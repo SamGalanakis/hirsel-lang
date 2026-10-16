@@ -528,7 +528,7 @@ impl crate::io::State {
                     R::SetTimeout { timeout, .. } => zero(timeout),
                     _ => false,
                 };
-                // A ConnectTls stream moves no plaintext before its handshake (§2.2).
+                // A ConnectTls stream moves no plaintext before its handshake.
                 let denied = grant.operation == NetOperation::ConnectTls
                     && !grant.tls
                     && matches!(
@@ -587,7 +587,7 @@ impl crate::io::State {
                 roots,
             } => {
                 let grant = self.stream_grant(*net, *stream)?;
-                // The stream is taken: it is closed on every failure (§3.2).
+                // The stream is taken: it is closed on every failure.
                 let value = if grant.tls {
                     Err(NetError::InvalidInput)
                 } else if grant.operation == NetOperation::ConnectTls

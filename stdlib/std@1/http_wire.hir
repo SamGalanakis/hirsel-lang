@@ -338,7 +338,7 @@ pub fn find_header[k: size](
 }
 
 // Zig lib/std/http/Client.zig Response.Head.parse, bff490a2 (MIT).
-// Frozen §6.2 deviations: reject CL+TE and every coding except chunked.
+// Deviations: reject CL+TE and every coding except chunked.
 @noalloc
 pub fn framing[k: size](
   buf: Bytes,

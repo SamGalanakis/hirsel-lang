@@ -339,7 +339,7 @@ Cargo features are independent link-time choices, all off by default:
   them as live blocks and backing (`large_bytes`) and return them at exit. The
   ordinary eight-byte header, descriptor registry, count/drop behavior and
   reuse-token key remain.
-  Regions keep their bump semantics; the §8 system comparison disables placement.
+  Regions keep their bump semantics; the system-allocator comparison disables placement.
 - `diagnostic`: builds Stats, backing-call and saturation counts, and the exit
   leak audit. Launch-time `CONFIG_DIAGNOSTIC` still selects poisoning separately.
   Correctness tests and native matrix tools select this archive, including their

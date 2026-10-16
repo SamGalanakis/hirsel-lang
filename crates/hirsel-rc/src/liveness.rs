@@ -1,6 +1,5 @@
-//! Backward value liveness over a LIR unit's normal and failure edges (design
-//! §2 "Compute liveness over ordinary successors and expanded cleanup
-//! blocks"). A block argument is a use on its incoming edge, not in the
+//! Backward value liveness over a LIR unit's normal and failure edges: ordinary
+//! successors and expanded cleanup blocks. A block argument is a use on its incoming edge, not in the
 //! target; a value an operation's failure successor needs (an argument of its
 //! failure edge, or live into its cleanup) is live at that operation, so a
 //! value used only by failure cleanup is live.

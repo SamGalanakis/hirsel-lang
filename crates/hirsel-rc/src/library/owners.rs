@@ -192,7 +192,7 @@ fn record(
 }
 
 /// The library's owner representations: the four containers, the cursor
-/// types and the string views (§2.5, §2.6). `signatures` are the program's
+/// types and the string views. `signatures` are the program's
 /// registry declarations; a type the program does not declare gets no row.
 pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     let mut out = LibraryOwners::default();

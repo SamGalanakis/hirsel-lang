@@ -215,8 +215,8 @@ names every program of a group);
 
 ## Task G: drop specialization and reuse
 
-`reuse::reuse(unit: LirUnit<Rc>, table, &Options) -> LirUnit<Reuse>` (design
-§2). `Options { reuse: false }` is the reuse-off switch: the unit only changes
+`reuse::reuse(unit: LirUnit<Rc>, table, &Options) -> LirUnit<Reuse>`.
+`Options { reuse: false }` is the reuse-off switch: the unit only changes
 stage. With it on, three rewrites run in order:
 
 - `specialize_drop::specialize`: a run `address d.f..; copy d.f..; release d`

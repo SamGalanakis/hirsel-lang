@@ -1,5 +1,4 @@
-//! The task-local size-class small-object allocator and the counted block header v2
-//! (§4 "Small-object allocator").
+//! The task-local size-class small-object allocator and the counted block header v2.
 //!
 //! Requests of at most [`SMALL_MAX`] payload bytes with alignment at most [`SMALL_ALIGN_MAX`]
 //! round up to a class in [`CLASS_SIZES`]: 16-byte steps to 256 bytes, then quarter-power-of-two

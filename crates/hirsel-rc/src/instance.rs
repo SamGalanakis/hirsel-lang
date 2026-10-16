@@ -1,4 +1,4 @@
-//! P1 instantiation (§3 "Generic code and size parameters").
+//! P1 instantiation of generic code and size parameters.
 //!
 //! Complete instances are expanded from the program's GEN-5 requirements, never
 //! from another definition's body: every non-generic executable definition is a

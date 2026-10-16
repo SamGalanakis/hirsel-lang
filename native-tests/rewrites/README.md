@@ -14,6 +14,7 @@ recorded, never treated as proofs. A theorem for one width or signedness says
 nothing about another, so every domain has its own row, and i128, SIMD lanes
 and float rows need their own evidence.
 
-`cargo test -p hirsel-rc --test it legalize::` parses this file, reruns the
+`.buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- --test-arg=rc_legalize::`
+(`crates/hirsel-pipeline-tests/tests/rc/rc_legalize.rs`) parses this file, reruns the
 exhaustive and boundary evidence the proved rows cite, and checks that a
 rewrite runs only in proved domains.
