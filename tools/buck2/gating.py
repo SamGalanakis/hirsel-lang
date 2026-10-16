@@ -413,8 +413,14 @@ def clippy_report(targets) -> tuple[bool, str]:
     """Clippy's diagnostics for the twins the invocation built; fetching the
     small `[clippy.txt]` outputs is a cache hit."""
     import clippy
-    report = buck2('build', '--show-full-json-output', *[t + '[clippy.txt]' for t in targets],
-                   capture_output=True, text=True)
+    for attempt in (1, 2):
+        report = buck2('build', '--show-full-json-output', *[t + '[clippy.txt]' for t in targets],
+                       capture_output=True, text=True)
+        # The pool may have dropped an output the invocation produced minutes ago
+        # (its action result's ttl ran out); Buck2 then reruns that action on the
+        # next build.
+        if report.returncode == 0 or 'Error materializing' not in report.stderr:
+            break
     if report.returncode:
         return False, report.stderr
     failed, text = clippy.diagnostics(json.loads(report.stdout or '{}'))

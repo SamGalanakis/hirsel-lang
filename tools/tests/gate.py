@@ -343,7 +343,13 @@ FAKE_BUCK2 = '''#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$COMMANDS"
 case $1 in
   uquery) [[ $* == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit 0 ;;
-  build) [[ $* == *show-full-json-output* ]] && echo '{}'; exit "${FAIL_BUILD:-0}" ;;
+  build)
+    if [[ $* == *show-full-json-output* && -n ${EXPIRED_ONCE:-} && ! -e $EXPIRED_ONCE ]]; then
+      touch "$EXPIRED_ONCE"
+      echo 'Error materializing artifact: retrieved 349 seconds ago with ttl = 0 seconds' >&2
+      exit 1
+    fi
+    [[ $* == *show-full-json-output* ]] && echo '{}'; exit "${FAIL_BUILD:-0}" ;;
 esac
 '''
 FAKE_SCRIPT = '''import os, sys
@@ -446,6 +452,14 @@ class Scripts(unittest.TestCase):
         self.assertIn('fmt.py --check', logged)
         self.assertIn('sync.py --check', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
+
+    def test_an_expired_clippy_output_is_fetched_again(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.env['EXPIRED_ONCE'] = str(self.root.parent / 'expired')
+        result, logged = self.run_tool('land')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(len([c for c in logged if 'show-full-json-output' in c]), 2)
 
     def test_land_refuses_a_red_tree_and_stops_on_a_conflict(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
