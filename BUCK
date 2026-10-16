@@ -1990,7 +1990,6 @@ hirsel_test(
         "//third-party:sha2",
     ],
     bin_exes = {},
-    shards = 2,
     costs = "//tools/buck2:test-costs/hirsel-pipeline-tests-test-front.tsv",
     host_cases = [
         "full_gate_binarytrees_and_inline_counts_match_on_aarch64",
@@ -2072,7 +2071,7 @@ hirsel_test(
         "//third-party:sha2",
     ],
     bin_exes = {},
-    shards = 5,
+    shards = 4,
     costs = "//tools/buck2:test-costs/hirsel-pipeline-tests-test-rc.tsv",
     data = glob([
         "conformance/**",

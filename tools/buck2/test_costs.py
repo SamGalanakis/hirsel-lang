@@ -10,7 +10,8 @@ Run every shard (or the one target) of the binaries to measure with libtest's ti
     python3 tools/buck2/sync.py
 
 Each binary in sync.py's SHARDED list found in the log gets `test-costs/<binary>.tsv` (`case<TAB>seconds`,
-sorted by case), merged over its earlier rows. sync.py derives the binary's shard
+sorted by case): the measured rows alone when the log has every shard of the
+binary, so deleted cases leave the table, otherwise merged over its earlier rows. sync.py derives the binary's shard
 count from the table's total and passes it to test_launcher.sh, which assigns
 cases longest first. The report lists each target's wall time and the slowest
 cases.
@@ -19,7 +20,7 @@ import argparse
 from pathlib import Path
 import re
 
-from sync import SHARDED
+from sync import SHARDED, shards
 
 HERE = Path(__file__).resolve().parent
 TABLES = HERE / 'test-costs'
@@ -87,7 +88,10 @@ def main():
             print(f'{cost:8.1f} s  {case}')
         if not args.report_only:
             path = TABLES / f'{binary}.tsv'
-            write_table(path, read_table(path) | rows)
+            count, _ = shards(binary)
+            complete = all(walls.get(f'{binary}-shard-{i}', ('',))[0] == 'Pass' for i in range(1, count + 1)) \
+                if count > 1 else walls.get(binary, ('',))[0] == 'Pass'
+            write_table(path, rows if complete else read_table(path) | rows)
 
 
 if __name__ == '__main__':

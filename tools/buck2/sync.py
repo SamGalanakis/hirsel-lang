@@ -207,7 +207,11 @@ def seeded(source_dir: pathlib.Path, crate_root: pathlib.Path) -> bool:
 # concurrent cases is at most SHARD_SECONDS per shard, and test_launcher.sh
 # deals the cases out longest first. SHARD_SECONDS leaves room for the slow
 # worker class, for pool load (the same case measured up to 4x slower on a
-# loaded pool than alone on the host) and for a shard's longest case.
+# loaded pool than alone on the host), for a shard's longest case, and for cases
+# that run their own worker threads, which oversubscribe a shard's CPUs: on
+# 2026-10-16 the stdlib binary in three shards (75 s each by its table) ran
+# 173-188 s per shard on the pool, and in six shards at most 86 s. The gate
+# keeps every test target near two minutes.
 SHARDED = [
     "hirsel-driver-test-it",
     "hirsel-driver-test-it-stdlib",
@@ -216,7 +220,7 @@ SHARDED = [
     "hirsel-rt-test-it",
 ]
 TEST_THREADS = 4
-SHARD_SECONDS = 75
+SHARD_SECONDS = 40
 COSTS = HERE / "test-costs"
 
 
