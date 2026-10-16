@@ -2490,7 +2490,9 @@ impl Checker<'_> {
             self.report(rule, site, message, explain);
         }
     }
-    fn access(&mut self, place: &Place, state: &State, operation: Span, call: bool) -> bool {
+    /// The binding grants write access to `place`, and nothing else may use
+    /// its storage (published Shared or region storage is never mutated).
+    fn access(&mut self, place: &Place, state: &State, operation: Span) -> bool {
         let binding = &self.body.bindings[place.binding];
         let rule = if binding.owner != self.graph.owner && self.graph.scoped {
             Some("CLO-1")
@@ -2560,6 +2562,12 @@ impl Checker<'_> {
                 return false;
             }
         }
+        true
+    }
+    /// No value live after this operation holds a loan on `place`. A `mut`
+    /// argument's exclusive loan starts at callee entry (LANG-3), so the call
+    /// checks it there, against the values still live once the callee runs.
+    fn unlent(&mut self, place: &Place, state: &State, operation: Span, call: bool) -> bool {
         if self.loaned(state, place) {
             // A borrowed loop's source is a §04 loan like any other; whether
             // SEM-4 owns its conflicts instead is spec #89.
@@ -3350,9 +3358,15 @@ impl Checker<'_> {
                     state.values.insert(*expression, value);
                     return;
                 }
+                // The call itself checks a `mut` argument's loans at callee
+                // entry; later arguments may still read the place (LANG-3).
                 if usage == UseKind::Mut
                     && *context != Context::Address
-                    && !self.access(&place, state, operation_site, true)
+                    && (!self.access(&place, state, operation_site)
+                        || !matches!(
+                            self.tree.expressions[operation.0 as usize].kind,
+                            ExprKind::Call { .. }
+                        ) && !self.unlent(&place, state, operation_site, true))
                 {
                     value.invalid = true;
                     state.values.insert(*expression, value);
@@ -4559,7 +4573,9 @@ impl Checker<'_> {
                         return;
                     }
                 }
-                if !self.access(&place, state, *operation, false) {
+                if !self.access(&place, state, *operation)
+                    || !self.unlent(&place, state, *operation, false)
+                {
                     return;
                 }
                 let value = self.value(state, *rhs);
@@ -5056,6 +5072,29 @@ impl Checker<'_> {
                             }
                         }
                     }
+                }
+                if !failed {
+                    // Callee entry starts each `mut` argument's exclusive loan:
+                    // only values still live then conflict with it (LANG-3).
+                    // The arguments themselves were checked against each
+                    // other above.
+                    let evaluated: Vec<_> = arguments
+                        .iter()
+                        .filter_map(|a| state.values.remove_entry(&a.value))
+                        .collect();
+                    for arg in arguments {
+                        if let ExprKind::Unary {
+                            op: UnaryOp::Mut,
+                            value,
+                        } = self.tree.expressions[arg.value.0 as usize].kind
+                            && let Some(place) = place(self.body, value, self.source_rows)
+                            && !self.unlent(&place, state, call_site, true)
+                        {
+                            failed = true;
+                            break;
+                        }
+                    }
+                    state.values.extend(evaluated);
                 }
                 if !failed {
                     for (arg, requirement) in arguments.iter().zip(requirements) {

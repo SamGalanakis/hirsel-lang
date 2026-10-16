@@ -1,0 +1,29 @@
+// rule: LANG-3
+// expect: run
+// stdout: ok
+// A mut argument reserves its place; the exclusive loan starts at callee
+// entry. A view whose last use is a later argument of the same call has ended
+// by then, so the call may grow the list it viewed (Rust's two-phase borrow).
+fn view(xs: List[u64]) -> List[u64] in xs {
+  xs
+}
+
+fn grow(mut xs: List[u64]) -> () {
+  let v = view(xs)
+  list.push(mut xs, list.len(v))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: List[u64] = [1]
+  grow(mut xs)
+  let ok = list.len(xs) == 2 && xs[0] == 1 && xs[1] == 1
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// The view is used again after the call, so it is still live when the callee
+// is entered and takes the exclusive loan. The accepted twin is
+// LANG-3-reserved-view-last-use-run.
+fn view(xs: List[u64]) -> List[u64] in xs {
+  xs
+}
+
+fn grow(mut xs: List[u64]) -> u64 {
+  let v = view(xs)
+  list.push(mut xs, list.len(v))
+  list.len(v)
+}

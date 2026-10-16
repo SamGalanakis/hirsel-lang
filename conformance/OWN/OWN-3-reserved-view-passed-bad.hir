@@ -1,0 +1,17 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 16
+// The view is passed into the callee itself, so it is in use when the callee
+// is entered and takes the exclusive loan. The accepted twin is
+// LANG-3-reserved-view-last-use-run.
+fn view(xs: List[u64]) -> List[u64] in xs {
+  xs
+}
+
+fn append_len(mut xs: List[u64], ys: List[u64]) -> () {
+  list.push(mut xs, list.len(ys))
+}
+
+fn grow(mut xs: List[u64]) -> () {
+  let v = view(xs)
+  append_len(mut xs, v)
+}

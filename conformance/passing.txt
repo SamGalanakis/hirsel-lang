@@ -1030,6 +1030,7 @@ conformance/LANG/LANG-3-callee-snapshot-before-arguments-run.hir
 conformance/LANG/LANG-3-kept-call-source-comparison-run.hir
 conformance/LANG/LANG-3-record-fields.hir
 conformance/LANG/LANG-3-reordered-record-fields.hir
+conformance/LANG/LANG-3-reserved-view-last-use-run.hir
 conformance/LANG/LANG-3-retained-assignment-temporary-run.hir
 conformance/LANG/LANG-3-stable-callee-argument-error-run.hir
 conformance/LANG/LANG-3-stable-callee-argument-failure.hir
@@ -1850,6 +1851,7 @@ conformance/MODE/MODE-1-receiving-local-holder-wrong-source-bad.hir
 conformance/MODE/MODE-1-relation-array-tuple-loop-bad.hir
 conformance/MODE/MODE-1-relation-array-tuple-loop-ok.hir
 conformance/MODE/MODE-1-relation-names-borrowed-binding-ok.hir
+conformance/MODE/MODE-1-reserved-view-used-after-bad.hir
 conformance/MODE/MODE-1-result-holder-computed-field-live-bad.hir
 conformance/MODE/MODE-1-result-holder-computed-field-live-used-bad.hir
 conformance/MODE/MODE-1-result-holder-computed-field-release-ok.hir
@@ -2669,6 +2671,7 @@ conformance/OWN/OWN-3-mut-borrowed-part-ok.hir
 conformance/OWN/OWN-3-parent-and-field-bad.hir
 conformance/OWN/OWN-3-parent-and-field-ok.hir
 conformance/OWN/OWN-3-replaced-callee-loop-run.hir
+conformance/OWN/OWN-3-reserved-view-passed-bad.hir
 conformance/OWN/OWN-3-same-name-bad.hir
 conformance/OWN/OWN-3-same-name-ok.hir
 conformance/OWN/OWN-3-scoped-capture-field-call-bad.hir

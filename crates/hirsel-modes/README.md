@@ -38,6 +38,11 @@ scoped binding table, so nested parameter ordinals cannot alias top-level ones.
 Projection steps carry H-checked declaration field and variant ordinals,
 independent of interning order. Every index of one sequence aliases
 for exclusive calls; distinct fields do not, and a parent overlaps its children.
+A `mut` call argument reserves its place while the later arguments are evaluated:
+they may read it but not write, move or reserve it again. Its exclusive loan, and
+the check that no live value still borrows the place, start at callee entry, so
+a view whose last use is a later argument of the same call has already ended
+(LANG-3, the two-phase borrow of Rust's `v.push(v.len())`).
 A borrowed loop over a place (`for x in xs`, any collection) lends that place
 from loop entry while it may advance again (SEM-4, §04): a write, move or `mut`
 loan of an overlapping place in the body conflicts whether or not the body uses
