@@ -251,6 +251,11 @@ AGREE_LIMIT = 5000
 # or non-terminating variant fails fast and names its shard.
 AGREE_FULL_SHARDS = 96
 AGREE_FULL_TIMEOUT = 1800
+# The full native matrix (tools/gate --full) runs as shards of the baseline by
+# path hash, each case under every configuration, so each shard stays well
+# under its Buck2 timeout; gate-native-full stays whole for --bless and for a
+# lane's filtered run.
+NATIVE_FULL_SHARDS = 8
 GATE_TESTS = [
     *(dict(name=f"gate-conformance-shard-{index}", binary="//:hirsel-conformance-bin-hirsel-conformance",
            args=["--check-format", "--shard", f"{index}/{CONFORMANCE_SHARDS}"], **GATE)
@@ -270,6 +275,10 @@ GATE_TESTS = [
          release=True, runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE),
     dict(name="gate-native-full", full=True, binary="//:hirsel-conformance-bin-native", args=["--full"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE),
+    *(dict(name=f"gate-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
+           args=["--full", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
+           runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE)
+      for index in range(1, NATIVE_FULL_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",

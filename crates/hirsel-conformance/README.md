@@ -209,7 +209,11 @@ cases, the allocating cases of `native-tests/regressions/memcheck.txt` and eight
 generated programs as x86-64 executables on the system-allocator archive, where
 each fixed-size block is one libc allocation, under Valgrind memcheck;
 `--filter TEXT` runs the matching baseline cases instead. Under every mode
-`--filter` may repeat; a case is selected when its ID contains any given text. `--replay DIR` and `--reduce DIR` act on one artifact.
+`--filter` may repeat; a case is selected when its ID contains any given text.
+`native --full --shard I/N` runs the cases the conformance runner's path-hash
+shard I of N holds (topology and generated cases included) under the whole
+matrix, and judges the exclusion rows of exactly those cases; the scheduled
+full gate runs `NATIVE_FULL_SHARDS` of them, and `--bless` refuses a shard. `--replay DIR` and `--reduce DIR` act on one artifact.
 
 `native --full --engine heap|llvm` retains only that engine's named configurations
 (`--engine diagnostic|default|system`: native code on that runtime archive)

@@ -1,6 +1,7 @@
 //! The native differential gate: `--smoke` (per push), `--full` (the versioned
 //! matrix, the set rule, topology and mismatch artifacts), `--replay` and
 //! `--reduce` of a stored artifact.
+use hirsel_conformance::Shard;
 use hirsel_conformance::native::{self, Case, Class, artifact};
 use hirsel_driver::native::{
     Configuration, Outcome, TargetSpec, Toolchain, full_matrix, smoke_matrix, topology_matrix,
@@ -8,7 +9,7 @@ use hirsel_driver::native::{
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--engine heap|llvm|diagnostic|default|system] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
+const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
                      options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
 
 fn main() -> ExitCode {
@@ -22,16 +23,18 @@ fn main() -> ExitCode {
     }
 }
 
-/// The cases `--filter` selects: every case whose ID contains any given text;
-/// without one, all of them.
+/// The cases `--filter` and `--shard` select: every case whose ID contains
+/// any given text (all of them without one) and that the shard holds.
 #[derive(Default)]
-struct Filter(Vec<String>);
+struct Filter(Vec<String>, Option<Shard>);
 
 impl Filter {
     fn keeps(&self, id: &str) -> bool {
-        self.0.is_empty() || self.0.iter().any(|text| id.contains(text.as_str()))
+        (self.0.is_empty() || self.0.iter().any(|text| id.contains(text.as_str())))
+            && self.1.as_ref().is_none_or(|shard| shard.holds(id))
     }
 
+    /// No text selects: the run covers every case of its shard.
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -116,6 +119,9 @@ fn run() -> Result<bool, String> {
             "--root" => root = value()?.into(),
             "--out" => out = Some(PathBuf::from(value()?)),
             "--filter" => filter.0.push(value()?),
+            "--shard" => {
+                filter.1 = Some(Shard::parse(&value()?).ok_or("--shard takes I/N, 1 <= I <= N")?)
+            }
             "--hash-seed" => {
                 hash_seed = value()?.parse().map_err(|_| "invalid --hash-seed")?;
                 hash_seed_explicit = true;
@@ -148,6 +154,9 @@ fn run() -> Result<bool, String> {
     let (mode, dir) = mode.ok_or(USAGE)?;
     if engine.is_some() && mode != "--full" {
         return Err("--engine requires --full".into());
+    }
+    if filter.1.is_some() && mode != "--full" {
+        return Err("--shard requires --full".into());
     }
     match mode.as_str() {
         "--smoke" => {
@@ -286,6 +295,9 @@ fn full(
     if bless && hash_seed != 0 {
         return Err("--bless requires the baseline hash seed".into());
     }
+    if bless && filter.1.is_some() {
+        return Err("--bless needs the whole baseline, without --shard".into());
+    }
     let out = match out {
         Some(out) => {
             std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
@@ -300,6 +312,9 @@ fn full(
     let toolchain = toolchain(&matrix)?;
     let mut cases = native::baseline(root)?;
     let complete = filter.is_empty() && engine.is_none();
+    // Only the whole run must find every campaign non-empty; a shard may hold
+    // no topology or generated case.
+    let whole = complete && filter.1.is_none();
     cases.retain(|c| filter.keeps(&c.id));
     let results = native::run_cases(&cases, &matrix, &toolchain, &native::scratch("full")?, jobs);
     let write = |name: &str, text: &str| {
@@ -320,7 +335,10 @@ fn full(
         )
         .map_err(|e| format!("{}: {e}", native::EXCLUSIONS))?;
     }
-    let exclusions = native::read_exclusions(root)?;
+    // A shard judges the rows of its own cases, including rows naming a case
+    // or configuration no longer in the matrix.
+    let mut exclusions = native::read_exclusions(root)?;
+    exclusions.retain(|(id, _), _| filter.keeps(id));
     let classes: Vec<_> = engine.map_or_else(|| vec![Class::Heap, Class::Llvm], |e| vec![e.class]);
     let report = native::judge_classes(&results, &exclusions, matrix.len(), complete, &classes);
     // Every mismatch leaves an artifact, which must replay at once, from a
@@ -433,7 +451,7 @@ fn full(
         "topology-matrix.tsv",
         &native::render_matrix(&topology_results),
     )?;
-    if complete || !(partitioned.is_empty() || topology.is_empty()) {
+    if whole || !(partitioned.is_empty() || topology.is_empty()) {
         ok &= all_agree("topology", &topology_results);
     }
     // Generated successes and directed failures agree under every
@@ -451,7 +469,7 @@ fn full(
         "generated-matrix.tsv",
         &native::render_matrix(&generated_results),
     )?;
-    if complete || !generated.is_empty() {
+    if whole || !generated.is_empty() {
         ok &= all_agree("generated", &generated_results);
     }
     // A restriction may empty a campaign, but not the whole run; the
@@ -471,6 +489,9 @@ fn full(
     json["topology_cases"] = topology_results.len().into();
     json["topology_partitions"] = topology.len().into();
     json["report"] = out.display().to_string().into();
+    if let Some(shard) = &filter.1 {
+        json["shard"] = format!("{}/{}", shard.index, shard.count).into();
+    }
     println!("{json:#}");
     for line in report.unlisted.iter().chain(&report.stale) {
         eprintln!("native: {line}");
@@ -597,11 +618,33 @@ mod tests {
 
     #[test]
     fn a_repeated_filter_keeps_a_case_any_text_selects() {
-        let filter = Filter(vec!["SEM-2".into(), "MEM-4".into()]);
+        let filter = Filter(vec!["SEM-2".into(), "MEM-4".into()], None);
         assert!(filter.keeps("conformance/SEM/SEM-2-a.hir"));
         assert!(filter.keeps("conformance/MEM/MEM-4-b.hir"));
         assert!(!filter.keeps("conformance/OWN/OWN-7-c.hir"));
         assert!(Filter::default().keeps("conformance/OWN/OWN-7-c.hir"));
+    }
+
+    #[test]
+    fn shards_partition_the_cases_a_filter_selects() {
+        let ids: Vec<String> = (0..200)
+            .map(|i| format!("conformance/SEM/SEM-{i}.hir"))
+            .collect();
+        let selected = |filter: &Filter| ids.iter().filter(|id| filter.keeps(id)).count();
+        let shards: Vec<_> = (1..=4)
+            .map(|i| Filter(Vec::new(), Shard::parse(&format!("{i}/4"))))
+            .collect();
+        assert_eq!(shards.iter().map(selected).sum::<usize>(), ids.len());
+        for id in &ids {
+            assert_eq!(shards.iter().filter(|s| s.keeps(id)).count(), 1, "{id}");
+        }
+        assert!(shards.iter().all(|s| selected(s) > 0 && s.is_empty()));
+        let narrowed = Filter(vec!["SEM-1".into()], Shard::parse("1/4"));
+        assert!(
+            ids.iter()
+                .filter(|id| narrowed.keeps(id))
+                .all(|id| id.contains("SEM-1"))
+        );
     }
 
     #[test]

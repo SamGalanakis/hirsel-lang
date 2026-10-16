@@ -363,7 +363,9 @@ def full_gate():
     stages.run('release tests', [*buck2, 'test', *config, *release, *tests, '--', *timeout])
     stages.run('full gate crate tests in release', full_crate_tests(*release, *libtests))
     stages.run('native and Lean checks', ['tools/check-native.sh'])
-    stages.run('native matrix: both targets and named exclusions', [*buck2, 'test', *config, '//:gate-native-full', '--', *long])
+    from sync import NATIVE_FULL_SHARDS
+    native_shards = [f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1)]
+    stages.run('native matrix: both targets and named exclusions', [*buck2, 'test', *config, *native_shards, '--', *long])
     stages.run('agreement campaign on heap and native code (unrestricted)',
                [*buck2, 'test', *config, '//:gate-agree-native-full', '--', *long])
     stages.run('interpreter passing corpus with independent second hash seed',

@@ -128,7 +128,9 @@ if "$full"; then
   run_stage "full gate crate tests in release" \
     full_crate_tests "${release[@]}" "${libtests[@]}"
   run_stage "native and Lean checks" tools/check-native.sh
-  run_stage "native matrix: both targets and named exclusions" buck2 test //:gate-native-full -- "${long[@]}"
+  native_shards=$(cd tools/buck2 && python3 -c 'from sync import NATIVE_FULL_SHARDS as n; print(*(f"//:gate-native-full-shard-{i}" for i in range(1, n + 1)))')
+  # shellcheck disable=SC2086 # one target per word
+  run_stage "native matrix: both targets and named exclusions" buck2 test $native_shards -- "${long[@]}"
   run_stage "agreement campaign on heap and native code (unrestricted)" \
     buck2 test //:gate-agree-native-full -- "${long[@]}"
   run_stage "interpreter passing corpus with independent second hash seed" \

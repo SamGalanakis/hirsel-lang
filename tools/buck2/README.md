@@ -104,6 +104,7 @@ Target names follow Cargo's targets, all in the root package:
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
 | an agreement shard (`AGREE_SHARDS`) | `//:gate-agree-shard-<i>` |
 | an unrestricted agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
+| a full native matrix shard (`NATIVE_FULL_SHARDS`, `--full` only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
 
 ## Blessing expectations
 

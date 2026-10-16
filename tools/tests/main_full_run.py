@@ -12,7 +12,7 @@ import unittest
 
 RUNNER = Path(__file__).resolve().parents[1] / 'main-full-run.sh'
 sys.path.insert(0, str(RUNNER.parent / 'buck2'))
-from sync import AGREE_LIMIT  # noqa: E402
+from sync import AGREE_LIMIT, NATIVE_FULL_SHARDS  # noqa: E402
 
 
 class MainFullRun(unittest.TestCase):
@@ -251,6 +251,7 @@ class GateCommands(unittest.TestCase):
         for helper in ('prepare', 'sync', 'clippy', 'fmt', 'changed_tests', 'conformance', 'agree'):
             (self.root / f'tools/buck2/{helper}.py').write_text(f'''import os, sys
 AGREE_LIMIT = {AGREE_LIMIT}
+NATIVE_FULL_SHARDS = {NATIVE_FULL_SHARDS}
 if __name__ == "__main__":
     with open(os.environ["COMMANDS"], "a") as log:
         print(" ".join(["{helper}.py", *sys.argv[1:]]), file=log)
@@ -315,7 +316,8 @@ printf '%s\\n' "$*" >> "$COMMANDS"
         self.assertIn('agree.py --full', commands)
         self.assertIn('check.sh: source and IR checker agreement (unrestricted)\n', result.stdout)
         self.assertIn(full + '//:gate-agree-native-full -- --timeout 14400', commands)
-        self.assertIn(full + '//:gate-native-full -- --timeout 14400', commands)
+        shards = ' '.join(f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1))
+        self.assertIn(full + shards + ' -- --timeout 14400', commands)
         self.assertIn(full + '//:gate-native-smoke -- --timeout 1800', commands)
         self.assertNotIn('agree.py', commands)
         self.assertNotIn('changed_tests.py', commands)
