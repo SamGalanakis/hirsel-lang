@@ -425,7 +425,6 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-types",
- "insta",
  "proptest",
 ]
 
@@ -486,7 +485,6 @@ name = "hirsel-rc"
 version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
- "hirsel-diag",
  "hirsel-heapcheck",
  "hirsel-lir",
  "hirsel-span",

@@ -1855,7 +1855,6 @@ hirsel_test(
         "//:hirsel-span",
         "//:hirsel-syntax",
         "//:hirsel-types",
-        "//third-party:insta",
         "//third-party:proptest",
     ],
     data = glob([
@@ -2199,7 +2198,6 @@ hirsel_library(
     name = "hirsel-rc",
     deps = [
         "//:hirsel-core-contract",
-        "//:hirsel-diag",
         "//:hirsel-lir",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2222,7 +2220,6 @@ hirsel_test(
     name = "hirsel-rc-unittest",
     deps = [
         "//:hirsel-core-contract",
-        "//:hirsel-diag",
         "//:hirsel-heapcheck",
         "//:hirsel-lir",
         "//:hirsel-span",

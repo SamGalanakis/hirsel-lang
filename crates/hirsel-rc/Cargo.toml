@@ -7,7 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 hirsel-core-contract = { path = "../hirsel-core-contract" }
-hirsel-diag = { path = "../hirsel-diag" }
 hirsel-lir = { path = "../hirsel-lir" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }
