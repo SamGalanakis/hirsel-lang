@@ -18,16 +18,16 @@ _selection = rule(
     attrs = {
         "collector": attrs.exec_dep(providers = [RunInfo]),
         "data": attrs.list(attrs.source()),
+        "labels": attrs.list(attrs.string(), default = []),
         "_llvm": attrs.exec_dep(default = "toolchains//:llvm"),
     },
 )
 
 
 def hirsel_native_selection(name, collector, data):
-    # Workspace builds in the ordinary gate do not prepare full campaigns.
-    if read_root_config("hirsel", "full", "false") != "true":
-        return
-    native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:release")
+    # Gate-labelled targets are excluded from the ordinary workspace build.
+    # Keep this build action available without enabling full test campaigns.
+    native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:release", labels = ["gate"])
     _selection(name = name, collector = ":" + name + "-collector", data = data,
                exec_compatible_with = [budget_constraint(pool_budget_name(1, 1048576))],
-               visibility = ["PUBLIC"])
+               labels = ["gate"], visibility = ["PUBLIC"])

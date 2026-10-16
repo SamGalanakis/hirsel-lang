@@ -344,7 +344,7 @@ checks. `--bless` requires `--exhaustive`.
 Generate the cached coverage artifact without executing programs:
 
 ```sh
-.buck2/bin/buck2 build -c hirsel.full=true //:native-selection --show-full-simple-output
+.buck2/bin/buck2 build //:native-selection --show-full-simple-output
 ```
 
 A direct native CLI invocation without `HIRSEL_NATIVE_SELECTION` derives its
