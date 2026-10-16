@@ -360,6 +360,9 @@ Cargo features are independent link-time choices, all off by default:
   inline-free flag, a null region limit), so emitted code carries no requests and is the
   object production links; inline dups stay. A slab or segment returned with blocks still
   live drops them with its pool.
+  `hirsel-driver`'s `tests/it/memcheck.rs` links a C program against this archive and
+  launches it as the campaign does: a read of a released slab block must exit 97, and its
+  twin that reads only before the release must exit 0.
 - `measurement`: builds Stats/auditing plus the counters below. Direct launch
   reads `HIRSEL_RT_MEASUREMENT` once to open its report before entry; this is a
   measurement-tool output and is outside semantic RunConfig and recorded tapes.

@@ -131,7 +131,8 @@ TEST_DATA = {
     "hirsel-conformance-test-it": ["crates/hirsel-conformance/tests/fixtures/**"],
     # Every rule ID any crate cites must resolve in docs/spec.
     "hirsel-conformance-test-spec_links": ["crates/**"],
-    "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**"],
+    # memcheck:: compiles a C program against the runtime header.
+    "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**"],
     "hirsel-driver-test-it-stdlib": ["crates/hirsel-driver/tests/fixtures/**"],
     "hirsel-llvm-test-it": ["crates/hirsel-llvm/tests/native/**"],
     "hirsel-modes-unittest": ["crates/hirsel-modes/proptest-regressions/**"],

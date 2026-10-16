@@ -30,6 +30,7 @@ mod ir_size;
 mod lazy_lowering;
 mod match_size;
 mod materialized;
+mod memcheck;
 mod native;
 mod native_input;
 mod native_source_cleanup;

@@ -851,13 +851,7 @@ pub fn link_objects(
     } else {
         &toolchain.clang
     });
-    if !aarch64(target) && !toolchain.wrapper.is_empty() {
-        command
-            .args(["-Xlinker", "--dynamic-linker", "-Xlinker"])
-            .arg(toolchain.valgrind_runtime.join("ld-linux-x86-64.so.2"))
-            .args(["-Xlinker", "-rpath", "-Xlinker"])
-            .arg(&toolchain.valgrind_runtime);
-    }
+    command.args(toolchain.loader_flags(target));
     command.arg(write("main.o", &main.bytes)?);
     for (index, object) in objects.iter().enumerate() {
         command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
@@ -1061,6 +1055,26 @@ impl Toolchain {
     /// branch or system call and a definite leak each fail the launch.
     /// Memcheck runs a program tens of times slower, so its launches get ten
     /// times the timeout.
+    /// The link flags that make an executable for `target` load as this toolchain launches
+    /// it: under the wrapper, Valgrind's pinned dynamic loader and runtime libraries.
+    pub fn loader_flags(&self, target: &TargetSpec) -> Vec<std::ffi::OsString> {
+        if aarch64(target) || self.wrapper.is_empty() {
+            return Vec::new();
+        }
+        let runtime = &self.valgrind_runtime;
+        [
+            "-Xlinker".into(),
+            "--dynamic-linker".into(),
+            "-Xlinker".into(),
+            runtime.join("ld-linux-x86-64.so.2").into(),
+            "-Xlinker".into(),
+            "-rpath".into(),
+            "-Xlinker".into(),
+            runtime.into(),
+        ]
+        .to_vec()
+    }
+
     pub fn under_memcheck(mut self) -> Self {
         self.launch_timeout = LAUNCH_TIMEOUT * 10;
         self.wrapper = [

@@ -808,6 +808,7 @@ hirsel_test(
         "docs/spec/**",
         "native-tests/**",
         "crates/hirsel-driver/tests/fixtures/**",
+        "crates/hirsel-rt/include/**",
         "crates/hirsel-driver/Cargo.toml",
     ]) + glob(["crates/hirsel-driver/tests/it/**"], exclude = ["crates/hirsel-driver/tests/it/**/*.rs"]),
     runtime_archives = "//:hirsel-rt-archives",
