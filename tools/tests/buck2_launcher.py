@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Caller selection, host partitioning and shard coverage at the launcher seam."""
+"""Caller selection, explicit inputs and shard coverage at the launcher seam."""
 import json
 import os
 from pathlib import Path
@@ -65,23 +65,20 @@ class LauncherFixture(unittest.TestCase):
         self.env = os.environ | dict(
             HIRSEL_TEST_TMPDIR=str(self.root / 'tmp'), HIRSEL_TEST_CWD=str(self.root),
             LLVM_SYS_211_PREFIX=str(self.root / 'llvm'), CASES=json.dumps(CASES),
-            OBSERVED=str(self.observed), HIRSEL_TEST_BINARY='fixture-test-it',
-            HIRSEL_TEST_HOST_CASES='host:: full_gate_prefix_host')
+            OBSERVED=str(self.observed), HIRSEL_TEST_BINARY='fixture-test-it')
         for key in ('HIRSEL_TEST_POOL', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
             self.env.pop(key, None)
 
 
 class LauncherSelection(LauncherFixture):
-    def run_cases(self, *args, host=False, shard='', patterns=None):
+    def run_cases(self, *args, shard=''):
         self.observed.unlink(missing_ok=True)
-        env = self.env | {'HIRSEL_TEST_HOST_ONLY': '1' if host else ''}
+        env = self.env.copy()
         if shard:
             # `<i>/<n>` with i from 1, as Buck2 target names count shards;
             # the launcher reads Bazel's 0-based variables.
             index, total = shard.split('/')
             env |= {'TEST_SHARD_INDEX': str(int(index) - 1), 'TEST_TOTAL_SHARDS': total}
-        if patterns is not None:
-            env['HIRSEL_TEST_HOST_CASES'] = patterns
         run = subprocess.run(['sh', str(LAUNCHER), 'harness', *args], cwd=self.root,
                              env=env, capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
@@ -107,38 +104,16 @@ class LauncherSelection(LauncherFixture):
         self.assertTrue(target.name.startswith('hirsel-test-'))
         self.assertEqual(list(target.iterdir()), [])
 
-    def test_host_intersects_full_gate_filter(self):
-        result, _ = self.run_cases('full_gate_', '--ignored', host=True)
-        self.assertEqual(result['cases'], ['host::full_gate_arm', 'pool::full_gate_prefix_host'])
+    def test_every_native_case_runs_on_the_pool_even_under_exact(self):
+        for case in CASES:
+            result, _ = self.run_cases(case, '--exact', '--include-ignored', shard='1/3')
+            self.assertEqual(result['cases'], [case])
 
-    def test_host_empty_intersection_executes_nothing(self):
-        result, _ = self.run_cases('pool::other', host=True)
-        self.assertEqual(result['cases'], [])
-
-    def test_multiple_caller_filters_and_skip_stay_narrow(self):
-        result, _ = self.run_cases('full_gate_', 'smoke', '--include-ignored',
-                                   '--skip', 'prefix', host=True)
-        self.assertEqual(set(result['cases']), {'host::full_gate_arm', 'host::smoke'})
-
-    def test_pool_excludes_host_even_under_exact(self):
-        for case in ['host::full_gate_arm', 'pool::full_gate_prefix_host']:
-            with self.subTest(case=case):
-                result, _ = self.run_cases(case, '--exact', '--ignored', shard='1/3')
-                self.assertEqual(result['cases'], [])
-
-    def test_prefix_twins_are_independent(self):
-        result, _ = self.run_cases('full_gate_prefix', '--ignored', host=True)
-        self.assertEqual(result['cases'], ['pool::full_gate_prefix_host'])
-        result, _ = self.run_cases('full_gate_prefix', '--ignored')
-        self.assertEqual(result['cases'], ['pool::full_gate_prefix'])
-
-    def test_host_and_shards_partition_all_selected_cases_once(self):
+    def test_shards_cover_all_selected_cases_once(self):
         actual = []
         for shard in ('1/3', '2/3', '3/3'):
             result, _ = self.run_cases('--include-ignored', shard=shard)
             actual.extend(result['cases'])
-        result, _ = self.run_cases('--include-ignored', host=True)
-        actual.extend(result['cases'])
         self.assertCountEqual(actual, CASES)
 
     def test_costs_balance_shards_longest_first(self):
@@ -149,7 +124,7 @@ class LauncherSelection(LauncherFixture):
         shards = {}
         for shard in ('1/2', '2/2'):
             self.env['HIRSEL_TEST_COSTS'] = str(costs)
-            result, _ = self.run_cases('--include-ignored', shard=shard, patterns='host::')
+            result, _ = self.run_cases('--include-ignored', '--skip=host::', shard=shard)
             shards[shard] = set(result['cases'])
         self.assertEqual(shards, {'1/2': {'pool::full_gate_heap', 'pool::full_gate_prefix'},
                                   '2/2': {'pool::full_gate_prefix_host', 'pool::other', 'pool::smoke'}})
@@ -160,39 +135,37 @@ class LauncherSelection(LauncherFixture):
             result, _ = self.run_cases('-Z', 'unstable-options', '--test-threads', '2',
                                        '--include-ignored', shard=shard)
             actual.extend(result['cases'])
-        result, _ = self.run_cases('--include-ignored', host=True)
-        actual.extend(result['cases'])
         self.assertCountEqual(actual, CASES)
 
     def test_filtered_shards_use_first_shard_only(self):
         for shard in ('1/3', '2/3', '3/3'):
             result, _ = self.run_cases('full_gate_', '--ignored', shard=shard)
             self.assertEqual(set(result['cases']),
-                             {'pool::full_gate_heap', 'pool::full_gate_prefix'} if shard == '1/3' else set())
+                             {name for name in CASES if 'full_gate_' in name} if shard == '1/3' else set())
 
     def test_values_and_spaces_survive_selection(self):
         args = ('--test-threads', '2', '--logfile', 'a path with spaces', '--color=never',
                 '--format', 'pretty', '--shuffle-seed', '123', '-Z', 'unstable-options',
                 'full_gate_', '--ignored')
-        result, _ = self.run_cases(*args, host=True)
+        result, _ = self.run_cases(*args)
         for value in ['a path with spaces', '2', '123', 'unstable-options']:
             self.assertIn(value, result['argv'])
-        self.assertEqual(set(result['cases']), {'host::full_gate_arm', 'pool::full_gate_prefix_host'})
+        self.assertEqual(set(result['cases']), {name for name in CASES if 'full_gate_' in name})
 
-    def test_list_reports_only_partition_and_inventory_precedes_partition(self):
-        _, output = self.run_cases('full_gate_', '--ignored', '--list', host=True)
+    def test_list_and_full_gate_inventory_agree(self):
+        _, output = self.run_cases('full_gate_', '--ignored', '--list')
         listed = [line[:-6] for line in output.splitlines() if line.endswith(': test')]
-        self.assertEqual(set(listed), {'host::full_gate_arm', 'pool::full_gate_prefix_host'})
+        self.assertEqual(set(listed), {name for name in CASES if 'full_gate_' in name})
         expected = [line.split(' ', 2)[2] for line in output.splitlines()
                     if line.startswith('HIRSEL_FULL_GATE_EXPECT fixture-test-it ')]
         self.assertEqual(set(expected), {name for name in CASES if 'full_gate_' in name})
 
     def test_end_of_options_and_equals_skip_preserve_selection(self):
-        result, _ = self.run_cases('--ignored', '--skip=prefix', '--', 'full_gate_', host=True)
-        self.assertEqual(result['cases'], ['host::full_gate_arm'])
+        result, _ = self.run_cases('--ignored', '--skip=prefix', '--', 'full_gate_')
+        self.assertEqual(set(result['cases']), {'host::full_gate_arm', 'pool::full_gate_heap'})
 
     def test_unpartitioned_command_passes_original_argv(self):
-        result, _ = self.run_cases('pool::other', '--exact', patterns='')
+        result, _ = self.run_cases('pool::other', '--exact')
         self.assertEqual(result['cases'], ['pool::other'])
         self.assertEqual(result['argv'], ['pool::other', '--exact'])
 

@@ -25,3 +25,11 @@ inlines does not depend on the partition. An object's code therefore depends on
 the small callee bodies it copies.
 
 Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, signature, check, modes, lower, run-config, core-contract and the native backends. Only cli, conformance and pipeline-tests (and the registry-backed harnesses of check and modes, as dev-dependencies) depend on this crate.
+
+Native tool paths are explicit absolute inputs: `LLVM_SYS_211_PREFIX`,
+`HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`,
+`HIRSEL_VALGRIND` and `VALGRIND_LIB`. The Buck2 test launcher supplies them
+from the pinned toolchains. Missing or relative paths refuse construction;
+there is no PATH search or system LLVM fallback. The input clang launcher
+selects the input lld, and memcheck launches retain their input library path
+when the child's environment is cleared.

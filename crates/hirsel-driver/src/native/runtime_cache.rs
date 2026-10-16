@@ -176,10 +176,9 @@ fn context(
         version(Command::new(prefix.join("bin/clang")).arg("--version"))?,
     ];
     if target.triple.starts_with("aarch64") {
-        parts.push(b"CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc".to_vec());
-        parts.push(version(
-            Command::new("aarch64-linux-gnu-gcc").arg("--version"),
-        )?);
+        let compiler = super::link::environment_path("HIRSEL_AARCH64_CC")?;
+        parts.push(compiler.as_os_str().as_encoded_bytes().to_vec());
+        parts.push(version(Command::new(compiler).arg("--version"))?);
     }
     let mut flags: Vec<_> = std::env::vars_os()
         .filter(|(name, _)| {

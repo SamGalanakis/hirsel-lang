@@ -249,7 +249,7 @@ int main(void) {{
         );
         let llvm_prefix = std::env::var_os("LLVM_SYS_211_PREFIX")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| "/usr/lib/llvm-21".into());
+            .expect("LLVM_SYS_211_PREFIX names the pinned toolchain input");
         let disassembly = Command::new(llvm_prefix.join("bin/llvm-objdump"))
             .args(["-d", "--no-show-raw-insn"])
             .arg(scratch.join("time.o"))

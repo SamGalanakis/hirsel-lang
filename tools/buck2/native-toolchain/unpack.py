@@ -75,6 +75,9 @@ def unpack(kind, output, archives):
             for source in (tree / "usr/lib/x86_64-linux-gnu").glob("*.so*"):
                 if source.is_file():
                     shutil.copy2(source, output / "lib" / source.name)
+            wrapper = output / "bin/hirsel-clang"
+            wrapper.write_text('#!/bin/sh\ntree="$(cd "$(dirname "$0")/.." && pwd)"\nLD_LIBRARY_PATH="$tree/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$tree/bin/clang" --ld-path="$tree/bin/ld.lld" "$@"\n')
+            wrapper.chmod(0o755)
         elif kind == "qemu":
             output.mkdir()
             shutil.copy2(tree / "usr/bin/qemu-aarch64-static", output / "qemu-aarch64")

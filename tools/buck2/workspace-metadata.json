@@ -1,0 +1,1739 @@
+{
+  "packages": [
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-check-protocol",
+          "path": "crates/hirsel-check-protocol",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-engine",
+          "path": "crates/hirsel-engine",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-lexer",
+          "path": "crates/hirsel-lexer",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-parser",
+          "path": "crates/hirsel-parser",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-resolve",
+          "path": "crates/hirsel-resolve",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-signature",
+          "path": "crates/hirsel-signature",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "proptest",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-check"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-check-protocol"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-driver",
+          "path": "crates/hirsel-driver",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-engine",
+          "path": "crates/hirsel-engine",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-cli"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-codec"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-driver",
+          "path": "crates/hirsel-driver",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-engine",
+          "path": "crates/hirsel-engine",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-conformance"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-core-contract"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "unicode-width",
+          "req": "^0.2",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-diag"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-check",
+          "path": "crates/hirsel-check",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-check-protocol",
+          "path": "crates/hirsel-check-protocol",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-engine",
+          "path": "crates/hirsel-engine",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-heapcheck",
+          "path": "crates/hirsel-heapcheck",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-interp",
+          "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-llvm",
+          "path": "crates/hirsel-llvm",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lower",
+          "path": "crates/hirsel-lower",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-modes",
+          "path": "crates/hirsel-modes",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-rc",
+          "path": "crates/hirsel-rc",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-rt",
+          "path": "crates/hirsel-rt",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-signature",
+          "path": "crates/hirsel-signature",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "libc",
+          "req": "^0.2",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "sha2",
+          "req": "^0.10",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-lexer",
+          "path": "crates/hirsel-lexer",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-parser",
+          "path": "crates/hirsel-parser",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-proof-export",
+          "path": "crates/hirsel-proof-export",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-resolve",
+          "path": "crates/hirsel-resolve",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-validate",
+          "path": "crates/hirsel-validate",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-driver"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-check-protocol",
+          "path": "crates/hirsel-check-protocol",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-fmt",
+          "path": "crates/hirsel-fmt",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-interp",
+          "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lexer",
+          "path": "crates/hirsel-lexer",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-parser",
+          "path": "crates/hirsel-parser",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-proof-export",
+          "path": "crates/hirsel-proof-export",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-resolve",
+          "path": "crates/hirsel-resolve",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-validate",
+          "path": "crates/hirsel-validate",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": "build",
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-engine"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-lexer",
+          "path": "crates/hirsel-lexer",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-parser",
+          "path": "crates/hirsel-parser",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-fmt"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-heapcheck"
+    },
+    {
+      "dependencies": [],
+      "name": "hirsel-intern"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-kernels",
+          "path": "crates/hirsel-kernels",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "sha2",
+          "req": "^0.10",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-validate",
+          "path": "crates/hirsel-validate",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-interp"
+    },
+    {
+      "dependencies": [],
+      "name": "hirsel-kernels"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-lexer"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-lir"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "llvm-sys",
+          "req": "=211.0.1",
+          "uses_default_features": false
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-heapcheck",
+          "path": "crates/hirsel-heapcheck",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-interp",
+          "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-llvm"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-check-protocol",
+          "path": "crates/hirsel-check-protocol",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-interp",
+          "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-validate",
+          "path": "crates/hirsel-validate",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "insta",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-lower"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-check",
+          "path": "crates/hirsel-check",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-check-protocol",
+          "path": "crates/hirsel-check-protocol",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-driver",
+          "path": "crates/hirsel-driver",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-engine",
+          "path": "crates/hirsel-engine",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-lexer",
+          "path": "crates/hirsel-lexer",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-parser",
+          "path": "crates/hirsel-parser",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-resolve",
+          "path": "crates/hirsel-resolve",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-signature",
+          "path": "crates/hirsel-signature",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "proptest",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-modes"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "insta",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "proptest",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-parser"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": "dev",
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-driver",
+          "path": "crates/hirsel-driver",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-engine",
+          "path": "crates/hirsel-engine",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-heapcheck",
+          "path": "crates/hirsel-heapcheck",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-interp",
+          "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-rc",
+          "path": "crates/hirsel-rc",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-rt",
+          "path": "crates/hirsel-rt",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-validate",
+          "path": "crates/hirsel-validate",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "insta",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "proptest",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "rustls",
+          "req": "=0.23.46",
+          "uses_default_features": false
+        },
+        {
+          "kind": "dev",
+          "name": "sha2",
+          "req": "^0.10",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-pipeline-tests"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-validate",
+          "path": "crates/hirsel-validate",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-proof-export"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-heapcheck",
+          "path": "crates/hirsel-heapcheck",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-rc"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "proptest",
+          "req": "^1",
+          "uses_default_features": false
+        }
+      ],
+      "name": "hirsel-resolve"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-kernels",
+          "path": "crates/hirsel-kernels",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "libc",
+          "req": "^0.2",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
+          "name": "rustls",
+          "req": "=0.23.46",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "sha2",
+          "req": "^0.10",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "webpki-roots",
+          "req": "=1.0.9",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-interp",
+          "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-rt",
+          "path": "crates/hirsel-rt",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-rt"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "serde",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "sha2",
+          "req": "^0.10",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-run-config"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-check-protocol",
+          "path": "crates/hirsel-check-protocol",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-signature"
+    },
+    {
+      "dependencies": [],
+      "name": "hirsel-span"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "sha2",
+          "req": "^0.10",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-syntax"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-tir"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-types"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-intern",
+          "path": "crates/hirsel-intern",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-diag",
+          "path": "crates/hirsel-diag",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-span",
+          "path": "crates/hirsel-span",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-validate"
+    }
+  ]
+}

@@ -118,7 +118,7 @@ RUNTIME_DATA = {
         "crates/hirsel-rt/include/**", "docs/spec/**", "native-tests/**", "tools/native-toolchain/**",
     ],
     "hirsel-rc": [*CORPUS_DATA, "crates/hirsel-rt/include/**", "native-tests/**"],
-    "hirsel-rt": [*CORPUS_DATA, "native-tests/**", "tools/native-toolchain/**"],
+    "hirsel-rt": [*CORPUS_DATA, "native-tests/**", "tools/native-toolchain/**", "Cargo.lock"],
 }
 
 # What a test binary reads at run time from its own crate, beyond the non-Rust
@@ -145,16 +145,6 @@ TEST_DATA = {
 NATIVE_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-llvm", "hirsel-pipeline-tests", "hirsel-rc", "hirsel-rt"}
 RUNTIME_ARCHIVES = "//:hirsel-rt-archives"
 
-# Cases that need tools the pool image does not carry (Cargo itself, the
-# AArch64 cross toolchain, qemu-user): they run on the invoking host as
-# `<test>-host`.
-HOST_CASES = {
-    "hirsel-lir-test-it": ["dependencies::"],
-    "hirsel-rt-test-it": ["abi::"],
-    # Links for AArch64 with the cross gcc and runs under qemu-user.
-    "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry"],
-}
-
 # Cases that call full_matrix (44 configurations) for toolchain or configuration
 # discovery: every run outside the full gate skips them by name, and
 # `-c hirsel.full=true` runs them (tools/buck2/defs.bzl).
@@ -162,34 +152,6 @@ FULL_GATE_SKIPS = {
     "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry"],
     "hirsel-conformance-test-it": ["native_gate::stored_configuration_retains_independent_seeds_and_baseline_names"],
 }
-
-# Full-gate tests often call a module-local helper rather than naming their
-# toolchain in the test body. Route all full-gate siblings in such a module
-# conservatively, including x86-only controls. Filters are function names,
-# which also cover tests inside inline modules without parsing Rust syntax.
-FULL_GATE_CASE = re.compile(r"\bfn\s+(full_gate_\w+)\s*\(")
-HOST_TOOLS = re.compile(
-    r"\b(?:full_matrix|aarch64\w*|qemu\w*|valgrind|lean|lake)\b"
-    r'|#\[ignore\s*=\s*"full gate: host tools"\]',
-    re.IGNORECASE,
-)
-
-
-def host_cases(name: str, source_dir: pathlib.Path, crate_root: pathlib.Path) -> list[str]:
-    """Host filters derived from tool use, guarded by generated BUCK freshness.
-
-    Scan complete modules so a helper's full_matrix or cross linker counts.
-    An opaque external helper can declare its requirement with
-    #[ignore = "full gate: host tools"]. Ordinary/manual tests keep their
-    existing routing; this discovery only adds full_gate_ cases.
-    """
-    cases = set(HOST_CASES.get(name, []))
-    for source in sorted(set(source_dir.rglob("*.rs")) | {crate_root}):
-        text = source.read_text()
-        if HOST_TOOLS.search(text):
-            cases.update(FULL_GATE_CASE.findall(text))
-    return sorted(cases)
-
 
 # Tests that draw random cases. Their binaries run under a seed that is part
 # of the test's action key (TEST_SEED in defs.bzl), so a cached pass covers
@@ -284,19 +246,19 @@ GATE_TESTS = [
            args=["--seed", "1", "--shard", f"{index}/{AGREE_FULL_SHARDS}"], release=True, **GATE)
       for index in range(1, AGREE_FULL_SHARDS + 1)),
     dict(name="gate-agree-native-full", full=True, binary="//:hirsel-conformance-bin-agree", args=["--seed", "1", "--native", "full"],
-         release=True, runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE),
+         release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-native-full", full=True, binary="//:hirsel-conformance-bin-native", args=["--full"], release=True,
-         runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, **GATE),
     *(dict(name=f"gate-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
            args=["--full", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
-           runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE)
+           runtime_archives=RUNTIME_ARCHIVES, **GATE)
       for index in range(1, NATIVE_FULL_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
-         runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",
          args=["--hash-seed", "1"], **GATE),
     dict(name="gate-native-hash-sweep", full=True, binary="//:hirsel-conformance-bin-native", args=["--hash-sweep", "--hash-seed", "1"],
-         release=True, runtime_archives=RUNTIME_ARCHIVES, host=True, **GATE),
+         release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE),
 ]
 
 INCLUDE = re.compile(r'\binclude(?:_str|_bytes)?!\(\s*"([^"]+)"\s*\)')
@@ -497,6 +459,8 @@ def test_data(binary: str, package: str, package_dir: pathlib.Path, src: pathlib
     The package manifest keeps the directory the test runs from in its inputs."""
     paths = RUNTIME_DATA.get(package, []) + TEST_DATA.get(binary, []) + [relative(package_dir / "Cargo.toml")]
     expression = f"glob({starlark(paths, 4)})"
+    if binary == "hirsel-lir-test-it":
+        expression += ' + ["//tools/buck2:workspace-metadata.json"]'
     own = target_dir(package_dir, src)
     if own != package_dir / "tests":
         directory = relative(own)
@@ -544,7 +508,7 @@ def first_party(meta: dict) -> str:
     opt_levels = dev_opt_levels()
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_test")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_test")\n',
     ]
 
     def label(package_id: str) -> str:
@@ -611,7 +575,6 @@ def first_party(meta: dict) -> str:
                 ))
             if lib.get("test", True):
                 out.append("\n" + call("hirsel_test", **profile, name=f"{name}-unittest", deps=test_deps,
-                                        host_cases=host_cases(f"{name}-unittest", target_dir(package_dir, src), src) or None,
                                         **test_attrs(f"{name}-unittest", src), **attrs))
         own = [f"//:{name}"] if lib else []
         for target in package["targets"]:
@@ -630,7 +593,6 @@ def first_party(meta: dict) -> str:
                 out.append("\n" + call("hirsel_binary", **profile, name=f"{name}-bin-{target['name']}", bin_name=target["name"], deps=own + normal, **attrs))
                 if target.get("test", True):
                     out.append("\n" + call("hirsel_test", **profile, name=f"{name}-bin-{target['name']}-unittest", deps=own + normal,
-                                             host_cases=host_cases(f"{name}-bin-{target['name']}-unittest", target_dir(package_dir, src), src) or None,
                                              **test_attrs(f"{name}-bin-{target['name']}-unittest", src), **attrs))
             elif kind == "example":
                 out.append("\n" + call("hirsel_binary", **profile, name=f"{name}-example-{target['name']}", bin_name=target["name"], deps=own + test_deps, **attrs))
@@ -642,10 +604,15 @@ def first_party(meta: dict) -> str:
                 count, costs = shards(f"{name}-test-{target['name']}")
                 out.append("\n" + call("hirsel_test", **profile, name=f"{name}-test-{target['name']}", deps=own + test_deps, bin_exes=binaries,
                                          shards=count if count > 1 else None, costs=costs,
-                                         host_cases=host_cases(f"{name}-test-{target['name']}", target_dir(package_dir, src), src) or None,
                                          **test_attrs(f"{name}-test-{target['name']}", src), **attrs))
     for gate in GATE_TESTS:
         out.append("\n" + call("hirsel_command_test", **gate, data=Raw(f"glob({starlark(CORPUS, 4)})")))
+    for name, script, data, archives in (
+        ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
+        ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),
+        ("gate-native-toolchain-pin", "tools/native-toolchain/check", ["tools/native-toolchain/**", "Cargo.lock"], None),
+    ):
+        out.append("\n" + call("hirsel_script_test", name=name, script=script, data=Raw(f"glob({starlark(data, 4)})"), runtime_archives=archives))
     return "".join(out)
 
 
@@ -698,6 +665,14 @@ def check_test_data(buck: str) -> None:
 def generate(out_root: pathlib.Path) -> None:
     meta = metadata(ROOT / "Cargo.toml")
     write_third_party(meta, out_root / "third-party")
+    workspace = {p["id"] for p in meta["packages"] if p["id"] in meta["workspace_members"]}
+    packages = [{"name": p["name"], "dependencies": [
+        {key: (str(pathlib.Path(value).relative_to(ROOT)) if key == "path" and value else value)
+         for key, value in dependency.items() if key in ("name", "kind", "path", "req", "uses_default_features")}
+        for dependency in p["dependencies"]]} for p in meta["packages"] if p["id"] in workspace]
+    metadata_file = out_root / "tools/buck2/workspace-metadata.json"
+    metadata_file.parent.mkdir(parents=True, exist_ok=True)
+    metadata_file.write_text(json.dumps({"packages": packages}, indent=2, sort_keys=True) + "\n")
     buck = first_party(meta)
     check_classes(buck)
     check_test_data(buck)
@@ -728,7 +703,7 @@ def native_toolchain_pins() -> str:
             + "\nNATIVE = " + json.dumps({k: v for k, v in pins.items() if k != "schema"}, indent=4) + "\n")
 
 
-GENERATED = ["tools/native-toolchain/pins.bzl","BUCK", "third-party/BUCK", "third-party/Cargo.toml", "third-party/Cargo.lock", "third-party/lib.rs", "tools/buck2/exec_sizes.bzl"]
+GENERATED = ["tools/buck2/workspace-metadata.json", "tools/native-toolchain/pins.bzl", "BUCK", "third-party/BUCK", "third-party/Cargo.toml", "third-party/Cargo.lock", "third-party/lib.rs", "tools/buck2/exec_sizes.bzl"]
 
 
 def main() -> int:

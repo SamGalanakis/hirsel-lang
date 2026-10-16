@@ -1845,14 +1845,19 @@ fn c_probes_agree_on_both_targets() {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join(format!("probe-{triple}.c"));
         std::fs::write(&file, &probe).unwrap();
-        let out = std::process::Command::new("clang")
-            .args(["-std=c11", "-ffreestanding", "-fsyntax-only"])
-            .arg(format!("--target={triple}"))
-            .arg("-I")
-            .arg(golden_dir())
-            .arg(&file)
-            .output()
-            .expect("clang is installed on the native host");
+        let out = std::process::Command::new(
+            std::path::PathBuf::from(
+                std::env::var_os("LLVM_SYS_211_PREFIX").expect("LLVM_SYS_211_PREFIX"),
+            )
+            .join("bin/clang"),
+        )
+        .args(["-std=c11", "-ffreestanding", "-fsyntax-only"])
+        .arg(format!("--target={triple}"))
+        .arg("-I")
+        .arg(golden_dir())
+        .arg(&file)
+        .output()
+        .expect("the pinned clang input is executable");
         assert!(
             out.status.success(),
             "{triple}: {}\n{probe}",

@@ -30,8 +30,7 @@ TEST_TMPDIR = "buck-out/tmp/cargo-target-tmpdir"
 # though rustc reads only the path.
 BIN_EXE_DIR = "buck-out/tmp/cargo-bin-exe"
 
-# `-c hirsel.tests=host` runs every test on the invoking host, for stages that
-# need host tools (qemu-user, the AArch64 cross toolchain, Valgrind, Lean);
+# `-c hirsel.tests=host` explicitly opts into execution on the invoking host;
 # `-c hirsel.tests=focus` keeps them on the pool at one CPU each (platforms.bzl).
 TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
 # The seed of every randomly seeded test (PROPTEST_RNG_SEED). It is part of the
@@ -42,9 +41,9 @@ TEST_SEED = read_root_config("hirsel", "test_seed", "1")
 def _request(binary):
     return [str(field) for field in test_request(binary)]
 
-def _test_platform(host, binary):
+def _test_platform(binary):
     """The invoking host, or the pool request measured for `binary` (its shards share it)."""
-    return [budget_constraint("host" if host or TESTS_ON_HOST else test_budget_name(binary))]
+    return [budget_constraint("host" if TESTS_ON_HOST else test_budget_name(binary))]
 
 def _from_package(manifest_dir, path):
     """`path`, relative to the repository root, as seen from `manifest_dir`."""
@@ -173,19 +172,23 @@ def hirsel_binary(name, bin_name, crate, crate_root, srcs, features, deps, manif
         visibility = ["PUBLIC"],
     )
 
-def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, host = False, shards = 1, costs = None, host_cases = [], opt_level = None, seeded = False, skips = []):
+def native_tool_inputs():
+    return {
+        "HIRSEL_AARCH64_TOOLCHAIN": "root//tools/buck2/native-toolchain:arm",
+        "HIRSEL_QEMU_TOOLCHAIN": "root//tools/buck2/native-toolchain:qemu",
+        "HIRSEL_VALGRIND_TOOLCHAIN": "root//tools/buck2/native-toolchain:valgrind",
+    }
+
+def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
     """A libtest harness (`rustc --test`) and the test that runs it.
 
     `bin_exes` are the package's binaries, as Cargo's CARGO_BIN_EXE_<name>.
     `data` are the files the test reads at run time; `runtime_archives` the
-    native runtime archives it links programs with; `host` runs it on the
-    invoking host, for tests that need the host's cross tools. `shards` splits
+    native runtime archives it links programs with. `shards` splits
     the cases over that many test targets `<name>-shard-<i>`, run in parallel,
     balanced by the measured seconds per case in the `costs` table.
-    `host_cases` are substring patterns over full test names. The caller's
-    libtest selection is intersected with this partition: matching cases run
-    by `<name>-host`, and all others run on the pool. `seeded` binaries draw
-    random cases, and run under `TEST_SEED`. `skips` are exact case names every
+    `seeded` binaries draw random cases and run under `TEST_SEED`.
+    `skips` are exact case names every
     run skips except the full gate's (`-c hirsel.full=true`).
     """
     harness = name + "-harness"
@@ -211,33 +214,24 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         bin_exes = bin_exes,
         bin_exe_dir = bin_exe_dir,
         runtime_archives = runtime_archives,
-        llvm = "toolchains//:llvm",
+        llvm = "root//tools/buck2/native-toolchain:llvm",
+        native_tools = native_tool_inputs() if runtime_archives else {},
         cwd = manifest_dir,
-        host_cases = host_cases,
         test_binary = name,
         request = _request(name),
         seed = TEST_SEED if seeded else "",
         args = [] if FULL_GATE else [argument for case in skips for argument in ("--skip", case)],
         visibility = ["PUBLIC"],
     )
-    if host_cases:
-        _rust_test(
-            name = name + "-host",
-            host_only = True,
-            labels = ["host"],
-            exec_compatible_with = _test_platform(True, name),
-            pool = False,
-            **common
-        )
     for shard in range(shards):
         _rust_test(
             name = name if shards == 1 else "{}-shard-{}".format(name, shard + 1),
             shard_index = shard,
             shards = shards if shards > 1 else 0,
             costs = costs if shards > 1 else None,
-            labels = ["host"] if host else [],
-            exec_compatible_with = _test_platform(host, name),
-            pool = not (host or TESTS_ON_HOST),
+            labels = [],
+            exec_compatible_with = _test_platform(name),
+            pool = not TESTS_ON_HOST,
             **common
         )
 
@@ -246,6 +240,8 @@ def _rust_test_impl(ctx):
     exes = {bin: dep[DefaultInfo].default_outputs[0] for bin, dep in ctx.attrs.bin_exes.items()}
     inputs = ctx.attrs.data + [exe for _, exe in sorted(exes.items())] + [llvm]
     inputs += ctx.attrs._llvm_libraries[DefaultInfo].default_outputs
+    tools = {name: dep[DefaultInfo].default_outputs[0] for name, dep in ctx.attrs.native_tools.items()}
+    inputs += list(tools.values())
     env = {
         "HIRSEL_TEST_CWD": ctx.attrs.cwd,
         "HIRSEL_TEST_TMPDIR": TEST_TMPDIR,
@@ -255,15 +251,12 @@ def _rust_test_impl(ctx):
         # target and shard, as they are part of the action key.
         "TEST_TARGET": str(ctx.label.raw_target()),
     }
+    env.update({name: cmd_args(tree) for name, tree in tools.items()})
     if exes:
         env["HIRSEL_TEST_BIN_EXE_DIR"] = ctx.attrs.bin_exe_dir
         env["HIRSEL_TEST_BIN_EXES"] = cmd_args([cmd_args(bin, "=", exe, delimiter = "") for bin, exe in sorted(exes.items())], delimiter = " ")
     if ctx.attrs.test_binary:
         env["HIRSEL_TEST_BINARY"] = ctx.attrs.test_binary
-    if ctx.attrs.host_cases:
-        env["HIRSEL_TEST_HOST_CASES"] = " ".join(ctx.attrs.host_cases)
-    if ctx.attrs.host_only:
-        env["HIRSEL_TEST_HOST_ONLY"] = "1"
     if ctx.attrs.shards:
         # Bazel's sharding variables: the 0-based shard of TEST_TOTAL_SHARDS.
         env["TEST_SHARD_INDEX"] = str(ctx.attrs.shard_index)
@@ -281,6 +274,10 @@ def _rust_test_impl(ctx):
         archives = ctx.attrs.runtime_archives[DefaultInfo].default_outputs[0]
         inputs.append(archives)
         env["HIRSEL_RUNTIME_ARCHIVES"] = cmd_args(archives)
+    if ctx.attrs.native_selection:
+        selection = ctx.attrs.native_selection[DefaultInfo].default_outputs[0]
+        inputs.append(selection)
+        env["HIRSEL_NATIVE_SELECTION"] = cmd_args(selection)
     command = cmd_args(ctx.attrs._launcher, ctx.attrs.harness[RunInfo], ctx.attrs.args, hidden = inputs)
     return [
         DefaultInfo(default_output = ctx.attrs.harness[DefaultInfo].default_outputs[0]),
@@ -310,10 +307,10 @@ _rust_test = rule(
         "cwd": attrs.string(),
         "data": attrs.list(attrs.source(), default = []),
         "harness": attrs.dep(providers = [RunInfo]),
-        "host_cases": attrs.list(attrs.string(), default = []),
-        "host_only": attrs.bool(default = False),
         "labels": attrs.list(attrs.string(), default = []),
         "llvm": attrs.dep(),
+        "native_selection": attrs.option(attrs.dep(), default = None),
+        "native_tools": attrs.dict(attrs.string(), attrs.dep(), default = {}),
         "pool": attrs.bool(default = False),
         "relocate": attrs.bool(default = False),
         # A pool run's `[cpu, memory_kb, cpu_class]`, for its executor (platforms.bzl).
@@ -337,7 +334,7 @@ def _stage(name):
     stage, sep, shard = name.rpartition("-shard-")
     return stage if sep and shard.isdigit() else name
 
-def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, host = False, release = False, full = False):
+def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, release = False, full = False, native_selection = None):
     """A gate stage as a test: `binary args...` run from its package directory `cwd`.
 
     On the pool its result is cached by its inputs, so an unchanged corpus and
@@ -358,13 +355,36 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         args = args,
         data = data,
         cwd = cwd,
-        llvm = "toolchains//:llvm",
+        llvm = "root//tools/buck2/native-toolchain:llvm",
+        native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives,
-        labels = ["gate"] + (["host"] if host else []),
-        exec_compatible_with = _test_platform(host, _stage(name)),
-        pool = not (host or TESTS_ON_HOST),
+        labels = ["gate"],
+        exec_compatible_with = _test_platform(_stage(name)),
+        pool = not TESTS_ON_HOST,
         request = _request(_stage(name)),
         relocate = True,
+        native_selection = native_selection,
+        seed = TEST_SEED if full else "",
+        visibility = ["PUBLIC"],
+    )
+
+def _script_binary_impl(ctx):
+    return [DefaultInfo(default_output = ctx.attrs.script), RunInfo(args = cmd_args(ctx.attrs.script))]
+
+_script_binary = rule(impl = _script_binary_impl, attrs = {"script": attrs.source()})
+
+def hirsel_script_test(name, script, data, runtime_archives = None):
+    """A full-gate shell harness with the same hermetic inputs as native Rust tests."""
+    if not FULL_GATE:
+        return
+    binary = name + "-script"
+    _script_binary(name = binary, script = script)
+    _rust_test(
+        name = name, harness = ":" + binary, args = [], data = data, cwd = ".",
+        llvm = "root//tools/buck2/native-toolchain:llvm",
+        native_tools = native_tool_inputs() if runtime_archives else {},
+        runtime_archives = runtime_archives, labels = ["gate"],
+        exec_compatible_with = _test_platform(name), pool = not TESTS_ON_HOST,
         visibility = ["PUBLIC"],
     )
 

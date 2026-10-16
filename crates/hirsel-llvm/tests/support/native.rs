@@ -77,7 +77,7 @@ pub fn runtime_archive(target: &TargetSpec) -> PathBuf {
     let archive = if aarch64(target) {
         command.args(["--target", &target.triple]).env(
             "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
-            "aarch64-linux-gnu-gcc",
+            std::env::var_os("HIRSEL_AARCH64_CC").expect("HIRSEL_AARCH64_CC"),
         );
         target_dir
             .join(&target.triple)
@@ -99,9 +99,14 @@ pub fn link(
     sources: &[PathBuf],
 ) -> PathBuf {
     let mut command = if aarch64(target) {
-        Command::new("aarch64-linux-gnu-gcc")
+        Command::new(std::env::var_os("HIRSEL_AARCH64_CC").expect("HIRSEL_AARCH64_CC"))
     } else {
-        Command::new(llvm_prefix().join("bin/clang"))
+        let mut command = Command::new(llvm_prefix().join("bin/clang"));
+        command.arg(format!(
+            "--ld-path={}",
+            llvm_prefix().join("bin/ld.lld").display()
+        ));
+        command
     };
     command
         .args([
@@ -150,9 +155,9 @@ pub fn link(
 pub fn run(target: &TargetSpec, executable: &Path) -> String {
     if aarch64(target) {
         output(
-            Command::new("qemu-aarch64-static")
+            Command::new(std::env::var_os("HIRSEL_QEMU_AARCH64").expect("HIRSEL_QEMU_AARCH64"))
                 .arg("-L")
-                .arg("/usr/aarch64-linux-gnu")
+                .arg(std::env::var_os("HIRSEL_AARCH64_SYSROOT").expect("HIRSEL_AARCH64_SYSROOT"))
                 .arg(executable),
         )
     } else {

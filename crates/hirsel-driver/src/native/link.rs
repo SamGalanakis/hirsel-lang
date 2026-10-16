@@ -26,6 +26,9 @@ pub struct Toolchain {
     /// The user-mode emulator AArch64 executables run under, and its sysroot.
     pub qemu_aarch64: PathBuf,
     pub aarch64_sysroot: PathBuf,
+    /// The pinned memcheck executable and its relocated support directory.
+    pub valgrind: PathBuf,
+    pub valgrind_lib: PathBuf,
     /// `libhirsel_rt.a` per target triple and archive variant.
     pub runtime: BTreeMap<(String, RuntimeBuild), PathBuf>,
     /// A checking tool an x86-64 executable is launched under (Valgrind
@@ -162,7 +165,7 @@ fn checked(stage: StageName, command: &mut Command) -> Result<(), NativeError> {
 
 impl Toolchain {
     /// The toolchain of a source checkout: the pinned LLVM prefix
-    /// (`LLVM_SYS_211_PREFIX`), the installed cross tools, and the runtime
+    /// (`LLVM_SYS_211_PREFIX`), explicit cross-tool inputs, and the runtime
     /// archive of each listed target: Buck2's under `HIRSEL_RUNTIME_ARCHIVES`, or
     /// built by Cargo with aborting panics into `build_dir`.
     pub fn in_tree(build_dir: &Path, targets: &[&TargetSpec]) -> Result<Self, NativeError> {
@@ -206,9 +209,8 @@ impl Toolchain {
                 "a toolchain needs a runtime archive",
             ));
         };
-        let prefix = std::env::var_os("LLVM_SYS_211_PREFIX")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| "/usr/lib/llvm-21".into());
+        let prefix = environment_path("LLVM_SYS_211_PREFIX")?;
+        let aarch64_cc = environment_path("HIRSEL_AARCH64_CC")?;
         // A build that makes the runtime archives itself (Buck2, tools/buck2/README.md)
         // names their directory: `<dir>/<triple>/<features or default>/libhirsel_rt.a`.
         // Cargo is then never run, and a missing archive is an error.
@@ -253,10 +255,9 @@ impl Toolchain {
                         command.args(["--features", &features]);
                     }
                     let archive = if aarch64(target) {
-                        command.args(["--target", &target.triple]).env(
-                            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
-                            "aarch64-linux-gnu-gcc",
-                        );
+                        command
+                            .args(["--target", &target.triple])
+                            .env("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", &aarch64_cc);
                         build_dir
                             .join(&target.triple)
                             .join("release/libhirsel_rt.a")
@@ -271,10 +272,12 @@ impl Toolchain {
         }
         Ok(Self {
             runtime_build,
-            clang: prefix.join("bin/clang"),
-            aarch64_cc: "aarch64-linux-gnu-gcc".into(),
-            qemu_aarch64: on_path("qemu-aarch64-static"),
-            aarch64_sysroot: "/usr/aarch64-linux-gnu".into(),
+            clang: prefix.join("bin/hirsel-clang"),
+            aarch64_cc,
+            qemu_aarch64: environment_path("HIRSEL_QEMU_AARCH64")?,
+            aarch64_sysroot: environment_path("HIRSEL_AARCH64_SYSROOT")?,
+            valgrind: environment_path("HIRSEL_VALGRIND")?,
+            valgrind_lib: environment_path("VALGRIND_LIB")?,
             runtime,
             wrapper: Vec::new(),
             launch_timeout: LAUNCH_TIMEOUT,
@@ -298,21 +301,26 @@ impl Toolchain {
     }
 }
 
-/// `program` as this process's PATH finds it. Launches clear the child's
-/// environment, and a bare name would then be searched only in the libc
-/// default path (/bin:/usr/bin), ignoring a user-local toolchain on PATH.
-fn on_path(program: &str) -> PathBuf {
-    on_path_in(program, std::env::var_os("PATH").as_deref())
+/// Tools are explicit action inputs. Bare executable names would search libc's
+/// default PATH after launch clears the environment, escaping the selected tree.
+pub(super) fn environment_path(name: &str) -> Result<PathBuf, NativeError> {
+    configured_path(name, std::env::var_os(name))
 }
 
-fn on_path_in(program: &str, paths: Option<&std::ffi::OsStr>) -> PathBuf {
-    paths
-        .and_then(|paths| {
-            std::env::split_paths(paths)
-                .map(|dir| dir.join(program))
-                .find(|path| path.is_file())
-        })
-        .unwrap_or_else(|| program.into())
+fn configured_path(name: &str, value: Option<std::ffi::OsString>) -> Result<PathBuf, NativeError> {
+    let path = value.map(PathBuf::from).ok_or_else(|| {
+        NativeError::new(
+            StageName::Link,
+            format!("{name} must name an absolute toolchain input"),
+        )
+    })?;
+    if !path.is_absolute() {
+        return Err(NativeError::new(
+            StageName::Link,
+            format!("{name} is not absolute: {}", path.display()),
+        ));
+    }
+    Ok(path)
 }
 
 fn aarch64(target: &TargetSpec) -> bool {
@@ -928,6 +936,9 @@ pub fn launch_with(
         .env_clear()
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record);
+    if !toolchain.wrapper.is_empty() {
+        command.env("VALGRIND_LIB", &toolchain.valgrind_lib);
+    }
     if toolchain.runtime_build.measurement {
         command.env("HIRSEL_RT_MEASUREMENT", dir.join("measurement"));
     }
@@ -1040,9 +1051,8 @@ impl Toolchain {
     /// times the timeout.
     pub fn under_memcheck(mut self) -> Self {
         self.launch_timeout = LAUNCH_TIMEOUT * 10;
-        let valgrind = on_path("valgrind");
         self.wrapper = [
-            valgrind.to_string_lossy().as_ref(),
+            self.valgrind.to_string_lossy().as_ref(),
             "--quiet",
             "--error-exitcode=97",
             "--leak-check=full",
@@ -1057,7 +1067,6 @@ impl Toolchain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn a_launch_past_its_timeout_is_killed_with_its_whole_process_group() {
@@ -1087,41 +1096,46 @@ mod tests {
     }
 
     #[test]
-    fn path_resolution_selects_the_first_tool_before_clearing_the_environment() {
-        let root = std::env::temp_dir().join(format!("hirsel-link-path-{}", std::process::id()));
-        let first = root.join("first");
-        let second = root.join("second");
-        for dir in [&first, &second] {
-            std::fs::create_dir_all(dir).unwrap();
-            let tool = dir.join("tool");
-            std::fs::write(&tool, "#!/bin/sh\nprintf '%s' chosen\n").unwrap();
-            std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let paths = std::env::join_paths([&first, &second]).unwrap();
-        let selected = on_path_in("tool", Some(&paths));
-        assert_eq!(selected, first.join("tool"));
-        // A sibling test forking while this test wrote the tool holds its write descriptor
-        // until that child execs, and exec fails ETXTBSY meanwhile; std and Cargo retry the
-        // same fork race. Ten attempts with a doubling backoff wait half a second in all,
-        // far longer than a fork-to-exec window.
-        let output = (0..10)
-            .find_map(
-                |attempt| match Command::new(&selected).env_clear().output() {
-                    Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                        std::thread::sleep(Duration::from_millis(1 << attempt));
-                        None
-                    }
-                    output => Some(output.unwrap()),
-                },
-            )
-            .expect("the tool stayed busy through every attempt");
-        assert!(output.status.success());
-        assert_eq!(output.stdout, b"chosen");
+    fn memcheck_launch_keeps_its_input_library_directory_after_env_clear() {
+        let dir = std::env::temp_dir().join(format!("hirsel-memcheck-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tools = Toolchain {
+            runtime_build: RuntimeBuild::default(),
+            clang: "/unused/clang".into(),
+            aarch64_cc: "/unused/gcc".into(),
+            qemu_aarch64: "/unused/qemu".into(),
+            aarch64_sysroot: "/unused/sysroot".into(),
+            valgrind: "/bin/sh".into(),
+            valgrind_lib: "/inputs/valgrind-support".into(),
+            runtime: BTreeMap::new(),
+            wrapper: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf '%s' \"$VALGRIND_LIB\"".into(),
+            ],
+            launch_timeout: LAUNCH_TIMEOUT,
+        };
+        let launched = launch(
+            Path::new("/unused/program"),
+            &TargetSpec::x86_64_unknown_linux_gnu(),
+            &tools,
+            &dir,
+            false,
+        )
+        .unwrap();
+        assert_eq!(launched.exit, Some(0));
+        assert_eq!(launched.stdout, b"/inputs/valgrind-support");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn configured_tools_refuse_missing_or_path_searched_names() {
+        assert!(configured_path("tool", None).is_err());
+        assert!(configured_path("tool", Some("clang".into())).is_err());
+        assert!(configured_path("tool", Some("relative/clang".into())).is_err());
         assert_eq!(
-            on_path_in("missing", Some(&paths)),
-            PathBuf::from("missing")
+            configured_path("tool", Some("/inputs/clang".into())).unwrap(),
+            Path::new("/inputs/clang")
         );
-        assert_eq!(on_path_in("tool", None), PathBuf::from("tool"));
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

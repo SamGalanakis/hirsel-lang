@@ -34,8 +34,8 @@ Rust is pinned in `rust-toolchain.toml` (1.99.0) and installed by rustup.
 The native backend needs LLVM 21.1.8 (`tools/native-toolchain/llvm-21.lock`);
 `.cargo/config.toml` points `LLVM_SYS_211_PREFIX` at `/usr/lib/llvm-21`
 unless the environment already sets it. `tools/native-toolchain/README.md`
-installs the pinned tree. The full gate also needs qemu-user, the AArch64
-cross toolchain, Valgrind and Lean on the host.
+installs the pinned tree. Native tests carry pinned qemu, an AArch64 cross toolchain and Valgrind as
+Buck2 inputs; only the Lean checks need a host installation.
 
 The build caps itself for a shared host: `.cargo/config.toml` limits Cargo
 to 4 jobs and sets `RUST_TEST_THREADS` and `HIRSEL_JOBS` (in-process worker
@@ -72,7 +72,7 @@ its prelude) come in hermetically; nothing is installed system-wide.
 python3 tools/buck2/prepare.py                  # once per checkout
 .buck2/bin/buck2 build //:
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
-  //:hirsel-lir-test-it-host //:hirsel-lir
+  //:hirsel-lir
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 tools/gate                                      # check the finished change
 tools/land                                      # land it on main
@@ -81,9 +81,8 @@ tools/land                                      # land it on main
 Without further configuration every action runs on this host. Buck2 can
 also use an optional remote-execution pool; its endpoint, credentials and
 platform properties live only in the gitignored `.buckconfig.local`
-(`tools/buck2/README.md`). Use `-c hirsel.tests=host` for tests that need
-qemu, the cross linker or Valgrind; compilation still goes wherever the other
-actions go. More target names and the filtered native commands are in
+(`tools/buck2/README.md`). `-c hirsel.tests=host` explicitly opts into running tests on the invoking
+host; native tools remain pinned inputs in either mode. More target names and the filtered native commands are in
 [tools/buck2/README.md](../tools/buck2/README.md).
 
 ## Gates
@@ -125,7 +124,7 @@ they add or touch, one native campaign at a time across lanes:
 
 ```sh
 flock /workspace/code/hirsel-briefs/locks/native-campaign.lock \
-  .buck2/bin/buck2 test -c hirsel.full=true -c hirsel.tests=host //:gate-native-full -- --test-arg=--filter --test-arg=<program> --timeout 14400
+  .buck2/bin/buck2 test -c hirsel.full=true //:gate-native-full -- --test-arg=--filter --test-arg=<program> --timeout 14400
 ```
 
 Tests that execute the full native matrix or take about a minute or longer

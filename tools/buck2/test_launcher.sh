@@ -7,7 +7,6 @@
 # and test threads and campaign workers bounded by the action's CPU share (at
 # most 4).
 #
-# HIRSEL_TEST_HOST_CASES partitions the caller selection before sharding.
 # TEST_SHARD_INDEX=<i> of TEST_TOTAL_SHARDS=<n> (Bazel's variables, i from 0)
 # runs the i-th of n cost-balanced parts of the listed cases, weighted by
 # HIRSEL_TEST_COSTS when it names a cost table. Given a filter or a value
@@ -57,11 +56,26 @@ else
 fi
 LLVM_SYS_211_PREFIX="$(cd "$LLVM_SYS_211_PREFIX" && pwd)"
 export LLVM_SYS_211_PREFIX
+if [ -n "${HIRSEL_AARCH64_TOOLCHAIN:-}" ]; then
+  arm="$(cd "$HIRSEL_AARCH64_TOOLCHAIN" && pwd)"
+  qemu="$(cd "$HIRSEL_QEMU_TOOLCHAIN" && pwd)"
+  valgrind="$(cd "$HIRSEL_VALGRIND_TOOLCHAIN" && pwd)"
+  export HIRSEL_AARCH64_CC="$arm/bin/aarch64-none-linux-gnu-gcc"
+  export HIRSEL_AARCH64_SYSROOT="$arm/aarch64-none-linux-gnu/libc"
+  export HIRSEL_QEMU_AARCH64="$qemu/qemu-aarch64"
+  export HIRSEL_VALGRIND="$valgrind/bin/valgrind"
+  export VALGRIND_LIB="$valgrind/libexec/valgrind"
+  unset HIRSEL_AARCH64_TOOLCHAIN HIRSEL_QEMU_TOOLCHAIN HIRSEL_VALGRIND_TOOLCHAIN
+fi
 export PATH="$LLVM_SYS_211_PREFIX/bin:${PATH:-/usr/bin:/bin}"
 export LD_LIBRARY_PATH="$LLVM_SYS_211_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ -n "${HIRSEL_RUNTIME_ARCHIVES:-}" ]; then
   HIRSEL_RUNTIME_ARCHIVES="$(cd "$HIRSEL_RUNTIME_ARCHIVES" && pwd)"
   export HIRSEL_RUNTIME_ARCHIVES
+fi
+if [ -n "${HIRSEL_NATIVE_SELECTION:-}" ]; then
+  HIRSEL_NATIVE_SELECTION="$(realpath "$HIRSEL_NATIVE_SELECTION")"
+  export HIRSEL_NATIVE_SELECTION
 fi
 export INSTA_WORKSPACE_ROOT="$root"
 # A pool action's reservation is its cgroup's cpu.max (the worker's action
@@ -113,14 +127,9 @@ shard=""
 if [ -n "${TEST_TOTAL_SHARDS:-}" ]; then shard="$((TEST_SHARD_INDEX + 1))/$TEST_TOTAL_SHARDS"; fi
 costs="${HIRSEL_TEST_COSTS:-}"
 case "$costs" in "" | /*) ;; *) costs="$root/$costs" ;; esac
-host_cases="${HIRSEL_TEST_HOST_CASES:-}"
-host_only="${HIRSEL_TEST_HOST_ONLY:-}"
 test_binary="${HIRSEL_TEST_BINARY:-}"
 unset HIRSEL_TEST_TMPDIR HIRSEL_TEST_CWD HIRSEL_TEST_BIN_EXES HIRSEL_TEST_BIN_EXE_DIR HIRSEL_TEST_COSTS HIRSEL_TEST_POOL HIRSEL_TEST_RELOCATE
-unset HIRSEL_TEST_HOST_CASES HIRSEL_TEST_HOST_ONLY HIRSEL_TEST_BINARY
-# Libtest ORs positional filters. Partition the caller's actual selection,
-# rather than adding host filters to it. Use the harness itself for Rust's
-# substring/exact/skip/ignored semantics; no second filter implementation.
+unset HIRSEL_TEST_BINARY
 full_gate=false
 ignored=false
 for argument in "$@"; do
@@ -129,7 +138,7 @@ for argument in "$@"; do
 done
 inventory=false
 if "$full_gate" && "$ignored" && [ -n "$test_binary" ]; then inventory=true; fi
-if [ -z "$shard$host_cases" ] && ! "$inventory"; then exec "$harness" "$@"; fi
+if [ -z "$shard" ] && ! "$inventory"; then exec "$harness" "$@"; fi
 set -f # Rust case names and declared patterns are words, never shell globs.
 # Value-taking options from the pinned libtest --help. Keep values quoted,
 # even when they contain spaces or look like flags.
@@ -171,16 +180,6 @@ if "$inventory"; then
       printf 'HIRSEL_FULL_GATE_EXPECT %s %s\n' "$test_binary" "$test_case"
     done
   fi
-fi
-if [ -n "$host_cases" ]; then
-  cases="$(printf '%s\n' "$cases" | while IFS= read -r test_case; do
-    [ -n "$test_case" ] || continue
-    on_host=""
-    for pattern in $host_cases; do
-      case "$test_case" in *"$pattern"*) on_host=1; break ;; esac
-    done
-    [ "$on_host" != "$host_only" ] || printf '%s\n' "$test_case"
-  done)"
 fi
 if [ -n "$shard" ]; then
   index="${shard%/*}"

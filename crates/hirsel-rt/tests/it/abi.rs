@@ -284,9 +284,8 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
     };
     // Same resolution as tools/native-toolchain/check: explicit environment prefix,
     // otherwise the lock's prefix; never PATH or an unpinned fallback.
-    let prefix = std::env::var_os("LLVM_SYS_211_PREFIX")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(locked("prefix")));
+    let prefix =
+        PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").expect("LLVM_SYS_211_PREFIX"));
     let config = prefix.join("bin/llvm-config");
     assert_eq!(
         command_output(Command::new(&config).arg("--version")).trim(),
@@ -294,33 +293,30 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
     );
     let bindir = PathBuf::from(command_output(Command::new(&config).arg("--bindir")).trim());
 
-    // Build this exact checkout's staticlib in a separate target directory. Cargo's
-    // outer test process holds the normal target lock, and selecting the newest hashed
-    // archive could silently test stale code after a feature/profile change.
-    let executable = std::env::current_exe().unwrap();
-    let target = executable
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("abi-symbols");
-    command_output(
-        Command::new("cargo")
-            .current_dir(repo)
-            .args([
-                "build",
-                "--locked",
-                "--offline",
-                "-p",
-                "hirsel-rt",
-                "--lib",
-                "--target-dir",
-            ])
-            .arg(&target)
-            .env_remove("CARGO_MAKEFLAGS")
-            .env_remove("MAKEFLAGS"),
-    );
-    let archive = target.join("debug/libhirsel_rt.a");
+    // Buck2 builds this checkout's production archive independently of the
+    // diagnostic test harness. Do not invoke Cargo from a pool test action.
+    let archive = if let Some(archives) = std::env::var_os("HIRSEL_RUNTIME_ARCHIVES") {
+        PathBuf::from(archives).join("x86_64-unknown-linux-gnu/default/libhirsel_rt.a")
+    } else {
+        let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("abi-symbols");
+        command_output(
+            Command::new("cargo")
+                .current_dir(repo)
+                .args([
+                    "build",
+                    "--locked",
+                    "--offline",
+                    "-p",
+                    "hirsel-rt",
+                    "--lib",
+                    "--target-dir",
+                ])
+                .arg(&target)
+                .env_remove("CARGO_MAKEFLAGS")
+                .env_remove("MAKEFLAGS"),
+        );
+        target.join("debug/libhirsel_rt.a")
+    };
     assert!(
         archive.is_file(),
         "missing static archive: {}",

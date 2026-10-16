@@ -37,7 +37,7 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 build //:                        # every first-party target, dev profile, on the pool
 .buck2/bin/buck2 test //...                       # every test
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
-  //:hirsel-lir-test-it-host //:hirsel-lir           # one crate, including host cases and doctests
+  //:hirsel-lir           # one crate, including host cases and doctests
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-2  # one shard of a sharded test binary
 .buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1   # run tests on this host
@@ -70,32 +70,35 @@ neither reuses nor replaces their cached verdicts.
 Arguments after `--` go to Buck2's test runner: `--test-arg=<a>` passes one
 libtest argument, and `--timeout <seconds>` raises the ten-minute limit per
 test. A sharded binary given a case filter runs it all in shard 1. Check the output
-for a nonzero case count. Host and pool targets intersect the caller's selection
-with their declared partition before sharding; even `--exact` cannot put a
-host case on the pool. Host filters are metadata, never extra OR-ed libtest
-arguments. Target names come from Cargo; `-unittest` and
-`-test-it` run unit and integration tests. Add `-test-it-host` for a crate's
-declared host-only cases and the library target for declared doctests, as in
-the LIR example. For a sharded binary, select every `-shard-<i>` target.
+for a nonzero case count. Every test runs on the pool by default, including
+native and full-gate cases. `-c hirsel.tests=host` explicitly opts into host
+execution; it still uses the pinned tool inputs. There are no implicit host
+partitions. Target names come from Cargo; `-unittest` and `-test-it` run unit
+and integration tests, and the library target runs declared doctests. For a
+sharded binary, select every `-shard-<i>` target.
 
 Heavy Buck2 commands run from this host and execute on the pool when one is
 configured. Native changes use a filtered campaign:
 
 ```sh
-.buck2/bin/buck2 test -c hirsel.full=true -c hirsel.tests=host //:gate-native-full -- --test-arg=--filter --test-arg=SEM-4-view-return-source-run --timeout 14400
+.buck2/bin/buck2 test -c hirsel.full=true //:gate-native-full -- --test-arg=--filter --test-arg=SEM-4-view-return-source-run --timeout 14400
 ```
 
-`-c hirsel.tests=host` changes test execution only; rustc stays on the pool.
-Use it for native tests needing qemu, the AArch64 linker or Valgrind, for example:
+Native tests receive LLVM 21.1.8, Arm GNU 14.3.Rel1 with its Linux sysroot,
+static AArch64 qemu and Valgrind as SHA-pinned Buck2 downloads. No worker
+image changes, PATH lookup or binfmt registration are needed. The launcher
+resolves `LLVM_SYS_211_PREFIX`, `HIRSEL_AARCH64_CC`,
+`HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND` and
+`VALGRIND_LIB` to absolute input paths before changing directory. The driver's
+clang launcher selects the input lld. Native launches preserve the selected
+Valgrind support directory when clearing the child's environment.
 
-```sh
-.buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1 -- --test-arg=rc_library_ --test-arg=--include-ignored
-```
-
-The scheduled full gate selects host execution for the full native matrix,
-native agreement, sanitizer and hash sweep. Lean and the runtime C harness
-also run on the invoking host. Keep those tools installed there; the pinned
-Rust/LLVM inputs are bootstrapped by `prepare.py`.
+The full gate's runtime C harness, library C probes and LLVM pin check are
+`//:gate-native-runtime-c`, `//:gate-native-library-c` and
+`//:gate-native-toolchain-pin` under `-c hirsel.full=true`. They run on the
+pool too. Lean still runs on the invoking host. The standalone tool proof is
+`//tools/buck2/native-toolchain:proof`; see
+[the native toolchain](../native-toolchain/README.md).
 
 Target names follow Cargo's targets, all in the root package:
 
@@ -108,7 +111,6 @@ Target names follow Cargo's targets, all in the root package:
 | example `<ex>` | `//:hirsel-x-example-<ex>` |
 | build script | `//:hirsel-x-build-script` |
 | a sharded test binary (`SHARDED` in `sync.py`) | `//:hirsel-x-test-it-shard-<i>` |
-| its cases that need the host (`host_cases` in `sync.py`) | `//:hirsel-x-test-it-host` |
 | a corpus campaign of `tools/gate` | `//:gate-<stage>` (label `gate`) |
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
 | an agreement shard (`AGREE_SHARDS`) | `//:gate-agree-shard-<i>` |
@@ -135,7 +137,7 @@ the checkout through its relative `CARGO_MANIFEST_DIR`. It fails unless a
 case ran, then runs the same cases again without the bless, on the pool, which
 fails unless the rewritten files now pass. `passing` runs
 `hirsel-conformance --update-passing` with `buck2 run --root "$PWD"`, and `exclusions` runs
-`native --full --bless` through the host-only `gate-native-full`.
+`native --full --bless` through `gate-native-full` with explicit host execution.
 
 A pool action reads a copy of the checkout that is discarded afterwards, so a
 bless there writes nothing that lasts: a read-only input fails with a bare
@@ -159,15 +161,11 @@ the old copy.
   change, and after a source adds or drops a literal `include*!` or `#[path]`
   reference, or the corpus a manifest names (rerun `sync.py` and commit the
   result).
-- Full-gate crate cases (`full_gate_` functions) are automatically added to
-  `host_cases` when their source module uses `full_matrix`, an AArch64 target,
-  the cross linker, qemu, Valgrind or Lean. The complete module is scanned so
-  module-local campaign helpers count; full-gate siblings (including x86-only
-  controls) conservatively share host routing. An opaque external helper can
-  declare this with `#[ignore = "full gate: host tools"]`. Existing ordinary
-  host cases stay in `HOST_CASES`. Adding a new full-gate case or host-tool use
-  changes the generated `BUCK`, so `sync.py --check` rejects stale routing.
-  `tools/tests/buck2_sync.py` exercises discovery in the fast gate.
+- Native and full-gate crate cases use the same pool execution path as ordinary
+  tests. The runtime ABI symbol test reads the separately built production
+  archive; the layering test reads `workspace-metadata.json`, generated from
+  Cargo's workspace graph by `sync.py` and checked for freshness. Neither
+  invokes Cargo on a worker.
 - A pool test's passing verdict is cached by its action key. Test binaries
   whose sources draw random cases (`proptest!`, `SEEDED` in `sync.py`) run
   under `PROPTEST_RNG_SEED` from `-c hirsel.test_seed` (default 1), which is in
@@ -252,10 +250,9 @@ them into a shared directory.
   0, its warming class, which gets no reserved worker. A test run carries its
   own executor (`test_executor` in `platforms.bzl`): Buck2 runs tests with it,
   not with their platform's. The priority is not part of an action key. The
-  platforms also include the invoking host for tests labelled `host`: cases that run
-  Cargo, and the stages that need qemu-user, the AArch64 cross toolchain or
-  Valgrind, which the pool image lacks (`-c hirsel.tests=host` runs every test
-  there).
+  platforms also include the invoking host for an explicit
+  `-c hirsel.tests=host` opt-in. Native tools are pinned action inputs in
+  either mode; no test needs those tools installed on the worker image.
 - Profiles (`profile.bzl`): the default target platform `//tools/buck2:dev` is
   Cargo's dev profile (third-party crates at opt-level 1, and the members a
   root `[profile.dev.package.<name>] opt-level` names at that level);

@@ -86,7 +86,7 @@ locked="$(awk '/^\[\[package\]\]/ { name = ""; version = "" }
 # The shared library loads and reports the pinned version at run time.
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
-"$bindir/clang" -std=c11 -Wall -Werror -I"$includedir" "$here/fixtures/version.c" \
+"$bindir/clang" --ld-path="$bindir/ld.lld" -std=c11 -Wall -Werror -I"$includedir" "$here/fixtures/version.c" \
   -L"$libdir" -l"LLVM-$major" -Wl,-rpath,"$libdir" -o "$scratch/version" \
   || fail "could not link fixtures/version.c against $shared"
 loaded="$("$scratch/version")" || fail "fixtures/version.c failed to run against $shared"

@@ -2,8 +2,8 @@
 # Native gate: LLVM emission, the runtime and its C harness, native differential and Lean
 # checks. Run by the full gate and on demand; native changes run native --full --filter
 # for the programs they touch.
-# Buck2 runs the tests (tools/buck2/README.md); stages that need the host's qemu-user, AArch64
-# cross toolchain or Valgrind run on this host (`-c hirsel.tests=host`), the rest on the pool.
+# Buck2 runs native tests, C harnesses and toolchain checks on the pool, with
+# pinned tools as inputs. Lean's model checks still use the invoking host.
 set -Eeuo pipefail
 # Four test threads and campaign workers unless the caller says otherwise.
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" HIRSEL_JOBS="${HIRSEL_JOBS:-4}" RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
@@ -48,37 +48,29 @@ config=(-c hirsel.full=true)
 export HIRSEL_BUCK2_CONFIG="${config[*]}"
 buck2() { local command=$1; shift; .buck2/bin/buck2 "$command" "${config[@]}" "$@"; }
 release=(--target-platforms //tools/buck2:release)
-host=(-c hirsel.tests=host)
 timeout=(--timeout 1800)
 long=(--timeout 14400)
-llvm="$PWD/tools/buck2/toolchains/llvm-files"
 libtest() { local argument; for argument in "$@"; do printf -- '--test-arg=%s\n' "$argument"; done; }
-# The C harnesses link the Buck2 runtime archives; a failed archive build ends the stage.
-with_archives() {
-  local archives
-  archives="$(buck2 build //:hirsel-rt-archives --show-full-simple-output)"
-  HIRSEL_RUNTIME_ARCHIVES="$archives" "$@"
-}
 mapfile -t runtime < <(buck2 uquery 'kind("_rust_test", attrregexfilter(name, "^hirsel-rt-", //...))')
 run_stage "runtime tests" buck2 test "${runtime[@]}" -- "${timeout[@]}"
-run_stage "runtime C harness" with_archives crates/hirsel-rt/harness/run.sh
-run_stage "library C probes" with_archives native-tests/library/run-c.sh
+run_stage "runtime C harness" buck2 test //:gate-native-runtime-c -- "${timeout[@]}"
+run_stage "library C probes" buck2 test //:gate-native-library-c -- "${timeout[@]}"
 run_stage "layout C probes" buck2 test //:hirsel-lir-test-it -- "${timeout[@]}" $(libtest layout:: --ignored)
-run_stage "LLVM toolchain pin" env LD_LIBRARY_PATH="$llvm/lib" tools/native-toolchain/check --prefix "$llvm"
+run_stage "LLVM toolchain pin" buck2 test //:gate-native-toolchain-pin -- "${timeout[@]}"
 # They link AArch64 programs with the cross gcc and run them under qemu-user.
-run_stage "LLVM backend tests" buck2 test "${host[@]}" //:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)
+run_stage "LLVM backend tests" buck2 test //:hirsel-llvm-unittest //:hirsel-llvm-test-it -- "${timeout[@]}" $(libtest --include-ignored)
 run_stage "Lean RC model audit" proofs/rc/audit.sh
 run_stage "Lean RC model vectors" proofs/rc/check-vectors.sh
 mapfile -t driver < <(buck2 uquery 'attrregexfilter(name, "^hirsel-driver-test-it(-shard-[0-9]+)?$", //...)')
 run_stage "native stages end to end: full matrix on both targets and 22 link partitions" \
-  buck2 test "${host[@]}" "${release[@]}" "${driver[@]}" -- "${long[@]}" \
+  buck2 test "${release[@]}" "${driver[@]}" -- "${long[@]}" \
   $(libtest native:: --include-ignored --test-threads=4)
 run_stage "native smoke with real Io record and replay" buck2 test //:gate-native-smoke -- "${timeout[@]}"
 run_stage "native executables under Valgrind memcheck" buck2 test //:gate-native-sanitize -- "${long[@]}"
 run_stage "native library bodies on both targets" \
-  buck2 test "${host[@]}" //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_library_ --include-ignored --test-threads=4)
+  buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_library_ --include-ignored --test-threads=4)
 run_stage "native Map and Set laws: hash seeds, structural order and failure sites" \
-  buck2 test "${host[@]}" //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_maps_native:: --include-ignored --test-threads=1)
+  buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_maps_native:: --include-ignored --test-threads=1)
 if (( ${#failed_stages[@]} > 0 )); then
   printf 'check-native.sh: %d failing stages: %s\n' "${#failed_stages[@]}" "$(IFS=';'; echo "${failed_stages[*]}")" >&2
   echo "check-native.sh: failed ($((SECONDS - gate_start)) s)" >&2

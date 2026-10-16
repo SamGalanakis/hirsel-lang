@@ -129,6 +129,11 @@ fn check_edge(from: &str, to: &str, kind: Kind) -> Result<(), String> {
 
 fn metadata() -> Value {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let prepared = std::path::Path::new(root).join("tools/buck2/workspace-metadata.json");
+    if prepared.is_file() {
+        return serde_json::from_slice(&std::fs::read(prepared).unwrap())
+            .expect("prepared Cargo metadata JSON");
+    }
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let output = Command::new(cargo)
         .args([

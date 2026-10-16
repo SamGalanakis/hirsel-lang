@@ -16,7 +16,8 @@ depend on the native implementation crates, which depend on this crate. Test-onl
 `serde_json` (`cargo metadata`). The manifest checks against the driver's
 registry inventory and interface version live in the driver's
 `tests/it/lir_schema.rs`. `tests/it/dependencies.rs` enforces the crate layering for the
-whole workspace.
+whole workspace. Buck2 supplies Cargo metadata generated and freshness-checked
+by `tools/buck2/sync.py`, so this test needs no Cargo on a worker.
 
 Invariants:
 

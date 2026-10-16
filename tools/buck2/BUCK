@@ -76,3 +76,5 @@ host_transition(
     cpu = "prelude//cpu/constraints:x86_64",
     visibility = ["PUBLIC"],
 )
+
+export_file(name = "workspace-metadata.json", visibility = ["PUBLIC"])

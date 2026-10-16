@@ -270,7 +270,7 @@ Tests:
   `hirsel_lir::layout::LayoutBuilder` and seal every unit with `hirsel_lir::validate`.
 - `tools/check-native.sh` adds `--include-ignored`: `tests/it/native.rs` links emitted objects with
   C harnesses and the `hirsel_rt_v2` archive and runs them on x86-64 and under
-  `qemu-aarch64-static`: the smoke fixture, the scalar boundary matrix against an
+  the pinned static AArch64 qemu: the smoke fixture, the scalar boundary matrix against an
   independent oracle, and the ABI probes (`tests/native/abi_harness.c`): C calls emitted
   entries with by-value, read-only, taken and aggregate-result signatures, an unaligned
   `@packed` record and a caller destination; emitted code calls a C-defined Hirsel entry
@@ -465,3 +465,7 @@ returns unique storage on success through SeqReserve; callers retain that fact
 across its out-of-line root return so an append needs no second count test.
 The driver's growth_ir controls pin the single first-push allocation on both
 targets and the steady-loop and shared spare-capacity paths.
+
+Buck2's test launcher provides the pinned LLVM, AArch64 compiler/sysroot and
+qemu as absolute input paths. Native helpers use those paths directly; native
+cases run on pool workers, including when `--include-ignored` selects them.

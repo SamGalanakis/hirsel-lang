@@ -368,7 +368,8 @@ Cargo features are independent link-time choices, all off by default:
 Production exports no Stats function, records no backing-call/saturation counts
 and never scans live storage at exit. Its observation says `audit unavailable`.
 Its allocation metadata still tracks free-list availability and pool retention
-needed by the allocator. `tests/it/abi.rs` separately builds the production archive
+needed by the allocator. `tests/it/abi.rs` reads Buck2's independently built production archive (or
+builds it separately under Cargo)
 and checks private/exported symbols for absence of measurement, backing counters,
 Stats and exit-scan code, and bytes for absence of the measurement environment
 name/report header. Runtime Rust tests enable `diagnostic` only as a dev feature.

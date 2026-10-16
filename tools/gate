@@ -345,7 +345,7 @@ def full_gate():
                               text=True).stdout.split()
 
     def full_crate_tests(*arguments):
-        # Each profile must cover the compiled inventory once across pool and host.
+        # Each profile must cover the compiled full-gate inventory once.
         return [PY, 'tools/buck2/full_gate_counts.py', '--run', *buck2, 'test', *config, *arguments,
                 '--', *long, '--test-arg=full_gate_', '--test-arg=--ignored']
 

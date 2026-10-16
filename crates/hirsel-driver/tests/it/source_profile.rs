@@ -78,7 +78,7 @@ fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
         }
         let dwarfdump = std::env::var_os("LLVM_SYS_211_PREFIX")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| "/usr/lib/llvm-21".into())
+            .expect("LLVM_SYS_211_PREFIX names the pinned toolchain input")
             .join("bin/llvm-dwarfdump");
         let dwarf = std::process::Command::new(&dwarfdump)
             .args(["--verify", exe.to_str().unwrap()])

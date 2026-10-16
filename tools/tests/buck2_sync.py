@@ -12,63 +12,16 @@ sync = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sync)
 
 
-class FullGateHostCases(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.main = self.root / 'main.rs'
-        self.main.write_text('')
+class NativePoolRouting(unittest.TestCase):
+    def test_no_campaign_implicitly_selects_the_host(self):
+        self.assertTrue(sync.GATE_TESTS)
+        for stage in sync.GATE_TESTS:
+            self.assertFalse(stage.get('host', False), stage['name'])
 
-    def cases(self, text):
-        (self.root / 'matrix.rs').write_text(text)
-        return sync.host_cases('fixture-test-it', self.root, self.main)
-
-    def test_helper_matrix_routes_full_gate_siblings_only(self):
-        self.assertEqual(self.cases('''
-fn campaign() { full_matrix(); }
-#[test]
-#[ignore = "full gate"]
-fn full_gate_both_targets() { campaign(); }
-#[test]
-#[ignore = "full gate"]
-fn full_gate_x86_control() { campaign(); }
-#[test]
-fn smoke() {}
-#[test]
-#[ignore]
-fn manual_native() {}
-'''), ['full_gate_both_targets', 'full_gate_x86_control'])
-
-    def test_each_host_dependency_routes_a_new_full_gate_case(self):
-        for dependency in [
-            'full_matrix()', 'TargetSpec::aarch64_unknown_linux_gnu()',
-            '&tools.aarch64_cc', '&tools.qemu_aarch64',
-            'Command::new("aarch64-linux-gnu-gcc")',
-            'Command::new("qemu-aarch64-static")', 'Command::new("valgrind")',
-            'Command::new("lean")', 'Command::new("lake")',
-            'Command::new("/usr/bin/valgrind")', 'Target::Aarch64',
-            'use hirsel_driver::native::full_matrix as configurations;',
-            '#[ignore = "full gate: host tools"]',
-        ]:
-            with self.subTest(dependency=dependency):
-                self.assertEqual(self.cases(dependency + '\nfn full_gate_added() {}'), ['full_gate_added'])
-
-    def test_pool_only_full_gate_cases_stay_on_pool(self):
-        self.assertEqual(self.cases('fn full_gate_heap_only() { heap_campaign(); }'), [])
-
-    def test_inline_module_test_name_is_a_libtest_filter(self):
-        self.assertEqual(self.cases('mod nested { fn full_gate_nested() { full_matrix(); } }'), ['full_gate_nested'])
-
-    def test_existing_host_filters_are_preserved(self):
-        self.assertEqual(sync.host_cases('hirsel-rt-test-it', self.root, self.main), ['abi::'])
-
-    def test_current_cross_target_full_gate_modules_are_hosted(self):
-        root = sync.ROOT / 'crates/hirsel-pipeline-tests/tests/front'
-        cases = sync.host_cases('hirsel-pipeline-tests-test-front', root, root / 'main.rs')
-        for module in ('rt_io_native', 'rt_text_native'):
-            for case in sync.FULL_GATE_CASE.findall((root / f'{module}.rs').read_text()):
-                self.assertIn(case, cases)
+    def test_generated_tests_have_no_host_partition(self):
+        buck = (sync.ROOT / 'BUCK').read_text()
+        self.assertNotIn('host_cases =', buck)
+        self.assertNotIn('host = True', buck)
 
 
 class SeededTests(unittest.TestCase):
