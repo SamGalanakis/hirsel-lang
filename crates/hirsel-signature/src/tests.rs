@@ -1,4 +1,5 @@
 use super::*;
+use hirsel_intern::Interner;
 use hirsel_types::encoding::{EncodingError, canonical_encoding};
 fn def(name: &str) -> ast::DefPath {
     ast::DefPath(ast::ItemPath {

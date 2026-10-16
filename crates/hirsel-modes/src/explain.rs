@@ -92,7 +92,7 @@ pub(crate) enum Cause {
 impl Cause {
     /// The closed v22 §23 vocabulary entry. Fine wording kinds remain
     /// private; every kind has an entry (#81).
-    #[allow(dead_code)] // Kept explicit for the vocabulary agreement test.
+    #[cfg(test)]
     pub(crate) fn spec_kind(self) -> &'static str {
         use Cause::*;
         match self {
@@ -402,7 +402,7 @@ pub(crate) enum Requirement {
 impl Requirement {
     /// The closed v22 §23 vocabulary entry. Fine wording kinds remain
     /// private; every kind has an entry (#81).
-    #[allow(dead_code)] // Kept explicit for the vocabulary agreement test.
+    #[cfg(test)]
     pub(crate) fn spec_kind(self) -> &'static str {
         use Requirement::*;
         match self {

@@ -1,7 +1,6 @@
 //! Shared test support: compile a source program with the real driver and
 //! adapt its validated `NativeInput` into the plain `Program` this crate reads
 //! (the driver wires the same adapter).
-#![allow(dead_code)]
 use hirsel_driver::compiler_adapters;
 use hirsel_engine::{
     InstanceKind, NativeInput, QueryEngine, check_progress, default_context, default_environment,

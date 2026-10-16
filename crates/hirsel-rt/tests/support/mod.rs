@@ -1,6 +1,5 @@
 //! Shared helpers for the runtime's integration tests: a per-thread counting host allocator,
 //! a context guard, descriptor builders, a finalizer event log and abort probes.
-#![allow(dead_code)]
 
 pub mod io;
 pub mod schema;
@@ -227,16 +226,6 @@ pub fn tag_step(offset: u64, variant: u32, span: u32) -> Step {
     }
 }
 
-/// A loop over `count` static elements at `offset`, `stride` apart, owning the next `span` steps.
-pub fn repeat_step(field: u32, offset: u64, count: u64, stride: u64, span: u32) -> Step {
-    Step {
-        count,
-        stride,
-        span,
-        ..step(STEP_LOOP, field, offset)
-    }
-}
-
 /// A loop over the `u64` count at `count_offset` of elements at `offset`, `stride` apart.
 pub fn elements_step(field: u32, count_offset: u64, offset: u64, stride: u64, span: u32) -> Step {
     Step {
@@ -325,25 +314,6 @@ pub fn write_ref(block: *mut Header, offset: usize, child: *mut Header) {
 
 pub fn state(ctx: *mut RunCtx, block: *mut Header) -> u8 {
     unsafe { (*ctx).diagnostic_state(block) }
-}
-
-pub fn descriptor(ctx: *mut RunCtx, block: *mut Header) -> *const Layout {
-    let index = unsafe { (*block).index() };
-    if index == 0 {
-        return &hirsel_rt::text::hirsel_rt_v2_bytes_descriptor.0;
-    }
-    if index == 1 {
-        return &hirsel_rt::io::hirsel_rt_v2_file_walk_descriptor.0;
-    }
-    BINDINGS.with(|bindings| {
-        bindings
-            .borrow()
-            .get(&(ctx as usize))
-            .unwrap()
-            .layouts
-            .as_ref()
-            .unwrap()[(index - 2) as usize]
-    })
 }
 
 pub fn count(block: *mut Header) -> u32 {

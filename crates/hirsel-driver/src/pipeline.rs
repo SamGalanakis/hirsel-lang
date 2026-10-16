@@ -1,6 +1,5 @@
 //! The engine's front phases over signature, check, modes and lower.
 //! Conversions retain producer decisions; missing facts are compiler errors.
-use crate::*;
 use hirsel_check::body;
 use hirsel_check_protocol::header::{Input, NormalizedDeclaration};
 use hirsel_engine::*;

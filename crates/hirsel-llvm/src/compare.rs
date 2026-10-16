@@ -14,7 +14,7 @@
 //! (a `@packed` field may hold a comparable value at any offset).
 
 use hirsel_lir::ir::COMPARE_MAX_DEPTH;
-use hirsel_lir::layout::{align_up, payload_offset, sequence_elements_offset};
+use hirsel_lir::layout::{payload_offset, sequence_elements_offset};
 use hirsel_lir::layout_types::{
     FieldLayout, LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind, ScanStep, SizeSpec,
 };

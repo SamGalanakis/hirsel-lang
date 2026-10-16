@@ -12,7 +12,7 @@ use crate::abi_types::FnAbiId;
 use crate::effect::Effects;
 use crate::layout_types::{LayoutId, ScalarKind};
 use crate::stage::{InputIdentity, Stage, StageKind};
-use hirsel_codec::{Snapshot, snapshot_enum, snapshot_struct};
+use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_core_contract::OperationId;
 use hirsel_core_contract::Passing;
 use hirsel_syntax::{ContentHash, DefPath};

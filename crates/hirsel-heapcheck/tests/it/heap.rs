@@ -4,7 +4,7 @@
 use crate::fixtures;
 
 use fixtures::*;
-use hirsel_codec::{self as snapshot, Snapshot};
+use hirsel_codec as snapshot;
 use hirsel_heapcheck::build::path;
 use hirsel_heapcheck::{Config, Run};
 use hirsel_lir::stage::Stage;
@@ -120,7 +120,3 @@ fn fixtures_run_from_their_snapshots_in_native_tests() {
         }
     }
 }
-
-// Keep the Snapshot trait in scope for `to_text`/`from_text` bounds.
-#[allow(dead_code)]
-fn _snapshot_bound<T: Snapshot>() {}

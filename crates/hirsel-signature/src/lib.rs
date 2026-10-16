@@ -9,7 +9,6 @@ use hirsel_check_protocol::declaration::{
 };
 use hirsel_check_protocol::header::{Input, NormalizedDeclaration, OwnerRepresentation};
 use hirsel_diag::{Diagnostic, RuleId};
-use hirsel_intern::Interner;
 use hirsel_span::Span;
 use hirsel_syntax as ast;
 use hirsel_types::encoding::fingerprint;

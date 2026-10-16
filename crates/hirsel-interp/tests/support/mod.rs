@@ -1,7 +1,6 @@
-#![allow(dead_code)]
 use hirsel_interp::{Execution, Limits, Value, run};
 use hirsel_span::{FileId, SourceMap, Span};
-use hirsel_syntax::{BinaryOp, ContentHash, DefPath, ItemPath, PackageId, UnaryOp};
+use hirsel_syntax::{BinaryOp, ContentHash, DefPath, ItemPath, PackageId};
 use hirsel_tir::LocalId;
 use hirsel_tir::*;
 use hirsel_types::*;
@@ -199,18 +198,6 @@ impl Builder {
             line,
             c,
         );
-        p
-    }
-    pub fn unary(
-        &mut self,
-        op: UnaryOp,
-        a: PlaceId,
-        kind: TypeKind,
-        line: u32,
-        c: CleanupId,
-    ) -> PlaceId {
-        let p = self.local(kind, Storage::Temporary);
-        self.assign(p, Rvalue::Unary { op, value: copy(a) }, line, c);
         p
     }
     pub fn cleanup(&mut self, actions: Vec<CleanupAction>) -> CleanupId {

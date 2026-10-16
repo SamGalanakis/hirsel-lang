@@ -1,9 +1,7 @@
 //! Helpers of hirsel-lower's lowering tests: definitions lowered from source by the
 //! driver, and execution of lowered definitions on the reference interpreter.
-#![allow(dead_code)]
 use hirsel_engine::{DefinitionQueries, QueryEngine};
 use hirsel_interp::{Execution, Limits};
-use hirsel_span::SourceMap;
 use hirsel_syntax::{DefPath, FileContext, ItemPath, PackageId};
 use hirsel_tir::{Definition, DefinitionRef, RunConfiguration, TirProvider};
 use hirsel_types::QueryError;
@@ -36,23 +34,6 @@ impl TirProvider for Provider {
             .map(Arc::new)
             .ok_or(QueryError::NotImplemented)
     }
-}
-
-pub fn execute(definitions: Vec<Definition>, arguments: Vec<hirsel_interp::Value>) -> Execution {
-    let mut sources = SourceMap::default();
-    sources.add("fixture.hir", "x\n".repeat(100)).unwrap();
-    hirsel_interp::run(
-        &mut Provider(definitions),
-        &sources,
-        &RunConfiguration {
-            entry: path("main"),
-            hash_seed: 0,
-            inputs: vec![],
-        },
-        arguments,
-        Limits::default(),
-    )
-    .unwrap()
 }
 
 pub fn returned(execution: Execution) -> hirsel_interp::Value {

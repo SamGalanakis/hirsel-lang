@@ -2,7 +2,6 @@
 //! uniqueness test, weakening, finalizers, regions, copies and partial masks. Every entry
 //! takes two `i64`s and returns an `i64`, so one C table drives them natively and the heap
 //! checker runs the same units for the expected observations.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 

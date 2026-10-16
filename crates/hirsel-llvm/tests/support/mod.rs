@@ -3,7 +3,6 @@
 //! Layouts and `FnAbi`s come from the `LayoutBuilder` over a small type store, so the
 //! emitter sees the same physical facts real programs will have. Every unit is sealed by
 //! the LIR validator (`validate::<Ready>`); a fixture the validator rejects fails its test.
-#![allow(dead_code)]
 
 pub mod glue;
 pub mod native;

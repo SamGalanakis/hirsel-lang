@@ -1,7 +1,6 @@
 //! A builder for hand-made LIR units and a fixed layout table, shared by the
 //! validator tests. Every test builds a valid unit and its one-edit
 //! mutation from the same function, so each rejection has an accepted twin.
-#![allow(dead_code)]
 
 use hirsel_core_contract::{
     Disposition, EngineDispositions, Manifest, OperationId, OperationRow, Passing, SemanticEffects,
@@ -91,8 +90,6 @@ pub mod l {
     /// `flat type Items { items: List[Item] }` and its block.
     pub const FLAT_ITEMS: LayoutId = LayoutId(29);
     pub const FLAT_ITEMS_BLK: LayoutId = LayoutId(30);
-    /// A flat `List[u64]`: prefix, then elements at a stride.
-    pub const FLAT_U64S: LayoutId = LayoutId(31);
     /// `flat type Outer { inner: Item, k: u64 }` and its block.
     pub const FLAT_OUTER: LayoutId = LayoutId(32);
     pub const FLAT_OUTER_BLK: LayoutId = LayoutId(33);
@@ -730,14 +727,6 @@ impl<S: Stage> Lir<S> {
     pub fn param(&mut self, value: ValueId) -> ValueId {
         self.unit.parameters.push(value);
         value
-    }
-
-    /// A scope nested in `parent`.
-    pub fn scope(&mut self, parent: ScopeId) -> ScopeId {
-        self.unit.scopes.push(ScopeInfo {
-            parent: Some(parent),
-        });
-        ScopeId(self.unit.scopes.len() as u32 - 1)
     }
 
     /// A slot of `scope`. A capture slot also gets the version name of its

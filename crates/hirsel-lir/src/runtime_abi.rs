@@ -10,7 +10,7 @@
 //! are u8, pointers are opaque; no Rust `Vec`, enum layout, `Result`, panic
 //! payload or host `usize` crosses the ABI.
 use crate::layout_types::{ScalarKind, StorageKind};
-use hirsel_codec::{snapshot_enum, snapshot_struct};
+use hirsel_codec::snapshot_enum;
 
 pub const RUNTIME_ABI_NAME: &str = "hirsel_rt_v2";
 pub const ABI_VERSION: u32 = 4;

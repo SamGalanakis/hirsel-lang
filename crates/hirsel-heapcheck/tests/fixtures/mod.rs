@@ -1,7 +1,6 @@
 //! Hand-built post-RC programs: each deliberately broken fixture and its
 //! corrected twin, built by one function with `fixed` selecting the twin.
 //! Every pair prints the same bytes, so only the heap audit tells them apart.
-#![allow(dead_code)]
 use hirsel_core_contract::{OperationId, Passing};
 use hirsel_heapcheck::build::{CLEANUP, Layouts, UnitBuilder, path};
 use hirsel_heapcheck::{OpOutcome, OpValue, Operations, Program, ViolationKind};

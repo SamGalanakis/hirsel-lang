@@ -1,5 +1,4 @@
 //! The emission fixture programs, each built for one target.
-#![allow(dead_code)]
 
 use hirsel_core_contract::Manifest;
 use hirsel_lir::ir::*;

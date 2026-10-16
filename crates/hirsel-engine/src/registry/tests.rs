@@ -1,6 +1,5 @@
 use super::review::*;
 use super::*;
-use crate::DefinitionQueries;
 use hirsel_types::core_roles::{intrinsic_roles, loop_protocols};
 #[test]
 fn registry_has_canonical_signatures() {

@@ -1,7 +1,6 @@
 //! Linking emitted objects with C and the `hirsel_rt_v2` runtime archive, and running the
 //! result: x86-64 natively, AArch64 under `qemu-aarch64-static`. These need the pinned clang,
 //! the AArch64 cross toolchain and qemu, so only `tools/check-native.sh` runs their tests.
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
