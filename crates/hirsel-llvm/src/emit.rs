@@ -796,45 +796,22 @@ fn define_root_adapter<'m>(
                 ),
             );
             let length = builder.load_access(module.int_type(64), data, 8, Access::Length);
-            args.extend([length, module.const_zero(module.int_type(1))]);
+            // Not deferred: the body stores the count it sets, as the external caller reads it.
+            args.extend([
+                length,
+                module.const_zero(module.int_type(1)),
+                module.const_zero(module.int_type(1)),
+            ]);
         }
     }
     let returned = builder.call(target, &args);
     signature.attribute_call(module, returned);
     for (field, &i) in signature.roots.iter().enumerate() {
-        let pointer = signature.root_pointer(&builder, returned, field);
-        builder.store(pointer, module.parameter(entry, signature.first[i]), 8);
-        if signature.companions[field].is_some() {
-            // The body hands back a length its block may lag: store it where it
-            // differs (never into a static block, whose count it then equals).
-            let LayoutKind::Block { payload } = layouts
-                .layout(signature.abi.parameters[i].layout)
-                .expect("root layout")
-                .kind
-            else {
-                unreachable!("sequence block")
-            };
-            let data = builder.offset(
-                pointer,
-                module.const_int(
-                    module.int_type(64),
-                    u128::from(
-                        payload_offset(layouts.layout(payload).expect("sequence payload").align)
-                            .expect("validated alignment"),
-                    ),
-                ),
-            );
-            let length = builder.extract(returned, field as u32 * 2 + 1);
-            let count = builder.load_access(module.int_type(64), data, 8, Access::Length);
-            let differs = builder.icmp(IntPredicate::Ne, count, length);
-            let write = module.append_block(entry);
-            let done = module.append_block(entry);
-            builder.cond_br(differs, write, done);
-            builder.position(write);
-            builder.store_access(length, data, 8, Access::Length);
-            builder.br(done);
-            builder.position(done);
-        }
+        builder.store(
+            signature.root_pointer(&builder, returned, field),
+            module.parameter(entry, signature.first[i]),
+            8,
+        );
     }
     let status = signature.status(&builder, returned);
     let value = signature.result(&builder, returned);
@@ -874,7 +851,7 @@ const REGION_RECORD_BYTES: u64 = 48;
 /// The name suffix of a library body's private root-value entry. It changes with that
 /// entry's signature, so a `linkonce_odr` body of an older signature never merges
 /// with a caller of this one.
-const ROOTS_SUFFIX: &str = ".roots7";
+const ROOTS_SUFFIX: &str = ".roots8";
 
 /// The private descriptor of the empty environment a function reference carries.
 
@@ -1243,8 +1220,15 @@ impl<'m, 'a> Signature<'m, 'a> {
             .iter()
             .map(|&sequence| {
                 sequence.then(|| {
+                    // Length, must-unique, and whether the caller defers this root's
+                    // count store (`SequenceState::dirty`): a caller without a
+                    // sequence state for it passes false, and gets the count stored.
                     let first = self.types.len() as u32;
-                    self.types.extend([module.int_type(64), module.int_type(1)]);
+                    self.types.extend([
+                        module.int_type(64),
+                        module.int_type(1),
+                        module.int_type(1),
+                    ]);
                     first
                 })
             })
@@ -1524,11 +1508,15 @@ struct FnEmitter<'m, 'a> {
     /// sequence state's slot that a `SeqSetLen`, a private root call or the
     /// entry (a root parameter's companions) can leave ahead of its block.
     deferred: Vec<bool>,
-    /// Deferred slots this unit borrows whole: a view whose length is not
-    /// preserved may read such a slot's block from memory.
+    /// Deferred slots this unit reads whole without taking them (a borrow or a
+    /// bitwise read): such a view, whose length is not preserved, may read the
+    /// slot's block from memory.
     viewed: Vec<bool>,
     /// Slots of root parameters that hand their length back to the caller.
     companion_slots: Vec<bool>,
+    /// A root parameter slot's `defer` companion: false when its caller keeps the
+    /// count in the block, so a `SeqSetLen` stores it and the return flushes.
+    defer_params: Vec<Option<Value<'m>>>,
     fresh_detaches: BTreeSet<ValueId>,
     /// The preserved length of the view an address is projected from, for its
     /// first step: an index into it bounds by that length, not the count word.
@@ -1595,6 +1583,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             deferred: vec![false; unit.slots.len()],
             viewed: vec![false; unit.slots.len()],
             companion_slots: vec![false; unit.slots.len()],
+            defer_params: vec![None; unit.slots.len()],
             fresh_detaches: BTreeSet::new(),
             known_count: None,
             at: (BlockId(0), 0),
@@ -2187,12 +2176,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     state.unique,
                     1,
                 );
-                // The caller hands over its length, which its block may lag.
-                self.builder.store(
-                    self.module.const_int(self.module.int_type(1), 1),
-                    state.dirty,
-                    1,
-                );
+                // A deferring caller hands over a length its block may lag.
+                let defer = self.module.parameter(self.function, first + 2);
+                self.builder.store(defer, state.dirty, 1);
+                self.defer_params[i] = Some(defer);
                 self.companion_slots[i] = true;
                 self.deferred[i] = true;
             }
@@ -2206,11 +2193,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         self.deferred[slot.index()] = true;
                     }
                 }
-                Inst::Read {
-                    address,
-                    mode: ReadMode::Borrow,
-                    ..
-                } => {
+                // A borrowed or bitwise view keeps reading the slot's block.
+                Inst::Read { address, mode, .. } if mode != ReadMode::Take => {
                     if let Some(slot) = self.whole_slot(address) {
                         self.viewed[slot.index()] = true;
                     }
@@ -2288,9 +2272,27 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         for slot in 0..self.deferred.len() {
             if !self.companion_slots[slot] || (self.viewed[slot] && !isolated) {
                 self.flush_length(slot)?;
+            } else if let Some(defer) = self.defer_params[slot] {
+                // A caller that keeps the count in the block reads it there.
+                let flush = self.module.append_block(self.function);
+                let done = self.module.append_block(self.function);
+                self.builder.cond_br(defer, done, flush);
+                self.builder.position(flush);
+                self.flush_length(slot)?;
+                self.builder.br(done);
+                self.builder.position(done);
             }
         }
         Ok(())
+    }
+
+    /// The slot an address projects from, through its address bases.
+    fn address_slot(&self, address: AddressId) -> Option<SlotId> {
+        match self.unit.addresses.get(address.index())?.base {
+            AddressBase::Slot(slot) => Some(slot),
+            AddressBase::Address(base) => self.address_slot(base),
+            AddressBase::Value(_) => None,
+        }
     }
 
     /// Brings the count word of deferred slot `slot` up to its length, if dirty.
@@ -4434,12 +4436,37 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         .whole_slot(address)
                         .is_some_and(|s| self.deferred[s.index()])
                 {
+                    let slot = self.whole_slot(address).expect("deferred slot").index();
                     self.builder.store(self.get(len)?, state.length, 8);
-                    self.builder.store(
-                        self.module.const_int(self.module.int_type(1), 1),
-                        state.dirty,
-                        1,
-                    );
+                    let dirty = || {
+                        self.builder.store(
+                            self.module.const_int(self.module.int_type(1), 1),
+                            state.dirty,
+                            1,
+                        )
+                    };
+                    let Some(defer) = self.defer_params[slot] else {
+                        dirty();
+                        return Ok(());
+                    };
+                    // A caller that keeps the count in the block gets it stored here.
+                    let deferred = self.module.append_block(self.function);
+                    let write = self.module.append_block(self.function);
+                    let done = self.module.append_block(self.function);
+                    self.builder.cond_br(defer, deferred, write);
+                    self.builder.position(deferred);
+                    dirty();
+                    self.builder.br(done);
+                    self.builder.position(write);
+                    let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+                    let Some(payload) = self.layout_payload(place.layout)? else {
+                        return self.invalid("a length of a place that holds no block");
+                    };
+                    let data = self.payload_of(pointer, payload)?;
+                    self.builder
+                        .store_access(self.get(len)?, data.ptr, 8, Access::Length);
+                    self.builder.br(done);
+                    self.builder.position(done);
                     return Ok(());
                 }
                 let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
@@ -7829,19 +7856,24 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         for (field, place) in root_places.iter().copied().enumerate() {
             if signature.companions[field].is_some() {
-                let (length, unique) = if let Some(state) = self.sequence_state_at(place) {
+                let i1 = self.module.int_type(1);
+                // A place with a sequence state defers the count store; any other keeps
+                // its count in its block, so the callee stores what it sets.
+                let (length, unique, defer) = if let Some(state) = self.sequence_state_at(place) {
                     (
                         self.builder.load(self.module.int_type(64), state.length, 8),
-                        self.builder.load(self.module.int_type(1), state.unique, 1),
+                        self.builder.load(i1, state.unique, 1),
+                        self.module.const_int(i1, 1),
                     )
                 } else {
                     let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
                     (
                         self.sequence_length(pointer, place.layout)?,
-                        self.module.const_zero(self.module.int_type(1)),
+                        self.module.const_zero(i1),
+                        self.module.const_zero(i1),
                     )
                 };
-                args.extend([length, unique]);
+                args.extend([length, unique, defer]);
             }
         }
         // A must-unique fact names a block with one holder, this frame's
@@ -7873,7 +7905,34 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             && abi.result.as_ref().is_none_or(|r| plain(r.layout));
         if !isolated_roots && !referenceless {
             self.invalidate_uniqueness();
-            self.flush_lengths(true)?;
+        }
+        // A callee reads a deferred slot's count only through what it is handed:
+        // the slot's address outside a root parameter (whose companion carries the
+        // length), or a view of a borrowed slot in a parameter that can hold one,
+        // an environment or a destination. Recursion and insertion helpers handed
+        // the list as a root and other data keep the deferral.
+        let opaque =
+            abi.environment
+                || abi.destination
+                || abi.parameters.iter().enumerate().any(|(i, parameter)| {
+                    !signature.roots.contains(&i) && !plain(parameter.layout)
+                });
+        let mut handed = vec![false; self.deferred.len()];
+        for (i, parameter) in abi.parameters.iter().enumerate() {
+            if signature.roots.contains(&i) {
+                continue;
+            }
+            if let Some(argument) = arguments.iter().find(|a| a.parameter == parameter.source)
+                && let ArgumentValue::Address { address, .. } = argument.value
+                && let Some(slot) = self.address_slot(address)
+            {
+                handed[slot.index()] = true;
+            }
+        }
+        for slot in 0..self.deferred.len() {
+            if handed[slot] || (opaque && self.viewed[slot]) {
+                self.flush_length(slot)?;
+            }
         }
         let returned = match function {
             Some(function) => self.builder.call(function, &args),
@@ -7892,12 +7951,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             for (field, place) in root_places.into_iter().enumerate() {
                 let pointer = signature.root_pointer(&self.builder, returned, field);
                 self.store(Shape::Scalar(ScalarKind::Pointer), pointer, place);
-                if signature.companions[field].is_some() && self.sequence_state_at(place).is_none()
-                {
-                    // The callee hands back a length its block may lag.
-                    let length = self.builder.extract(returned, field as u32 * 2 + 1);
-                    self.store_length_if_differs(pointer, place.layout, length)?;
-                }
                 if let Some(state) = self.sequence_state_at(place) {
                     self.builder.store(
                         self.builder.extract(returned, field as u32 * 2 + 1),

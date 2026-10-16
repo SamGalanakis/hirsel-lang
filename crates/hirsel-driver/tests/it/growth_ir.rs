@@ -11,6 +11,12 @@ use std::collections::{BTreeMap, BinaryHeap};
 
 /// The optimized IR of `main` in `source`, compiled for `target`.
 fn main_ir(source: &str, target: TargetSpec) -> String {
+    function_ir(source, "4mainI", target)
+}
+
+/// The optimized IR of the function whose symbol contains `name` in `source`.
+fn function_ir(source: &str, name: &str, target: TargetSpec) -> String {
+    let name = name.to_owned();
     let source = source.to_owned();
     with_compiler_stack(move || {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
@@ -23,8 +29,8 @@ fn main_ir(source: &str, target: TargetSpec) -> String {
         let ir = emit_ir(&ready, OptLevel::Speed).unwrap();
         let start = ir
             .lines()
-            .position(|l| l.starts_with("define") && l.contains("4mainI") && !l.contains("@_H1T"))
-            .expect("main is defined");
+            .position(|l| l.starts_with("define") && l.contains(&name) && !l.contains("@_H1T"))
+            .expect("the function is defined");
         let lines: Vec<&str> = ir.lines().skip(start).collect();
         let end = lines.iter().position(|l| *l == "}").unwrap();
         // Name each TBAA access tag by its type's name, so a capacity load is
@@ -153,6 +159,33 @@ fn cycle(blocks: &BTreeMap<String, Block>, start: &str) -> Option<(usize, Vec<St
         }
     }
     None
+}
+
+/// The cheapest path from the entry to a return: what a call takes when nothing
+/// grows, detaches or fails.
+fn cheapest_return(blocks: &BTreeMap<String, Block>) -> Vec<String> {
+    let mut queue = BinaryHeap::new();
+    let mut seen = std::collections::BTreeSet::new();
+    queue.push(std::cmp::Reverse((0, "<entry>", Vec::new())));
+    while let Some(std::cmp::Reverse((cost, at, path))) = queue.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let block = &blocks[at];
+        let mut path: Vec<String> = path;
+        path.push(at.to_owned());
+        if block.lines.iter().any(|l| l.starts_with("ret ")) {
+            return path;
+        }
+        for next in &block.successors {
+            queue.push(std::cmp::Reverse((
+                cost + block.cost(),
+                next.as_str(),
+                path.clone(),
+            )));
+        }
+    }
+    panic!("no return")
 }
 
 /// The cheapest loop that stores a list element: what one steady iteration runs.
@@ -291,6 +324,46 @@ fn two_lists_pushed_in_one_loop_store_their_counts_after_it() {
         assert!(!stores_a_count_in_a_loop(&ir), "{ir}");
         let ir = main_ir(&copied, target);
         assert!(stores_a_count_in_a_loop(&ir), "{ir}");
+    }
+}
+
+/// A list passed by address keeps its count in its block, so the push it takes
+/// is not deferred: the inlined push stores the count it sets, and the caller
+/// neither reloads nor compares it afterwards (expr-compiler's `insert`).
+#[test]
+fn a_push_into_a_list_passed_by_address_stores_its_count_once() {
+    let source = "fn insert(mut nodes: List[u64], value: u64) -> u64 {
+  let index = list.len(nodes)
+  list.push(mut nodes, value)
+  index
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut nodes: List[u64] = []
+  for i in 0u64..100u64 { failure.check(insert(mut nodes, i) == i, TextInvariant()) }
+  Ok(())
+}
+";
+    let length = |l: &str| l.ends_with("!tbaa !\"sequence length\"");
+    for target in targets() {
+        let ir = function_ir(source, "6insertI", target);
+        let blocks = blocks(&ir);
+        let path = cheapest_return(&blocks);
+        let count = |what: &dyn Fn(&str) -> bool| -> usize {
+            path.iter().map(|b| blocks[b].count(what)).sum()
+        };
+        let shown = || format!("path {path:?}\n{ir}");
+        assert_eq!(
+            count(&|l| l.contains(" = load ") && length(l)),
+            1,
+            "{}",
+            shown()
+        );
+        assert_eq!(
+            count(&|l| l.starts_with("store ") && length(l)),
+            1,
+            "{}",
+            shown()
+        );
     }
 }
 
