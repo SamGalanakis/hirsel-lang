@@ -1,6 +1,6 @@
 """Derive the native program cover from the compiler and its complete corpus."""
 
-load(":platforms.bzl", "budget_constraint", "test_budget_name")
+load(":platforms.bzl", "budget_constraint", "pool_budget_name")
 
 def _impl(ctx):
     tree = ctx.actions.copied_dir("corpus", {f.short_path: f for f in ctx.attrs.data})
@@ -29,5 +29,5 @@ def hirsel_native_selection(name, collector, data):
         return
     native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:release")
     _selection(name = name, collector = ":" + name + "-collector", data = data,
-               exec_compatible_with = [budget_constraint(test_budget_name("gate-native-selection"))],
+               exec_compatible_with = [budget_constraint(pool_budget_name(1, 2097152))],
                visibility = ["PUBLIC"])

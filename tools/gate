@@ -24,7 +24,7 @@ patch-id of the lane's own diff, and the crates it touches). When main moves
 under an unchanged change and it rebases cleanly, the next run only builds the
 workspace and checks formatting.
 
---full runs every stage, including the unrestricted campaigns, the release
+--full runs every stage, including the budgeted agreement and native campaigns, the release
 profile, the full_gate_ tests and tools/check-native.sh; it reports every stage
 and fails after the last (tools/main-full-run.sh).
 """

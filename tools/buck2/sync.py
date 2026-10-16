@@ -236,7 +236,7 @@ AGREE_FULL_TIMEOUT = 1800
 AGREE_NATIVE_FULL_SHARDS = 16
 AGREE_NATIVE_FULL_TIMEOUT = 3600
 # The full native matrix (tools/gate --full) runs as shards of the baseline by
-# path hash, each case under every configuration, so each shard stays well
+# path hash, each case under its rotating pairwise cover, so each shard stays well
 # under its Buck2 timeout; gate-native-full stays whole for --bless and for a
 # lane's filtered run.
 NATIVE_FULL_SHARDS = 8

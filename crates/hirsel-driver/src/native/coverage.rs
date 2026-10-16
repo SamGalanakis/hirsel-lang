@@ -181,13 +181,17 @@ fn ready_features(program: &ReadyProgram, features: &mut BTreeSet<String>) {
             features.insert(format!(
                 "lir/{:?}{detail}/{}",
                 inst.opcode(),
-                operands.join(",")
+                vocabulary(&operands.join(","))
             ));
         }
         for term in &unit.terminators {
             let mut operands = Vec::new();
             term.visit(&mut |reference| operands.push(operand(program, unit, reference)));
-            features.insert(format!("lir/{:?}/{}", term.opcode(), operands.join(",")));
+            features.insert(format!(
+                "lir/{:?}/{}",
+                term.opcode(),
+                vocabulary(&operands.join(","))
+            ));
         }
         features.insert(format!(
             "abi/{}/{}",
