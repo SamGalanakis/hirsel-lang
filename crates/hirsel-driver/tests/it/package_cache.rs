@@ -638,58 +638,87 @@ fn compile_time_limit_edits_retry_cached_package_results() {
 #[test]
 #[ignore = "full gate"]
 fn full_gate_cold_and_warm_corpus_verdicts_and_diagnostics_are_identical() {
-    with_compiler_stack(|| {
-        fn files(dir: &Path, result: &mut Vec<PathBuf>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    files(&path, result);
-                } else if path.extension().is_some_and(|e| e == "hir") {
-                    result.push(path);
-                }
+    fn files(dir: &Path, result: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files(&path, result);
+            } else if path.extension().is_some_and(|e| e == "hir") {
+                result.push(path);
             }
         }
-        let mut corpus = vec![];
-        files(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance"),
-            &mut corpus,
-        );
-        corpus.sort();
-        let cache = PackageCache::new();
-        let mut timings = [std::time::Duration::ZERO; 2];
-        for path in &corpus {
-            let mut verdicts = vec![];
-            for (i, cache) in [&PackageCache::disabled(), &cache].into_iter().enumerate() {
-                let start = std::time::Instant::now();
-                let verdict = match load_program_source_with_cache(path, None, cache) {
-                    Ok(mut p) => match p.check() {
-                        Ok(o) => format!("{:?}", rendered(&o)),
-                        Err(e) => format!("{e:?}"),
-                    },
-                    Err(ToolError::Query {
-                        error: QueryError::Diagnostics(ds),
-                        sources,
-                        ..
-                    }) => format!(
-                        "{:?}",
-                        ds.iter()
-                            .map(|d| d.to_json(&sources).to_string())
-                            .collect::<Vec<_>>()
-                    ),
-                    Err(e) => format!("{e}"),
-                };
-                timings[i] += start.elapsed();
-                verdicts.push(verdict);
-            }
-            assert_eq!(verdicts[0], verdicts[1], "{}", path.display());
-        }
-        eprintln!(
-            "{} corpus programs: cold {:?}, warm {:?}; zero verdict/diagnostic differences",
-            corpus.len(),
-            timings[0],
-            timings[1]
-        );
+    }
+    let mut corpus = vec![];
+    files(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance"),
+        &mut corpus,
+    );
+    corpus.sort();
+    let jobs = std::env::var("HIRSEL_JOBS")
+        .ok()
+        .and_then(|jobs| jobs.parse::<usize>().ok())
+        .unwrap_or(4)
+        .max(1);
+    // Worker `w` checks programs w, w + jobs, ... in order, each warm through a cache of
+    // its own, so a failing program replays from the same HIRSEL_JOBS.
+    let corpus = &corpus;
+    let timings: Vec<[std::time::Duration; 2]> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..jobs)
+            .map(|worker| {
+                scope.spawn(move || {
+                    with_compiler_stack(|| {
+                        let cache = PackageCache::new();
+                        let mut timings = [std::time::Duration::ZERO; 2];
+                        for path in corpus.iter().skip(worker).step_by(jobs) {
+                            let mut verdicts = vec![];
+                            for (i, cache) in
+                                [&PackageCache::disabled(), &cache].into_iter().enumerate()
+                            {
+                                let start = std::time::Instant::now();
+                                let verdict =
+                                    match load_program_source_with_cache(path, None, cache) {
+                                        Ok(mut p) => match p.check() {
+                                            Ok(o) => format!("{:?}", rendered(&o)),
+                                            Err(e) => format!("{e:?}"),
+                                        },
+                                        Err(ToolError::Query {
+                                            error: QueryError::Diagnostics(ds),
+                                            sources,
+                                            ..
+                                        }) => format!(
+                                            "{:?}",
+                                            ds.iter()
+                                                .map(|d| d.to_json(&sources).to_string())
+                                                .collect::<Vec<_>>()
+                                        ),
+                                        Err(e) => format!("{e}"),
+                                    };
+                                timings[i] += start.elapsed();
+                                verdicts.push(verdict);
+                            }
+                            assert_eq!(verdicts[0], verdicts[1], "{}", path.display());
+                        }
+                        timings
+                    })
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
     });
+    let total = |i: usize| timings.iter().map(|t| t[i]).sum::<std::time::Duration>();
+    eprintln!(
+        "{} corpus programs on {jobs} threads: cold {:?}, warm {:?} in all; zero verdict/diagnostic differences",
+        corpus.len(),
+        total(0),
+        total(1)
+    );
 }
 
 /// A model-based run over edits shared through one cache: a leaf package, a library
