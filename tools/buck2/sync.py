@@ -77,7 +77,7 @@ BUILD_SCRIPT_INPUTS = {
 # What each crate's tests read at run time outside their crate: repository
 # paths they reach from CARGO_MANIFEST_DIR. A test runs from the project root
 # and sees only its declared inputs on the pool. Those inputs are part of its
-# cached verdict's key, and the files whose edits select it (changed_tests.py).
+# cached verdict's key, and the files whose edits select it (tools/gate).
 MANIFEST_REFERENCE = re.compile(r'"manifest"\s*:\s*"([^"]+)"')
 
 
@@ -236,7 +236,7 @@ def dev_opt_levels() -> dict[str, int]:
     packages = tomllib.loads((ROOT / "Cargo.toml").read_text())["profile"]["dev"].get("package", {})
     return {name: entry["opt-level"] for name, entry in packages.items() if name != "*" and "opt-level" in entry}
 
-# The fast gate's corpus stages (tools/check.sh) as tests over the whole corpus, so
+# The corpus campaigns (tools/gate) as tests over the whole corpus, so
 # an unchanged corpus and compiler are a cache hit on the pool.
 CORPUS = [
     "bench/native/programs/**",
@@ -254,7 +254,7 @@ GATE = dict(cwd="crates/hirsel-conformance")
 CONFORMANCE_SHARDS = 16
 AGREE_SHARDS = 16
 AGREE_LIMIT = 5000
-# The unrestricted campaign (tools/check.sh --full) runs as shards of the whole
+# The unrestricted campaign (`tools/gate --full`) runs as shards of the whole
 # seed-1 catalogue by stable variant rank, each with its own timeout, so a slow
 # or non-terminating variant fails fast and names its shard.
 AGREE_FULL_SHARDS = 96
@@ -273,7 +273,7 @@ GATE_TESTS = [
            release=True, **GATE) for index in range(1, AGREE_SHARDS + 1)),
     dict(name="gate-native-smoke", binary="//:hirsel-conformance-bin-native", args=["--smoke"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
-    # tools/check.sh --full (`-c hirsel.full=true` declares them). AArch64 runs under
+    # `tools/gate --full` (`-c hirsel.full=true` declares them). AArch64 runs under
     # the host's qemu-user and cross toolchain, and memcheck under its Valgrind,
     # so those stages run on the host.
     *(dict(name=f"gate-agree-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",

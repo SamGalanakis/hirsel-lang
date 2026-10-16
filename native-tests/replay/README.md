@@ -15,7 +15,7 @@ arenas are numbered differently.
   under another schema version, and reduces it while keeping the same
   discrepancy. Regenerate `case.txt` with
   `cargo test -p hirsel-conformance --test it native_gate::bless -- --ignored`.
-- Real mismatches are written by `tools/check.sh --full` (the `native --full`
+- Real mismatches are written by `tools/gate --full` (the `native --full`
   binary) under its report directory's `mismatch/`, each moved after it is
   written and replayed at once from a warmed engine; the first artifact of each
   mismatching case is also reduced to `reduced.hir`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full oracle on a pinned, fresh origin/main, for a scheduler. Logs, the lock and
+# Run the full suite (tools/gate --full) on demand on a pinned, fresh origin/main. Logs, the lock and
 # latest.json go to $HIRSEL_MAIN_RUNS; each run's detached worktree goes under
 # $HIRSEL_MAIN_WORKTREES; Cargo reuses $CARGO_TARGET_DIR between runs.
 set -Eeuo pipefail
@@ -69,5 +69,5 @@ echo "main-full-run: sha=$sha start=$start worktree=$worktree" >> "$log"
 # Foreground scope: it owns the complete process tree and releases it before cleanup.
 cd "$worktree"
 systemd-run --user --scope -p MemoryMax=8G -p CPUQuota=400% \
-  nice -n 10 tools/check.sh --full >> "$log" 2>&1
+  nice -n 10 tools/gate --full >> "$log" 2>&1
 stage="completed"

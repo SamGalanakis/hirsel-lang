@@ -3,7 +3,7 @@
 
 Without arguments: the push gate's AGREE_LIMIT ranked variants over AGREE_SHARDS
 shards. With --full: the unrestricted seed-1 campaign over AGREE_FULL_SHARDS
-shards, each under its own AGREE_FULL_TIMEOUT (tools/check.sh --full).
+shards, each under its own AGREE_FULL_TIMEOUT (`tools/gate --full`).
 """
 
 import json

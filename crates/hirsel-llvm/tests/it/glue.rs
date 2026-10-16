@@ -1,7 +1,7 @@
 //! Compiled drop glue against the runtime's step-program walk (`support::glue`): the same
 //! typed graphs released both ways must finalize, close and free the same blocks in the
 //! same order. Native runs need the pinned toolchain, so `tools/check-native.sh` runs them
-//! (`--include-ignored`); `tools/check.sh` runs emission.
+//! (`--include-ignored`); `tools/gate` runs emission.
 
 use crate::support;
 

@@ -14,8 +14,8 @@ from pathlib import Path
 
 TIMESTAMP = re.compile(r'^\[\d{4}-\d\d-\d\dT[^\]]*\] ?', re.M)
 COLOUR = re.compile(r'\x1b\[[0-9;]*m')
-# `check.sh: <stage> passed (12 s)` and `check.sh: <stage> failed (exit 1, 12 s)`.
-STAGE = re.compile(r'^(check(?:-native)?\.sh): (.+) (?:passed \((\d+) s\)|failed \(exit (\d+), (\d+) s\))$', re.M)
+# `gate: <stage> passed (12 s)` and `gate: <stage> failed (exit 1, 12 s)`, and check-native.sh's.
+STAGE = re.compile(r'^(gate|check-native\.sh): (.+) (?:passed \((\d+) s\)|failed \(exit (\d+), (\d+) s\))$', re.M)
 # Buck2 names a failed test target in its result line and again in the summary.
 TARGET = re.compile(r'^(?:✗ (?:Fail|Timeout|Fatal|Infra Failure): |  ✗ )(\S+//:\S+)', re.M)
 # A target the pool never started: empty output and a remote execution error.
@@ -29,7 +29,7 @@ def plain(text):
 
 
 def stages(text):
-    """Every stage of check.sh and check-native.sh in order, with its result."""
+    """Every stage of `tools/gate --full` and check-native.sh in order, with its result."""
     out = []
     for match in STAGE.finditer(text):
         gate, name, passed, status, failed = match.groups()

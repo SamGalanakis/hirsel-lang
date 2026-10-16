@@ -9,7 +9,7 @@ reuse its declared-type rules; produced plans belong to that shared protocol.
 The driver composes checking, modes and
 [hirsel-lower](../hirsel-lower/README.md); checking never depends on lowering.
 The existing driver dev-dependency supplies registry signatures to internal body
-harnesses (the exception in `tools/buck2/changed_tests.py`).
+harnesses (the exception in `tools/buck2/gating.py`).
 
 Every expression has a checked type/use decision. All returned TypeIds belong
 to CheckedBody.types. No callee implementation is consulted. Record instantiated

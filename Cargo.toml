@@ -42,7 +42,7 @@ opt-level = 1
 [profile.dev.package.hirsel-rc]
 opt-level = 1
 
-# The per-push gate's agreement sample and native smoke (tools/check.sh): release code with
+# The per-push gate's agreement sample and native smoke (tools/gate): release code with
 # incremental reuse, so an edit recompiles what changed rather than every crate below it
 # from scratch. `--release` stays as it was for benchmarks, the runtime archive and the
 # full gate.

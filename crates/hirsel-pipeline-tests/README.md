@@ -9,7 +9,7 @@ crate's own `tests/it` keeps the tests that build their input by hand.
 Allowed dependencies: dev-dependencies only, on the driver and the crates whose
 public API the tests read. The library is empty and nothing depends on this
 crate. The TLS native export test also uses rustls as its independent local server.
-`tools/buck2/changed_tests.py` refuses a dependency on `hirsel-driver` from any
+`tools/gate` (`tools/buck2/gating.py`) refuses a dependency on `hirsel-driver` from any
 crate outside its `DRIVER_DEPENDENTS` list: this crate, `hirsel-cli`,
 `hirsel-conformance`, and check and modes, whose internal unit-test harnesses read
 the §22 signatures from the driver's `BuiltinRegistry`.

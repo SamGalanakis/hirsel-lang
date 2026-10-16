@@ -1,6 +1,6 @@
 # Corpus cases the per-push native smoke runs under the smoke matrix (heap executor with
 # fault injection, and an optimized x86-64 executable): every one must agree with the
-# reference. Keep it a handful: tools/check.sh allows this stage 60 s.
+# reference. Keep it a handful: tools/gate runs it for every change that can affect native code.
 conformance/CAP/CAP-1-output-no-added-newline.hir
 conformance/CLO/CLO-2-bound-derived-capability-run.hir
 conformance/CLO/CLO-2-derived-capability-field-run.hir

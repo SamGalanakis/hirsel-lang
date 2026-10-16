@@ -2,7 +2,7 @@
 """Every ignored test runs in a gate.
 
 An ignored test is a `full_gate_` case (`#[ignore = "full gate..."]`, run by
-both full-gate crate stages of check.sh), a release-only case
+both full-gate crate stages of `tools/gate --full`), a release-only case
 (`cfg_attr(debug_assertions, ignore ...)`, run by the release tests), or a case
 in a module that tools/check-native.sh runs with its ignored tests. Expectation
 rewrites are not ignored tests: they run under HIRSEL_BLESS (tools/bless.sh).

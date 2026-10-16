@@ -41,13 +41,12 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 test //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-2  # one shard of a sharded test binary
 .buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1   # run tests on this host
-.buck2/bin/buck2 test //:gate-native-smoke          # one tools/check.sh corpus stage
+.buck2/bin/buck2 test //:gate-native-smoke          # one corpus campaign of tools/gate
 python3 tools/buck2/conformance.py                # conformance shards and summed counts
 python3 tools/buck2/agree.py                      # AGREE_LIMIT variants over AGREE_SHARDS shards, summed JSON
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-native
-python3 tools/buck2/changed_tests.py              # the tests these changes reach
 python3 tools/buck2/sync.py                       # after metadata or action-sizes.json changes
-tools/check.sh                                       # the per-push gate
+tools/gate                                           # the per-push gate (tools/land lands)
 ```
 
 Builds use Buck2's default isolation dir, `v2`: never pass
@@ -100,7 +99,7 @@ Target names follow Cargo's targets, all in the root package:
 | build script | `//:hirsel-x-build-script` |
 | a sharded test binary (`SHARDED` in `sync.py`) | `//:hirsel-x-test-it-shard-<i>` |
 | its cases that need the host (`host_cases` in `sync.py`) | `//:hirsel-x-test-it-host` |
-| a `tools/check.sh` corpus or campaign stage | `//:gate-<stage>` (label `gate`) |
+| a corpus campaign of `tools/gate` | `//:gate-<stage>` (label `gate`) |
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
 | an agreement shard (`AGREE_SHARDS`) | `//:gate-agree-shard-<i>` |
 | an unrestricted agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
@@ -162,7 +161,7 @@ the old copy.
 - A pool test's passing verdict is cached by its action key. Test binaries
   whose sources draw random cases (`proptest!`, `SEEDED` in `sync.py`) run
   under `PROPTEST_RNG_SEED` from `-c hirsel.test_seed` (default 1), which is in
-  that key: a cached pass covers its seed only. `tools/check.sh --full` draws a new
+  that key: a cached pass covers its seed only. `tools/gate --full` draws a new
   seed each run and prints it; `HIRSEL_TEST_SEED=<n>` reproduces one.
 - Features are Cargo's workspace-wide resolution (`cargo build --workspace
   --all-targets`): one feature set per crate, dev-dependency features included.
@@ -199,7 +198,7 @@ the old copy.
   inventory. `full_gate_counts.py --run <command...>` streams Buck2's log and
   checks every `(binary, case)` appears exactly once, rejecting missing,
   duplicate, failed or unexpected executions. Both full-gate crate stages in
-  `tools/check.sh --full` use it independently; `full_gate_counts.py <log>` checks a
+  `tools/gate --full` use it independently; `full_gate_counts.py <log>` checks a
   saved log. Launcher and counter regressions run in the fast gate.
 - On the pool an action's work directory is a bind mount of a subdirectory.
   The runtime refuses to record there, since it cannot establish the mount's
@@ -293,7 +292,7 @@ prelude pin change fails `prepare.py` instead of mis-patching.
 expand the new prelude, port the transforms, and re-pin with
 `prelude_overlay.py --print-pins --prelude-dir <stock prelude>`. To drop the
 overlay, set `[cells] prelude = prelude` and `[external_cells] prelude =
-bundled`, and delete `prelude_overlay.py`, its pins, its test with its `tools/check.sh` stage, and
+bundled`, and delete `prelude_overlay.py`, its pins, its test `tools/tests/prelude_overlay.py`, and
 `prepare_prelude` in `bootstrap.py`.
 
 ## Measured test requests
@@ -366,7 +365,7 @@ in `sync.py`. The sum is the unsharded sample, including
 skipped variants. `agree.py` checks unique shard identities, matching catalogue
 metadata, sample coverage and classification/edit totals, and fails on any
 cluster or absent shard. Each pool action has a 300-second timeout.
-`tools/check.sh --full` runs `agree.py --full`: the whole seed-1 catalogue over
+`tools/gate --full` runs `agree.py --full`: the whole seed-1 catalogue over
 `AGREE_FULL_SHARDS` (96) shards by the same stable rank, each under its own
 `AGREE_FULL_TIMEOUT` (1800 s), so a slow or non-terminating variant fails one
 named shard. The campaign has grown past what one 4-CPU action can finish

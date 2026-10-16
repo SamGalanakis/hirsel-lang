@@ -46,7 +46,7 @@ exec "$@"
         self.git('init', '-b', 'main')
         self.git('config', 'user.email', 'test@example.invalid')
         self.git('config', 'user.name', 'Gate test')
-        self.gate('echo "check.sh: passed (0 s)"')
+        self.gate('echo "gate: passed (0 s)"')
         origin = self.root / 'origin.git'
         subprocess.run(['git', 'clone', '--bare', str(self.repo), str(origin)],
                        check=True, capture_output=True)
@@ -57,7 +57,7 @@ exec "$@"
                               capture_output=True, text=True).stdout.strip()
 
     def gate(self, body):
-        path = self.repo / 'tools/check.sh'
+        path = self.repo / 'tools/gate'
         path.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n')
         path.chmod(0o755)
         self.git('add', '.')
@@ -77,7 +77,7 @@ exec "$@"
     def test_pins_origin_and_cleans_worktree_under_required_scope(self):
         sha = self.git('rev-parse', 'HEAD')
         # Dirty local code must never run on scheduled main.
-        (self.repo / 'tools/check.sh').write_text('#!/bin/sh\nexit 99\n')
+        (self.repo / 'tools/gate').write_text('#!/bin/sh\nexit 99\n')
         run = self.run_gate()
         self.assertEqual(run.returncode, 0, run.stderr)
         result = self.result()
@@ -89,12 +89,12 @@ exec "$@"
         args = self.scope_args.read_text().splitlines()
         self.assertEqual(args[:6], ['--user', '--scope', '-p', 'MemoryMax=8G',
                                    '-p', 'CPUQuota=400%'])
-        self.assertEqual(args[6:], ['nice', '-n', '10', 'tools/check.sh', '--full'])
+        self.assertEqual(args[6:], ['nice', '-n', '10', 'tools/gate', '--full'])
 
     def test_reports_inner_native_failure_and_failed_tests(self):
         self.gate('''echo 'test native::seed_law ... FAILED'
 echo 'check-native.sh: native laws failed (exit 101, 1 s)'
-echo 'check.sh: native and Lean checks failed (exit 101, 1 s)'
+echo 'gate: native and Lean checks failed (exit 101, 1 s)'
 exit 101''')
         self.git('push', 'origin', 'main')
         run = self.run_gate()
@@ -105,13 +105,13 @@ exit 101''')
         self.assertEqual(result['failing_tests'], ['native::seed_law'])
 
     def test_records_every_stage_of_a_run_that_continues_past_failures(self):
-        self.gate('''echo 'check.sh: workspace build passed (3 s)'
-echo 'check.sh: workspace tests failed (exit 32, 40 s)' >&2
+        self.gate('''echo 'gate: workspace build passed (3 s)'
+echo 'gate: workspace tests failed (exit 32, 40 s)' >&2
 echo 'check-native.sh: Lean RC model audit failed (exit 1, 2 s)' >&2
 echo 'check-native.sh: runtime C harness passed (5 s)'
-echo 'check.sh: native and Lean checks failed (exit 1, 9 s)' >&2
-echo 'check.sh: native matrix: both targets and named exclusions passed (60 s)'
-echo 'check.sh: 2 failing stages: workspace tests;native and Lean checks' >&2
+echo 'gate: native and Lean checks failed (exit 1, 9 s)' >&2
+echo 'gate: native matrix: both targets and named exclusions passed (60 s)'
+echo 'gate: 2 failing stages: workspace tests;native and Lean checks' >&2
 exit 32''')
         self.git('push', 'origin', 'main')
         self.assertEqual(self.run_gate().returncode, 32)
@@ -119,12 +119,12 @@ exit 32''')
         self.assertEqual(result['first_failing_stage'], 'workspace tests')
         self.assertEqual([(s['gate'], s['stage'], s['result'], s['exit'], s['seconds'])
                           for s in result['stages']], [
-            ('check.sh', 'workspace build', 'pass', 0, 3),
-            ('check.sh', 'workspace tests', 'fail', 32, 40),
+            ('gate', 'workspace build', 'pass', 0, 3),
+            ('gate', 'workspace tests', 'fail', 32, 40),
             ('check-native.sh', 'Lean RC model audit', 'fail', 1, 2),
             ('check-native.sh', 'runtime C harness', 'pass', 0, 5),
-            ('check.sh', 'native and Lean checks', 'fail', 1, 9),
-            ('check.sh', 'native matrix: both targets and named exclusions', 'pass', 0, 60)])
+            ('gate', 'native and Lean checks', 'fail', 1, 9),
+            ('gate', 'native matrix: both targets and named exclusions', 'pass', 0, 60)])
 
     def test_collects_named_cli_failures(self):
         self.gate("""echo 'conformance/run/corpus.hir: wrong observation'
@@ -133,7 +133,7 @@ echo 'topology: native-tests/topology/units.hir: wrong observation'
 echo 'generated: success-1 under arm: unavailable'
 echo 'hash sweep: conformance/run/hash.hir under x86: wrong observation'
 echo 'native: conformance/run/matrix.hir llvm under x86: new exclusion'
-echo 'check.sh: native matrix failed (exit 1, 1 s)'
+echo 'gate: native matrix failed (exit 1, 1 s)'
 exit 1""")
         self.git('push', 'origin', 'main')
         self.assertEqual(self.run_gate().returncode, 1)
@@ -155,7 +155,7 @@ exit 1""")
                     data['known_kinds'] = 1
                 self.gate(f"""echo '{json.dumps(data)}'
 echo 'agree: new discrepancy kind: native/new'
-echo 'check.sh: {stage} failed (exit 1, 1 s)'
+echo 'gate: {stage} failed (exit 1, 1 s)'
 exit 1""")
                 self.git('push', 'origin', 'main')
                 self.assertEqual(self.run_gate().returncode, 1)
@@ -181,7 +181,7 @@ exit 1""")
   '1 TESTS FAILED' \\
   '  ✗ root//:hirsel-pipeline-tests-test-it-shard-1 (root//tools/buck2:dev#b48a97a5614255e0)' \\
   '{ts}✗ Timeout: root//:gate-native-full (14400.0s)' \\
-  'check.sh: full gate crate tests failed (exit 32, 2081 s)'
+  'gate: full gate crate tests failed (exit 32, 2081 s)'
 exit 32""")
         self.git('push', 'origin', 'main')
         self.assertEqual(self.run_gate().returncode, 32)
@@ -204,7 +204,7 @@ exit 32""")
   '{ts}agree: 1 discrepancy cluster' \\
   '  ✗ root//:gate-agree-full-shard-43 (root//tools/buck2:dev#b48a97a5614255e0)' \\
   '  ✗ root//:gate-agree-full-shard-7 (root//tools/buck2:dev#b48a97a5614255e0)' \\
-  'check.sh: source and IR checker agreement (unrestricted) failed (exit 32, 250 s)'
+  'gate: source and IR checker agreement (unrestricted) failed (exit 32, 250 s)'
 exit 32""")
         self.git('push', 'origin', 'main')
         self.assertEqual(self.run_gate().returncode, 32)
@@ -239,19 +239,24 @@ exit 32""")
 
 
 class GateCommands(unittest.TestCase):
+    """`tools/gate --full` with a fake Buck2 and fake helpers."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for directory in ('.buck2/bin', 'tools/tests', 'tools/buck2'):
             (self.root / directory).mkdir(parents=True)
-        for test in ('main_full_run', 'buck2_sync', 'prelude_overlay', 'buck2_launcher', 'full_gate_counts',
-                     'ignored_tests'):
+        for test in ('main_full_run', 'buck2_sync', 'gate'):
             (self.root / f'tools/tests/{test}.py').write_text('# fixture gate tests\n')
-        for helper in ('prepare', 'sync', 'clippy', 'fmt', 'changed_tests', 'conformance', 'agree'):
+        for helper in ('gating', 'impact'):
+            (self.root / f'tools/buck2/{helper}.py').write_text((RUNNER.parent / f'buck2/{helper}.py').read_text())
+        for helper in ('prepare', 'sync', 'clippy', 'fmt', 'conformance', 'agree'):
             (self.root / f'tools/buck2/{helper}.py').write_text(f'''import os, sys
 AGREE_LIMIT = {AGREE_LIMIT}
+AGREE_SHARDS = CONFORMANCE_SHARDS = 16
 NATIVE_FULL_SHARDS = {NATIVE_FULL_SHARDS}
+summarize = None
 if __name__ == "__main__":
     with open(os.environ["COMMANDS"], "a") as log:
         print(" ".join(["{helper}.py", *sys.argv[1:]]), file=log)
@@ -265,7 +270,9 @@ if os.environ.get("FAIL_COUNTS") == "1":
     sys.exit(23)
 sys.exit(subprocess.call(sys.argv[sys.argv.index("--run") + 1:]))
 ''')
-        (self.root / 'tools/check.sh').write_text((RUNNER.parent / 'check.sh').read_text())
+        gate = self.root / 'tools/gate'
+        gate.write_text((RUNNER.parent / 'gate').read_text())
+        gate.chmod(0o755)
         self.commands = self.root / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands), 'HIRSEL_TEST_SEED': '7'}
         buck2 = self.root / '.buck2/bin/buck2'
@@ -282,93 +289,63 @@ printf '%s\\n' "$*" >> "$COMMANDS"
         native.write_text('#!/bin/sh\nprintf "native gate\\n" >> "$COMMANDS"\n')
         native.chmod(0o755)
 
-    def run_check(self, *args):
-        return subprocess.run(['bash', 'tools/check.sh', *args], cwd=self.root,
+    def run_full(self):
+        return subprocess.run([sys.executable, 'tools/gate', '--full'], cwd=self.root,
                               env=self.env, capture_output=True, text=True)
 
-    def test_push_gate_keeps_tests_corpus_lints_and_sample(self):
-        result = self.run_check()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        commands = self.commands.read_text().splitlines()
-        self.assertIn('prepare.py', commands)
-        self.assertIn('sync.py --check', commands)
-        self.assertIn('build //: --materializations none', commands)
-        self.assertIn('clippy.py', commands)
-        self.assertIn('fmt.py --check', commands)
-        self.assertIn('changed_tests.py', commands)
-        self.assertNotIn('test root//:a-unittest root//:b-test-it', commands)
-        self.assertIn('conformance.py', commands)
-        self.assertIn('agree.py', commands)
-        self.assertIn(f'check.sh: source and IR checker agreement ({AGREE_LIMIT} variants)\n', result.stdout)
-        self.assertIn('test //:gate-native-smoke -- --timeout 1800', commands)
-        self.assertFalse(any('full' in command or command == 'native gate'
-                             or '//tools/buck2:release' in command for command in commands))
-
     def test_full_keeps_unrestricted_campaigns_and_all_old_gates(self):
-        result = self.run_check('--full')
+        result = self.run_full()
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = self.commands.read_text().splitlines()
         full = 'test -c hirsel.full=true -c hirsel.test_seed=7 '
-        self.assertIn(full + 'root//:a-unittest root//:b-test-it root//:doclib -- --timeout 1800', commands)
-        self.assertIn(full + '--target-platforms //tools/buck2:release root//:a-unittest '
-                      'root//:b-test-it root//:doclib -- --timeout 1800', commands)
-        self.assertIn('native gate', commands)
-        self.assertIn('agree.py --full', commands)
-        self.assertIn('check.sh: source and IR checker agreement (unrestricted)\n', result.stdout)
-        self.assertIn(full + '//:gate-agree-native-full -- --timeout 14400', commands)
-        shards = ' '.join(f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1))
-        self.assertIn(full + shards + ' -- --timeout 14400', commands)
-        self.assertIn(full + '//:gate-native-smoke -- --timeout 1800', commands)
+        for command in ['prepare.py', 'sync.py --check', 'clippy.py', 'fmt.py --check', 'conformance.py', 'agree.py --full',
+                        'build -c hirsel.full=true -c hirsel.test_seed=7 //: --materializations none', 'native gate',
+                        full + 'root//:a-unittest root//:b-test-it root//:doclib -- --timeout 1800',
+                        full + '--target-platforms //tools/buck2:release root//:a-unittest root//:b-test-it root//:doclib -- --timeout 1800',
+                        full + '//:gate-agree-native-full -- --timeout 14400',
+                        full + ' '.join(f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1)) + ' -- --timeout 14400',
+                        full + '//:gate-native-smoke -- --timeout 1800',
+                        full + '//:gate-conformance-hash-seed -- --timeout 14400',
+                        full + '//:gate-native-hash-sweep -- --timeout 14400']:
+            self.assertIn(command, commands)
+        self.assertIn('gate: source and IR checker agreement (unrestricted)\n', result.stdout)
         self.assertNotIn('agree.py', commands)
-        self.assertNotIn('changed_tests.py', commands)
         self.assertFalse(any('doclib' in c and 'full_gate_' in c for c in commands))
         # Every Buck2 command of the full gate sees the campaign targets.
         self.assertTrue(all(' -c hirsel.full=true -c hirsel.test_seed=7 ' in command for command in commands
                             if command.split()[0] in ('build', 'test')))
-        self.assertIn('check.sh: randomly seeded tests run with PROPTEST_RNG_SEED=7\n', result.stdout)
+        self.assertIn('gate: randomly seeded tests run with PROPTEST_RNG_SEED=7\n', result.stdout)
+        self.assertIn('gate: tool tests: tools/tests/gate.py passed', result.stdout)
 
     def test_full_gate_runs_every_stage_past_failures_and_fails_at_the_end(self):
         self.env['FAIL_COUNTS'] = '1'
         self.env['FAIL_CLIPPY'] = '1'
-        result = self.run_check('--full')
+        result = self.run_full()
         self.assertEqual(result.returncode, 19)
-        self.assertIn('check.sh: workspace clippy failed (exit 19,', result.stderr)
-        self.assertIn('check.sh: full gate crate tests failed (exit 23,', result.stderr)
-        self.assertIn('check.sh: 3 failing stages: workspace clippy;full gate crate tests;'
+        self.assertIn('gate: workspace clippy failed (exit 19,', result.stderr)
+        self.assertIn('gate: full gate crate tests failed (exit 23,', result.stderr)
+        self.assertIn('gate: 3 failing stages: workspace clippy;full gate crate tests;'
                       'full gate crate tests in release\n', result.stderr)
-        self.assertNotIn('check.sh: passed', result.stdout)
+        self.assertNotIn('gate: passed', result.stdout)
         commands = self.commands.read_text().splitlines()
         # Every later stage still ran, up to the last.
         for command in ['fmt.py --check', 'conformance.py', 'agree.py --full', 'native gate',
                         'test -c hirsel.full=true -c hirsel.test_seed=7 //:gate-native-hash-sweep -- --timeout 14400']:
             self.assertIn(command, commands)
 
-    def test_failing_stage_stops_before_tests(self):
-        self.env['FAIL_CLIPPY'] = '1'
-        result = self.run_check()
-        self.assertEqual(result.returncode, 19)
-        self.assertIn('workspace clippy failed (exit 19,', result.stderr)
-        self.assertFalse(any(command.startswith('test') or command == 'changed_tests.py'
-                             for command in self.commands.read_text().splitlines()))
-
-    def test_named_ignored_group_runs_only_in_full_and_in_both_profiles(self):
+    def test_named_ignored_group_runs_in_both_profiles(self):
         group = ' -- --timeout 14400 --test-arg=full_gate_ --test-arg=--ignored'
-        for arguments, full in [((), False), (('--full',), True)]:
-            with self.subTest(full=full):
-                self.commands.unlink(missing_ok=True)
-                result = self.run_check(*arguments)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                commands = self.commands.read_text().splitlines()
-                counters = [command for command in commands if command.startswith('full_gate_counts.py --run ')]
-                self.assertEqual(len(counters), 2 if full else 0)
-                self.assertEqual('test -c hirsel.full=true -c hirsel.test_seed=7 root//:a-unittest root//:b-test-it'
-                                 + group in commands, full)
-                self.assertEqual('test -c hirsel.full=true -c hirsel.test_seed=7 --target-platforms //tools/buck2:release '
-                                 'root//:a-unittest root//:b-test-it' + group in commands, full)
-                # An unrestricted --ignored would also run fixture regeneration
-                # and manual diagnostics. Only the named group is automatic.
-                self.assertFalse(any(command.endswith('--test-arg=--ignored')
-                                     and 'full_gate_' not in command for command in commands))
+        result = self.run_full()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = self.commands.read_text().splitlines()
+        self.assertEqual(len([c for c in commands if c.startswith('full_gate_counts.py --run ')]), 2)
+        self.assertIn('test -c hirsel.full=true -c hirsel.test_seed=7 root//:a-unittest root//:b-test-it' + group, commands)
+        self.assertIn('test -c hirsel.full=true -c hirsel.test_seed=7 --target-platforms //tools/buck2:release '
+                      'root//:a-unittest root//:b-test-it' + group, commands)
+        # An unrestricted --ignored would also run fixture regeneration
+        # and manual diagnostics. Only the named group is automatic.
+        self.assertFalse(any(command.endswith('--test-arg=--ignored')
+                             and 'full_gate_' not in command for command in commands))
 
 
 class NativeGate(unittest.TestCase):
@@ -416,146 +393,6 @@ if [[ $1 == build ]]; then echo /archives; fi
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('check-native.sh: passed', result.stdout)
         self.assertTrue(any(c.startswith('run.sh') for c in self.commands.read_text().splitlines()))
-
-
-class ChangedTests(unittest.TestCase):
-    def setUp(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            'changed_tests', RUNNER.parent / 'buck2/changed_tests.py')
-        self.module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.module)
-
-    def test_matrix_skip_reaches_driver_harnesses_without_breaking_doctests(self):
-        from unittest.mock import patch
-        driver = 'root//:hirsel-driver-test-it-shard-3'
-        configurations = 'root//:hirsel-conformance-test-it'
-        doctest = 'root//:hirsel-lir'
-        unit = 'root//:hirsel-signature-unittest'
-        calls = []
-        def execute(command):
-            calls.append(command)
-            # Reproduce the doctest adapter's rejection of libtest's --skip.
-            if doctest in command and '--test-arg=--skip' in command:
-                return 1
-            return 0
-        with patch.object(self.module.subprocess, 'check_output', return_value=doctest + '\n'), \
-             patch.object(self.module.subprocess, 'call', side_effect=execute):
-            self.assertEqual(self.module.run_tests([driver, doctest, unit, configurations]), 0)
-        self.assertEqual(len(calls), 2)
-        self.assertIn(doctest, calls[1])
-        self.assertIn(unit, calls[0])
-        self.assertNotIn('--test-arg=--skip', calls[1])
-        self.assertIn(driver, calls[0])
-        self.assertIn('--test-arg=--skip', calls[0])
-        self.assertIn('--test-arg=native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry', calls[0])
-        self.assertIn(configurations, calls[0])
-        self.assertIn('--test-arg=native_gate::stored_configuration_retains_independent_seeds_and_baseline_names', calls[0])
-
-    def test_main_advancing_does_not_select_sibling_changes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            def git(*arguments):
-                return subprocess.run(['git', '-C', str(root), *arguments], check=True,
-                                      capture_output=True, text=True).stdout.strip()
-            git('init', '-b', 'main')
-            git('config', 'user.email', 'test@example.invalid')
-            git('config', 'user.name', 'Gate test')
-            (root / 'shared.txt').write_text('initial')
-            git('add', '.')
-            git('commit', '-m', 'Initial fixture')
-            git('switch', '-c', 'lane')
-            (root / 'ours.txt').write_text('lane')
-            git('add', '.')
-            git('commit', '-m', 'Lane fixture')
-            git('switch', 'main')
-            (root / 'upstream.txt').write_text('sibling')
-            git('add', '.')
-            git('commit', '-m', 'Sibling fixture')
-            git('update-ref', 'refs/remotes/origin/main', 'HEAD')
-            git('switch', 'lane')
-            (root / 'shared.txt').write_text('unstaged')
-            (root / 'new.txt').write_text('untracked')
-            self.assertEqual(set(self.module.changed_paths(root)),
-                             {'ours.txt', 'shared.txt', 'new.txt'})
-
-    def test_a_deleted_file_stands_for_its_directorys_files(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'crates/a/src').mkdir(parents=True)
-            for path in ['crates/a/src/lib.rs', 'crates/a/src/kept.rs', 'crates/a/Cargo.toml']:
-                (root / path).write_text('')
-            self.assertEqual(
-                self.module.owned_paths(root, ['crates/a/src/gone.rs', 'crates/a/Cargo.toml']),
-                ['crates/a/Cargo.toml', 'crates/a/src/kept.rs', 'crates/a/src/lib.rs'])
-            self.assertEqual(self.module.owned_paths(root, ['crates/b/src/gone/deep.rs']), [])
-
-    def test_selection_is_every_test_reaching_a_changed_input_except_gate_stages(self):
-        self.assertEqual(
-            self.module.query(['crates/a/src/lib.rs']),
-            '(kind("_rust_test", rdeps(//..., owner("crates/a/src/lib.rs")))'
-            ' + attrfilter(labels, doctest, rdeps(//..., owner("crates/a/src/lib.rs"))))'
-            ' - attrfilter(labels, gate, //...)')
-        for path in ['tools/buck2/defs.bzl', '.buckconfig', 'Cargo.lock', 'BUCK']:
-            self.assertEqual(self.module.query([path]),
-                             '(kind("_rust_test", //...) + attrfilter(labels, doctest, //...))'
-                             ' - attrfilter(labels, gate, //...)')
-
-    def test_only_tool_crates_may_depend_on_the_driver(self):
-        def package(name, *dependencies):
-            return dict(id=name, name=name, dependencies=[
-                dict(name=dependency, kind=kind) for dependency, kind in dependencies])
-        metadata = {
-            'workspace_members': ['hirsel-driver', 'hirsel-cli', 'hirsel-pipeline-tests',
-                                  'hirsel-rc', 'hirsel-lir', 'hirsel-types', 'hirsel-interp'],
-            'packages': [
-                package('hirsel-driver', ('hirsel-rc', None), ('hirsel-engine', None)),
-                package('hirsel-cli', ('hirsel-driver', None), ('hirsel-engine', None)),
-                package('hirsel-interp', ('hirsel-engine', 'dev')),
-                package('hirsel-pipeline-tests', ('hirsel-driver', 'dev')),
-                package('hirsel-rc', ('hirsel-lir', None), ('hirsel-driver', 'dev')),
-                package('hirsel-lir', ('hirsel-driver', None)),
-                package('hirsel-types', ('serde', 'dev')),
-                package('external', ('hirsel-driver', 'dev')),
-            ],
-        }
-        self.assertEqual(self.module.driver_dependents(metadata),
-                         ['hirsel-interp', 'hirsel-lir', 'hirsel-rc'])
-        # The control: without those edges nothing is refused.
-        for name in ['hirsel-rc', 'hirsel-lir', 'hirsel-interp']:
-            next(p for p in metadata['packages'] if p['name'] == name)['dependencies'] = []
-        self.assertEqual(self.module.driver_dependents(metadata), [])
-
-    def test_manifests_give_every_declared_dependency_edge(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/*"]\n')
-            for name, text in [('a', '[dependencies]\nb = { path = "../b" }\n'
-                                     '[dev-dependencies]\nd = { package = "hirsel-driver", path = "../d" }\n'),
-                               ('b', '[target.\'cfg(unix)\'.build-dependencies]\nc = "1"\n')]:
-                (root / 'crates' / name).mkdir(parents=True)
-                (root / 'crates' / name / 'Cargo.toml').write_text(f'[package]\nname = "{name}"\n' + text)
-            metadata = self.module.workspace_metadata(root)
-            self.assertEqual(metadata['workspace_members'], ['a', 'b'])
-            self.assertEqual([p['dependencies'] for p in metadata['packages']], [
-                [dict(name='b', kind=None), dict(name='hirsel-driver', kind='dev')],
-                [dict(name='c', kind='build')],
-            ])
-            self.assertEqual(self.module.driver_dependents(metadata), ['a'])
-
-    def test_a_crate_with_one_test_binary_rejects_new_top_level_test_files(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for path, text in [('crates/merged/tests/it/main.rs', 'mod old;\n'),
-                               ('crates/merged/tests/it/old.rs', ''),
-                               ('crates/merged/tests/new.rs', '#[test]\nfn t() {}\n'),
-                               ('crates/merged/tests/allocator.rs',
-                                '// own test binary: installs a global allocator.\n'),
-                               ('crates/single/tests/one.rs', ''),
-                               ('crates/single/tests/two.rs', '')]:
-                (root / path).parent.mkdir(parents=True, exist_ok=True)
-                (root / path).write_text(text)
-            self.assertEqual(self.module.stray_test_binaries(root), ['crates/merged/tests/new.rs'])
 
 
 class AgreementShards(unittest.TestCase):

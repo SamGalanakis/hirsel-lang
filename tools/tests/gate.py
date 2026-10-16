@@ -123,6 +123,142 @@ class Classification(unittest.TestCase):
         self.assertEqual(len(rules), (REPO / 'BUCK').read_text().count('\n    name = '))
 
 
+class Workspace(unittest.TestCase):
+    """The workspace rules the selection depends on."""
+
+    def test_main_advancing_does_not_select_sibling_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scratch_repo(root)
+            commit(root, {'shared.txt': 'initial'}, 'Initial fixture')
+            git(root, 'switch', '-q', '-c', 'lane')
+            commit(root, {'ours.txt': 'lane'}, 'Lane fixture')
+            git(root, 'switch', '-q', 'main')
+            commit(root, {'upstream.txt': 'sibling'}, 'Sibling fixture')
+            git(root, 'switch', '-q', 'lane')
+            (root / 'shared.txt').write_text('unstaged')
+            (root / 'new.txt').write_text('untracked')
+            self.assertEqual(set(gating.changed_paths(gating.merge_base('main', root), root)),
+                             {'ours.txt', 'shared.txt', 'new.txt'})
+
+    def test_a_deleted_file_stands_for_its_directorys_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'crates/a/src').mkdir(parents=True)
+            for path in ['crates/a/src/lib.rs', 'crates/a/src/kept.rs', 'crates/a/Cargo.toml']:
+                (root / path).write_text('')
+            self.assertEqual(
+                gating.owned_paths(['crates/a/src/gone.rs', 'crates/a/Cargo.toml'], root),
+                ['crates/a/Cargo.toml', 'crates/a/src/kept.rs', 'crates/a/src/lib.rs'])
+            self.assertEqual(gating.owned_paths(['crates/b/src/gone/deep.rs'], root), [])
+
+    def test_only_tool_crates_may_depend_on_the_driver(self):
+        def package(name, *dependencies):
+            return dict(id=name, name=name, dependencies=[
+                dict(name=dependency, kind=kind) for dependency, kind in dependencies])
+        metadata = {
+            'workspace_members': ['hirsel-driver', 'hirsel-cli', 'hirsel-pipeline-tests',
+                                  'hirsel-rc', 'hirsel-lir', 'hirsel-types', 'hirsel-interp'],
+            'packages': [
+                package('hirsel-driver', ('hirsel-rc', None), ('hirsel-engine', None)),
+                package('hirsel-cli', ('hirsel-driver', None), ('hirsel-engine', None)),
+                package('hirsel-interp', ('hirsel-engine', 'dev')),
+                package('hirsel-pipeline-tests', ('hirsel-driver', 'dev')),
+                package('hirsel-rc', ('hirsel-lir', None), ('hirsel-driver', 'dev')),
+                package('hirsel-lir', ('hirsel-driver', None)),
+                package('hirsel-types', ('serde', 'dev')),
+                package('external', ('hirsel-driver', 'dev')),
+            ],
+        }
+        self.assertEqual(gating.driver_dependents(metadata), ['hirsel-interp', 'hirsel-lir', 'hirsel-rc'])
+        # The control: without those edges nothing is refused.
+        for name in ['hirsel-rc', 'hirsel-lir', 'hirsel-interp']:
+            next(p for p in metadata['packages'] if p['name'] == name)['dependencies'] = []
+        self.assertEqual(gating.driver_dependents(metadata), [])
+
+    def test_manifests_give_every_declared_dependency_edge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/*"]\n')
+            for name, text in [('a', '[dependencies]\nb = { path = "../b" }\n'
+                                     '[dev-dependencies]\nd = { package = "hirsel-driver", path = "../d" }\n'),
+                               ('b', '[target.\'cfg(unix)\'.build-dependencies]\nc = "1"\n')]:
+                (root / 'crates' / name).mkdir(parents=True)
+                (root / 'crates' / name / 'Cargo.toml').write_text(f'[package]\nname = "{name}"\n' + text)
+            metadata = gating.workspace_metadata(root)
+            self.assertEqual(metadata['workspace_members'], ['a', 'b'])
+            self.assertEqual([p['dependencies'] for p in metadata['packages']], [
+                [dict(name='b', kind=None), dict(name='hirsel-driver', kind='dev')],
+                [dict(name='c', kind='build')],
+            ])
+            self.assertEqual(gating.driver_dependents(metadata), ['a'])
+
+    def test_a_crate_with_one_test_binary_rejects_new_top_level_test_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path, text in [('crates/merged/tests/it/main.rs', 'mod old;\n'),
+                               ('crates/merged/tests/it/old.rs', ''),
+                               ('crates/merged/tests/new.rs', '#[test]\nfn t() {}\n'),
+                               ('crates/merged/tests/allocator.rs',
+                                '// own test binary: installs a global allocator.\n'),
+                               ('crates/single/tests/one.rs', ''),
+                               ('crates/single/tests/two.rs', '')]:
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text)
+            self.assertEqual(gating.stray_test_binaries(root), ['crates/merged/tests/new.rs'])
+
+    def test_full_gate_skips_reach_their_test_targets(self):
+        import sync
+        buck = (REPO / 'BUCK').read_text()
+        _, rules = impact.buck_rules(buck)
+        for binary, cases in sync.FULL_GATE_SKIPS.items():
+            self.assertIn(f'    skips = {json.dumps(cases)},\n', rules[binary])
+
+
+class Queries(unittest.TestCase):
+    """The Buck2 queries a selection asks, with uquery recorded."""
+
+    def resolve(self, paths, owners_with_gate=(), buck=False):
+        asked = []
+
+        def uquery(expression):
+            asked.append(expression)
+            if expression.startswith('attrfilter(labels, gate,'):
+                return list(owners_with_gate)
+            return ['root//:t-unittest']
+        selection = gating.Selection.__new__(gating.Selection)
+        selection.paths = paths
+        selection.classified = impact.classify(paths, MEMBERS, BUCK)
+        if buck:
+            selection.classified.buck = buck
+        selection.tests, selection.campaigns = [], set()
+        original = gating.uquery
+        gating.uquery = uquery
+        try:
+            selection.resolve()
+        finally:
+            gating.uquery = original
+        return selection, asked
+
+    def test_an_input_selects_the_tests_reaching_it_and_the_campaigns_reading_it(self):
+        selection, asked = self.resolve(['conformance/passing.txt'], ['root//:gate-conformance-shard-3', 'root//:gate-native-smoke'])
+        self.assertEqual(selection.campaigns, {impact.CONFORMANCE, impact.NATIVE_SMOKE})
+        self.assertIn('(kind("_rust_test", rdeps(//..., owner("conformance/passing.txt"))) + attrfilter(labels, doctest, '
+                      'rdeps(//..., owner("conformance/passing.txt")))) - attrfilter(labels, gate, //...)', asked)
+        self.assertEqual(selection.tests, ['root//:t-unittest'])
+
+    def test_a_library_edit_adds_its_crates_campaigns_and_a_buck_edit_its_targets(self):
+        selection, asked = self.resolve(['crates/hirsel-lexer/src/lib.rs'], buck={'hirsel-llvm-test-it'})
+        self.assertEqual(selection.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
+        self.assertIn(gating.macro_targets({'hirsel-llvm-test-it'}), asked[-1])
+        self.assertEqual(len(selection.campaign_targets()), 32)
+
+    def test_a_build_wide_edit_selects_every_test_and_campaign(self):
+        selection, asked = self.resolve(['.buckconfig'])
+        self.assertEqual(asked, [gating.ALL_TESTS])
+        self.assertEqual(selection.campaigns, set(impact.CAMPAIGNS))
+
+
 class Identity(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

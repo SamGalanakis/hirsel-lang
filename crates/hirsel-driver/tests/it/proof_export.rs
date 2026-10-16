@@ -601,7 +601,7 @@ fn sampled(path: &Path) -> bool {
     hash.0[0] % 16 == 0
 }
 
-/// Per push (its own tools/check.sh stage): the seeded sample, which must reach
+/// Per push (whenever tools/gate selects this binary): the seeded sample, which must reach
 /// every fingerprint derivation; the full gate runs every program.
 #[test]
 fn a_sample_of_accepted_programs_round_trips() {

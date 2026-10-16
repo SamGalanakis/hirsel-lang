@@ -6,7 +6,7 @@ seeded random partitions, and every executable must observe what the reference
 interpreter does. Before each link the manifest is checked: every export is
 defined once and every import resolves.
 
-`cases.txt` lists the corpus cases run this way by `tools/check.sh --full`; each has
+`cases.txt` lists the corpus cases run this way by `tools/gate --full`; each has
 several units (generic instances, closures, finalizers). The driver test
 `singleton_whole_and_twenty_random_partitions_observe_the_same` runs its own
 programs through the same 22 partitions, and

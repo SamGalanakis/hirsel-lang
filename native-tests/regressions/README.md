@@ -19,7 +19,7 @@ The native differential gate's checked-in state.
 - `agree-known.txt`: the kinds of discrepancy the `agree --native full`
   campaign finds in valid variants of supported programs. A new kind fails the
   gate, and so does a listed kind that no longer occurs.
-- `smoke.txt`: the cases `tools/check.sh` runs on every push (heap executor with
+- `smoke.txt`: the cases `tools/gate` runs per push (heap executor with
   fault injection and an optimized x86-64 executable on the diagnostic and on
   the shipped runtime archive), with eight generated successes and eight
   directed failures.

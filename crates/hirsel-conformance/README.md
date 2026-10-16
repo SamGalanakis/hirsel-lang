@@ -134,7 +134,7 @@ path and required behavior). Handwritten documentation never controls execution.
 
 ## Canonical corpus layout
 
-`tools/check.sh` passes `--check-format` to the runner. Every discovered `.hir` file,
+`tools/gate` passes `--check-format` to the runner. Every discovered `.hir` file,
 including unratcheted and runtime-excluded cases, must equal the output of the
 same driver formatter used by `hirsel fmt`. Archived `reports/` directories are
 not corpus inputs. An intentional syntax negative is exempt only when formatting
@@ -171,7 +171,7 @@ The migration never updates `passing.txt` or excludes a semantic difference.
 
 ## Native differential gate (`src/native/`, `--bin native`)
 
-`native --smoke` (in `tools/check.sh`) runs the cases of
+`native --smoke` (in `tools/gate`) runs the cases of
 `native-tests/regressions/smoke.txt` and eight generated successes and eight
 directed failures on the heap executor with fault injection and as an optimized
 x86-64 executable on the diagnostic runtime archive and on the shipped (default)
@@ -186,7 +186,7 @@ archive `hirsel run --native` ships, with the inlined fast paths) or `system`
 `LAUNCH_TIMEOUT` (120 s, ten times that under memcheck) and that configuration
 of that case fails by name.
 
-`native --full` (in `tools/check.sh --full`) runs every executable case of
+`native --full` (in `tools/gate --full`) runs every executable case of
 `conformance/passing.txt` under the driver's full matrix on both targets and
 writes `native-matrix.tsv` (one row per case and configuration, headed by the
 matrix and observation versions) and `case-walls.tsv` (each case's wall time,
@@ -204,7 +204,7 @@ directories, and its report unless `--out` names one, under its own run root
 one checkout never share a path; the root is held by a file lock, and the next
 run removes every root whose owner has exited. Runtime archives built with
 Cargo stay in the shared, locked `native-gate/runtime/cache`.
-`native --sanitize` (in `tools/check.sh --full`) runs the smoke
+`native --sanitize` (in `tools/gate --full`) runs the smoke
 cases, the allocating cases of `native-tests/regressions/memcheck.txt` and eight
 generated programs as x86-64 executables under Valgrind memcheck, at O0 and O3:
 on the system-allocator archive, where each fixed-size block is one libc
@@ -230,7 +230,7 @@ optimized x86-64 executables under `full`), except under a configuration its
 program has an exclusion row for. A mismatch, a heap violation and a stage
 validator's refusal are discrepancies; their kinds must be exactly those of
 `native-tests/regressions/agree-known.txt`. The default campaign in
-`tools/check.sh` is unchanged and still requires zero flagged variants.
+`tools/gate` is unchanged and still requires zero flagged variants.
 
 An optional `// entry: name` header selects an ordinary public function instead
 of `main` in the compiler, agreement and native runners. Test controls use a
