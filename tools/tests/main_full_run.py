@@ -357,8 +357,7 @@ class NativeGate(unittest.TestCase):
         self.env = os.environ | {'COMMANDS': str(self.commands)}
         (self.root / 'tools').mkdir()
         (self.root / 'tools/check-native.sh').write_text((RUNNER.parent / 'check-native.sh').read_text())
-        for tool in ('.buck2/bin/buck2', 'crates/hirsel-rt/harness/run.sh', 'native-tests/library/run-c.sh',
-                     'tools/native-toolchain/check', 'proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh'):
+        for tool in ('.buck2/bin/buck2', 'proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh'):
             path = self.root / tool
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f'''#!/usr/bin/env bash
@@ -375,16 +374,16 @@ if [[ $1 == build ]]; then echo /archives; fi
                                env=self.env, capture_output=True, text=True)
 
     def test_every_stage_runs_and_a_failing_command_still_ends_its_stage(self):
-        result = self.run_native('build -c hirsel.full=true //:hirsel-rt-archives')
+        result = self.run_native('gate-native-runtime-c')
         self.assertEqual(result.returncode, 7)
         commands = self.commands.read_text().splitlines()
-        # The archive build failed, so neither stage ran a harness on no archives.
-        self.assertFalse(any(c.startswith(('run.sh', 'run-c.sh')) for c in commands))
         self.assertIn('check-native.sh: runtime C harness failed (exit 7,', result.stderr)
-        self.assertIn('check-native.sh: library C probes failed (exit 7,', result.stderr)
-        self.assertIn('check-native.sh: 2 failing stages: runtime C harness;library C probes\n', result.stderr)
-        # Every later stage still ran.
-        for tool in ('check --prefix', 'audit.sh', 'check-vectors.sh'):
+        self.assertIn('check-native.sh: library C probes passed', result.stdout)
+        self.assertIn('check-native.sh: 1 failing stages: runtime C harness\n', result.stderr)
+        # Independent Buck2 harnesses and every later stage still run.
+        for target in ('gate-native-library-c', 'gate-native-toolchain-pin'):
+            self.assertTrue(any(c.startswith('buck2 test') and target in c for c in commands), target)
+        for tool in ('audit.sh', 'check-vectors.sh'):
             self.assertTrue(any(c.startswith(tool) for c in commands), tool)
         self.assertIn('check-native.sh: Lean RC model vectors passed', result.stdout)
         self.assertTrue(commands[-1].startswith('buck2 test') and 'rc_maps_native::' in commands[-1])
@@ -394,8 +393,9 @@ if [[ $1 == build ]]; then echo /archives; fi
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('check-native.sh: passed', result.stdout)
         commands = self.commands.read_text().splitlines()
-        self.assertTrue(any(c.startswith('run.sh') for c in commands))
-        self.assertTrue(any(c.startswith('run-c.sh') for c in commands))
+        for target in ('gate-native-runtime-c', 'gate-native-library-c', 'gate-native-toolchain-pin'):
+            self.assertTrue(any(c.startswith('buck2 test') and target in c for c in commands), target)
+        self.assertFalse(any('hirsel.tests=host' in c for c in commands))
 
 
 class AgreementShards(unittest.TestCase):
