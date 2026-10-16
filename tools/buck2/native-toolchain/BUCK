@@ -1,4 +1,4 @@
-load(":pins.bzl", "LLVM_DEBS", "NATIVE")
+load("//tools/native-toolchain:pins.bzl", "LLVM_DEBS", "NATIVE")
 load(":defs.bzl", "toolchain_proof", "unpack_toolchain")
 
 [http_file(name = "llvm-deb-{}".format(i), urls = [pin["url"]], sha256 = pin["sha256"], size_bytes = pin["size"]) for i, pin in enumerate(LLVM_DEBS)]

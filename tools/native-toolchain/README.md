@@ -34,7 +34,7 @@ symlinks before Buck2 hashes the output directories. Execution uses read-only
 action inputs inside the pool's networkless sandbox, with its private `/tmp`.
 
 ```sh
-.buck2/bin/buck2 test //tools/native-toolchain:proof
+.buck2/bin/buck2 test //tools/buck2/native-toolchain:proof
 ```
 
 The proof runs clang's version command, links and runs C with the pinned lld,

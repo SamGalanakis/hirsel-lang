@@ -12,7 +12,7 @@ def _unpack(ctx):
 unpack_toolchain = rule(impl = _unpack, attrs = {
     "archives": attrs.list(attrs.dep()),
     "kind": attrs.string(),
-    "_unpack": attrs.source(default = "//tools/native-toolchain:unpack.py"),
+    "_unpack": attrs.source(default = "//tools/buck2/native-toolchain:unpack.py"),
 })
 
 def _proof(ctx):
