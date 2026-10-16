@@ -4,9 +4,6 @@ use crate::{LayoutId, LayoutTable};
 use hirsel_syntax::ContentHash;
 use std::collections::BTreeMap;
 
-pub const BUILTIN_COUNT: u32 = 2;
-pub const EMPTY_ENVIRONMENT_INDEX: u32 = BUILTIN_COUNT;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DescriptorRegistry {
     pub table: ContentHash,

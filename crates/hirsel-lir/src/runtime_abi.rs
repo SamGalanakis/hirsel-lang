@@ -12,7 +12,6 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const RUNTIME_ABI_NAME: &str = "hirsel_rt_v2";
 pub const ABI_VERSION: u32 = 4;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
@@ -795,18 +794,6 @@ impl RuntimeThunk {
         let (returns, parameters) = prototype.split_once('(').expect("prototype");
         format!("typedef {}(*{})({parameters}", returns, self.name)
     }
-}
-
-/// Design §4 entry families the runtime has not declared yet, with their owning
-/// task. Their C signatures are written by that task, never guessed here.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum PendingEntry {
-    /// `frame_enter`/`frame_leave`: logical frame admission, blocked on spec #16.
-    Frame,
-    /// `io_call`: typed library and Io operations.
-    IoCall,
-    /// `launch`: entry, ABI and grant checks before entry.
-    Launch,
 }
 
 snapshot_enum!(RuntimeEntry {

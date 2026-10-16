@@ -2,7 +2,7 @@
 
 Native data schemas: the staged LIR family, target
 descriptors, the physical layout table, the cross-unit ABI, `hirsel_rt_v2`
-declarations, the exhaustive effect classification and deterministic snapshots.
+declarations, effect flags and deterministic snapshots.
 `layout.rs` derives layouts, `abi.rs` derives `FnAbi`s and `layout_validate.rs`
 checks both independently. `validate/` holds the independent stage
 validators. `persistent.rs` is the structure-sharing vector that
@@ -46,11 +46,8 @@ Invariants:
   call, construction, closure, constant and failure data in side tables.
 - Failure edges are explicit: every potentially failing instruction names a
   `FailureEdge` (cleanup entry, rule, anchor, token-disposal list).
-- Effects. `effect.rs` matches every LIR opcode and every TIR rvalue,
-  instruction kind, terminator and cleanup action with no catch-all arm and no
-  pure fallback. TIR `ReleaseRegion`, `CloseArena` and `JoinTasks` classify as
-  explicit `Unavailable`. Indirect calls are conservative; direct calls use
-  declared effects.
+- Effects. A call site carries its callee's declared `Effects`; `effect.rs`
+  also names every row's `Opcode`, the vocabulary each stage admits.
 - Arenas. `LayoutKind::Arena` and
   `ValueRepr::Arena` are the one-word token. `ArenaOpen` (Value stage,
   `arena.with`'s library body only, entry block) becomes `RegionEnter` plus

@@ -1,5 +1,5 @@
 //! Schema fixtures: deterministic round trips, identity checks, the instruction
-//! row bound, exhaustive effect coverage, instance-key erasure and the operation
+//! row bound, opcode coverage, instance-key erasure and the operation
 //! manifest skeleton.
 use hirsel_codec::{self as snapshot, Snapshot};
 use hirsel_core_contract::{
@@ -8,7 +8,7 @@ use hirsel_core_contract::{
     Unavailable,
 };
 use hirsel_lir::abi_types::*;
-use hirsel_lir::effect::{self, Effects, Opcode, TirClass};
+use hirsel_lir::effect::{Effects, Opcode};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::runtime_abi::{self, RuntimeEntry, SizeClass};
@@ -1429,7 +1429,7 @@ fn instruction_rows_are_at_most_32_bytes() {
 use hirsel_lir::ir;
 
 #[test]
-fn every_opcode_is_classified_and_none_falls_back_to_pure() {
+fn every_opcode_is_covered_and_admitted_by_a_stage() {
     let table = fixture_table(&TargetSpec::x86_64_unknown_linux_gnu());
     let unit = fixture_unit::<Value>(&table);
     let mut seen: Vec<Opcode> = unit
@@ -1443,56 +1443,12 @@ fn every_opcode_is_classified_and_none_falls_back_to_pure() {
     let mut all = Opcode::ALL.to_vec();
     all.sort();
     assert_eq!(seen, all, "the fixture covers every opcode");
-    // The named scalar operations report range in a flag and never fail
-    // (LIR schema revision 6).
-    let pure = [
-        Opcode::Const,
-        Opcode::FunctionRef,
-        Opcode::UpdateMask,
-        Opcode::Convert,
-        Opcode::IntArith,
-        Opcode::MulAdd,
-        // An arena token names its mark's region record: no memory, no failure.
-        Opcode::ArenaToken,
-    ];
     for &op in Opcode::ALL {
-        let effects = effect::opcode_effects(op);
-        assert_eq!(effects.is_pure(), pure.contains(&op), "{op:?}: {effects:?}");
-        assert_eq!(
-            op.is_terminator(),
-            effects.contains(Effects::CONTROL),
-            "{op:?}"
-        );
         assert!(
             StageKind::ALL.iter().any(|stage| stage.admits(op)),
             "{op:?} is admitted by no stage"
         );
     }
-    let unavailable = effect::opcode_effects(Opcode::Unavailable);
-    for (flag, name) in Effects::NAMES {
-        assert_eq!(
-            unavailable.contains(flag),
-            flag != Effects::CONTROL,
-            "{name}"
-        );
-    }
-    let take = Inst::Read {
-        result: ValueId(0),
-        address: AddressId(0),
-        reaching: ValueId(0),
-        mode: ReadMode::Take,
-    };
-    assert!(effect::inst_effects(&take).contains(Effects::OWNS | Effects::WRITES));
-    // A call adds declared effects; an indirect call is conservative.
-    for term in &unit.terminators {
-        let effects = effect::terminator_effects(term, &unit.tables);
-        assert!(effects.contains(Effects::CONTROL));
-    }
-    assert_eq!(effect::call_effects(&unit.tables.calls[1]), Effects::ALL);
-    assert_eq!(
-        effect::call_effects(&unit.tables.calls[0]),
-        Effects::READS | Effects::MAY_FAIL
-    );
     for flags in [
         Effects::NONE,
         Effects::ALL,
@@ -1516,329 +1472,6 @@ fn stage_vocabularies_are_successively_restricted() {
     // A recipe-resolved Copy is a Ready primitive; the Ready validator
     // rejects the recipes that lower away.
     assert!(Ready.admits(Opcode::Copy));
-}
-
-mod tir_coverage {
-    use super::*;
-    use hirsel_tir as tir;
-    use hirsel_types::UseKind;
-
-    fn operand(usage: UseKind) -> tir::Operand {
-        tir::Operand {
-            place: tir::PlaceId(0),
-            usage,
-        }
-    }
-
-    fn body(rvalues: Vec<tir::Rvalue>) -> tir::Body {
-        tir::Body {
-            parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
-            locals: Vec::new(),
-            places: Vec::new(),
-            scopes: Vec::new(),
-            blocks: Vec::new(),
-            rvalues,
-            cleanups: Vec::new(),
-            cleanup_nodes: Vec::new(),
-            entry: tir::BlockId(0),
-            parameters: Vec::new(),
-            result: hirsel_types::TypeStore::default().push(hirsel_types::Type::unit()),
-            tail_sites: Vec::new(),
-            matches: Vec::new(),
-        }
-    }
-
-    fn lowered(class: TirClass) -> (&'static [Opcode], Effects) {
-        match class {
-            TirClass::Lowered { ops, effects } => (ops, effects),
-            TirClass::Unavailable(feature) => panic!("unexpectedly unavailable: {feature:?}"),
-        }
-    }
-
-    /// Exhaustive over TIR: a new variant fails to compile here and in effect.rs.
-    fn rvalue_samples() -> Vec<tir::Rvalue> {
-        use hirsel_syntax::{BinaryOp as SB, UnaryOp as SU};
-        let sample = |r: &tir::Rvalue| match r {
-            tir::Rvalue::Constant(_)
-            | tir::Rvalue::ReadConstant { .. }
-            | tir::Rvalue::FunctionReference { .. }
-            | tir::Rvalue::Size(_)
-            | tir::Rvalue::Use(_)
-            | tir::Rvalue::Unary { .. }
-            | tir::Rvalue::Binary { .. }
-            | tir::Rvalue::Construct { .. }
-            | tir::Rvalue::Closure { .. }
-            | tir::Rvalue::Shape(_) => (),
-        };
-        let unit = hirsel_types::TypeStore::default().push(hirsel_types::Type::unit());
-        let mut samples = vec![
-            tir::Rvalue::Constant(tir::Constant::Unit),
-            tir::Rvalue::ReadConstant {
-                definition: path("c"),
-            },
-            tir::Rvalue::FunctionReference {
-                definition: path("g"),
-                arguments: Vec::new(),
-            },
-            tir::Rvalue::Size(hirsel_types::SizeParameterRef::bound(
-                hirsel_types::SizeParamId(0),
-            )),
-            tir::Rvalue::Construct {
-                constructor: tir::Constructor::Tuple,
-                fields: Vec::new(),
-                destination: hirsel_types::Destination::Heap,
-            },
-            tir::Rvalue::Closure {
-                body: tir::BodyId(1),
-                captures: Vec::new(),
-                destination: hirsel_types::Destination::Inferred,
-            },
-            tir::Rvalue::Shape(unit),
-        ];
-        for usage in [UseKind::Borrow, UseKind::Take, UseKind::Copy, UseKind::Mut] {
-            samples.push(tir::Rvalue::Use(operand(usage)));
-        }
-        for op in [
-            SU::Neg,
-            SU::Not,
-            SU::BitNot,
-            SU::Take,
-            SU::Copy,
-            SU::Mut,
-            SU::Unique,
-            SU::Box,
-        ] {
-            samples.push(tir::Rvalue::Unary {
-                op,
-                value: operand(UseKind::Copy),
-            });
-        }
-        for op in [
-            SB::Add,
-            SB::Sub,
-            SB::Mul,
-            SB::Div,
-            SB::Rem,
-            SB::Shl,
-            SB::Shr,
-            SB::BitAnd,
-            SB::BitOr,
-            SB::BitXor,
-            SB::Eq,
-            SB::Ne,
-            SB::Lt,
-            SB::Le,
-            SB::Gt,
-            SB::Ge,
-            SB::And,
-            SB::Or,
-            SB::Range,
-            SB::RangeInclusive,
-        ] {
-            samples.push(tir::Rvalue::Binary {
-                op,
-                left: operand(UseKind::Copy),
-                right: operand(UseKind::Copy),
-            });
-        }
-        samples.iter().for_each(sample);
-        samples
-    }
-
-    #[test]
-    fn every_tir_item_maps_to_classified_lir_operations() {
-        let rvalues = rvalue_samples();
-        for rvalue in &rvalues {
-            let (ops, effects) = lowered(effect::classify_rvalue(rvalue));
-            assert!(!ops.is_empty(), "{rvalue:?}");
-            let pure = matches!(
-                rvalue,
-                tir::Rvalue::Constant(_)
-                    | tir::Rvalue::FunctionReference { .. }
-                    | tir::Rvalue::Size(_)
-            );
-            assert_eq!(effects.is_pure(), pure, "{rvalue:?}: {effects:?}");
-        }
-        let take = lowered(effect::classify_rvalue(&tir::Rvalue::Use(operand(
-            UseKind::Take,
-        ))))
-        .1;
-        assert!(take.contains(Effects::OWNS | Effects::WRITES));
-
-        let body = body(rvalues);
-        let place = tir::PlaceId(0);
-        let instructions = [
-            tir::InstructionKind::BindOrigin {
-                source: place,
-                place,
-                kind: tir::OriginBindingKind::Fresh,
-            },
-            tir::InstructionKind::BindFields {
-                source: place,
-                fields: Vec::new(),
-            },
-            tir::InstructionKind::EndOrigin(place),
-            tir::InstructionKind::StorageLive(tir::LocalId(0)),
-            tir::InstructionKind::StorageDead {
-                place,
-                if_live: false,
-            },
-            tir::InstructionKind::EndScope(tir::ScopeId(0)),
-            tir::InstructionKind::Assign {
-                destination: place,
-                value: tir::RvalueId(0),
-            },
-            tir::InstructionKind::Assign {
-                destination: place,
-                value: tir::RvalueId(10_000),
-            },
-            tir::InstructionKind::Replace {
-                destination: place,
-                value: operand(UseKind::Take),
-                displaced: place,
-                if_live: true,
-            },
-            tir::InstructionKind::BeginLoan {
-                id: tir::LoanId(0),
-                place,
-                mutable: false,
-                if_inactive: false,
-            },
-            tir::InstructionKind::EndLoan {
-                loan: tir::LoanId(0),
-                if_active: false,
-            },
-            tir::InstructionKind::Drop {
-                place,
-                if_live: false,
-            },
-            tir::InstructionKind::RunCleanup(tir::CleanupId(0)),
-            tir::InstructionKind::Check {
-                condition: operand(UseKind::Copy),
-                rule: hirsel_diag::RuleId::new("MEM-14").unwrap(),
-            },
-            tir::InstructionKind::Snapshot {
-                destination: place,
-                value: operand(UseKind::Copy),
-            },
-            tir::InstructionKind::Defuse { place },
-        ];
-        for kind in &instructions {
-            match kind {
-                tir::InstructionKind::BindOrigin { .. }
-                | tir::InstructionKind::BindFields { .. }
-                | tir::InstructionKind::Defuse { .. }
-                | tir::InstructionKind::EndOrigin(_)
-                | tir::InstructionKind::StorageLive(_)
-                | tir::InstructionKind::StorageDead { .. }
-                | tir::InstructionKind::EndScope(_)
-                | tir::InstructionKind::Assign { .. }
-                | tir::InstructionKind::Replace { .. }
-                | tir::InstructionKind::BeginLoan { .. }
-                | tir::InstructionKind::EndLoan { .. }
-                | tir::InstructionKind::Drop { .. }
-                | tir::InstructionKind::RunCleanup(_)
-                | tir::InstructionKind::Check { .. }
-                | tir::InstructionKind::Snapshot { .. } => {}
-            }
-            let (ops, effects) = lowered(effect::classify_instruction(kind, &body));
-            assert!(!ops.is_empty() && !effects.is_pure(), "{kind:?}");
-        }
-        // A dangling rvalue is malformed TIR and classified as everything.
-        assert!(
-            lowered(effect::classify_instruction(&instructions[7], &body))
-                .1
-                .contains(Effects::ALL)
-        );
-
-        let terminators = [
-            tir::Terminator::Goto(tir::BlockId(0)),
-            tir::Terminator::Match {
-                table: tir::MatchTableId(0),
-                from: 0,
-            },
-            tir::Terminator::Branch {
-                condition: operand(UseKind::Copy),
-                yes: tir::BlockId(0),
-                no: tir::BlockId(0),
-            },
-            tir::Terminator::Switch {
-                value: operand(UseKind::Copy),
-                arms: Vec::new(),
-                otherwise: tir::BlockId(0),
-            },
-            tir::Terminator::Call {
-                callee: tir::Callee::Definition {
-                    path: path("g"),
-                    arguments: Vec::new(),
-                },
-                arguments: Vec::new(),
-                returns: Some(tir::CallReturn {
-                    destination: place,
-                    next: tir::BlockId(0),
-                }),
-                on_failure: tir::CleanupId(0),
-            },
-            tir::Terminator::Return {
-                value: operand(UseKind::Take),
-                cleanup: tir::CleanupId(0),
-            },
-            tir::Terminator::Fail {
-                rule: hirsel_diag::RuleId::new("FAIL-1").unwrap(),
-                cleanup: tir::CleanupId(0),
-            },
-            tir::Terminator::Unreachable,
-        ];
-        for term in &terminators {
-            match term {
-                tir::Terminator::Goto(_)
-                | tir::Terminator::Match { .. }
-                | tir::Terminator::Branch { .. }
-                | tir::Terminator::Switch { .. }
-                | tir::Terminator::Call { .. }
-                | tir::Terminator::Return { .. }
-                | tir::Terminator::Fail { .. }
-                | tir::Terminator::Unreachable => {}
-            }
-            let (ops, effects) = lowered(effect::classify_terminator(term));
-            assert!(
-                ops.iter().any(|op| op.is_terminator()) && effects.contains(Effects::CONTROL),
-                "{term:?}"
-            );
-        }
-        assert_eq!(
-            lowered(effect::classify_terminator(&terminators[4])).1,
-            Effects::ALL
-        );
-
-        let cleanups = [
-            tir::CleanupAction::Drop {
-                place,
-                if_live: true,
-            },
-            tir::CleanupAction::EndLoan {
-                loan: tir::LoanId(0),
-                if_active: true,
-            },
-            tir::CleanupAction::ReleaseRegion(hirsel_types::RegionId(0)),
-            tir::CleanupAction::CloseArena(place),
-            tir::CleanupAction::JoinTasks {
-                scope: place,
-                cancel: true,
-            },
-        ];
-        let classes: Vec<_> = cleanups.iter().map(effect::classify_cleanup).collect();
-        assert!(matches!(classes[0], TirClass::Lowered { .. }));
-        assert!(matches!(classes[1], TirClass::Lowered { .. }));
-        assert_eq!(
-            classes[2..],
-            [
-                TirClass::Unavailable(UnavailableFeature::ReleaseRegion),
-                TirClass::Unavailable(UnavailableFeature::CloseArena),
-                TirClass::Unavailable(UnavailableFeature::JoinTasks),
-            ]
-        );
-    }
 }
 
 mod instance_keys {
