@@ -1,0 +1,321 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+// exit: 0
+// A byte list that is only reserved and pushed, then frozen whole into a Bytes
+// field of a record pushed onto a list later taken into a flat field, may be
+// written where that record's encoding will lie. Its contents must equal those
+// of the same list built as an ordinary list, which reading its length before
+// the freeze forces. The cases are reserved counted pushes, growth without a
+// reservation, conditional and empty pushes, a reservation smaller than the
+// pushes, a moved list and Bytes, fields after the byte field, and two byte
+// fields of which only the first follows fixed fields alone.
+fn output_error[E](take e: E) -> () {}
+
+flat type Message {
+  id: u64,
+  kind: u64,
+  payload: Bytes,
+}
+
+flat type Messages {
+  items: List[Message],
+}
+
+flat type Tailed {
+  id: u64,
+  payload: Bytes,
+  tail: u64,
+  name: String,
+}
+
+flat type Tails {
+  items: List[Tailed],
+}
+
+flat type Pair {
+  id: u64,
+  first: Bytes,
+  second: Bytes,
+}
+
+flat type Pairs {
+  items: List[Pair],
+}
+
+fn checksum(b: Bytes) -> u64 {
+  let mut h: u64 = 14695981039346656037u64
+  for i in 0u64..bytes.len(b) {
+    let product: u128 = int.widen(h ^ int.widen(b[i])) * 1099511628211u128
+    h = int.truncate(product)
+  }
+  h
+}
+
+fn digest(messages: Messages) -> u64 {
+  let mut s: u64 = list.len(messages.items)
+  for m in messages.items {
+    s = int.wrapping_add(
+      s ^ 1540483477u64,
+      m.id ^ m.kind ^ checksum(m.payload) ^ bytes.len(m.payload)
+    )
+  }
+  s
+}
+
+fn reserved(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  list.reserve(mut items, n)
+  for i in 0u64..n {
+    let mut payload: List[u8] = []
+    let length = 3u64 + i % 11u64
+    list.reserve(mut payload, length)
+    for j in 0u64..length {
+      list.push(mut payload, int.narrow(97u64 + (i + j * 7u64) % 26u64))
+    }
+    list.push(
+      mut items,
+      Message(id: i, kind: i % 7u64, payload: bytes.from_list(take payload))
+    )
+  }
+  digest(Messages(items: take items))
+}
+
+fn reserved_ordinary(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  list.reserve(mut items, n)
+  for i in 0u64..n {
+    let mut payload: List[u8] = []
+    let length = 3u64 + i % 11u64
+    list.reserve(mut payload, length)
+    for j in 0u64..length {
+      list.push(mut payload, int.narrow(97u64 + (i + j * 7u64) % 26u64))
+    }
+    let seen = list.len(payload)
+    list.push(
+      mut items,
+      Message(
+        id: i + seen - seen,
+        kind: i % 7u64,
+        payload: bytes.from_list(take payload)
+      )
+    )
+  }
+  digest(Messages(items: take items))
+}
+
+fn grown() -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..8u64 {
+    let mut payload: List[u8] = []
+    for j in 0u64..i * 5u64 {
+      if j % 3u64 != 1u64 {
+        list.push(mut payload, int.narrow(65u64 + j % 50u64))
+      }
+    }
+    list.push(
+      mut items,
+      Message(id: i, kind: 2, payload: bytes.from_list(take payload))
+    )
+  }
+  digest(Messages(items: take items))
+}
+
+fn grown_ordinary() -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..8u64 {
+    let mut payload: List[u8] = []
+    for j in 0u64..i * 5u64 {
+      if j % 3u64 != 1u64 {
+        list.push(mut payload, int.narrow(65u64 + j % 50u64))
+      }
+    }
+    let seen = list.len(payload)
+    list.push(
+      mut items,
+      Message(id: i + seen - seen, kind: 2, payload: bytes.from_list(take payload))
+    )
+  }
+  digest(Messages(items: take items))
+}
+
+fn moved_list() -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..8u64 {
+    let mut payload: List[u8] = []
+    list.reserve(mut payload, 2u64)
+    for j in 0u64..i {
+      list.push(mut payload, int.narrow(j))
+    }
+    let moved = take payload
+    let frozen = bytes.from_list(take moved)
+    list.push(mut items, Message(id: i, kind: 3, payload: take frozen))
+  }
+  digest(Messages(items: take items))
+}
+
+fn moved_list_ordinary() -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..8u64 {
+    let mut payload: List[u8] = []
+    list.reserve(mut payload, 2u64)
+    for j in 0u64..i {
+      list.push(mut payload, int.narrow(j))
+    }
+    let seen = list.len(payload)
+    let moved = take payload
+    let frozen = bytes.from_list(take moved)
+    list.push(mut items, Message(id: i + seen - seen, kind: 3, payload: take frozen))
+  }
+  digest(Messages(items: take items))
+}
+
+fn tails_sum(tails: Tails) -> u64 {
+  let mut s: u64 = list.len(tails.items)
+  for t in tails.items {
+    s = int.wrapping_add(
+      s ^ t.tail,
+      t.id ^ checksum(t.payload) ^ string.byte_len(t.name)
+    )
+  }
+  s
+}
+
+fn tailed() -> u64 {
+  let mut items: List[Tailed] = []
+  for i in 0u64..8u64 {
+    let mut payload: List[u8] = []
+    for j in 0u64..i * 3u64 {
+      list.push(mut payload, int.narrow(j % 256u64))
+    }
+    list.push(
+      mut items,
+      Tailed(
+        id: i,
+        payload: bytes.from_list(take payload),
+        tail: i * 3u64,
+        name: "tail name"
+      )
+    )
+  }
+  tails_sum(Tails(items: take items))
+}
+
+fn tailed_ordinary() -> u64 {
+  let mut items: List[Tailed] = []
+  for i in 0u64..8u64 {
+    let mut payload: List[u8] = []
+    for j in 0u64..i * 3u64 {
+      list.push(mut payload, int.narrow(j % 256u64))
+    }
+    let seen = list.len(payload)
+    list.push(
+      mut items,
+      Tailed(
+        id: i + seen - seen,
+        payload: bytes.from_list(take payload),
+        tail: i * 3u64,
+        name: "tail name"
+      )
+    )
+  }
+  tails_sum(Tails(items: take items))
+}
+
+fn pairs_sum(pairs: Pairs) -> u64 {
+  let mut s: u64 = list.len(pairs.items)
+  for p in pairs.items {
+    s = int.wrapping_add(s ^ p.id, checksum(p.first) ^ checksum(p.second))
+  }
+  s
+}
+
+fn paired() -> u64 {
+  let mut items: List[Pair] = []
+  for i in 0u64..8u64 {
+    let mut first: List[u8] = []
+    let mut second: List[u8] = []
+    for j in 0u64..i {
+      list.push(mut first, int.narrow(j))
+    }
+    list.push(mut second, int.narrow(i))
+    list.push(
+      mut items,
+      Pair(
+        id: i,
+        first: bytes.from_list(take first),
+        second: bytes.from_list(take second)
+      )
+    )
+  }
+  pairs_sum(Pairs(items: take items))
+}
+
+fn paired_ordinary() -> u64 {
+  let mut items: List[Pair] = []
+  for i in 0u64..8u64 {
+    let mut first: List[u8] = []
+    let mut second: List[u8] = []
+    for j in 0u64..i {
+      list.push(mut first, int.narrow(j))
+    }
+    list.push(mut second, int.narrow(i))
+    let seen = list.len(first)
+    list.push(
+      mut items,
+      Pair(
+        id: i + seen - seen,
+        first: bytes.from_list(take first),
+        second: bytes.from_list(take second)
+      )
+    )
+  }
+  pairs_sum(Pairs(items: take items))
+}
+
+fn read_back() -> bool {
+  let mut items: List[Message] = []
+  for i in 0u64..5u64 {
+    let mut payload: List[u8] = []
+    list.reserve(mut payload, i)
+    for j in 0u64..i {
+      list.push(mut payload, int.narrow(100u64 + j))
+    }
+    list.push(
+      mut items,
+      Message(id: i * 3u64, kind: i, payload: bytes.from_list(take payload))
+    )
+  }
+  let messages = Messages(items: take items)
+  let mut found: bool = false
+  let mut index: u64 = 0
+  for m in messages.items {
+    if index == 3u64 {
+      found = m.id == 9u64 && m.kind == 3u64 && bytes.len(m.payload) == 3u64 && m.payload[2u64] == 102u8
+    }
+    index += 1u64
+  }
+  found && list.len(messages.items) == 5u64
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let built = reserved(0) == reserved_ordinary(0) && reserved(1) == reserved_ordinary(1)
+  let long = reserved(14) == reserved_ordinary(14)
+  let grows = grown() == grown_ordinary() && moved_list() == moved_list_ordinary()
+  let around = tailed() == tailed_ordinary() && paired() == paired_ordinary()
+  let ok = built && long && grows && around && read_back()
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

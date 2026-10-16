@@ -1280,6 +1280,7 @@ conformance/MEM/MEM-12-field-map-bad.hir
 conformance/MEM/MEM-12-field-map-ok.hir
 conformance/MEM/MEM-12-field-nonflat-list-bad.hir
 conformance/MEM/MEM-12-field-nonflat-list-ok.hir
+conformance/MEM/MEM-12-flat-bytes-field-run.hir
 conformance/MEM/MEM-12-flat-capability-bad.hir
 conformance/MEM/MEM-12-flat-capability-ok.hir
 conformance/MEM/MEM-12-flat-copy-take-concrete-ok.hir
