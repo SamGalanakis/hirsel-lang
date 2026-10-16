@@ -228,7 +228,7 @@ language failure and 3 for a refused launch. With `HIRSEL_RT_OBSERVATION` it
 writes the observation record (`hirsel-observation 1`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). `HIRSEL_RT_TAPE` receives the real Io completion tape
-(`hirsel-io-tape 4`: run identity digest, independent hash/Random/Test seeds, launch arguments, initial tree, typed completions and a complete-count trailer; version 3 tapes, which cannot hold network events, stay readable); `HIRSEL_RT_REPLAY` runs on simulated
+(`hirsel-io-tape 4`: run identity digest, independent hash/Random/Test seeds, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
 Io that accepts exactly a recorded tape and refuses a mismatch, a missing event
 and an unconsumed one. Each completion is appended and flushed before delivery; an abort preserves its confirmed prefix. A missing trailer marks an unknown suffix and refuses complete replay or any resumability claim. Native stdout uses raw OS writes, so EPIPE and EBADF become recorded OutputError outcomes; generated main ignores SIGPIPE before entry. Replay divergence exits 3 with confirmed stdout, including during handle cleanup.
 

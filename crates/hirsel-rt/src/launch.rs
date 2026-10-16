@@ -70,18 +70,8 @@ pub type Entry = unsafe extern "C" fn(
     args: *const u64,
 ) -> u8;
 
-/// The tape file's first line. Version 4 adds network events;
-/// version 3 tapes, which cannot contain them, remain readable.
+/// The tape file's first line.
 pub const TAPE_HEADER: &str = "hirsel-io-tape 4";
-/// The previous tape version, read but never written.
-pub const TAPE_HEADER_V3: &str = "hirsel-io-tape 3";
-fn tape_version(line: Option<&str>) -> Option<u32> {
-    match line? {
-        TAPE_HEADER => Some(4),
-        TAPE_HEADER_V3 => Some(3),
-        _ => None,
-    }
-}
 
 /// An adapter the launcher still holds after binding it.
 struct Shared<A>(Rc<RefCell<A>>);
@@ -258,9 +248,11 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
         }
     }
     let mut lines = text.lines();
-    let Some(version) = tape_version(lines.next()) else {
-        return Err("not an Io tape of a supported version (3 or 4)".into());
-    };
+    if lines.next() != Some(TAPE_HEADER) {
+        return Err(format!(
+            "not an Io tape: the first line is not `{TAPE_HEADER}`"
+        ));
+    }
     lines
         .map(|line| {
             let (line, fault) = match line.split_once(" ! ") {
@@ -376,8 +368,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                     },
                 },
                 words => match crate::net::tape::parse_request(words)? {
-                    Some(request) if version >= 4 => request,
-                    Some(_) => return Err("a network event in a version 3 tape".into()),
+                    Some(request) => request,
                     None => return Err("bad tape request".into()),
                 },
             };
@@ -413,8 +404,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["checked", v] => Completion::Checked(boolean(v)?),
                 ["refused", id] => Completion::Refused(number(id)?),
                 words => match crate::net::tape::parse_completion(words)? {
-                    Some(completion) if version >= 4 => completion,
-                    Some(_) => return Err("a network event in a version 3 tape".into()),
+                    Some(completion) => completion,
                     None => return Err("bad tape completion".into()),
                 },
             };
@@ -496,11 +486,11 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
         .split_once("\nevents\n")
         .ok_or("recording without events delimiter")?;
     let mut lines = metadata.lines();
-    let header = lines.next();
-    if tape_version(header).is_none() {
-        return Err("not a recording of a supported version (3 or 4)".into());
+    if lines.next() != Some(TAPE_HEADER) {
+        return Err(format!(
+            "not a recording: the first line is not `{TAPE_HEADER}`"
+        ));
     }
-    let header = header.expect("versioned header");
     let mut run_identity = None;
     let (mut hash_seed, mut random_seed, mut test_seed) = (None, None, None);
     let mut arguments = vec![];
@@ -588,7 +578,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
         }
         _ => (events, None),
     };
-    let events = parse_tape(&format!("{header}\n{events}"))?;
+    let events = parse_tape(&format!("{TAPE_HEADER}\n{events}"))?;
     if count.is_some_and(|count| count != events.len()) {
         return Err("complete count mismatch".into());
     }

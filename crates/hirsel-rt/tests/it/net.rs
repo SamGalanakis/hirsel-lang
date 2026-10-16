@@ -696,7 +696,7 @@ fn listeners_accept_under_a_listen_rule() {
 }
 
 #[test]
-fn tape_v4_round_trips_every_network_event_and_v3_stays_readable() {
+fn tape_v4_round_trips_every_network_event_and_other_versions_are_refused() {
     let a4 = loopback(8080);
     let a6 = SocketAddr {
         ip: "2001:db8::1".parse().unwrap(),
@@ -844,28 +844,7 @@ fn tape_v4_round_trips_every_network_event_and_v3_stays_readable() {
     let text = render_tape(&events).unwrap();
     assert_eq!(parse_tape(&text).unwrap(), events);
 
-    // Version 3: readable when it has no network events, refused when it claims one.
-    let v3 = "hirsel-io-tape 3\nnet 1 -> handle ok 2\nstdout 1 -> handle ok 3\n";
-    assert_eq!(
-        parse_tape(v3).unwrap(),
-        vec![
-            Event {
-                request: Request::Net { io: 1 },
-                completion: Completion::Handle(Ok(2)),
-                fault: None,
-            },
-            Event {
-                request: Request::Stdout { io: 1 },
-                completion: Completion::Handle(Ok(3)),
-                fault: None,
-            },
-        ]
-    );
-    let net_line = text.lines().nth(1).unwrap();
-    assert_eq!(
-        parse_tape(&format!("hirsel-io-tape 3\n{net_line}\n")),
-        Err("a network event in a version 3 tape".into())
-    );
+    assert!(parse_tape("hirsel-io-tape 3\n").is_err());
     assert!(parse_tape("hirsel-io-tape 5\n").is_err());
     // Exactly one spelling of each value.
     for bad in [
