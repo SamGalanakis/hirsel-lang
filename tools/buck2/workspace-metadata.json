@@ -1069,6 +1069,31 @@
       "dependencies": [
         {
           "kind": null,
+          "name": "hirsel-driver",
+          "path": "crates/hirsel-driver",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-engine",
+          "path": "crates/hirsel-engine",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "serde_json",
+          "req": "^1",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-native-build"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
           "name": "hirsel-diag",
           "path": "crates/hirsel-diag",
           "req": "*",

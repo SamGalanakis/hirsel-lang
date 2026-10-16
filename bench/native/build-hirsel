@@ -15,10 +15,10 @@ def main():
     p.add_argument('--output', type=Path, default=ROOT/'build/hirsel.json')
     p.add_argument('--configuration', action='append', choices=CONFIGURATIONS)
     args = p.parse_args()
-    env = controlled_environment({'CARGO_BUILD_JOBS':'4', 'HIRSEL_JOBS':'4', 'RUST_TEST_THREADS':'4', 'HIRSEL_BENCH_RUNTIME':str(ROOT/'build/runtime')})
-    proc = subprocess.run(['cargo', 'build', '--release', '--locked', '--message-format=json', '--manifest-path', str(ROOT/'hirsel/Cargo.toml')], cwd=ROOT.parent.parent, env=env, check=True, stdout=subprocess.PIPE, text=True)
-    artifacts = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith('{')]
-    helper = Path(next(row['executable'] for row in artifacts if row.get('reason')=='compiler-artifact' and row.get('executable') and row['target']['name']=='hirsel-native-build'))
+    buck2 = lambda *a: subprocess.run([str(ROOT.parent.parent/'.buck2/bin/buck2'), 'build', *a, '--show-full-simple-output'],
+                                      cwd=ROOT.parent.parent, check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+    helper = Path(buck2('--target-platforms', '//tools/buck2:release', '//:hirsel-native-build-bin-hirsel-native-build'))
+    env = controlled_environment({'HIRSEL_JOBS':'4', 'HIRSEL_RUNTIME_ARCHIVES':buck2('//:hirsel-rt-archives')})
     revision = subprocess.run(['git','rev-parse','HEAD'],cwd=ROOT.parent.parent,capture_output=True,text=True,check=True).stdout.strip()
     specs = json.loads(args.output.read_text()) if args.output.exists() else {}
     for c in CONFIGURATIONS:specs.setdefault(c,{'cases':{}})

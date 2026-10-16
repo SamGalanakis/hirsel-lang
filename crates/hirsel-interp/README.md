@@ -247,11 +247,8 @@ continuations' newly owned temporaries are also released. No host destructor run
 Hirsel finalizers, and no callback or finalizer recurses on the host stack.
 
 The hand-lowered fixture declarations retain owned owner/callee/nominal snapshots
-in `tests/support/signatures.rs`. `python3 crates/hirsel-interp/tests/audit.py`
-runs the 32 TIR fixture tests with strict full validation. The main crate tests
-validate the regular core, aggregate, pattern and callback fixtures directly. `--validator-root <task-V-worktree>` can also
-audit against a read-only validator checkout; the runner creates a temporary
-audit crate and leaves both worktrees untouched. The intentionally
+in `tests/support/signatures.rs`. The main crate tests validate the regular core,
+aggregate, pattern and callback fixtures directly. The intentionally
 reachable tooling-depth sentinel and explicit malformed-TIR rejection cases have
 narrow expected-violation checks; all other retained definitions are asserted
 valid, including callees that never execute. The counted-slot cleanup lists are

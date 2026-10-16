@@ -59,10 +59,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
         (root/'native-tests/regressions/exclusions.tsv').write_text('# case\tconfiguration\tclass\treason\n')
         (root/'native-tests/topology').mkdir()
         (root/'native-tests/topology/cases.txt').write_text('')
-        env = os.environ.copy()
-        env.update(CARGO_BUILD_JOBS='4', HIRSEL_JOBS='4', RUST_TEST_THREADS='4')
-        result = subprocess.run(['cargo','run','--release','-p','hirsel-conformance','--bin','native','--',
-                                 '--full','--filter',source.stem,'--root',str(root),'--jobs','4',
+        buck2 = lambda *a: subprocess.run([str(repo/'.buck2/bin/buck2'), 'build', *a, '--show-full-simple-output'],
+                                          cwd=repo, check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+        native = buck2('--target-platforms', '//tools/buck2:release', '//:hirsel-conformance-bin-native')
+        env = dict(os.environ, HIRSEL_JOBS='4', HIRSEL_RUNTIME_ARCHIVES=buck2('//:hirsel-rt-archives'))
+        result = subprocess.run([native,'--full','--filter',source.stem,'--root',str(root),'--jobs','4',
                                  '--out',str(ROOT/'build/controls'/source.stem)],cwd=repo,env=env)
         return result.returncode
 if __name__ == '__main__': raise SystemExit(main())

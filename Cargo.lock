@@ -429,6 +429,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-native-build"
+version = "0.1.0"
+dependencies = [
+ "hirsel-driver",
+ "hirsel-engine",
+ "serde_json",
+]
+
+[[package]]
 name = "hirsel-parser"
 version = "0.1.0"
 dependencies = [

@@ -51,6 +51,7 @@ DRIVER_DEPENDENTS = {
     'hirsel-cli': 'the command-line front end',
     'hirsel-conformance': 'the conformance, agreement and native runners',
     'hirsel-pipeline-tests': 'implementation-crate tests that compile source',
+    'hirsel-native-build': 'the native benchmark build helper',
     # These unit-test harnesses read the core library
     # signatures from BuiltinRegistry, which is built with check and modes.
     # hirsel-signature and hirsel-lower have no registry-backed harnesses.

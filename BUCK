@@ -1880,6 +1880,42 @@ hirsel_test(
     edition = "2024",
 )
 
+hirsel_binary(
+    name = "hirsel-native-build-bin-hirsel-native-build",
+    bin_name = "hirsel-native-build",
+    deps = [
+        "//:hirsel-driver",
+        "//:hirsel-engine",
+        "//third-party:serde_json",
+    ],
+    crate = "hirsel_native_build",
+    crate_root = "crates/hirsel-native-build/src/main.rs",
+    srcs = glob(["crates/hirsel-native-build/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-native-build",
+    package_name = "hirsel-native-build",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-native-build-bin-hirsel-native-build-unittest",
+    deps = [
+        "//:hirsel-driver",
+        "//:hirsel-engine",
+        "//third-party:serde_json",
+    ],
+    data = glob(["crates/hirsel-native-build/Cargo.toml"]) + glob(["crates/hirsel-native-build/src/**"], exclude = ["crates/hirsel-native-build/src/**/*.rs"]),
+    crate = "hirsel_native_build",
+    crate_root = "crates/hirsel-native-build/src/main.rs",
+    srcs = glob(["crates/hirsel-native-build/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-native-build",
+    package_name = "hirsel-native-build",
+    version = "0.1.0",
+    edition = "2024",
+)
+
 hirsel_library(
     name = "hirsel-parser",
     deps = [

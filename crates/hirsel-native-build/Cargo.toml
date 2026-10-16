@@ -1,0 +1,12 @@
+[package]
+name = "hirsel-native-build"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+hirsel-driver = { path = "../hirsel-driver" }
+hirsel-engine = { path = "../hirsel-engine" }
+serde_json = "1"

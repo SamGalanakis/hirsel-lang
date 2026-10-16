@@ -110,11 +110,10 @@ fn compile() -> Result<(), Box<dyn std::error::Error>> {
             };
             let dir = output.parent().ok_or("output needs a directory")?;
             std::fs::create_dir_all(dir)?;
-            let runtime = std::env::var_os("HIRSEL_BENCH_RUNTIME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| dir.join("runtime"));
+            let runtime = dir.join("runtime");
             let runtime_build = RuntimeBuild {
                 diagnostic: false,
+                memcheck: false,
                 system_allocator: config == "regions-off-system",
                 measurement,
             };
