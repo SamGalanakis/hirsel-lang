@@ -31,7 +31,8 @@ TEST_TMPDIR = "buck-out/tmp/cargo-target-tmpdir"
 BIN_EXE_DIR = "buck-out/tmp/cargo-bin-exe"
 
 # `-c hirsel.tests=host` runs every test on the invoking host, for stages that
-# need host tools (qemu-user, the AArch64 cross toolchain, Valgrind, Lean).
+# need host tools (qemu-user, the AArch64 cross toolchain, Valgrind, Lean);
+# `-c hirsel.tests=focus` keeps them on the pool at one CPU each (platforms.bzl).
 TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
 # The seed of every randomly seeded test (PROPTEST_RNG_SEED). It is part of the
 # test's environment, so of its cached verdict: a pass is reused only under the

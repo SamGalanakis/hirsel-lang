@@ -73,7 +73,7 @@ python3 tools/buck2/prepare.py                  # once per checkout
 .buck2/bin/buck2 build //:
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
   //:hirsel-lir-test-it-host //:hirsel-lir
-.buck2/bin/buck2 test //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
+.buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 tools/gate                                      # check the finished change
 tools/land                                      # land it on main
 ```

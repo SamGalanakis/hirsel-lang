@@ -38,7 +38,7 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 test //...                       # every test
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
   //:hirsel-lir-test-it-host //:hirsel-lir           # one crate, including host cases and doctests
-.buck2/bin/buck2 test //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
+.buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-2  # one shard of a sharded test binary
 .buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1   # run tests on this host
 .buck2/bin/buck2 test //:gate-native-smoke          # one corpus campaign of tools/gate
@@ -56,6 +56,16 @@ The isolation dir is part of every action's output paths, so an action run
 under another one has a different key and misses the pool's shared cache. A
 private isolation dir is only for inspecting the graph beside a running
 command, or for escaping a stuck daemon; anything it builds starts cold.
+
+`-c hirsel.tests=focus` is for running one test or a few by name: each test
+run books one CPU, with its binary's measured memory, and queues at the
+compiles' priority instead of the binary's whole-shard request. The pool
+reserves nothing for a multi-CPU action, so a four-CPU run of one case waited
+for one worker to free four CPUs at once: over twelve alternated edits its
+queue had a median of 43 s and a maximum of 353 s, against 0.4 s and 6 s in
+focus. Leave it off for whole crates and gate stages, which use the threads
+their request buys; the request is in the test's action key, so a focus run
+neither reuses nor replaces their cached verdicts.
 
 Arguments after `--` go to Buck2's test runner: `--test-arg=<a>` passes one
 libtest argument, and `--timeout <seconds>` raises the ten-minute limit per

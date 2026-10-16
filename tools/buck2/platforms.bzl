@@ -30,11 +30,21 @@ TEST_PRIORITY = 0
 # A binary with no measurement yet runs as a single-threaded one with room.
 DEFAULT_TEST_REQUEST = [1, 2097152, ""]
 
-def _test_budget(cpu, memory_kb, cpu_class):
-    return "pool_test_" + pool_budget_name(cpu, memory_kb, cpu_class).removeprefix("pool_")
+# `-c hirsel.tests=focus` is for running one test or a few by name: every pool
+# test run books one CPU (with its binary's measured memory) and queues with the
+# compiles. The pool's scheduler reserves nothing for a multi-CPU action, so
+# behind a stream of one-CPU actions a four-CPU run of a single case waited up
+# to minutes for one worker to free four CPUs at once, then ran for a second.
+FOCUS = read_root_config("hirsel", "tests", "pool") == "focus"
+
+def _test_request(cpu, memory_kb, cpu_class):
+    """A test request's budget name and effective `[cpu, memory_kb, cpu_class]`."""
+    if FOCUS:
+        return "pool_focus_" + pool_budget_name(1, memory_kb, cpu_class).removeprefix("pool_"), [1, memory_kb, cpu_class]
+    return "pool_test_" + pool_budget_name(cpu, memory_kb, cpu_class).removeprefix("pool_"), [cpu, memory_kb, cpu_class]
 
 def test_budget_name(binary):
-    return _test_budget(*TEST_REQUESTS.get(binary, DEFAULT_TEST_REQUEST))
+    return _test_request(*TEST_REQUESTS.get(binary, DEFAULT_TEST_REQUEST))[0]
 
 # The request of a compile no measurement sized.
 DEFAULT_REQUEST = [1, 1048576]
@@ -153,8 +163,11 @@ def declare_platforms(name, constraints):
         budget = pool_budget_name(cpu, memory_kb, cpu_class)
         native.constraint_value(name = budget, constraint_setting = ":budget", visibility = ["PUBLIC"])
         budgets["{}|{}|{}|{}".format(budget, cpu, memory_kb, cpu_class)] = ":" + budget
-    for cpu, memory_kb, cpu_class in sorted(set([tuple(r) for r in TEST_REQUESTS.values()] + [tuple(DEFAULT_TEST_REQUEST)])):
-        test = _test_budget(cpu, memory_kb, cpu_class)
+    tests = {}
+    for request in [DEFAULT_TEST_REQUEST] + TEST_REQUESTS.values():
+        test, effective = _test_request(*request)
+        tests[test] = effective
+    for test, (cpu, memory_kb, cpu_class) in sorted(tests.items()):
         native.constraint_value(name = test, constraint_setting = ":budget", visibility = ["PUBLIC"])
         budgets["{}|{}|{}|{}".format(test, cpu, memory_kb, cpu_class)] = ":" + test
     native.constraint_value(name = "host", constraint_setting = ":budget", visibility = ["PUBLIC"])
