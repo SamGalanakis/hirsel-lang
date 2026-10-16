@@ -3,9 +3,7 @@
 # open defect, not a waiver: a new kind fails the gate, and so does a kind that no longer occurs.
 native/heap/heap: Malformed: read names ValueId(N) but SlotId(N) holds ValueId(N)
 native/heap/heap: TypeConfusion: dup copy of a non-block value
-native/heap/import: Import(InstanceId(N), Instance(MissingDefinition
 native/heap/import: validator: CleanupOrder
 native/heap/perceus: validator: HolderUnderLoan
 native/heap/placement: HeapInNoalloc("construction N of ? escapes the frame")
 native/llvm/emission: invalid Ready unit: no runtime descriptor for layout N: Malformed("a drop program shorter than its fields' con
-native/llvm/import: Import(InstanceId(N), Instance(MissingDefinition

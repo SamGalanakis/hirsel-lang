@@ -5523,6 +5523,36 @@ impl Importer<'_, '_> {
                 direct.abi,
             ));
         }
+        // An operation without a library body is named, as a value, by its
+        // forwarding body (`library::value`).
+        if self.program.operations.contains_key(path)
+            && !self.program.definitions.contains_key(path)
+        {
+            if !crate::library::value::forwards(path) {
+                return unsupported(format!(
+                    "{path:?} as a function value: it is lowered inline at each call"
+                ));
+            }
+            let callee = crate::instance::callee_actuals(
+                self.program.binders.get(path).copied(),
+                &self.def.types,
+                arguments,
+                self.actuals,
+                false,
+                path,
+            )?;
+            let request = crate::library::Request::operation_value(
+                self.program,
+                path,
+                callee.store,
+                callee.arguments,
+            )?;
+            let direct = self.require(request)?;
+            return Ok((
+                self.symbol(SymbolKind::Function, path, direct.symbol.instance),
+                direct.abi,
+            ));
+        }
         let callee = crate::instance::callee_actuals(
             self.program.binders.get(path).copied(),
             &self.def.types,

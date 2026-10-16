@@ -403,6 +403,14 @@ conjunction of outer/entries uniqueness; shared sources copy, unique sources mov
 and drain their remaining suffix in reverse. Integer `.order` constants lower to
 a FunctionRef and inline Order construction, with no callable static-data format.
 
+`library/value.rs` gives an operation without a library body a function value
+(`let f = out.print`): one forwarding body per operation, instantiated at the
+operation's own path and actuals, passes each parameter on as declared and calls
+the operation, so a call through the value fails and cleans up as a direct call
+does. Of the inline lowerings only the lengths have a value (their `SeqLen`); the
+others are unsupported as values. `native-tests/regressions/operation-as-value.hir`
+runs it in the native smoke.
+
 `flat_walk` strength-reduces zero-based, unit-stride loops over variable-element
 flat sequences and sequential `Packed` sequences (MEM-13, offsets from the first
 element) at Value, after import has sealed the layout table. Its public

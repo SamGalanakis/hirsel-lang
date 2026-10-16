@@ -15,15 +15,16 @@ use crate::instance::{InstanceId, Instances, Program};
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::{CallableShape, FnAbi, FnAbiId};
 use hirsel_lir::ir::{
-    AddressBase, AddressId, AddressInfo, ArithMode, BinaryOp, BlockId, BlockKind, CleanupAnchor,
-    CleanupAnchorId, ConstantData, ConstantId, ConstantValue, EdgeId, FailureEdge, FailureId,
-    Holding, Inst, LirType, LirTypeId, LirUnit, LoanId, LoanInfo, PoolRange, ProjectionStep,
-    ReadMode, ScopeId, ScopeInfo, SiteRange, SlotId, SlotInfo, SlotKind, SourceAnchor,
-    SourceAnchorId, Symbol, SymbolId, SymbolKind, Terminator, UnitHeader, UnitOrigin, ValueId,
-    ValueRepr,
+    AddressBase, AddressId, AddressInfo, ArithMode, BinaryOp, BlockId, BlockKind, CallArgument,
+    CallId, CallSite, Callee, CleanupAnchor, CleanupAnchorId, ConstantData, ConstantId,
+    ConstantValue, DestinationClass, EdgeId, FailureEdge, FailureId, Holding, Inst, LirType,
+    LirTypeId, LirUnit, LoanId, LoanInfo, PoolRange, ProjectionStep, ReadMode, ScopeId, ScopeInfo,
+    SiteRange, SlotId, SlotInfo, SlotKind, SourceAnchor, SourceAnchorId, Symbol, SymbolId,
+    SymbolKind, Terminator, UnitHeader, UnitOrigin, ValueId, ValueRepr,
 };
 use hirsel_lir::layout::{EnvironmentShape, LayoutBuilder, LayoutError, Owners};
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind};
+use hirsel_lir::operation::OperationArgument;
 use hirsel_lir::stage::{StageKind, Value};
 use hirsel_syntax::DefPath;
 use hirsel_types::{GenericArgument, Primitive, Size, Type, TypeId, TypeKind, TypeStore};
@@ -885,6 +886,59 @@ impl<'c, 'a> Body<'c, 'a> {
             element,
             None,
         )
+    }
+
+    // --- calls ---
+
+    /// Call `callee` at `abi` and continue after it. The invocation loans end
+    /// on both outcomes, in reverse, before a failure enters the body's
+    /// held-owner cleanup; mutable arguments publish their write-back version
+    /// on failure too.
+    pub fn call(
+        &mut self,
+        callee: Callee,
+        operation_arguments: Vec<OperationArgument>,
+        abi: FnAbiId,
+        arguments: Vec<CallArgument>,
+        loans: &[LoanId],
+    ) -> Option<ValueId> {
+        let shape = self.cx.layouts.table().fn_abis[abi.0 as usize].clone();
+        let result = shape.result.map(|r| self.fresh(r.layout));
+        let failed = self.block(BlockKind::FailureCleanup, &[]);
+        let at = self.current();
+        self.at(failed);
+        for &loan in loans.iter().rev() {
+            self.end_loan(loan);
+        }
+        let failure = self.failure(None);
+        let tail = self.ed.unit.tables.failures[failure.index()].cleanup;
+        self.terminate(Terminator::Jump(tail));
+        self.at(at);
+        let failure = self.failure_to(failed, &[], None);
+        let after = self.block(BlockKind::Body, &[]);
+        let normal = self.edge(after, &[]);
+        let arguments = PoolRange::push(&mut self.ed.unit.pools.call_arguments, arguments);
+        let id = CallId(self.ed.unit.tables.calls.len() as u32);
+        self.ed.unit.tables.calls.push(CallSite {
+            operation_arguments,
+            callee,
+            abi,
+            arguments,
+            result,
+            destination: shape.destination.then_some(DestinationClass::Inferred),
+            declared: crate::import::CALL_EFFECTS,
+            anchor: self.anchor,
+        });
+        self.terminate(Terminator::Call {
+            call: id,
+            normal: Some(normal),
+            failure,
+        });
+        self.at(after);
+        for &loan in loans.iter().rev() {
+            self.end_loan(loan);
+        }
+        result
     }
 
     // --- symbols ---

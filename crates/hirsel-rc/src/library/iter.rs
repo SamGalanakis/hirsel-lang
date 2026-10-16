@@ -4,7 +4,6 @@ use super::{CallShape, Cx, InlineLowering, LibraryBody, LibraryError, R, core_pa
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::{CallableShape, FnAbiId};
-use hirsel_lir::effect::Effects;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
@@ -76,8 +75,7 @@ fn callback_abi(b: &mut Body<'_, '_>, ordinal: usize) -> Result<FnAbiId, Library
         .map_err(|e| LibraryError::Layout(b.cx.path.clone(), e))
 }
 
-/// End invocation loans on both outcomes before entering the body's held-owner
-/// cleanup. Mutable arguments publish their write-back version on failure too.
+/// An indirect call of `callee` (`Body::call`).
 pub(crate) fn call(
     b: &mut Body<'_, '_>,
     callee: ValueId,
@@ -85,49 +83,7 @@ pub(crate) fn call(
     arguments: Vec<CallArgument>,
     loans: &[LoanId],
 ) -> Result<Option<ValueId>, LibraryError> {
-    let shape = b.cx.layouts.table().fn_abis[abi.0 as usize].clone();
-    let result = shape.result.map(|r| b.fresh(r.layout));
-    let failed = b.block(BlockKind::FailureCleanup, &[]);
-    let at = b.current();
-    b.at(failed);
-    for &loan in loans.iter().rev() {
-        b.end_loan(loan);
-    }
-    let failure = b.failure(None);
-    let tail = b.ed.unit.tables.failures[failure.index()].cleanup;
-    b.terminate(Terminator::Jump(tail));
-    b.at(at);
-    let failure = b.failure_to(failed, &[], None);
-    let after = b.block(BlockKind::Body, &[]);
-    let normal = b.edge(after, &[]);
-    let arguments = PoolRange::push(&mut b.ed.unit.pools.call_arguments, arguments);
-    let id = CallId(b.ed.unit.tables.calls.len() as u32);
-    b.ed.unit.tables.calls.push(CallSite {
-        operation_arguments: Vec::new(),
-        callee: Callee::Indirect(callee),
-        abi,
-        arguments,
-        result,
-        destination: shape.destination.then_some(DestinationClass::Inferred),
-        declared: Effects::READS
-            | Effects::WRITES
-            | Effects::OWNS
-            | Effects::MAY_FAIL
-            | Effects::ALLOCATES
-            | Effects::OBSERVABLE
-            | Effects::BARRIER,
-        anchor: b.anchor,
-    });
-    b.terminate(Terminator::Call {
-        call: id,
-        normal: Some(normal),
-        failure,
-    });
-    b.at(after);
-    for &loan in loans.iter().rev() {
-        b.end_loan(loan);
-    }
-    Ok(result)
+    Ok(b.call(Callee::Indirect(callee), Vec::new(), abi, arguments, loans))
 }
 
 fn from_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {

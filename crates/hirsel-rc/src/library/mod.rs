@@ -23,6 +23,7 @@ pub mod map;
 pub mod net;
 pub mod owners;
 pub mod sorted;
+pub mod value;
 pub mod views;
 
 use crate::import::{ImportCx, ImportError};
@@ -103,6 +104,8 @@ pub const BODIES: &[&LibraryBody] = &[
     &iter::MAP_STEP,
     // net (net-t2): net.read_into over its fixed runtime entry.
     &net::READ_INTO,
+    // value: an operation used as a function value.
+    &value::FORWARD,
     // views (lib-views): none; its cursor protocols are runtime primitives.
 ];
 
@@ -269,6 +272,20 @@ impl Request {
             environment: None,
             finalizer: false,
         })
+    }
+
+    /// The function value of registry operation `path`, which has neither a
+    /// library body nor an inline lowering: the forwarding body
+    /// (`value::FORWARD`) keyed by the operation's own path and actuals, so
+    /// its callable type and `FnAbi` are the operation's.
+    pub fn operation_value(
+        program: &Program,
+        path: &DefPath,
+        store: hirsel_types::TypeStore,
+        arguments: Vec<GenericArgument>,
+    ) -> Result<Self, InstanceError> {
+        let forward = body_index(&native_path("operation_value")).expect("registered forwarder");
+        Self::operation(program, forward, path, store, arguments)
     }
 
     /// The instance of a helper no registry row names: `callable` is a

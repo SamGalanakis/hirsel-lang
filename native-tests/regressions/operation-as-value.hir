@@ -1,0 +1,28 @@
+// An operation used as a function value is called through its forwarding body: runtime
+// primitives (out.print, string.from_bytes) and an inline length (string.byte_len) each
+// reach native code as a FunctionRef with the operation's own ABI.
+fn twice(f: fn(String) -> u64, s: String) -> u64 {
+  f(s) + f(s)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let len = string.byte_len
+  let decode = string.from_bytes
+  let n = twice(len, "abc") + len("de")
+  let valid: bool = match decode(b"\xff") {
+    Ok(_) => false,
+    Error(_) => n == 8,
+  }
+  let print = fn() {
+    out.print
+  }()
+  let _ = print(
+    io.stdout(rt)?,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
