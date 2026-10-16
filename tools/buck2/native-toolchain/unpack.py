@@ -44,11 +44,12 @@ def place_runtime_debug(output):
         debug = output / "lib/debug/.build-id" / build_id[:2] / (build_id[2:] + ".debug")
         if not debug.is_file():
             continue
-        section = subprocess.check_output(["readelf", "--string-dump=.gnu_debuglink", library], text=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-        link = re.search(r"\[\s*0\]\s+(\S+)", section)
+        section = subprocess.check_output(["readelf", "--string-dump=.gnu_debuglink", library], env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        # readelf also prints the binary CRC after the filename; it need not be UTF-8.
+        link = re.search(rb"\[\s*0\]\s+(\S+)", section)
         if not link:
             raise ValueError(f"no debuglink for {library}")
-        adjacent = library.parent / ".debug" / link[1]
+        adjacent = library.parent / ".debug" / link[1].decode("ascii")
         adjacent.parent.mkdir(exist_ok=True)
         shutil.copyfile(debug, adjacent)
 
