@@ -90,7 +90,7 @@ variants and adding a corpus file leaves the rest of a sample in place.
 `--shard I/N` partitions that globally selected sample by stable variant rank,
 after applying the limit. Catalogue counts remain those of the unsharded run;
 outcome and edit counts sum across shards. `python3 tools/buck2/agree.py` runs the gate's
-64 shards and rejects missing or inconsistent reports.
+16 shards and rejects missing or inconsistent reports.
 `--path PREFIX` (repeatable) keeps only the corpus files whose root-relative
 path starts with a prefix, so `--path conformance/CLO/X.hir` checks exactly
 the variants of that file the whole campaign would.
