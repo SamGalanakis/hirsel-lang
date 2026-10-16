@@ -574,9 +574,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 (block, next)
             }
             _ => {
-                // Worst-case payload padding after the 16-byte extent and the header. No
-                // inbounds GEP or overflowing request reaches a store.
-                let overhead = 24 + physical - 8;
+                // Worst-case payload padding after the immortal prefix. No inbounds GEP
+                // or overflowing request reaches a store.
+                let overhead = IMMORTAL_PREFIX_BYTES + physical - 8;
                 let request = self
                     .builder
                     .binary(BinOp::Add, capacity, self.const_u64(overhead));
@@ -593,9 +593,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let fits = self.builder.binary(BinOp::And, fits, bounded);
                 self.builder.cond_br(fits, fast, slow);
                 self.builder.position(fast);
-                let payload =
-                    self.builder
-                        .binary(BinOp::Add, cursor, self.const_u64(24 + physical - 1));
+                let payload = self.builder.binary(
+                    BinOp::Add,
+                    cursor,
+                    self.const_u64(IMMORTAL_PREFIX_BYTES + physical - 1),
+                );
                 let payload =
                     self.builder
                         .binary(BinOp::And, payload, self.const_u64(!(physical - 1)));

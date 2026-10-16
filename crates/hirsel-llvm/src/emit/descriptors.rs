@@ -325,7 +325,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let record = self.layout(layout)?;
         let (flat, align) = (record.kind == LayoutKind::Flat, record.align);
         let offset = if flat {
-            match align_up(24, u64::from(align.max(8))) {
+            match align_up(IMMORTAL_PREFIX_BYTES, u64::from(align.max(8))) {
                 Ok(n) => n,
                 Err(error) => return self.invalid(format!("{error:?}")),
             }
@@ -400,7 +400,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         references: &[(u64, Value<'m>)],
     ) -> Emitted<Value<'m>> {
         let physical = align.max(8);
-        let start = match align_up(24, u64::from(physical)) {
+        let start = match align_up(IMMORTAL_PREFIX_BYTES, u64::from(physical)) {
             Ok(n) => n,
             Err(_) => return self.invalid("static extent overflow"),
         };
@@ -417,19 +417,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         // like heap classes would give [] spare capacity and send its first
         // push through a detach instead of directly through sequence growth.
         let capacity = bytes.len();
-        let header_ty = self.module.struct_type(&[i32_ty, i32_ty]);
         let word = self
             .module
             .const_or(descriptor, self.module.const_int(i32_ty, 2u128 << 29));
-        let header = self.module.const_struct(&[
-            self.module.const_int(i32_ty, u128::from(COUNT_IMMORTAL)),
-            word,
-        ]);
-        let padding = vec![0u8; (header_offset - 16) as usize];
-        let extent = self.module.const_struct(&[
-            self.const_u64(capacity as u64),
-            self.const_u64(u64::from(physical)),
-        ]);
+        let prefix = IMMORTAL_PREFIX.map(|field| match field {
+            PrefixWord::Capacity => self.const_u64(capacity as u64),
+            PrefixWord::Align => self.const_u64(u64::from(physical)),
+            PrefixWord::Count => self.module.const_int(i32_ty, u128::from(COUNT_IMMORTAL)),
+            PrefixWord::Descriptor => word,
+        });
+        let prefix_ty = self.module.struct_type(
+            &IMMORTAL_PREFIX.map(|field| self.module.int_type(8 * field.bytes() as u32)),
+        );
+        let padding = vec![0u8; (start - IMMORTAL_PREFIX_BYTES) as usize];
         let (payload_ty, payload) = if references.is_empty() {
             (
                 self.module.array_type(i8_ty, bytes.len() as u64),
@@ -464,16 +464,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         let ty = self.module.packed_struct_type(&[
             self.module.array_type(i8_ty, padding.len() as u64),
-            self.module
-                .struct_type(&[self.module.int_type(64), self.module.int_type(64)]),
-            header_ty,
+            prefix_ty,
             payload_ty,
         ]);
         let global = self.module.private_constant(name, ty, physical);
         let initializer = self.module.const_packed_struct(&[
             self.module.const_bytes(&padding),
-            extent,
-            header,
+            self.module.const_struct(&prefix),
             payload,
         ]);
         self.module.set_initializer(global, initializer);

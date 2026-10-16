@@ -68,6 +68,53 @@ pub(crate) use pair::{PairField, PairWord, REGISTER_PAIR, pair_type};
 use pair::{decode_word, encode_word, scalar_shape, value_word};
 use signature::{Hidden, Signature};
 
+/// A word of the prefix an immortal block (static, region owner or arena block) carries
+/// before its payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrefixWord {
+    Capacity,
+    Align,
+    Count,
+    Descriptor,
+}
+
+/// The immortal prefix's words in address order, ending at the payload: the extent
+/// `{ capacity, align }` (`hirsel_rt_v2_extent`), then the counted header
+/// `{ count, descriptor }`. Static blocks, region owners and arena blocks are laid out
+/// from here and [`PrefixWord::bytes`].
+pub(crate) const IMMORTAL_PREFIX: [PrefixWord; 4] = [
+    PrefixWord::Capacity,
+    PrefixWord::Align,
+    PrefixWord::Count,
+    PrefixWord::Descriptor,
+];
+
+/// Bytes of the immortal prefix; the payload lies at the first multiple of its physical
+/// alignment at or past them.
+pub(crate) const IMMORTAL_PREFIX_BYTES: u64 = PrefixWord::Capacity.back();
+
+impl PrefixWord {
+    pub(crate) const fn bytes(self) -> u64 {
+        match self {
+            PrefixWord::Capacity | PrefixWord::Align => 8,
+            PrefixWord::Count | PrefixWord::Descriptor => 4,
+        }
+    }
+
+    /// Bytes from this word's start to the end of the prefix.
+    pub(crate) const fn back(self) -> u64 {
+        let (mut i, mut found, mut bytes) = (0, false, 0);
+        while i < IMMORTAL_PREFIX.len() {
+            found |= IMMORTAL_PREFIX[i] as u8 == self as u8;
+            if found {
+                bytes += IMMORTAL_PREFIX[i].bytes();
+            }
+            i += 1;
+        }
+        bytes
+    }
+}
+
 /// The optimization pipeline run between the two verifier passes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OptLevel {
@@ -1084,6 +1131,32 @@ mod tests {
             modules: vec!["m_n".into()],
             name: name.into(),
         })
+    }
+
+    /// The immortal prefix is the runtime's extent and then its counted header, word by
+    /// word (`hirsel_rt_v2.h`): the header's `HEADER_SIZE` bytes end at the prefix, with the
+    /// count at `COUNT_OFFSET` and the descriptor at `LAYOUT_OFFSET`, and the extent's
+    /// capacity, then its alignment, lie `IMMORTAL_CAPACITY_BACK` bytes before the header.
+    /// A change to `IMMORTAL_PREFIX` or `PrefixWord::bytes` fails here, not in a
+    /// capacity query that misreads a static block.
+    #[test]
+    fn the_immortal_prefix_is_the_runtime_extent_then_header() {
+        use hirsel_lir::runtime_abi::{HEADER_SIZE, IMMORTAL_CAPACITY_BACK, LAYOUT_OFFSET};
+        let at = |word: PrefixWord| IMMORTAL_PREFIX_BYTES - word.back();
+        let header = IMMORTAL_PREFIX_BYTES - HEADER_SIZE;
+        assert_eq!(at(PrefixWord::Count), header + COUNT_OFFSET);
+        assert_eq!(at(PrefixWord::Descriptor), header + LAYOUT_OFFSET);
+        assert_eq!(
+            PrefixWord::Count.bytes() + PrefixWord::Descriptor.bytes(),
+            HEADER_SIZE
+        );
+        assert_eq!(header - at(PrefixWord::Capacity), IMMORTAL_CAPACITY_BACK);
+        assert_eq!(
+            at(PrefixWord::Align),
+            at(PrefixWord::Capacity) + PrefixWord::Capacity.bytes()
+        );
+        assert_eq!(at(PrefixWord::Capacity), 0);
+        assert_eq!(IMMORTAL_PREFIX_BYTES, 24);
     }
 
     /// Since `.roots5`, a returned root's pointer word is the pointer itself, for sequence

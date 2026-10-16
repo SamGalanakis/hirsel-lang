@@ -216,6 +216,10 @@ reanchoring and required external/function-reference entries are preserved.
 constant whose reference cells are relocations to the blocks they name; a reference result
 is block 0, any other result is loaded from its payload. String/Bytes literals are private static immortal blocks
 (`COUNT_IMMORTAL`, `DOMAIN_STATIC`), and a literal slice's owner is its sequence block.
+Every immortal block (static, region owner, arena block) lays out its prefix, the extent
+`{ capacity, align }` and the counted header, from `IMMORTAL_PREFIX` and `PrefixWord::bytes`;
+`IMMORTAL_PREFIX_BYTES` is derived from them and `the_immortal_prefix_is_the_runtime_extent_then_header`
+pins each word to the runtime ABI.
 `Compare` calls a private generated comparator per layout (`compare.rs`), which follows the
 interpreter's order and fails MEM-3 past `COMPARE_MAX_DEPTH`. Path equality and hashing
 use its inert intern ID; ordered comparisons resolve UTF-8 text with
