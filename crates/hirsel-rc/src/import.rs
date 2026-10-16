@@ -521,7 +521,7 @@ struct PlaceRef {
     /// produce (LIR schema revision 4).
     source: Option<(LirTypeId, TypeId)>,
     /// The site of the origin binding that named this place: an index or tag
-    /// check of it fails there, as in the interpreter (§23: the operation
+    /// check of it fails there, as in the interpreter (docs/spec/diagnostics.md: the operation
     /// naming the place, not the enclosing statement).
     site: Option<Span>,
 }

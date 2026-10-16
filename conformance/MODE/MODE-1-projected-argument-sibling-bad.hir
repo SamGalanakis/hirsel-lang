@@ -1,7 +1,7 @@
 // rule: MODE-1
 // expect: reject MODE-1 at line 22
-// Under v22 §04, replacing q.p overlaps the loan on the argument place q.p, which a
-// live result related to the argument holds.
+// Replacing q.p overlaps the loan on the argument place q.p, which a live result
+// related to the argument holds (places and loans, docs/spec/ownership.md).
 type Pair {
   a: String,
   b: String,

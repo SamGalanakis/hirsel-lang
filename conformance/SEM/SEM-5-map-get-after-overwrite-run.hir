@@ -1,7 +1,7 @@
 // rule: SEM-5
 // expect: run
 // stdout: 10 30 20
-// "Map insertion replaces an existing value in its existing position" (§22),
+// "Map insertion replaces an existing value in its existing position" (docs/spec/core-library.md),
 // so a keyed read sees the replacement, and a result read earlier keeps its value.
 fn output_error[E](take e: E) -> () {}
 

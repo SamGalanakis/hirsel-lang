@@ -44,7 +44,7 @@ the check that no live value still borrows the place, start at callee entry, so
 a view whose last use is a later argument of the same call has already ended
 (LANG-3, the two-phase borrow of Rust's `v.push(v.len())`).
 A borrowed loop over a place (`for x in xs`, any collection) lends that place
-from loop entry while it may advance again (SEM-4, §04): a write, move or `mut`
+from loop entry while it may advance again (SEM-4): a write, move or `mut`
 loan of an overlapping place in the body conflicts whether or not the body uses
 the element, and the diagnostic names the loop as the cause. A write followed by
 `break` or `return` does not, since the loop never reads the source again.
@@ -71,7 +71,7 @@ The private CFG builder, temporary liveness and forward fixed-point solver all
 use explicit worklists. Backward temporary demand starts in CFG postorder,
 so acyclic successors settle before their predecessors. `work::read(Counter::
 OwnershipLivenessSteps)` counts node transfers; cycles still iterate to convergence. Recovery types suppress dependent ownership diagnostics.
-Diagnostics follow spec §23 source/site/rule ordering and prerequisite suppression.
+Diagnostics follow docs/spec/diagnostics.md source/site/rule ordering and prerequisite suppression.
 Capture layout is supplied by the separate authority pass: ownership refines the
 creation uses and checks mode/access constraints of the supplied captures.
 Authority types a borrowed or mutable non-plain capture as a Local view of its
@@ -271,7 +271,7 @@ roots have explicit, separate interpretations. Closure literal owners use
 Expression instead of Statement.
 
 Driver order is body check, authority/capture check, ownership with these capture
-rows, then lowering. Merge J and I diagnostics and select the first by spec §23.
+rows, then lowering. Merge J and I diagnostics and select the first by docs/spec/diagnostics.md.
 Task-handle obligations survive branch joins and are checked on each reachable
 exit; cancel does not consume a handle, while await and detach do. Runtime task
 execution, cancellation and joining are M2.
@@ -279,7 +279,7 @@ execution, cancellation and joining are M2.
 Tests begin with `authority/test_support.rs` manufactured CheckedBody fixtures.
 The real corpus in `authority/corpus` runs lexer, parser, resolver, signature
 normalization and H body checking as dev-dependencies, followed by J. Its
-signature-only library fixture contains the v20 §22 declarations and nominal
+signature-only library fixture contains the core library declarations and nominal
 roles. `passing.txt` is a never-shrinking list; `pending.txt` gives an owner and
 observed failure for every remaining program; `annotations.txt` records spec
 issue annotations (currently zero). Run `tools/bless.sh authority-corpus` to update the lists after the existing baseline has passed. Run/fail programs
@@ -343,7 +343,7 @@ roots receive shared derived summaries; provider reads remain recorded even on
 failure. Function/Iter capture summaries retain J's explicit capture evidence.
 
 Ownership flow state is one private loan set per value (`ownership/flow/loans.rs`,
-§04 Places and loans): a kind (identity, bound, read) on a place (a binding, a
+docs/spec/ownership.md, places and loans): a kind (identity, bound, read) on a place (a binding, a
 lexical scope, the value's own environment or a placement a join lost), each with
 its issue site. A value holds its alias, sources, captures and environment loans
 itself, and its content holds read loans on bindings and scope loans by part. A

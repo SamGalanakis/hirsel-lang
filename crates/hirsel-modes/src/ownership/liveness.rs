@@ -1,4 +1,4 @@
-//! Backward use-liveness of every value that can hold a loan (§04, LANG-3).
+//! Backward use-liveness of every value that can hold a loan (LANG-3).
 //! A loan lasts until the last use of each holder on every path, not to the
 //! end of the holder's scope. Holders are expression temporaries, bindings and
 //! the cursor of a borrowed loop. Destroying a holder whose type has

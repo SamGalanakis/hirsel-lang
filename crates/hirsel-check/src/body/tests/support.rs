@@ -380,7 +380,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
                 .metadata
                 .schema = builtin.metadata.schema.clone();
         }
-        // E needs a plain lane proof while §22 intrinsics use scalar families.
+        // E needs a plain lane proof while core library intrinsics use scalar families.
         if name.starts_with("simd.") {
             let s = registry.signatures.get_mut(&p).unwrap();
             if let SignatureKind::Function(f) = &mut Arc::make_mut(s).kind {

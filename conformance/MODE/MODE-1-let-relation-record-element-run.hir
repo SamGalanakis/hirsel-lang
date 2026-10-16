@@ -2,7 +2,7 @@
 // expect: run
 // stdout: ok
 // A binding's relation is a contract, and its content is at most as
-// long-lived as the relation says (§04). Global content in a list of records
+// long-lived as the relation says (MODE-1). Global content in a list of records
 // declared `in i` is read through its elements under that contract, also
 // through a block that yields the binding (#50).
 type R {

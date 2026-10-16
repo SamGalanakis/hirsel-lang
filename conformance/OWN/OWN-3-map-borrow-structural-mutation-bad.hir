@@ -1,12 +1,12 @@
 // rule: OWN-3
 // expect: accept
-// The first access obligation cites the complete operation (§23).
+// The first access obligation cites the complete operation (docs/spec/diagnostics.md).
 fn probe(mut m: Map[u8, u8]) {
   for (k, v) in m {
     map.insert(mut m, 3, 4)
     break
   }
 }
-// v22 R2 (§04, LANG-3): a loan lasts until its holder's last use. The holder
+// LANG-3: a loan lasts until its holder's last use. The holder
 // is dead at the conflicting action, so this v21 reject is accepted; the
 // holder-used twin is OWN-3-map-borrow-structural-mutation-used-bad.hir.

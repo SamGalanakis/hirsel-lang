@@ -90,7 +90,7 @@ pub(crate) enum Cause {
     Sendable,
 }
 impl Cause {
-    /// The closed v22 §23 vocabulary entry. Fine wording kinds remain
+    /// The closed docs/spec/diagnostics.md vocabulary entry. Fine wording kinds remain
     /// private; every kind has an entry (#81).
     #[cfg(test)]
     pub(crate) fn spec_kind(self) -> &'static str {
@@ -400,7 +400,7 @@ pub(crate) enum Requirement {
     NotSendableType,
 }
 impl Requirement {
-    /// The closed v22 §23 vocabulary entry. Fine wording kinds remain
+    /// The closed docs/spec/diagnostics.md vocabulary entry. Fine wording kinds remain
     /// private; every kind has an entry (#81).
     #[cfg(test)]
     pub(crate) fn spec_kind(self) -> &'static str {
@@ -847,7 +847,7 @@ impl Explanation {
         for caution in &self.cautions {
             diagnostic.notes.push(caution.text());
         }
-        // §23: the provided cause and its site alone identify a cascade.
+        // docs/spec/diagnostics.md: the provided cause and its site alone identify a cascade.
         // Keep the definition-local root, and distinguish different creation
         // sites (for example two moves of the same reinitialised binding).
         if diagnostic.root_cause.is_none() {
@@ -1248,7 +1248,7 @@ mod tests {
         for kind in kinds {
             assert!(
                 provided.contains(kind.spec_kind()),
-                "{kind:?}: {:?} is not a §23 provided kind",
+                "{kind:?}: {:?} is not a provided cause kind",
                 kind.spec_kind()
             );
         }
@@ -1321,7 +1321,7 @@ mod tests {
         for kind in kinds {
             assert!(
                 required.contains(kind.spec_kind()),
-                "{kind:?}: {:?} is not a §23 required kind",
+                "{kind:?}: {:?} is not a required fact kind",
                 kind.spec_kind()
             );
         }

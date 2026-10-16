@@ -1,7 +1,8 @@
 // rule: MODE-1
 // expect: accept
-// Under v22 §04, a borrowed argument q.p lends the place q.p, so a field of q
-// outside it stays writable while a result related to the argument lives.
+// A borrowed argument q.p lends the place q.p (places and loans,
+// docs/spec/ownership.md), so a field of q outside it stays writable while a
+// result related to the argument lives.
 type Pair {
   a: String,
   b: String,

@@ -1,4 +1,4 @@
-//! Hand-built controls for loans that end at their holder's last use (§04):
+//! Hand-built controls for loans that end at their holder's last use (LANG-3):
 //! lowering ends a loan after the last use of every
 //! holder on each path, where destroying a holder with user-visible
 //! destruction is a use, and the checker accepts exactly that.

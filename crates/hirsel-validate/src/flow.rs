@@ -906,7 +906,7 @@ impl Model {
         for (a, b) in a.projection.iter().zip(&b.projection) {
             match (a, b) {
                 // All elements of a sequence are one place; the fields below
-                // that place are still distinct (§04 conflicts, #77).
+                // that place are still distinct (OWN-3, #77).
                 (Projection::Index(_), Projection::Index(_)) => (),
                 (
                     Projection::VariantField { variant: a, .. },
@@ -2478,7 +2478,7 @@ impl Checker<'_> {
                             Relation::place(identity.clone())
                         } else if self.current_content_global(state, &argument.value) {
                             // An arena-only source contributes its arena
-                            // bound; its read loan ends at return (§04, P2).
+                            // bound; its read loan ends at return (MODE-1).
                             // A region ends with its scope and a taken
                             // parameter's storage with this frame, so either
                             // bounds a dependent result to this frame (PROV-4,
@@ -3477,7 +3477,7 @@ impl Checker<'_> {
         }
         if state.places[index] & LIVE != 0 {
             self.conflict(model, state, place, true, true, report);
-            // §04: destroying content with user-visible destruction uses it,
+            // destroying content with user-visible destruction uses it,
             // so every loan it holds must still be active. DROP-1 values are
             // destroyed without observation and are not checked.
             if self.destroyed(self.place_type(place)) {
@@ -5644,7 +5644,7 @@ impl Checker<'_> {
                     self.flow_error(report, ViolationKind::InvalidOrigin(value.place));
                 }
 
-                // §22 borrowed for protocols compose an owned yield back to its
+                // Core library borrowed `for` protocols compose an owned yield back to its
                 // original source, without bounds on unnamed preparation/cursor
                 // storage. Data excludes borrowed callable/resource environments.
                 // Ordinary calls keep binding homes (MODE-1; spec issue #100):

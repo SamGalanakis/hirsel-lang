@@ -1,7 +1,7 @@
 // rule: MODE-1
 // expect: run
 // stdout: ok
-// A borrowed loop lends its source only while it may advance again (§04). A
+// A borrowed loop lends its source only while it may advance again (SEM-4). A
 // write followed by `break` ends the loop before the next read of `xs`.
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let mut xs: List[u64] = [1, 2]

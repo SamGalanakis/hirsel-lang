@@ -694,7 +694,7 @@ pub struct OwnershipFacts {
     pub plain_types: std::collections::BTreeSet<TypeId>,
     /// Rows whose values have no user-visible destruction (DROP-1): copyable
     /// and not once. Destroying a holder of any other value, including rows
-    /// appended after this pass, is a use of its loans (§04).
+    /// appended after this pass, is a use of its loans (LANG-3).
     pub silent_drop_types: std::collections::BTreeSet<TypeId>,
     /// Borrowed call arguments whose result relation names only a field path
     /// `F` of their parameter, with the type of the argument place extended

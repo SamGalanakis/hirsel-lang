@@ -1,6 +1,6 @@
 // rule: OWN-3
 // expect: accept
-// A closure capturing storage is dead before the `mut` call (§04).
+// A closure capturing storage is dead before the `mut` call (LANG-3).
 fn look(x: Bytes) -> u64 {
   0
 }

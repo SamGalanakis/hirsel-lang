@@ -83,12 +83,12 @@ Lowering consumes these producer decisions after I/J:
   semantic TypeId for subsequent materialization.
 
 Missing nominal capability arguments retain typed ordinary inputs/results and
-are diagnosed by authority checking under §23, rather than a derivative arity
+are diagnosed by authority checking under docs/spec/diagnostics.md, rather than a derivative arity
 error. Resource finalizers type their implicit local binder, enforce unit results,
 and reject propagation with the specialized DROP-3 diagnostic.
 
 Test-only lexer/parser/resolver dependencies parse source text;
-`tests/library.hir` transcribes the v20 §22 library signatures. The registry uses
+`tests/library.hir` transcribes the core library signatures. The registry uses
 manufactured nominal capability/error types and never supplies a library body.
 Conformance programs run end to end in the corpus gate rather than here. The body
 suite holds hand-built arenas/manufactured signatures, parsed programs, a
@@ -102,7 +102,7 @@ deterministic plans after symbol, mapping and signature-store reordering.
 body after J/I and before lowering. It rejects invalid growable fields and
 variable-size flat indexing/replacement, importing nominal representations with
 shared substitution and recording every consulted signature dependency. It
-produces source diagnostics; the driver alone selects their order under v20 §23.
+produces source diagnostics; the driver alone selects their order under docs/spec/diagnostics.md.
 Stable flat byte encoding remains issue #1 and is not inferred from target ABI.
 
 Contract clauses receive ordinary body elaborations, calls and provider reads in

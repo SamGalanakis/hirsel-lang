@@ -102,7 +102,7 @@ impl Checker<'_> {
     }
 
     /// The roots whose content may leave the frame. A Plain value owns no
-    /// blocks (§04, MEM-5), so moving or copying one, such as a `u64` read
+    /// blocks (MEM-5), so moving or copying one, such as a `u64` read
     /// out of a local list, makes nothing of its root escape.
     fn escaping_roots(&self) -> &BTreeSet<u32> {
         self.scratch.escaping_roots[self.site.body.0 as usize].get_or_init(|| {

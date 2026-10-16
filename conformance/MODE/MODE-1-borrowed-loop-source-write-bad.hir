@@ -3,7 +3,7 @@
 // spec: #89
 // The source of `for r in xs` may only be read in the body (SEM-4). Each
 // advance reads it, so the loop keeps it lent while it may advance again,
-// even when the body never uses `r` (§04).
+// even when the body never uses `r` (SEM-4).
 type R {
   name: String,
   n: u64,

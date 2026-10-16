@@ -45,7 +45,7 @@ pub enum PeerTls {
     Fails(TlsFailure),
 }
 
-/// §22 `TlsFailure`, in its variant order.
+/// `TlsFailure`, in its docs/spec/core-library.md variant order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum TlsFailure {

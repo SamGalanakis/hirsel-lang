@@ -88,7 +88,7 @@ impl SocketAddr {
     }
 }
 
-/// `TlsFailure`, in its §22 variant order.
+/// `TlsFailure`, in its docs/spec/core-library.md variant order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TlsFailure {
     UnknownIssuer,
@@ -138,7 +138,7 @@ impl From<TlsFailure> for hirsel_run_config::TlsFailure {
     }
 }
 
-/// `NetError`, in its §22 variant order. Fault codes are capability inputs, not errno.
+/// `NetError`, in its docs/spec/core-library.md variant order. Fault codes are capability inputs, not errno.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetError {
     NotGranted,
@@ -401,7 +401,7 @@ impl crate::io::State {
         }
     }
     /// Check every grant before any provider effect (CAP-1), then ask the
-    /// provider of the Net's world. Input validation precedes the grant check (§22 P5).
+    /// provider of the Net's world. Input validation precedes the grant check (docs/spec/core-library.md).
     pub(crate) fn execute_net(
         &mut self,
         host: &mut dyn NetProvider,

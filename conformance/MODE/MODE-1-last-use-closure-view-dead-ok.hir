@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: accept
-// A closure holds the loans of the views it captures until its last call (MODE-5, §04).
+// A closure holds the loans of the views it captures until its last call (MODE-5).
 fn look(x: Bytes) -> u64 {
   0
 }

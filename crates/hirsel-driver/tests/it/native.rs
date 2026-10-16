@@ -563,7 +563,7 @@ fn third[V: copyable](x:V) { first(x) }
 }
 
 /// A failing index in statement position fails at the index expression, by
-/// line and column, in all three engines (§23's primary site is the
+/// line and column, in all three engines (the diagnostics part's primary site is the
 /// operation that fails; corpus headers pin only the line).
 #[test]
 fn an_index_failure_site_is_the_index_expression_in_every_engine() {

@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: reject MODE-1 at line 21
-// The closure capturing the view is called after the `mut` (MODE-5, §04).
+// The closure capturing the view is called after the `mut` (MODE-5).
 fn look(x: Bytes) -> u64 {
   0
 }

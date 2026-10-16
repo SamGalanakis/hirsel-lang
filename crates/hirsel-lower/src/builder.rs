@@ -69,7 +69,7 @@ pub(super) struct Builder<'a, 'b> {
     pub borrowed_cursor_types: BTreeSet<TypeId>,
     /// Lowering a value that a binding receives: a borrowed argument temporary
     /// the result keeps is released like a named local declared just before
-    /// that binding, on every exit (§04, DROP-2).
+    /// that binding, on every exit (DROP-2).
     pub keeping: bool,
     /// Where that binding's declaration starts: a kept temporary's declaration.
     pub keep_span: Span,

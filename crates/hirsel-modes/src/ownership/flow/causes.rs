@@ -387,7 +387,7 @@ impl Checker<'_> {
         pending
     }
     /// The live holder of a loan on `place`, if one is in a binding: the
-    /// value the loan set says still uses it (§04 last use).
+    /// value the loan set says still uses it (LANG-3).
     pub(super) fn lent(
         &self,
         state: &State,

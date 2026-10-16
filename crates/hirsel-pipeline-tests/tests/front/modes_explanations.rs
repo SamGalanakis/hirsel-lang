@@ -1,7 +1,7 @@
 //! Eight causal ownership diagnostics, rendered by the whole pipeline. Each
 //! was once one generic sentence; each now states what is provided and why,
 //! what is required and why, and the repairs the checker accepts. Rules and
-//! primary spans are unchanged. Folding (§23)
+//! primary spans are unchanged. Folding (docs/spec/diagnostics.md)
 //! joins diagnostics with the same provided cause at the same site, across
 //! requirements; the folding cases are unit tests in hirsel-driver.
 use std::path::Path;

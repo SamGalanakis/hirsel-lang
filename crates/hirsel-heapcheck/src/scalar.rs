@@ -2,7 +2,7 @@
 //! arithmetic, and IEEE f32/f64 with no reassociation. A checked failure is a
 //! language failure taken along the operation's failure edge. The named
 //! library operations (LIR schema revision 6) are computed here on their
-//! mathematical definitions (SEM-1, SEM-2, §22), independently of the
+//! mathematical definitions (SEM-1, SEM-2, docs/spec/core-library.md), independently of the
 //! interpreter and of emission.
 use hirsel_lir::ir::{ArithMode, BinaryOp, ConvertMode, UnaryOp};
 use hirsel_lir::layout_types::ScalarKind;
@@ -240,7 +240,7 @@ where
     }
 }
 
-/// `div_floor`, `mod` and `div_exact` (§22): the quotient rounded toward
+/// `div_floor`, `mod` and `div_exact` (docs/spec/core-library.md): the quotient rounded toward
 /// negative infinity, its remainder (the divisor's sign), and the exact
 /// quotient. A zero divisor, signed `MIN / -1` (for all three) and a nonzero
 /// remainder of `div_exact` fail SEM-1 (None).

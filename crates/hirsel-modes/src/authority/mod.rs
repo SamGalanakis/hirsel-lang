@@ -1,4 +1,5 @@
-//! Signature-only provenance, authority and capture checking (v20 §§4, 7–11, 23).
+//! Signature-only provenance, authority and capture checking (docs/spec/ownership.md,
+//! brands.md, closures.md, capabilities.md and diagnostics.md).
 mod closure_rows;
 mod cursors;
 pub use cursors::refine_cursor_plan;

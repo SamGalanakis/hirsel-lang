@@ -2061,7 +2061,7 @@ fn execute_instruction(
         // Binding an origin computes both places. An index outside its
         // sequence or a field of an inactive variant still fails where the
         // place is accessed, with that access's cleanup, but at the site of
-        // the expression naming the place (§23's primary site is the
+        // the expression naming the place (the diagnostics part's primary site is the
         // operation that fails, not the enclosing statement).
         InstructionKind::BindOrigin { source, place, .. } => {
             for id in [source, place] {

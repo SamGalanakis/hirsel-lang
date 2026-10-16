@@ -29,7 +29,7 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
                 ("let frozen=shared.freeze(take xs)", "MODE-1"),
                 ("send(take xs)", "MODE-1"),
             ] {
-                // `kept` is used after the action, so its loan is still live (§04).
+                // `kept` is used after the action, so its loan is still live (LANG-3).
                 let body = format!(
                     "{prelude}fn probe(take input:unique List[Bytes]){{let mut xs:unique List[Bytes]=take input;let kept=(copy {view},);{action};let _=kept}}"
                 );

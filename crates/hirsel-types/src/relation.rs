@@ -1,4 +1,4 @@
-//! One relation bounds a value (MODE-1, PROV-4, §04).
+//! One relation bounds a value (MODE-1, PROV-4).
 //!
 //! `T in S` names the places a value may reach: parameters and their field
 //! paths, bindings, arenas and a callable's environment. The empty relation is
@@ -10,7 +10,7 @@ use crate::{
     Type, TypeId, TypeKind, TypeStore, Uniqueness,
 };
 
-/// One place that bounds a value (MODE-1, §04). Field paths are meaningful (#77).
+/// One place that bounds a value (MODE-1). Field paths are meaningful (#77).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Reach {
     /// A parameter or local (arenas included), with its field path.

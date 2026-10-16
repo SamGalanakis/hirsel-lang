@@ -1,7 +1,7 @@
 // rule: MODE-1
 // expect: run
 // stdout: ok
-// A holder keeps its loans while it is live (§04). A record inside a list
+// A holder keeps its loans while it is live (LANG-3). A record inside a list
 // holds the view of `s` it was built from, so the loan on `s` lasts until the
 // last read of `xs[0].name`, not until `xs` is bound.
 type R {

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
-/// The largest single read; a read never waits to fill its limit (§22 Network).
+/// The largest single read; a read never waits to fill its limit (docs/spec/core-library.md).
 pub const READ_CHUNK: u64 = 64 * 1024;
 /// Zig `ListenOptions.kernel_backlog`.
 const BACKLOG: libc::c_int = 128;
@@ -60,7 +60,7 @@ pub fn error(code: libc::c_int) -> NetError {
         libc::EPIPE => NetError::BrokenPipe,
         libc::ETIMEDOUT | libc::EAGAIN | libc::EINPROGRESS => NetError::TimedOut,
         libc::EINVAL => NetError::InvalidInput,
-        // A capability input, never an errno contract (§22).
+        // A capability input, never an errno contract (docs/spec/core-library.md).
         _ => NetError::Fault(1),
     }
 }
@@ -407,7 +407,7 @@ impl NetProvider for HostNet {
     fn connect(&mut self, id: u64, host: &str, port: u16, timeout: NetTimeout) -> Provided<()> {
         let started = Instant::now();
         Ok(resolve(host, port).and_then(|addresses| {
-            // The timeout bounds the whole call, resolution included (§22 Network).
+            // The timeout bounds the whole call, resolution included (docs/spec/core-library.md).
             let timeout = match duration(timeout) {
                 None => NetTimeout::Unbounded,
                 Some(d) => match d.checked_sub(started.elapsed()) {

@@ -153,7 +153,7 @@ fn disjoint_fields_of_one_storage_may_both_be_mut() {
     build(true).broken(vec![aliased()]);
 }
 
-/// All elements of a sequence are one storage (§04 conflicts): `xs[i]` and
+/// All elements of a sequence are one storage (OWN-3): `xs[i]` and
 /// `xs[j]` alias whatever the indices hold, while elements of two sequences do not.
 #[test]
 fn two_index_projections_of_one_sequence_alias() {

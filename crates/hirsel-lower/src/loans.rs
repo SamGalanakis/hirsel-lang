@@ -129,7 +129,7 @@ impl Builder<'_, '_> {
             if_active: !state.must.contains(&loan),
         };
         // A holder whose destruction is user-visible uses its loans when it is
-        // dropped (§04), so those loans end after its drop. Others end first.
+        // dropped (LANG-3), so those loans end after its drop. Others end first.
         let held_until: BTreeMap<u32, BTreeSet<u32>> = selected
             .iter()
             .map(|loan| {

@@ -5702,7 +5702,7 @@ impl<'a> Checker<'a> {
     /// result is bounded by its sources instead, the root of an argument or
     /// of an annotated binding receives its actual placement, and a plain
     /// value's placement is inert. A local arena value kept where a global is
-    /// required is PROV-4 too: §23 orders placement before required modes,
+    /// required is PROV-4 too: docs/spec/diagnostics.md orders placement before required modes,
     /// and ownership judges a read's locality by current content, which may
     /// be Global under a written local storage contract. Only a part of a
     /// Local aggregate checked where it is constructed defers to that owner:
@@ -8032,7 +8032,7 @@ impl<'a> Checker<'a> {
             self.expr(a.value, Some((CaptureContext::Escaping, expected, "CLO-4")));
             used = used.join(self.used(a.value));
         }
-        // v22 §04: a constructed value holds its parts' loans, so it lives
+        // a constructed value holds its parts' loans, so it lives
         // where their arena content lives, and each field is within it. The
         // owner is checked where it is kept (#79), as a tuple is. A
         // destination that names an arena already placed the owner, and its

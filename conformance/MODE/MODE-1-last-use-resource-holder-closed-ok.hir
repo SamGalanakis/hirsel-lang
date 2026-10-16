@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: accept
-// A resource consumed before the `mut` holds nothing afterwards (§04).
+// A resource consumed before the `mut` holds nothing afterwards (LANG-3).
 resource type Guard {
   data: Bytes,
 }

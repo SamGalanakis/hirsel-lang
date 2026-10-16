@@ -17,6 +17,6 @@ fn probe(mut x: Bytes, mut y: Bytes) {
   bump(mut y)
   ()
 }
-// v22 R2 (§04, LANG-3): a loan lasts until its holder's last use. The holder
+// LANG-3: a loan lasts until its holder's last use. The holder
 // is dead at the conflicting action, so this v21 reject is accepted; the
 // holder-used twin is MODE-1-owned-local-receiver-after-fresh-live-used-bad.hir.

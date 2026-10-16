@@ -1062,7 +1062,7 @@ struct Checker<'a> {
     return_uniqueness: BTreeMap<ParamId, bool>,
     return_sendability: BTreeMap<ParamId, bool>,
     arenas: crate::arenas::Arenas,
-    /// The holders live after each graph node (§04 last use).
+    /// The holders live after each graph node (LANG-3).
     live: &'a [BTreeSet<Holder>],
     /// The callable type this graph implements, once computed.
     callable: std::cell::OnceCell<Option<(FunctionType, bool)>>,
@@ -2252,7 +2252,7 @@ impl Checker<'_> {
         }
         true
     }
-    /// A loan lasts until the last use of each value holding it (§04): only
+    /// A loan lasts until the last use of each value holding it (LANG-3): only
     /// holders live after this operation keep their loans.
     fn holder_live(&self, holder: Holder) -> bool {
         self.live[self.node].contains(&holder)
@@ -2263,7 +2263,7 @@ impl Checker<'_> {
             || (!self.properties[self.body.bindings[place.binding].ty.index()].plain
                 && self.capturer(state, place.binding).is_some())
     }
-    /// The values live after this operation, which keep their loans (§04),
+    /// The values live after this operation, which keep their loans (LANG-3),
     /// with the binding that holds each (none for an evaluated temporary).
     fn live_values<'s>(
         &self,
@@ -2347,7 +2347,7 @@ impl Checker<'_> {
             .map(|(holder, _)| holder)
     }
     /// A borrowed loop keeps the iterated place lent while it may advance
-    /// again (SEM-4, §04): the source of the loop that does, if any.
+    /// again (SEM-4): the source of the loop that does, if any.
     pub(super) fn iteration(&self, state: &State, place: &Place) -> Option<ExprId> {
         state
             .iteration_loans
@@ -2569,7 +2569,7 @@ impl Checker<'_> {
     /// checks it there, against the values still live once the callee runs.
     fn unlent(&mut self, place: &Place, state: &State, operation: Span, call: bool) -> bool {
         if self.loaned(state, place) {
-            // A borrowed loop's source is a §04 loan like any other; whether
+            // A borrowed loop's source is a loan like any other; whether
             // SEM-4 owns its conflicts instead is spec #89.
             self.report(
                 if call
@@ -5408,7 +5408,7 @@ impl Checker<'_> {
                             let source = place(self.body, arg.value, self.source_rows);
                             // An arena-only argument, computed, named or
                             // copied, contributes its arena bound and a read
-                            // loan on its place, which ends at return (§04,
+                            // loan on its place, which ends at return (MODE-1,
                             // P2). A taken parameter's storage is not one: a
                             // result holding it must name it (MODE-1). A
                             // closure call's result may share what its

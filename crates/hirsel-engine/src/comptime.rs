@@ -348,7 +348,7 @@ impl QueryEngine {
                 ));
                 Err(QueryError::Diagnostics(vec![diagnostic]))
             }
-            // CT-1 and §23 own exhausted evaluation steps, including the
+            // CT-1 and docs/spec/diagnostics.md own exhausted evaluation steps, including the
             // configured budget until #7 specifies source-event accounting.
             Outcome::ToolingLimit(limit) if limit.kind == hirsel_tir::ToolingLimitKind::Steps => {
                 let mut diagnostic = Diagnostic::error(

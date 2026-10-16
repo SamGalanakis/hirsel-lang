@@ -197,7 +197,7 @@ producer that differs changes this crate or the producer):
   it (a write: the block must be unique).
 - LIR schema revision 6: `Convert`, `IntArith`, `MulAdd` and the named
   divisions, minimum, maximum and total order execute in `scalar.rs` from
-  their definitions (SEM-1, SEM-2, §22), independent of the emitter;
+  their definitions (SEM-1, SEM-2, docs/spec/core-library.md), independent of the emitter;
   `hirsel-llvm/tests/scalar_library.rs` compares them with the interpreter's
   kernels at every width and edge.
 - LIR schema revision 7: a `Slot` step addresses an element slot below the

@@ -28,7 +28,7 @@ Every domain is checked in calls and annotations using its declared RuleId.
 `OMITTED` lists unsettled #4/#6/#7/#16 surfaces; M2 execution may remain
 unavailable independently of these declaration facts.
 
-Compiler-only loop protocols are separate from §22's source API.
+Compiler-only loop protocols are separate from the core library's source API.
 `hirsel_types::core_roles::loop_protocols()`
 returns `(protocol, open_path, next_path)` rows for `MapInsertionOrder`,
 `SortedMapOrder`, `SetElements`, `ArrayConsume`, `ListConsume` and `InlineConsume`.

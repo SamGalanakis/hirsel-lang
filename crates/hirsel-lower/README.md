@@ -268,7 +268,7 @@ Lowering keeps private sparse content-to-loan dependencies alongside storage
 availability. Result selectors and scoped callees retain their operand
 permissions; aggregate fields and transports retain the same dependencies.
 Dependencies are keyed by part paths in which every element of a sequence, map
-or set is one step (§04), as the IR checker keys them, so a view inside a record
+or set is one step (OWN-3), as the IR checker keys them, so a view inside a record
 in a list stays held until the element's field is read; one element's write
 leaves the others' dependencies in place.
 Replacing receiving storage updates those holders after atomic installation,

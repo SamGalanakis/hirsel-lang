@@ -2,7 +2,7 @@
 // expect: reject OWN-3 at line 12
 // spec: #89
 // Lending the source of a borrowed loop `mut` conflicts with the loop's next
-// read of it (SEM-4), though the body never uses `x` (§04).
+// read of it (SEM-4), though the body never uses `x`.
 fn bump(mut xs: List[u64]) {
   xs[0] = 3
 }

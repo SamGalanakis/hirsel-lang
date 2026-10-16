@@ -829,7 +829,7 @@ fn heap_lines(program: &Program, case: &Case, unit: &ValidatedUnit<Ready>) -> St
 
 /// The heap checker executes every case at every operand tuple and returns, or fails with
 /// SEM-1 at the instruction's site, exactly as the interpreter's kernels do (SEM-1, SEM-2,
-/// §22).
+/// docs/spec/core-library.md).
 #[test]
 fn the_heap_checker_agrees_with_the_interpreter_on_every_scalar_library_operation() {
     let target = TargetSpec::x86_64_unknown_linux_gnu();

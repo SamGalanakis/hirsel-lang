@@ -278,7 +278,7 @@ pub(crate) fn unary<'m>(
     }
 }
 
-/// `div_floor`, `mod` and `div_exact` (§22). A zero divisor and signed `MIN / -1` fail SEM-1
+/// `div_floor`, `mod` and `div_exact` (docs/spec/core-library.md). A zero divisor and signed `MIN / -1` fail SEM-1
 /// for all three, and a nonzero remainder for `div_exact`. The divisor is replaced by 1 on a
 /// failing path before dividing, so no `sdiv`/`srem` reaches undefined behaviour, and the one
 /// guard covers every failure.

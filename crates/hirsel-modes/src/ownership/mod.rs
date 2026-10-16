@@ -47,7 +47,7 @@ impl Place {
 }
 /// Refine shared tables in place. Reads, including failed reads, remain in
 /// `body.resolution.reads` even when an operational provider error is returned.
-/// Recovery/error types suppress dependent ownership judgments (§23).
+/// Recovery/error types suppress dependent ownership judgments (docs/spec/diagnostics.md).
 /// Clause roots already have H's distinct borrowed parameter rows.
 /// `results` are the authority pass's formal frame results: they are derived
 /// summaries of the same rows as the callable types, and are normalised with them.

@@ -895,7 +895,7 @@ fn a_binding_introduced_before_a_loop_continues_across_its_backedge() {
 
 #[test]
 fn a_closure_call_over_arena_only_captures_bounds_a_result_by_its_arena() {
-    // #80 with §04/P2: a closure call's result may share what its
+    // #80 with MODE-1: a closure call's result may share what its
     // environment captures. When each capture is arena-only storage of this
     // body, the result holds only its arena bound and read loans on the
     // captures, as the direct argument does, and both checkers accept it.
@@ -918,7 +918,7 @@ fn a_closure_call_over_arena_only_captures_bounds_a_result_by_its_arena() {
 
 #[test]
 fn an_arena_only_argument_bounds_a_result_by_its_arena_unless_it_is_taken_storage() {
-    // §04/P2: an arena-only argument, computed, named or copied, contributes
+    // MODE-1: an arena-only argument, computed, named or copied, contributes
     // its arena bound and a read loan on its place, which ends at return.
     // Hand-built control: a taken parameter's storage is not one, so the same
     // body with the parameter dropped from its result relation is invalid.

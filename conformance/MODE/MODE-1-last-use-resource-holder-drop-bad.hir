@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: reject MODE-1 at line 19
-// Dropping a resource at scope exit is a use of its loans (§04, DROP-2).
+// Dropping a resource at scope exit is a use of its loans (DROP-2).
 resource type Guard {
   data: Bytes,
 }

@@ -4,14 +4,14 @@ use hirsel_syntax::Visibility;
 
 pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     let mut out = BTreeMap::new();
-    // §14 DROP-4 declares this intrinsic outside the §22 library ledger.
+    // DROP-4 declares this intrinsic outside the core library ledger.
     let mut forget = Builder::new("T");
     let signature = forget.function("take x: T", "()", true);
     publish(
         forget.signature("forget", SignatureKind::Function(signature), false),
         &mut out,
     );
-    // §22 overview fixtures are declarations too, never ambient authority.
+    // Core library overview fixtures are declarations too, never ambient authority.
     for (name, generic, parameters, result) in [
         (
             "store.transact",
@@ -82,7 +82,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             AuthoritySummary::Known(vec![AuthorityTerm::Capability(core_path(name))].into());
         publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
     }
-    // These inert, plain views/positions have intrinsic loop/brand rules (§22).
+    // These inert, plain views/positions have intrinsic loop/brand rules (docs/spec/core-library.md).
     for name in [
         "Instant",
         "Path",
@@ -270,7 +270,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             &mut out,
         );
     }
-    // §22 network resources have Net authority and a noalloc close finalizer.
+    // Core library network resources have Net authority and a noalloc close finalizer.
     for name in ["Stream", "Listener"] {
         let b = Builder::new("").with_declarations(&out);
         let mut t = type_definition(vec![], None);

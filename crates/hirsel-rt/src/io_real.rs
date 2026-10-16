@@ -789,7 +789,7 @@ fn open_beneath(fd: RawFd, path: &str, flags: i32, mode: u64) -> Result<File, Io
     resolve_beneath(vec![Rc::new(root)], path, flags, mode).map(|(file, _)| file)
 }
 
-/// §22: "Directory paths are relative; absolute paths, traversal outside the
+/// docs/spec/core-library.md: "Directory paths are relative; absolute paths, traversal outside the
 /// root (including resolved links) and inaccessible paths return FileFault
 /// without granting authority." Parent steps pop only already pinned in-root
 /// descriptors. An O_PATH descriptor pins each classified inode before use.

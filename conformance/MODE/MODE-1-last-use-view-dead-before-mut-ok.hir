@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: accept
-// A view's loan ends at its holder's last use, so a later `mut` checks (§04).
+// A view's loan ends at its holder's last use, so a later `mut` checks (LANG-3).
 fn look(x: Bytes) -> u64 {
   0
 }

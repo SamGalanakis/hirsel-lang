@@ -192,7 +192,7 @@ fn replacing_an_indexed_callee_invokes_the_previously_selected_environment() {
 
 #[test]
 fn an_owned_related_yield_can_return_without_copying_it() {
-    // MODE-1 (§04), OWN-1 (§05), SEM-4 (§15), and §22 ordinary
+    // MODE-1, OWN-1, SEM-4, and core library ordinary
     // borrowed loop sources: the owned yield retains s, not cursor access.
     for source in [
         include_str!("../../../../conformance/SEM/SEM-4-view-return-source-run.hir"),

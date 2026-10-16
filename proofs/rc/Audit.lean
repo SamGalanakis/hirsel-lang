@@ -40,6 +40,6 @@ axioms (`propext`, `Classical.choice`, `Quot.sound`). -/
 #print axioms Rc.drain_terminates
 #print axioms Rc.no_garbage
 #print axioms Rc.drains_to_dead
--- last-use release (v22 §21)
+-- last-use release (MODE-2)
 #print axioms Rc.last_use_release
 #print axioms Rc.last_use_enables_unique

@@ -1,5 +1,5 @@
 //! A loan lasts until the last use of every value holding it, on every path
-//! (§04, LANG-3), not to the end of its holder's scope. Construction ends loans
+//! (LANG-3), not to the end of its holder's scope. Construction ends loans
 //! lexically; this pass ends each one where it stops being needed, and the
 //! presence pass (`loans.rs`) then retires the lexical ends that no longer
 //! apply. A loan is needed while some path reaches an access through it, a
@@ -11,7 +11,7 @@ use hirsel_types::{TypeId, UseKind};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// One step of a content path. All elements of a sequence, map or set are one
-/// place (§04), so an element step names no index, as the IR checker's does.
+/// place (OWN-3), so an element step names no index, as the IR checker's does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Part {
     Field(u32),

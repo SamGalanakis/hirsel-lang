@@ -439,7 +439,7 @@ independent Python reader/writer; `tests/wire.rs` runs it in the crate tests.
 The codec is a shared data API; source-language generic encode/decode bindings
 are a separate library integration, not privileged constructor hooks.
 
-`core_roles` holds the two role tables the driver's §22 registry and the checkers
+`core_roles` holds the two role tables the driver's core library registry and the checkers
 share: `LOOP_PROTOCOLS`/`loop_protocols()` (the borrowed-loop protocols and their
 `$intrinsic` open/next paths) and `Intrinsic`/`intrinsic_roles()` (the authority
 role of each core operation). The registry declares the operations; these tables

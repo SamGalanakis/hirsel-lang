@@ -78,7 +78,7 @@ bits and the selected trace. Semantic observations are identical across trace mo
 The core dispatches no named numeric/string operations. In particular integer
 conversion signatures, float-to-integer behavior, explicit fused math, IEEE bits,
 float min/max/total order, scalar views are dependency
-owned by M against v20 §22 (which settles #18). There is no conversion opcode in frozen `Rvalue`.
+owned by M against docs/spec/core-library.md (which settles #18). There is no conversion opcode in frozen `Rvalue`.
 Region/task cleanup is unavailable until its owning runtime task. Unavailable features are
 reported explicitly, never silently approximated.
 

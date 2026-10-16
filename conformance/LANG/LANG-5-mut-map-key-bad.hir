@@ -1,6 +1,6 @@
 // rule: LANG-5
 // expect: reject LANG-5 at line 6
-// The first access obligation cites the complete operation (§23).
+// The first access obligation cites the complete operation (docs/spec/diagnostics.md).
 fn probe(mut m: Map[u8, u8]) {
   for (k, v) in mut m {
     k = 3

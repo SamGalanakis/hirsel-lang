@@ -301,7 +301,7 @@ pub enum UnaryOp {
 /// The named library operations (LIR schema revision 6) follow the operators
 /// on the same instruction: `DivFloor`, `Mod` and `DivExact` are integer
 /// operations failing SEM-1 on a zero divisor and on signed `MIN / -1`, and
-/// `DivExact` also on a nonzero remainder (§22 "Numeric and string
+/// `DivExact` also on a nonzero remainder (docs/spec/core-library.md "Numeric and string
 /// details"). `Min`, `Max`, `MinNumber` and `MaxNumber` are IEEE 754-2019
 /// `minimum`, `maximum`, `minimumNumber` and `maximumNumber` on floats
 /// (SEM-2: NaN propagates or is ignored, -0 < +0), and `TotalOrder` is IEEE
@@ -336,7 +336,7 @@ pub enum BinaryOp {
 }
 
 /// What `Inst::Convert` computes (LIR schema revision 6; SEM-1 conversions,
-/// §22 "Numeric and string details", and `float.to_i32`). An integer mode's
+/// docs/spec/core-library.md "Numeric and string details", and `float.to_i32`). An integer mode's
 /// result is the operand modulo 2^width of the result kind, read with the
 /// result's signedness (truncation, or extension by the operand's
 /// signedness), so it is the operand itself whenever it is representable.
@@ -360,7 +360,7 @@ pub enum ConvertMode {
     IntToFloat,
     /// `f32.bits`/`f64.bits` and `f32.from_bits`/`f64.from_bits`: the same
     /// bits read as the other kind of one pair, f32 with u32 or f64 with u64,
-    /// in either direction (§22 "IEEE bit primitives"). A NaN, as operand or
+    /// in either direction (docs/spec/core-library.md "IEEE bit primitives"). A NaN, as operand or
     /// as result, reads as its float kind's one observable NaN, the quiet NaN
     /// with a zero sign and payload (SEM-2). No flag and no error case.
     Reinterpret,

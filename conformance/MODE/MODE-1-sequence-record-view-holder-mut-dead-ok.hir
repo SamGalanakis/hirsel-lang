@@ -1,7 +1,7 @@
 // rule: MODE-1
 // expect: accept
 // The twin of MODE-1-sequence-record-view-holder-mut-used-bad.hir reads
-// `xs[0].name` before the `mut`, so the loan on `s` has ended (§04).
+// `xs[0].name` before the `mut`, so the loan on `s` has ended (LANG-3).
 type R {
   name: String,
 }

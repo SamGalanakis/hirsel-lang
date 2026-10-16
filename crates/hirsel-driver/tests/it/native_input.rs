@@ -237,7 +237,7 @@ fn native_snapshots_preserve_conditional_loop_loans() {
     let mut path = entry_path(&default_context());
     path.0.name = "probe".into();
     // The loop's read loan may still be active from the previous iteration, so
-    // it ends conditionally before it begins again (§04 last use).
+    // it ends conditionally before it begins again (LANG-3).
     for mutable in [false, true] {
         let mut forged = snapshot.clone();
         let definition = Arc::make_mut(forged.definitions.get_mut(&path).unwrap());

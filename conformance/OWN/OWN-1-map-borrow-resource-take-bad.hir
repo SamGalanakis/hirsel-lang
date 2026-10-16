@@ -1,6 +1,6 @@
 // rule: OWN-1
 // expect: reject OWN-1 at line 13
-// The first access obligation cites the complete operation (§23).
+// The first access obligation cites the complete operation (docs/spec/diagnostics.md).
 resource type Token {
   n: u8,
 }

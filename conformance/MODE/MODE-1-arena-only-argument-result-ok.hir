@@ -2,7 +2,7 @@
 // expect: accept
 // An arena-only argument, computed, named or copied from a named local,
 // contributes its arena bound and a read loan on its place, and the read loan
-// ends at return (v22 §04, P2). So each result is within `in a`.
+// ends at return (MODE-1). So each result is within `in a`.
 fn mk(a: Arena) -> Bytes in a {
   b"x"
 }

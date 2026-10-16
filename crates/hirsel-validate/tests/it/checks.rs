@@ -662,7 +662,7 @@ fn sequence_indices_alias_for_loans_and_moves() {
 }
 
 /// All elements of a sequence are one place, but distinct fields below it are
-/// not (§04 conflicts): a write loan on `xs[j].1` may begin while a read loan
+/// not (OWN-3): a write loan on `xs[j].1` may begin while a read loan
 /// on `xs[i].0` is live, and one on `xs[j].0` may not.
 #[test]
 fn distinct_fields_below_sequence_elements_do_not_overlap() {

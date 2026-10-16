@@ -12,7 +12,7 @@ use crate::net::{
 };
 use crate::{Header, RunCtx, STATUS_FAILURE, STATUS_OK};
 
-/// `NetError` (§22 variant order): tag, then the payload words of Canceled(CancelCause),
+/// `NetError` (docs/spec/core-library.md variant order): tag, then the payload words of Canceled(CancelCause),
 /// Tls(TlsFailure) (its tag, then the alert byte) or Fault(u32).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

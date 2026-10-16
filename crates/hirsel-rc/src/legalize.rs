@@ -17,7 +17,7 @@
 //!   contraction; nothing to rewrite.
 //! - **i128** values are scalar words of their own width in both emitters;
 //!   arithmetic and comparisons stay `Binary`.
-//! - **Scalar intrinsics** (LIR schema revision 6). A call of a §22 scalar
+//! - **Scalar intrinsics** (LIR schema revision 6). A call of a core library scalar
 //!   library operation becomes its instruction, chosen from the call's argument and result kinds:
 //!   `int.widen` and `int.truncate` a `Convert`; `int.narrow` a `TryNarrow`
 //!   `Convert` and a `Check` of its flag failing SEM-1 at the call's site;
@@ -66,7 +66,7 @@ enum SimdOp {
     Add,
 }
 
-/// The scalar library operations (§22) and the instruction each becomes.
+/// The scalar library operations (docs/spec/core-library.md) and the instruction each becomes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarOp {
     /// `widen`, `truncate`, `try_narrow` (into an `Option`) and `to_i32`

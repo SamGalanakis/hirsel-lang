@@ -1359,12 +1359,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                 let bits = |k: Option<ScalarKind>| k.and_then(integer_bits);
                 let flag_kind = flag.map(|f| self.scalar(f));
                 let ok = match mode {
-                    // SEM-1 / §22: widen requires the source's complete range to fit.
+                    // SEM-1: widen requires the source's complete range to fit.
                     ConvertMode::Widen => {
                         matches!((from, to), (Some(a), Some(b)) if widens(a, b))
                             && flag_kind.is_none()
                     }
-                    // §22: truncate requires a no-wider destination.
+                    // truncate requires a no-wider destination (docs/spec/core-library.md).
                     ConvertMode::Truncate => {
                         matches!((bits(from), bits(to)), (Some(a), Some(b)) if b <= a)
                             && flag_kind.is_none()
@@ -1410,7 +1410,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 left,
                 right,
             } => {
-                // `Add` is the only operation the library names (§22).
+                // `Add` is the only operation the library names (docs/spec/core-library.md).
                 let ok = op == crate::ir::BinaryOp::Add
                     && self.scalar(left).is_some_and(|k| integer_bits(k).is_some())
                     && self.same_type(left, right)

@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: accept
-// Under §04/P2 and #80, a closure call's result may share what its environment
+// Under MODE-1 and #80, a closure call's result may share what its environment
 // captures. Each capture here is arena-only storage of this body, so the result
 // holds only its arena bound and read loans that end at return, and it is
 // within `in a`, as `choose(a, t, y)` is.

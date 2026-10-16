@@ -1,7 +1,7 @@
 // rule: MODE-1
 // expect: reject MODE-1 at line 19
 // The record inside `xs` holds the view of `s` and is read after the `mut`,
-// so the loan on `s` is live there (§04).
+// so the loan on `s` is live there (LANG-3).
 type R {
   name: String,
 }

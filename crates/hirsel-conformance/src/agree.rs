@@ -569,7 +569,7 @@ impl Catalogue<'_> {
             .result
             .is_none_or(|t| self.type_text(t).trim() == "()")
     }
-    /// Last-use loan shapes (§04): a view of a mutable binding that is dead
+    /// Last-use loan shapes (LANG-3): a view of a mutable binding that is dead
     /// before the rest of the block or used after it, which for a binding that
     /// holds a view is a closure capturing that view; and an early return that
     /// drops every live holder on that path.
@@ -667,7 +667,7 @@ impl Catalogue<'_> {
             }
         }
     }
-    /// A binding's value held as part of a sequence element (§04): `let p: T =
+    /// A binding's value held as part of a sequence element (LANG-3): `let p: T =
     /// e` becomes `let agree_held_N: List[(T, u64)] = [(e, 0u64)]` and then
     /// `let (p, _) = agree_held_N[0]`, so `p` names a tuple part of a list
     /// element. What `e` holds (a view) is then held through the element
@@ -1270,7 +1270,7 @@ impl Catalogue<'_> {
     }
     /// A write moved into a later argument of a call in the neighbouring
     /// statement or tail (`f(a, { w; b })`), so it runs while the loans of
-    /// the earlier arguments are live (§04, LANG-3). A write through an index
+    /// the earlier arguments are live (LANG-3). A write through an index
     /// is also moved after a copy of the indexed list, so it detaches a shared
     /// list (OWN-4). `before` says the write precedes `target` in the source.
     fn into_argument(&mut self, moved: StmtId, target: Span, roots: &[ExprId], before: bool) {

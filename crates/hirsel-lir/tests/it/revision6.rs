@@ -78,7 +78,7 @@ fn a_conversion_holds_only_between_the_kinds_its_mode_names() {
         },
         bad,
     );
-    // §22 truncate: a no-wider destination.
+    // truncate takes a no-wider destination (docs/spec/core-library.md).
     pair(
         |m| {
             let (from, to) = if m {
@@ -187,7 +187,7 @@ fn int_arith(layout: LayoutId, op: BinaryOp, mode: ArithMode, with_flag: bool) -
 #[test]
 fn integer_arithmetic_adds_integers_and_flags_exactly_a_checked_overflow() {
     let bad = |k: &K| *k == K::Type("integer arithmetic");
-    // `Add` is the only operation the library names (§22).
+    // `Add` is the only operation the library names (docs/spec/core-library.md).
     pair(
         |m| {
             int_arith(

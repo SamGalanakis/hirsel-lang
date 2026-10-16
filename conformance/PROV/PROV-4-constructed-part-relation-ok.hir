@@ -1,6 +1,6 @@
 // rule: PROV-4
 // expect: accept
-// A constructed record holds its parts' loans (§04), so it lives in `a` and may
+// A constructed record holds its parts' loans (docs/spec/ownership.md), so it lives in `a` and may
 // be kept where `a` is named, held by an inferred binding, or lent (#79).
 type Ast {
   s: String,

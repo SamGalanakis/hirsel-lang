@@ -1,4 +1,4 @@
-//! Boundary oracles for every implemented §22 operation, using shared data only.
+//! Boundary oracles for every implemented core library operation, using shared data only.
 use crate::support;
 use hirsel_interp::{
     library::{

@@ -890,7 +890,7 @@ macro_rules! conversions {
 }
 
 /// `try_narrow`, `narrow`, `widen` and `truncate` from one integer kind into
-/// every integer kind (SEM-1, §22): `Some`/`None` built by the lowering's
+/// every integer kind (SEM-1, docs/spec/core-library.md): `Some`/`None` built by the lowering's
 /// branch, and `narrow` failing SEM-1 at its call when the value is not
 /// representable.
 fn conversions_lower(conversions: Vec<Conversion>) {
@@ -1023,7 +1023,7 @@ fn de(a: T, b: T) -> T {
 const DIVISION_LINES: [(&str, u32); 3] = [("df", 11), ("md", 14), ("de", 17)];
 
 /// Wrapping, saturating and checked addition and the three named divisions
-/// of one kind over every pair of edges (SEM-1, §22), and each division's
+/// of one kind over every pair of edges (SEM-1, docs/spec/core-library.md), and each division's
 /// failures: a zero divisor, signed `MIN / -1` and an inexact `div_exact`.
 fn arithmetic_lowers(a: Arithmetic) {
     let t = a.kind;
@@ -1279,7 +1279,7 @@ fn f64_operations_lower() {
 
 /// `float.to_i32` truncates toward zero into `Ok`, and returns
 /// `Error(NotFinite)` for NaN and infinities and `Error(OutOfRange)` outside
-/// i32 (§22): the lowering's three-way switch at both widths.
+/// i32 (docs/spec/core-library.md): the lowering's three-way switch at both widths.
 #[test]
 fn float_to_i32_lowers_into_its_result() {
     for t in ["f32", "f64"] {

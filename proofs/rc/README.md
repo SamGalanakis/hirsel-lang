@@ -107,7 +107,7 @@ Each theorem below is in the published set (`Audit.lean`) that `audit.sh` checks
 | region-exit credit conservation | `region_close_conserves` |
 | each finalizer obligation is consumed once, before the fields are released | `finalizer_at_most_once`, `drain_after_finalizer` |
 | a finite zero-holder DAG drains to dead storage, except the explicit exemptions | `drain_terminates`, `no_garbage`, `drains_to_dead` |
-| last-use release is safe (v22 §21), and is what lets MODE-2 end uniqueness | `last_use_release`, `last_use_enables_unique` |
+| last-use release is safe, and is what lets MODE-2 end uniqueness | `last_use_release`, `last_use_enables_unique` |
 
 The **ideal machine** (`Rc/Ideal.lean`) has no headers and no tokens. A value dies when no
 credit remains on it, unless it is *pinned*: conservatively retained, which is how the ideal

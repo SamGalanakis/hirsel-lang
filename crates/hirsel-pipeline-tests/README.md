@@ -12,7 +12,7 @@ crate. The TLS native export test also uses rustls as its independent local serv
 `tools/gate` (`tools/buck2/gating.py`) refuses a dependency on `hirsel-driver` from any
 crate outside its `DRIVER_DEPENDENTS` list: this crate, `hirsel-cli`,
 `hirsel-conformance`, and check and modes, whose internal unit-test harnesses read
-the §22 signatures from the driver's `BuiltinRegistry`.
+the core library signatures from the driver's `BuiltinRegistry`.
 
 Layout:
 

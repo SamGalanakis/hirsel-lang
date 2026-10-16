@@ -60,7 +60,7 @@ pub(crate) struct Frame {
     pub depth_failure: bool,
     /// The site of an origin binding whose place is out of bounds or names an
     /// inactive variant. The access that then fails reports this site: the
-    /// expression naming the place, not the statement reading it (§23).
+    /// expression naming the place, not the statement reading it (docs/spec/diagnostics.md).
     pub place_failure_site: Option<hirsel_span::Span>,
     /// Lifetimes of this frame's values under checked execution.
     pub check: Option<crate::checked::FrameCheck>,

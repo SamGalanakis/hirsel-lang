@@ -3,7 +3,7 @@ import Rc.Drain
 /-!
 # Last-use release
 
-v22 §21 lists last-use count release (Perceus) as a proof obligation, and MODE-2 waits on it
+Last-use count release (Perceus) is a proof obligation, and MODE-2 waits on it
 before uniqueness may end at a counted share's last use. In the model a holder's credit may
 be released as soon as its last loan has ended (no live borrow is guarded by it): the release
 step has no scope-end precondition at all. These theorems state that such a release is legal,

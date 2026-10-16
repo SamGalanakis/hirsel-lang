@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: accept
-// The early return drops the holder before any `mut`; the other path closes it first (§04).
+// The early return drops the holder before any `mut`; the other path closes it first (LANG-3).
 resource type Guard {
   data: Bytes,
 }

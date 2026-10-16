@@ -85,7 +85,7 @@ pub fn to_i32(value: &Value) -> Option<Result<i32, u32>> {
     })
 }
 
-/// §22 `f32.bits`/`f64.bits`: the IEEE bits as the same-width unsigned integer, every NaN
+/// `f32.bits`/`f64.bits` (docs/spec/core-library.md): the IEEE bits as the same-width unsigned integer, every NaN
 /// read as the one observable NaN (SEM-2).
 pub fn bits(value: &Value) -> Option<Value> {
     let mut value = value.clone();
@@ -96,7 +96,7 @@ pub fn bits(value: &Value) -> Option<Value> {
         _ => None,
     }
 }
-/// §22 `f32.from_bits`/`f64.from_bits`: the float with the bits of a u32 or u64, a NaN
+/// `f32.from_bits`/`f64.from_bits` (docs/spec/core-library.md): the float with the bits of a u32 or u64, a NaN
 /// pattern giving the one observable NaN (SEM-2).
 pub fn from_bits(value: crate::Integer) -> Option<Value> {
     use hirsel_types::Primitive;
@@ -106,7 +106,7 @@ pub fn from_bits(value: crate::Integer) -> Option<Value> {
         _ => return None,
     })
 }
-/// §22 integer-to-float conversion. Rust's integer `as` casts supply IEEE
+/// Integer-to-float conversion (docs/spec/core-library.md). Rust's integer `as` casts supply IEEE
 /// round-to-nearest, ties-to-even, directly at the destination width.
 pub fn from_int(value: crate::Integer, target: hirsel_types::Primitive) -> Option<Value> {
     use hirsel_types::Primitive;

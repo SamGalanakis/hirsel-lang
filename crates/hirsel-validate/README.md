@@ -679,7 +679,7 @@ representations retain conservative summaries; recursive path closure is absent.
 
 Borrowed `for` protocol returns independently compose owned Data yields through
 unnamed owned preparation and cursor holders back to their selected sources
-(§22). The exact validated association receipt supplies the holder roles; source
+(docs/spec/core-library.md). The exact validated association receipt supplies the holder roles; source
 bounds, ownership, expiry and result-relation inclusion remain checked. Named
 binding homes and ordinary direct calls keep their bounds under MODE-1; spec
 [issue #100](https://github.com/SamGalanakis/hirsel-lang/issues/100) records the
