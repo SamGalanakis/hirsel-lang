@@ -119,7 +119,7 @@ Invariants:
   zero-extended by emitted code and never assumed; on failure it is zero. x86-64 returns
   the pair in AL and RDX, AArch64 in W0 and X1: the C struct `{ uint8_t status;
   uint64_t value; }` (or `void *value`). Definitions, function-reference thunks, closure
-  and iterator bodies all follow it, so direct, private (`.roots6`, as one more word after
+  and iterator bodies all follow it, so direct, private (`.roots7`, as one more word after
   the roots) and indirect calls agree and an erased call keeps no result cell. 128-bit and
   aggregate results, and runtime primitives, keep their result pointer. Every return of
   such an entry branches to one return block where status and word meet in scalar phis
@@ -397,8 +397,20 @@ The emitted count edges retain their existing measurement hooks.
 small and large classes.
 Other single Block/Box roots use an intact pointer word and a status word,
 so headerless regional payloads need no extra alignment for return transport.
-Private entries use `.roots6`: sequence roots also receive their current full
-length and must-unique bit by value. Nothing caches a capacity: it is one load of
+Private entries use `.roots7`: sequence roots also receive their current full
+length and must-unique bit by value, and hand the length back without storing it.
+A slot with a sequence state defers its count store (`SequenceState::dirty`): a
+`SeqSetLen`, a private root call's return or the entry (a caller's length) only
+marks it dirty, and a flush stores the length, where it differs from the block's
+count (never into a static block), before anything may read that count from
+memory: the block moving, copied or exchanged out of its slot, a view of unknown
+origin with a borrowed slot's payload layout, a call that reaches blocks, a
+runtime or structural operation, or leaving the entry (a root parameter's length
+goes back to its caller instead). A callee without a state for a root parameter,
+a caller without one for a root argument, and the public adapter store the
+length they receive where it differs. A push loop thus stores no count per
+element: float SAXPY's two-list loop, whose blocks LLVM cannot tell apart, stores
+both once after the loop (`growth_ir.rs`, with a per-iteration copy as control). Nothing caches a capacity: it is one load of
 the block's own header word (`Access::Capacity` in TBAA, disjoint from lengths and
 elements), so LLVM hoists it out of a push loop between growths. No fact cell's
 address reaches a call, so the caller's must-unique fact is an SSA value across

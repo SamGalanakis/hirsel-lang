@@ -77,10 +77,11 @@ impl Block {
     fn calls(&self) -> usize {
         self.count(|l| l.contains("call ") && !l.contains("@llvm."))
     }
+    /// An element store of any width: a scalar store tagged as a value.
     fn stores_element(&self) -> bool {
         self.lines
             .iter()
-            .any(|l| l.starts_with("store i64 ") && l.contains("!tbaa"))
+            .any(|l| l.starts_with("store ") && l.ends_with("!tbaa !\"scalar value\""))
     }
     fn cost(&self) -> usize {
         self.conditional() + self.loads() + self.calls()
@@ -248,6 +249,49 @@ fn a_push_loop_after_a_growing_push_carries_uniqueness_as_a_value() {
 }
 ",
     );
+}
+
+/// Whether any loop of `ir` stores a sequence's count word.
+fn stores_a_count_in_a_loop(ir: &str) -> bool {
+    let blocks = blocks(ir);
+    blocks.iter().any(|(name, block)| {
+        block.count(|l| l.starts_with("store ") && l.ends_with("!tbaa !\"sequence length\"")) > 0
+            && cycle(&blocks, name).is_some()
+    })
+}
+
+const TWO_LISTS: &str = "pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut xs: List[u64] = []
+  let mut ys: List[u64] = []
+  list.reserve(mut xs, 100000u64)
+  list.reserve(mut ys, 100000u64)
+  for i in 0u64..100000u64 {
+    list.push(mut xs, i % 127u64)
+    list.push(mut ys, i % 31u64)
+  }
+  failure.check(xs[99999u64] + ys[99999u64] == 99999u64 % 127u64 + 99999u64 % 31u64, TextInvariant())
+  Ok(())
+}
+";
+
+/// Two lists pushed in one loop (float SAXPY's shape): LLVM cannot tell their
+/// blocks apart, so it could not sink either count store; the emitter defers
+/// both (`SequenceState::dirty`) and stores them once, after the loop. Causal
+/// control: a copy of one list taken every iteration needs its count current,
+/// so that iteration stores it.
+#[test]
+fn two_lists_pushed_in_one_loop_store_their_counts_after_it() {
+    let copied = TWO_LISTS.replace(
+        "    list.push(mut ys, i % 31u64)\n",
+        "    list.push(mut ys, i % 31u64)\n    let saved = copy xs\n    failure.check(list.len(saved) == i + 1u64, TextInvariant())\n",
+    );
+    for target in targets() {
+        let ir = main_ir(TWO_LISTS, target.clone());
+        assert!(ir.contains("!tbaa !\"sequence length\""), "{ir}");
+        assert!(!stores_a_count_in_a_loop(&ir), "{ir}");
+        let ir = main_ir(&copied, target);
+        assert!(stores_a_count_in_a_loop(&ir), "{ir}");
+    }
 }
 
 /// A push per index below a fresh list's reservation has spare capacity by
