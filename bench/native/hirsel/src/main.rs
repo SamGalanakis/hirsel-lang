@@ -155,7 +155,7 @@ fn compile() -> Result<(), Box<dyn std::error::Error>> {
                 "compile_kind": "source check/snapshot shared across configurations; native passes, LLVM O3 and link; runtime separate; caches retained",
                 "llvm_version": hirsel_driver::native::llvm_version(),
                 "hirsel_opt_level": "O3", "hirsel_lto": false,
-                "runtime_archive": toolchain.runtime.get(&target.triple),
+                "runtime_archive": toolchain.runtime.get(&(target.triple.clone(), runtime_build)),
                 "runtime_build": { "diagnostic": false, "system_allocator": runtime_build.system_allocator, "measurement": measurement },
                 "matrix_version": hirsel_driver::native::MATRIX_VERSION,
                 "configuration": config, "partition": partition.name(),
