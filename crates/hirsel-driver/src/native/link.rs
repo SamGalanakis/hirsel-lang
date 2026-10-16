@@ -29,6 +29,9 @@ pub struct Toolchain {
     /// The pinned memcheck executable and its relocated support directory.
     pub valgrind: PathBuf,
     pub valgrind_lib: PathBuf,
+    /// Matching libc/loader and debug symbols for memcheck's mandatory redirects.
+    pub valgrind_runtime: PathBuf,
+    pub valgrind_debug: PathBuf,
     /// `libhirsel_rt.a` per target triple and archive variant.
     pub runtime: BTreeMap<(String, RuntimeBuild), PathBuf>,
     /// A checking tool an x86-64 executable is launched under (Valgrind
@@ -278,6 +281,8 @@ impl Toolchain {
             aarch64_sysroot: environment_path("HIRSEL_AARCH64_SYSROOT")?,
             valgrind: environment_path("HIRSEL_VALGRIND")?,
             valgrind_lib: environment_path("VALGRIND_LIB")?,
+            valgrind_runtime: environment_path("HIRSEL_VALGRIND_RUNTIME")?,
+            valgrind_debug: environment_path("HIRSEL_VALGRIND_DEBUG")?,
             runtime,
             wrapper: Vec::new(),
             launch_timeout: LAUNCH_TIMEOUT,
@@ -848,6 +853,13 @@ pub fn link_objects(
     } else {
         &toolchain.clang
     });
+    if !aarch64(target) && !toolchain.wrapper.is_empty() {
+        command
+            .args(["-Xlinker", "--dynamic-linker", "-Xlinker"])
+            .arg(toolchain.valgrind_runtime.join("ld-linux-x86-64.so.2"))
+            .args(["-Xlinker", "-rpath", "-Xlinker"])
+            .arg(&toolchain.valgrind_runtime);
+    }
     command.arg(write("main.o", &main.bytes)?);
     for (index, object) in objects.iter().enumerate() {
         command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
@@ -937,7 +949,9 @@ pub fn launch_with(
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record);
     if !toolchain.wrapper.is_empty() {
-        command.env("VALGRIND_LIB", &toolchain.valgrind_lib);
+        command
+            .env("VALGRIND_LIB", &toolchain.valgrind_lib)
+            .env("LD_LIBRARY_PATH", &toolchain.valgrind_runtime);
     }
     if toolchain.runtime_build.measurement {
         command.env("HIRSEL_RT_MEASUREMENT", dir.join("measurement"));
@@ -1060,6 +1074,10 @@ impl Toolchain {
         ]
         .map(String::from)
         .to_vec();
+        self.wrapper.push(format!(
+            "--extra-debuginfo-path={}",
+            self.valgrind_debug.display()
+        ));
         self
     }
 }
@@ -1107,6 +1125,8 @@ mod tests {
             aarch64_sysroot: "/unused/sysroot".into(),
             valgrind: "/bin/sh".into(),
             valgrind_lib: "/inputs/valgrind-support".into(),
+            valgrind_runtime: "/unused/libc".into(),
+            valgrind_debug: "/unused/debug".into(),
             runtime: BTreeMap::new(),
             wrapper: vec![
                 "/bin/sh".into(),

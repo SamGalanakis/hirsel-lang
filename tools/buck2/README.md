@@ -89,7 +89,7 @@ static AArch64 qemu and Valgrind as SHA-pinned Buck2 downloads. No worker
 image changes, PATH lookup or binfmt registration are needed. The launcher
 resolves `LLVM_SYS_211_PREFIX`, `HIRSEL_AARCH64_CC`,
 `HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND` and
-`VALGRIND_LIB` to absolute input paths before changing directory. The driver's
+`VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME` and `HIRSEL_VALGRIND_DEBUG` to absolute input paths before changing directory. The driver's
 clang launcher selects the input lld. Native launches preserve the selected
 Valgrind support directory when clearing the child's environment.
 
