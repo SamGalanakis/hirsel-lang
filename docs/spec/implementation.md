@@ -145,6 +145,29 @@ fresh displaced slot with no user callback or failing operation between the two 
 then finalize the displaced value. If that finalizer fails, the destination still holds the
 new value; a `mut` argument has no rollback ([OWN-3](ownership.md#own-3-exclusive-access)).
 
+### Flat fields written in place
+
+A byte list that is only created empty, reserved, pushed and frozen whole into the Bytes
+field of an element that a flat list builder appends is written where that element will
+lie (LIR schema revision 24). The list's creation opens the element at that field
+(`FlatField Open`), its reservations and pushes write the field's bytes in place
+(`FlatField Reserve`, `FlatField Push`), its freeze is a jump, and the element's
+construction becomes `FlatClose`, which completes the element around the bytes already
+there and counts it. The list has no block, its freeze copies nothing, and nothing
+releases it. The field must follow only fixed fields, so its bytes lie at a fixed offset
+while they are written. A builder holds at most one open element, beyond its used bytes,
+and every path from the opening reaches the close with no other write of the builder.
+
+The LIR validator does not trust the importer's proof of that region. It replays open
+elements over slot versions: a reservation, a push and a close need the version reaching
+them to be open at their field, and an opening needs one open at no field. Every other
+write of the builder defines a version with no open element, so a write between the
+opening and the close leaves the close without its element. The checked heap executor
+tracks each builder's open element and refuses any other write of the builder while one
+is open. A unit with no open element checks as it did before revision 24, and the runtime
+ABI is unchanged. The rewrite is an optimization: without it, such byte lists are ordinary
+lists, and no program's meaning changes.
+
 **Runtime.** One runtime library provides counted allocation and release, region and
 arena storage, hashing (SipHash-1-3 keyed from the run's hash seed), `Io` providers,
 recording and replay, and the network and TLS providers. Compiled code reaches it only
