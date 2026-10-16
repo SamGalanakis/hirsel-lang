@@ -40,7 +40,9 @@ action inputs inside the pool's networkless sandbox, with its private `/tmp`.
 The proof runs clang's version command, links and runs C with the pinned lld,
 builds a static AArch64 executable and runs it directly with the input qemu
 (no binfmt), then checks the C executable with the input Valgrind and
-`VALGRIND_LIB`. It fails on any missing tool, link, launch or memcheck error.
+`VALGRIND_LIB`. It checks the pinned clang/lld versions, requires output markers from both
+executables and an explicit zero-error Valgrind summary, then requires
+Valgrind to refuse a planted 32-byte leak with exit 97. A skipped step fails.
 The per-push native smoke stage includes this proof, so a pin or unpacking
 change cannot land without exercising the tools on a worker.
 
