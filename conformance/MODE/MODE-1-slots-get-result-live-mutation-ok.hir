@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: accept
+fn inspect(found: Option[Bytes]) -> () {}
+
+fn probe(mut s: Slots[Bytes], id: SlotId[Bytes] of s, take value: Bytes) {
+  let found = slots.get(s, id)
+  inspect(found)
+  let other = slots.insert(mut s, take value)
+}

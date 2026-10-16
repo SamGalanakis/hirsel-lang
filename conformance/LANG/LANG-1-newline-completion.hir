@@ -1,0 +1,18 @@
+// rule: LANG-1
+// expect: accept
+// Shows "No methods, no use, no conditional operator, no test sublanguage."
+@noalloc
+fn calculate() -> (u32, ()) {
+  let mut x: u32 = 1 + 2
+  x += 3
+  while x < 8 {
+    x += 1
+    if x == 7 {
+      continue
+    }
+    if x == 8 {
+      break
+    }
+  }
+  (x, ())
+}

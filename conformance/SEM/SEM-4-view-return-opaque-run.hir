@@ -1,0 +1,15 @@
+// rule: SEM-4
+// expect: run
+// stdout: a
+fn first(s: String) -> String in s {
+  for piece in view_return@1/view(s) {
+    return piece
+  }
+  copy s
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, first("a"))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

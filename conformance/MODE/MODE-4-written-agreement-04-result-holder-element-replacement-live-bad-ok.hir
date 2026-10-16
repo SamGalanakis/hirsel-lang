@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: accept
+// Regression from store/element; TIR/LoanConflict.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes, mut y: Bytes, c: bool) {
+  let mut slot: List[Bytes] = [view(x), view(y)]
+  bump(mut x)
+  slot[0u64] = copy y
+  ()
+}

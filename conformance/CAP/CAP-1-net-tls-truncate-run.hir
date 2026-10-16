@@ -1,0 +1,38 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 443u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Certificate(["example.com"]),
+        connections: [Open([Send(b"hi"), Truncate(), Send(b"unreached")])]
+      ),
+      NetPeer(
+        address: "plain.example",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 2u8])],
+        tls: Plain(),
+        connections: [Open([Send(b"hi"), Truncate()])]
+      )
+    ]
+  )
+  let s = net.connect(n, "example.com", 443u16, Unbounded())?
+  let mut secure = tls.connect(n, take s, "example.com", WebPki())?
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
+  // The peer closed without close_notify: every later secured read is truncated.
+  test.check(t, net.read(n, mut secure, mut buf, 8u64) == Error(Tls(Truncated())))
+  test.check(t, net.read(n, mut secure, mut buf, 8u64) == Error(Tls(Truncated())))
+  test.check(t, net.write(n, mut secure, b"after")? == 5u64)
+  // A plaintext stream has no close_notify to miss: the same step ends it.
+  let mut plain = net.connect(n, "plain.example", 80u16, Unbounded())?
+  test.check(t, net.read(n, mut plain, mut buf, 8u64)? == 2u64)
+  test.check(t, net.read(n, mut plain, mut buf, 8u64)? == 0u64)
+  test.check(t, bytes.from_list(take buf) == b"hihi")
+  Ok(())
+}

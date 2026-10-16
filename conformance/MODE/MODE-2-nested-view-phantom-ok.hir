@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: accept
+fn inspect(x: Ptr[unique List[Bytes]]) {}
+
+fn probe(x: Ptr[unique List[Bytes]]) {
+  inspect(x)
+}

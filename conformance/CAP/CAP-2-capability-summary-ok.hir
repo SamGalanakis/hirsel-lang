@@ -1,0 +1,11 @@
+// rule: CAP-2
+// expect: accept
+// "inert means the summary is empty"; summaries join held authority.
+@noalloc
+fn inert_only[T: inert](x: T) -> () {
+  ()
+}
+
+fn check(value: u32) -> () {
+  inert_only(value)
+}

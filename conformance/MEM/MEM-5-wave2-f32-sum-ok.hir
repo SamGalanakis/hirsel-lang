@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn main(xs: Array[f32]) -> f32 {
+  std@1/f32.sum(xs)
+}

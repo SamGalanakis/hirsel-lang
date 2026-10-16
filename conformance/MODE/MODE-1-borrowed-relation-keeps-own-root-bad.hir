@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// Under v22 S2, a written relation on a borrowed parameter adds to its own root,
+// so x still depends on the caller's binding and cannot be returned in a alone.
+fn f(a: Arena, x: Bytes in a) -> Bytes in a {
+  x
+}

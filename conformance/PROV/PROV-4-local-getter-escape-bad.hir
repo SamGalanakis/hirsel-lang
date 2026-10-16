@@ -1,0 +1,9 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 8
+fn read(a: Arena, x: Bytes in a) -> Bytes in x {
+  x
+}
+
+fn escape(a: Arena, x: Bytes in a) -> Bytes {
+  read(a, x)
+}

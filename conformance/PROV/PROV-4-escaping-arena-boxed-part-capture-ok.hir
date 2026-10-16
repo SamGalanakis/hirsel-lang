@@ -1,0 +1,12 @@
+// rule: PROV-4
+// expect: accept
+// The scoped twin borrows the boxed arena part within the frame.
+fn probe(a: Arena) -> u64 {
+  let x: String in a = "x"
+  let held = (box x, 2u8)
+  let f = fn() {
+    let (b, n) = held
+    1u64
+  }
+  f()
+}

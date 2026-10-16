@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+type R {
+  part: u8,
+}
+
+fn probe(take r: R) {
+  let built = box {
+    r
+  }.part
+  let frozen = shared.freeze(take built)
+}

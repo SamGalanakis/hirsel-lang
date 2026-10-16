@@ -1,0 +1,24 @@
+// rule: SEM-1
+// expect: run
+// stdout: ok
+// "narrow (fails)" only when out of range.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let x: i16 = -127 - 1
+  let value: i8 = int.narrow(x)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if value == -127 - 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

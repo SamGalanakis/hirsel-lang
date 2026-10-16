@@ -1,0 +1,13 @@
+rc-trace v1 max 16
+error at step 3 (line 6): T04 release: root r1 still guards a live borrow
+heap
+  @0 live gen 1 count fin 1 heap arity 0
+credits
+  r1 -> @0#1
+borrows
+  b1 guard r1 parent - -> @0#1
+locals
+tokens
+work
+regions
+events

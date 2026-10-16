@@ -1,0 +1,6 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 5
+// "Resources and handles ... give callers no authority"; operations take a capability.
+fn operation(s: Scope, take h: Task[u32] of s) -> u32 {
+  task.await(take h)
+}

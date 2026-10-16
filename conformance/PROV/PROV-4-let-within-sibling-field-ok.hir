@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3 and #82. Each field path admits what its own field holds, and a read
+// of the field is within it.
+type Two {
+  p: Bytes,
+  q: Bytes,
+}
+
+fn tight(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> u64 {
+  let z = Two(p: x, q: y)
+  let v: Bytes in z.p = x
+  let w: Bytes in z.q = y
+  let u: Bytes in z.p = z.p
+  0
+}

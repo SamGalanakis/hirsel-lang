@@ -1,0 +1,16 @@
+// rule: LANG-11
+// expect: reject MODE-1 at line 13
+// "An outer-place tail retains that identity and its field partition; a
+// binding declared inside moves out to the consumer, even a borrower ... a
+// counted projected part remains borrowed."
+// `v[0]` is a counted part of `v`, which the block declares. Nothing moves a
+// part out of its owner, so the borrowing consumer would read `v[0]` after
+// `v` has ended with the block.
+fn first() -> u64 {
+  list.len(
+    {
+      let v: List[List[u64]] = [[1]]
+      v[0]
+    }
+  )
+}

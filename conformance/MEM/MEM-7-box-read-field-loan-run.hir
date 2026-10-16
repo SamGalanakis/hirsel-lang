@@ -1,0 +1,28 @@
+// rule: MEM-7
+// expect: run
+// stdout: field
+type Cell {
+  text: String,
+  number: u64,
+}
+
+fn text(x: box Cell) -> String in x.text {
+  x.text
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut value = box Cell(text: "field", number: 1)
+  let view = text(value)
+  value.number = 2
+  failure.check(view == "field" && value.number == 2, TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, view) ? output_error
+  out.print(io.stdout(rt) ? grant_error, "\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

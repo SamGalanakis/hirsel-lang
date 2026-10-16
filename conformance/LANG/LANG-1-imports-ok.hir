@@ -1,0 +1,8 @@
+// rule: LANG-1
+// expect: accept
+// Shows "No methods, no use, no conditional operator, no test sublanguage."
+// Names resolve without imports.
+@noalloc
+fn zero() -> u32 {
+  0
+}

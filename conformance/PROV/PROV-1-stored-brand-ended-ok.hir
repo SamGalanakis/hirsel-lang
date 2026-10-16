@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// "A brand ends when p is reassigned." An unbranded value replaces storage
+// without carrying an ended brand into it.
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn dup(mut a: Trace, take b: Trace) -> () {
+  a = take b
+}

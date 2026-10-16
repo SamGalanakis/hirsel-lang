@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let source: String = "aé😀é"
+  failure.check(
+    match std@1/string.find(source, "é") {
+      Some(p) => string.byte_offset(source, p) == 1,
+      None() => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match std@1/string.find(source, "missing") {
+      Some(_) => false,
+      None() => true,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

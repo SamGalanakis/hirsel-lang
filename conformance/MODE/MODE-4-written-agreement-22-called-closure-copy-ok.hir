@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/mode; TIR/TypeMismatch/closure result.
+fn shared(a: sendable String) -> () {
+  let f = fn() {
+    let u = fn() {
+      unique a
+    }()
+  }
+  f()
+}

@@ -1,0 +1,14 @@
+// rule: FACT-2
+// expect: fail FACT-2 at line 12
+// A fact over "other plain base[s]" is checked at construction.
+type Pair {
+  low: u8,
+  high: u8,
+}
+
+distinct type Interval(v: Pair) where v.low <= v.high
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = Interval(Pair(low: 2, high: 1))
+  Ok(())
+}

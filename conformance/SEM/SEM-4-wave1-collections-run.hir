@@ -1,0 +1,46 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+@noalloc
+fn compare(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1i32
+  } else if a > b {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+@noalloc
+fn even(n: u64) -> bool uses {} {
+  n % 2 == 0
+}
+
+fn doubled(n: u64) -> u64 uses {} {
+  n * 2
+}
+
+fn plus(take total: u64, n: u64) -> u64 uses {} {
+  total + n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let xs: List[u64] = [1, 2, 2, 3, 4]
+  failure.check(std@1/list.binary_search(xs, 2, compare) == Some(1), Bounds())
+  failure.check(std@1/list.binary_search(xs, 5, compare) == None(), Bounds())
+  failure.check(std@1/list.find(xs, even) == Some(1), Bounds())
+  failure.check(std@1/list.map(xs, doubled) == [2, 4, 4, 6, 8], Bounds())
+  failure.check(std@1/list.filter(copy xs, even) == [2, 2, 4], Bounds())
+  failure.check(std@1/list.fold(xs, 10u64, plus) == 22, Bounds())
+  failure.check(!std@1/list.all(xs, even) && std@1/list.any(xs, even), Bounds())
+  let (yes, no) = std@1/list.partition(copy xs, even)
+  failure.check(yes == [2, 2, 4] && no == [1, 3], Bounds())
+  failure.check(std@1/list.concat(copy yes, copy no) == [2, 2, 4, 1, 3], Bounds())
+  failure.check(std@1/list.dedup(copy xs) == [1, 2, 3, 4], Bounds())
+  failure.check(xs == [1, 2, 2, 3, 4], Bounds())
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

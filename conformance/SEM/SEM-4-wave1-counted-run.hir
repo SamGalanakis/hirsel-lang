@@ -1,0 +1,58 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+@noalloc
+fn compare(a: String, b: String) -> i32 uses {} {
+  if a < b {
+    -1i32
+  } else if a > b {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+@noalloc
+fn selected(x: String) -> bool uses {} {
+  x == "b"
+}
+
+fn make(x: String) -> String uses {} {
+  "made"
+}
+
+fn count(take n: u64, x: String) -> u64 uses {} {
+  n + string.byte_len(x)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut xs: unique List[String] = unique ["c", "b", "a", "b"]
+  std@1/list.sort(mut xs, compare)
+  failure.check(xs == ["a", "b", "b", "c"], Bounds())
+  failure.check(std@1/list.binary_search(xs, "b", compare) == Some(1), Bounds())
+  failure.check(std@1/list.find(xs, selected) == Some(1), Bounds())
+  failure.check(!std@1/list.all(xs, selected) && std@1/list.any(xs, selected), Bounds())
+  failure.check(std@1/list.map(xs, make) == ["made", "made", "made", "made"], Bounds())
+  failure.check(std@1/list.fold(xs, 0u64, count) == 4, Bounds())
+  let alias = copy xs
+  let filtered = std@1/list.filter(copy xs, selected)
+  failure.check(filtered == ["b", "b"] && alias == xs, Bounds())
+  let (yes, no) = std@1/list.partition(copy xs, selected)
+  failure.check(yes == ["b", "b"] && no == ["a", "c"], Bounds())
+  failure.check(std@1/list.concat(take yes, take no) == ["b", "b", "a", "c"], Bounds())
+  failure.check(std@1/list.dedup(copy xs) == ["a", "b", "c"], Bounds())
+  let mut unique_xs = unique xs
+  std@1/list.reverse(mut unique_xs)
+  std@1/list.rotate(mut unique_xs, 1)
+  failure.check(unique_xs == ["b", "b", "a", "c"], Bounds())
+  failure.check(alias == ["a", "b", "b", "c"], Bounds())
+  let popped: String = match list.pop(mut unique_xs) {
+    Some(s) => take s,
+    None() => "bad",
+  }
+  failure.check(popped == "c" && list.remove(mut unique_xs, 1) == "b", Bounds())
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

@@ -1,0 +1,45 @@
+// rule: MEM-5
+// expect: run
+// stdout: ok
+// CLO-1 says "its environment lives in the caller's region and never
+// allocates." A closure bound and called inside a `@noalloc` closure body
+// borrows its captures into the frame, its body proves `@noalloc`, and
+// ending it destroys nothing, exactly as in a named `@noalloc` function.
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+@noalloc
+fn named() -> u64 {
+  let n: u64 = 1
+  let g = fn() {
+    n
+  }
+  g()
+}
+
+@noalloc
+fn example() -> u64 {
+  invoke(
+    fn() {
+      let n: u64 = 1
+      let g = fn() {
+        n
+      }
+      g() + g()
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if named() + example() == 3 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

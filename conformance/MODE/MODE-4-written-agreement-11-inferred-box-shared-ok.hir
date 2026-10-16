@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/relation; TIR/TypeMismatch/call result.
+type R {
+  part: Shared[Bytes],
+}
+
+fn probe(take r: R in r) {
+  let built = box {
+    r
+  }.part
+  let frozen = shared.freeze(take built)
+}

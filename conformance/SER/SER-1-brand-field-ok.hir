@@ -1,0 +1,7 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type Row {
+  owner: List[u64],
+  value: List[u64],
+}

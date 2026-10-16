@@ -1,0 +1,31 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 30
+type R {
+  n: u64,
+  other: u64,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn make_n(r: R) -> Option[u8 of r.n] {
+  None
+}
+
+fn make_other(r: R) -> Option[u8 of r.other] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) {}
+
+fn inspect_n(r: R, p: Option[u8 of r.n]) {}
+
+fn inspect_other(r: R, p: Option[u8 of r.other]) {}
+
+fn probe(take x: R, flag: bool) {
+  let mut r = copy x
+  let p = make_n(r)
+  r.n = 3
+  inspect_n(r, p)
+}

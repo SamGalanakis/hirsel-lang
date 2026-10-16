@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn probe() {
+  let x: List[u8] = [1u8]
+}

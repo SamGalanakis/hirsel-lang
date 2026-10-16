@@ -1,0 +1,22 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 21
+// A brand made before the loop names the incarnation the loop replaces, so
+// using it after the loop is PROV-1 (#78).
+type R {
+  k: u64,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) {}
+
+fn replaced(take r0: R, c: bool) {
+  let mut r = take r0
+  let p = make(r)
+  while c {
+    r = R(k: 1u64)
+  }
+  inspect(r, p)
+}

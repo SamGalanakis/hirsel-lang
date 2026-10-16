@@ -1,0 +1,8 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+// A sequence of `sendable fn` elements holds only function values that may
+// cross tasks.
+fn probe(take f: fn() -> u64) -> u64 {
+  let jobs: List[sendable fn() -> u64] = [f]
+  jobs[0]()
+}

@@ -1,0 +1,5 @@
+// rule: MODE-4
+// expect: accept
+fn good[T](take x: sendable T) -> Result[sendable T, ()] {
+  Ok(take x)
+}

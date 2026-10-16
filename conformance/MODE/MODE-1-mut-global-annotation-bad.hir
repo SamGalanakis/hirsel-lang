@@ -1,0 +1,3 @@
+// rule: MODE-1
+// expect: reject LANG-7 at line 3
+fn view(mut x: String @ global) -> () { () }

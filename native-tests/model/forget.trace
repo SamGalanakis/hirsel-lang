@@ -1,0 +1,8 @@
+rc-trace v1
+max 16
+# T17 explicit forget: the credit moves to the permanent forget ledger, so the block and
+# its subgraph never drain (an explicit exemption).
+alloc r1 1
+alloc r2 0
+write r1 0 r2
+forget r1

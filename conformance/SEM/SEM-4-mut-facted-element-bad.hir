@@ -1,0 +1,10 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 7
+// "the element type may not carry facts".
+distinct type Percent(v: u8) where v <= 100
+
+fn inspect(mut xs: Array[Percent]) -> () {
+  for x in mut xs {
+    let y = x
+  }
+}

@@ -1,0 +1,7 @@
+// rule: OWN-2
+// expect: accept
+pub fn probe(n: Net, take s: Stream of n) -> Result[(), NetError] {
+  let upgraded = tls.connect(n, take s, "example.com", WebPki())?
+  let _ = net.peer_addr(n, upgraded)
+  Ok(())
+}

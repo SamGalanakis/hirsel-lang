@@ -1,0 +1,9 @@
+// rule: MODE-4
+// expect: accept
+fn probe() -> fn() -> u64 {
+  let x: String = "x"
+  let f: fn() -> u64 = fn() {
+    string.byte_len(x)
+  }
+  f
+}

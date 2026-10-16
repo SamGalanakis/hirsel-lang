@@ -1,0 +1,13 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 9
+type Pair {
+  tag: Option[u8],
+  bit: bool,
+}
+
+fn classify(p: Pair) -> u64 {
+  match p {
+    Pair(tag: Some(n), bit: true) => 1,
+    Pair(tag: None, ..) => 3,
+  }
+}

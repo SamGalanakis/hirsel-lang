@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+type Payload = sendable Bytes
+
+fn old(take x: Bytes) -> Payload {
+  x
+}

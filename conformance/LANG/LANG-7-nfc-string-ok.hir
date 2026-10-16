@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn normalized() -> String uses {} {
+  std@1/unicode.normalize_nfc("e")
+}

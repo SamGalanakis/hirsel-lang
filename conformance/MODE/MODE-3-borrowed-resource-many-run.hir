@@ -1,0 +1,33 @@
+// rule: MODE-3
+// expect: run
+// stdout: read
+// stdout: read
+// stdout: owner
+// stdout: drop
+resource type Token {
+  stdout: Stdout,
+}
+drop(t) {
+  let _ = out.print(t.stdout, "drop\n")
+}
+
+fn inspect(token: Token) {
+  let _ = out.print(token.stdout, "read\n")
+}
+
+fn repeat(f: fn() uses {Stdout}) {
+  f()
+  f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let token = Token(stdout: stdout)
+  repeat(
+    fn() {
+      inspect(token)
+    }
+  )
+  let _ = out.print(token.stdout, "owner\n")
+  Ok(())
+}

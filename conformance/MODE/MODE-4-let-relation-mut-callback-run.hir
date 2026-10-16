@@ -1,0 +1,57 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// "A closure or Iter is sendable exactly when everything it captures is; this
+// is computed where it is built." A let relation is the receiving contract of
+// the binding; what an adapter captures is its current content (#88). A
+// function value, like an Iter, keeps its producer fact in Local receiving
+// storage until a mutable call leaves only the contract's crossing mode.
+fn output_error[E](take e: E) -> () {}
+
+type Counter {
+  n: u8,
+  label: String,
+}
+
+fn step(mut c: Counter) -> Option[u8] {
+  if c.n == 3 {
+    None
+  } else {
+    let value = c.n
+    c.n += 1
+    Some(value)
+  }
+}
+
+fn double(x: u8) -> u8 {
+  x * 2
+}
+
+fn keep(mut f: fn(u8) -> u8) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let state = Counter(n: 0, label: "s")
+  let source: Iter[u8] = iter.from(take state, step)
+  let mut f: (fn(u8) -> u8) in args = double
+  keep(mut f)
+  let mapped: Iter[u8] = iter.map(take source, take f)
+  let mut it: Iter[u8] = iter.map(take mapped, double)
+  let mut sum: u8 = 0
+  for x in take it {
+    sum += x
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if sum == 12u8 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

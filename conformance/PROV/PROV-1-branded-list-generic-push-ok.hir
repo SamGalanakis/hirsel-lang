@@ -1,0 +1,12 @@
+// rule: PROV-1
+// expect: accept
+// A user generic over the element type carries its brand like `list.push`.
+fn put[T](mut xs: List[T], take x: T) -> () {
+  list.push(mut xs, take x)
+}
+
+fn gather(text: String, p: StrPos of text) -> u64 {
+  let mut positions: List[StrPos of text] = []
+  put(mut positions, p)
+  list.len(positions)
+}

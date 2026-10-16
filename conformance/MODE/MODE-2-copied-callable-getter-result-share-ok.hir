@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: accept
+fn needs_unique(x: unique String) {}
+
+fn pass[T: copyable](x: T) -> T in x {
+  copy x
+}
+
+fn probe() {
+  let x: String = "a"
+  let f = fn() {
+    x
+  }
+  let g = pass(f)
+  needs_unique(x)
+  let y = g()
+}

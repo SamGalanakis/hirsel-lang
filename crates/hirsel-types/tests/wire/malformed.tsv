@@ -1,0 +1,17 @@
+# name<TAB>golden schema name<TAB>payload hex<TAB>expected error
+bool-2	bool-true	02	Scalar
+nan-signaling-f32	f32	0100807f	Scalar
+nan-negative-f64	f64	010000000000f0ff	Scalar
+utf8-surrogate	utf8	0300000000000000eda080	Utf8
+utf8-overlong	utf8	0200000000000000c080	Utf8
+string-truncated	utf8	030000000000000078	Truncated
+bytes-huge-length	bytes	ffffffffffffffff	Length
+variant-unknown	variant	02000000	Tag
+variant-payload-short	variant	01000000	Truncated
+set-duplicate	set-byte-order	020000000000000001000100	Duplicate
+set-reversed	set-byte-order	020000000000000001000001	Order
+map-duplicate	map-insertion-order	020000000000000002010200	Duplicate
+list-huge-count	array	ffffffffffffffff	Limit
+inline-short	inline	0100	Truncated
+scalar-trailing	u8	ff00	Trailing
+unit-trailing	unit	00	Trailing

@@ -1,0 +1,40 @@
+// rule: MODE-1
+// expect: run
+// stdout: received
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  x = b"changed"
+}
+
+fn probe(mut x: Bytes, mut y: Bytes) -> bool {
+  let mut slot = Pair(left: view(x), right: view(y))
+  let mut n: u32 = 0u32
+  while n < 3u32 {
+    slot.left = view(x)
+    n += 1u32
+  }
+  let kept = slot.left == b"left" && slot.right == b"right"
+  slot.left = b"fresh"
+  bump(mut x)
+  slot.right = b"new"
+  bump(mut y)
+  kept && slot.left == b"fresh" && slot.right == b"new"
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut x: Bytes = b"left"
+  let mut y: Bytes = b"right"
+  let good = probe(mut x, mut y)
+  if good && x == b"changed" && y == b"changed" {
+    let _ = out.print(io.stdout(rt)?, "received\n")
+  }
+  Ok(())
+}

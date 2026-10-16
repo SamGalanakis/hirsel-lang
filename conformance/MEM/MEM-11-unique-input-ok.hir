@@ -1,0 +1,6 @@
+// rule: MEM-11
+// expect: accept
+// "shared.freeze(take x" — " unique T)".
+fn freeze(take x: unique String) -> Shared[String] {
+  shared.freeze(take x)
+}

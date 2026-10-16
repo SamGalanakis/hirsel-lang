@@ -1,0 +1,5 @@
+// rule: MEM-12
+// expect: accept
+flat type Value {
+  items: List[u8] @ growable,
+}

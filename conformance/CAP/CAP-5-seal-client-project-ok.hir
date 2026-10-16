@@ -1,0 +1,5 @@
+// rule: CAP-5
+// expect: accept
+pub fn probe(r: vendor.ReadDir) -> Dir {
+  vendor.raw(r)
+}

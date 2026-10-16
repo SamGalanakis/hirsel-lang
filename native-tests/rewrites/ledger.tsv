@@ -1,0 +1,17 @@
+# Proof-domain ledger for optional Ready rewrites.
+# One row per rule and domain. Only `proved` turns a rewrite on; `unknown`,
+# `timeout`, `refuted` and unlisted domains stay off. SIMD lanes and resources
+# are never covered by a scalar row.
+rule	domain	failure	layout	evidence	status
+mul-two-as-add	int:u8	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	exhaustive: every operand, checked x*2 == checked x+x (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:i8	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	exhaustive: every operand, checked x*2 == checked x+x (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:u16	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	exhaustive: every operand, checked x*2 == checked x+x (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:i16	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	exhaustive: every operand, checked x*2 == checked x+x (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:u32	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	algebraic: 2x = x+x in Z and both checked forms test the same range; boundary vectors MIN, MIN/2-1, MIN/2, -1, 0, 1, MAX/2, MAX/2+1, MAX (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:i32	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	algebraic: 2x = x+x in Z and both checked forms test the same range; boundary vectors MIN, MIN/2-1, MIN/2, -1, 0, 1, MAX/2, MAX/2+1, MAX (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:u64	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	algebraic: 2x = x+x in Z and both checked forms test the same range; boundary vectors MIN, MIN/2-1, MIN/2, -1, 0, 1, MAX/2, MAX/2+1, MAX (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:i64	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	algebraic: 2x = x+x in Z and both checked forms test the same range; boundary vectors MIN, MIN/2-1, MIN/2, -1, 0, 1, MAX/2, MAX/2+1, MAX (tests/legalize.rs mul_two_ledger_evidence)	proved
+mul-two-as-add	int:u128	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	no solver run; a narrow-width theorem does not authorize i128	unknown
+mul-two-as-add	int:i128	SEM-1 on the same failure edge and site, exactly when 2x is outside the width	none (scalar operands)	no solver run; a narrow-width theorem does not authorize i128	unknown
+mul-two-as-add	float:f32	none (floats do not fail)	none (scalar operands)	no solver run; NaN payload, -0 and overflow-to-infinity need Hirsel-specific preconditions	unknown
+mul-two-as-add	float:f64	none (floats do not fail)	none (scalar operands)	no solver run; NaN payload, -0 and overflow-to-infinity need Hirsel-specific preconditions	unknown

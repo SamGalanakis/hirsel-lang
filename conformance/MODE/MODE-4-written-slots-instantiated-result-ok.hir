@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+// The Local generic declaration acquires a Plain concrete result after substitution.
+fn cross(take x: sendable Option[u64]) {}
+
+fn probe() {
+  let mut s: Slots[u64] = slots.empty()
+  let id = slots.insert(mut s, 1u64)
+  cross(slots.get(s, id))
+}

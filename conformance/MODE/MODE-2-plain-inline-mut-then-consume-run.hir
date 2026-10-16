@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut ys: Inline[u64, 3] = [1, 2, 3]
+  for y in mut ys {
+    y = y * 10
+  }
+  let mut s: u64 = 0
+  for y in take ys {
+    s += y
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if s == 60 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

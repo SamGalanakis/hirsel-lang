@@ -1,0 +1,26 @@
+// rule: GEN-1
+// expect: run
+// stdout: receipt
+type Wrap[T] {
+  value: T,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn probe[T: data](take x: Wrap[T]) -> bool {
+  fn inner[U: plain](y: U) -> bool {
+    let pair = (identity(x).value, identity(x).value)
+    true
+  }
+  inner(1u32)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let wrapped: Wrap[Bytes] = Wrap(value: b"x")
+  if probe(take wrapped) {
+    let _ = out.print(io.stdout(rt)?, "receipt\n")
+  }
+  Ok(())
+}

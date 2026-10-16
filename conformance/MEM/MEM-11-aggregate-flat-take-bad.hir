@@ -1,0 +1,15 @@
+// rule: MEM-11
+// expect: reject MEM-11 at line 14
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+type R {
+  item: Item,
+}
+
+fn probe(take item: Item) {
+  let built = R(item: take item)
+  let frozen: Shared[R] = shared.freeze(take built)
+}

@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 9
+fn open_replace(mut x: Bytes, take y: Bytes) {
+  x = y
+}
+
+fn bad() {
+  let mut x: sendable Bytes = b"a"
+  open_replace(mut x, b"b")
+}

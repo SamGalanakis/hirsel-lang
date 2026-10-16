@@ -1,0 +1,8 @@
+// rule: FACT-1
+// expect: reject FACT-1 at line 6
+// "Each is any pure boolean expression"; result names the returned value.
+@noalloc
+fn id(x: u32) -> u32
+  ensures result {
+  x
+}

@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 5
+fn put(mut xs: List[String], y: String) -> () {
+  for x in mut xs {
+    x = y
+  }
+}

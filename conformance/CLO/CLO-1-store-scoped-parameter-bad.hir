@@ -1,0 +1,10 @@
+// rule: CLO-1
+// expect: reject CLO-1 at line 9
+// "A scoped closure cannot be stored or returned."
+type Holder {
+  action: fn() -> () uses {},
+}
+
+fn example(action: fn() -> () uses {}) -> Holder {
+  Holder(action: action)
+}

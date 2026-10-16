@@ -1,0 +1,24 @@
+// rule: SEM-1
+// expect: run
+// stdout: ok
+// "Conversions are named" — " widen, try_narrow → Option, narrow (fails), truncate".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let x: u16 = 255
+  let value: u8 = int.narrow(x)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if value == 255 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

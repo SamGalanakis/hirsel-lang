@@ -1,0 +1,8 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 7
+fn probe() {
+  let mut s: Slots[u64] = slots.empty()
+  let id = slots.insert(mut s, 10u64)
+  s = slots.empty()
+  let _ = slots.get(s, id)
+}

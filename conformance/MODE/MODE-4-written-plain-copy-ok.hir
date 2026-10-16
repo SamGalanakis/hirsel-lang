@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+fn sink(take x: sendable u64) {}
+
+fn good() {
+  let x: sendable u64 = 1
+  let y = copy x
+  sink(take y)
+  sink(take x)
+}

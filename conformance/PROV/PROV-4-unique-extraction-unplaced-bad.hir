@@ -1,0 +1,9 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 8
+// A unique value extracted in an arena still lives in that arena, so it
+// cannot be returned where no placement is declared. The accepted twin is
+// MEM-5-unique-extraction-arena-ok, which declares the result in the arena.
+@noalloc
+fn probe(a: Arena, x: Bytes in a) -> Bytes {
+  unique x
+}

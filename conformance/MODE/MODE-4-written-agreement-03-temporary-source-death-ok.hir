@@ -1,0 +1,19 @@
+// rule: MODE-4
+// expect: accept
+// Regression from statement/swap; TIR/LoanConflict.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {}
+
+fn probe(mut x: Bytes) {
+  let mut slot = view(
+    fn() {
+      x
+    }()
+  )
+  bump(mut x)
+  slot = b"fresh"
+  ()
+}

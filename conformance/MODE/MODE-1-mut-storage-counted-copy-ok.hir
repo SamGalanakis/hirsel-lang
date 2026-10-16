@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: accept
+type Holder {
+  name: String,
+}
+
+fn store(mut h: Holder, take x: String) -> () {
+  h.name = copy x
+}
+
+fn probe(take x: String) -> Holder {
+  let mut h = Holder(name: "a")
+  store(mut h, take x)
+  h
+}

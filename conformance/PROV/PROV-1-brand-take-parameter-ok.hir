@@ -1,0 +1,6 @@
+// rule: PROV-1
+// expect: accept
+// "Brands never name take parameters."
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}

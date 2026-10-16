@@ -1,0 +1,10 @@
+// rule: LANG-11
+// expect: accept
+// Shows "A block’s value is its final expression."
+@noalloc
+fn example(x: u32) -> u32 {
+  let f = fn(y: u32) -> u32 {
+    y
+  }
+  f(x)
+}

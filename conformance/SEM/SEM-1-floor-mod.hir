@@ -1,0 +1,14 @@
+// rule: SEM-1
+// expect: run
+@noalloc
+fn check(n: bool) -> ()
+  requires n {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let a: i32 = -7
+  check(int.div_floor(a, 3) == -3)
+  check(int.mod(a, 3) == 2)
+  Ok(())
+}

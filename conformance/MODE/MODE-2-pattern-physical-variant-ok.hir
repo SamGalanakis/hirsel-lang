@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+fn make() -> Result[unique String, ()] {
+  Ok("x")
+}
+
+fn probe() {
+  match make() {
+    Ok(text) => (),
+    Error(e) => (),
+  }
+}

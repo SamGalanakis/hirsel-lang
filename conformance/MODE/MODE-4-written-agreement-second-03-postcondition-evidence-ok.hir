@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn inspect(x: Bytes) -> bool {
+  true
+}
+
+fn probe(x: sendable (unique Bytes)) -> ()
+  ensures inspect(x) {
+  let y = copy x
+  ()
+}

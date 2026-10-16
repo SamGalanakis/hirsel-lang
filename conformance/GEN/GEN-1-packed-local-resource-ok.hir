@@ -1,0 +1,12 @@
+// rule: GEN-1
+// expect: accept
+// The twin, the same holder of a plain record is flat.
+type Res {
+  n: u64,
+}
+
+type Holder = Empty | Has(r: Res)
+
+fn hold() -> () {
+  let x: Packed[Holder] = Has(r: Res(n: 1))
+}

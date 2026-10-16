@@ -1,0 +1,20 @@
+// rule: MEM-13
+// expect: run
+// stdout: selected
+type V = A(u64) | B(u64)
+
+fn pick() -> u64 {
+  let v: V = B(7u64)
+  match v {
+    A(a) => a,
+    B(b) => b,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  if pick() == 7u64 {
+    let _ = out.print(stdout, "selected\n")
+  }
+  Ok(())
+}

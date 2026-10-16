@@ -1,0 +1,11 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 7
+resource type Trace {}
+drop(value) {}
+
+@noalloc
+fn inspect(take value: Trace, text: String) {
+  for piece in std@1/unicode.graphemes(text) {
+    break
+  }
+}

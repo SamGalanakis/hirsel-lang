@@ -1,0 +1,15 @@
+// rule: CONC-2
+// expect: accept
+// "The scope body is once and may take owned values".
+fn consume(take payload: List[u32]) -> () {
+  ()
+}
+
+fn work(tasks: Tasks, take payload: List[u32]) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      consume(take payload)
+    }
+  )
+}

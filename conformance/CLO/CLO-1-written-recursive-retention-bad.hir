@@ -1,0 +1,19 @@
+// rule: CLO-1
+// expect: reject CLO-1 at line 16
+fn sink(x: sendable Bytes) {}
+
+type Chain {
+  next: Option[box Chain],
+  f: fn() -> (),
+}
+
+fn probe(take x: sendable Bytes, again: bool) {
+  let f = fn() {
+    sink(x)
+  }
+  let mut n: Chain in n = Chain(next: None, f: copy f)
+  while again {
+    n = Chain(next: Some(box copy n), f: copy f)
+  }
+  n.f()
+}

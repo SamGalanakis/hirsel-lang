@@ -1,0 +1,12 @@
+rc-trace v1 max 3
+ok after 8 steps
+heap
+  @0 live gen 1 count immortal heap arity 1
+credits
+borrows
+locals
+tokens
+  t1 none
+work
+regions
+events

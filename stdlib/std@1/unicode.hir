@@ -1,0 +1,183 @@
+// Unicode 16.0.0 canonical normalization (UAX #15). Input is valid UTF-8.
+// Tables are ordinary immutable source constants, not runtime kernels.
+@noalloc
+fn scalar_at(table: Bytes, offset: u64) -> u32 uses {} {
+  let a: u32 = core@1/int.widen(table[offset])
+  let b: u32 = core@1/int.widen(table[offset + 1])
+  let c: u32 = core@1/int.widen(table[offset + 2])
+  a << 16 | b << 8 | c
+}
+
+@noalloc
+fn combining_class(cp: u32) -> u8 uses {} {
+  if cp < scalar_at(NFC_CCC, 0) || cp > scalar_at(
+    NFC_CCC,
+    core@1/bytes.len(NFC_CCC) - 4
+  ) {
+    return 0
+  }
+  let mut lo: u64 = 0
+  let mut hi = core@1/bytes.len(NFC_CCC) / 4
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    if scalar_at(NFC_CCC, mid * 4) < cp {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  if lo < core@1/bytes.len(NFC_CCC) / 4 && scalar_at(NFC_CCC, lo * 4) == cp {
+    NFC_CCC[lo * 4 + 3]
+  } else {
+    0
+  }
+}
+
+@noalloc
+fn canonical_pair(cp: u32) -> (u32, u32) uses {} {
+  if cp < scalar_at(NFC_DECOMPOSITION, 0) || cp > scalar_at(
+    NFC_DECOMPOSITION,
+    core@1/bytes.len(NFC_DECOMPOSITION) - 9
+  ) {
+    return (cp, 0)
+  }
+  let mut lo: u64 = 0
+  let mut hi = core@1/bytes.len(NFC_DECOMPOSITION) / 9
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    if scalar_at(NFC_DECOMPOSITION, mid * 9) < cp {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  if lo < core@1/bytes.len(NFC_DECOMPOSITION) / 9 && scalar_at(
+    NFC_DECOMPOSITION,
+    lo * 9
+  ) == cp {
+    (scalar_at(NFC_DECOMPOSITION, lo * 9 + 3), scalar_at(NFC_DECOMPOSITION, lo * 9 + 6))
+  } else {
+    (cp, 0)
+  }
+}
+
+@noalloc
+fn composite(a: u32, b: u32) -> u32 uses {} {
+  // Algorithmic Hangul L + V and LV + T, including zero-class Jamo.
+  if a >= 0x1100 && a < 0x1113 && b >= 0x1161 && b < 0x1176 {
+    return 0xac00 + ((a - 0x1100) * 21 + b - 0x1161) * 28
+  }
+  if a >= 0xac00 && a < 0xd7a4 && (a - 0xac00) % 28 == 0 && b > 0x11a7 && b < 0x11c3 {
+    return a + b - 0x11a7
+  }
+  let mut lo: u64 = 0
+  let mut hi = core@1/bytes.len(NFC_COMPOSITION) / 9
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    let first = scalar_at(NFC_COMPOSITION, mid * 9)
+    let second = scalar_at(NFC_COMPOSITION, mid * 9 + 3)
+    if first < a || first == a && second < b {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  if lo < core@1/bytes.len(NFC_COMPOSITION) / 9 && scalar_at(NFC_COMPOSITION, lo * 9) == a && scalar_at(
+    NFC_COMPOSITION,
+    lo * 9 + 3
+  ) == b {
+    scalar_at(NFC_COMPOSITION, lo * 9 + 6)
+  } else {
+    0
+  }
+}
+
+// Stable insertion within the final combining sequence; starters are barriers.
+fn ordered(mut points: List[u32], cp: u32) -> () uses {} {
+  let cc = combining_class(cp)
+  core@1/list.push(mut points, cp)
+  let mut i = core@1/list.len(points) - 1
+  while cc != 0 && i > 0 && combining_class(points[i - 1]) > cc {
+    points[i] = points[i - 1]
+    i -= 1
+  }
+  points[i] = cp
+}
+
+fn decompose(mut points: List[u32], cp: u32) -> () uses {} {
+  if cp >= 0xac00 && cp < 0xd7a4 {
+    let syllable = cp - 0xac00
+    ordered(mut points, 0x1100 + syllable / 588)
+    ordered(mut points, 0x1161 + syllable % 588 / 28)
+    if syllable % 28 != 0 {
+      ordered(mut points, 0x11a7 + syllable % 28)
+    }
+  } else {
+    let (a, b) = canonical_pair(cp)
+    if a == cp {
+      ordered(mut points, cp)
+    } else {
+      decompose(mut points, a)
+      if b != 0 {
+        decompose(mut points, b)
+      }
+    }
+  }
+}
+
+fn encode(mut bytes: List[u8], cp: u32) -> () uses {} {
+  if cp < 0x80 {
+    core@1/list.push(mut bytes, core@1/int.narrow(cp))
+  } else {
+    if cp < 0x800 {
+      core@1/list.push(mut bytes, core@1/int.narrow(0xc0u32 | cp >> 6))
+    } else {
+      if cp < 0x10000 {
+        core@1/list.push(mut bytes, core@1/int.narrow(0xe0u32 | cp >> 12))
+      } else {
+        core@1/list.push(mut bytes, core@1/int.narrow(0xf0u32 | cp >> 18))
+        core@1/list.push(mut bytes, core@1/int.narrow(0x80u32 | cp >> 12 & 0x3f))
+      }
+      core@1/list.push(mut bytes, core@1/int.narrow(0x80u32 | cp >> 6 & 0x3f))
+    }
+    core@1/list.push(mut bytes, core@1/int.narrow(0x80u32 | cp & 0x3f))
+  }
+}
+
+// Explicit NFC: compatibility mappings never enter canonical_pair.
+pub fn normalize_nfc(s: String) -> String uses {} {
+  let mut points: List[u32] = []
+  for cp in core@1/string.scalars(s) {
+    decompose(mut points, cp)
+  }
+  let mut composed: List[u32] = []
+  let mut starter: u64 = 0
+  let mut last_class: u8 = 0
+  for cp in points {
+    let cc = combining_class(cp)
+    let mut joined: u32 = 0
+    if core@1/list.len(composed) > 0 && (last_class == 0 || last_class < cc) {
+      joined = composite(composed[starter], cp)
+    }
+    if joined != 0 {
+      composed[starter] = joined
+    } else {
+      if cc == 0 {
+        starter = core@1/list.len(composed)
+      }
+      core@1/list.push(mut composed, cp)
+      last_class = cc
+    }
+  }
+  let mut bytes: List[u8] = []
+  for cp in composed {
+    encode(mut bytes, cp)
+  }
+  match core@1/string.from_bytes(core@1/bytes.from_list(take bytes)) {
+    Ok(text) => take text,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}

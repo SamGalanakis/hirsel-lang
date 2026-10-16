@@ -1,0 +1,23 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// "A brand ends when p is ... moved." A borrowed owner still exists when the
+// call returns, and a taken argument may be consumed by a call whose result
+// it does not brand.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn count(take d: List[u64]) -> u64 {
+  0
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn probe() -> () {
+  let owner = fresh()
+  let value = mk(owner)
+  let n = count(take owner)
+}

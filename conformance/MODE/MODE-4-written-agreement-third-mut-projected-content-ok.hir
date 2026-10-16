@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: accept
+type Rec {
+  items: Array[sendable Bytes],
+}
+
+fn set(mut b: sendable Bytes) -> () {
+  ()
+}
+
+fn example(mut r: sendable Rec) -> () {
+  set(mut r.items[0])
+}

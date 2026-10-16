@@ -1,0 +1,20 @@
+// rule: DET-2
+// expect: run
+// stdout: 1
+// stdout: 2
+// Optimisation preserves "evaluation order" and "every effect before" a check.
+fn emit(out: Stdout, n: u64) -> Result[u64, OutputError] {
+  out.print(out, std@1/u64.to_string(n))?
+  out.print(out, "\n")?
+  Ok(n)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  let _ = (emit(out, 1) ? Output, emit(out, 2) ? Output)
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

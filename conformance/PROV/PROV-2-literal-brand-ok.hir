@@ -1,0 +1,16 @@
+// rule: PROV-2
+// expect: accept
+// "A brand names the binding its value came from." An unbranded result
+// accepts a literal, and a branded result accepts a value that came from the
+// named binding.
+fn list(a: Arena) -> List[Bytes] in a {
+  [b"parsed"]
+}
+
+fn first(s: String) -> Option[StrPos of s] {
+  None
+}
+
+fn find(s: String) -> Option[StrPos of s] {
+  first(s)
+}

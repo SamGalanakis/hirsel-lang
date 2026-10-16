@@ -1,0 +1,20 @@
+// rule: SEM-1
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut buffer: Inline[u8, 1] = [99]
+  core@1/test.check(t, std@1/i64.format(12, mut buffer) == Error(BufferTooSmall))
+  core@1/test.check(t, buffer == [99u8])
+  core@1/test.check(t, std@1/i64.parse("9223372036854775808") == Error(OutOfRange))
+  core@1/test.check(t, std@1/i64.parse("-9223372036854775809") == Error(OutOfRange))
+  core@1/test.check(t, std@1/i64.parse("") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("+1") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse(" 1") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("1 ") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("1_0") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("0x1") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("--1") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("1z") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("9223372036854775808x") == Error(Invalid))
+  core@1/test.check(t, std@1/i64.parse("00012") == Ok(12i64))
+  Ok(())
+}

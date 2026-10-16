@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+fn sink(x: sendable Bytes) {}
+
+fn probe(take x: sendable Bytes, again: bool) {
+  while again {
+    sink(x)
+  }
+  sink(x)
+}

@@ -1,0 +1,26 @@
+// rule: PROV-4
+// expect: accept
+// A scoped closure may read a tuple whose part joins arena and heap content,
+// and an escaping one may own a tuple of heap parts.
+fn scoped(a: Arena, c: bool) -> u64 {
+  let x: String in a = "x"
+  let y: String = "y"
+  let p = if c {
+    (x, 1u8)
+  } else {
+    (y, 2u8)
+  }
+  fn() {
+    let (s, n) = p
+    string.byte_len(s)
+  }()
+}
+
+fn escaping() -> fn() -> u64 {
+  let x: String = copy_to(heap, "x")
+  let p = (x, 1u8)
+  fn() {
+    let (s, n) = p
+    string.byte_len(s)
+  }
+}

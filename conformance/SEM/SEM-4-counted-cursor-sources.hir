@@ -1,0 +1,13 @@
+// rule: SEM-4
+// expect: accept
+fn set_strings(xs: Set[String]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn map_strings(xs: Map[u64, String]) {
+  for (key, value) in xs {
+    let _ = value
+  }
+}

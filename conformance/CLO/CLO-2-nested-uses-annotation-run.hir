@@ -1,0 +1,45 @@
+// rule: CLO-2
+// expect: run
+// stdout: ok
+// "A written binding type keeps its written contract" (#58). A function type
+// written as a list's element type keeps the `uses` of its parameter's
+// function type, so a literal declaring the same parameter fits the element.
+@noalloc
+fn through(g: @noalloc fn() -> () uses {}) -> u64 {
+  1
+}
+
+fn probe() -> u64 {
+  let held: List[fn(g: @noalloc fn() -> () uses {}) -> u64] = [
+    fn(g: @noalloc fn() -> () uses {}) {
+      through(g)
+    }
+  ]
+  let listed: List[fn(g: fn() -> () uses {}) -> u64] = [
+    fn(g: fn() -> () uses {}) {
+      g()
+      2
+    }
+  ]
+  held[0](
+    fn() {
+      ()
+    }
+  ) + listed[0](
+    fn() {
+      ()
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe() == 3 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

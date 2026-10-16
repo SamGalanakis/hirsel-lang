@@ -1,0 +1,5 @@
+// rule: MODE-1
+// expect: accept
+fn put(mut slot: List[String], take v: String) -> () {
+  slot = [v]
+}

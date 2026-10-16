@@ -1,0 +1,12 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 11
+// "An operation taking a branded value requires the same p."
+// The callee promises this callback no relation between the handle and the
+// directory, so a callback that requires one is a different function type.
+fn apply(f: fn(d: Dir, x: File) -> ()) -> () {
+  ()
+}
+
+fn example() -> () {
+  apply(fn(d: Dir, x: File of d) {})
+}

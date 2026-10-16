@@ -1,0 +1,19 @@
+// rule: CLO-3
+// expect: reject CLO-3 at line 12
+// A task closure takes its Receivers, but the exception is for sendability.
+// A Receiver declared local is bounded by its caller and cannot cross into a
+// task. The accepted twin is CLO-3-receiver-capture-ok.
+fn example(tasks: Tasks, take r: Receiver[u64] in r) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          let _ = take r
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 9
+fn get[T: copyable](xs: List[T]) -> T in xs {
+  copy xs[0]
+}
+
+fn probe() {
+  let xs: List[sendable Bytes] = [b"a"]
+  let received: sendable Bytes = get(xs)
+}

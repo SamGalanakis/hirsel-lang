@@ -1,0 +1,7 @@
+// rule: PROV-1
+// expect: accept
+fn example(a: String, b: String) -> () {
+  for position in string.positions(a) {
+    string.byte_offset(a, position);
+  }
+}

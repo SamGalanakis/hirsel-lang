@@ -1,0 +1,67 @@
+// rule: MEM-5
+// expect: run
+// stdout: ok
+// "A value transferred on every exit without any possible intervening
+// failure creates no cleanup obligation." A binding is owned from its `let`
+// to the end of its block. Here the `Token` moves to `keep` on every path,
+// and nothing that may fail runs while it is still owned, so the `@noalloc`
+// closure bodies never destroy it, as for the temporary `keep(make(), d)`.
+resource type Token {
+  n: u32,
+}
+drop(x) {
+  ()
+}
+
+@noalloc
+fn make() -> Token {
+  Token(n: 1)
+}
+
+@noalloc
+fn keep(take x: Token, n: u32) -> Token {
+  x
+}
+
+@noalloc
+fn produce(f: @noalloc fn() -> Token uses {}) -> Token {
+  f()
+}
+
+@noalloc
+fn straight(d: u32) -> Token {
+  produce(
+    fn() {
+      let token = make()
+      keep(take token, d)
+    }
+  )
+}
+
+@noalloc
+fn branches(d: u32, flag: bool) -> Token {
+  produce(
+    fn() {
+      let token = make()
+      if flag {
+        keep(take token, d)
+      } else {
+        keep(take token, 2)
+      }
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let first = straight(4)
+  let second = branches(4, false)
+  let _ = out.print(
+    io.stdout(rt)?,
+    if first.n + second.n == 2 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+// A unique parameter "accepts only unique arguments".
+// The callee passes this callback an aliased value, so a callback whose own
+// parameter demands a unique one is a different function type.
+fn apply(f: fn(x: Bytes) -> ()) -> () {
+  ()
+}
+
+fn example() -> () {
+  apply(fn(x: unique Bytes) {})
+}

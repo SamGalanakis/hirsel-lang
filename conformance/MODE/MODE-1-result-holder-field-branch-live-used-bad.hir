@@ -1,0 +1,37 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 33
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+type Nest {
+  pair: Pair,
+  other: Bytes,
+}
+
+type Bucket {
+  items: List[Bytes],
+  other: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes, mut y: Bytes, c: bool) {
+  let mut slot = Pair(left: view(x), right: view(y))
+  if c {
+    slot.left = b"a"
+  } else {
+    slot.right = b"b"
+  }
+  bump(mut x)
+  let used = slot
+  ()
+}
+// The holder is used after the conflicting action, so its loan is still live (§04).

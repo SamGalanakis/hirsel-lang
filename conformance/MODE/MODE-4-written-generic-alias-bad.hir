@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+type Payload[T] = sendable T
+
+fn bad[T](take x: T) -> Payload[T] {
+  x
+}

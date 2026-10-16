@@ -1,0 +1,6 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 3
+fn probe(take x: Bytes) -> () of x
+  ensures true {
+  ()
+}

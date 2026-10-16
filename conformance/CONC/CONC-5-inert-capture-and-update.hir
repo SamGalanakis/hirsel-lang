@@ -1,0 +1,34 @@
+// rule: CONC-5
+// expect: run
+// Mutex bodies "may capture inert values" and update the unique payload.
+@noalloc
+fn check(x: u32) -> ()
+  requires x == 7 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let n: u32 = 7
+  let m: Mutex[u32] = mutex.create(tasks, 0)
+  mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u32) {
+      value = n
+    }
+  )
+  let value: u32 = mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u32) {
+      value
+    }
+  )
+  check(value)
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

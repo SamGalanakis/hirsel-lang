@@ -1,0 +1,32 @@
+// rule: CLO-1
+// expect: run
+// stdout: ok
+// exit: 0
+// "Captures are borrows." A scoped closure reads an element of a captured
+// sequence as its enclosing function would (OWN-8).
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: List[u8] = [7, 9]
+  let i: u64 = 1
+  let first = fn() {
+    xs[0]
+  }()
+  let read = fn() {
+    xs[i]
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if first == 7 && read() == 9 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

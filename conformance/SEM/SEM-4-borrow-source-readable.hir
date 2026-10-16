@@ -1,0 +1,27 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+// "the source may be read in the body".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Array[u8] = [1, 2]
+  let mut sum: u8 = 0
+  for x in xs {
+    sum += xs[0]
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if sum == 2 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

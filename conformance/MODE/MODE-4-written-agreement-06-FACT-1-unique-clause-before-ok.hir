@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/mode; TIR/TypeMismatch/call argument.
+fn inspect(x: sendable (unique Bytes)) -> bool {
+  true
+}
+
+fn weaken(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: unique Bytes) -> ()
+  ensures before(inspect(x)) {
+  weaken(mut x)
+}

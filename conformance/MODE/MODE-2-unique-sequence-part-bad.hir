@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 7
+// An element type declared unique is a contract of the sequence, and a value
+// shared by a copy no longer satisfies it.
+fn list(take x: unique Bytes) -> List[unique Bytes] {
+  let y = copy x
+  [take x]
+}

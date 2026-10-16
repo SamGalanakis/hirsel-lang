@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), std@1/net.AddrParseError] {
+  let v4 = std@1/net.parse_ipv4("192.168.0.1")?
+  failure.check(v4 == [192, 168, 0, 1], TextInvariant())
+  let v6 = std@1/net.parse_ipv6("2001:db8::192.168.0.1")?
+  failure.check(std@1/net.format_ip(V6(v6)) == "2001:db8::c0a8:1", TextInvariant())
+  let ip = std@1/net.parse_ip("::ffff:192.0.2.128")?
+  failure.check(std@1/net.format_ip(ip) == "::ffff:192.0.2.128", TextInvariant())
+  let addr = std@1/net.parse_socket_addr("[2001:db8::1]:443")?
+  failure.check(
+    std@1/net.format_socket_addr(addr) == "[2001:db8::1]:443",
+    TextInvariant()
+  )
+  failure.check(std@1/net.ends_in_number("0x7f.0.0.1"), TextInvariant())
+  match std@1/net.validate_host("example.com") {
+    Ok(()) => (),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match std@1/net.validate_host("example.123") {
+    Error(_) => (),
+    Ok(()) => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

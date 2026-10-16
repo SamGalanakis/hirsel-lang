@@ -1,0 +1,13 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 11
+// Replacing the record containing the selected field replaces the field.
+type State[T] {
+  it: Iter[T],
+  spare: Iter[T],
+}
+
+@preserves_captures(s.it)
+fn step[T](mut s: State[T], take other: State[T]) -> Option[T] {
+  s = take other
+  iter.next(mut s.it)
+}

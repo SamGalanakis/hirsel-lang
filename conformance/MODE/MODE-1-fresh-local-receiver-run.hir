@@ -1,0 +1,20 @@
+// rule: MODE-1
+// expect: run
+// stdout: fresh
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn probe(x: Bytes) -> Bytes {
+  let mut slot = view(x)
+  slot = b"new"
+  slot
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = probe(b"old")
+  if out == b"new" {
+    let _ = out.print(io.stdout(rt)?, "fresh\n")
+  }
+  Ok(())
+}

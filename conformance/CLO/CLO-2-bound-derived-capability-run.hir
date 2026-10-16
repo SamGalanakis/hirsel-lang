@@ -1,0 +1,11 @@
+// rule: CLO-2
+// expect: run
+// stdout: ok
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let f = fn() {
+    out.print(grant_stdout, "ok\n")
+  }
+  let _ = f()
+  Ok(())
+}

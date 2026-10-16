@@ -1,0 +1,19 @@
+// native/llvm/placement: HeapInNoalloc("construction N of ? escapes the frame")
+// under x86_64/regions/elide/reuse/llvm-O2/whole/diagnostic: native placement in example: HeapInNoalloc("construction 0 of example escapes the frame")
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+@noalloc
+fn example() -> u64 {
+  invoke(
+    fn() {
+      let agree_held_513: List[(List[u64], u64)] = [([7], 0u64)]
+let (n, _) = agree_held_513[0]
+      n[0]
+    }
+  )
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

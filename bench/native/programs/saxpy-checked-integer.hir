@@ -1,0 +1,27 @@
+// Checked u32 multiply then add; stop at the first overflowing source index.
+// Widening makes the checked result explicit without catching a language failure.
+fn workload(data: Bytes) -> Bytes {
+  let mut pos: u64 = 0
+  let n = decimal(data, mut pos)
+  let mut x: List[u32] = []
+  let mut y: List[u32] = []
+  list.reserve(mut x, n)
+  list.reserve(mut y, n)
+  for i in 0u64..n {
+    let a: u32 = if i == n / 2u64 { 4294967295u32 } else { int.narrow(i % 1000u64) }
+    list.push(mut x, a)
+    list.push(mut y, int.narrow(i % 97u64))
+  }
+  let mut total: u64 = 0
+  let mut failed: u64 = n
+  for index in 0u64..n {
+    let product: u64 = int.widen(x[index]) * 3u64
+    if product > 4294967295u64 { failed = index; break }
+    let sum: u64 = product + int.widen(y[index])
+    if sum > 4294967295u64 { failed = index; break }
+    y[index] = int.narrow(sum)
+    total += sum
+  }
+  if failed < n { total += 1000000000u64 + failed }
+  number(total)
+}

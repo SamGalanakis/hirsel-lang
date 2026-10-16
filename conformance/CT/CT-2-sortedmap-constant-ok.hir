@@ -1,0 +1,7 @@
+// rule: CT-2
+// expect: accept
+fn probe() -> () {
+  let by = u32.order
+  let m: SortedMap[u32, u8] of by = sorted_map.empty(by)
+  ()
+}

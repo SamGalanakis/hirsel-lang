@@ -1,0 +1,13 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 9
+// The map's value type fixes `map.insert`'s type argument at `StrPos of text`,
+// so a position of `other` cannot be inserted.
+fn index(text: String, other: String) -> u64 {
+  let mut starts: Map[u64, StrPos of text] = map.empty()
+  let mut n: u64 = 0
+  for p in string.positions(other) {
+    map.insert(mut starts, n, p)
+    n += 1u64
+  }
+  n
+}

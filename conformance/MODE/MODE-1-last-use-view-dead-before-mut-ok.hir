@@ -1,0 +1,20 @@
+// rule: MODE-1
+// expect: accept
+// A view's loan ends at its holder's last use, so a later `mut` checks (§04).
+fn look(x: Bytes) -> u64 {
+  0
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut b: Bytes) {
+  let v = view(b)
+  let n = look(v)
+  bump(mut b)
+}

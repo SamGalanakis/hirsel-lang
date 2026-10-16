@@ -1,0 +1,16 @@
+// rule: LANG-2
+// expect: accept
+// "Type arguments are never written in expressions."
+// The direct call supplies them.
+fn identity[T](take x: T) -> T {
+  x
+}
+
+fn increment(x: u64) -> u64 {
+  x + 1
+}
+
+fn example() -> u64 {
+  let f = increment
+  f(identity(1u64))
+}

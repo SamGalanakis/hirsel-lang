@@ -1,0 +1,12 @@
+rc-trace v1 max 16
+error at step 4 (line 7): T13 reuse: token t1 has capacity 2, not 1
+heap
+  @0 raw gen 1 capacity 2
+credits
+borrows
+locals
+tokens
+  t1 raw @0#1 capacity 2
+work
+regions
+events

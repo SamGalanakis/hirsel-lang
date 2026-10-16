@@ -1,0 +1,25 @@
+// Individually allocated nodes; retained long tree, stretch tree, temporary epochs.
+type Tree = Leaf | Branch(left: box Tree, right: box Tree)
+fn tree(depth: u64) -> box Tree {
+  if depth == 0u64 { box Leaf() }
+  else { box Branch(left: tree(depth - 1u64), right: tree(depth - 1u64)) }
+}
+fn check(t: box Tree) -> u64 {
+  match t { Leaf() => 1u64, Branch(left: l, right: r) => 1u64 + check(l) + check(r) }
+}
+fn workload(data: Bytes) -> Bytes {
+  let mut pos: u64 = 0
+  let depth = decimal(data, mut pos)
+  let long = tree(depth)
+  let mut total = { let stretch = tree(depth + 1u64); check(stretch) }
+  let mut d: u64 = 4
+  while d <= depth {
+    for iteration in 0u64..(1u64 << (depth - d)) {
+      let temporary = tree(d)
+      total += check(temporary)
+    }
+    d += 2u64
+  }
+  total += check(long)
+  number(total)
+}

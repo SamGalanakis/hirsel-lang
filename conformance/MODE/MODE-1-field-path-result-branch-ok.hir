@@ -1,0 +1,20 @@
+// rule: MODE-1
+// expect: accept
+// v22 #77. Both arms read within p.a, so the join does too.
+type Inner {
+  x: Bytes,
+  y: Bytes,
+}
+
+type Pair {
+  a: Inner,
+  b: Bytes,
+}
+
+fn get(p: Pair, flag: bool) -> Bytes in p.a {
+  if flag {
+    p.a.x
+  } else {
+    p.a.y
+  }
+}

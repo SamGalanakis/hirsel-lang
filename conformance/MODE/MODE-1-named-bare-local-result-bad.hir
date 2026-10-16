@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 5
+// A named function has no environment, so its local result names its
+// sources.
+fn same(x: Bytes) -> Bytes in env {
+  x
+}

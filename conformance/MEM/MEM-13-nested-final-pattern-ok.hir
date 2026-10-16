@@ -1,0 +1,13 @@
+// rule: MEM-13
+// expect: accept
+type Inner = Closed | Canceled(u64)
+
+type Outer[T] = Empty | Full(T)
+
+fn choose(x: Outer[Inner]) -> u64 {
+  match x {
+    Empty => 0,
+    Full(Closed) => 1,
+    Full(Canceled(n)) => n,
+  }
+}

@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: accept
+fn id(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  x
+}
+
+fn moved(a: Arena, take z: Bytes in z) -> u64 {
+  let r = id(
+    a,
+    take fn() {
+      fn(agree_x: Bytes in a) {
+        agree_x
+      }(z)
+    }()
+  )
+  1u64
+}

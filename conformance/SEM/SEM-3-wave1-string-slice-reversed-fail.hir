@@ -1,0 +1,19 @@
+// rule: SEM-3
+// expect: fail SEM-3 at line 8
+fn probe(s: String) -> () {
+  match string.position(s, 0) {
+    Some(a) => match string.position(s, string.byte_len(s)) {
+      Some(b) => {
+        // Both tokens belong to this exact Unicode source.
+        let _ = string.slice(s, b, a)
+      },
+      None() => (),
+    },
+    None() => (),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  probe("é😀")
+  Ok(())
+}

@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 14
+// "Sharing a part ... ends a binding’s uniqueness."
+type Rec {
+  items: Bytes,
+}
+
+fn require_unique(mut r: unique Rec) -> () {
+  ()
+}
+
+fn example(mut r: unique Rec) -> () {
+  let part = r.items
+  require_unique(mut r)
+  let _ = part
+}

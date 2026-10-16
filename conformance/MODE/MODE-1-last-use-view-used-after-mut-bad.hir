@@ -1,0 +1,20 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 18
+// The view is used after the `mut`, so its loan is live there (§04).
+fn look(x: Bytes) -> u64 {
+  0
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut b: Bytes) -> u64 {
+  let v = view(b)
+  bump(mut b)
+  look(v)
+}

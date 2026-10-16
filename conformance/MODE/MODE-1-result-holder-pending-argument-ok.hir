@@ -1,0 +1,26 @@
+// rule: MODE-1
+// expect: accept
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn observe(x: Bytes, n: u32) {
+  ()
+}
+
+fn probe(mut x: Bytes) {
+  let mut slot = view(x)
+  observe(
+    x,
+    {
+      slot = b"fresh"
+      1u32
+    }
+  )
+  bump(mut x)
+  ()
+}

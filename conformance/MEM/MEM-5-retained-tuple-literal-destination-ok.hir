@@ -1,0 +1,13 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn view(s: String) -> String in s {
+  copy s
+}
+
+fn example() {
+  let f: fn() -> (String, u64) uses {} = fn() -> (String, u64) {
+    (view("new"), 7u64)
+  }
+  ()
+}

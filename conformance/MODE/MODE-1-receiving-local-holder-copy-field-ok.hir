@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: accept
+type Holder {
+  value: Bytes,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn example(take h: Holder, seed: Bytes) -> Bytes in {h, seed} {
+  let mut r: Holder in r = copy h
+  r.value = copy seed
+  r.value
+}

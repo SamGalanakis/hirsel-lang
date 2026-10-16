@@ -1,0 +1,18 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 17
+type Mid {
+  leaf: unique List[Bytes],
+}
+
+type Top {
+  mid: Mid,
+}
+
+fn need(take x: unique List[Bytes]) {}
+
+fn probe(take t: unique Top) {
+  let alias = copy t.mid
+  let Top(mid: mid) = take t
+  let Mid(leaf: leaf) = take mid
+  need(take leaf)
+}

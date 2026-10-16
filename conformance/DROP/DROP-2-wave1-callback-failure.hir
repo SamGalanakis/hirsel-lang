@@ -1,0 +1,29 @@
+// rule: DROP-2
+// expect: fail MEM-14 at line 14
+resource type Item {
+  key: u64,
+  label: String,
+  out: Stdout,
+}
+@noalloc drop(x) {
+  out.print(x.out, x.label);
+}
+
+@noalloc
+fn predicate(x: Item) -> bool uses {} {
+  failure.check(x.key != 2, Bounds())
+  true
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  let items: List[Item] = [
+    Item(key: 1, label: "A\n", out: out),
+    Item(key: 2, label: "B\n", out: out),
+    Item(key: 3, label: "C\n", out: out)
+  ]
+  std@1/list.filter(take items, predicate)
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

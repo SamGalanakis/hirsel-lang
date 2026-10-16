@@ -1,0 +1,23 @@
+// rule: MODE-1
+// expect: accept
+// A closure holds the loans of the views it captures until its last call (MODE-5, §04).
+fn look(x: Bytes) -> u64 {
+  0
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut b: Bytes) {
+  let v = view(b)
+  let f = fn() -> u64 {
+    look(v)
+  }
+  let n = f()
+  bump(mut b)
+}

@@ -1,0 +1,17 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 16
+// A callee preserving only a sibling field does not cover the selection.
+type State[T] {
+  it: Iter[T],
+  spare: Iter[T],
+}
+
+@preserves_captures(s.spare)
+fn inner[T](mut s: State[T]) -> Option[T] {
+  iter.next(mut s.spare)
+}
+
+@preserves_captures(s.it)
+fn step[T](mut s: State[T]) -> Option[T] {
+  inner(mut s)
+}

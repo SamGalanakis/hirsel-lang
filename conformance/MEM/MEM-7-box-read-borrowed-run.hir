@@ -1,0 +1,31 @@
+// rule: MEM-7
+// expect: run
+// stdout: borrowed
+resource type Token {
+  text: String,
+}
+
+type Holder {
+  token: Token,
+}
+
+fn inspect(x: box Holder) -> bool {
+  match x {
+    Holder(token: t) => t.text == "borrowed",
+  }
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let value = box Holder(token: Token(text: "borrowed"))
+  failure.check(inspect(value), TextInvariant())
+  failure.check(inspect(value), TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, "borrowed\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

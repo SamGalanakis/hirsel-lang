@@ -1,0 +1,15 @@
+---
+source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
+expression: "rendered(\"PROV/PROV-3-task-bad.hir\")"
+---
+error[PROV-1]: the value belongs to a different origin: `h` belongs to `a`, but a parameter of `task.await` requires a value `of b`
+ --> ../../conformance/PROV/PROV-3-task-bad.hir:5:3
+   5 |   task.await(b, take h)
+     |   ^^^^^^^^^^^^^^^^^^^^^ 
+ --> ../../conformance/PROV/PROV-3-task-bad.hir:4:40
+   4 | fn example(a: Scope, b: Scope, take h: Task[u64] of a) -> u64 {
+     |                                        ^^^^^^^^^^^^^^ provided: branded `of a` by its type
+ --> ../../conformance/PROV/PROV-3-task-bad.hir:5:3
+   5 |   task.await(b, take h)
+     |   ^^^^^^^^^^ required: a parameter of `task.await` requires `of b`
+  = help: 1. use the value's own owner `a` here (no cost)

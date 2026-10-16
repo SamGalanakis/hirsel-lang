@@ -1,0 +1,9 @@
+// rule: DROP-4
+// expect: accept
+// Spec example "Implicit drop is the abort path" and commit is explicit.
+// AtomicFile is the core library resource; its declared drop aborts.
+pub fn save(dir: Dir, p: Path, data: Bytes) -> Result[(), FileError] {
+  let mut f = file.create_atomic(dir, p)?
+  file.write_all(dir, mut f, data)?
+  file.commit(dir, take f)
+}

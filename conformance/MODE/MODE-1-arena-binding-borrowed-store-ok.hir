@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: accept
+// Naming the borrowed parameter in the binding's relation admits its value
+// alongside the arena.
+type Ast {
+  s: String,
+}
+
+fn f(a: Arena, x: String) -> () {
+  let mut g: Ast in {a, x} = Ast(s: "y")
+  g.s = x
+}

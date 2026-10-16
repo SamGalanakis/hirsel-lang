@@ -1,0 +1,11 @@
+[package]
+name = "hirsel-syntax"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-span = { path = "../hirsel-span" }
+hirsel-intern = { path = "../hirsel-intern" }
+sha2 = "0.10"

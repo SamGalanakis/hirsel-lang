@@ -1,0 +1,8 @@
+// rule: MEM-5
+// expect: accept
+resource type Token {
+  n: u32,
+}
+@noalloc drop(x) {
+  let n: u32 = x.n
+}

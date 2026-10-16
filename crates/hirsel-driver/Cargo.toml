@@ -1,0 +1,39 @@
+[package]
+name = "hirsel-driver"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-engine = { path = "../hirsel-engine" }
+hirsel-check-protocol = { path = "../hirsel-check-protocol" }
+hirsel-signature = { path = "../hirsel-signature" }
+hirsel-check = { path = "../hirsel-check" }
+hirsel-lower = { path = "../hirsel-lower" }
+hirsel-modes = { path = "../hirsel-modes" }
+hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-diag = { path = "../hirsel-diag" }
+hirsel-span = { path = "../hirsel-span" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-types = { path = "../hirsel-types" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-interp = { path = "../hirsel-interp" }
+hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-lir = { path = "../hirsel-lir" }
+hirsel-rc = { path = "../hirsel-rc" }
+hirsel-heapcheck = { path = "../hirsel-heapcheck" }
+hirsel-llvm = { path = "../hirsel-llvm" }
+hirsel-rt = { path = "../hirsel-rt" }
+serde_json = "1"
+libc = { version = "0.2", default-features = false }
+sha2 = "0.10"
+
+[dev-dependencies]
+hirsel-codec = { path = "../hirsel-codec" }
+hirsel-proof-export = { path = "../hirsel-proof-export" }
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-validate = { path = "../hirsel-validate" }
+hirsel-lexer = { path = "../hirsel-lexer" }
+hirsel-parser = { path = "../hirsel-parser" }
+hirsel-resolve = { path = "../hirsel-resolve" }

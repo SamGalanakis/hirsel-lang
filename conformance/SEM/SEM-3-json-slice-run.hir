@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let source: String = "x{\"a\":\"é\",\"n\":-0.00E+001}y"
+  let start = match core@1/string.position(source, 1) {
+    Some(p) => p,
+    None() => {
+      failure.check(false, TextInvariant())
+      return Ok(())
+    },
+  }
+  let end = match core@1/string.position(source, core@1/string.byte_len(source) - 1) {
+    Some(p) => p,
+    None() => {
+      failure.check(false, TextInvariant())
+      return Ok(())
+    },
+  }
+  let text = core@1/string.slice(source, start, end)
+  let value = match std@1/json.parse(take text) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      {
+        let empty: std@1/json.Value = Null()
+        empty
+      }
+    },
+  }
+  match std@1/json.stringify(value) {
+    Ok(s) => failure.check(s == "{\"a\":\"é\",\"n\":-0.00E+001}", TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

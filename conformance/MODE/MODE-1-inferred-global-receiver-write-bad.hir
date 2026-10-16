@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 13
+// The twin of MODE-1-inferred-local-receiver-write-run. The element received
+// is global, so the inferred storage is global and rejects a local write.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn taken(p: Bytes) {
+  let xs: List[Bytes] = [b"q"]
+  for x in take xs {
+    let mut y = take x
+    y = view(p)
+  }
+}

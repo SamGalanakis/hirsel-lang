@@ -1,0 +1,23 @@
+// rule: CT-2
+// expect: run
+// stdout: saved
+// stdout: saved
+const DATA: String in heap = "saved\n"
+
+@noalloc
+fn read() -> String in heap uses {} {
+  DATA
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(io.stdout(rt) ? grant_error, read()) ? ignore
+  out.print(io.stdout(rt) ? grant_error, read()) ? ignore
+  Ok(())
+}
+
+fn ignore[E](take e: E) {}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,26 @@
+// rule: PROV-1
+// expect: run
+// Moving `text` into the record carries its identity there, and moving the
+// record moves it again, so `pos` stays usable until the written take that
+// ends the record's identity. The destructured field is branded by the new
+// local (PROV-5).
+resource type Cursor {
+  text: String,
+  pos: StrPos of .text,
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let text: String = "ab"
+  match string.position(text, 1u64) {
+    Some(pos) => {
+      let c = Cursor(text: text, pos: pos)
+      let moved = c
+      test.check(t, moved.pos == pos)
+      let Cursor(text: checked_text, pos: checked_pos) = take moved
+      test.check(t, checked_pos == checked_pos)
+      test.check(t, string.byte_offset(checked_text, checked_pos) == 1u64)
+    },
+    None => test.check(t, false),
+  }
+  Ok(())
+}

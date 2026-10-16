@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: accept
+fn put(mut xs: List[String], take y: String) -> () {
+  for x in mut xs {
+    x = copy y
+  }
+}

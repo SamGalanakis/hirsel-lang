@@ -1,0 +1,9 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. Naming a binding beside an arena admits the arenas the binding
+// holds. z holds y's arena b, so y is within {a, z}.
+fn good(a: Arena, b: Arena, y: Bytes in b) -> u64 {
+  let z = y
+  let v: Bytes in {a, z} = y
+  0
+}

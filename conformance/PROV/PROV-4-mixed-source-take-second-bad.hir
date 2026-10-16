@@ -1,0 +1,12 @@
+// rule: PROV-4
+// expect: reject MODE-1 at line 9
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn bad(a: Arena, b: Arena, take x: Bytes in a, take y: Bytes in b) {
+  let selected = choose(a, b, x, y)
+  let moved = take y
+  let _ = selected
+  let _ = moved
+}

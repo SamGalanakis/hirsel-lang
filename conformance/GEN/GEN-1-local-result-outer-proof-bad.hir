@@ -1,0 +1,10 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 8
+fn same[T](x: T) -> T in x {
+  x
+}
+
+fn relay[U](x: U) -> () {
+  let v = same(x)
+  ()
+}

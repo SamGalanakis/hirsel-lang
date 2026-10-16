@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 9
+fn cross[T: sendable](take xs: (T, u64)) {}
+
+fn probe() {
+  let x: Bytes = b"a"
+  let xs = (x, 0u64)
+  let ys = copy xs
+  cross(take xs)
+}

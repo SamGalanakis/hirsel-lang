@@ -1,0 +1,41 @@
+// rule: OWN-3
+// expect: run
+// stdout: ok
+// v22 §04 makes all elements of a sequence one place, but distinct fields
+// below it do not overlap. A block argument may write a sibling field of the
+// element place an earlier argument lends, through any index, even when the
+// write detaches the shared list (OWN-4). The callee sees the name it was lent.
+type R {
+  name: String,
+  n: u64,
+}
+
+fn len(s: String, k: u64) -> u64 {
+  string.byte_len(s) + k
+}
+
+fn sibling() -> u64 {
+  let mut xs: List[R] = [R(name: "ab", n: 1)]
+  let i = 0u64
+  let ys = copy xs
+  len(
+    xs[i].name,
+    {
+      xs[i].n = 5
+      1
+    }
+  ) + xs[0].n * 10 + ys[0].n * 100
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = sibling() == 153
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

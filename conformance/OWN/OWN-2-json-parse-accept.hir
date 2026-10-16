@@ -1,0 +1,7 @@
+// rule: OWN-2
+// expect: accept
+fn probe(take text: String) -> () uses {} {
+  std@1/json.parse(copy text)
+  core@1/string.byte_len(text)
+  ()
+}

@@ -1,0 +1,7 @@
+// rule: MEM-14
+// expect: reject PROV-1 at line 6
+// "moving, replacing or destroying the container ends [identity]".
+fn read(mut s: Slots[u64], id: SlotId[u64] of s) -> Option[u64] in s {
+  s = slots.empty()
+  slots.get(s, id)
+}

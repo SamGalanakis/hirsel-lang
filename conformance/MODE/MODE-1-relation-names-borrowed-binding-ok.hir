@@ -1,0 +1,8 @@
+// rule: MODE-1
+// expect: accept
+// "let x T in S fixes x's receiving contract (LANG-15); S may name places in
+// scope." A relation may name a borrowed binding that is not an arena, and a
+// fresh literal is within any relation.
+fn example(d: Dir) -> () {
+  let value: Bytes in d = b"inside"
+}

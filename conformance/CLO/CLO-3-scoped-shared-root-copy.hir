@@ -1,0 +1,19 @@
+// rule: CLO-3
+// expect: accept
+fn read_root(tasks: Tasks, take bytes: unique Bytes) {
+  let root = shared.freeze(take bytes)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() {
+          let owned = copy root
+          let _ = owned
+        }
+      )
+      task.await(s, take child)
+    }
+  )
+  let _ = root
+}

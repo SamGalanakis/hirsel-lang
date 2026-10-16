@@ -1,0 +1,43 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// exit: 0
+// "Plain values are never local." A locality written on plain bits is inert,
+// so the result below is an ordinary global value that outlives its source.
+type P {
+  x: u32,
+  y: u32,
+}
+
+fn output_error[E](take e: E) -> () {}
+
+fn first(p: P, m: u32) -> u32 in p {
+  p.x + m
+}
+
+fn keep(take n: u32 in n) -> u32 {
+  n
+}
+
+fn pick() -> u32 {
+  let p = P(x: 4, y: 5)
+  let n = first(p, 1)
+  keep(n)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if pick() == 5 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

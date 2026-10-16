@@ -1,0 +1,6 @@
+// rule: CONC-6
+// expect: accept
+// "a Receiver is noncopyable"; it is moved or borrowed, never copied.
+fn consume(take r: Receiver[u32]) -> () {
+  let other = take r
+}

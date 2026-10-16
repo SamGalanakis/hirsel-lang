@@ -1,0 +1,25 @@
+// rule: SEM-2
+// expect: run
+// stdout: ok
+// "−0 < +0" applies even though zeros compare equal.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let zero: f64 = 0.0
+  let value = float.min(zero, -zero)
+  let inv = 1.0 / value
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if inv < 0.0 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

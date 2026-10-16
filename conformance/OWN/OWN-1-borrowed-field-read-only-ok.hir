@@ -1,0 +1,10 @@
+// rule: OWN-1
+// expect: accept
+// "Anything else derived from x is local to x."
+type Rec {
+  items: Bytes,
+}
+
+fn example(mut r: Rec) -> () {
+  r.items = b"new"
+}

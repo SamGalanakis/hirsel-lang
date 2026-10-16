@@ -1,0 +1,9 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 6
+// The first access obligation cites the complete operation (§23).
+fn probe(mut m: Map[u8, u8]) {
+  for (k, v) in m {
+    map.insert(mut m, 3, 4)
+  }
+}
+// The holder is used after the conflicting action, so its loan is still live (§04).

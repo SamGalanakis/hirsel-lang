@@ -1,0 +1,171 @@
+@noalloc
+fn piece(s: String, start: u64, end: u64) -> String in s uses {} {
+  match core@1/string.position(s, start) {
+    Some(a) => match core@1/string.position(s, end) {
+      Some(b) => core@1/string.slice(s, a, b),
+      None() => {
+        core@1/failure.check(false, TextInvariant())
+        s
+      },
+    },
+    None() => {
+      core@1/failure.check(false, TextInvariant())
+      s
+    },
+  }
+}
+
+// Nonoverlapping substring delimiter; preserve leading, trailing and empty fields.
+pub fn split(take s: String, separator: String) -> List[String] uses {} {
+  let source = core@1/string.as_bytes(s)
+  let delimiter = core@1/string.as_bytes(separator)
+  let len = core@1/bytes.len(source)
+  let width = core@1/bytes.len(delimiter)
+  core@1/failure.check(width != 0, TextInvariant())
+  let mut parts: List[String] = []
+  let mut begin: u64 = 0
+  let mut i: u64 = 0
+  while i <= len && width <= len - i {
+    let mut j: u64 = 0
+    while j < width && source[i + j] == delimiter[j] {
+      j += 1
+    }
+    if j == width {
+      core@1/list.push(mut parts, piece(s, begin, i))
+      i += width
+      begin = i
+    } else {
+      i += 1
+    }
+  }
+  core@1/list.push(mut parts, piece(s, begin, len))
+  take parts
+}
+
+// Byte matching is safe for UTF-8: a nonempty valid pattern cannot start at
+// a continuation byte. Offsets and positions remain relative to this slice.
+@noalloc
+fn matches_at(source: Bytes, pattern: Bytes, offset: u64) -> bool uses {} {
+  let len = core@1/bytes.len(source)
+  let width = core@1/bytes.len(pattern)
+  if offset > len || width > len - offset {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < width {
+    if source[offset + i] != pattern[i] {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+@noalloc
+pub fn find(s: String, pattern: String) -> Option[StrPos of s] uses {} {
+  let source = core@1/string.as_bytes(s)
+  let needle = core@1/string.as_bytes(pattern)
+  let len = core@1/bytes.len(source)
+  let width = core@1/bytes.len(needle)
+  let mut i: u64 = 0
+  while i <= len && width <= len - i {
+    if matches_at(source, needle, i) {
+      return core@1/string.position(s, i)
+    }
+    i += 1
+  }
+  None()
+}
+
+@noalloc
+pub fn starts_with(s: String, pattern: String) -> bool uses {} {
+  matches_at(core@1/string.as_bytes(s), core@1/string.as_bytes(pattern), 0)
+}
+
+@noalloc
+pub fn ends_with(s: String, pattern: String) -> bool uses {} {
+  let len = core@1/string.byte_len(s)
+  let width = core@1/string.byte_len(pattern)
+  width <= len && matches_at(
+    core@1/string.as_bytes(s),
+    core@1/string.as_bytes(pattern),
+    len - width
+  )
+}
+
+@noalloc
+fn whitespace(byte: u8) -> bool uses {} {
+  byte == 32 || byte >= 9 && byte <= 13
+}
+
+@noalloc
+pub fn trim(s: String) -> String in s uses {} {
+  let source = core@1/string.as_bytes(s)
+  let mut begin: u64 = 0
+  let mut end = core@1/bytes.len(source)
+  while begin < end && whitespace(source[begin]) {
+    begin += 1
+  }
+  while begin < end && whitespace(source[end - 1]) {
+    end -= 1
+  }
+  piece(s, begin, end)
+}
+
+// Builders below only append valid UTF-8 or change one ASCII byte to another.
+fn finish_valid(take builder: List[u8]) -> String uses {} {
+  match std@1/text.finish(take builder) {
+    Ok(text) => take text,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+fn ascii_case(s: String, lower: bool) -> String uses {} {
+  let source = core@1/string.as_bytes(s)
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(source) {
+    let byte = source[i]
+    let converted = if lower && byte >= 65 && byte <= 90 {
+      byte + 32
+    } else if !lower && byte >= 97 && byte <= 122 {
+      byte - 32
+    } else {
+      byte
+    }
+    core@1/list.push(mut builder, converted)
+    i += 1
+  }
+  finish_valid(take builder)
+}
+
+pub fn ascii_lower(s: String) -> String uses {} {
+  ascii_case(s, true)
+}
+
+pub fn ascii_upper(s: String) -> String uses {} {
+  ascii_case(s, false)
+}
+
+pub fn concat(a: String, b: String) -> String uses {} {
+  let mut builder: List[u8] = []
+  std@1/text.append(mut builder, a)
+  std@1/text.append(mut builder, b)
+  finish_valid(take builder)
+}
+
+pub fn join(parts: List[String], separator: String) -> String uses {} {
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < core@1/list.len(parts) {
+    if i != 0 {
+      std@1/text.append(mut builder, separator)
+    }
+    std@1/text.append(mut builder, parts[i])
+    i += 1
+  }
+  finish_valid(take builder)
+}

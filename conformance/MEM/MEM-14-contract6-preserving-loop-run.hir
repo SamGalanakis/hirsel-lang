@@ -1,0 +1,40 @@
+// rule: MEM-14
+// expect: run
+// stdout: advanced
+// stdout: advanced
+// stdout: advanced
+@advance_only(it)
+fn advance[T](mut it: Iter[T]) -> Option[T] {
+  iter.next(mut it)
+}
+
+@preserves_captures(it)
+fn step[T](mut it: Iter[T]) -> Option[T] {
+  advance(mut it)
+}
+
+fn next(mut position: u64) -> Option[u64] {
+  if position < 3 {
+    let value = position
+    position += 1
+    Some(value)
+  } else {
+    None
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut it = iter.from(0u64, next)
+  let mut count: u64 = 0
+  while count < 4 {
+    match step(mut it) {
+      Some(value) => {
+        failure.check(value == count, Bounds())
+        let _ = out.print(io.stdout(rt)?, "advanced\n")
+      },
+      None => failure.check(count == 3, Bounds()),
+    }
+    count += 1
+  }
+  Ok(())
+}

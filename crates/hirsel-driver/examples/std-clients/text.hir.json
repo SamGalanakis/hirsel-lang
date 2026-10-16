@@ -1,0 +1,1 @@
+{"schema":1,"package":{"name":"app","version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"text.hir","module":[]}],"dependencies":[{"manifest":"../../../../stdlib/std@1/hirsel.json","package":{"name":"std","version":"1"},"expose":[]}]}

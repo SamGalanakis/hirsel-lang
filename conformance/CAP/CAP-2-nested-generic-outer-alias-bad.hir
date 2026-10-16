@@ -1,0 +1,13 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 10
+fn accept[X: inert](x: X) -> () {
+  ()
+}
+
+fn outer[T](x: T) -> () {
+  fn inner[U: inert](take y: U) -> () {
+    let alias = x
+    accept(alias)
+  }
+  ()
+}

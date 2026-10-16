@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn inspect(s: String) {
+  let view = std@1/unicode.graphemes(s)
+}

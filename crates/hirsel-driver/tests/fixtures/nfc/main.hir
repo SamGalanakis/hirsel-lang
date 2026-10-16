@@ -1,0 +1,6 @@
+pub fn batch(xs: List[String]) -> List[String] uses {} {
+  let mut ys: List[String] = []
+  for s in xs { core@1/list.push(mut ys, std@1/unicode.normalize_nfc(s)) }
+  take ys
+}
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] { Ok(()) }

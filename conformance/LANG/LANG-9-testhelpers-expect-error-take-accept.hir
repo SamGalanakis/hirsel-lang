@@ -1,0 +1,6 @@
+// rule: LANG-9
+// expect: accept
+// entry: trial
+fn trial(t: Test, take value: Result[u64, String]) -> String {
+  std@1/test.expect_error(t, take value)
+}

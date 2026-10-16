@@ -1,0 +1,51 @@
+// rule: MODE-1
+// expect: run
+// stdout: kept
+// stdout: taken
+// stdout: part
+// An inferred binding receives the locality of its initializer. Local content
+// makes local storage, which accepts a later local write.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn kept(p: Bytes) -> bool {
+  let xs: List[Bytes] = [view(p)]
+  let mut seen: bool = false
+  for x in take xs {
+    let mut y = x
+    y = view(p)
+    seen = y == b"p"
+  }
+  seen
+}
+
+fn taken(p: Bytes) -> bool {
+  let xs: List[Bytes] = [view(p)]
+  let mut seen: bool = false
+  for x in take xs {
+    let mut y = take x
+    y = view(p)
+    seen = y == b"p"
+  }
+  seen
+}
+
+fn part(p: Bytes) -> bool {
+  let mut (a, b): (Bytes, Bytes) = (b"x", view(p))
+  a = view(p)
+  a == b
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  if kept(b"p") {
+    let _ = out.print(io.stdout(rt)?, "kept\n")
+  }
+  if taken(b"p") {
+    let _ = out.print(io.stdout(rt)?, "taken\n")
+  }
+  if part(b"p") {
+    let _ = out.print(io.stdout(rt)?, "part\n")
+  }
+  Ok(())
+}

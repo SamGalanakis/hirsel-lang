@@ -1,0 +1,35 @@
+// rule: MODE-1
+// expect: accept
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+type Nest {
+  pair: Pair,
+  other: Bytes,
+}
+
+type Bucket {
+  items: List[Bytes],
+  other: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes, mut y: Bytes, c: bool) {
+  let mut slot = Pair(left: view(x), right: view(y))
+  if c {
+    slot.left = b"a"
+  } else {
+    slot.left = b"b"
+  }
+  bump(mut x)
+  ()
+}

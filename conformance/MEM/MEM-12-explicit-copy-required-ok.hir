@@ -1,0 +1,12 @@
+// rule: MEM-12
+// expect: accept
+// "Flat values are copied only explicitly (a memcpy)".
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+fn read(take a: Item) -> u64 {
+  let b = copy a
+  a.n
+}

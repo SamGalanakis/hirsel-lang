@@ -1,0 +1,6 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 5
+pub fn trial(t: Test) -> () {
+  let d = test.dir(t, [])
+  let f = file.open(take d, path.of("a"))
+}

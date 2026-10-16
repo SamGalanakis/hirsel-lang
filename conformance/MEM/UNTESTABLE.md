@@ -1,0 +1,23 @@
+# Memory properties requiring another oracle
+
+The `.hir` corpus covers observable values and stated static restrictions. These parts cannot be decided by one ordinary safe program:
+
+| Rule | Part | Oracle |
+| --- | --- | --- |
+| MEM-1 | Exact dup/drop insertion, elision, specialization, size-keyed reuse, plain counts, immortalization just before count overflow, and the timing of a projection's count | Machine-checked RC model, instrumented runtime count/reuse traces, and differential execution. A safe program has no count/address observer or means to manufacture count overflow. |
+| MEM-2 | Universal acyclicity, absence of weak references/aliasable cells, and channel cycles lying outside the value graph | Mode/type-system proof and generated safe graph model; channel-buffer lifecycle model with the CONC-6 corpus. Finite examples cannot establish the universal property. Self-capture is also rejected by LANG-10/CLO rules; v20 section 23 assigns diagnostic ownership. |
+| MEM-3 | Unobservable freeing order, constant native release stack, no allocation by release, dead-header worklist | RC model plus instrumented allocator/stack oracle across arbitrarily deep generated graphs. DROP-2 provides observable resource order tests. |
+| MEM-4 | Count-free arena blocks, held-heap-block release at close, nested-block detachment, deep owned storage after seal, no further arena allocations after sealing | Arena/RC model and instrumented allocation traces. Safe code cannot inspect physical placement or retained counts. The seal API consumes the only arena capability; use after seal is already an ownership error. |
+| MEM-5 | Allocation-contract preservation for every generic/closure/dictionary instantiation and all implementation paths | Allocation-effect checker proof plus generated signature/instantiation corpus and runtime allocation instrumentation. Concrete representative cases are in `.hir`. |
+| MEM-7 | Exact inline layout, no hidden generic boxing, no runtime overlap checks | Typed layout oracle and IR audit; compile many instantiations with allocation/overlap instrumentation. |
+| MEM-8 | Fixed machine width and absence of a runtime width query | Type/IR layout oracle and API surface audit. V20 declares simd.splat/add; compare lane-by-lane scalar execution and first failing lane against the vector implementation. |
+| MEM-9 | Universal adherence to a written unsafe aliasing contract; behavior outside the determinism contract | Unsafe/FFI contract review and native sanitizer/stress harness. Scalar capability-precondition twins use the library signature. |
+| MEM-10 | Regions carry no counts; data stack/slab/segment placement, unpublished growth and relocation, published address stability, 8 MiB idle pool limit, direct caller destination and scope-exit pointer reset | Region/RC model, prototype allocation traces and interpreter/native differential runs. Placement is explicitly unobservable; compare reserved and relocating builders and measure idle retained bytes at each region exit. |
+| MEM-11 | Inner blocks immortal/uncounted, only root atomic, deep walk and exact last-root freeing | Shared/RC model plus atomic/refcount instrumentation and weak-memory stress. Freeze preconditions and last/non-last-root thaw are program tests. |
+| MEM-12 | One contiguous pointer-free block, memcpy cost, stable byte encoding and sendable-copy ABI | Native flat layout model and cross-task differential tests; SER-1/2 wire bytes are separate and covered by hirsel-types/tests/wire golden vectors, its independent Python decoder and both-target codec tests. At-most-one growable and must-be-last cannot be isolated from each other when two fields are growable; every such layout already violates must-be-last. |
+| MEM-13 | Storage exactly the active variant's size and physical in-place payload updates | Typed-layout model plus allocator/IR instrumentation. Program tests cover variant replacement, payload places and sequential access. |
+| MEM-14 | Retire a slot before generation wrap, rather than alias a stale id | Parameterized slot model with a deliberately tiny generation width and exhaustive wrap tests. The spec provides no generation width or wrap control to a safe program. |
+
+V20 MEM-5: cleanup twins exercise explicit destructor effects and noalloc_drop.
+The model must also check early failure/return/cancellation cleanup and recursive
+field summaries without consulting destructor bodies across definitions.

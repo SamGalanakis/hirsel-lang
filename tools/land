@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Land the lane's committed change on main.
+
+    tools/land
+
+Fetch, rebase onto origin/main, then build the workspace, run Clippy, check
+formatting and the build files on the rebased tree, and push. A rejected push
+(main moved) repeats the loop. A rebase conflict stops it: resolve it, run
+tools/gate on the result, and land again.
+
+Land never runs tests. tools/gate runs them once, on the finished change, and
+records the change's identity when it passes (gating.change_identity: the
+patch-id of the lane's own diff without context lines, and the crates it
+touches). Land refuses a change with no such record, so a clean rebase onto a
+newer main never reruns tests, and an edited or hand-merged change always does.
+"""
+
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools/buck2'))
+sys.dont_write_bytecode = True
+import gating  # noqa: E402
+from gating import say  # noqa: E402
+
+PY = sys.executable
+ATTEMPTS = 20
+REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
+
+
+def run(*command, **kwargs):
+    return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, **kwargs)
+
+
+def checks():
+    """Build, Clippy, formatting and the build files on this tree: True when all pass."""
+    if run(PY, 'tools/buck2/prepare.py').returncode:
+        say('land: tools/buck2/prepare.py failed')
+        return False
+    local = gating.Local()
+    local.start('formatting', [PY, 'tools/buck2/fmt.py', '--check'])
+    local.start('Buck2 build files match Cargo', [PY, 'tools/buck2/sync.py', '--check'])
+    build = gating.uquery(gating.BUILD_SET)
+    clippy = gating.uquery(gating.CLIPPY_SET)
+    started = time.monotonic()
+    result = gating.buck2('build', '--materializations', 'none', *build, *[t + '[clippy.txt]' for t in clippy],
+                          capture_output=True, text=True)
+    ok = result.returncode == 0
+    say(f'land: {"pass" if ok else "FAIL"}  workspace build and Clippy: {len(build)} targets, '
+        f'{len(clippy)} Clippy twins ({time.monotonic() - started:.0f} s)')
+    if not ok:
+        say(gating.last_lines(result.stderr, 40))
+    else:
+        clean, text = gating.clippy_report(clippy)
+        if not clean:
+            say('land: FAIL  Clippy\n' + gating.last_lines(text, 40))
+            ok = False
+    for name, _, status, output, seconds in local.finish():
+        say(f'land: {"pass" if status == 0 else "FAIL"}  {name} ({seconds:.0f} s)')
+        if status:
+            say(gating.last_lines(output, 20))
+            ok = False
+    return ok
+
+
+def main():
+    if len(sys.argv) > 1:
+        print(__doc__, file=sys.stderr)
+        return 2
+    os.chdir(ROOT)
+    for name, value in (('CARGO_BUILD_JOBS', '4'), ('HIRSEL_JOBS', '4'), ('RUST_TEST_THREADS', '4')):
+        os.environ.setdefault(name, value)
+    if run('git', 'status', '--porcelain').stdout.strip():
+        say('land: the worktree has uncommitted changes; commit them (and gate the result) first')
+        return 1
+    for attempt in range(1, ATTEMPTS + 1):
+        if (fetch := run('git', 'fetch', 'origin')).returncode:
+            say('land: git fetch failed\n' + fetch.stderr)
+            return 1
+        rebase = run('git', 'rebase', 'origin/main')
+        if rebase.returncode:
+            conflicts = run('git', 'diff', '--name-only', '--diff-filter=U').stdout.split()
+            run('git', 'rebase', '--abort')
+            say('land: the rebase onto origin/main conflicts in: ' + (', '.join(conflicts) or rebase.stderr.strip()))
+            say('land: rebase by hand, resolve, run tools/gate on the result, then tools/land')
+            return 1
+        base = gating.merge_base('origin/main')
+        identity = gating.change_identity(base)
+        if not identity:
+            say('land: nothing to land; HEAD is on origin/main')
+            return 0
+        crates = gating.Selection(base).crates
+        if not gating.is_green(identity, crates):
+            say(f'land: tools/gate has not passed this change (identity {identity[:12]}); '
+                'run tools/gate, then tools/land')
+            return 1
+        say(f'land: attempt {attempt}: {run("git", "rev-list", "--count", f"{base}..HEAD").stdout.strip()} '
+            f'commits on {base[:12]}, change {identity[:12]} passed tools/gate')
+        if not checks():
+            say('land: refusing to push a red tree')
+            return 1
+        push = run('git', 'push', 'origin', 'HEAD:main')
+        if push.returncode == 0:
+            say(f'land: pushed {run("git", "rev-parse", "--short", "HEAD").stdout.strip()} to main')
+            return 0
+        if not any(marker in push.stderr for marker in REJECTED):
+            say('land: git push failed\n' + push.stderr)
+            return 1
+        say('land: main moved during the checks; rebasing again')
+    say(f'land: main moved under {ATTEMPTS} attempts in a row; try again')
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

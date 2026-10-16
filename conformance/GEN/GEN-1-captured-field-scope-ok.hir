@@ -1,0 +1,15 @@
+// rule: GEN-1
+// expect: accept
+type Wrap[T] {
+  value: T,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn probe[T: data](x: Wrap[T]) {
+  fn inner[U: plain](y: U) -> bool {
+    x.value == x.value
+  }
+}

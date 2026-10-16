@@ -1,0 +1,8 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  failure.check(std@1/string.starts_with("", ""), TextInvariant())
+  failure.check(std@1/string.starts_with("é", ""), TextInvariant())
+  failure.check(!std@1/string.starts_with("", "é"), TextInvariant())
+  Ok(())
+}

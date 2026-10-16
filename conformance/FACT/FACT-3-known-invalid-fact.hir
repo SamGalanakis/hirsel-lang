@@ -1,0 +1,9 @@
+// rule: FACT-3
+// expect: fail FACT-2 at line 7
+// "Every contract and fact is checked at run time at every optimisation level".
+distinct type Percent(v: u8) where v <= 100
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = Percent(101)
+  Ok(())
+}

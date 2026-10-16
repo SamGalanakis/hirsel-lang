@@ -1,0 +1,8 @@
+// rule: CAP-3
+// expect: reject CAP-3 at line 5
+fn probe(s: Stdout) {
+  let f = fn() uses {Io} {
+    out.print(s, "ok\n")
+  }
+  let _ = f()
+}

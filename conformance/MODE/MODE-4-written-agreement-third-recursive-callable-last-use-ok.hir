@@ -1,0 +1,18 @@
+// rule: MODE-4
+// expect: accept
+type Chain {
+  next: Option[box Chain],
+  f: fn() -> (),
+}
+
+fn probe(take f: (sendable fn() -> ()) in f, again: bool) {
+  let mut n: Chain = Chain(next: None, f: copy f)
+  let last_use_view = fn() {
+    copy n
+  }
+  let _ = last_use_view()
+  while again {
+    n = Chain(next: Some(box copy n), f: copy f)
+  }
+  n.f()
+}

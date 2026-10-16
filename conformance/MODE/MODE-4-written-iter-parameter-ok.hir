@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+// A written callable type keeps its declared environment promises, so a
+// function value requiring a sendable `mut` Iter is held where one is written.
+fn build() {
+  let step: fn(mut it: sendable Iter[u64]) -> Option[u64] = fn(
+    mut it: sendable Iter[u64]
+  ) -> Option[u64] {
+    iter.next(mut it)
+  }
+}

@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: accept
+type serializable {
+  serializable: u8,
+}
+
+fn use_name(x: serializable) -> u8 {
+  x.serializable
+}

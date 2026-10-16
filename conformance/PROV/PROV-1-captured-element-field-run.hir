@@ -1,0 +1,35 @@
+// rule: PROV-1
+// expect: run
+// stdout: ok
+// An element of a captured sequence is a value the closure body computes,
+// and a field read through it is a part of that same value.
+type R {
+  xs: List[Bytes],
+  n: u64,
+}
+
+fn count(rs: List[R]) -> u64 {
+  fn() {
+    list.len(rs[0u64].xs)
+  }()
+}
+
+fn number(rs: List[R]) -> u64 {
+  fn() {
+    rs[1u64].n
+  }()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let rs: List[R] = [R(xs: [b"a", b"b"], n: 1), R(xs: [], n: 7)]
+  let ok = count(rs) == 2 && number(rs) == 7
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

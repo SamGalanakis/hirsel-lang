@@ -1,0 +1,5 @@
+// rule: LANG-14
+// expect: reject LANG-14 at line 5
+// Shows "todo" is in the keyword list and cannot be a parameter name.
+@noalloc
+fn example(todo: u32) -> u32 { 0 }

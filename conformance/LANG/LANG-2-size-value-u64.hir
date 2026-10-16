@@ -1,0 +1,7 @@
+// rule: LANG-2
+// expect: accept
+// Shows "A size parameter used as a value is a u64."
+@noalloc
+fn length[n: size](xs: Inline[u32, n]) -> u64 {
+  n
+}

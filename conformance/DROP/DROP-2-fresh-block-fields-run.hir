@@ -1,0 +1,33 @@
+// rule: DROP-2
+// expect: run
+// stdout: eval right
+// stdout: eval left
+// stdout: drop right
+// stdout: drop left
+resource type Token {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+type Pair {
+  left: Token,
+  right: Token,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let pair = Pair(
+    right: {
+      let _ = out.print(stdout, "eval right\n")
+      Token(stdout: stdout, text: "drop right\n")
+    },
+    left: {
+      let _ = out.print(stdout, "eval left\n")
+      Token(stdout: stdout, text: "drop left\n")
+    }
+  )
+  Ok(())
+}

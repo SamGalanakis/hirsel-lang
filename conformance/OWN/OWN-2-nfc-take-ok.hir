@@ -1,0 +1,11 @@
+// rule: OWN-2
+// expect: accept
+fn owned(take s: String) -> String uses {} {
+  std@1/unicode.normalize_nfc(s)
+}
+
+fn both() -> String uses {} {
+  let s: String = "e\u{301}"
+  owned(copy s)
+  std@1/unicode.normalize_nfc(s)
+}

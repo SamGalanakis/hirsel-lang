@@ -1,0 +1,10 @@
+// rule: MEM-5
+// expect: accept
+type Wrap[T] {
+  value: T,
+}
+
+@noalloc
+fn probe[T: plain](x: Wrap[T]) -> unique Wrap[T] {
+  unique x
+}

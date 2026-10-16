@@ -1,0 +1,33 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn main() -> () {
+  let mut buffer: Inline[u8, 25] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  std@1/f32.format(1.0f32, mut buffer);
+}

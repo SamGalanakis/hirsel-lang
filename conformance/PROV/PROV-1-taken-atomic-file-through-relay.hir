@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: accept
+fn relay[T](take value: T) -> T {
+  value
+}
+
+fn commit_one(dir: Dir, take f: AtomicFile of dir) -> Result[(), FileError] {
+  let forwarded = relay(take f)
+  file.commit(dir, take forwarded)
+}

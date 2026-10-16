@@ -1,0 +1,36 @@
+// rule: PROV-4
+// expect: accept
+// A tuple joined from arena and heap parts is usable where a local value is,
+// and parts that lend from named parameters can be returned as local to them.
+fn local_use(a: Arena, c: bool) -> u64 {
+  let x: String in a = "x"
+  let y: String = "y"
+  let p = if c {
+    (x, 1u8)
+  } else {
+    (y, 2u8)
+  }
+  let (s, n) = p
+  string.byte_len(s)
+}
+
+fn unused(a: Arena, c: bool) -> u64 {
+  let x: String in a = "x"
+  let y: String = "y"
+  let p = if c {
+    (x, 1u8)
+  } else {
+    (y, 2u8)
+  }
+  0
+}
+
+fn heap_parts(c: bool) -> (String, u8) {
+  let x: String = copy_to(heap, "x")
+  let y: String = "y"
+  if c {
+    (x, 1u8)
+  } else {
+    (y, 2u8)
+  }
+}

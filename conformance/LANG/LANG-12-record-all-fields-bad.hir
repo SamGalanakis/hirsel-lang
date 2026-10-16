@@ -1,0 +1,12 @@
+// rule: LANG-12
+// expect: reject LANG-12 at line 11
+// Shows "must be labelled at every call; an unlabelled parameter cannot be."
+type Rec {
+  a: u32,
+  b: u32,
+}
+
+@noalloc
+fn example() -> Rec {
+  Rec(a: 1)
+}

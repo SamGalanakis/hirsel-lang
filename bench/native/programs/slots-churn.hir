@@ -1,0 +1,45 @@
+// narrow source model (8-bit generations), not core Slots.
+// Same record-array algorithm, anchor order and retirement boundary as phase 1.
+type Slot { generation: u8, live: bool, retired: bool, value: u64 }
+type Id { index: u64, generation: u8 }
+fn step(h: u64, value: u64) -> u64 {
+  let wide: u128 = int.widen(h) * 131u128 + int.widen(value)
+  int.truncate(wide)
+}
+fn workload(data: Bytes) -> Bytes {
+  let mut pos: u64 = 0
+  let n = decimal(data, mut pos)
+  let mut slots: List[Slot] = []
+  let capacity = n / 255u64 + 3u64
+  list.reserve(mut slots, capacity)
+  for unused in 0u64..capacity { list.push(mut slots, Slot(generation: 0u8, live: false, retired: false, value: 0u64)) }
+  slots[0u64] = Slot(generation: 1u8, live: true, retired: false, value: 10u64)
+  slots[1u64] = Slot(generation: 1u8, live: true, retired: false, value: 20u64)
+  slots[2u64].generation = 1u8
+  let mut active: u64 = 2
+  let mut total: u64 = 0
+  for i in 0u64..n {
+    failure.check(!slots[active].retired, Bounds())
+    let id = Id(index: active, generation: slots[active].generation)
+    slots[active].live = true
+    slots[active].value = i + 1u64
+    let mut h = i
+    for index in 0u64..=active {
+      if slots[index].live {
+        h = step(step(step(h, index), int.widen(slots[index].generation)), slots[index].value)
+      }
+    }
+    total = int.wrapping_add(total, h)
+    slots[active].live = false
+    if id.generation == 255u8 {
+      slots[active].retired = true
+      total = int.wrapping_add(total, 1u64)
+      active += 1u64
+      slots[active] = Slot(generation: 1u8, live: false, retired: false, value: 0u64)
+    } else { slots[active].generation += 1u8 }
+    let stale = slots[id.index].generation != id.generation || slots[id.index].retired || !slots[id.index].live
+    failure.check(stale, Bounds())
+    total = int.wrapping_add(total, 1u64)
+  }
+  number(total)
+}

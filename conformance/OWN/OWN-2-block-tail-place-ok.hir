@@ -1,0 +1,17 @@
+// rule: OWN-2
+// expect: accept
+// Under LANG-11 (#50), `take` in the block's tail moves the outer place into the
+// take parameter, and the later assignment reinitialises it (#83).
+fn consume(take x: String) -> () {
+  ()
+}
+
+fn example() -> () {
+  let mut t: String = "x"
+  consume(
+    {
+      take t
+    }
+  )
+  t = "y"
+}

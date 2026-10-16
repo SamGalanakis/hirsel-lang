@@ -1,0 +1,24 @@
+// native/import/validator: Type("returned value"): a returned once closure keeps its specialized layout
+// hirsel run --native: native import validator in loud: Type("returned value"); the closure's layout is not the erased once fn result the ABI names (corpus: MODE-3-once-function-write-run)
+fn loud() -> once fn() -> u64 {
+  fn() {
+    1
+  }
+}
+
+fn total() -> u64 {
+  let g = loud()
+  g()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if total() == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

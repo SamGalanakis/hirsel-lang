@@ -1,0 +1,17 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 13
+// An escaping environment owns global values. A tuple whose part joins arena
+// and heap content is as local as every source, as the whole-value join is.
+fn probe(a: Arena, c: bool) -> fn() -> u64 {
+  let x: String in a = "x"
+  let y: String = "y"
+  let p = if c {
+    (x, 1u8)
+  } else {
+    (y, 2u8)
+  }
+  fn() {
+    let (s, n) = p
+    string.byte_len(s)
+  }
+}

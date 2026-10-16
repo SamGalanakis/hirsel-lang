@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: accept
+type S = Shared[Bytes]
+
+fn view(s: unique S) -> unique S in s {
+  copy s
+}

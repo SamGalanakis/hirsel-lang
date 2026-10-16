@@ -1,0 +1,15 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 14
+// "Move. Use-after-move is a compile error."
+fn consume(take x: Bytes) -> () {
+  ()
+}
+
+fn inspect(x: Bytes) -> () {
+  ()
+}
+
+fn example(take x: Bytes) -> () {
+  let y = take x
+  inspect(x)
+}

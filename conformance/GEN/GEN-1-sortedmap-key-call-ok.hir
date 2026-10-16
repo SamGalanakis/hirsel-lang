@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: accept
+fn need[K: key](x: K) {}
+
+fn probe(x: Map[u32, u8]) {
+  need(x)
+}

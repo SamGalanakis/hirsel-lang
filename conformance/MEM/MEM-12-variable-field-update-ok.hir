@@ -1,0 +1,11 @@
+// rule: MEM-12
+// expect: accept
+// "Variable-size fields are fixed at construction; fixed-size fields are mutable in place".
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+fn edit(mut x: Item) -> () {
+  x.n = 1
+}

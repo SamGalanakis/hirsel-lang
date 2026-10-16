@@ -1,0 +1,39 @@
+// rule: CT-2
+// expect: run
+// stdout: ok
+fn fresh() -> unique Bytes {
+  b"x"
+}
+
+fn need(take x: unique Bytes) -> bool {
+  x == b"x"
+}
+
+fn value() -> unique Bytes {
+  comptime fresh()
+}
+
+fn empty() -> Map[u32, u8] {
+  comptime map.empty()
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let n = need(value())
+  let m = empty()
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if n {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

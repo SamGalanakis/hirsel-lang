@@ -1,0 +1,58 @@
+// rule: MODE-3
+// expect: run
+// stdout: ok
+fn set_once(
+  mut p: once @noalloc fn() -> u64 uses {},
+  take q: once @noalloc fn() -> u64 uses {}
+) {
+  p = take q
+}
+
+fn set_many(mut p: @noalloc fn() -> u64 uses {}, take q: @noalloc fn() -> u64 uses {}) {
+  p = take q
+}
+
+fn probe_once(take q: @noalloc fn() -> u64 uses {}) -> u64 {
+  let n: u64 = 1
+  let mut f: once @noalloc fn() -> u64 uses {} = fn() {
+    n
+  }
+  set_once(mut f, take q)
+  f()
+}
+
+fn probe_many(take q: @noalloc fn() -> u64 uses {}) -> u64 {
+  let n: u64 = 1
+  let mut f: @noalloc fn() -> u64 uses {} = fn() {
+    n
+  }
+  set_many(mut f, take q)
+  f() + f()
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if probe_once(
+      fn() {
+        2u64
+      }
+    ) == 2 && probe_many(
+      fn() {
+        2u64
+      }
+    ) == 4 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

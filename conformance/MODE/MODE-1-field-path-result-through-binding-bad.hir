@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// v22 #77. A binding read from p.b keeps that part, so returning it under a
+// relation to p.a is outside the relation.
+type Pair {
+  a: Bytes,
+  b: Bytes,
+}
+
+fn get(p: Pair) -> Bytes in p.a {
+  let q = p.b
+  q
+}

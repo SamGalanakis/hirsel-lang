@@ -1,0 +1,13 @@
+// rule: CAP-3
+// expect: reject CAP-3 at line 12
+fn repeat(f: fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+fn example(io: Stdout) -> u64 {
+  let f = fn() {
+    let _ = out.print(io, "x")
+    1u64
+  }
+  repeat(f)
+}

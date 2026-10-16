@@ -1,0 +1,7 @@
+// rule: OWN-1
+// expect: accept
+// "Anything else derived from x is local to x" (the spec’s at signature).
+pub fn at[T](xs: Array[T], i: u64) -> T in xs
+  requires i < array.len(xs) {
+  xs[i]
+}

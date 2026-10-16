@@ -1,0 +1,26 @@
+fn error(take e: FileError) -> () {}
+
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of(".")) ? error
+  let p = path.of("sample")
+  {
+    let f = file.create_atomic(d, p) ? error
+    let _ = take f
+  }
+  match file.open(d, p) {
+    Error(_) => (),
+    Ok(f) => {
+      let _ = take f
+      require(false)
+    },
+  }
+  Ok(())
+}

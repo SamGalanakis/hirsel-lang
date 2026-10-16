@@ -1,0 +1,14 @@
+// rule: CLO-2
+// expect: accept
+@capability(global)
+pub opaque type Gate: plain uses {Dir}
+
+fn restricted(body: fn() -> () uses {Gate, Dir}) -> () {}
+
+fn probe(d: Dir) {
+  restricted(
+    fn() {
+      let _ = file.remove(d, path.of("hello"))
+    }
+  )
+}

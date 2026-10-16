@@ -1,0 +1,6 @@
+rc-trace v1
+max 16
+# A dead resource's fields are not released before its finalizer has run.
+alloc r1 0 fin
+drop r1
+drain

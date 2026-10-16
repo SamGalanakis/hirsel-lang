@@ -1,0 +1,26 @@
+// rule: LANG-7
+// expect: run
+// stdout: ok
+fn classify(p: (Option[u8], Option[u8])) -> u64 {
+  match p {
+    (Some(a), Some(b)) => 1,
+    (Some(a), None) => 2,
+    (None, Some(b)) => 3,
+    (None, None) => 4,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = classify((Some(1), Some(2))) == 1 && classify((Some(1), None)) == 2 && classify(
+    (None, Some(2))
+  ) == 3 && classify((None, None)) == 4
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

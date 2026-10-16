@@ -1,0 +1,20 @@
+// rule: FAIL-2
+// expect: fail SEM-1 at line 13
+// "a failed child ... the failure continues outward".
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) -> () {
+      let h = task.async(
+        s,
+        fn() -> u8 {
+          let n: u8 = 255
+          n + 1
+        }
+      )
+      let value = task.await(s, take h)
+    }
+  )
+  Ok(())
+}

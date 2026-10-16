@@ -1,0 +1,7 @@
+// rule: MODE-3
+// expect: accept
+fn outer() {
+  let _ = fn(take f: once fn() -> ()) {
+    f()
+  }
+}

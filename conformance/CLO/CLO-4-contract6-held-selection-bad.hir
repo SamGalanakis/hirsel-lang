@@ -1,0 +1,16 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 6
+// A callable type's @captures selection is part of what a held function value
+// must promise. A closure built inside another closure's body promises none.
+fn first() {
+  let held: List[(@captures(x) fn(take x: Iter[u64]) -> Iter[u64], u64)] = [
+    fn() {
+      (
+        fn(take x: Iter[u64]) -> Iter[u64] {
+          x
+        },
+        0u64
+      )
+    }()
+  ]
+}

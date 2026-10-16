@@ -1,0 +1,30 @@
+// rule: OWN-3
+// expect: accept
+// The later argument is computed first, reads a shared loan, or touches a
+// different field.
+type Pair {
+  n: u64,
+  other: u64,
+}
+
+fn total(xs: List[u64], extra: u64) -> u64 {
+  list.len(xs) + extra
+}
+
+fn set(mut n: u64, extra: ()) -> () {
+  n = 3
+}
+
+fn main() -> () {
+  let mut xs: List[u64] = [1]
+  let n = list.len(xs)
+  list.push(mut xs, n)
+  let t = total(xs, list.len(xs))
+  let mut p = Pair(n: 1, other: 2)
+  set(
+    mut p.n,
+    {
+      p.other = 4
+    }
+  )
+}

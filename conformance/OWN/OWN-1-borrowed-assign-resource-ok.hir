@@ -1,0 +1,13 @@
+// rule: OWN-1
+// expect: accept
+// "Callee owns it." A taken resource may be assigned into owned storage
+// (issue #73).
+resource type Token {
+  n: u8,
+}
+drop(t) {}
+
+fn probe(take x: Token) -> () {
+  let mut r: Token in r = Token(n: 1u8)
+  r = x
+}

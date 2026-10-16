@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: accept
+fn sink(xs: unique List[u64]) -> u64 {
+  list.len(xs)
+}
+
+fn probe() -> u64 {
+  sink(
+    fn() -> (unique List[u64]) in env {
+      let xs: List[u64] = [1]
+      xs
+    }()
+  )
+}

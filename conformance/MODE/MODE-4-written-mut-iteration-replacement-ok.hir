@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+fn put(mut xs: sendable List[String], take y: String) -> () {
+  for x in mut xs {
+    x = "fresh"
+  }
+}

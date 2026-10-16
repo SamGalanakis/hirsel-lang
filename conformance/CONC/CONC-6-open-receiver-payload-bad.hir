@@ -1,0 +1,6 @@
+// rule: CONC-6
+// expect: reject CONC-6 at line 5
+// "channel.open(tasks) ... for sendable T"; Receiver is excluded from payloads.
+fn open(tasks: Tasks) -> () {
+  let ends: (Sender[Receiver[u32]], Receiver[Receiver[u32]]) = channel.open(tasks)
+}

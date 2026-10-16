@@ -1,0 +1,21 @@
+// rule: GEN-1
+// spec: #48
+// expect: reject GEN-1 at line 20
+resource type Key {
+  x: u32,
+}
+drop(k) {}
+
+type Wrapped {
+  key: Key,
+}
+
+fn cmp(a: Wrapped, b: Wrapped) -> i32 uses {} {
+  0
+}
+
+fn exercise() {
+  let by: Order[Wrapped] = Order(compare: cmp)
+  let mut m: SortedMap[Wrapped, u8] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, Wrapped(key: Key(x: 1)), 1)
+}

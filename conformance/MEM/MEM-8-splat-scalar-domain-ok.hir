@@ -1,0 +1,10 @@
+// rule: MEM-8
+// expect: accept
+// Section 22 limits A to integer, float or bool scalars.
+type Lane {
+  value: u8,
+}
+
+fn example() {
+  let a: Simd[u8, 2] = simd.splat(1u8)
+}

@@ -1,0 +1,18 @@
+// rule: MODE-2
+// expect: accept
+// A closure that returns a counted part of a captured record shares it; a later
+// closure that copies the record captures it as aliased, which needs no unique.
+type Rec {
+  items: Array[u64],
+}
+
+fn probe(a: Arena) -> u64 {
+  let r: unique Rec in a = Rec(items: [1, 2])
+  let old = fn() {
+    r.items
+  }()
+  let c = fn() {
+    copy r
+  }
+  old[0]
+}

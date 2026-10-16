@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+// stdout: nfc
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(std@1/unicode.normalize_nfc("e\u{301}") == "\u{e9}", TextInvariant())
+  failure.check(std@1/unicode.normalize_nfc("\u{212b}") == "\u{c5}", TextInvariant())
+  failure.check(
+    std@1/unicode.normalize_nfc("\u{1e0a}\u{323}") == "\u{1e0c}\u{307}",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/unicode.normalize_nfc("A\u{305}\u{30a}") == "A\u{305}\u{30a}",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/unicode.normalize_nfc("\u{308}\u{301}") == "\u{308}\u{301}",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/unicode.normalize_nfc("\u{fb01}\u{ff21}") == "\u{fb01}\u{ff21}",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/unicode.normalize_nfc("\u{1100}\u{1161}\u{11a8}") == "\u{ac01}",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/unicode.normalize_nfc("\u{f73}") == "\u{f71}\u{f72}",
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "nfc\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

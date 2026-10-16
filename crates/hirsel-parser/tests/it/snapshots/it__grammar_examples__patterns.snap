@@ -1,0 +1,49 @@
+---
+source: crates/hirsel-parser/tests/it/grammar_examples.rs
+expression: snapshot
+---
+fn f() { let Rec(x: x, y: (_, (a, b)), ..) = take r
+ match x { -1 => 0, true => 1, false => 2, "s" => 3, b"b" => 4, () => 5, (v,) => v, Single(..,) => 6, V(a,b,) if a > b => a, _ => 7 } }
+
+item 0 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "f" }) Origin { span: Span { file: FileId(0), start: 0, end: 187 }, tokens: TokenRange { start: 0, end: 145 } } TokenRange { start: 0, end: 145 } hash=[74, 8c, 51, 5d, b8, e1, 4f, bd, 72, b4, 84, d0, 35, 1e, 88, 5f, b9, dc, 1d, ff, e2, c9, fd, 1c, 5f, 2c, f0, f9, 6d, 3b, d0, 1e]
+  Private []
+  Function { signature: FunctionSyntax { attributes: [], generics: [], parameters: [], result: None, uses: None, contracts: [] }, body: Some(ExprId(17)), abi: None }
+expr 0 Origin { span: Span { file: FileId(0), start: 50, end: 51 }, tokens: TokenRange { start: 41, end: 42 } }: Path(Path { package: None, segments: [Symbol(10)] })
+expr 1 Origin { span: Span { file: FileId(0), start: 45, end: 51 }, tokens: TokenRange { start: 39, end: 42 } }: Unary { op: Take, value: ExprId(0) }
+expr 2 Origin { span: Span { file: FileId(0), start: 59, end: 60 }, tokens: TokenRange { start: 46, end: 47 } }: Path(Path { package: None, segments: [Symbol(4)] })
+expr 3 Origin { span: Span { file: FileId(0), start: 69, end: 70 }, tokens: TokenRange { start: 55, end: 56 } }: Literal(Integer("0"))
+expr 4 Origin { span: Span { file: FileId(0), start: 80, end: 81 }, tokens: TokenRange { start: 62, end: 63 } }: Literal(Integer("1"))
+expr 5 Origin { span: Span { file: FileId(0), start: 92, end: 93 }, tokens: TokenRange { start: 69, end: 70 } }: Literal(Integer("2"))
+expr 6 Origin { span: Span { file: FileId(0), start: 102, end: 103 }, tokens: TokenRange { start: 76, end: 77 } }: Literal(Integer("3"))
+expr 7 Origin { span: Span { file: FileId(0), start: 113, end: 114 }, tokens: TokenRange { start: 83, end: 84 } }: Literal(Integer("4"))
+expr 8 Origin { span: Span { file: FileId(0), start: 122, end: 123 }, tokens: TokenRange { start: 91, end: 92 } }: Literal(Integer("5"))
+expr 9 Origin { span: Span { file: FileId(0), start: 133, end: 134 }, tokens: TokenRange { start: 101, end: 102 } }: Path(Path { package: None, segments: [Symbol(14)] })
+expr 10 Origin { span: Span { file: FileId(0), start: 151, end: 152 }, tokens: TokenRange { start: 112, end: 113 } }: Literal(Integer("6"))
+expr 11 Origin { span: Span { file: FileId(0), start: 165, end: 166 }, tokens: TokenRange { start: 125, end: 126 } }: Path(Path { package: None, segments: [Symbol(7)] })
+expr 12 Origin { span: Span { file: FileId(0), start: 169, end: 170 }, tokens: TokenRange { start: 129, end: 130 } }: Path(Path { package: None, segments: [Symbol(8)] })
+expr 13 Origin { span: Span { file: FileId(0), start: 165, end: 170 }, tokens: TokenRange { start: 125, end: 130 } }: Binary { op: Gt, left: ExprId(11), right: ExprId(12) }
+expr 14 Origin { span: Span { file: FileId(0), start: 174, end: 175 }, tokens: TokenRange { start: 133, end: 134 } }: Path(Path { package: None, segments: [Symbol(7)] })
+expr 15 Origin { span: Span { file: FileId(0), start: 182, end: 183 }, tokens: TokenRange { start: 140, end: 141 } }: Literal(Integer("7"))
+expr 16 Origin { span: Span { file: FileId(0), start: 53, end: 185 }, tokens: TokenRange { start: 44, end: 143 } }: Match { value: ExprId(2), arms: [MatchArm { pattern: PatternId(7), guard: None, body: ExprId(3) }, MatchArm { pattern: PatternId(8), guard: None, body: ExprId(4) }, MatchArm { pattern: PatternId(9), guard: None, body: ExprId(5) }, MatchArm { pattern: PatternId(10), guard: None, body: ExprId(6) }, MatchArm { pattern: PatternId(11), guard: None, body: ExprId(7) }, MatchArm { pattern: PatternId(12), guard: None, body: ExprId(8) }, MatchArm { pattern: PatternId(14), guard: None, body: ExprId(9) }, MatchArm { pattern: PatternId(15), guard: None, body: ExprId(10) }, MatchArm { pattern: PatternId(18), guard: Some(ExprId(13)), body: ExprId(14) }, MatchArm { pattern: PatternId(19), guard: None, body: ExprId(15) }] }
+expr 17 Origin { span: Span { file: FileId(0), start: 7, end: 187 }, tokens: TokenRange { start: 6, end: 145 } }: Block { statements: [StmtId(0)], tail: Some(ExprId(16)) }
+stmt 0 Origin { span: Span { file: FileId(0), start: 9, end: 51 }, tokens: TokenRange { start: 8, end: 44 } }: Let { mutable: false, pattern: PatternId(6), ty: None, value: ExprId(1) }
+pattern 0 Origin { span: Span { file: FileId(0), start: 20, end: 21 }, tokens: TokenRange { start: 15, end: 16 } }: Binding(Symbol(4))
+pattern 1 Origin { span: Span { file: FileId(0), start: 27, end: 28 }, tokens: TokenRange { start: 22, end: 23 } }: Wildcard
+pattern 2 Origin { span: Span { file: FileId(0), start: 31, end: 32 }, tokens: TokenRange { start: 26, end: 27 } }: Binding(Symbol(7))
+pattern 3 Origin { span: Span { file: FileId(0), start: 34, end: 35 }, tokens: TokenRange { start: 29, end: 30 } }: Binding(Symbol(8))
+pattern 4 Origin { span: Span { file: FileId(0), start: 30, end: 36 }, tokens: TokenRange { start: 25, end: 31 } }: Tuple([PatternId(2), PatternId(3)])
+pattern 5 Origin { span: Span { file: FileId(0), start: 26, end: 37 }, tokens: TokenRange { start: 21, end: 32 } }: Tuple([PatternId(1), PatternId(4)])
+pattern 6 Origin { span: Span { file: FileId(0), start: 13, end: 42 }, tokens: TokenRange { start: 10, end: 36 } }: Constructor { path: Path { package: None, segments: [Symbol(3)] }, fields: [PatternField { label: Some(Symbol(4)), pattern: PatternId(0) }, PatternField { label: Some(Symbol(5)), pattern: PatternId(5) }], rest: true }
+pattern 7 Origin { span: Span { file: FileId(0), start: 63, end: 65 }, tokens: TokenRange { start: 50, end: 52 } }: Literal(Integer("-1"))
+pattern 8 Origin { span: Span { file: FileId(0), start: 72, end: 76 }, tokens: TokenRange { start: 58, end: 59 } }: Literal(Bool(true))
+pattern 9 Origin { span: Span { file: FileId(0), start: 83, end: 88 }, tokens: TokenRange { start: 65, end: 66 } }: Literal(Bool(false))
+pattern 10 Origin { span: Span { file: FileId(0), start: 95, end: 98 }, tokens: TokenRange { start: 72, end: 73 } }: Literal(String("\"s\""))
+pattern 11 Origin { span: Span { file: FileId(0), start: 105, end: 109 }, tokens: TokenRange { start: 79, end: 80 } }: Literal(Bytes("b\"b\""))
+pattern 12 Origin { span: Span { file: FileId(0), start: 116, end: 118 }, tokens: TokenRange { start: 86, end: 88 } }: Tuple([])
+pattern 13 Origin { span: Span { file: FileId(0), start: 126, end: 127 }, tokens: TokenRange { start: 95, end: 96 } }: Binding(Symbol(14))
+pattern 14 Origin { span: Span { file: FileId(0), start: 125, end: 129 }, tokens: TokenRange { start: 94, end: 98 } }: Tuple([PatternId(13)])
+pattern 15 Origin { span: Span { file: FileId(0), start: 136, end: 147 }, tokens: TokenRange { start: 104, end: 109 } }: Constructor { path: Path { package: None, segments: [Symbol(15)] }, fields: [], rest: true }
+pattern 16 Origin { span: Span { file: FileId(0), start: 156, end: 157 }, tokens: TokenRange { start: 117, end: 118 } }: Binding(Symbol(7))
+pattern 17 Origin { span: Span { file: FileId(0), start: 158, end: 159 }, tokens: TokenRange { start: 119, end: 120 } }: Binding(Symbol(8))
+pattern 18 Origin { span: Span { file: FileId(0), start: 154, end: 161 }, tokens: TokenRange { start: 115, end: 122 } }: Constructor { path: Path { package: None, segments: [Symbol(16)] }, fields: [PatternField { label: None, pattern: PatternId(16) }, PatternField { label: None, pattern: PatternId(17) }], rest: false }
+pattern 19 Origin { span: Span { file: FileId(0), start: 177, end: 178 }, tokens: TokenRange { start: 136, end: 137 } }: Wildcard

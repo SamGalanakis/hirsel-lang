@@ -1,0 +1,4 @@
+// rule: MEM-7
+// expect: accept
+// Spec example "box T ... required for recursive types".
+type Tree = Leaf | Node(left: box Tree, key: u64, right: box Tree)

@@ -1,0 +1,73 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+fn put[T](mut xs: List[T], take x: T) {
+  list.push(mut xs, take x)
+}
+
+fn put_sendable[T](mut xs: List[sendable T], take x: sendable T) {
+  list.push(mut xs, take x)
+}
+
+fn needs(take x: sendable Bytes) -> u64 {
+  if x == b"f" {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+fn step(mut x: u64) -> Option[u64] {
+  None
+}
+
+fn number(x: sendable u64) -> sendable u64 {
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: List[sendable Bytes] = [b"first"]
+  let mut jobs: List[sendable fn() -> u64] = [
+    fn() {
+      1u64
+    }
+  ]
+  let mut i: u64 = 0
+  while i < 20 {
+    put(mut xs, b"a")
+    put_sendable(mut xs, b"bb")
+    list.push(mut xs, b"ccc")
+    put(
+      mut jobs,
+      fn() {
+        2u64
+      }
+    )
+    put_sendable(
+      mut jobs,
+      fn() {
+        3u64
+      }
+    )
+    list.push(
+      mut jobs,
+      fn() {
+        4u64
+      }
+    )
+    i = i + 1
+  }
+  let mut it: sendable Iter[u64] = iter.from(0u64, step)
+  let _ = iter.next(mut it)
+  let x: sendable Bytes = b"f"
+  let total = needs(take x) + jobs[0]() + number(1u64)
+  let _ = out.print(
+    io.stdout(rt)?,
+    if total == 3 && list.len(xs) == 61 && list.len(jobs) == 61 && xs[60] == b"ccc" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,5 @@
+// rule: SEM-1
+// expect: accept
+fn convert(x: u32) -> f64 {
+  float.from_int(x)
+}

@@ -1,0 +1,5 @@
+// rule: CT-1
+// expect: accept
+distinct type Percent(v: u8) where v <= 100
+
+const VALUE: Percent = comptime Percent(100)

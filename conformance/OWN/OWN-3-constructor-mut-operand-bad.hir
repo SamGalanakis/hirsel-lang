@@ -1,0 +1,13 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 12
+// "Exclusive in-place access, mut x at the call site".
+// A constructor stores its operands and lends no place, so none is passed mut.
+type Item {
+  sku: String,
+  qty: u32,
+}
+
+fn example(take s: String) -> Item {
+  let mut sku = s
+  Item(sku: mut sku, qty: 1)
+}

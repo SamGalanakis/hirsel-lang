@@ -1,0 +1,14 @@
+// rule: CONC-5
+// expect: reject CONC-5 at line 11
+// "values stored into the payload are unique".
+const DATA: List[u32] = [1]
+
+fn replace(tasks: Tasks, m: Mutex[List[u32]]) -> () {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique List[u32]) {
+      value = copy DATA
+    }
+  )
+}

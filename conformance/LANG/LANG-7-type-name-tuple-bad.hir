@@ -1,0 +1,7 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 6
+type R = (u8, u8)
+
+fn probe() {
+  let x = R
+}

@@ -1,0 +1,14 @@
+// rule: CAP-1
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let monotonic_denied: bool = match io.monotonic_clock(rt) {
+    Ok(_) => false,
+    Error(NotGranted()) => true,
+  }
+  let wall_denied: bool = match io.wall_clock(rt) {
+    Ok(_) => false,
+    Error(NotGranted()) => true,
+  }
+  failure.check(monotonic_denied && wall_denied, Arithmetic())
+  Ok(())
+}

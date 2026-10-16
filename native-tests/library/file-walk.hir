@@ -1,0 +1,30 @@
+fn error(take e: FileError) -> () {}
+
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of(".")) ? error
+  file.write_bytes(d, path.of("z"), b"z") ? error
+  file.write_bytes(d, path.of("a"), b"a") ? error
+  let it = file.walk(d) ? error
+  let mut count = 0u64
+  for item in take it {
+    let p = item ? error
+    require(
+      file.read_bytes(d, p) ? error == if count == 0u64 {
+        b"a"
+      } else {
+        b"z"
+      }
+    )
+    count += 1u64
+  }
+  require(count == 2u64)
+  Ok(())
+}

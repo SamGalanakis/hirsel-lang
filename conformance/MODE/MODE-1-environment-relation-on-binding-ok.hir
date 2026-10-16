@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: accept
+// Under v22 R3, the function type's result may be related to its environment.
+fn example() -> u64 {
+  let g: fn() -> u64 in env = fn() -> u64 {
+    1
+  }
+  g()
+}

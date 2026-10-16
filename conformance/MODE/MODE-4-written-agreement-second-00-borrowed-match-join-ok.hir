@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn arm(take s: unique String, n: u64) -> u64 {
+  string.byte_len(
+    match n {
+      0 => s,
+      1 => "four",
+      _ => "x",
+    }
+  )
+}

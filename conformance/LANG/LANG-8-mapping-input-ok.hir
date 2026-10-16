@@ -1,0 +1,22 @@
+// rule: LANG-8
+// expect: accept
+// Shows "plain e? requires identical error types."
+type Inner = Missing()
+
+type Outer = Wrapped(Inner)
+
+@noalloc
+fn read(r: Result[u32, Inner]) -> Result[u32, Inner] {
+  r
+}
+
+@noalloc
+fn convert(e: Inner) -> Outer {
+  Wrapped(Missing)
+}
+
+@noalloc
+fn example(r: Result[u32, Inner]) -> Result[u32, Outer] {
+  let n = read(r) ? convert
+  Ok(n)
+}

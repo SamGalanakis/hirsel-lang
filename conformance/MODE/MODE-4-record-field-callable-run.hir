@@ -1,0 +1,28 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// The twin of MODE-4-record-field-callable-bad.
+type Job {
+  run: sendable fn() -> u64,
+}
+
+fn probe(take f: sendable fn() -> u64) -> u64 {
+  let job = Job(run: f)
+  job.run()
+}
+
+fn seven() -> u64 {
+  7
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

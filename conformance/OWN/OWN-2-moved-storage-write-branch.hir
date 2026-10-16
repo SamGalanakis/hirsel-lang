@@ -1,0 +1,14 @@
+// rule: OWN-2
+// expect: accept
+type R {
+  n: Bytes,
+}
+
+fn probe(flag: bool) {
+  let mut r = R(n: b"old")
+  if flag {
+    let x = take r
+  }
+  r = R(n: b"new")
+  let y = take r
+}

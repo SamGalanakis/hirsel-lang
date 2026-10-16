@@ -1,0 +1,18 @@
+[workspace]
+[package]
+name = "resource-drops-reference"
+version = "0.1.0"
+edition = "2024"
+[features]
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+stats = []
+heavy = []
+[dependencies]
+mimalloc = { version = "=0.1.39", optional = true }
+libmimalloc-sys = { version = "=0.1.35", optional = true }
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 1
+overflow-checks = true
+panic = "abort"

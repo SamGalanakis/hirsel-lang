@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn sink[T: sendable](x: box T) {}
+
+fn probe(take x: box sendable Bytes) {
+  let f = fn() {
+    sink(x)
+  }
+  fn() {
+    f
+  }()()
+}

@@ -1,0 +1,24 @@
+// rule: DROP-1
+// expect: run
+// stdout: ok
+// "Copyable values have no user-visible destruction".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a: u8 = 7
+  let b = a
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if a == b {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

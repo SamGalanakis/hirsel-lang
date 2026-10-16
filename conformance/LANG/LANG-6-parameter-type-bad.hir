@@ -1,0 +1,5 @@
+// rule: LANG-6
+// expect: reject LANG-6 at line 5
+// Shows "No part of a signature is ever inferred from a body."
+@noalloc
+fn example(x) -> u32 { 0 }

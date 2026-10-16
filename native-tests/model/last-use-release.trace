@@ -1,0 +1,12 @@
+rc-trace v1
+max 16
+# Last-use release (v22 §21, MODE-2): r2 shares r1's block; once r2's last loan ends, r2 is
+# released at its last use rather than at scope end, and r1 is unique again, so the
+# in-place write is legal.
+alloc r1 1
+dup r1 r2
+borrow b1 r2
+end-borrow b1
+drop r2
+alloc r3 0
+write r1 0 r3

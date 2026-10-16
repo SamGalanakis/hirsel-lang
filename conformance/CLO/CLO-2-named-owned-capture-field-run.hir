@@ -1,0 +1,23 @@
+// rule: CLO-2
+// expect: run
+// stdout: same
+type Wrap[T] {
+  value: T,
+}
+
+fn probe[T: data](take x: Wrap[T]) -> bool {
+  fn inner[U: plain](y: U) -> bool {
+    let v = x.value
+    v == v
+  }
+  inner(1u8)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let value: Wrap[Bytes] = Wrap(value: b"hello")
+  if probe(take value) {
+    let _ = out.print(stdout, "same\n")
+  }
+  Ok(())
+}

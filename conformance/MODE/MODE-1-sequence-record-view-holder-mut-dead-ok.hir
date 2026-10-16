@@ -1,0 +1,22 @@
+// rule: MODE-1
+// expect: accept
+// The twin of MODE-1-sequence-record-view-holder-mut-used-bad.hir reads
+// `xs[0].name` before the `mut`, so the loan on `s` has ended (§04).
+type R {
+  name: String,
+}
+
+fn view(x: String) -> String in x {
+  copy x
+}
+
+fn bump(mut x: String) {
+  ()
+}
+
+fn count(mut s: String) -> u64 {
+  let xs: List[R] = [R(name: view(s))]
+  let n = string.byte_len(xs[0].name)
+  bump(mut s)
+  n
+}

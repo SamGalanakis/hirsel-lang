@@ -1,0 +1,157 @@
+[
+  {
+    "name": "directed-0",
+    "input": "  null \r\n",
+    "compact": "null"
+  },
+  {
+    "name": "directed-1",
+    "input": "[]",
+    "compact": "[]"
+  },
+  {
+    "name": "directed-2",
+    "input": "{}",
+    "compact": "{}"
+  },
+  {
+    "name": "directed-3",
+    "input": "\"\"",
+    "compact": "\"\""
+  },
+  {
+    "name": "directed-4",
+    "input": "true",
+    "compact": "true"
+  },
+  {
+    "name": "directed-5",
+    "input": "false",
+    "compact": "false"
+  },
+  {
+    "name": "directed-6",
+    "input": "[null,true,false]",
+    "compact": "[null,true,false]"
+  },
+  {
+    "name": "directed-7",
+    "input": "{\"z\":0,\"a\":1,\"m\":2}",
+    "compact": "{\"z\":0,\"a\":1,\"m\":2}"
+  },
+  {
+    "name": "directed-8",
+    "input": "9007199254740993",
+    "compact": "9007199254740993"
+  },
+  {
+    "name": "directed-9",
+    "input": "-0",
+    "compact": "-0"
+  },
+  {
+    "name": "directed-10",
+    "input": "1.2300E+004",
+    "compact": "1.2300E+004"
+  },
+  {
+    "name": "directed-11",
+    "input": "1e999999999999999999999999999999999",
+    "compact": "1e999999999999999999999999999999999"
+  },
+  {
+    "name": "directed-12",
+    "input": "-1e-99999999999999999999999999999",
+    "compact": "-1e-99999999999999999999999999999"
+  },
+  {
+    "name": "directed-13",
+    "input": "\"\\u0000\\b\\f\\n\\r\\t\\\"\\\\\\/\"",
+    "compact": "\"\\u0000\\b\\f\\n\\r\\t\\\"\\\\/\""
+  },
+  {
+    "name": "directed-14",
+    "input": "\"\\uD83D\\uDE00\"",
+    "compact": "\"😀\""
+  },
+  {
+    "name": "directed-15",
+    "input": "\"\\udbff\\udfff\"",
+    "compact": "\"􏿿\""
+  },
+  {
+    "name": "directed-16",
+    "input": "\"\\u007f\\u0080\\u07ff\\u0800\\uffff\"",
+    "compact": "\"߿ࠀ￿\""
+  },
+  {
+    "name": "directed-17",
+    "input": "\"é😀\"",
+    "compact": "\"é😀\""
+  },
+  {
+    "name": "directed-18",
+    "input": "{\"é\":{\"a\":[0,-12,1.5]},\"b\":[]}",
+    "compact": "{\"é\":{\"a\":[0,-12,1.5]},\"b\":[]}"
+  },
+  {
+    "name": "y_number_0e1.json",
+    "input": "[0e1]",
+    "compact": "[0e1]"
+  },
+  {
+    "name": "y_number_int_with_exp.json",
+    "input": "[20e1]",
+    "compact": "[20e1]"
+  },
+  {
+    "name": "y_number_real_capital_e.json",
+    "input": "[1E22]",
+    "compact": "[1E22]"
+  },
+  {
+    "name": "y_array_with_several_null.json",
+    "input": "[1,null,null,null,2]",
+    "compact": "[1,null,null,null,2]"
+  },
+  {
+    "name": "y_string_1_2_3_bytes_UTF-8_sequences.json",
+    "input": "[\"\\u0060\\u012a\\u12AB\"]",
+    "compact": "[\"`Īካ\"]"
+  },
+  {
+    "name": "y_string_accepted_surrogate_pair.json",
+    "input": "[\"\\uD801\\udc37\"]",
+    "compact": "[\"𐐷\"]"
+  },
+  {
+    "name": "y_string_last_surrogates_1_and_2.json",
+    "input": "[\"\\uDBFF\\uDFFF\"]",
+    "compact": "[\"􏿿\"]"
+  },
+  {
+    "name": "y_string_escaped_control_character.json",
+    "input": "[\"\\u0012\"]",
+    "compact": "[\"\\u0012\"]"
+  },
+  {
+    "name": "y_object_empty.json",
+    "input": "{}",
+    "compact": "{}"
+  },
+  {
+    "name": "y_object_long_strings.json",
+    "input": "{\"x\":[{\"id\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}], \"id\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+    "compact": "{\"x\":[{\"id\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}],\"id\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+  },
+  {
+    "name": "y_structure_trailing_newline.json",
+    "input": "[\"a\"]\n",
+    "compact": "[\"a\"]"
+  },
+  {
+    "name": "ordered-indexed-object",
+    "input": "{\"k23\":23,\"k22\":22,\"k21\":21,\"k20\":20,\"k19\":19,\"k18\":18,\"k17\":17,\"k16\":16,\"k15\":15,\"k14\":14,\"k13\":13,\"k12\":12,\"k11\":11,\"k10\":10,\"k9\":9,\"k8\":8,\"k7\":7,\"k6\":6,\"k5\":5,\"k4\":4,\"k3\":3,\"k2\":2,\"k1\":1,\"k0\":0}",
+    "compact": "{\"k23\":23,\"k22\":22,\"k21\":21,\"k20\":20,\"k19\":19,\"k18\":18,\"k17\":17,\"k16\":16,\"k15\":15,\"k14\":14,\"k13\":13,\"k12\":12,\"k11\":11,\"k10\":10,\"k9\":9,\"k8\":8,\"k7\":7,\"k6\":6,\"k5\":5,\"k4\":4,\"k3\":3,\"k2\":2,\"k1\":1,\"k0\":0}"
+  }
+]

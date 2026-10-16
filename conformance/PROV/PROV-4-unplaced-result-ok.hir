@@ -1,0 +1,15 @@
+// rule: PROV-4
+// expect: accept
+// "A value in a cannot outlive a." The result names the arena, a heap value
+// outlives it, and a local result is bounded by its source instead.
+fn keep(a: Arena, take x: Bytes in a) -> Bytes in a {
+  x
+}
+
+fn heap_value(a: Arena, take x: Bytes in heap) -> Bytes {
+  x
+}
+
+fn view(a: Arena, x: Bytes in a) -> Bytes in x {
+  x
+}

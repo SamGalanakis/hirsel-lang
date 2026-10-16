@@ -1,0 +1,29 @@
+// rule: MODE-1
+// expect: accept
+// The early return drops the holder before any `mut`; the other path closes it first (§04).
+resource type Guard {
+  data: Bytes,
+}
+drop(g) {}
+
+fn guard(x: Bytes) -> Guard in x {
+  Guard(data: copy x)
+}
+
+fn close(take g: Guard in g) {
+  ()
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut b: Bytes, c: bool) {
+  let g = guard(b)
+  if c {
+    return ()
+  }
+  close(take g)
+  bump(mut b)
+  ()
+}

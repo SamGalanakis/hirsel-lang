@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: accept
+fn step(mut n: u64) -> Option[u64] {
+  None
+}
+
+fn advance(mut it: sendable Iter[u64]) {
+  let _ = iter.next(mut it)
+}
+
+fn good() {
+  let mut it: sendable Iter[u64] = iter.from(0u64, step)
+  advance(mut it)
+}

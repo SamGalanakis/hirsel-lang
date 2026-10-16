@@ -1,0 +1,41 @@
+// rule: LANG-7
+// expect: accept
+// A call of a Never-returning function diverges in every value position.
+fn stop() -> Never {
+  stop()
+}
+
+fn probe(flag: bool) -> u64 {
+  match flag {
+    true => 7u64,
+    false => stop(),
+  }
+}
+
+fn bound(flag: bool) -> u64 {
+  if flag {
+    let x: u64 = stop()
+    x
+  } else {
+    3u64
+  }
+}
+
+fn add(a: u64, b: u64) -> u64 {
+  a + b
+}
+
+fn argument(flag: bool) -> u64 {
+  if flag {
+    add(1u64, stop())
+  } else {
+    4u64
+  }
+}
+
+fn early(flag: bool) -> u64 {
+  if flag {
+    return stop()
+  }
+  5u64
+}

@@ -1,0 +1,16 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 14
+// Arithmetic produces an unmarked scalar; the annotation cannot invent an origin.
+fn use_pos(s: Dir, p: u64 of s) -> () {
+  ()
+}
+
+fn use_scalar(p: u64) -> () {
+  ()
+}
+
+fn probe(s: Dir, p: u64 of s) -> () {
+  let untouched: u64 of s = p
+  let q: u64 of s = p + 1u64
+  use_pos(s, q)
+}

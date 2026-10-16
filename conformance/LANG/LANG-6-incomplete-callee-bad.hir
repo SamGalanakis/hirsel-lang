@@ -1,0 +1,10 @@
+// rule: LANG-6
+// expect: reject LANG-6 at line 9
+@incomplete
+fn unfinished() -> u32 {
+  todo("pending")
+}
+
+fn caller() -> u32 {
+  unfinished()
+}

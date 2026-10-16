@@ -1,0 +1,53 @@
+// rule: SEM-5
+// expect: run
+// stdout: 21 none yes no
+// Key equality is structural (GEN-1), so a record key is found by an equal
+// record built separately, and field order matters.
+type Point {
+  x: u32,
+  y: u32,
+}
+
+fn output_error[E](take e: E) -> () {}
+
+fn show(found: Option[u64]) -> String {
+  match found {
+    Some(v) => std@1/u64.to_string(v),
+    None => "none",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant_error
+  let mut m: Map[Point, u64] = map.empty()
+  map.insert(mut m, Point(x: 1, y: 2), 12)
+  map.insert(mut m, Point(x: 2, y: 1), 21)
+  let mut s: Set[Point] = set.empty()
+  set.insert(mut s, Point(x: 1, y: 2))
+  out.print(out, show(map.get(m, Point(x: 2, y: 1)))) ? output_error
+  out.print(out, " ") ? output_error
+  out.print(out, show(map.get(m, Point(x: 2, y: 2)))) ? output_error
+  out.print(
+    out,
+    if set.contains(s, Point(x: 1, y: 2)) {
+      " yes"
+    } else {
+      " no"
+    }
+  ) ? output_error
+  out.print(
+    out,
+    if set.contains(s, Point(x: 2, y: 1)) {
+      " yes"
+    } else {
+      " no"
+    }
+  ) ? output_error
+  out.print(out, "\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

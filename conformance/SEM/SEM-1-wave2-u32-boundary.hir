@@ -1,0 +1,34 @@
+// rule: SEM-1
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  core@1/test.check(t, std@1/u32.to_string(0u32) == "0")
+  core@1/test.check(t, std@1/u32.parse("0") == Ok(0u32))
+  let mut buffer1: Inline[u8, 1] = [99u8]
+  core@1/test.check(t, std@1/u32.format(0u32, mut buffer1) == Ok(1u64))
+  core@1/test.check(t, buffer1 == [48u8])
+  core@1/test.check(t, std@1/u32.to_string(4294967295u32) == "4294967295")
+  core@1/test.check(t, std@1/u32.parse("4294967295") == Ok(4294967295u32))
+  let mut buffer2: Inline[u8, 10] = [
+    99u8,
+    99u8,
+    99u8,
+    99u8,
+    99u8,
+    99u8,
+    99u8,
+    99u8,
+    99u8,
+    99u8
+  ]
+  core@1/test.check(t, std@1/u32.format(4294967295u32, mut buffer2) == Ok(10u64))
+  core@1/test.check(
+    t,
+    buffer2 == [52u8, 50u8, 57u8, 52u8, 57u8, 54u8, 55u8, 50u8, 57u8, 53u8]
+  )
+  core@1/test.check(t, std@1/u32.to_string(0u32) == "0")
+  core@1/test.check(t, std@1/u32.parse("0") == Ok(0u32))
+  let mut buffer3: Inline[u8, 1] = [99u8]
+  core@1/test.check(t, std@1/u32.format(0u32, mut buffer3) == Ok(1u64))
+  core@1/test.check(t, buffer3 == [48u8])
+  Ok(())
+}

@@ -1,0 +1,22 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 18
+// spec: #60
+// A value whose brand owner was a block local may only be dropped.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn probe() -> () {
+  let value = {
+    let r = fresh()
+    mk(r)
+  }
+  match value {
+    Some(x) => (),
+    None => (),
+  }
+}

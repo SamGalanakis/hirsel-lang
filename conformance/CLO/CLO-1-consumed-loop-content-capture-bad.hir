@@ -1,0 +1,20 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 18
+// Consumed loop content that views a borrowed parameter is local, so a
+// closure over it returns local content that a take parameter cannot keep,
+// as the getter twin `get(v)` of a getter local to its argument cannot.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn keep(take b: Bytes) {}
+
+fn pairs(p: Bytes) {
+  let xs: List[(u64, Bytes)] = [(1, view(p))]
+  for (n, v) in take xs {
+    let f = fn() {
+      v
+    }
+    keep(f())
+  }
+}

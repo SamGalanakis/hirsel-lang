@@ -1,0 +1,7 @@
+rc-trace v1
+max 16
+# T02 static constants are immortal from birth: sharing and releasing never touch them.
+static r1
+dup r1 r2
+drop r1
+drop r2

@@ -1,0 +1,18 @@
+// rule: CLO-4
+// expect: accept
+// A callee preserving the whole record covers its selected field.
+type State[T] {
+  it: Iter[T],
+  count: u64,
+}
+
+@advance_only(s)
+fn inner[T](mut s: State[T]) -> Option[T] {
+  s.count += 1
+  iter.next(mut s.it)
+}
+
+@advance_only(s.it)
+fn step[T](mut s: State[T]) -> Option[T] {
+  inner(mut s)
+}

@@ -1,0 +1,11 @@
+// rule: LANG-15
+// expect: accept
+// A Plain field read copies bits rather than borrowing its mut parameter.
+type R {
+  index: u64,
+}
+
+fn f(mut r: R) {
+  let mut start: u64 = r.index
+  start = 1
+}

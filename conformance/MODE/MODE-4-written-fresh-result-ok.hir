@@ -1,0 +1,5 @@
+// rule: MODE-4
+// expect: accept
+fn fresh() -> sendable Bytes {
+  b"f"
+}

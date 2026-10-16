@@ -1,0 +1,11 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  failure.check(std@1/string.trim(" \t\n\r\u{b}\u{c}é😀 \t") == "é😀", TextInvariant())
+  failure.check(
+    std@1/string.trim("\u{a0}é\u{2003}") == "\u{a0}é\u{2003}",
+    TextInvariant()
+  )
+  failure.check(std@1/string.trim("\0é\0") == "\0é\0", TextInvariant())
+  Ok(())
+}

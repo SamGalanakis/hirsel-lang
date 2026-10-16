@@ -1,0 +1,52 @@
+// rule: DROP-2
+// expect: run
+// stdout: first
+// stdout: last
+// stdout: selected
+// stdout: kept
+// stdout: otherwise
+// stdout: last
+// stdout: kept
+// stdout: first
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+resource type Parent {
+  first: Trace,
+  kept: Trace,
+  last: Trace,
+}
+drop(x) {
+  let _ = out.print(x.first.stdout, "parent must not finalize\n")
+}
+
+fn make(stdout: Stdout) -> Parent {
+  Parent(
+    first: Trace(stdout: stdout, text: "first\n"),
+    kept: Trace(stdout: stdout, text: "kept\n"),
+    last: Trace(stdout: stdout, text: "last\n")
+  )
+}
+
+fn branch(stdout: Stdout, selected: bool) {
+  let parent = make(stdout)
+  if selected {
+    let Parent(kept: kept, ..) = take parent
+    let _ = out.print(stdout, "selected\n")
+  } else {
+    let Parent(first: first, kept: kept, last: last) = take parent
+    let _ = out.print(stdout, "otherwise\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  branch(stdout, true)
+  branch(stdout, false)
+  Ok(())
+}

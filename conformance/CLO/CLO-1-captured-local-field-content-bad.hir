@@ -1,0 +1,22 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 19
+// A closure's environment bounds its local result. Here the environment is r,
+// whose field holds content borrowed from seed, so the result
+// is as local as r is, and r ends with the function. The function twin
+// `get(r)` with a getter local to its argument is rejected the same way.
+type Holder {
+  value: Bytes,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn example(take h: Holder, seed: Bytes) -> Bytes in {h, seed} {
+  let mut r: Holder in r = take h
+  r = Holder(value: b"fresh")
+  r.value = identity(seed)
+  fn() {
+    r.value
+  }()
+}

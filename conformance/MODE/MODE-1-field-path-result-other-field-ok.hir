@@ -1,0 +1,30 @@
+// rule: MODE-1
+// expect: accept
+// v22 #77. A result related to p.a may read p.a or any part of it, and a
+// relation naming both fields admits either.
+type Inner {
+  x: Bytes,
+  y: Bytes,
+}
+
+type Pair {
+  a: Inner,
+  b: Bytes,
+}
+
+fn get(p: Pair) -> Bytes in p.a {
+  p.a.y
+}
+
+fn either(p: Pair, flag: bool) -> Bytes in {p.a, p.b} {
+  if flag {
+    p.a.x
+  } else {
+    p.b
+  }
+}
+
+fn caller(take p: Pair) -> Bytes {
+  let r = get(p)
+  copy r
+}

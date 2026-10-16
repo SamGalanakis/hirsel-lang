@@ -1,0 +1,15 @@
+// rule: CT-2
+// expect: accept
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn number() -> u8 {
+  let x = Trace(n: 1u8)
+  x.n
+}
+
+const VALUE: u8 = comptime number()

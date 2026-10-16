@@ -1,0 +1,13 @@
+// rule: MEM-12
+// expect: accept
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+fn need[T: sendable](take x: T) -> () {}
+
+fn dup(take w: Item) -> Item {
+  need(take copy w)
+  w
+}

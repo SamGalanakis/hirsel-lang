@@ -1,0 +1,24 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// A borrowed loop lends its source only while it may advance again (§04). A
+// write followed by `break` ends the loop before the next read of `xs`.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: List[u64] = [1, 2]
+  let mut seen = 0u64
+  for x in xs {
+    seen = x
+    xs[0] = 7
+    break
+  }
+  let ok = seen == 1 && xs[0] == 7
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

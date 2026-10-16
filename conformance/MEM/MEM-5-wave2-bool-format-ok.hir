@@ -1,0 +1,7 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn main() -> () {
+  let mut buffer: Inline[u8, 5] = [0u8, 0u8, 0u8, 0u8, 0u8]
+  std@1/bool.format(false, mut buffer);
+}

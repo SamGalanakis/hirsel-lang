@@ -1,0 +1,19 @@
+// rule: OWN-2
+// expect: accept
+// Under LANG-11 (#50), `take` in the arm moves the outer place on that path; a
+// binding declared inside an arm moves out to the consumer (#83).
+fn consume(take x: String) -> () {
+  ()
+}
+
+fn example(c: bool) -> () {
+  let t: String = "x"
+  consume(
+    if c {
+      let u: String = "y"
+      u
+    } else {
+      take t
+    }
+  )
+}

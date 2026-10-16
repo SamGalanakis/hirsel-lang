@@ -1,0 +1,36 @@
+// rule: PROV-4
+// expect: accept
+// A local(x, ..) result retains the placement of its sources, so a result
+// written without a placement is declared in theirs. A value constructed for
+// it is placed by that expected type, and the written form is the same type.
+type Ast {
+  bytes: Bytes,
+}
+
+fn fresh(a: Arena, x: Bytes in a) -> Bytes in x {
+  b"fresh"
+}
+
+fn written(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  b"fresh"
+}
+
+fn wrap(a: Arena, x: Bytes in a) -> Ast in x {
+  Ast(bytes: copy x)
+}
+
+fn taken(a: Arena, take x: Bytes in heap) -> Ast in x {
+  Ast(bytes: take x)
+}
+
+fn pair(a: Arena, take src: Bytes in a) -> (Bytes, u8) in {src, a} {
+  (take src, 1u8)
+}
+
+fn unplaced(x: Bytes) -> Ast in x {
+  Ast(bytes: copy x)
+}
+
+fn relay(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  fresh(a, x)
+}

@@ -1,0 +1,989 @@
+// Port of Zig lib/std/http/Client.zig request/sendBodiless/sendBodyComplete,
+// Request.receiveHead/redirect/fetch and lib/std/http.zig Reader.State and
+// BodyWriter.chunkedDrain/endChunked, bff490a23889750de7096d9057c0a432efc929a8.
+// MIT, third-party/NOTICES.md. Explicit Net and branded Stream replace Io and
+// the pooled Connection; owned buffers replace borrowed reader/writer slices.
+// Limits/defaults follow ureq src/config.rs.
+pub type Method = Get | Head | Post | Put | Delete | Patch | Options
+
+pub type Version = Http10 | Http11
+
+pub type Header {
+  name: String,
+  value: String,
+}
+
+pub type Config {
+  max_redirects: u32,
+  connect_timeout: Option[std@1/time.Duration],
+  read_timeout: Option[std@1/time.Duration],
+  write_timeout: Option[std@1/time.Duration],
+  max_head_bytes: u64,
+  max_headers: u64,
+  user_agent: String,
+  roots: TlsRoots,
+  status_as_error: bool,
+}
+
+pub type ResponseHead {
+  version: Version,
+  status: u16,
+  reason: String,
+  headers: List[Header],
+  content_length: Option[u64],
+  chunked: bool,
+  keep_alive: bool,
+  location: Option[String],
+  content_type: Option[String],
+}
+
+pub type Response {
+  status: u16,
+  headers: List[Header],
+  body: Bytes,
+  url: String,
+}
+
+pub type HttpError = Net(NetError) | Url(std@1/uri.UriError) | Malformed(
+  std@1/http_wire.HeadError
+) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
+  u16
+) | OutOfOrder
+
+// ready=0, streaming request=1, sent=2, body=3, done=4, failed=5.
+// body_kind: EOF=0, content-length=1, chunked=2. chunk_suffix tracks the
+// mandatory CRLF after data separately from the following chunk size line.
+pub opaque resource type Request: noalloc_drop uses {Net} {
+  net: Net,
+  stream: Stream of .net,
+  config: Config,
+  method: Method,
+  uri: std@1/uri.Uri,
+  url: String,
+  headers: List[Header],
+  redirects: u32,
+  state: u8,
+  sent_body: bool,
+  input: List[u8],
+  offset: u64,
+  body_kind: u8,
+  remaining: u64,
+  chunk_suffix: bool,
+  response_trailers: List[Header],
+}
+@noalloc drop(self) {}
+
+pub fn default_config() -> Config uses {} {
+  Config(
+    max_redirects: 3,
+    connect_timeout: None(),
+    read_timeout: None(),
+    write_timeout: None(),
+    max_head_bytes: 65536,
+    max_headers: 100,
+    user_agent: "hirsel-std/1",
+    roots: WebPki(),
+    status_as_error: true
+  )
+}
+
+// Zig lib/std/ascii.zig toLower/eqlIgnoreCase, scalar byte path (bff490a2).
+@noalloc
+fn http_lower(b: u8) -> u8 uses {} {
+  if b >= 65 && b <= 90 {
+    b + 32
+  } else {
+    b
+  }
+}
+
+@noalloc
+fn http_same(a: String, b: String) -> bool uses {} {
+  let x = core@1/string.as_bytes(a)
+  let y = core@1/string.as_bytes(b)
+  if core@1/bytes.len(x) != core@1/bytes.len(y) {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(x) {
+    if http_lower(x[i]) != http_lower(y[i]) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+// Zig HeaderIterator lookup; the first case-insensitive match wins.
+pub fn header(headers: List[Header], name: String) -> Option[String] uses {} {
+  for h in headers {
+    if http_same(h.name, name) {
+      return Some(unique h.value)
+    }
+  }
+  None()
+}
+
+fn http_text(buf: Bytes, start: u64, end: u64) -> Result[String, HttpError] uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut out, buf[i])
+    i += 1
+  }
+  match std@1/text.finish(take out) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(Malformed(HeaderValue())),
+  }
+}
+
+fn http_net_error(error: NetError) -> HttpError uses {} {
+  Net(unique error)
+}
+
+fn http_timeout(value: Option[std@1/time.Duration]) -> Result[NetTimeout, HttpError] uses {} {
+  match value {
+    None() => Ok(Unbounded()),
+    Some(d) => {
+      if d.nanoseconds <= 0 || d.nanoseconds > 18446744073709551615i128 {
+        return Error(http_net_error(InvalidInput()))
+      }
+      Ok(Nanos(core@1/int.narrow(d.nanoseconds)))
+    },
+  }
+}
+
+// Zig HostName.fromUri: decode, remove IPv6 brackets and canonicalize for Net.
+fn http_host(parsed_uri: std@1/uri.Uri) -> Result[String, HttpError] uses {} {
+  let component = match parsed_uri.host {
+    Some(c) => c,
+    None() => return Error(Url(InvalidHostName())),
+  }
+  let raw = std@1/uri.component_raw(component)
+  let len = core@1/bytes.len(raw)
+  if len >= 2 && raw[0] == 91 && raw[len - 1] == 93 {
+    let name = http_text(raw, 1, len - 1)?
+    return match std@1/net.parse_ip(name) {
+      Ok(ip) => Ok(std@1/net.format_ip(ip)),
+      Error(_) => Error(Url(InvalidHostName())),
+    }
+  }
+  let mut out: List[u8] = []
+  let end = if len > 0 && raw[len - 1] == 46 {
+    len - 1
+  } else {
+    len
+  }
+  let mut i: u64 = 0
+  while i < end {
+    core@1/list.push(mut out, http_lower(raw[i]))
+    i += 1
+  }
+  let name = match std@1/text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => return Error(Url(InvalidHostName())),
+  }
+  match std@1/net.validate_host(name) {
+    Ok(()) => Ok(take name),
+    Error(_) => Error(Url(InvalidHostName())),
+  }
+}
+
+@noalloc
+fn http_port(parsed_uri: std@1/uri.Uri) -> u16 uses {} {
+  match parsed_uri.port {
+    Some(p) => p,
+    None() => if http_same(parsed_uri.scheme, "https") {
+      443
+    } else {
+      80
+    },
+  }
+}
+
+fn http_open(n: Net, config: Config, parsed_uri: std@1/uri.Uri) -> Result[
+  Stream of n,
+  HttpError
+] {
+  if !http_same(parsed_uri.scheme, "http") && !http_same(parsed_uri.scheme, "https") {
+    return Error(UnsupportedScheme())
+  }
+  let name = http_host(parsed_uri)?
+  let ct = http_timeout(config.connect_timeout)?
+  let rt = http_timeout(config.read_timeout)?
+  let wt = http_timeout(config.write_timeout)?
+  let mut plain = core@1/net.connect(n, name, http_port(parsed_uri), ct) ? http_net_error
+  // ConnectTls allows options before upgrade; these also bound the handshake.
+  core@1/net.set_read_timeout(n, mut plain, rt) ? http_net_error
+  core@1/net.set_write_timeout(n, mut plain, wt) ? http_net_error
+  let s = if http_same(parsed_uri.scheme, "https") {
+    core@1/tls.connect(n, take plain, name, config.roots) ? http_net_error
+  } else {
+    take plain
+  }
+  Ok(take s)
+}
+
+// Reject all non-token names and control bytes before writing any request.
+fn http_validate_headers(headers: List[Header]) -> Result[(), HttpError] uses {} {
+  for h in headers {
+    let name = core@1/string.as_bytes(h.name)
+    if core@1/bytes.len(name) == 0 {
+      return Error(Malformed(HeaderName()))
+    }
+    let mut ni: u64 = 0
+    while ni < core@1/bytes.len(name) {
+      let b = name[ni]
+      ni += 1
+      if !(b >= 65 && b <= 90 || b >= 97 && b <= 122 || b >= 48 && b <= 57 || b == 33 || b == 35 || b == 36 || b == 37 || b == 38 || b == 39 || b == 42 || b == 43 || b == 45 || b == 46 || b == 94 || b == 95 || b == 96 || b == 124 || b == 126) {
+        return Error(Malformed(HeaderName()))
+      }
+    }
+    let value = core@1/string.as_bytes(h.value)
+    let mut vi: u64 = 0
+    while vi < core@1/bytes.len(value) {
+      let b = value[vi]
+      vi += 1
+      if b != 9 && (b < 32 || b == 127) {
+        return Error(Malformed(HeaderValue()))
+      }
+    }
+  }
+  Ok(())
+}
+
+fn http_validate_target(target: String) -> Result[(), HttpError] uses {} {
+  let wire_bytes = core@1/string.as_bytes(target)
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(wire_bytes) {
+    if wire_bytes[i] <= 32 || wire_bytes[i] == 127 {
+      return Error(Url(UnexpectedCharacter()))
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+pub fn request(
+  n: Net,
+  config: Config,
+  method: Method,
+  url: String,
+  headers: List[Header]
+) -> Result[Request, HttpError] {
+  http_validate_headers(headers)?
+  http_validate_headers([Header(name: "user-agent", value: config.user_agent)])?
+  let parsed_uri = std@1/uri.parse(url) ? Url
+  let target = std@1/uri.component_encoded(parsed_uri.path, Path())
+  http_validate_target(target)?
+  match parsed_uri.query {
+    Some(q) => http_validate_target(std@1/uri.component_encoded(q, Query()))?,
+    None() => (),
+  }
+  let s = http_open(n, config, parsed_uri)?
+  Ok(
+    Request(
+      net: n,
+      stream: take s,
+      config: unique config,
+      method: method,
+      uri: unique parsed_uri,
+      url: unique url,
+      headers: unique headers,
+      redirects: config.max_redirects,
+      state: 0,
+      sent_body: false,
+      input: [],
+      offset: 0,
+      body_kind: 0,
+      remaining: 0,
+      chunk_suffix: false,
+      response_trailers: []
+    )
+  )
+}
+
+fn http_method_text(method: Method) -> String uses {} {
+  match method {
+    Get() => "GET",
+    Head() => "HEAD",
+    Post() => "POST",
+    Put() => "PUT",
+    Delete() => "DELETE",
+    Patch() => "PATCH",
+    Options() => "OPTIONS",
+  }
+}
+
+fn http_write(mut r: Request, data: Bytes) -> Result[(), HttpError] {
+  core@1/net.write_all(r.net, mut r.stream, data) ? http_net_error
+  Ok(())
+}
+
+fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError] {
+  r.state = 5
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, http_method_text(r.method))
+  std@1/text.append(mut out, " ")
+  let target_path = std@1/uri.component_encoded(r.uri.path, Path())
+  std@1/text.append(
+    mut out,
+    if target_path == "" {
+      "/"
+    } else {
+      target_path
+    }
+  )
+  match r.uri.query {
+    Some(q) => {
+      std@1/text.append(mut out, "?")
+      std@1/text.append(mut out, std@1/uri.component_encoded(q, Query()))
+    },
+    None() => (),
+  }
+  std@1/text.append(mut out, " HTTP/1.1\r\nhost: ")
+  let hostname = http_host(r.uri)?
+  let data = core@1/string.as_bytes(hostname)
+  let mut ipv6: bool = false
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    if data[i] == 58 {
+      ipv6 = true
+    }
+    i += 1
+  }
+  if ipv6 {
+    std@1/text.append(mut out, "[")
+  }
+  std@1/text.append(mut out, hostname)
+  if ipv6 {
+    std@1/text.append(mut out, "]")
+  }
+  match r.uri.port {
+    Some(p) => {
+      std@1/text.append(mut out, ":")
+      std@1/u16.format_into(p, mut out)
+    },
+    None() => (),
+  }
+  std@1/text.append(mut out, "\r\nuser-agent: ")
+  std@1/text.append(mut out, r.config.user_agent)
+  std@1/text.append(mut out, "\r\nconnection: close\r\n")
+  for h in r.headers {
+    // Framing and connection headers belong to this state machine (Zig's
+    // overridable built-in headers), never to two competing wire encodings.
+    if !http_same(h.name, "host") && !http_same(h.name, "user-agent") && !http_same(
+      h.name,
+      "connection"
+    ) && !http_same(h.name, "content-length") && !http_same(h.name, "transfer-encoding") {
+      std@1/text.append(mut out, h.name)
+      std@1/text.append(mut out, ": ")
+      std@1/text.append(mut out, h.value)
+      std@1/text.append(mut out, "\r\n")
+    }
+  }
+  std@1/text.append(mut out, framing_line)
+  std@1/text.append(mut out, "\r\n")
+  let request_bytes = core@1/bytes.from_list(take out)
+  http_write(mut r, request_bytes)
+}
+
+pub fn send_bodiless(mut r: Request) -> Result[(), HttpError] {
+  if r.state != 0 {
+    return Error(OutOfOrder())
+  }
+  http_send_head(mut r, "")?
+  r.state = 2
+  Ok(())
+}
+
+pub fn send_body(mut r: Request, body: Bytes) -> Result[(), HttpError] {
+  if r.state != 0 {
+    return Error(OutOfOrder())
+  }
+  let mut line: List[u8] = []
+  std@1/text.append(mut line, "content-length: ")
+  std@1/u64.format_into(core@1/bytes.len(body), mut line)
+  std@1/text.append(mut line, "\r\n")
+  let framing_line = std@1/text.finish(take line)
+  match framing_line {
+    Ok(s) => http_send_head(mut r, s)?,
+    Error(_) => return Error(Malformed(HeaderValue())),
+  }
+  http_write(mut r, body)?
+  r.sent_body = true
+  r.state = 2
+  Ok(())
+}
+
+fn http_begin_chunks(mut r: Request) -> Result[(), HttpError] {
+  if r.state == 0 {
+    http_send_head(mut r, "transfer-encoding: chunked\r\n")?
+    r.state = 1
+    r.sent_body = true
+  }
+  if r.state != 1 {
+    return Error(OutOfOrder())
+  }
+  Ok(())
+}
+
+pub fn send_chunk(mut r: Request, data: Bytes) -> Result[(), HttpError] {
+  http_begin_chunks(mut r)?
+  let len = core@1/bytes.len(data)
+  if len == 0 {
+    return Ok(())
+  }
+  let digits: Bytes = b"0123456789abcdef"
+  let mut reversed: List[u8] = []
+  let mut size = len
+  while size > 0 {
+    core@1/list.push(mut reversed, digits[size % 16])
+    size /= 16
+  }
+  let mut out: List[u8] = []
+  let mut i = core@1/list.len(reversed)
+  while i > 0 {
+    i -= 1
+    core@1/list.push(mut out, reversed[i])
+  }
+  core@1/list.push(mut out, 13)
+  core@1/list.push(mut out, 10)
+  let prefix = core@1/bytes.from_list(take out)
+  r.state = 5
+  http_write(mut r, prefix)?
+  http_write(mut r, data)?
+  http_write(mut r, b"\r\n")?
+  r.state = 1
+  Ok(())
+}
+
+pub fn end_body(mut r: Request, request_trailers: List[Header]) -> Result[(), HttpError] {
+  http_validate_headers(request_trailers)?
+  for h in request_trailers {
+    if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
+      h.name,
+      "host"
+    ) {
+      return Error(Malformed(HeaderName()))
+    }
+  }
+  http_begin_chunks(mut r)?
+  r.state = 5
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, "0\r\n")
+  for h in request_trailers {
+    std@1/text.append(mut out, h.name)
+    std@1/text.append(mut out, ": ")
+    std@1/text.append(mut out, h.value)
+    std@1/text.append(mut out, "\r\n")
+  }
+  std@1/text.append(mut out, "\r\n")
+  let wire_bytes = core@1/bytes.from_list(take out)
+  http_write(mut r, wire_bytes)?
+  r.state = 2
+  Ok(())
+}
+
+// Batches use the existing noalloc parser without fixing Config.max_headers to
+// an implementation capacity. Offsets always refer to the original input.
+fn http_parse_head(buf: Bytes, config: Config) -> Result[
+  Option[(ResponseHead, u64)],
+  HttpError
+] uses {} {
+  let empty = std@1/http_wire.RawHeader(
+    name_start: 0,
+    name_end: 0,
+    value_start: 0,
+    value_end: 0
+  )
+  let mut raw: Inline[std@1/http_wire.RawHeader, 16] = [
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty
+  ]
+  let mut line = std@1/http_wire.StatusLine(
+    version: 0,
+    code: 0,
+    reason_start: 0,
+    reason_end: 0
+  )
+  let mut count: u64 = 0
+  let mut first: bool = true
+  let mut start: u64 = 0
+  let mut headers: List[Header] = []
+  let mut content_length: Option[u64] = None()
+  let mut chunked: bool = false
+  let mut keep_alive: bool = false
+  while true {
+    let parsed = if first {
+      std@1/http_wire.parse_response(buf, mut line, mut raw, mut count)
+    } else {
+      std@1/http_wire.parse_headers(buf, start, mut raw, mut count)
+    }
+    let mut complete: bool = false
+    match parsed {
+      Ok(Partial()) => return Ok(None()),
+      Ok(Complete(end)) => {
+        start = end
+        complete = true
+      },
+      Error(TooManyHeaders()) => {
+        start = raw[count - 1].value_end
+        while start < core@1/bytes.len(buf) && buf[start] != 10 {
+          start += 1
+        }
+        start += 1
+      },
+      Error(e) => return Error(Malformed(e)),
+    }
+    if core@1/list.len(headers) > config.max_headers || count > config.max_headers - core@1/list.len(
+      headers
+    ) {
+      return Error(Malformed(TooManyHeaders()))
+    }
+    let mut batch_cl: bool = false
+    let mut batch_te: bool = false
+    let mut hi: u64 = 0
+    while hi < count {
+      let name = http_text(buf, raw[hi].name_start, raw[hi].name_end)?
+      if http_same(name, "content-length") {
+        batch_cl = true
+      }
+      if http_same(name, "transfer-encoding") {
+        batch_te = true
+      }
+      hi += 1
+    }
+    if (batch_cl || content_length != None()) && (batch_te || chunked) {
+      return Error(Malformed(TransferEncoding()))
+    }
+    let frame = match std@1/http_wire.framing(buf, line.version, raw, count) {
+      Ok(f) => f,
+      Error(TransferEncoding()) => return Error(UnsupportedTransferEncoding()),
+      Error(e) => return Error(Malformed(e)),
+    }
+    if first {
+      keep_alive = frame.keep_alive
+    }
+    let mut i: u64 = 0
+    while i < count {
+      let h = raw[i]
+      let name = http_text(buf, h.name_start, h.name_end)?
+      let value = http_text(buf, h.value_start, h.value_end)?
+      if http_same(name, "connection") {
+        keep_alive = frame.keep_alive
+      }
+      core@1/list.push(mut headers, Header(name: take name, value: take value))
+      i += 1
+    }
+    match frame.content_length {
+      Some(value) => match content_length {
+        Some(old) => if old != value {
+          return Error(Malformed(ContentLength()))
+        },
+        None() => {
+          content_length = Some(value)
+        },
+      },
+      None() => (),
+    }
+    if chunked && frame.chunked {
+      return Error(UnsupportedTransferEncoding())
+    }
+    chunked = chunked || frame.chunked
+    if chunked && content_length != None() {
+      return Error(Malformed(TransferEncoding()))
+    }
+    if complete {
+      // Reason is informational; invalid UTF-8 is empty.
+      let reason = match http_text(buf, line.reason_start, line.reason_end) {
+        Ok(value) => take value,
+        Error(_) => "",
+      }
+      let location = header(headers, "location")
+      let content_type = header(headers, "content-type")
+      return Ok(
+        Some(
+          (
+            ResponseHead(
+              version: if line.version == 0 {
+                Http10()
+              } else {
+                Http11()
+              },
+              status: line.code,
+              reason: take reason,
+              headers: take headers,
+              content_length: content_length,
+              chunked: chunked,
+              keep_alive: keep_alive,
+              location: take location,
+              content_type: take content_type
+            ),
+            start
+          )
+        )
+      )
+    }
+    first = false
+  }
+  Ok(None())
+}
+
+// A borrowed request buffer becomes owned bytes for the scalar wire parser.
+fn http_owned_input(data: List[u8]) -> Bytes uses {} {
+  core@1/bytes.from_list(unique data)
+}
+
+fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
+  let mut unread: List[u8] = []
+  let mut i = r.offset
+  while i < core@1/list.len(r.input) {
+    core@1/list.push(mut unread, r.input[i])
+    i += 1
+  }
+  r.input = take unread
+  r.offset = 0
+  Ok(core@1/net.read(r.net, mut r.stream, mut r.input, max) ? http_net_error)
+}
+
+fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
+  while true {
+    let buf = http_owned_input(r.input)
+    let unread = core@1/bytes.slice(buf, r.offset, core@1/bytes.len(buf))
+    match http_parse_head(unread, r.config)? {
+      Some((head, end)) => {
+        if end > r.config.max_head_bytes {
+          return Error(HeadTooLarge())
+        }
+        r.offset += end
+        return Ok(take head)
+      },
+      None() => (),
+    }
+    let have = core@1/list.len(r.input) - r.offset
+    if have >= r.config.max_head_bytes {
+      return Error(HeadTooLarge())
+    }
+    let space = r.config.max_head_bytes - have
+    if http_read_more(
+      mut r,
+      if space > 4096 {
+        4096
+      } else {
+        space
+      }
+    )? == 0 {
+      return Error(Truncated())
+    }
+  }
+  Error(Truncated())
+}
+
+fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
+  if r.redirects == 0 {
+    return Error(TooManyRedirects())
+  }
+  let location = match head.location {
+    Some(s) => s,
+    None() => return Error(RedirectLocationInvalid()),
+  }
+  let parsed_uri = match std@1/uri.resolve(r.uri, location) {
+    Ok(u) => take u,
+    Error(_) => return Error(RedirectLocationInvalid()),
+  }
+  http_validate_target(std@1/uri.component_encoded(parsed_uri.path, Path()))?
+  match parsed_uri.query {
+    Some(q) => http_validate_target(std@1/uri.component_encoded(q, Query()))?,
+    None() => (),
+  }
+  let changed = !http_same(r.uri.scheme, parsed_uri.scheme) || http_host(r.uri)? != http_host(
+    parsed_uri
+  )? || http_port(r.uri) != http_port(parsed_uri)
+  let to_get = head.status == 303 || (head.status == 301 || head.status == 302) && r.method == Post()
+  if !to_get && r.sent_body {
+    return Error(RedirectRequiresResend())
+  }
+  let mut headers: List[Header] = []
+  for h in r.headers {
+    if !(changed && (http_same(h.name, "authorization") || http_same(h.name, "cookie") || http_same(
+      h.name,
+      "proxy-authorization"
+    ))) && !(to_get && (http_same(h.name, "content-type") || http_same(
+      h.name,
+      "content-length"
+    ) || http_same(h.name, "transfer-encoding"))) {
+      core@1/list.push(mut headers, unique h)
+    }
+  }
+  // Replace the complete connection state so Net and Stream move together
+  // with their sibling brand, as in Client.request's fresh redirect reader.
+  let next_method: Method = if to_get {
+    Get()
+  } else {
+    r.method
+  }
+  let next_url = std@1/uri.format(parsed_uri)
+  let mut fresh = request(r.net, r.config, next_method, next_url, headers)?
+  fresh.redirects = r.redirects - 1
+  r = take fresh
+  send_bodiless(mut r)
+}
+
+pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
+  if r.state != 2 {
+    return Error(OutOfOrder())
+  }
+  r.state = 5
+  while true {
+    let head = http_next_head(mut r)?
+    if head.status == 100 {
+      continue
+    }
+    let no_body = r.method == Head() || head.status >= 100 && head.status < 200 || head.status == 204 || head.status == 304
+    if !no_body && (head.status == 301 || head.status == 302 || head.status == 303 || head.status == 307 || head.status == 308) {
+      http_redirect(mut r, head)?
+      r.state = 5
+      continue
+    }
+    if no_body {
+      r.state = 4
+    } else {
+      r.state = 3
+      if head.chunked {
+        r.body_kind = 2
+        r.remaining = 0
+      } else {
+        match head.content_length {
+          Some(len) => {
+            r.body_kind = 1
+            r.remaining = len
+            if len == 0 {
+              r.state = 4
+            }
+          },
+          None() => {
+            r.body_kind = 0
+          },
+        }
+      }
+    }
+    return Ok(take head)
+  }
+  Error(Truncated())
+}
+
+// Zig Reader.State.body_remaining_chunk_len: head -> data -> suffix -> head.
+fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
+  if r.chunk_suffix {
+    while core@1/list.len(r.input) - r.offset < 2 {
+      if http_read_more(mut r, 4096)? == 0 {
+        return Error(Truncated())
+      }
+    }
+    if r.input[r.offset] != 13 || r.input[r.offset + 1] != 10 {
+      return Error(Chunk())
+    }
+    r.offset += 2
+    r.chunk_suffix = false
+  }
+  while true {
+    let buf = http_owned_input(r.input)
+    match std@1/http_wire.parse_chunk_size(buf, r.offset) {
+      Error(_) => return Error(Chunk()),
+      Ok(Complete(consumed, size)) => {
+        r.offset += consumed
+        r.remaining = size
+        if size == 0 {
+          http_read_trailers(mut r)?
+          r.state = 4
+        }
+        return Ok(())
+      },
+      Ok(Partial()) => (),
+    }
+    let have = core@1/list.len(r.input) - r.offset
+    if have >= r.config.max_head_bytes {
+      return Error(HeadTooLarge())
+    }
+    let space = r.config.max_head_bytes - have
+    if http_read_more(
+      mut r,
+      if space > 4096 {
+        4096
+      } else {
+        space
+      }
+    )? == 0 {
+      return Error(Truncated())
+    }
+  }
+  Error(Truncated())
+}
+
+fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
+  // Prefix a synthetic status line to reuse strict batched header parsing.
+  let mut collected: List[u8] = []
+  std@1/text.append(mut collected, "HTTP/1.1 200 OK\r\n")
+  while true {
+    while r.offset < core@1/list.len(r.input) {
+      core@1/list.push(mut collected, r.input[r.offset])
+      r.offset += 1
+    }
+    let buf = core@1/bytes.from_list(copy collected)
+    match http_parse_head(buf, r.config)? {
+      Some((head, end)) => {
+        if end - 17 > r.config.max_head_bytes {
+          return Error(HeadTooLarge())
+        }
+        r.response_trailers = copy head.headers
+        return Ok(())
+      },
+      None() => (),
+    }
+    let have = core@1/list.len(collected) - 17
+    if have >= r.config.max_head_bytes {
+      return Error(HeadTooLarge())
+    }
+    let space = r.config.max_head_bytes - have
+    if http_read_more(
+      mut r,
+      if space > 4096 {
+        4096
+      } else {
+        space
+      }
+    )? == 0 {
+      return Error(Truncated())
+    }
+  }
+  Error(Truncated())
+}
+
+pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError] {
+  if max == 0 {
+    return Error(http_net_error(InvalidInput()))
+  }
+  if r.state == 4 {
+    return Ok(0)
+  }
+  if r.state != 3 {
+    return Error(OutOfOrder())
+  }
+  if r.body_kind == 2 && r.remaining == 0 {
+    http_chunk_head(mut r)?
+    if r.state == 4 {
+      return Ok(0)
+    }
+  }
+  if r.offset == core@1/list.len(r.input) {
+    if http_read_more(
+      mut r,
+      if max > 4096 {
+        4096
+      } else {
+        max
+      }
+    )? == 0 {
+      if r.body_kind != 0 {
+        return Error(Truncated())
+      }
+      r.state = 4
+      return Ok(0)
+    }
+  }
+  let mut count = core@1/list.len(r.input) - r.offset
+  if count > max {
+    count = max
+  }
+  if r.body_kind != 0 && count > r.remaining {
+    count = r.remaining
+  }
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, r.input[r.offset + i])
+    i += 1
+  }
+  r.offset += count
+  if r.body_kind != 0 {
+    r.remaining -= count
+    if r.remaining == 0 {
+      if r.body_kind == 1 {
+        r.state = 4
+      } else {
+        r.chunk_suffix = true
+      }
+    }
+  }
+  Ok(count)
+}
+
+pub fn read_all(mut r: Request, limit: u64) -> Result[Bytes, HttpError] {
+  let mut out: List[u8] = []
+  while true {
+    let len = core@1/list.len(out)
+    // Read one byte beyond the bound, including when limit is zero. Avoid
+    // overflow at u64::MAX, and do not allocate a limit-sized buffer up front.
+    let space: u64 = if len == limit {
+      1
+    } else if limit - len > 4096 {
+      4096
+    } else {
+      limit - len
+    }
+    let count = read_body(mut r, mut out, space)?
+    if core@1/list.len(out) > limit {
+      return Error(BodyTooLarge())
+    }
+    if count == 0 {
+      return Ok(core@1/bytes.from_list(take out))
+    }
+  }
+  Error(Truncated())
+}
+
+pub fn trailers(r: Request) -> List[Header] {
+  unique r.response_trailers
+}
+
+pub fn fetch(
+  n: Net,
+  config: Config,
+  method: Method,
+  url: String,
+  headers: List[Header],
+  body: Option[Bytes]
+) -> Result[Response, HttpError] {
+  let mut r = request(n, config, method, url, headers)?
+  match body {
+    Some(data) => send_body(mut r, data)?,
+    None() => send_bodiless(mut r)?,
+  }
+  let head = receive_head(mut r)?
+  if config.status_as_error && head.status >= 400 && head.status <= 599 {
+    return Error(Status(head.status))
+  }
+  let data = read_all(mut r, 10485760)?
+  Ok(
+    Response(
+      status: head.status,
+      headers: unique head.headers,
+      body: take data,
+      url: unique r.url
+    )
+  )
+}

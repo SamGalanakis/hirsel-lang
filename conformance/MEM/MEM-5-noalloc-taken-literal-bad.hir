@@ -1,0 +1,13 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 10
+@noalloc
+fn keep(take s: String) -> String {
+  s
+}
+
+fn example() {
+  let f: @noalloc fn() -> String uses {} = fn() -> String {
+    keep("new")
+  }
+  ()
+}

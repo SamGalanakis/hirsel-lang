@@ -1,0 +1,8 @@
+rc-trace v1
+max 16
+# Resetting a shared donor only releases one holder and yields a none token; reusing a
+# none token allocates fresh storage.
+alloc r1 0
+dup r1 r2
+reset r1 t1
+reuse t1 r3 0

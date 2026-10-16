@@ -1,0 +1,5 @@
+Alloc { alloc: AllocId(0), owner: "heap", capacity: 16 }
+Reset { alloc: AllocId(0), token: Some(TokenId(0)) }
+Reuse { alloc: AllocId(0), generation: 1 }
+Release { alloc: AllocId(0), count: Some(0) }
+Free { alloc: AllocId(0) }

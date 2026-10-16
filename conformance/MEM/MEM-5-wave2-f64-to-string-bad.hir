@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 5
+@noalloc
+fn main() -> String {
+  std@1/f64.to_string(1.0f64)
+}

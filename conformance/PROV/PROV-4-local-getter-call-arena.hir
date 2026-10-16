@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: accept
+fn read(a: Arena, x: Bytes in a) -> Bytes in x {
+  x
+}
+
+fn use(a: Arena) {
+  let x: Bytes in a = b"x"
+  let y = read(a, x)
+  let _ = y
+}

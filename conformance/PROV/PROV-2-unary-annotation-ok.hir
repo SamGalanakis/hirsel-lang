@@ -1,0 +1,10 @@
+// rule: PROV-2
+// expect: accept
+fn use_pos(s: Dir, p: i64 of s) -> () {
+  ()
+}
+
+fn probe(s: Dir, p: i64 of s) -> () {
+  let q: i64 = -p
+  ()
+}

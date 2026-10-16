@@ -1,0 +1,23 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+fn error(take e: FileError) -> () {}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let d = test.dir(t, [(path.of("a"), b"old"), (path.of("./a"), b"x")])
+  test.check(t, file.read_bytes(d, path.of("a")) ? error == b"x")
+  let other = test.dir(t, [])
+  let f = file.open(d, path.of("a")) ? error
+  match file.narrow(other, take f) {
+    None => test.check(t, true),
+    Some(narrowed) => {
+      let _ = take narrowed
+      test.check(t, false)
+    },
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

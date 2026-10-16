@@ -1,0 +1,17 @@
+// rule: LANG-2
+// expect: fail MEM-14 at line 8
+// A failure inside a generic nested function reports the nested function's
+// own site, at the instantiation that fails.
+fn outer(xs: List[u64]) -> u64 {
+  fn at[T: plain](t: T, i: u64) -> u64 {
+    let z = t
+    xs[i]
+  }
+  at(1u8, 0u64) + at(2u32, 7u64)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: List[u64] = [4, 5]
+  let n = outer(xs)
+  Ok(())
+}

@@ -1,0 +1,7 @@
+// rule: SER-1
+// expect: accept
+fn encode[T: serializable](x: T) {}
+
+fn example(x: std@1/time.Duration) {
+  encode(x)
+}

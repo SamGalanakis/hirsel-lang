@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 8
+fn mapper(s: String) -> String in s {
+  copy s
+}
+
+fn example(xs: List[String]) -> () {
+  std@1/list.map(xs, mapper);
+}

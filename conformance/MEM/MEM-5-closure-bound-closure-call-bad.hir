@@ -1,0 +1,25 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 22
+// The rejected twin, where the bound closure calls a function that may allocate,
+// so calling it is an allocating call inside the `@noalloc` closure body.
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+fn seven() -> u64 {
+  let l: List[u64] = [7]
+  l[0]
+}
+
+@noalloc
+fn example() -> u64 {
+  invoke(
+    fn() {
+      let g = fn() {
+        seven()
+      }
+      g()
+    }
+  )
+}

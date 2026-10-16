@@ -1,0 +1,5 @@
+// rule: LANG-6
+// expect: reject LANG-6 at line 4
+fn unfinished() -> u32 {
+  todo
+}

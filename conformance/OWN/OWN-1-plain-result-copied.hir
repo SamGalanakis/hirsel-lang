@@ -1,0 +1,6 @@
+// rule: OWN-1
+// expect: accept
+// "A plain value is copied by reading it."
+fn example(x: u64) -> u64 {
+  x
+}

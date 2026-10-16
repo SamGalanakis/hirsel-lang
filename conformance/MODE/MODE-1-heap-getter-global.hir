@@ -1,0 +1,10 @@
+// rule: MODE-1
+// expect: accept
+// "A getter over a heap map returns an ordinary global value."
+fn get(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn example(take x: Bytes) -> Bytes {
+  get(x)
+}

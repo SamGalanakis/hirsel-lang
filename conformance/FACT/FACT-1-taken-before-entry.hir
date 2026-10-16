@@ -1,0 +1,13 @@
+// rule: FACT-1
+// expect: run
+// "an ensures may name a take parameter only inside before".
+@noalloc
+fn id(take x: u32) -> u32
+  ensures result == before(x) {
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = id(7)
+  Ok(())
+}

@@ -1,0 +1,8 @@
+// rule: PROG-2
+// expect: reject PROG-2 at line 6
+type Hidden = vendor.Hidden
+
+fn probe(take h: vendor.Hidden) -> String {
+  let Hidden(value: _, text: s): vendor.Hidden = take h
+  s
+}

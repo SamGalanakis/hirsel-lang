@@ -1,0 +1,25 @@
+// rule: CLO-4
+// expect: accept
+// A sendable state handed to iter.from keeps its current crossing evidence
+// in the iterator's environment when the callback's mutable slot is written
+// sendable, since the slot's receipt preserves it on every invocation
+// (agree --full annotation/mode).
+type Taken[T] {
+  inner: Iter[T],
+  left: u64,
+}
+
+@captures(it)
+fn take_n[T](take it: sendable Iter[T], limit: u64) -> Iter[T] {
+  iter.from(
+    take Taken(inner: take it, left: limit),
+    fn(mut s: sendable Taken[T]) -> Option[T] {
+      if s.left == 0 {
+        None
+      } else {
+        s.left -= 1
+        iter.next(mut s.inner)
+      }
+    }
+  )
+}

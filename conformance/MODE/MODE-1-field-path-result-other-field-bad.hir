@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 11
+// v22 #77. A result related to p.a must stay within p.a, so it cannot read
+// p.b, directly or through a binding.
+type Pair {
+  a: Bytes,
+  b: Bytes,
+}
+
+fn get(p: Pair) -> Bytes in p.a {
+  p.b
+}

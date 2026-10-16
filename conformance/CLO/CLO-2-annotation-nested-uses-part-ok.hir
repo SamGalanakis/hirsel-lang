@@ -1,0 +1,26 @@
+// rule: CLO-2
+// expect: accept
+// The accepted twins, where the returned part is `uses {}` as written and an
+// unannotated binding keeps the `uses {}` its initializer proves.
+fn sandbox(g: fn() -> () uses {}) -> () {
+  g()
+}
+
+fn quiet() -> fn() -> () uses {} {
+  fn() {
+    ()
+  }
+}
+
+fn pair() -> (fn() -> () uses {}, u64) {
+  (quiet(), 0u64)
+}
+
+fn probe() -> u64 {
+  let t: (fn() -> () uses {}, u64) = pair()
+  let (f, n) = t
+  sandbox(f)
+  let g = quiet()
+  sandbox(g)
+  n
+}

@@ -1,0 +1,98 @@
+// rule: DROP-2
+// expect: run
+// stdout: C
+// stdout: A
+// stdout: N
+// stdout: B
+// stdout: D
+// stdout: F
+// stdout: G
+// stdout: E
+// stdout: ok
+resource type Item {
+  key: u64,
+  label: String,
+  out: Stdout,
+}
+@noalloc drop(x) {
+  out.print(x.out, x.label);
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.key < b.key {
+    -1i32
+  } else if a.key > b.key {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+@noalloc
+fn even(x: Item) -> bool uses {} {
+  x.key % 2 == 0
+}
+
+@noalloc
+fn present(x: Item) -> bool uses {} {
+  x.key <= 3
+}
+
+@noalloc
+fn below(x: Item) -> bool uses {} {
+  x.key < 4
+}
+
+fn key(x: Item) -> u64 uses {} {
+  x.key
+}
+
+fn add(take total: u64, x: Item) -> u64 uses {} {
+  total + x.key
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  {
+    let mut xs: unique List[Item] = [
+      Item(key: 3, label: "C\n", out: out),
+      Item(key: 1, label: "A\n", out: out),
+      Item(key: 2, label: "B\n", out: out)
+    ]
+    std@1/list.sort(mut xs, compare)
+    let needle = Item(key: 2, label: "N\n", out: out)
+    failure.check(std@1/list.binary_search(xs, needle, compare) == Some(1), Bounds())
+    failure.check(std@1/list.find(xs, even) == Some(1), Bounds())
+    failure.check(std@1/list.all(xs, present) && std@1/list.any(xs, even), Bounds())
+    failure.check(std@1/list.map(xs, key) == [1, 2, 3], Bounds())
+    failure.check(std@1/list.fold(xs, 0u64, add) == 6, Bounds())
+    std@1/list.reverse(mut xs)
+    std@1/list.rotate(mut xs, 1)
+    list.swap(mut xs, 0, 0)
+    let removed = list.remove(mut xs, 1)
+    let tail: Item = match list.pop(mut xs) {
+      Some(item) => take item,
+      None() => Item(key: 0, label: "bad\n", out: out),
+    }
+    failure.check(removed.key == 1 && tail.key == 3 && list.len(xs) == 1, Bounds())
+  }
+  {
+    let xs: List[Item] = [
+      Item(key: 1, label: "D\n", out: out),
+      Item(key: 2, label: "E\n", out: out),
+      Item(key: 3, label: "F\n", out: out),
+      Item(key: 4, label: "G\n", out: out)
+    ]
+    let filtered = std@1/list.filter(take xs, even)
+    let (yes, no) = std@1/list.partition(take filtered, below)
+    let joined = std@1/list.concat(take no, take yes)
+    for item in take joined {
+      failure.check(item.key % 2 == 0, Bounds())
+    }
+  }
+  out.print(out, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

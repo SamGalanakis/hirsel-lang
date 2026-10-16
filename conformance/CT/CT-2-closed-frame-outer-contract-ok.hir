@@ -1,0 +1,7 @@
+// rule: CT-2
+// expect: accept
+fn probe(x: u8) -> u8
+  requires false
+  ensures result == 1u8 {
+  comptime 1u8
+}

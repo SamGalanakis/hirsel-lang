@@ -1,0 +1,15 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 14
+// A unique value extracted from content stays where that content lives
+// (MEM-5). A join that lost an arena placement still lives there in one
+// branch, so the extraction is as local as the join and cannot be returned.
+fn probe(a: Arena, c: bool) -> String {
+  let x: String in a = "x"
+  let y: String = "y"
+  let s = if c {
+    x
+  } else {
+    y
+  }
+  unique s
+}

@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 8
+fn replace(mut x: box List[Bytes]) {}
+
+fn probe() {
+  let mut x: box unique List[Bytes] = box unique [b"x"]
+  let keep: bool = true
+  replace(mut x)
+}

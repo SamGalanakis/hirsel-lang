@@ -1,0 +1,17 @@
+// rule: OWN-3
+// expect: reject MODE-1 at line 11
+resource type Item {
+  key: u64,
+}
+@noalloc drop(x) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut held: unique List[Item] = [Item(key: 3)]
+  let tail = held[0]
+  let _ = list.pop(mut held)
+  failure.check(tail.key == 3, Bounds())
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

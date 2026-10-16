@@ -1,0 +1,31 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let empty: List[u8] = []
+  let frozen_empty = bytes.from_list(take empty)
+  let literal: List[u8] = [255u8, 0u8]
+  let frozen_literal = bytes.from_list(take literal)
+  let mut shared: List[u8] = [65u8, 66u8]
+  let frozen_shared = bytes.from_list(copy shared)
+  list.push(mut shared, 67u8)
+  let mut grown: List[u8] = []
+  list.reserve(mut grown, 9)
+  list.push(mut grown, 255u8)
+  list.push(mut grown, 0u8)
+  let frozen_grown = bytes.from_list(take grown)
+  let ok = bytes.len(frozen_empty) == 0 && frozen_literal == b"\xff\x00" && frozen_shared == b"AB" && list.len(
+    shared
+  ) == 3 && shared[2] == 67u8 && frozen_grown == frozen_literal
+  out.print(
+    io.stdout(rt) ? output_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

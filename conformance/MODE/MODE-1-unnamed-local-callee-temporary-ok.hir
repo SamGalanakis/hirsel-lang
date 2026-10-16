@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: accept
+// The argument is the caller's own parameter, so the callee's local result
+// is local to storage the caller's result names.
+fn same(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn named(y: Bytes) -> Bytes in y {
+  same(y)
+}

@@ -1,0 +1,6 @@
+// rule: MEM-4
+// expect: accept
+// "sealing is an allocation site".
+fn seal(take a: Arena in a, take root: u64) -> Region[u64] {
+  arena.seal(take a, take root)
+}

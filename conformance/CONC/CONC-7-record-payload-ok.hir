@@ -1,0 +1,11 @@
+// rule: CONC-7
+// expect: accept
+// "Atomic[T] holds scalars only".
+type Pair {
+  first: u32,
+  second: u32,
+}
+
+fn make(tasks: Tasks) -> () {
+  let a: Atomic[u32] = atomic.create(tasks, 1)
+}

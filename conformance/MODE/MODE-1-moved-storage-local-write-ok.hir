@@ -1,0 +1,16 @@
+// rule: MODE-1
+// expect: accept
+// A global value may be written into the moved binding on every iteration.
+type R {
+  n: Bytes,
+}
+
+fn f(take x: R, take z: R, flag: bool) -> () {
+  let mut r = x
+  let mut c = flag
+  while c {
+    r = copy z
+    let _ = take r
+    c = false
+  }
+}

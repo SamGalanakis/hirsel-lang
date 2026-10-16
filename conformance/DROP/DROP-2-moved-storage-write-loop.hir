@@ -1,0 +1,34 @@
+// rule: DROP-2
+// expect: run
+// stdout: old
+// stdout: 0
+// stdout: 1
+// stdout: 2
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut r = Trace(stdout: stdout, text: "old\n")
+  for i in 0u8..3u8 {
+    r = Trace(
+      stdout: stdout,
+      text: if i == 0u8 {
+        "0\n"
+      } else {
+        if i == 1u8 {
+          "1\n"
+        } else {
+          "2\n"
+        }
+      }
+    )
+    let value = take r
+  }
+  Ok(())
+}

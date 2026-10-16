@@ -1,0 +1,8 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 6
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 1] = [7u8]
+  let i: u64 = 18446744073709551615
+  let value = xs[i]
+  Ok(())
+}

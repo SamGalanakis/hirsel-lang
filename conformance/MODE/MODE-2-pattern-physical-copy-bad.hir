@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 12
+type Rec {
+  items: unique Bytes,
+}
+
+fn need(take x: unique Bytes) {}
+
+fn probe(take r: unique Rec) {
+  let alias = copy r
+  let Rec(items: items) = take alias
+  need(take items)
+}

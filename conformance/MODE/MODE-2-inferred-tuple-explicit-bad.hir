@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 8
+type R {
+  xs: unique List[Bytes],
+}
+
+fn probe(take r: R) {
+  let built: (unique List[Bytes], u8) = (
+    {
+      r
+    }.xs,
+    1u8
+  )
+}

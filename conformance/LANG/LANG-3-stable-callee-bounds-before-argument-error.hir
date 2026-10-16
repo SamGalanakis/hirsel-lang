@@ -1,0 +1,15 @@
+// rule: LANG-3
+// expect: fail MEM-14 at line 13
+type Stage {
+  call: fn(u64) -> u64 uses {},
+}
+
+fn stop() -> Result[u64, ()] {
+  Error(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stages: List[Stage] = []
+  let _ = stages[0u64].call(stop()?)
+  Ok(())
+}

@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: accept
+// "Plain values are never local."
+fn get(x: u64) -> u64 {
+  x
+}

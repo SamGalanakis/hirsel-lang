@@ -1,0 +1,16 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 15
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+type Holder {
+  value: Trace,
+}
+
+fn view(x: Holder) -> Trace in x {
+  x.value
+}

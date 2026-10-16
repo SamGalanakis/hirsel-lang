@@ -1,0 +1,17 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 16
+// The element place is reserved for the callee. A later argument that lends
+// the whole list exclusively could remove the element before the call.
+fn clear(mut xs: List[u64]) -> u64 {
+  xs = []
+  0
+}
+
+fn set(mut x: u64, value: u64) -> () {
+  x = value
+}
+
+fn main() -> () {
+  let mut xs: List[u64] = [1]
+  set(mut xs[0], clear(mut xs))
+}

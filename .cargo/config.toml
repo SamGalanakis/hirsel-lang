@@ -1,0 +1,12 @@
+# The pinned LLVM for llvm-sys (tools/native-toolchain/llvm-21.lock). An LLVM_SYS_211_PREFIX
+# already in the environment wins, for example a local `install --unpack` prefix.
+[env]
+LLVM_SYS_211_PREFIX = { value = "/usr/lib/llvm-21", force = false }
+# Tests run at most 4 at a time (the compiler tests use large thread stacks).
+RUST_TEST_THREADS = { value = "4", force = false }
+# Worker threads of the agreement campaign and other in-process fan-outs.
+HIRSEL_JOBS = { value = "4", force = false }
+
+# One cargo invocation uses at most 4 jobs. CARGO_BUILD_JOBS in the environment overrides this.
+[build]
+jobs = 4

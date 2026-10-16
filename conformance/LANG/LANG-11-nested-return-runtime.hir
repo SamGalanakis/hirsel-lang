@@ -1,0 +1,20 @@
+// rule: LANG-11
+// expect: run
+// stdout: 9
+// Shows "A block’s value is its final expression."
+@noalloc
+fn example(x: u64) -> u64 {
+  let y: u64 = {
+    if x == 0 {
+      return 9
+    }
+    x
+  }
+  y + 1
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(example(0)))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

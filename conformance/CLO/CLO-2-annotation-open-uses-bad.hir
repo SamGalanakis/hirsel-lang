@@ -1,0 +1,19 @@
+// rule: CLO-2
+// expect: reject CAP-3 at line 18
+// "Written unrestricted parameters do not meet restricted uses" (#58). A
+// binding written with open `uses` promises none, whatever its initializer
+// proves, so it does not meet a `uses {}` parameter.
+fn sandbox(g: fn() -> () uses {}) -> () {
+  g()
+}
+
+fn quiet() -> fn() -> () uses {} {
+  fn() {
+    ()
+  }
+}
+
+fn probe() -> () {
+  let g: fn() -> () = quiet()
+  sandbox(g)
+}

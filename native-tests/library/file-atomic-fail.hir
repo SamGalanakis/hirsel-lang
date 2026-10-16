@@ -1,0 +1,8 @@
+fn error(take e: FileError) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of(".")) ? error
+  let f = file.create_atomic(d, path.of("sample")) ? error
+  let _ = 1u64 / 0u64
+  Ok(())
+}

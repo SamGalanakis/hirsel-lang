@@ -1,0 +1,33 @@
+// rule: PROV-2
+// expect: run
+// stdout: none
+// stdout: none
+// stdout: some
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let dir = io.dir(rt, path.of(".")) ? Files
+  let alias = io.dir(rt, path.of(".")) ? Files
+  let p = path.of("hirsel-prov-current.txt")
+  file.write_bytes(dir, p, b"data") ? Files
+  let first = file.open(dir, p) ? Files
+  let second = file.open(alias, p) ? Files
+  let moved = take first
+  file.write_bytes(alias, p, b"data") ? Files
+  match file.narrow(dir, take moved) {
+    Some(g) => out.print(io.stdout(rt) ? Grant, "some\n") ? Output,
+    None => out.print(io.stdout(rt) ? Grant, "none\n") ? Output,
+  }
+  match file.narrow(alias, take second) {
+    Some(g) => out.print(io.stdout(rt) ? Grant, "some\n") ? Output,
+    None => out.print(io.stdout(rt) ? Grant, "none\n") ? Output,
+  }
+  let fresh = file.open(dir, p) ? Files
+  match file.narrow(dir, take fresh) {
+    Some(g) => out.print(io.stdout(rt) ? Grant, "some\n") ? Output,
+    None => out.print(io.stdout(rt) ? Grant, "none\n") ? Output,
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

@@ -1,0 +1,11 @@
+// rule: OWN-8
+// expect: reject OWN-8 at line 10
+// "To move a part out of an owned value, destructure the whole."
+type Rec {
+  items: Bytes,
+  n: u64,
+}
+
+fn example(take r: Rec) -> Bytes {
+  take r.items
+}

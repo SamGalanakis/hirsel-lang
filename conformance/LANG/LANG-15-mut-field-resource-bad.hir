@@ -1,0 +1,16 @@
+// rule: LANG-15
+// expect: reject LANG-15 at line 15
+// A noncopyable field remains a read-only borrow, even with let mut.
+resource type Index {
+  index: u64,
+}
+
+type R {
+  item: Index,
+}
+
+fn f(mut r: R) {
+  let mut start = r.item
+  let _ = start.index
+  start.index = 1
+}

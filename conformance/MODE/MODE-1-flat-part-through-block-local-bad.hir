@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 16
+// A part of a root declared local stays local through a block.
+flat type F {
+  text: String,
+}
+
+type R {
+  part: unique F,
+}
+
+fn probe(take r: R in r) {
+  let built = box {
+    r
+  }.part
+  let frozen = shared.freeze(take built)
+}

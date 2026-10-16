@@ -1,0 +1,5 @@
+// rule: MODE-1
+// expect: accept
+fn normalize(b: Bytes) -> Bytes in b {
+  std@1/bytes.replace(b, b"\r\n", b"\n")
+}

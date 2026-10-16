@@ -1,0 +1,17 @@
+// rule: OWN-2
+// expect: accept
+// "Use-after-move is a compile error."
+fn consume(take x: Bytes) -> () {
+  ()
+}
+
+fn inspect(x: Bytes) -> () {
+  ()
+}
+
+fn example(take x: Bytes, pick: bool) -> () {
+  if pick {
+    consume(copy x)
+  }
+  inspect(x)
+}

@@ -1,0 +1,5 @@
+// rule: PROG-2
+// expect: accept
+fn probe() -> vendor.Hidden {
+  vendor.build()
+}

@@ -1,0 +1,26 @@
+// rule: DROP-2
+// expect: run
+// stdout: second
+// stdout: first
+// "fields in reverse order".
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+type Pair {
+  first: Trace,
+  second: Trace,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let pair = Pair(
+    first: Trace(stdout: stdout, text: "first\n"),
+    second: Trace(stdout: stdout, text: "second\n")
+  )
+  Ok(())
+}

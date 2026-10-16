@@ -1,0 +1,39 @@
+// rule: PROV-4
+// expect: accept
+// Branches whose values live in the same arena join into a value in that
+// arena, and branches that are both on the heap join into a heap value.
+fn len(b: Bytes) -> u64 {
+  0
+}
+
+fn same(c: bool, a: Arena) -> u64 {
+  let text: Bytes in a = b"x"
+  len(
+    if c {
+      text
+    } else {
+      text
+    }
+  )
+}
+
+fn two(c: bool, a: Arena) -> u64 {
+  let text: Bytes in a = b"x"
+  let other: Bytes in a = b"yy"
+  let chosen = if c {
+    text
+  } else {
+    other
+  }
+  len(chosen)
+}
+
+fn heap_value(c: bool) -> u64 {
+  let text: String = copy_to(heap, "heap")
+  let chosen = if c {
+    text
+  } else {
+    text
+  }
+  string.byte_len(chosen)
+}

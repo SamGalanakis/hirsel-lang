@@ -1,0 +1,22 @@
+// rule: MODE-3
+// expect: run
+// stdout: 12
+// A mutable binding written once holds a once function whatever it received.
+// Each call consumes it and each write refills it.
+fn twice() -> u64 {
+  let mut g: once fn() -> u64 = fn() -> u64 {
+    1
+  }
+  let first = g()
+  g = fn() -> u64 {
+    2
+  }
+  first * 10 + g()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  if twice() == 12 {
+    let _ = out.print(io.stdout(rt)?, "12\n")
+  }
+  Ok(())
+}

@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 5
+// A local function is named too, so its local result names its sources.
+fn probe(y: String) -> u64 {
+  fn inner(x: String) -> String in env {
+    x
+  }
+  string.byte_len(inner(y))
+}

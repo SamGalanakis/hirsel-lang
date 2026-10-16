@@ -1,0 +1,11 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 8
+// The list's element type fixes `list.push`'s type argument at `StrPos of
+// text`, so a position of `other` cannot enter through the generic parameter.
+fn mixed(text: String, other: String) -> u64 {
+  let mut positions: List[StrPos of text] = []
+  for p in string.positions(other) {
+    list.push(mut positions, p)
+  }
+  list.len(positions)
+}

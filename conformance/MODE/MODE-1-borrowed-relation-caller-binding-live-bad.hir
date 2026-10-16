@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// Under v22 S2, the result of f(a, h) keeps the caller's binding h borrowed, so h
+// cannot be replaced while the result is live.
+fn f(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  x
+}
+
+fn g(a: Arena) -> bool {
+  let mut h: Bytes in a = b"one"
+  let r = f(a, h)
+  h = b"two"
+  equal(r, h)
+}
+
+fn equal(x: Bytes, y: Bytes) -> bool {
+  x == y
+}

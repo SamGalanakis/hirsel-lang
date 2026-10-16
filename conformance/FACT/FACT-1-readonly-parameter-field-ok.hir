@@ -1,0 +1,14 @@
+// rule: FACT-1
+// expect: accept
+type Holder {
+  xs: List[u8],
+}
+
+fn inspect(xs: List[u8]) -> bool {
+  true
+}
+
+fn probe(mut h: Holder) -> u64
+  requires inspect(h.xs) {
+  list.len(h.xs)
+}

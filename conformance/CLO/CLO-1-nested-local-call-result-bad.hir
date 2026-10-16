@@ -1,0 +1,20 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 19
+// The returned content still depends on p. An owned parameter cannot keep it.
+// The accepted twin reads the result while p remains live.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn keep(take x: Bytes) {}
+
+fn pairs(p: Bytes) {
+  let w = view(p)
+  let g = fn() {
+    let h = fn() {
+      w
+    }
+    h()
+  }
+  keep(g())
+}

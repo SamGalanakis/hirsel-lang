@@ -1,0 +1,49 @@
+// rule: GEN-1
+// expect: run
+// stdout: ok
+fn outer(take text: String) -> once fn() -> u64 {
+  fn() {
+    let data = take text
+    fn length[n: size](ys: Inline[u8, n]) -> u64 {
+      string.byte_len(data) + n
+    }
+    let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+    fn() {
+      length(xs)
+    }()
+  }
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let literal = {
+    let f = outer(take "owned")
+    f() == 8
+  }
+  let builder: List[u8] = [111u8, 119u8, 110u8, 101u8, 100u8]
+  let finite = match string.from_bytes(bytes.from_list(take builder)) {
+    Ok(text) => {
+      let f = outer(take text)
+      f() == 8
+    },
+    Error(bytes) => {
+      let discarded = take bytes
+      false
+    },
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if literal && finite {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

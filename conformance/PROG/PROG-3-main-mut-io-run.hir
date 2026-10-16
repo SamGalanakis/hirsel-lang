@@ -1,0 +1,9 @@
+// rule: PROG-3
+// expect: run
+// stdout: launched
+// The entry result is Ok even though the handed-back capability word is nonzero.
+pub fn main(mut rt: Io, args: Args) -> Result[(), GrantError] {
+  rt = rt
+  let _ = out.print(io.stdout(rt)?, "launched\n")
+  Ok(())
+}

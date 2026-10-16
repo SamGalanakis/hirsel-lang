@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 6
+fn need[K: key](x: K) {}
+
+fn probe(x: SortedMap[u32, u8]) {
+  need(x)
+}

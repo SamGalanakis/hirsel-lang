@@ -1,0 +1,9 @@
+// rule: CONC-6
+// expect: accept
+// A Sender "may travel inside payloads".
+fn send_sender(tasks: Tasks, mut s: Sender[Sender[u32]], take payload: Sender[u32]) -> Result[
+  (),
+  (Sender[u32], ChannelError)
+] {
+  channel.send(tasks, mut s, take payload)
+}

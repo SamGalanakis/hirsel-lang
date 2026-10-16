@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 9
+// "... Receivers ... scoped capabilities ... task handles."
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(take x: Test) -> () {
+  cross(take x)
+}

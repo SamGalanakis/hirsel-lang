@@ -1,0 +1,6 @@
+// rule: PROV-4
+// expect: accept
+// "Constructors are placed by the expected type."
+fn build(a: Arena) -> Bytes in a {
+  b"arena"
+}

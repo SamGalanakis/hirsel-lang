@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 16
+type Holder {
+  value: Bytes,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn example(take h: Holder, seed: Bytes, flag: bool) -> Bytes {
+  let mut r: Holder in r = take h
+  while flag {
+    r.value = identity(seed)
+  }
+  r.value
+}

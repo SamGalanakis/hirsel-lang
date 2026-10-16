@@ -1,0 +1,29 @@
+// rule: FAIL-2
+// expect: run
+// stdout: ok
+// "Result for expected failures" stays nested inside the successful isolate.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let status: Result[Result[u8, ()], Failure] = task.isolate(
+    tasks,
+    fn() -> Result[u8, ()] {
+      Error(())
+    }
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if status == Ok(Error(())) {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

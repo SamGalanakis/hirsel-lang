@@ -1,0 +1,14 @@
+// rule: FACT-1
+// expect: accept
+fn inspect(x: unique Bytes) -> bool {
+  true
+}
+
+fn weaken(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: unique Bytes) -> ()
+  requires inspect(x) {
+  weaken(mut x)
+}

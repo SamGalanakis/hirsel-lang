@@ -1,0 +1,20 @@
+// rule: DROP-2
+// expect: run
+resource type Child {}
+drop(x) {
+  let _ = 1u8 + 1u8
+}
+
+resource type Parent {
+  first: Child,
+  second: Child,
+}
+drop(x) {
+  let _ = 255u8 + 1u8
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let Parent(first: first, second: second) = Parent(first: Child(), second: Child())
+  test.check(t, true)
+  Ok(())
+}

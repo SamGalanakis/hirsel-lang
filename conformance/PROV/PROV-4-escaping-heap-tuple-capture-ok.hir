@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: accept
+// The heap outlives every arena, so an escaping environment may own a heap part.
+fn probe(a: Arena) -> fn() -> u64 {
+  let x: String in heap = "x"
+  let pair = (x, 1u8)
+  fn() {
+    let (s, n) = pair
+    string.byte_len(s)
+  }
+}

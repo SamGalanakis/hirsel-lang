@@ -1,0 +1,17 @@
+// rule: FAIL-4
+// expect: fail SEM-1 at line 13
+// "A failure inside a mutex.with body kills that mutex".
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let initial: u8 = 0
+  let m = mutex.create(tasks, take initial)
+  mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u8) -> () uses {} {
+      let n: u8 = 255
+      let broken = n + 1
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn probe() {
+  let mut xs: List[sendable Bytes] = [b"first"]
+  let alias = copy xs
+  list.push(mut xs, b"second")
+}

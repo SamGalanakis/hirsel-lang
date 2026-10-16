@@ -1,0 +1,8 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 6
+type Held = resource_probe@1/owner.Token
+
+fn probe(take token: Held) -> u64 {
+  let Held(value: value) = take token
+  value
+}

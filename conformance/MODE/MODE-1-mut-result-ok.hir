@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: accept
+// "Borrowed and mut parameters are local."
+fn get(mut x: Bytes) -> Bytes in x {
+  x
+}

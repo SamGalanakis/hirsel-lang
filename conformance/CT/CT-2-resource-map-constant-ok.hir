@@ -1,0 +1,13 @@
+// rule: CT-2
+// expect: accept
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn probe() -> () {
+  let m: Map[u8, Trace] = map.empty()
+  ()
+}

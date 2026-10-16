@@ -1,0 +1,8 @@
+// rule: PROV-4
+// expect: accept
+// Under v22 (R3) `in heap` is the empty relation, so a global element meets the
+// arena relation. v21 rejected this, since a value without a placement proved
+// neither the arena nor the heap.
+fn list(a: Arena, take src: Bytes) -> () {
+  let items: List[Bytes] in a = [take src]
+}

@@ -1,0 +1,3 @@
+// rule: GEN-1
+// expect: accept
+pub opaque type Datum: key uses {}

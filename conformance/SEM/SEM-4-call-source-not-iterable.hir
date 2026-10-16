@@ -1,0 +1,11 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 8
+fn value() -> u64 {
+  1
+}
+
+fn probe() {
+  for n in value() {
+    let _ = n
+  }
+}

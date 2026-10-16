@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. Relating the view to selected as well admits everything selected
+// holds, while fresh blocks still go to a.
+type View {
+  bytes: Bytes,
+}
+
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn good(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) {
+  let selected = choose(a, b, x, y)
+  let _: View in {a, selected} = View(bytes: selected)
+}

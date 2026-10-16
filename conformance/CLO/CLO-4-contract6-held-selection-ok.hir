@@ -1,0 +1,14 @@
+// rule: CLO-4
+// expect: accept
+// A callable type's @captures selection is part of what a held function value
+// must promise. A closure literal at the selected position receives it.
+fn first() {
+  let held: List[(@captures(x) fn(take x: Iter[u64]) -> Iter[u64], u64)] = [
+    (
+      fn(take x: Iter[u64]) -> Iter[u64] {
+        x
+      },
+      0u64
+    )
+  ]
+}

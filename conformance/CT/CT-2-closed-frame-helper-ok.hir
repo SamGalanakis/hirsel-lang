@@ -1,0 +1,12 @@
+// rule: CT-2
+// expect: accept
+const VALUE: u8 = 1u8
+
+fn helper(x: u8) -> u8
+  requires x > 0u8 {
+  x + 1u8
+}
+
+fn probe(x: u8) -> u8 {
+  comptime helper(VALUE)
+}

@@ -1,0 +1,8 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 7
+// Locality cannot reach a field through an alias either.
+type Lent = Bytes in env
+
+type Holder {
+  value: Lent,
+}

@@ -1,0 +1,7 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 5
+// "Noncopyable ... task handles ... Moved or borrowed only."
+fn example(s: Scope, take x: Task[u64] of s) -> () {
+  let y = copy x
+  let _ = task.await(s, take x)
+}

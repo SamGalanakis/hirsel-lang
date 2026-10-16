@@ -1,0 +1,8 @@
+// rule: MODE-6
+// expect: accept
+// "A scoped capability ... cannot be ... captured by an escaping closure."
+fn example(take cap: Stdout) -> once fn() -> () uses {Stdout} {
+  fn() {
+    let _ = take cap
+  }
+}

@@ -1,0 +1,8 @@
+// rule: MEM-13
+// expect: accept
+// "except by whole assignment of its container".
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn replace(mut xs: List[Packed[Choice]], take ys: List[Packed[Choice]]) -> () {
+  xs = take ys
+}

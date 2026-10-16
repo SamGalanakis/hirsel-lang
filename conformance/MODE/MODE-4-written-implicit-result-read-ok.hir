@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+fn get[T](xs: List[T]) -> T in xs {
+  xs[0]
+}
+
+fn probe() {
+  let xs: List[sendable Bytes] = [b"first"]
+  let y: Bytes = get(xs)
+}

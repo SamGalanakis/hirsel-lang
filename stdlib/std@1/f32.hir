@@ -1,0 +1,211 @@
+// Floating text is an ordinary source algorithm over the four IEEE primitives.
+@noalloc
+pub fn format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[
+  u64,
+  std@1/scalar.FormatError
+] uses {} {
+  let bits: u64 = core@1/int.widen(core@1/f32.bits(value))
+  let negative = bits & 2147483648u64 != 0
+  let fraction = bits & 8388607u64
+  let raw_exponent = bits >> 23 & 255u64
+  if raw_exponent == 255 {
+    let spelling: String = if fraction != 0 {
+      "NaN"
+    } else if negative {
+      "-inf"
+    } else {
+      "inf"
+    }
+    return std@1/internal.float_decimal.special(spelling, mut buffer)
+  }
+  if raw_exponent == 0 && fraction == 0 {
+    return std@1/internal.float_decimal.special(
+      if negative {
+        "-0"
+      } else {
+        "0"
+      },
+      mut buffer
+    )
+  }
+  let mantissa = fraction + if raw_exponent == 0 {
+    0
+  } else {
+    1u64 << 23
+  }
+  let biased: i32 = core@1/int.narrow(raw_exponent)
+  let exponent = if raw_exponent == 0 {
+    1i32
+  } else {
+    biased
+  } - 150
+  let (digits, scale) = std@1/internal.float_decimal.shortest(
+    mantissa,
+    exponent,
+    fraction == 0 && raw_exponent > 1
+  )
+  std@1/internal.float_decimal.render(digits, scale, negative, mut buffer)
+}
+
+// Appends the shortest round-trip text of `value` to `out`; to_string is that
+// text.
+pub fn format_into(value: f32, mut out: List[u8]) -> () uses {} {
+  let mut buffer: Inline[u8, 40] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let count = match format(value, mut buffer) {
+    Ok(count) => count,
+    Error(_) => {
+      core@1/failure.check(false, Bounds())
+      0
+    },
+  }
+  std@1/internal.decimal.append_prefix(mut out, buffer, count)
+}
+
+pub fn to_string(value: f32) -> String uses {} {
+  let mut out: List[u8] = []
+  format_into(value, mut out)
+  std@1/internal.decimal.finish(take out)
+}
+
+@noalloc
+pub fn parse(text: String) -> Result[f32, std@1/scalar.ParseError] uses {} {
+  if text == "NaN" {
+    return Ok(core@1/f32.from_bits(2143289344u32))
+  }
+  if text == "inf" {
+    return Ok(core@1/f32.from_bits(2139095040u32))
+  }
+  if text == "-inf" {
+    return Ok(core@1/f32.from_bits(4286578688u32))
+  }
+  match std@1/internal.float_decimal.parse(text, 23, 127) {
+    Error(error) => Error(error),
+    Ok(bits) => {
+      let word: u32 = core@1/int.narrow(bits)
+      Ok(core@1/f32.from_bits(word))
+    },
+  }
+}
+
+// Adjacent pair tree, including the carried odd tail. Recursion uses at most
+// 64 frames for a u64 count; the borrowed input is never copied or mutated.
+@noalloc
+fn pair_range(xs: Array[f32], start: u64, count: u64) -> f32 uses {} {
+  if count == 0 {
+    return 0f32
+  }
+  if count == 1 {
+    return xs[start]
+  }
+  let mut pair_count: u64 = 1
+  while pair_count <= (count - 1) / 2 {
+    pair_count *= 2
+  }
+  pair_range(xs, start, pair_count) + pair_range(
+    xs,
+    start + pair_count,
+    count - pair_count
+  )
+}
+
+@noalloc
+pub fn sum(xs: Array[f32]) -> f32 uses {} {
+  pair_range(xs, 0, core@1/array.len(xs))
+}
+
+pub fn sum_exact(xs: Array[f32]) -> f32 uses {} {
+  let mut accumulator = std@1/internal.superacc.acc_zero()
+  let mut positive_infinity: bool = false
+  let mut negative_infinity: bool = false
+  let mut all_negative_zero: bool = core@1/array.len(xs) != 0
+  let mut i: u64 = 0
+  while i < core@1/array.len(xs) {
+    let bits: u64 = core@1/int.widen(core@1/f32.bits(xs[i]))
+    all_negative_zero = all_negative_zero && bits == 2147483648u64
+    let negative = bits & 2147483648u64 != 0
+    let raw_exponent = bits >> 23 & 255u64
+    let trailing = bits & 8388607u64
+    if raw_exponent == 255 {
+      if trailing != 0 {
+        return core@1/f32.from_bits(2143289344u32)
+      }
+      if negative {
+        negative_infinity = true
+      } else {
+        positive_infinity = true
+      }
+    } else {
+      let mantissa = trailing + if raw_exponent == 0 {
+        0u64
+      } else {
+        1u64 << 23
+      }
+      let shift = if raw_exponent == 0 {
+        0u64
+      } else {
+        raw_exponent - 1
+      }
+      std@1/internal.superacc.acc_add(mut accumulator, mantissa, shift, negative)
+    }
+    i += 1
+  }
+  if positive_infinity && negative_infinity {
+    return core@1/f32.from_bits(2143289344u32)
+  }
+  if positive_infinity {
+    return core@1/f32.from_bits(2139095040u32)
+  }
+  if negative_infinity {
+    return core@1/f32.from_bits(4286578688u32)
+  }
+  let bits = std@1/internal.superacc.acc_finish(
+    accumulator,
+    23,
+    255,
+    2147483648,
+    all_negative_zero
+  )
+  let encoded: u32 = core@1/int.narrow(bits)
+  core@1/f32.from_bits(encoded)
+}

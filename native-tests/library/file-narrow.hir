@@ -1,0 +1,24 @@
+fn error(take e: FileError) -> () {}
+
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of(".")) ? error
+  let p = path.of("sample")
+  file.write_bytes(d, p, b"data") ? error
+  let f = file.open(d, p) ? error
+  let narrowed = file.narrow(d, take f)
+  match take narrowed {
+    Some(narrowed_file) => {
+      let _ = take narrowed_file
+    },
+    None => require(false),
+  }
+  Ok(())
+}

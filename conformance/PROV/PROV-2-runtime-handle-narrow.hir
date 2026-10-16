@@ -1,0 +1,23 @@
+// rule: PROV-2
+// expect: run
+// stdout: ok
+// "file.narrow(d, f) -> Option[File of d] narrows at run time."
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let dir = io.dir(rt, path.of(".")) ? Files
+  let path = path.of("hirsel-prov-narrow.txt")
+  file.write_bytes(dir, path, b"data") ? Files
+  let handle = file.open(dir, path) ? Files
+  match file.narrow(dir, take handle) {
+    Some(narrowed) => {
+      let _ = take narrowed
+      out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+    },
+    None => out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output,
+  }
+  let _ = file.remove(dir, path)
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

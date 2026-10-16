@@ -1,0 +1,19 @@
+// rule: PROV-4
+// expect: accept
+// Under v22 (R3) a join is the union of its arms' loan sets; global content adds no
+// bound, so the join of an arena value and a global value stays in the arena.
+// v21 rejected this, since the join had no placement of its own.
+fn len(b: Bytes) -> u64 {
+  0
+}
+
+fn keep(c: bool, a: Arena) -> u64 {
+  let text: Bytes in a = b"x"
+  let other: Bytes = b"yy"
+  let chosen: Bytes in a = if c {
+    text
+  } else {
+    other
+  }
+  len(chosen)
+}

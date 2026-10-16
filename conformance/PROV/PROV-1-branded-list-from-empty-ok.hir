@@ -1,0 +1,13 @@
+// rule: PROV-1
+// expect: accept
+// An empty sequence holds no element, so it satisfies any element brand, and
+// `list.push` instantiated at `StrPos of text` carries that brand, so each pushed
+// position belongs to `text`, and an element read keeps it.
+fn first_empty(text: String) -> String in text {
+  let mut positions: List[StrPos of text] = []
+  for p in string.positions(text) {
+    list.push(mut positions, p)
+  }
+  let start = positions[0]
+  string.slice(text, start, start)
+}

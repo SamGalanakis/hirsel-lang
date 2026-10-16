@@ -1,0 +1,17 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 12
+// A closure stored in a returned record keeps its arena part as a returned closure does.
+type Holder {
+  action: fn() -> u64,
+}
+
+fn probe(a: Arena) -> Holder {
+  let x: String in a = "x"
+  let pair = (x, 1u8)
+  Holder(
+    action: fn() {
+      let (s, n) = pair
+      string.byte_len(s)
+    }
+  )
+}

@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. Naming both sources admits a value within either, so both arena
+// loans stay inside the relation.
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn good(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  choose(a, b, x, y)
+}

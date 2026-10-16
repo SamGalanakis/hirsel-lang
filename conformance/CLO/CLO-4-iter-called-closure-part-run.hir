@@ -1,0 +1,44 @@
+// rule: CLO-4
+// expect: run
+// stdout: ok
+// §22 says "iter.from accepts a global next function/closure, owns it and its
+// state, and computes sendability and authority from both." An iterator made
+// inside a called closure knows its captures and its cleanup; the written
+// `Iter[u64]` states neither, so the tuple part and the list element receive
+// it, as a binding of that type does.
+fn next_value(mut n: u64) -> Option[u64] {
+  if n < 3 {
+    n = n + 1
+    Some(n)
+  } else {
+    None
+  }
+}
+
+fn total() -> u64 {
+  let l: List[(Iter[u64], u64)] = [
+    fn() {
+      (iter.from(0u64, next_value), 4u64)
+    }()
+  ]
+  let mut sum: u64 = 0
+  for (it, n) in take l {
+    sum = sum + n
+    for x in take it {
+      sum = sum + x
+    }
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if total() == 10 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

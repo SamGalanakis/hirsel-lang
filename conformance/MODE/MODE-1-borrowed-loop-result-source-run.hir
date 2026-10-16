@@ -1,0 +1,24 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+fn pick(xs: List[Bytes], x: Bytes) -> Bytes in {xs, x} {
+  for e in xs {
+    return e
+  }
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let xs: List[Bytes] = [b"first", b"second"]
+  let empty: List[Bytes] = []
+  let ok = pick(xs, b"fallback") == b"first" && pick(empty, b"fallback") == b"fallback"
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

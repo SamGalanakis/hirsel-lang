@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: accept
+// "Fresh constructions from unique parts are unique."
+type Rec {
+  items: Bytes,
+}
+
+fn require_unique(mut r: unique Rec) -> () {
+  ()
+}
+
+fn example(take x: unique Bytes) -> () {
+  let mut r = Rec(items: take x)
+  require_unique(mut r)
+}

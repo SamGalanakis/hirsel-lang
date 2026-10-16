@@ -1,0 +1,21 @@
+// rule: CONC-4
+// expect: run
+// "Every execution is explained by a sequentially consistent order".
+@noalloc
+fn check(x: u32) -> ()
+  requires x == 2 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let a: Atomic[u32] = atomic.create(tasks, 0)
+  atomic.store(tasks, a, 1)
+  atomic.store(tasks, a, 2)
+  check(atomic.load(tasks, a))
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

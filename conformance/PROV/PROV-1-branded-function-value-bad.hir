@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 13
+// "An operation taking a branded value requires the same p."
+// A named function used as a value keeps the brand relations of its header.
+fn inspect(d: Dir, f: File of d) -> () {
+  ()
+}
+
+fn example(d: Dir, other: Dir, p: Path) -> Result[(), FileError] {
+  let open = file.open
+  let check = inspect
+  let f = open(d, p)?
+  check(other, f)
+  Ok(())
+}

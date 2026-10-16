@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+@noalloc
+fn compare(a: u64, b: u64) -> i32 uses {} {
+  0i32
+}
+
+fn example(mut xs: List[u64]) -> () {
+  std@1/list.sort(mut xs, compare);
+}

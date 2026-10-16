@@ -1,0 +1,8 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 6
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut xs: unique List[u64] = unique [1, 2]
+  let bytes: Bytes = b"ab"
+  bytes[2]
+  Ok(())
+}

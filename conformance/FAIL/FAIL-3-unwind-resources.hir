@@ -1,0 +1,50 @@
+// rule: FAIL-3
+// expect: run
+// stdout: b
+// stdout: a
+// stdout: caught
+// "resource drops are the only user code that runs" during failure unwinding.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn broken(stdout: Stdout) -> () {
+  let a = Trace(stdout: stdout, text: "a\n")
+  let b = Trace(stdout: stdout, text: "b\n")
+  let n: u8 = 255
+  let value = n + 1
+  let _ = out.print(stdout, "unreachable\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let stdout = io.stdout(rt) ? grant_error
+  let status: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() -> () {
+      broken(stdout)
+    }
+  )
+  let caught: bool = match status {
+    Ok(value) => false,
+    Error(failure) => true,
+  }
+  let _ = out.print(
+    stdout,
+    if caught {
+      "caught\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,14 @@
+// rule: OWN-1
+// expect: accept
+resource type Token {
+  n: u8,
+}
+drop(x) {}
+
+fn observe(x: Token) {}
+
+fn probe(m: Map[u8, Token]) {
+  for (k, v) in m {
+    observe(v)
+  }
+}

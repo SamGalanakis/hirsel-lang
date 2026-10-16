@@ -1,0 +1,15 @@
+// rule: CAP-2
+// expect: accept
+pub opaque type Key: plain + sendable + inert uses {} {
+  n: u32,
+}
+
+fn locked(tasks: Tasks, outer: Mutex[u32], k: Key) -> () {
+  mutex.with(
+    tasks,
+    outer,
+    fn(mut value: unique u32) {
+      let _ = k.n
+    }
+  )
+}

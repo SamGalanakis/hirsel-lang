@@ -1,0 +1,9 @@
+// rule: CT-2
+// expect: accept
+fn number() -> u8 {
+  1u8
+}
+
+fn probe() -> u8 {
+  comptime number()
+}

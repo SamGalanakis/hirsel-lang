@@ -1,0 +1,23 @@
+// rule: MODE-1
+// expect: accept
+// The result lends from the parameters themselves and names the taken one.
+// A global heap value copied or moved into the call is its own share.
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn relay(a: Arena, b: Arena, take x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  choose(a, b, x, y)
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn lent(take x: Bytes) -> Bytes in x {
+  view(x)
+}
+
+fn moved(take x: Bytes) -> Bytes in x {
+  view(take x)
+}

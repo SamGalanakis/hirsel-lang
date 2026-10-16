@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 13
+resource type Conn {
+  n: Net,
+  s: Stream of .n,
+}
+
+fn sent(mut c: Conn) -> Result[(), NetError] {
+  Ok(())
+}
+
+fn reconnect(mut c: Conn, other: Net, take s: Stream of other) -> Result[(), NetError] {
+  c.s = take s
+  sent(mut c)
+}

@@ -1,0 +1,8 @@
+// rule: MEM-13
+// expect: accept
+// "Packed[T] stores a variant value in its own variant’s size".
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn make() -> Packed[Choice] {
+  Small(value: 1)
+}

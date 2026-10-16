@@ -1,0 +1,6 @@
+// rule: MEM-11
+// expect: accept
+fn probe() {
+  let built: box u8 = box 1u8
+  let frozen: Shared[box u8] = shared.freeze(take built)
+}

@@ -1,0 +1,39 @@
+// rule: DROP-2
+// expect: run
+// stdout: g
+// stdout: closed
+// stdout: kept
+// stdout: first
+// Closing the binding drops it; the kept temporary still drops at scope exit.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn make(stdout: Stdout, take text: String) -> Trace {
+  Trace(stdout: stdout, text: text)
+}
+
+fn wrap(t: Trace, stdout: Stdout, take text: String) -> Trace in t {
+  Trace(stdout: stdout, text: text)
+}
+
+fn close(take t: Trace in t) {
+  ()
+}
+
+fn probe(stdout: Stdout, first: Trace) {
+  let g = wrap(wrap(first, stdout, "kept\n"), stdout, "g\n")
+  close(take g)
+  let _ = out.print(stdout, "closed\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let first = make(stdout, "first\n")
+  probe(stdout, first)
+  Ok(())
+}

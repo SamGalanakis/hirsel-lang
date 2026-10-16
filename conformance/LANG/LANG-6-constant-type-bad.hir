@@ -1,0 +1,6 @@
+// rule: LANG-6
+// expect: reject LANG-6 at line 6
+// Shows "No part of a signature is ever inferred from a body."
+@noalloc
+fn value() -> u32 { 0 }
+const N = value()

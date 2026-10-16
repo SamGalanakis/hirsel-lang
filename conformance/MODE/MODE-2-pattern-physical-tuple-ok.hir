@@ -1,0 +1,5 @@
+// rule: MODE-2
+// expect: accept
+fn probe(take t: (unique Bytes, u8)) {
+  let (items, n) = take t
+}

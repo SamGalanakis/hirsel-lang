@@ -1,0 +1,13 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 12
+// "Noncopyable ... Moved or borrowed only."
+resource type Token {
+  n: u64,
+}
+drop(t) {
+  ()
+}
+
+fn example(take x: List[Token]) -> () {
+  let y = copy x
+}

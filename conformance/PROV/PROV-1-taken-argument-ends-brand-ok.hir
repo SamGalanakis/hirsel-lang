@@ -1,0 +1,20 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// "A brand ends when p is ... moved." The branded value is read before the
+// owner is moved, and an unbranded value is read after it.
+fn use_pos(s: Dir, p: i64) -> () {
+  ()
+}
+
+fn use_first(p: i64, s: Dir) -> () {
+  ()
+}
+
+fn probe(s: Dir, p: i64 of s) -> () {
+  use_first(-p, take s)
+}
+
+fn plain(s: Dir, p: i64) -> () {
+  use_pos(take s, -p)
+}

@@ -1,0 +1,30 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+// "Flat values are copied only explicitly (a memcpy)".
+fn output_error[E](take e: E) -> () {}
+
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a = Item(text: "flat", n: 1)
+  let b = copy a
+  a.n = 2
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if b.n == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

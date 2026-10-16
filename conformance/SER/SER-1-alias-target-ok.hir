@@ -1,0 +1,14 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type Row {
+  n: u64,
+}
+
+type Alias = Row
+
+fn encode[T: serializable](x: T) {}
+
+fn example(x: Alias) {
+  encode(x)
+}

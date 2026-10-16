@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn main() -> () {
+  std@1/f64.sum_exact([1.0f64]);
+}

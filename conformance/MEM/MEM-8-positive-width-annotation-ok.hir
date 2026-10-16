@@ -1,0 +1,4 @@
+// rule: MEM-8
+// expect: accept
+// Section 22 limits A to integer, float or bool scalars.
+fn example(x: Simd[u8, 2]) {}

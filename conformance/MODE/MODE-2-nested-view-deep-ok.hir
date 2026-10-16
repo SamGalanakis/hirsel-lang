@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+fn consume(take x: box box box List[Bytes]) {}
+
+fn probe() {
+  let xs: List[Bytes] = [b"x"]
+  let x = box box box unique xs
+  consume(take x)
+}

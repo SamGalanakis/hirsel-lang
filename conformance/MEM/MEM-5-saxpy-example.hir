@@ -1,0 +1,9 @@
+// rule: MEM-5
+// expect: accept
+// Spec example — "@noalloc" saxpy uses equal Inline lengths and constructs no blocks.
+@noalloc
+pub fn saxpy[n: size](a: f32, x: Inline[f32, n], mut y: Inline[f32, n]) -> () {
+  for i in 0..n {
+    y[i] = a * x[i] + y[i]
+  }
+}

@@ -1,0 +1,9 @@
+// rule: LANG-12
+// expect: accept
+type R {
+  x: u8,
+}
+
+fn probe() {
+  let x = R(x: 1u8)
+}

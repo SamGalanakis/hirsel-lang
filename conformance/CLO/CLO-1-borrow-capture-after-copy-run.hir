@@ -1,0 +1,14 @@
+// rule: CLO-1
+// expect: run
+// stdout: 12
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a: String = "shared"
+  let b = copy a
+  let f = fn() {
+    string.byte_len(a)
+  }
+  let n = f() + f()
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

@@ -1,0 +1,25 @@
+// rule: MODE-3
+// expect: accept
+// Under provisional #37 B, a scoped resource borrow permits repeated calls.
+resource type Token {
+  n: u64,
+}
+drop(t) {
+  ()
+}
+
+fn inspect(token: Token) {
+  let _ = token.n
+}
+
+fn repeat(f: fn() uses {}) {
+  f()
+  f()
+}
+
+fn example(take token: Token) {
+  let f = fn() uses {} {
+    inspect(token)
+  }
+  repeat(f)
+}

@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 10
+// An owned share of a counted element has no crossing evidence.
+fn cross(take x: sendable Option[Bytes]) {}
+
+fn probe() {
+  let mut s: Slots[Bytes] = slots.empty()
+  let fresh: Bytes = b"x"
+  let id = slots.insert(mut s, take fresh)
+  cross(slots.get(s, id))
+}

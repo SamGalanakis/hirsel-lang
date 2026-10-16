@@ -1,0 +1,11 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.check(t, true)
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

@@ -1,0 +1,8 @@
+// rule: CT-2
+// expect: accept
+fn probe(x: u8) -> u8 {
+  comptime fn(z: u8) -> u8
+    requires z > 0u8 {
+    z
+  }(1u8)
+}

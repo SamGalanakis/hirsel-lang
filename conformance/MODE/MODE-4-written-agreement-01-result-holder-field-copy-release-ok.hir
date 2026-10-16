@@ -1,0 +1,21 @@
+// rule: MODE-4
+// expect: accept
+// Regression from expression/closure-call; TIR/LoanConflict.
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn probe(mut x: Bytes, mut y: Bytes, c: bool) {
+  let mut slot = Pair(left: view(x), right: view(y))
+  let mut kept = fn() {
+    copy slot.left
+  }()
+  slot.left = b"fresh"
+  kept = b"new"
+  ()
+}

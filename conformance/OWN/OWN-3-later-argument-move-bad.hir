@@ -1,0 +1,10 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 9
+// The place a mut argument names is lent when the callee is entered. A later
+// argument that moves it leaves nothing to lend.
+fn f(mut xs: List[u64], take ys: List[u64]) -> () {}
+
+fn main() -> () {
+  let mut xs: List[u64] = [1]
+  f(mut xs, take xs)
+}

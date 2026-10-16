@@ -1,0 +1,23 @@
+// rule: MEM-14
+// expect: run
+// stdout: ok
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: List[u8] = [7u8]
+  let i: u64 = 0
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if xs[i] == 7u8 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

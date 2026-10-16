@@ -1,0 +1,24 @@
+// rule: SEM-2
+// expect: run
+// stdout: ok
+// "IEEE binary32/64, round-to-nearest-even"; "No contraction or reassociation".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let zero: f64 = 0.0
+  let neg = -zero
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if zero == neg {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

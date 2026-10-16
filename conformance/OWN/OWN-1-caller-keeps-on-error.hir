@@ -1,0 +1,28 @@
+// rule: OWN-1
+// expect: run
+// stdout: returned
+// stdout: dropped
+// "On error ... Caller keeps it."
+type Problem = Stop()
+
+resource type Token {
+  out: Stdout,
+}
+drop(token) {
+  let _ = out.print(token.out, "dropped\n")
+}
+
+fn inspect(token: Token) -> Result[(), Problem] {
+  Error(Stop)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let token = Token(out: io.stdout(rt) ? Grant)
+  let _ = inspect(token)
+  out.print(io.stdout(rt) ? Grant, "returned\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

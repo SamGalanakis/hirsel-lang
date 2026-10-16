@@ -1,0 +1,9 @@
+// rule: MEM-14
+// expect: accept
+@advance_only(it)
+fn step[T](mut it: Iter[T], take replacement: Iter[T]) {
+  while true {
+    let _ = iter.next(mut it)
+    break
+  }
+}

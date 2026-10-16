@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+type Holder {
+  action: @noalloc fn() -> u64 uses {},
+}
+
+@noalloc
+fn call_field(h: sendable Holder) -> u64 {
+  h.action()
+}

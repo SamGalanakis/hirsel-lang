@@ -1,0 +1,10 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// Under v22 R3, `env` is a closure or function type's environment. A binding is
+// not related to it; only a function type's result relation names it.
+fn example() -> u64 {
+  let g: (fn() -> u64) in env = fn() -> u64 {
+    1
+  }
+  g()
+}

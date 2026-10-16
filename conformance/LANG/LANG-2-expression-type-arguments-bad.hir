@@ -1,0 +1,12 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 11
+// Shows "Type arguments are never written in expressions, so postfix [ is always indexing."
+@noalloc
+fn identity[T](x: T) -> () {
+  ()
+}
+
+@noalloc
+fn example(x: u32) -> () {
+  identity[u32](x)
+}

@@ -1,0 +1,7 @@
+// rule: SER-1
+// expect: reject SER-1 at line 6
+fn encode[T: serializable](x: T) {}
+
+fn example(x: Instant) {
+  encode(x)
+}

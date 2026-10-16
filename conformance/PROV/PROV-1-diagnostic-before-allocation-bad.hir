@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 9
+fn inspect(d: Dir, f: File of d) -> () {
+  ()
+}
+
+@noalloc
+fn example(a: Dir, b: Dir, f: File of a) -> () {
+  inspect(b, f)
+}

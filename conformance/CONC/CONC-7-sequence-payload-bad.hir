@@ -1,0 +1,6 @@
+// rule: CONC-7
+// expect: reject CONC-7 at line 5
+// "Atomic[T] holds scalars only".
+fn make(tasks: Tasks) -> () {
+  let a: Atomic[List[u32]] = atomic.create(tasks, [1, 2])
+}

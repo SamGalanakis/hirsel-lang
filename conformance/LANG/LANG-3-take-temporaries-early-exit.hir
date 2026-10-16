@@ -1,0 +1,38 @@
+// rule: LANG-3
+// expect: run
+// stdout: temporary-second
+// stdout: temporary-first
+// stdout: named-second
+// stdout: named-first
+// Shows "on an early exit, evaluated temporaries drop in reverse evaluation order before named locals."
+resource type Token {
+  out: Stdout,
+  text: String,
+}
+drop(t) {
+  let _ = out.print(t.out, t.text)
+}
+
+@noalloc
+fn failure() -> Result[u32, ()] {
+  Error(())
+}
+
+fn consume(take a: Token in a, take b: Token in b, n: u32) -> () {
+  let _ = out.print(a.out, "entered\n")
+}
+
+fn exercise(rt: Stdout) -> Result[(), ()] {
+  let first = Token(out: rt, text: "named-first\n")
+  let second = Token(out: rt, text: "named-second\n")
+  let a = Token(out: rt, text: "temporary-first\n")
+  let b = Token(out: rt, text: "temporary-second\n")
+  consume(take a, take b, failure()?)
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let _ = exercise(grant_stdout)
+  Ok(())
+}

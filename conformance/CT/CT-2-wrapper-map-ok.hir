@@ -1,0 +1,9 @@
+// rule: CT-2
+// expect: accept
+fn make() -> Map[u32, u8] {
+  map.empty()
+}
+
+fn probe() {
+  let m: Map[u32, u8] = comptime make()
+}

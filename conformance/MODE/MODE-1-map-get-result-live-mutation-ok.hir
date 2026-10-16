@@ -1,0 +1,10 @@
+// rule: MODE-1
+// expect: accept
+// The map.get result's last use precedes the insertion, so its loan has ended (§04).
+fn inspect(found: Option[Bytes]) -> () {}
+
+fn probe(mut m: Map[u8, Bytes], take value: Bytes) {
+  let found = map.get(m, 1)
+  inspect(found)
+  map.insert(mut m, 3, take value)
+}

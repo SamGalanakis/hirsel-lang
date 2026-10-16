@@ -1,0 +1,12 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 11
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn view(x: Option[Trace]) -> Option[Trace] in x {
+  x
+}

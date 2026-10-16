@@ -1,0 +1,46 @@
+// rule: SEM-1
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  failure.check(std@1/duration.from_parts(0, 0).nanoseconds == 0i128, Arithmetic())
+  failure.check(
+    std@1/duration.from_parts(-9223372036854775808i64, -2147483648i32).nanoseconds == -9223372036854775810147483648i128,
+    Arithmetic()
+  )
+  failure.check(
+    std@1/duration.from_parts(9223372036854775807i64, 2147483647i32).nanoseconds == 9223372036854775809147483647i128,
+    Arithmetic()
+  )
+  failure.check(
+    std@1/duration.format(std@1/time.Duration(nanoseconds: 0)) == "0s",
+    Arithmetic()
+  )
+  failure.check(
+    std@1/duration.format(std@1/time.Duration(nanoseconds: 1000000000)) == "1s",
+    Arithmetic()
+  )
+  match std@1/duration.parse("") {
+    Error(Invalid()) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  let s: String = "x0.000000001sx"
+  let first = match string.position(s, 1) {
+    Some(p) => p,
+    None() => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  let last = match string.position(s, 13) {
+    Some(p) => p,
+    None() => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  let text = string.slice(s, first, last)
+  match std@1/duration.parse(text) {
+    Ok(value) => failure.check(value.nanoseconds == 1, Arithmetic()),
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}

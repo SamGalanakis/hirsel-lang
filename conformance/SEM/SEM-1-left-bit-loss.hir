@@ -1,0 +1,12 @@
+// rule: SEM-1
+// expect: run
+@noalloc
+fn check(n: bool) -> ()
+  requires n {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  check(128u8 << 1u8 == 0u8)
+  Ok(())
+}

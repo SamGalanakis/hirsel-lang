@@ -1,0 +1,52 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), ()] {
+  let _n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [
+          V4([127u8, 0u8, 0u8, 1u8]),
+          V6(
+            [
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              0u8,
+              1u8
+            ]
+          )
+        ],
+        tls: Certificate(["example.com", "alternate.example.com"]),
+        connections: [
+          Refused(),
+          Unanswered(),
+          Open([Send(b"reply"), Expect(b"request"), Stall(), Close(), Reset()])
+        ]
+      ),
+      NetPeer(
+        address: "::1",
+        port: 81u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: []
+      )
+    ]
+  )
+  test.check(t, true)
+  Ok(())
+}

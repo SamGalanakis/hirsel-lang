@@ -1,0 +1,17 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 16
+// spec: #60
+// "A brand ends when p ... leaves scope." Provisionally, a value whose
+// brand owner has ended may only be dropped. The owner here is a temporary.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn probe() -> () {
+  let value = mk(fresh())
+  let other = take value
+}

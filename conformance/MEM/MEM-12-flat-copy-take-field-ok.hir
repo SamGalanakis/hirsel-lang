@@ -1,0 +1,13 @@
+// rule: MEM-12
+// expect: accept
+type Rec {
+  i: u64,
+  text: String,
+}
+
+fn need(take x: unique Rec) -> () {}
+
+fn dup(take w: unique Rec) -> () {
+  let k = copy w.i
+  need(take w)
+}

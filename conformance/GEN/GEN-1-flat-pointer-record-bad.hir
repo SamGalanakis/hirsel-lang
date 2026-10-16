@@ -1,0 +1,12 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 11
+// MEM-12 excludes pointers even when ordinary representation is Plain.
+type Record {
+  value: Ptr[u8],
+}
+
+fn use_flat[T: flat](x: T) {}
+
+fn example(x: Record) {
+  use_flat(x)
+}

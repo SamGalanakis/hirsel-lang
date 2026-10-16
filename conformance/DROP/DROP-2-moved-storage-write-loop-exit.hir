@@ -1,0 +1,42 @@
+// rule: DROP-2
+// expect: run
+// stdout: 0
+// stdout: 1
+// stdout: old
+// stdout: 2
+// stdout: end
+// The binding is moved before the loop and assigned in it. Each assignment
+// drops the value the previous iteration left. When the scope ends, the
+// later binding holding the moved value is dropped first and then the value
+// the last iteration left.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  {
+    let mut r = Trace(stdout: stdout, text: "old\n")
+    let value = take r
+    for i in 0u8..3u8 {
+      r = Trace(
+        stdout: stdout,
+        text: if i == 0u8 {
+          "0\n"
+        } else {
+          if i == 1u8 {
+            "1\n"
+          } else {
+            "2\n"
+          }
+        }
+      )
+    }
+  }
+  let _ = out.print(stdout, "end\n")
+  Ok(())
+}

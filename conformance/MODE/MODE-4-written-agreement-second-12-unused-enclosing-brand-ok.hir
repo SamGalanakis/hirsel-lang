@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn outer[T: plain](x: T) -> () {
+  fn inner[U](mut y: U of x) -> () {}
+  ()
+}

@@ -1,0 +1,19 @@
+// rule: MODE-1
+// expect: accept
+type Holder {
+  value: Bytes,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+type Outer {
+  inner: Holder,
+}
+
+fn example(take h: Outer, seed: Bytes) -> Bytes in {h, seed} {
+  let mut r: Outer in r = take h
+  r.inner.value = identity(seed)
+  r.inner.value
+}

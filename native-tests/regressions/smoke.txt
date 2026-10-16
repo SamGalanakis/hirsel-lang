@@ -1,0 +1,20 @@
+# Corpus cases the per-push native smoke runs under the smoke matrix (heap executor with
+# fault injection, and an optimized x86-64 executable): every one must agree with the
+# reference. Keep it a handful: tools/check.sh allows this stage 60 s.
+conformance/CAP/CAP-1-output-no-added-newline.hir
+conformance/CLO/CLO-2-bound-derived-capability-run.hir
+conformance/CLO/CLO-2-derived-capability-field-run.hir
+conformance/DROP/DROP-2-kept-temporary-failure-run.hir
+conformance/DROP/DROP-2-kept-temporary-order-run.hir
+conformance/DROP/DROP-2-mut-replacement-finalizer-failure.hir
+conformance/FACT/FACT-1-requires-false.hir
+conformance/GEN/GEN-1-borrowed-root-comparison-run.hir
+conformance/GEN/GEN-1-generic-float-ieee.hir
+conformance/LANG/LANG-3-take-temporaries-early-exit.hir
+conformance/OWN/OWN-2-callee-owns-on-error.hir
+conformance/PROV/PROV-1-copied-prefix-write-run.hir
+conformance/SEM/SEM-1-signed-add-fail.hir
+native-tests/regressions/match-on-variant-value.hir
+native-tests/regressions/print-without-newline.hir
+native-tests/regressions/index-let-failure-column.hir
+native-tests/regressions/flat-builder-takeover.hir

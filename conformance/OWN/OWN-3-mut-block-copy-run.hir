@@ -1,0 +1,35 @@
+// rule: OWN-3
+// expect: run
+// stdout: ok
+// exit: 0
+// "A mut borrow is exclusive."
+// Provisional reading (spec issue 50). A plain part read out of a block is a
+// copy, an owned temporary. Mutating the copy leaves the storage unchanged.
+fn output_error[E](take e: E) -> () {}
+
+fn one(mut a: u64) -> () {
+  a = 9
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut xs: Array[u64] = [1, 2]
+  one(
+    mut {
+      xs
+    }[1]
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if xs[0] == 1 && xs[1] == 2 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

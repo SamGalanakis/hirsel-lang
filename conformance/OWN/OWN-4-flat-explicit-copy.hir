@@ -1,0 +1,12 @@
+// rule: OWN-4
+// expect: accept
+// "flat values copy with copy x (a memcpy)."
+flat type Item {
+  sku: String,
+  qty: u32,
+}
+
+fn example(take x: Item) -> (Item, Item) {
+  let y = copy x
+  (take x, take y)
+}

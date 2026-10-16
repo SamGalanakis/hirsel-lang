@@ -1,0 +1,17 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 11
+// entry: test_narrow
+pub fn test_narrow(t: Test) -> Result[(), FileError] {
+  let p = path.of("sub/value")
+  let dir = test.dir(t, [(p, b"data")])
+  let fresh = file.open(dir, p)?
+  let sub = dir.narrow(take dir, path.of("sub"))?
+  test.check(
+    t,
+    match file.narrow(sub, take fresh) {
+      Some(g) => true,
+      None => false,
+    }
+  )
+  Ok(())
+}

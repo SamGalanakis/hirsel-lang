@@ -1,0 +1,31 @@
+// rule: MODE-1
+// expect: accept
+// A result declared local to a taken parameter is as local as that argument
+// was. The parameter's storage ends with the call, the value it shared does
+// not, so the body may return a share obtained by borrowing the parameter.
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn relay_first(a: Arena, b: Arena, take x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  choose(a, b, x, y)
+}
+
+fn relay_second(a: Arena, b: Arena, x: Bytes in a, take y: Bytes in b) -> Bytes in {
+  x,
+  y
+} {
+  choose(a, b, x, y)
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn keep(take x: Bytes) -> Bytes in x {
+  view(x)
+}
+
+fn caller(take x: Bytes) -> Bytes {
+  keep(take x)
+}

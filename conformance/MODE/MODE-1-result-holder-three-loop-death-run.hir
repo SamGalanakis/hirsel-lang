@@ -1,0 +1,32 @@
+// rule: MODE-1
+// expect: run
+// stdout: released
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  x = b"changed"
+}
+
+fn probe(mut x: Bytes, mut y: Bytes) {
+  let mut slot = view(x)
+  let mut n: u32 = 0u32
+  while n < 3u32 {
+    slot = view(y)
+    n += 1u32
+  }
+  slot = b"fresh"
+  bump(mut y)
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut x: Bytes = b"first"
+  let mut y: Bytes = b"second"
+  probe(mut x, mut y)
+  if y == b"changed" {
+    let _ = out.print(io.stdout(rt)?, "released\n")
+  }
+  Ok(())
+}

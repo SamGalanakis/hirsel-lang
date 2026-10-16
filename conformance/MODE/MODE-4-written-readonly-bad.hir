@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn sink(x: sendable Bytes) {}
+
+fn bad(x: Bytes) {
+  sink(x)
+}

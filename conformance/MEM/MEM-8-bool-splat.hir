@@ -1,0 +1,8 @@
+// rule: MEM-8
+// expect: run
+// stdout: bool splat ok
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let m: Simd[bool, 4] = simd.splat(true)
+  let _ = out.print(io.stdout(rt)?, "bool splat ok\n")
+  Ok(())
+}

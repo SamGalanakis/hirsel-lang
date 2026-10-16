@@ -1,0 +1,8 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 7
+// "Caller keeps it." Only a plain value read from a borrowed parameter is
+// its own copy; this one cannot be taken into owned storage.
+fn probe(x: Bytes) -> () {
+  let mut y: Bytes in y = b"a"
+  y = take x
+}

@@ -1,0 +1,33 @@
+// rule: DROP-2
+// expect: fail SEM-1 at line 19
+// stdout: a
+// stdout: c
+// stdout: b
+// An exit releases the loop body's scope before the loop's cursor, whose
+// remaining elements drop high to low.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn probe(take xs: List[Trace]) {
+  for x in take xs {
+    let old = x
+    let _ = 1u8 / 0u8
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  probe(
+    [
+      Trace(stdout: stdout, text: "a\n"),
+      Trace(stdout: stdout, text: "b\n"),
+      Trace(stdout: stdout, text: "c\n")
+    ]
+  )
+  Ok(())
+}

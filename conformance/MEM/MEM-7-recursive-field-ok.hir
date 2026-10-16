@@ -1,0 +1,4 @@
+// rule: MEM-7
+// expect: accept
+// "a box T field is a heap block, required for recursive types".
+type Tree = Leaf | Node(child: box Tree)

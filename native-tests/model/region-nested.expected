@@ -1,0 +1,12 @@
+rc-trace v1 max 16
+ok after 8 steps
+heap
+  @0 free gen 1
+  @1 free gen 1
+credits
+borrows
+locals
+tokens
+work
+regions
+events

@@ -1,0 +1,14 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 13
+// Packed[T] requires T to be Flat in a local annotation too, and a resource payload is
+// never flat (MEM-12).
+resource type Res {
+  n: u64,
+}
+drop(x) {}
+
+type Holder = Empty | Has(r: Res)
+
+fn hold() -> () {
+  let x: Packed[Holder] = Has(r: Res(n: 1))
+}

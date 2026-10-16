@@ -1,0 +1,5 @@
+// rule: MODE-4
+// expect: accept
+fn get[T](take x: sendable T) -> sendable T {
+  take x
+}

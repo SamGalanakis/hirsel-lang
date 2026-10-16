@@ -1,0 +1,6 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 5
+// "Only unique whole-value assignments."
+fn example(mut x: unique Bytes, take y: Bytes) -> () {
+  x = take y
+}

@@ -1,0 +1,11 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 9
+// A take parameter receives an owned value. `mut` lends the place itself,
+// also when the value is plain and an unmarked argument would be copied.
+fn bump(take n: u64) -> () {}
+
+fn probe() -> u64 {
+  let mut r: u64 = 1
+  bump(mut r)
+  r
+}

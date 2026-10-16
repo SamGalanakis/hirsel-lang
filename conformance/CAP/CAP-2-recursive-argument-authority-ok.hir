@@ -1,0 +1,9 @@
+// rule: CAP-2
+// expect: accept
+type Tree[T] = Leaf(value: T) | Node(child: box Tree[T])
+
+fn need[T: inert](x: T) {}
+
+fn probe(x: Tree[u32]) {
+  need(x)
+}

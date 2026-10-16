@@ -1,0 +1,7 @@
+rc-trace v1
+max 4294967295
+alloc r0 0
+dup r0 r1
+drop r0
+drop r1
+drain

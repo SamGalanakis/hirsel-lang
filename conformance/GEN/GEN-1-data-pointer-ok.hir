@@ -1,0 +1,11 @@
+// rule: GEN-1
+// expect: accept
+@noalloc
+fn bound[T: data](x: T) -> () {
+  ()
+}
+
+@noalloc
+fn example(x: u32) -> () {
+  bound(x)
+}

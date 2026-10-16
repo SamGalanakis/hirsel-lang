@@ -1,0 +1,43 @@
+// rule: MEM-13
+// expect: run
+// stdout: 9
+// stdout: 5
+// stdout: 7
+// stdout: 2
+// stdout: done
+// "a sequence of Packed values is sequential", so elements whose payloads hold a
+// bounded Packed value of their own are walked in place, each at its extent.
+type Inner = Num(n: u64) | Pair(a: u64, b: u64)
+
+type Outer = Leaf(id: u8) | Node(inner: Packed[Inner], k: u16) | Empty
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let xs: List[Packed[Outer]] = [
+    Leaf(id: 9u8),
+    Empty,
+    Node(inner: Num(n: 5u64), k: 1u16),
+    Node(inner: Pair(a: 3u64, b: 4u64), k: 2u16)
+  ]
+  let mut k = 0u64
+  for x in xs {
+    if k == 0u64 {
+      let _ = out.print(out, std@1/u8.to_string(x.Leaf.id))
+      let _ = out.print(out, "\n")
+    } else if k == 2u64 {
+      let _ = out.print(out, std@1/u64.to_string(x.Node.inner.Num.n))
+      let _ = out.print(out, "\n")
+    } else if k == 3u64 {
+      let _ = out.print(
+        out,
+        std@1/u64.to_string(x.Node.inner.Pair.a + x.Node.inner.Pair.b)
+      )
+      let _ = out.print(out, "\n")
+      let _ = out.print(out, std@1/u16.to_string(x.Node.k))
+      let _ = out.print(out, "\n")
+    }
+    k = k + 1u64
+  }
+  let _ = out.print(out, "done\n")
+  Ok(())
+}

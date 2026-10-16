@@ -1,0 +1,14 @@
+// rule: PROV-1
+// expect: accept
+// `map.empty()` receives no value of its type arguments, so the expected
+// `Map[u64, StrPos of text]` instantiates it, and `map.insert` then requires
+// each inserted position to belong to `text`.
+fn index(text: String) -> u64 {
+  let mut starts: Map[u64, StrPos of text] = map.empty()
+  let mut n: u64 = 0
+  for p in string.positions(text) {
+    map.insert(mut starts, n, p)
+    n += 1u64
+  }
+  n
+}

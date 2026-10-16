@@ -1,0 +1,15 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 13
+resource type Inner {
+  n: u32,
+}
+drop(x) {
+  ()
+}
+
+resource type Outer {
+  inner: Inner,
+}
+@noalloc drop(x) {
+  ()
+}

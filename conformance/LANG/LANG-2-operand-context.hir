@@ -1,0 +1,13 @@
+// rule: LANG-2
+// expect: accept
+// Shows "A literal or bare variant takes its type from the expected type; with neither it is an error."
+@noalloc
+fn example(n: u64) -> bool {
+  let left = 1 + n
+  let right = n + 1
+  let equal = 1 == n
+  for i in 0..n {
+    let _ = i
+  }
+  equal
+}

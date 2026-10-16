@@ -1,0 +1,28 @@
+// rule: MEM-7
+// expect: run
+// stdout: detached
+type Cell {
+  text: String,
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a = box Cell(text: "old")
+  let b = copy a
+  a.text = "new"
+  failure.check(a.text == "new", TextInvariant())
+  failure.check(b.text == "old", TextInvariant())
+  let mut xs: box Array[u64] = box [1, 2]
+  let ys = copy xs
+  xs[0] = 9
+  failure.check(xs[0] == 9, TextInvariant())
+  failure.check(ys[0] == 1, TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, "detached\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

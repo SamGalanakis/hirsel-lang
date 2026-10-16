@@ -1,0 +1,14 @@
+// rule: FAIL-1
+// expect: fail FACT-1 at line 6
+// "failed ... contract ... [is a] failure"; false contract cites the contract.
+@noalloc
+fn positive(n: u8) -> u8
+  requires n > 0 {
+  n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let n: u8 = 0
+  let outcome = positive(n)
+  Ok(())
+}

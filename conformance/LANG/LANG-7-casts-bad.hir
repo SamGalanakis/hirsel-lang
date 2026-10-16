@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 5
+// Shows "No overloading, type classes, implicit conversions (including between error types), macros, exceptions, any or casts."
+@noalloc
+fn example(x: u8) -> u32 { x as u32 }

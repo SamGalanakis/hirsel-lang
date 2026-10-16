@@ -1,0 +1,8 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 7
+// "A value in a cannot outlive a." A written local storage contract does not
+// lift the arena placement of the binding's value into an unplaced result.
+fn text(a: Arena) -> String {
+  let x: String in a = "x"
+  x
+}

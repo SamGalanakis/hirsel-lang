@@ -1,0 +1,5 @@
+// rule: PROG-2
+// expect: reject PROG-2 at line 4
+fn probe(secret: vendor.Secret) -> u64 {
+  secret.value
+}

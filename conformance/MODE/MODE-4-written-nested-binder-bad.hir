@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 7
+fn sink[T](take x: sendable T) {}
+
+fn outer[T: sendable](take x: T) {
+  fn inner[U](take y: U) {
+    sink(take y)
+  }
+  inner(take x)
+}

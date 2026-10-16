@@ -1,0 +1,34 @@
+// rule: LANG-2
+// expect: run
+// stdout: ok
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a = if 1u8 == 1 {
+    3u8
+  } else {
+    4
+  }
+  let b = match a {
+    3 => 5u8,
+    _ => 6,
+  }
+  let valid = match b {
+    5 => b == 5,
+    _ => false,
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

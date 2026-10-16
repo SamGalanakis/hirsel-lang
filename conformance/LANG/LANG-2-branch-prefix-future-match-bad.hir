@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 5
+fn probe(b: bool) {
+  let x = match b {
+    true => 1,
+    false => 2u8,
+  }
+}

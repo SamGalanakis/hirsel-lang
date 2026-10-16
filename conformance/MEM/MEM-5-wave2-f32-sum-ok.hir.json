@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "MEM-5-wave2-f32-sum-ok.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

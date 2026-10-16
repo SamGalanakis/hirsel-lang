@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn example(value: String) -> Bytes in value {
+  string.as_bytes(value)
+}

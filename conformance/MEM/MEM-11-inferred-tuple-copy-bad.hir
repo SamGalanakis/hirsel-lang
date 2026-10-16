@@ -1,0 +1,15 @@
+// rule: MEM-11
+// expect: reject MEM-11 at line 14
+type R {
+  xs: unique List[Bytes],
+}
+
+fn probe(take r: R) {
+  let built = (
+    {
+      r
+    }.xs,
+    1u8
+  )
+  let frozen = shared.freeze(take built)
+}

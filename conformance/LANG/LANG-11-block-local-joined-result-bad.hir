@@ -1,0 +1,17 @@
+// rule: LANG-11
+// expect: reject MODE-1 at line 14
+// "The result is as local as that argument was" (MODE-1). `p` is borrowed
+// from the caller, so the result of `pick(p, v)` is local, and it is also
+// bounded by `v`, which the block declares and ends.
+fn pick(x: List[u64], y: List[u64]) -> List[u64] in {x, y} {
+  x
+}
+
+fn count(p: List[u64]) -> u64 {
+  list.len(
+    {
+      let v: List[u64] = [1]
+      pick(p, v)
+    }
+  )
+}

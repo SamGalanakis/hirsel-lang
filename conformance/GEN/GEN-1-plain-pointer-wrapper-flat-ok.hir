@@ -1,0 +1,11 @@
+// rule: GEN-1
+// expect: accept
+type W[T: plain] {
+  x: T,
+}
+
+fn need[T: flat](take x: T) {}
+
+fn probe(take x: W[u8]) {
+  need(take x)
+}

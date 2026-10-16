@@ -1,0 +1,30 @@
+// rule: LANG-7
+// expect: run
+// stdout: ok
+type Pair {
+  tag: Option[u8],
+  bit: bool,
+}
+
+fn classify(p: Pair) -> u64 {
+  match p {
+    Pair(tag: Some(n), bit: true) => 1,
+    Pair(tag: Some(n), bit: false) => 2,
+    Pair(tag: None, ..) => 3,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = classify(Pair(tag: Some(1), bit: true)) == 1 && classify(
+    Pair(tag: Some(1), bit: false)
+  ) == 2 && classify(Pair(tag: None, bit: true)) == 3
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

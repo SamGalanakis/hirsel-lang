@@ -1,0 +1,7 @@
+// rule: MEM-5
+// expect: accept
+// "explicit arena placement do[es] not count".
+@noalloc
+fn make(a: Arena) -> String in a {
+  "arena"
+}

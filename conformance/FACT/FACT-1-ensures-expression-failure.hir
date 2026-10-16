@@ -1,0 +1,13 @@
+// rule: FACT-1
+// expect: fail SEM-1 at line 6
+// "a failure while evaluating one cites its own rule".
+@noalloc
+fn id(x: u32) -> u32
+  ensures x / 0 == 0 {
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = id(1)
+  Ok(())
+}

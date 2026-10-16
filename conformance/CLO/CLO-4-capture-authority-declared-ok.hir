@@ -1,0 +1,8 @@
+// rule: CLO-4
+// expect: accept
+// "Their type states their authority as capability types."
+fn example(dir: Dir) -> fn() -> Dir uses {Dir} {
+  fn() {
+    dir
+  }
+}

@@ -1,0 +1,12 @@
+// rule: MEM-14
+// expect: reject MEM-14 at line 11
+// A function value must state every guarantee its receiving type requires.
+fn plain(mut it: Iter[u64]) -> Option[u64] {
+  None
+}
+
+fn use_it(take g: @advance_only(it) fn(mut it: Iter[u64]) -> Option[u64]) {}
+
+fn build() {
+  use_it(plain)
+}

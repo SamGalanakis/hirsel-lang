@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn example(mut builder: List[u8], text: String) -> () {
+  std@1/text.append(mut builder, text)
+}

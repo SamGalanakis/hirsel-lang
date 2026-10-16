@@ -1,0 +1,20 @@
+// rule: MEM-3
+// expect: fail MEM-3 at line 18
+// Insertion hashes its key as the keyed reads do, so the first insertion of a
+// key past the limit fails too (#90).
+type Chain = End(value: Option[u64]) | Link(next: box Chain)
+
+fn chain(depth: u64) -> Chain {
+  let mut c: Chain = End(value: None)
+  for i in 0..depth {
+    c = Link(next: box take c)
+  }
+  take c
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut m: Map[Chain, u64] = map.empty()
+  let deep = chain(544)
+  map.insert(mut m, take deep, 1)
+  Ok(())
+}

@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+fn sink(take x: sendable Shared[Bytes]) {}
+
+fn good() {
+  let bytes: Bytes = b"a"
+  let x = shared.freeze(take bytes)
+  let y = copy x
+  sink(take y)
+  sink(take x)
+}

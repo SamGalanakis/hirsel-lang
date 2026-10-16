@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: accept
+// Regression from parameter/passing; TIR/TypeMismatch/call result.
+type R {
+  xs: unique List[Bytes],
+}
+
+fn probe(r: R) {
+  let built = box unique {
+    r
+  }.xs
+  let frozen = shared.freeze(take built)
+}

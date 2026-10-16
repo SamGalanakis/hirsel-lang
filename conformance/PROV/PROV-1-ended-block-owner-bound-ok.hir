@@ -1,0 +1,21 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// Moving a value whose brand owner has ended into a binding is not a use.
+// The binding holds it until it is dropped, and PROV-1-owner-leaves-scope-bad
+// shows the first use being refused.
+fn fresh() -> List[u64] {
+  []
+}
+
+fn mk(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn probe() -> () {
+  let value = {
+    let r = fresh()
+    mk(r)
+  }
+  ()
+}

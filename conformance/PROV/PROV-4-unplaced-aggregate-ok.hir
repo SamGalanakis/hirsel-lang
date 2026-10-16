@@ -1,0 +1,19 @@
+// rule: PROV-4
+// expect: accept
+// "Constructors are placed by the expected type". The placed aggregate, list
+// and tuple part hold the arena value.
+type Ast {
+  bytes: Bytes,
+}
+
+fn build(a: Arena, take src: Bytes in a) -> Ast in a {
+  Ast(bytes: take src)
+}
+
+fn list(a: Arena, take src: Bytes in a) -> () {
+  let items: List[Bytes] in a = [take src]
+}
+
+fn pair(a: Arena, take src: Bytes in a) -> (Bytes, u8) in a {
+  (take src, 1u8)
+}

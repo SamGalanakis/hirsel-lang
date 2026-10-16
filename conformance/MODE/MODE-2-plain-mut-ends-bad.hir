@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+// "Copying ... or passing as a plain mut argument ends a binding’s uniqueness."
+fn require_unique(mut x: unique Bytes) -> () {
+  x = b"new"
+}
+
+fn plain_mut(mut x: Bytes) -> () {
+  ()
+}
+
+fn borrow(x: Bytes) -> () {
+  ()
+}
+
+fn example(mut x: unique Bytes) -> () {
+  plain_mut(mut x)
+  require_unique(mut x)
+}

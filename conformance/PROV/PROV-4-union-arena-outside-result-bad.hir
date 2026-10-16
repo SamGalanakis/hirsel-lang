@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 10
+// v22 R3. The result of choose is within x or y, so it may hold a bound loan
+// on either arena. The relation names only a, and the loan on b escapes.
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn bad(a: Arena, b: Arena, take x: Bytes in a, take y: Bytes in b) -> Bytes in a {
+  choose(a, b, x, y)
+}

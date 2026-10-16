@@ -1,0 +1,9 @@
+// rule: LANG-5
+// expect: accept
+// Shows "A value changes only through a visible name"
+@noalloc
+fn example(mut xs: Inline[u32, 1]) -> () {
+  for x in mut xs {
+    x = 1
+  }
+}

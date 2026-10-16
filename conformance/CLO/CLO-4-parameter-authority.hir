@@ -1,0 +1,8 @@
+// rule: CLO-4
+// expect: accept
+// "At a call, uses {p} becomes the authority summary ... for p."
+fn example(take action: fn() -> () uses {Dir}) -> fn() -> () uses {action} {
+  fn() {
+    action()
+  }
+}

@@ -1,0 +1,45 @@
+// rule: PROV-1
+// expect: accept
+// "Whole owned replacement gives a fresh identity", also when the old value
+// moved out without a written take, as in a self-assignment; new brands name
+// the replaced binding and its fields (issue #75).
+type R {
+  s: Slots[u64],
+  k: u64,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) {}
+
+fn make_k(r: R) -> Option[u8 of r.k] {
+  None
+}
+
+fn inspect_k(r: R, p: Option[u8 of r.k]) {}
+
+fn self_move() {
+  let mut r = R(s: slots.empty(), k: 0u64)
+  r = r
+  let first: u64 = 10
+  let id = slots.insert(mut r.s, take first)
+}
+
+fn moved_then_replaced() {
+  let mut r = R(s: slots.empty(), k: 0u64)
+  let t = r
+  r = R(s: slots.empty(), k: 1u64)
+  let p = make_k(r)
+  inspect_k(r, p)
+}
+
+fn branch_self_move(c: bool) {
+  let mut r = R(s: slots.empty(), k: 0u64)
+  if c {
+    r = r
+  }
+  let p = make(r)
+  inspect(r, p)
+}

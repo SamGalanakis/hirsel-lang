@@ -1,0 +1,6 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 5
+// "io.dir(rt, path)" projects directory authority from an explicit Io.
+pub fn directory(p: Path) -> Result[Dir, FileError] {
+  io.dir(p)
+}

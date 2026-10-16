@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+fn probe(take f: sendable fn() -> u64) -> u64 {
+  let n = 0u64
+  let agree_held_166: List[(List[((sendable fn() -> u64, u64), u64)], u64)] = [
+    ([((f, n), 0u64)], 0u64)
+  ]
+  let (agree_held_231, _) = agree_held_166[0]
+  let (pair, _) = agree_held_231[0]
+  let (g, k) = pair
+  g() + k
+}

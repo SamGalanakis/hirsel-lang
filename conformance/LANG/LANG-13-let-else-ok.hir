@@ -1,0 +1,10 @@
+// rule: LANG-13
+// expect: accept
+// Shows "Refutable patterns appear only in match"
+@noalloc
+fn example(x: Option[u32]) -> u32 {
+  match x {
+    Some(n) => n,
+    None => 0,
+  }
+}

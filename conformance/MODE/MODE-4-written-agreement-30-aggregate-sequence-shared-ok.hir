@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+// Regression from expression/closure-call; TIR/TypeMismatch/sendable receipt.
+fn probe(take s: Shared[List[u8]]) {
+  let built: List[Shared[List[u8]]] = [
+    take fn() {
+      s
+    }()
+  ]
+}

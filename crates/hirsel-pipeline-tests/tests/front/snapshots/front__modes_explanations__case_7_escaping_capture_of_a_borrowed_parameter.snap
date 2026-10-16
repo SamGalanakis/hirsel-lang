@@ -1,0 +1,17 @@
+---
+source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
+expression: "rendered(\"CLO/CLO-4-stored-borrowed-capture-bad.hir\")"
+---
+error[CLO-4]: escaping captures need immutable owned global values: `x` is local to the caller, but the closure escapes
+ --> ../../conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir:10:13
+  10 |     action: fn() {
+     |             ^^^^^^ 
+ --> ../../conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir:8:15
+   8 | fn example(x: Bytes) -> Holder {
+     |               ^^^^^ provided: `x` is a borrowed parameter; it lives in the caller's region
+ --> ../../conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir:10:13
+  10 |     action: fn() {
+     |             ^^^^^^ required: an escaping closure owns its captures, which must be immutable, owned and global (CLO-4)
+  = help: 1. declare the parameter `take x` (no cost; callers write `take x`, which moves their value into this call)
+  = help: 2. `unique x` (deep copy: allocates, costs O(size), and is not allowed under `@noalloc`)
+  = note: `copy x` does not help: a copy shares the blocks of `x`, which stay local

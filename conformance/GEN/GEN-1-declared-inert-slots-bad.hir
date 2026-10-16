@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 7
+type W[T: inert] {
+  value: T,
+}
+
+fn probe(x: W[Slots[Dir]]) {}

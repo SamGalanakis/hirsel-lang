@@ -1,0 +1,17 @@
+// rule: CLO-4
+// expect: accept
+type Relay[S, N] {
+  state: S,
+  next: N,
+}
+
+@captures(state, next, third)
+fn build[S, T](
+  take state: S,
+  take next: fn(mut S) -> Option[T],
+  take third: fn(mut S) -> Option[T]
+) -> Iter[T] {
+  let relay = Relay(state: take state, next: take third)
+  let Relay(state: s, next: n) = take relay
+  iter.from(take s, take n)
+}

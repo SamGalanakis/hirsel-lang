@@ -1,0 +1,6 @@
+// rule: MEM-4
+// expect: accept
+// "turns the arena and root into a resource".
+fn seal(take a: Arena in a, take root: u64) -> Region[u64] {
+  arena.seal(take a, take root)
+}

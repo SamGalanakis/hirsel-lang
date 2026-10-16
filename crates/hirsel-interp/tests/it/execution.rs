@@ -1,0 +1,542 @@
+use crate::support;
+use hirsel_diag::RuleId;
+use hirsel_interp::{
+    Error, Integer, Limits, OperationCall, OperationContext, OperationResult, Operations, Outcome,
+    TraceEvent, Value,
+};
+use hirsel_syntax::BinaryOp as B;
+use hirsel_tir::*;
+use hirsel_types::{ParamId, Primitive as P, TypeKind};
+use support::*;
+fn int(k: P, n: u128) -> Value {
+    Value::Integer(Integer::new(k, n).unwrap())
+}
+fn returned(e: &hirsel_interp::Execution, want: Value) {
+    assert_eq!(
+        e.outcome,
+        Outcome::Returned {
+            value: want,
+            exit_code: 0
+        }
+    );
+    assert!(e.stdout.is_empty());
+}
+fn rule(r: &str) -> RuleId {
+    RuleId::new(r).unwrap()
+}
+fn fail(e: &hirsel_interp::Execution, r: &str, line: u32) {
+    let Outcome::Failed(f) = &e.outcome else {
+        panic!("expected failure: {e:?}")
+    };
+    assert_eq!(f.rule, rule(r));
+    assert_eq!(f.line, line);
+}
+fn cleanup_events(e: &hirsel_interp::Execution) -> Vec<(usize, CleanupAction)> {
+    e.trace
+        .iter()
+        .filter_map(|t| {
+            if let TraceEvent::Cleanup { depth, action } = t {
+                Some((*depth, action.clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn countdown() -> Definition {
+    let mut b = Builder::new();
+    let n = b.parameter(TypeKind::Primitive(P::U32));
+    let zero = b.int(P::U32, 0);
+    let test = b.binary(
+        B::Eq,
+        n,
+        zero,
+        TypeKind::Primitive(P::Bool),
+        3,
+        CleanupId(0),
+    );
+    b.block(
+        Terminator::Branch {
+            condition: copy(test),
+            yes: BlockId(1),
+            no: BlockId(2),
+        },
+        4,
+    );
+    let one = b.int(P::U32, 1);
+    b.block(
+        Terminator::Return {
+            value: take(one),
+            cleanup: CleanupId(0),
+        },
+        5,
+    );
+    let one = b.int(P::U32, 1);
+    let next_n = b.binary(B::Sub, n, one, TypeKind::Primitive(P::U32), 6, CleanupId(0));
+    let result = b.local(TypeKind::Primitive(P::U32), Storage::Temporary);
+    b.block(
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("countdown"),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: ParamId(0),
+                value: take(next_n),
+            }],
+            returns: Some(CallReturn {
+                destination: result,
+                next: BlockId(3),
+            }),
+            on_failure: CleanupId(0),
+        },
+        7,
+    );
+    let answer = b.binary(
+        B::Add,
+        result,
+        one,
+        TypeKind::Primitive(P::U32),
+        8,
+        CleanupId(0),
+    );
+    b.finish("countdown", answer)
+}
+#[test]
+fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
+    let e = execute(
+        vec![countdown()],
+        vec![int(P::U32, 20)],
+        Limits {
+            steps: 10000,
+            call_depth: 21,
+        },
+    );
+    returned(&e, int(P::U32, 21));
+    let e = execute(
+        vec![countdown()],
+        vec![int(P::U32, 20)],
+        Limits {
+            steps: 10000,
+            call_depth: 20,
+        },
+    );
+    tooling_limit(&e, ToolingLimitKind::CallDepth, 1);
+    let e = execute(
+        vec![countdown()],
+        vec![int(P::U32, 2000)],
+        Limits {
+            steps: 100000,
+            call_depth: 3000,
+        },
+    );
+    returned(&e, int(P::U32, 2001));
+}
+fn loop_program() -> Vec<Definition> {
+    let mut b = Builder::new();
+    let n = b.int(P::U32, 5);
+    let sum = b.int(P::U32, 0);
+    let zero = b.int(P::U32, 0);
+    let one = b.int(P::U32, 1);
+    b.block(Terminator::Goto(BlockId(1)), 2);
+    let test = b.binary(
+        B::Gt,
+        n,
+        zero,
+        TypeKind::Primitive(P::Bool),
+        3,
+        CleanupId(0),
+    );
+    b.block(
+        Terminator::Branch {
+            condition: take(test),
+            yes: BlockId(2),
+            no: BlockId(4),
+        },
+        4,
+    );
+    let result = b.local(TypeKind::Primitive(P::U32), Storage::Temporary);
+    b.block(
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("add"),
+                arguments: vec![],
+            },
+            arguments: vec![
+                CallArgument {
+                    parameter: ParamId(0),
+                    value: copy(sum),
+                },
+                CallArgument {
+                    parameter: ParamId(1),
+                    value: copy(n),
+                },
+            ],
+            returns: Some(CallReturn {
+                destination: result,
+                next: BlockId(3),
+            }),
+            on_failure: CleanupId(0),
+        },
+        5,
+    );
+    b.replace(sum, take(result), 6);
+    let next = b.binary(B::Sub, n, one, TypeKind::Primitive(P::U32), 7, CleanupId(0));
+    b.replace(n, take(next), 7);
+    b.block(Terminator::Goto(BlockId(1)), 8);
+    let main = b.finish("main", sum);
+    let mut c = Builder::new();
+    let a = c.parameter(TypeKind::Primitive(P::U32));
+    let z = c.parameter(TypeKind::Primitive(P::U32));
+    let answer = c.binary(B::Add, a, z, TypeKind::Primitive(P::U32), 10, CleanupId(0));
+    let add = c.finish("add", answer);
+    vec![main, add]
+}
+#[test]
+fn later_argument_failure_cleans_caller_temporaries_before_locals() {
+    let mut b = Builder::new();
+    let local1 = b.int(P::U8, 10);
+    let local2 = b.int(P::U8, 20);
+    let temp1 = b.int(P::U8, 30);
+    let temp2 = b.int(P::U8, 40);
+    let cleanup = b.cleanup(vec![drop(temp2), drop(temp1), drop(local2), drop(local1)]);
+    let max = b.int(P::U8, 255);
+    let one = b.int(P::U8, 1);
+    let later = b.binary(B::Add, max, one, TypeKind::Primitive(P::U8), 9, cleanup);
+    let result = b.local(TypeKind::Tuple(vec![].into()), Storage::ReturnSlot);
+    b.block(
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("never_entered"),
+                arguments: vec![],
+            },
+            arguments: vec![
+                CallArgument {
+                    parameter: ParamId(0),
+                    value: take(temp1),
+                },
+                CallArgument {
+                    parameter: ParamId(1),
+                    value: take(temp2),
+                },
+                CallArgument {
+                    parameter: ParamId(2),
+                    value: take(later),
+                },
+            ],
+            returns: Some(CallReturn {
+                destination: result,
+                next: BlockId(1),
+            }),
+            on_failure: CleanupId(0),
+        },
+        10,
+    );
+    let d = b.finish("main", result);
+    let e = execute(vec![d], vec![], Limits::default());
+    fail(&e, "SEM-1", 9);
+    assert_eq!(
+        cleanup_events(&e),
+        vec![
+            (1, drop(temp2)),
+            (1, drop(temp1)),
+            (1, drop(local2)),
+            (1, drop(local1))
+        ]
+    );
+    assert_eq!(
+        e.trace
+            .iter()
+            .filter(|e| matches!(e, TraceEvent::Enter { .. }))
+            .count(),
+        1
+    );
+}
+#[test]
+fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
+    let mut b = Builder::new();
+    let u = b.unit();
+    let c = b.cleanup(vec![drop(u)]);
+    b.block(
+        Terminator::Return {
+            value: take(u),
+            cleanup: c,
+        },
+        9,
+    );
+    let d = b.definition("main");
+    let e = execute(
+        vec![d.clone()],
+        vec![],
+        Limits {
+            steps: 1,
+            call_depth: 1,
+        },
+    );
+    tooling_limit(&e, ToolingLimitKind::Steps, 9);
+    assert_eq!(e.steps, 1);
+    assert_eq!(cleanup_events(&e), vec![(1, drop(u))]);
+    let e = execute(
+        vec![d],
+        vec![],
+        Limits {
+            steps: 2,
+            call_depth: 1,
+        },
+    );
+    returned(&e, Value::Unit);
+    assert_eq!(e.steps, 2);
+    let mut b = Builder::new();
+    b.block(Terminator::Goto(BlockId(0)), 7);
+    let e = execute(
+        vec![b.definition("main")],
+        vec![],
+        Limits {
+            steps: 100,
+            call_depth: 1,
+        },
+    );
+    tooling_limit(&e, ToolingLimitKind::Steps, 7);
+    assert_eq!(e.steps, 100);
+}
+
+#[test]
+fn depth_failure_occurs_after_entry_and_cleans_transferred_arguments() {
+    // Intentionally incomplete TIR: call-depth guard fires before reachable Unreachable.
+    // This fixture exercises tooling policy and is not publishable strict-valid TIR.
+    let mut c = Builder::new();
+    let param = c.parameter(TypeKind::Primitive(P::U8));
+    let cleanup = c.cleanup(vec![drop(param)]);
+    let scratch = c.local(TypeKind::Tuple(vec![].into()), Storage::Temporary);
+    c.emit(
+        InstructionKind::StorageLive(c.body.places[scratch.0 as usize].root),
+        22,
+        cleanup,
+    );
+    c.block(Terminator::Unreachable, 23);
+    let callee = c.definition("callee");
+    let mut b = Builder::new();
+    let param = b.int(P::U8, 7);
+    let local = b.int(P::U8, 8);
+    let cleanup = b.cleanup(vec![drop(local)]);
+    let result = b.local(TypeKind::Tuple(vec![].into()), Storage::ReturnSlot);
+    b.block(
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("callee"),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: ParamId(0),
+                value: take(param),
+            }],
+            returns: Some(CallReturn {
+                destination: result,
+                next: BlockId(1),
+            }),
+            on_failure: cleanup,
+        },
+        4,
+    );
+    let main = b.finish("main", result);
+    let e = execute_unvalidated(
+        vec![main, callee],
+        vec![],
+        Limits {
+            steps: 100,
+            call_depth: 1,
+        },
+    );
+    tooling_limit(&e, ToolingLimitKind::CallDepth, 22);
+    assert_eq!(cleanup_events(&e), vec![(2, drop(param)), (1, drop(local))]);
+}
+#[test]
+fn external_float_inputs_are_normalized_even_when_returned_directly() {
+    let mut b = Builder::new();
+    let input = b.parameter(TypeKind::Primitive(P::F64));
+    returned(
+        &execute(
+            vec![b.finish("main", input)],
+            vec![Value::F64(0xfff0_0000_0000_0001)],
+            Limits::default(),
+        ),
+        Value::F64(0x7ff8_0000_0000_0000),
+    );
+}
+
+#[test]
+fn cleanup_zero_can_hold_actions_and_control_edges_have_no_failure_list() {
+    let mut b = Builder::new();
+    let value = b.int(P::U8, 9);
+    b.body.set_cleanup(CleanupId(0), vec![drop(value)]);
+    let e = execute(vec![b.finish("main", value)], vec![], Limits::default());
+    returned(&e, int(P::U8, 9));
+    assert_eq!(cleanup_events(&e), vec![(1, drop(value))]);
+    let mut b = Builder::new();
+    b.body.cleanups.clear();
+    b.block(Terminator::Goto(BlockId(0)), 7);
+    let e = execute(
+        vec![b.definition("main")],
+        vec![],
+        Limits {
+            steps: 5,
+            call_depth: 1,
+        },
+    );
+    tooling_limit(&e, ToolingLimitKind::Steps, 7);
+    assert!(cleanup_events(&e).is_empty());
+}
+
+fn tooling_limit(execution: &hirsel_interp::Execution, kind: ToolingLimitKind, line: u32) {
+    let Outcome::ToolingLimit(limit) = &execution.outcome else {
+        panic!("expected tooling limit")
+    };
+    assert_eq!(limit.kind, kind);
+    assert_eq!(limit.site, Some(site(line)));
+    assert!(
+        !execution
+            .trace
+            .iter()
+            .any(|event| matches!(event, TraceEvent::Failure(_)))
+    );
+}
+
+#[test]
+fn effect_only_tracing_retains_no_events_for_a_long_pure_loop() {
+    let mut b = Builder::new();
+    let yes = b.constant(TypeKind::Primitive(P::Bool), Constant::Bool(true));
+    b.block(Terminator::Goto(BlockId(1)), 2);
+    b.emit(
+        InstructionKind::Check {
+            condition: copy(yes),
+            rule: rule("FAIL-1"),
+        },
+        7,
+        CleanupId(0),
+    );
+    b.block(Terminator::Goto(BlockId(1)), 7);
+    let definitions = vec![b.definition("main")];
+    assert_fixtures(&definitions, &Default::default());
+    let run = RunConfiguration {
+        entry: path("main"),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    let limits = Limits {
+        steps: 16_384,
+        call_depth: 1,
+    };
+    let execute_mode = |trace_mode| {
+        hirsel_interp::run_with_runtime(
+            &mut Provider {
+                definitions: definitions.clone(),
+                queries: vec![],
+            },
+            &sources(),
+            &run,
+            vec![],
+            limits,
+            &mut hirsel_interp::NoOperations,
+            &hirsel_interp::aggregate::RuntimeTypes {
+                trace_mode,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let full = execute_mode(hirsel_interp::TraceMode::Full);
+    let effects = execute_mode(hirsel_interp::TraceMode::Effects);
+    assert!(full.trace.len() > limits.steps as usize);
+    assert_eq!(
+        effects.trace.capacity(),
+        0,
+        "pure steps must not allocate a retained trace"
+    );
+    assert_eq!(effects.outcome, full.outcome);
+    assert_eq!(effects.steps, full.steps);
+    assert_eq!(effects.stdout, full.stdout);
+    assert_eq!(effects.failures, full.failures);
+}
+
+#[test]
+fn effect_only_tracing_preserves_anchored_operations_and_failure_observations() {
+    struct Add {
+        fail: bool,
+    }
+    impl Operations for Add {
+        fn call(
+            &mut self,
+            call: OperationCall<'_>,
+            context: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            if call.path != &path("add") {
+                return Ok(None);
+            }
+            context.stdout.extend_from_slice(b"add\n");
+            context.consume(CapabilityEvent {
+                capability: path("Test"),
+                operation: "add".into(),
+                input: vec![],
+                output: vec![],
+            })?;
+            if self.fail {
+                return Ok(Some(OperationResult::Failed(hirsel_interp::Failure {
+                    rule: rule("FAIL-1"),
+                    line: 5,
+                    site: call.site,
+                    kind: "test failure".into(),
+                })));
+            }
+            let [Value::Integer(left), Value::Integer(right)] = call.arguments else {
+                panic!("integer pair")
+            };
+            Ok(Some(OperationResult::returned(int(
+                P::U32,
+                left.bits() + right.bits(),
+            ))))
+        }
+    }
+    let definitions = loop_program();
+    assert_fixtures(&definitions, &Default::default());
+    let run = RunConfiguration {
+        entry: path("main"),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    for fail in [false, true] {
+        let execute_mode = |trace_mode| {
+            hirsel_interp::run_with_runtime(
+                &mut Provider {
+                    definitions: definitions.clone(),
+                    queries: vec![],
+                },
+                &sources(),
+                &run,
+                vec![],
+                Limits::default(),
+                &mut Add { fail },
+                &hirsel_interp::aggregate::RuntimeTypes {
+                    trace_mode,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let full = execute_mode(hirsel_interp::TraceMode::Full);
+        let effects = execute_mode(hirsel_interp::TraceMode::Effects);
+        let observed = effects.observable(&sources()).unwrap();
+        assert_eq!(Some(&observed), full.observable(&sources()).as_ref());
+        assert_eq!(observed.effects.len(), if fail { 1 } else { 5 });
+        assert!(
+            effects
+                .trace
+                .iter()
+                .all(|e| matches!(e, TraceEvent::Effect(_)))
+        );
+        assert_eq!(effects.outcome, full.outcome);
+        assert_eq!(effects.steps, full.steps);
+        assert_eq!(effects.failures, full.failures);
+        assert_eq!(effects.stdout, full.stdout);
+    }
+}

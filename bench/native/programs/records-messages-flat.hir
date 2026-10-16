@@ -1,0 +1,30 @@
+// Contiguous pointer-free id/kind/length/payload messages; sequential flat walking.
+// Native flat layout supplies the u64 length prefix of the final byte list.
+flat type Message { id: u64, kind: u64, payload: Bytes }
+flat type Messages { items: List[Message] }
+fn workload(data: Bytes) -> Bytes {
+  let mut pos: u64 = 0
+  let n = decimal(data, mut pos)
+  let mut items: List[Message] = []
+  list.reserve(mut items, n)
+  for i in 0u64..n {
+    let mut payload: List[u8] = []
+    let length = 24u64 + i % 104u64
+    list.reserve(mut payload, length)
+    for j in 0u64..length { list.push(mut payload, int.narrow(97u64 + (i + j * 7u64) % 26u64)) }
+    list.push(mut items, Message(id: i, kind: i % 7u64, payload: bytes.from_list(take payload)))
+  }
+  let messages = Messages(items: take items)
+  let mut sum: u64 = 0
+  let mut index: u64 = 0
+  for message in messages.items {
+    sum = int.wrapping_add(sum, message.id ^ message.kind ^ checksum(message.payload))
+    if index % 16u64 == 0u64 {
+      let mut changed = copy message
+      changed.id ^= 291u64
+      sum = int.wrapping_add(sum, changed.id ^ changed.kind ^ checksum(changed.payload))
+    }
+    index += 1u64
+  }
+  number(sum)
+}

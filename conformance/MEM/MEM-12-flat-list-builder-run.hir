@@ -1,0 +1,199 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+// exit: 0
+// A flat list field holds the FlatFormatV0 encoding of its elements. A list
+// whose records are constructed only for its pushes and which is then taken
+// into such a field may be built in that encoding directly. Its contents must
+// equal those of the same list built as an ordinary list, which reading it
+// while it grows forces. The cases are empty, single and growing through many
+// records, with fixed, Bytes, String and nested list fields, with conditional
+// pushes and after a move, into a record with only that field or with another.
+fn output_error[E](take e: E) -> () {}
+
+flat type Message {
+  id: u64,
+  tags: List[u64],
+  name: String,
+  payload: Bytes,
+}
+
+flat type Messages {
+  items: List[Message],
+}
+
+flat type Stamped {
+  stamp: u64,
+  items: List[Message],
+}
+
+fn checksum(b: Bytes) -> u64 {
+  let mut h: u64 = 14695981039346656037u64
+  for i in 0u64..bytes.len(b) {
+    let product: u128 = int.widen(h ^ int.widen(b[i])) * 1099511628211u128
+    h = int.truncate(product)
+  }
+  h
+}
+
+fn digest(messages: Messages) -> u64 {
+  let mut s: u64 = list.len(messages.items)
+  for m in messages.items {
+    let mut t: u64 = list.len(m.tags)
+    for tag in m.tags {
+      t = int.wrapping_add(t ^ 2654435761u64, tag)
+    }
+    s = int.wrapping_add(
+      s ^ 1540483477u64,
+      m.id ^ t ^ checksum(m.payload) ^ string.byte_len(m.name)
+    )
+  }
+  s
+}
+
+fn payload(i: u64) -> Bytes {
+  let mut p: List[u8] = []
+  for j in 0u64..i % 13u64 {
+    list.push(mut p, int.narrow(97u64 + (i + j * 7u64) % 26u64))
+  }
+  bytes.from_list(take p)
+}
+
+fn tags(i: u64) -> List[u64] {
+  let mut t: List[u64] = []
+  for j in 0u64..i % 4u64 {
+    list.push(mut t, i * 10u64 + j)
+  }
+  t
+}
+
+fn built(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  list.reserve(mut items, n)
+  for i in 0u64..n {
+    list.push(mut items, Message(id: i, tags: tags(i), name: "m", payload: payload(i)))
+  }
+  digest(Messages(items: take items))
+}
+
+fn ordinary(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..n {
+    let seen = list.len(items)
+    list.push(
+      mut items,
+      Message(id: i + seen - i, tags: tags(i), name: "m", payload: payload(i))
+    )
+  }
+  digest(Messages(items: take items))
+}
+
+fn built_conditional() -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..40u64 {
+    if i % 3u64 == 0u64 {
+      list.push(
+        mut items,
+        Message(id: i, tags: tags(i), name: "three", payload: payload(i))
+      )
+    } else if i % 7u64 == 2u64 {
+      list.push(mut items, Message(id: i * 2u64, tags: [], name: "", payload: b""))
+    }
+  }
+  let moved = take items
+  digest(Messages(items: take moved))
+}
+
+fn ordinary_conditional() -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..40u64 {
+    let seen = list.len(items)
+    if i % 3u64 == 0u64 {
+      list.push(
+        mut items,
+        Message(id: i + seen - seen, tags: tags(i), name: "three", payload: payload(i))
+      )
+    } else if i % 7u64 == 2u64 {
+      list.push(mut items, Message(id: i * 2u64, tags: [], name: "", payload: b""))
+    }
+  }
+  digest(Messages(items: take items))
+}
+
+fn stamp_sum(s: Stamped) -> u64 {
+  let mut sum: u64 = s.stamp
+  for m in s.items {
+    sum = int.wrapping_add(sum ^ m.id, checksum(m.payload) ^ list.len(m.tags))
+  }
+  sum
+}
+
+fn stamped_built(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..n {
+    list.push(mut items, Message(id: i, tags: tags(i), name: "s", payload: payload(i)))
+  }
+  stamp_sum(Stamped(stamp: n * 3u64, items: take items))
+}
+
+fn stamped_ordinary(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..n {
+    let seen = list.len(items)
+    list.push(
+      mut items,
+      Message(id: i + seen - seen, tags: tags(i), name: "s", payload: payload(i))
+    )
+  }
+  stamp_sum(Stamped(stamp: n * 3u64, items: take items))
+}
+
+fn fields_read_back() -> bool {
+  let mut items: List[Message] = []
+  for i in 0u64..5u64 {
+    list.push(
+      mut items,
+      Message(
+        id: i * 3u64,
+        tags: tags(i + 2u64),
+        name: "abc",
+        payload: payload(i + 1u64)
+      )
+    )
+  }
+  let messages = Messages(items: take items)
+  let mut found: bool = false
+  let mut index: u64 = 0
+  for m in messages.items {
+    if index == 3u64 {
+      let tag = m.tags[0]
+      found = m.id == 9u64 && list.len(m.tags) == 1u64 && tag == 50u64 && checksum(
+        m.payload
+      ) == checksum(payload(4)) && string.byte_len(m.name) == 3u64
+    }
+    index += 1u64
+  }
+  found && list.len(messages.items) == 5u64
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let ok = built(0) == ordinary(0) && built(1) == ordinary(1) && built(300) == ordinary(
+    300
+  ) && built_conditional() == ordinary_conditional() && fields_read_back() && stamped_built(
+    24
+  ) == stamped_ordinary(24)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

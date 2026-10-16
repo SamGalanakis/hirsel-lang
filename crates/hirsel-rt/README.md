@@ -1,0 +1,451 @@
+# hirsel-rt
+
+The native runtime substrate behind the versioned C interface `hirsel_rt_v2`
+(`include/hirsel_rt_v2.h`): the task-local size-class allocator, plain counts,
+the MEM-3 release worklist, compiler-local regions, failure state and finalizers. Built as an
+rlib (for tests) and a static library (for linking with generated code).
+
+Allowed dependencies: std, the data-only core-contract and run-config, the shared pure LeafKernel crate, libc (OS syscall declarations), rustls 0.23 (ring/std/tls12), webpki-roots 1 and sha2 (PEM tape identity) in production. No other implementation crate; the driver wires them. Test-only: the interpreter for independent replay oracles (the registry inventory check and the compiled-program tests are in `hirsel-pipeline-tests`, `rt_*`), plus the data crates `hirsel-lir`,
+`hirsel-types`, `hirsel-syntax` and `hirsel-tir`, so the tests release values whose layouts `hirsel-lir`
+derives and `hirsel_lir::rt_program` lowers.
+
+Invariants and boundary:
+
+- Every export is a non-unwinding `extern "C"` function: a Rust panic aborts at the boundary.
+  Statuses are `u8` (0 success, 1 language failure). A library manifest may ask the caller
+  to record its rule at the call site; substrate entries already record it. Broken invariants
+  are faults that abort with a message; host exhaustion is environmental and terminates. Neither
+  is ever reported as a language failure.
+- The run context is passed explicitly and shares nothing with other contexts (OWN-6).
+- Blocks have one eight-byte `repr(C, align(8))` header: a u32 count and a u32
+  descriptor word (29 index bits, two storage-kind bits, one dead-wide-cursor bit).
+  Every reference points eight bytes before its payload, including over-aligned blocks.
+  Capacity/alignment live in 64 KiB slab metadata, large prefixes, or immutable static/region
+  extent records. Pools select `(class capacity, max(requested alignment, 8))`; small pools
+  have separate 8/16 alignment classes and the existing capacity schedule. Allocation pops the current slab's page-local `free` list. Free pushes a separate
+  `local_free` list. Nothing is atomic and no operation checks a thread: every page belongs
+  to its task. On exhaustion sequential fresh capacity extends the allocation
+  list in at most 8 KiB batches before deferred frees are collected, then another
+  available slab is selected (mimalloc's page design; third-party/NOTICES.md).
+  A free-list pointer overlays the entire header. Diagnostic states and returned-storage
+  tombstones are cold side records; production stores no lifecycle byte. Idle slabs above
+  the cap (8 MiB default) return at trim points, and task exit returns every backing block.
+- One immutable descriptor registry belongs to a run context. The driver assigns it before
+  partitioning the linked program and every emitted object receives the same assignment.
+  Runtime-owned bytes/file-walk descriptors reserve indices 0/1, empty environments use 2,
+  and canonical layout-descriptor digests order the remaining indices. ABI v2 entries accept
+  indices; inline FINALIZE steps retain descriptor pointers as immutable program data.
+- `alloc` and `arena_alloc` return the new block and cannot fail (runtime ABI 3): backing
+  exhaustion terminates environmentally, which no program observes, so callers test no
+  status.
+- A reused token's payload keeps its bytes, in diagnostic mode too: a reuse may skip storing
+  fields whose bits the donor's moved-out children left in place (`Reuse.kept`). Fresh and
+  freed payloads are poisoned.
+- Compiled fast paths (runtime ABI 4, `hirsel_rt_v2.h`): the context is `repr(C)` and begins
+  with its heap's `Compiled` words, a dup bound, an inline-free flag, the idle slab count and
+  each small pool's current page (`Class::current`, mirrored by `Heap::set_current`). Compiled
+  code pops a constant small request off its pool's page, adds a holder below the dup bound and
+  pushes a dead small block onto its page's `local_free` list, keeping the page's live count
+  and the idle slab count exact; a null page, an empty list, a page's first deferred free, a
+  saturated count and a large block take the runtime entry. Diagnostic mode, measurement
+  archives and the system allocator keep the bound and flag zero and the pages null, so every
+  operation reaches its entry there.
+- Counts are non-atomic; a dup past the configured finite maximum makes the block immortal,
+  which is sticky and never tests unique. Ordinary uncounted storage has no header.
+  Compiler-emitted flat values in regions carry a region-kind immortal header:
+  dup/release are no-ops and the emitted uniqueness count test is false, while the region still bounds
+  their storage lifetime and frees it with its segment.
+- Layout descriptors (`hirsel_rt_v2_layout`, version 5; its `LAYOUT_NO_EXTENT` flag marks a
+  fixed-size, non-flat layout whose arena blocks carry no extent) hold a flat drop program that
+  `hirsel_lir::rt_program` lowers from the LayoutRecord's nested drop program; nothing
+  else produces one. Steps: `RELEASE` a counted holder, `FINALIZE` an inline resource,
+  `CLOSE_HANDLE` through the Io adapter's close thunk (`config.close_handle`), `TAG` (skip an
+  inactive variant's span), `NONNULL` (skip the dataful variant's span of a null-pointer niche
+  when its word is null), `LIVE_BIT` (skip a moved capture whose persistent bit is clear), `LOOP` (a span per element, highest first; a static count, or a
+  dynamic `u64` count only in an outermost loop) and `COLUMN` (one structure-of-arrays column of
+  the enclosing loop's element). Outside loops each step names its top-level live-mask field.
+- Release is iterative and post-order, with no allocation or recursion through data.
+  A last release of a payload with no finalizer or drop steps frees it directly,
+  including an erased String/Bytes owner: there is no cursor or worklist to drain.
+  Simple dead blocks retain their index and use the count word for the next step. Loop/column
+  descriptors set WIDE_CURSOR: their complete 24-bit step and 40-bit mixed-radix cursor spans
+  the header plus a pre-reserved four-byte slab shadow (or a large prefix shadow). The parent
+  link uses the consumed reference slot. The root's bytes stay intact for Reset/Reuse.kept.
+  Resumption reconstructs frames from immutable steps, preserving DROP-2 and build-order
+  recycling. Diagnostic descriptor validation rejects control words aliased with consumed
+  slots, allowing the deliberately shared null-pointer niche guard and words in exclusive
+  arms of one ordinal tag (a nested tag in one arm may share bytes with a sibling arm's
+  reference: only one arm runs). Finalizers and closes
+  run shielded; cleanup keeps the first failure and records later causes. Unsafe-ffi finalizer
+  failure terminates. Compiler-reserved inline continuations are separate 32-byte records.
+- Compiled drop glue (hirsel-llvm) shares the count word under one written contract
+  (`hirsel_rt_v2.h`, transcribed in `hirsel_lir::runtime_abi`): a plain task-local `u32` at
+  `COUNT_OFFSET`; at `COUNT_UNIQUE` the block dies, `COUNT_IMMORTAL` is never written, any
+  other count is stored one lower. The glue releases a dead block's fields itself, in the
+  drop program's order, and returns the storage through `hirsel_rt_v2_free(ctx, block)`
+  (or its inline fast path), which is shallow and faults on a static block. Only layouts without a finalizer, an inline
+  resource or columns have glue; every other block, a block whose layout its holder does not
+  fix, and a block that dies with the glue's depth budget spent come back through
+  `hirsel_rt_v2_release`, and the walk never calls glue. Diagnostic mode checks less on a
+  glue path: a shared decrement done inline does not run `check_live_block` on the child, so
+  a second release of an already freed block is caught only if it reaches
+  `hirsel_rt_v2_free` (live, count 1, no finalizer) or a runtime entry.
+- Regions are uncounted bump storage from a task pool; their cleanup list releases held heap
+  credits and finalizes scheduled resources newest first at exit, then the pool keeps at most
+  8 MiB idle (MEM-10). Unpublished builders may grow (in place or by relocation); published
+  ones never move.
+- `unique_copy` deep-copies the counted heap blocks reachable from a root through each block's
+  `RELEASE` steps (tags and loops respected), each block once so sharing is kept; immortal and
+  static blocks are copied too, since a `unique` value is written in place without a test,
+  and a resource or handle is an invariant fault. Its visited map and
+  work stacks are runtime-owned, so the native stack stays constant over any depth.
+- `unique_copy_value` is `unique_copy` from an inline value (an aggregate, variant or inline
+  array holding blocks): the caller's bit copy, whose holder slots (read through the value's
+  layout descriptor) it rewrites in place to deep copies, one visited map for the whole value.
+- `detach` is copy on write's copy (OWN-4): the block alone, into a heap block of its layout
+  and capacity, with one more holder for each counted child it holds (static and immortal
+  blocks included, since the caller writes the copy).
+- Sequences (LIR schema revision 7): a sequence payload is
+  a `u64` count at offset 0, then elements at a fixed stride from the first offset aligned for
+  them, and its capacity is the metadata's usable bytes after that offset by the stride.
+  `hirsel_rt_v2_seq_grow(ctx, block, element_size, element_align, capacity)` leaves a unique
+  heap block that already holds `capacity` elements alone; otherwise the count and the counted
+  elements move bitwise into a block of the class that fits (the new capacity is the class's),
+  the old storage is freed shallowly, never scanned, and the returned reference names the new
+  block. A block that is not unique (shared, immortal, or static: an empty list literal is the
+  static empty sequence of its layout) is detached once at the requested capacity: count and
+  elements copied, each counted element one more holder, the caller's credit of the original
+  given back. Compiled code therefore does not detach a place whose only write is a reserve,
+  so `[]` then `reserve(n)` makes one allocation. A dead block and an overflowing size are
+  invariant faults.
+  `hirsel_rt_v2_block_grow(ctx, block, keep, extent, align)` is the same growth by bytes:
+  a block that holds `extent` payload bytes is left alone, otherwise its first `keep` bytes
+  move. A sequential Packed sequence (MEM-13, `SeqAppend`) grows through it.
+- Keyed hashing (SEM-5): `hirsel_rt_v2_hash_begin(ctx)` answers the run's SipHash-1-3 key
+  state from `Config.hash_seed` (Config's hash-seed word, revision 7), and
+  `hirsel_rt_v2_hash_bytes(state, bytes, length)` folds bytes into a state. Compiled
+  `Inst::Hash` walks a layout's scalar leaves itself (hirsel-llvm `compare.rs`) and calls
+  only these two; the seed moves placement and never an observation.
+- No numeric Depth or frame charge exists until spec #16 rules.
+
+Transitions of D's Lean model (`proofs/rc/README.md`) cited in code comments as `T<ID> <name>`;
+`tests/it/model.rs` runs the model's `rc-trace v1` vectors (`native-tests/model/`) on the runtime and
+requires its checked final states:
+
+| ID | names | entry |
+|---|---|---|
+| T01 | Alloc | `alloc` |
+| T03 | Dup, DupSaturate, DupImmortal | `dup` |
+| T04 | Drop, DropLast, DropImmortal | `release` |
+| T12, T13, T14 | Reset, Reuse, Dispose | `reset`, `reuse`, `dispose` |
+| T15 | FinalizeBegin, FinalizeEnd | a finalizer call and its outcome; `finalize_begin`, `finalize_end` around a drop body compiled code calls |
+| T16 | DropEdge, Free | a `RELEASE` step consuming a child's credit; storage returned after draining; `free` after compiled glue's inline edge |
+| T18, T19, T20 | RegionOpen, RegionAlloc, RegionEdgeAdd | `region_enter`, `region_reserve`, `region_hold` |
+| T23 | RegionClose | `region_exit` |
+
+An arena (`arena.with`) is a region whose record its
+token names. `arena_alloc` bump-allocates an immortal regional block (header and
+payload, after an extent unless its layout is `LAYOUT_NO_EXTENT`, whose capacity
+is its descriptor size) whose segments grow one and a half times the previous one plus
+the request, as Zig's `std.heap.ArenaAllocator` does (third-party/NOTICES.md).
+`arena_enter` enters an arena's region warm: it seeds the cursor and limit from an
+idle standard segment of the pool, when one exists, so the first block is an inline bump.
+Compiled arena allocations bump `Region.cursor` inline up to `Region.end` at the
+C header's asserted offsets; every reservation ends on a word, so the cursor needs no
+alignment step. Diagnostic regions keep that limit null, so every
+allocation registers its owner and poisons its payload through the runtime;
+runtime reservations and builders derive the actual bound from the segment.
+
+Checks: `cargo test -p hirsel-rt` and `harness/run.sh` (ASan/UBSan C harness, AArch64 under
+qemu), which `tools/check-native.sh` runs. `harness/bench.sh` times the `binarytrees` C port
+against glibc malloc, mimalloc, jemalloc and 48- and 32-byte-node mimalloc controls (the prior header controls) in paired rounds, with a tree freed by the walk
+(`hirsel-walk`) and by the compiled glue of the node layout (`hirsel`).
+
+## Library and Io
+
+`operations::manifest` joins registry-produced rows against all 144 reviewed identities in `native-tests/library/operations.tsv`, including exact declaration digests and passing/cleanup conventions. Missing, duplicate, stale and foreign identities fail closed. M2 entries name their feature; remaining aggregate/backend gaps explicitly use NotImplemented. Effects retain registry conservatism. The scalar operations (`operations::SCALAR_INTRINSICS`) are `Instruction` rows: LIR instructions since schema revision 6, with no runtime entry. So are the inline library operations (`operations::INLINE_OPERATIONS`: the sequence lengths, which import lowers to `SeqLen`, and the legalized `simd.add` and `simd.splat`, and `forget`, which consumes without cleanup); a library body's row is `Body`, and each library lane edits only its own operations' rows. The four f32/f64 bits/from_bits operations are among them: `Convert` in its `Reinterpret` mode (LIR revision 23), a bitcast with NaN canonicalization. Formatting, parsing and reductions are ordinary std source, with no host algorithm entry or boxed universal value.
+
+`operations::Library<A>` is the typed Rust Io boundary. `RealIo::grant` pins an explicit Linux directory descriptor and captures stdout; `grant_with_output` adds an explicit writer and records actual committed prefixes. All descendant opens resolve relative links component by component from pinned
+directory descriptors. Absolute targets and parent steps beyond each grant root
+are refused; narrowed grants retain their own pinned roots. Entries are classified
+with fstatat(AT_SYMLINK_NOFOLLOW) and pinned with O_PATH before any data open. Directory grants retain separate inode identities, and File narrowing compares the opened inode. Walk sorts UTF-8 bytes, follows confined links, and returns FileFault for escaping
+links, link/directory cycles and special files. Writes prepare replacement storage before publication so zero-byte errors preserve destinations; successful or partially failed writes publish exactly the recorded prefix.
+
+`SimIo::new(initial_tree,tape)` always enforces exact replay, including an empty tape. Request/completion mismatches, missing events and unconsumed events are adapter errors. Acceptance precedes stdout/tree/handle publication. Tape events contain typed requests, completions and explicit capability fault inputs; neither backend consults ambient time, seed or environment. A canceled commit still consumes and aborts the owned atomic handle, as interpreter cleanup requires.
+
+Network: `net.rs` holds the core network data, the
+`NetProvider` seam and grant policy, which runs in `io::State` before any provider call,
+so a denied or invalid request issues no syscall, DNS query or TLS byte (tests/it/net.rs
+counts provider calls). Streams and listeners are handles branded by their Net; a
+ConnectTls stream moves no plaintext before its handshake. `net_host.rs` is the libc
+provider, ported from Rust std's Unix socket code and Zig's getaddrinfo lookup: nonblocking
+connect with `poll` and one deadline across resolved addresses, SO_RCVTIMEO/SO_SNDTIMEO,
+MSG_NOSIGNAL writes. Network outcomes are provider inputs recorded as completions (tape v4,
+`net/tape.rs`); `SimIo` replays them with no sockets after re-deriving every grant decision
+from its bound rules (`set_net_rules`; launch reads the root Net's `io.net` grant JSON from
+`HIRSEL_RT_NET` and binds `net.script@2` peers through `set_net_script`). TLS upgrades the granted
+socket through rustls in `net_tls.rs`; subsequent network reads and writes carry
+plaintext. `tls.close` sends close_notify before closing on every outcome; implicit
+drop only closes. PEM bytes pass through `Adapter::tls_roots` to the host provider
+for its next handshake, outside the tape request, whose SHA-256 must match. Replay
+and scripted providers ignore the bundle and use only the digest. Scripted worlds
+attach independently at the same provider seam. `net_abi.rs` exports the stream
+operations at the Hirsel ABI (`NET_EXPORTS`), plus `hirsel_rt_v2_net_read_into`, the
+entry of `$intrinsic.NetReadInto` that `net.read_into`'s compiled body calls with its
+buffer size. `net.resolve` allocates its `List[SocketAddr]` under descriptor 0, the
+runtime's plain pointer-free sequence descriptor. `hirsel-pipeline-tests`
+`rt_net_native` records a compiled program against a loopback server and replays it
+both natively and independently in the interpreter, with an altered-byte control.
+The test-only `tests/support/net.rs` translator reconstructs independent interpreter
+script peers from native typed completions. `tests/support/io.rs` compares every
+completion, surviving grant, final tree and stdout, then strictly replays the
+interpreter's own tape. Corruption controls keep the fixture tape separate from
+the comparison tape, including external fault inputs. Partial native writes supply their accepted prefix to the
+script; read chunks and EOF remain exact. TLS success, name mismatch and handshake
+failure are representable; other TLS failures are refused until the approved peer
+schema can express them. PEM events require the original trust bundle and verify
+its SHA256 digest. Certificate names are merged across the entire recording;
+a fixed peer cannot both accept and reject the same name.
+
+Launch owns a stable `io::Binding`, installs `io::hirsel_rt_v2_io_close` as Config.close_handle, and explicitly binds it with RunCtx.bind_io_data. The adapter must stay at its bound address and outlive every release on that context. Close-handle runs only while it is bound, with exclusive adapter access; unbind before dropping it. There is no global/thread-local fallback. This private RunCtx field changes no Config or C ABI.
+
+`Map` and `Set` are native LIR bodies in `hirsel-rc::library::map`; the compiled seed law in `hirsel-pipeline-tests/tests/rc/rc_maps_native.rs` replaces the Rust Map model. Sequence consumption is implemented by compiled library bodies in `hirsel-rc`; their C and H checks, native target tests and resource failure campaigns replace the Rust Cursor model. The six consuming open/next manifest rows are Body.
+
+## Launch and the Hirsel-ABI Io entries
+
+`hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds
+the linked program's immutable descriptor registry and runs one compiled
+`fn(rt: Io, args: Args) -> Result[(), E]` in a fresh context with real Io
+granted on `HIRSEL_RT_ROOT`, and exits 0 for `Ok`, 1 for `Error`, 2 for a
+language failure and 3 for a refused launch. With `HIRSEL_RT_OBSERVATION` it
+writes the observation record (`hirsel-observation 1`, the status, the result
+bytes or the failure chain as kind, rule and site codes, and the task-exit
+audit in a diagnostic or measurement archive, or `audit unavailable` in production). `HIRSEL_RT_TAPE` receives the real Io completion tape
+(`hirsel-io-tape 4`: run identity digest, independent hash/Random/Test seeds, launch arguments, initial tree, typed completions and a complete-count trailer; version 3 tapes, which cannot hold network events, stay readable); `HIRSEL_RT_REPLAY` runs on simulated
+Io that accepts exactly a recorded tape and refuses a mismatch, a missing event
+and an unconsumed one. Each completion is appended and flushed before delivery; an abort preserves its confirmed prefix. A missing trailer marks an unknown suffix and refuses complete replay or any resumability claim. Native stdout uses raw OS writes, so EPIPE and EBADF become recorded OutputError outcomes; generated main ignores SIGPIPE before entry. Replay divergence exits 3 with confirmed stdout, including during handle cleanup.
+
+A `RuntimePrimitive` manifest row names a symbol exported at the Hirsel ABI v1
+(`(ctx, [caller destination], [result pointer], parameters...) -> status`).
+`operations::HIRSEL_ABI_EXPORTS` lists each such export with its physical
+signature, and the driver checks every call against it before linking. These include stdout/print, all directory and file leaves, Path/Args, MonotonicClock/WallClock/Random,
+Test check/check_case/fail/dir, IEEE bit primitives, Unicode cursors and text entries.
+`test.for_all`, `test.equal` and `test.approx` are ordinary std@1 source;
+expect_error awaits the approved general divergence contract. `Path` is an
+inert u64 into the context's intern table; file and atomic handles close on drop.
+Taken bytes and handles are consumed on every outcome, including status 1.
+`file.walk` owns a counted environment of sorted results and a position, with a
+runtime descriptor and step thunk; it stops after its first Error.
+`hirsel_rt_v2_launch_zero` calls an eligible `fn() -> Result[(), E]` at its
+three-pointer ABI without acquiring a real directory or an argv snapshot.
+`hirsel_rt_v2_launch_test` grants only Test and accepts the same explicit config.
+`launch::Config` (the C `hirsel_rt_v2_launch_config`) is separate from allocation
+`context::Config`: hash, Random and Test seeds are independent u64s, followed by
+the 32-byte run identity. Generated main passes a constant config; only hash_seed
+reaches allocation. No seed is read from an environment variable. A tape records
+all four fields, and replay rejects any mismatch before entering the program.
+ The ten `$intrinsic.OrderCompare_*` rows are compiled
+Body entries in `hirsel-rc`, with callable FunctionRef symbols and no raw C order
+exports. SortedMap empty/len are Instruction rows, insertion/open/next are Body
+rows; its owned cursor finalizer is a private library body.
+
+`iter.from` and `iter.map` are Body rows whose inline constructions own compiled
+step thunks in `hirsel-rc`; `iter.next` is an Instruction row lowering to one
+indirect call. No runtime iterator model or operation export implements them.
+
+Unicode views (SEM-3) inline to a Copy of the String slice. `views.rs` exports
+UnicodeScalars and ScalarPositions open/next at the Hirsel ABI:
+open borrows (owner,start,length), next mutates the exclusive ViewCursor address.
+The four-word cursor holds that slice and a relative position; it never owns the
+source. Positions includes the terminal boundary of an empty string. Repr(C) Option
+records match derived layouts on both targets in tests/it/views.rs. GraphemeView
+and its Unicode16 segmentation execute ordinary std source; official source
+vector tests live in hirsel-driver/tests/stdlib_graphemes.rs.
+
+`text.rs` implements string.from_bytes, string.slice,
+string.as_bytes, bytes.slice, string.position,
+string.byte_offset at their declared Hirsel ABI. Fresh results use
+`hirsel_rt_v2_bytes_descriptor` (Sequence[u8]: u64 count, then bytes). UTF-8
+conversion transfers the same slice into either Result arm; slicing shares one
+owner credit and preserves its origin. bytes.replace is ordinary std source.
+StrPos's nominal u64 storage travels by read-only address. SEM-3 exports return
+status 1 with output unwritten; emission records the manifest's rule at the call
+site. `hirsel-pipeline-tests/tests/front/rt_text_native.rs` checks the full native matrix, C callers under
+ASan/UBSan on x86-64 and qemu on AArch64, and generated drop glue with zero
+live blocks after every one of 1000 calls at O0/O2 in both runtime modes.
+
+The byte bridges retain one Slice owner credit and its exact interval. Freezing
+List[u8] is a checked LIR Slice construction in hirsel-rc and has no runtime
+entry. Position Option initializes both tag and inactive bytes; Some holds the relative offset without another owner credit.
+Path text reads only the bound lexical intern table and emits no host request.
+
+Ordinary tape snapshots retain physical directories/files and relative link metadata.
+Replay resolves aliases inside each pinned directory grant, so writing through an alias
+updates its target. Invalid link targets and byte-invalid host names remain operation
+faults; they do not reject tape admission. Exclusive temporary creation uses the
+kernel's O_EXCL|O_NOFOLLOW decision before link expansion. Commit checks that its
+source is the prepared regular inode. Ordinary tapes model ordered program effects,
+not arbitrary concurrent mutations of host directory entries.
+
+`host_paths` implements the filesystem obligation of `HostAuthority::authorize`.
+`PinnedDirectory` owns the acquired mount descriptor. Admission passes named
+selectors, `Access` rights and the exact pins to `RealIo::from_pinned_mounts`;
+an empty iterator acquires no directory. `mount_pins` borrows every retained pin,
+and `prepare_recording_with_files` checks all of them before recorder effects.
+Directory acquisition matches only a configured selector or its descendants;
+missing mounts return FileError::NotGranted even when another mount grants Dir.
+Narrowed directories retain their parent's read/read_write rights. Write, remove,
+atomic creation, append and commit refuse read grants before storage calls.
+`SimIo::set_mounts` configures the same independently enforced replay policy.
+Snapshots use virtual selectors and retain same-resource/contained mount aliases,
+so their publications share storage while each issued grant remains confined.
+`RecorderDestination::pin/open` checks every grant by physical device/inode
+ancestry before creating or truncating tape/tool output, follows existing aliases,
+and exclusively creates new leaves relative to pinned parents. A file beside a
+grant in their shared parent is isolated and accepted. `RecorderDirectory::pin/check`
+also rejects grants inside directory-owned recorder storage, for journal adapters.
+Every bind mount view requires matching descriptor identity; unavailable physical
+ancestry refuses admission. Existing file inodes are checked against the granted
+physical trees, including hard links and file bind mounts. Tape, observation and measurement
+outputs are pinned before entry; no output path is reopened after entry.
+The launcher also pins inherited regular-file stdout/stderr sinks before opening
+recorders and refuses identical recorder inodes. Pipes, terminals, sockets and
+closed descriptors do not collide with regular files. File-backed provider
+adapters pass their acquired pins to RecorderDestination::open_with_files.
+
+Native launches stream without retaining duplicate output/event histories in memory.
+The public RealIo adapter retains history by default for tests and local observers.
+`harness/output-bench.c` compares this ordinary path and ordinary recording
+against identical raw C writes; neither mode claims durability.
+
+## Timing, diagnostics and measurement archives
+
+Cargo features are independent link-time choices, all off by default:
+
+- `system-allocator`: each counted heap block gets one libc `malloc` and one
+  matching `free`, bypassing slabs and free lists. Small requests keep the exact
+  class capacity and physical alignment. A fixed-size layout's block (descriptor
+  `LAYOUT_NO_EXTENT`, no wide cursor, at most 8-aligned; never a sequence payload,
+  `rt_program::no_extent`) is bare: the malloc is
+  its header and class capacity, the header is the allocation, and its capacity
+  is its descriptor's. Other blocks keep the large prefix (per-block capacity for
+  compiled queries, a wide cursor's shadow, an over-aligned payload inside an
+  over-allocation whose original pointer is retained). A bare token reused for a
+  layout that cannot be bare moves its bytes to prefixed storage of the same
+  capacity. Production does not list bare blocks, so one still live at task exit
+  stays with the process; diagnostic and measurement archives list them, count
+  them as live blocks and backing (`large_bytes`) and return them at exit. The
+  ordinary eight-byte header, descriptor registry, count/drop behavior and
+  reuse-token key remain.
+  Regions keep their bump semantics; the §8 system comparison disables placement.
+- `diagnostic`: builds Stats, backing-call and saturation counts, and the exit
+  leak audit. Launch-time `CONFIG_DIAGNOSTIC` still selects poisoning separately.
+  Correctness tests and native matrix tools select this archive, including their
+  poisoning-off configurations. C Stats consumers define `HIRSEL_RT_ENABLE_STATS`.
+- `measurement`: builds Stats/auditing plus the counters below. Direct launch
+  reads `HIRSEL_RT_MEASUREMENT` once to open its report before entry; this is a
+  measurement-tool output and is outside semantic RunConfig and recorded tapes.
+  Rust callers pass an admitted file to `RunCtx::set_measurement_output(file)`.
+
+Production exports no Stats function, records no backing-call/saturation counts
+and never scans live storage at exit. Its observation says `audit unavailable`.
+Its allocation metadata still tracks free-list availability and pool retention
+needed by the allocator. `tests/it/abi.rs` separately builds the production archive
+and checks private/exported symbols for absence of measurement, backing counters,
+Stats and exit-scan code, and bytes for absence of the measurement environment
+name/report header. Runtime Rust tests enable `diagnostic` only as a dev feature.
+
+The driver selects archives with `RuntimeBuild { diagnostic, system_allocator,
+measurement }` and includes that choice in the content key. Linking a measurement
+archive also sets LLVM's `EmitInputs.measurement`: every inline count edge gets
+its hook once, including shared/immortal edges, and a spent glue budget lets the
+runtime record the dying edge. A measurement archive keeps the compiled fast
+paths' dup bound and inline-free flag zero and its pages null, so every dup,
+allocation and free still reaches the runtime and is counted there; detach remains a
+runtime call. The optional hooks are declared in `include/hirsel_rt_measurement.h`,
+separately from the production runtime ABI. No uniqueness read is an event.
+A timing object has no measurement imports; before/after
+SHA-256 for the unchanged PROV-1 copied-prefix corpus object at this cutover is
+`3ea17b189286b4a93483fc68e89f03f149528dd0bb61f562ac20f387dd5f5f28`.
+
+The exit report is newline-delimited text, starting `hirsel-measurement 1`.
+There is one `class CAPACITY ALLOCATIONS FREES` row per `CLASS_SIZES` entry,
+then `class large ...` for capacities outside that schedule. Bins are logical
+payload capacities, independent of allocator metadata/storage kind/alignment.
+They count physical block allocations/frees, including sequence relocation;
+reset/reuse retains the same allocation. The remaining rows are `KEY VALUE`:
+
+- `count_increments`, `count_decrements`: holder-operation attempts, including
+  static/immortal no-ops, final-credit drops and reset's consumed donor credit;
+- `cow_detaches`, `deep_copies`: shallow-detach/deep-copy calls; `copied_blocks`
+  and `copied_bytes`: blocks and capacity bytes copied by those walks;
+- `reuse_hits`, `reuse_misses`: non-null token reuse and null-token allocation;
+- `live_bytes`, `peak_live_bytes`: live/draining/raw heap payload capacity bytes;
+- `region_high_water_bytes`, `region_pool_high_water_bytes`: simultaneously lent
+  and idle segment bytes, including segment headers/unused capacity; and
+- `arena_high_water_bytes unavailable`: native arenas are dependency-owned.
+
+The report snapshots before forced task-exit reclamation, so an unbalanced run
+retains its live-byte evidence. A bad report path refuses launch before entry;
+a write failure terminates environmentally. The output file is consumed once,
+so the launcher's task exit followed by context destruction cannot overwrite it.
+
+`tests/it/measurement.rs` hand-computes all counters on a shared pair, shallow and
+sharing-preserving deep copies, reset/reuse and nested regions. The native tests
+run every named conformance smoke case through all four allocator/measurement
+choices, compare binarytrees C runtime-harness output on both targets, verify
+inline count telemetry, compare the production object's hash with ordinary
+emission, and prove that a leaked block fails the diagnostic observer while its
+freed twin passes. The source benchmark's box-pattern access remains spec #98;
+its existing source/expectations are untouched.
+
+Runtime replay and fake Test trees reconstruct their own local file identities
+from initial entries and ordered publications. Open retains an identity, narrow
+compares it with the currently resolved entry and transfers or closes it, and
+replacement never reuses an identity even for identical bytes. Atomic appends
+preserve the prepared identity and commit moves it. Exact replay validates these
+changes before publishing state; identities are not host inode values or new
+tape fields. Disk narrowing continues to compare device/inode metadata.
+
+Compiled capacity queries read the existing repr(C) metadata through the C
+header's read-only offsets: small headers identify their 64 KiB slab's pool,
+large headers retain a prefix pointer before the header, and immortal headers
+retain an inline Extent. Offset assertions in alloc.rs and the hirsel-lir
+header-transcription test bind these loads to both allocator feature builds.
+
+Measurement launches also write JSON source counts beside the existing text totals
+(`<HIRSEL_RT_MEASUREMENT>.sites.json`); `HIRSEL_RT_PROFILE` selects an explicit JSON
+path. Both destinations are pinned before entry. Schema 1 contains `totals` and a
+`sites` array. Each site has `id` (u64), `package`, `file`, one-based `line` and Unicode
+scalar `column`, `function`, initiating LIR `operation`, and `counts` keyed by counter
+kind. Kinds: allocations, frees, count_increments, count_decrements, cow_detaches,
+deep_copies, copied_blocks, copied_bytes, reuse_hits and reuse_misses. Absent kinds are
+zero. Alloc/free totals sum physical class bins; copied_bytes retains physical capacity
+units. Every total equals the sum of site counts. Site 0 denotes runtime work with no
+emitted source scope; gauges remain in the text report because peaks do not sum.
+
+The object embeds each site's immutable metadata; measurement-only enter/leave hooks
+scope the site over emitted calls. Runtime walks and generated release glue inherit
+that site, while callbacks can install their own and restore it on return. The existing
+`Counters` API and text format are unchanged. Production builds cfg-elide all source
+accounting, output parsing and hooks along with the original measurement code.
+
+`io_net_script.rs` independently implements the frozen scripted-peer state machine.
+Its socket-convention vectors and script tests live in `tests/it/net_script.rs`;
+the tests use the public NetProvider seam. Host policy and stream branding belong to the typed Io
+adapter; the script provider owns peer queues and byte state and never opens sockets.
+Unbounded unanswered connects and stalled reads produce a distinct Blocked signal.
+A `Fails(f)` peer fails every handshake with `Tls(f)` (State closes the taken stream as
+for any handshake failure), and a `Truncate()` step reads as `Tls(Truncated())` on a
+secured stream and as end of stream otherwise.
+
+`test.net` decodes the nested core peer values through `test_net_abi.rs` and creates
+an isolated ScriptNet in State, with peer-derived rules. Every request and result
+uses tape v4; replay reconstructs script worlds and checks their outcomes before
+publishing state. `RealIo` and `SimIo::set_net_script` configure the root script world
+before entry, independently of explicit `set_net_rules` policy.
+
+`io_net_script::ScriptIo` is a cloneable socket-free adapter for driver-owned
+oracles. It shares State's network policy and ScriptNet worlds with native
+execution, accepts typed network requests/projection/close, and never calls
+production allocation/count/drop helpers or acquires host network authority.

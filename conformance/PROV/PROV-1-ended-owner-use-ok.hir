@@ -1,0 +1,30 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// "A brand ends when p ... leaves scope." The owner is bound and outlives the
+// use, a value used within its temporary owner's statement is still branded,
+// and a value whose owner has ended is dropped.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn probe() -> () {
+  let owner = fresh()
+  let value = mk(owner)
+  let other = take value
+}
+
+fn within() -> () {
+  match mk(fresh()) {
+    Some(x) => (),
+    None => (),
+  }
+}
+
+fn dropped() -> () {
+  let value = mk(fresh())
+}

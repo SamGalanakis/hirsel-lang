@@ -1,0 +1,29 @@
+// rule: FAIL-2
+// expect: run
+// stdout: ok
+// "task.isolate ... -> Result[R, Failure]" wraps success.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let status: Result[u8, Failure] = task.isolate(
+    tasks,
+    fn() -> u8 {
+      7
+    }
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if status == Ok(7) {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

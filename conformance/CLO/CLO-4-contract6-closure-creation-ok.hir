@@ -1,0 +1,25 @@
+// rule: CLO-4
+// expect: accept
+fn count(mut position: u64) -> Option[u64] {
+  if position < 3 {
+    let value = position
+    position += 1
+    Some(value)
+  } else {
+    None
+  }
+}
+
+fn first() -> u64 {
+  let wrap: @captures(x) fn(take x: Iter[u64], take y: Iter[u64]) -> Iter[u64] = fn(
+    take x: Iter[u64],
+    take y: Iter[u64]
+  ) -> Iter[u64] {
+    x
+  }
+  let mut it = wrap(iter.from(0u64, count), iter.from(5u64, count))
+  match iter.next(mut it) {
+    Some(v) => v + 1,
+    None => 0,
+  }
+}

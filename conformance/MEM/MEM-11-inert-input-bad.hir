@@ -1,0 +1,6 @@
+// rule: MEM-11
+// expect: reject MEM-11 at line 5
+// "for T inert and holding no resources".
+fn freeze(take x: unique Dir) -> Shared[Dir] {
+  shared.freeze(take x)
+}

@@ -1,0 +1,13 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 11
+// The first argument fixes `T` at `StrPos of text`, so a position of `other`
+// cannot reach the list through `put`'s generic parameter.
+fn put[T](mut xs: List[T], take x: T) -> () {
+  list.push(mut xs, take x)
+}
+
+fn gather(text: String, other: String, q: StrPos of other) -> u64 {
+  let mut positions: List[StrPos of text] = []
+  put(mut positions, q)
+  list.len(positions)
+}

@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 8
+resource type Cell {
+  value: u64,
+}
+
+fn probe(a: Map[u64, Cell], b: Map[u64, Cell]) -> bool {
+  std@1/map.same_entries(a, b)
+}

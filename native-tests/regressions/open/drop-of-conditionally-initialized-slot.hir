@@ -1,0 +1,28 @@
+// native/ready/cleanup: a drop of conditionally initialized SlotId(N)
+// hirsel run --native: native ready in width: Cleanup(Unsupported("a drop of conditionally initialized SlotId(9)"))
+fn width(s: String, n: u64) -> u64 {
+  string.byte_len(
+    if n == 0 {
+      s
+    } else {
+      "other"
+    }
+  )
+}
+
+fn both() -> u64 {
+  let s: String = "ab"
+  width(s, 0) + width(s, 1)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if both() == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

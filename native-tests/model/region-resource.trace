@@ -1,0 +1,12 @@
+rc-trace v1
+max 16
+# Closing a region schedules the cleanup of a resource it held: the outgoing credit is
+# released once, the resource dies, and its finalizer runs from the dead worklist.
+alloc r1 0 fin
+region-open g1
+region-alloc g1 l1 1
+region-store l1 0 r1
+local-drop l1
+region-close g1
+finalize ok
+drain

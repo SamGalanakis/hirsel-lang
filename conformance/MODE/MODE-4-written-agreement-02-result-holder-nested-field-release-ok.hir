@@ -1,0 +1,27 @@
+// rule: MODE-4
+// expect: accept
+// Regression from operand/same-type; TIR/LoanConflict.
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+type Nest {
+  pair: Pair,
+  other: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes, mut y: Bytes, c: bool) {
+  let mut slot = Nest(pair: Pair(left: view(x), right: view(y)), other: b"other")
+  bump(mut y)
+  slot.pair.right = b"new"
+  ()
+}

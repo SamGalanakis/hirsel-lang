@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+pub fn read(n: Net, mut s: Stream of n, mut buf: Inline[u8, 8]) {
+  let _ = net.read_into(n, mut s, mut buf)
+}

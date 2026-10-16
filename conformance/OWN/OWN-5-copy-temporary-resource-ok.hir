@@ -1,0 +1,15 @@
+// rule: OWN-5
+// expect: accept
+// "Resources (Senders included) ... Moved or borrowed only."
+resource type Trace {
+  text: String,
+}
+drop(x) {}
+
+fn keep(take x: Trace) -> () {
+  ()
+}
+
+fn example() -> () {
+  keep(Trace(text: "fresh"))
+}

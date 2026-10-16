@@ -1,0 +1,7 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 6
+// "no block may be constructed whose destination may be the counted heap"; "no ... deep copy not proven unnecessary".
+@noalloc
+fn make() -> String {
+  "heap"
+}

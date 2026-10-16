@@ -1,0 +1,10 @@
+// rule: MEM-13
+// expect: reject MEM-13 at line 8
+// "variant can never be replaced, except by whole assignment of its container".
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn replace(mut xs: List[Packed[Choice]]) -> () {
+  for x in mut xs {
+    x = Large(value: 1, extra: 2)
+  }
+}

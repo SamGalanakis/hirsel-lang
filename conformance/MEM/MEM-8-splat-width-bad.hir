@@ -1,0 +1,5 @@
+// rule: MEM-8
+// expect: reject MEM-8 at line 3
+fn example() -> Simd[u32, 0] {
+  simd.splat(1)
+}

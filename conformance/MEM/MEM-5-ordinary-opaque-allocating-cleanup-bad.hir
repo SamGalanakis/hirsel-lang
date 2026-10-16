@@ -1,0 +1,24 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 24
+pub opaque resource type Domain: inert uses {} {
+  n: u64,
+}
+drop(self) {
+  let allocated: List[u64] = copy_to(heap, [self.n])
+}
+
+type Dto {
+  n: u64,
+}
+
+fn from_dto(x: Dto) -> Option[Domain] {
+  let n: u64 = x.n
+  if n <= 100 {
+    Some(Domain(n: n))
+  } else {
+    None
+  }
+}
+
+@noalloc
+fn discard(take x: Domain) {}

@@ -1,0 +1,27 @@
+// rule: CONC-6
+// expect: run
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+@noalloc
+fn check(n: bool) -> ()
+  requires n {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let (sender, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+  let mut s = take sender
+  let mut r = take receiver
+  check(channel.send(tasks, mut s, 7) == Ok(()))
+  discard(take s)
+  check(channel.receive(tasks, mut r) == Ok(7))
+  check(channel.receive(tasks, mut r) == Error(Closed))
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

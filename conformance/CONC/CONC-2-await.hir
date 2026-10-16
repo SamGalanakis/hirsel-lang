@@ -1,0 +1,22 @@
+// rule: CONC-2
+// expect: run
+// "Every task handle is awaited or explicitly detached"; detach remains scoped.
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  task.scope(
+    io.tasks(rt) ? Grant,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() -> u32 {
+          7
+        }
+      )
+      let _: u32 = task.await(s, take h)
+    }
+  )
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

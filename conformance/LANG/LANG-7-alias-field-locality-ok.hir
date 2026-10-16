@@ -1,0 +1,8 @@
+// rule: LANG-7
+// expect: accept
+// An alias without locality may type a field.
+type Lent = Bytes
+
+type Holder {
+  value: Lent,
+}

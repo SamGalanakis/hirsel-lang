@@ -1,0 +1,5 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 4
+fn probe() {
+  let r = 0..2
+}

@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/mode; TIR/TypeMismatch/closure capture.
+fn keep(take action: fn() -> () uses {}) -> () {
+  ()
+}
+
+fn example(take x: sendable Bytes) -> () {
+  keep(
+    fn() {
+      let _ = x
+    }
+  )
+}

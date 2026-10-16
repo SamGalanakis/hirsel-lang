@@ -1,0 +1,13 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 12
+// spec: #62
+// "A value in a cannot outlive a." A taken value is the callee's to keep, and
+// a take parameter declared without a placement promises nothing about the
+// arena, so the callee could hand the value back as a heap result.
+fn keep(take y: Bytes) -> Bytes {
+  y
+}
+
+fn launder(a: Arena, take x: Bytes in a) -> Bytes {
+  keep(take x)
+}

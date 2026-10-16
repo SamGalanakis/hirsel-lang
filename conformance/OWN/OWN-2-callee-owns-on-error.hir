@@ -1,0 +1,28 @@
+// rule: OWN-2
+// expect: run
+// stdout: dropped
+// stdout: returned
+// "On error ... Callee owns it."
+type Problem = Stop()
+
+resource type Token {
+  out: Stdout,
+}
+drop(token) {
+  let _ = out.print(token.out, "dropped\n")
+}
+
+fn consume(take token: Token) -> Result[(), Problem] {
+  Error(Stop)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let token = Token(out: io.stdout(rt) ? Grant)
+  let _ = consume(take token)
+  out.print(io.stdout(rt) ? Grant, "returned\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

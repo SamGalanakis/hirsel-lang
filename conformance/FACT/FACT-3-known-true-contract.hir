@@ -1,0 +1,13 @@
+// rule: FACT-3
+// expect: run
+// A proven true check may be removed; "that changes cost only".
+@noalloc
+fn id(x: u32) -> u32
+  ensures result == x {
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = id(4)
+  Ok(())
+}

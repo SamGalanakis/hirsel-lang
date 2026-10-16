@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 6
+fn example(a: String, b: String) -> () {
+  match string.position(a, 0) {
+    Some(position) => {
+      string.byte_offset(b, position);
+    },
+    None() => (),
+  }
+}

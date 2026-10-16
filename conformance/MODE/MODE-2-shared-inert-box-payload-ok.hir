@@ -1,0 +1,5 @@
+// rule: MODE-2
+// expect: accept
+fn probe(s: unique Shared[Bytes]) {
+  let built: box unique Shared[Bytes] = box copy s
+}

@@ -1,0 +1,28 @@
+// rule: LANG-2
+// expect: run
+// stdout: ok
+fn outer[T: plain](x: T) -> T {
+  fn inner[U](take y: U) -> U {
+    y
+  }
+  inner(x)
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(7u8) == 7u8 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

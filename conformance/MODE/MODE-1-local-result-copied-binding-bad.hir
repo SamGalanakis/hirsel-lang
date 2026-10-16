@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// The copy of a borrowed value is this function's own binding and is as
+// local as the value it copied. A result that lends from the binding would
+// outlive it, whatever the binding was copied from.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn keep(x: Bytes) -> Bytes in x {
+  let y = copy x
+  view(y)
+}

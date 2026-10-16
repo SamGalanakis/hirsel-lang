@@ -1,0 +1,17 @@
+// rule: SEM-1
+// expect: run
+// `f` is a hex digit, so a hex literal ending in `f32` or `f64` has no float
+// suffix. Only `u` or `i` can start a hex literal's suffix (grammar int-suffix).
+pub fn main(t: Test) -> Result[(), ()] {
+  let a: u64 = 0x1f32
+  let b: u64 = 0xf64
+  let c: u16 = 0xf32u16
+  let d = 0xfu8
+  let e = 0x1_f64i32
+  test.check(t, a == 7986)
+  test.check(t, b == 3940)
+  test.check(t, c == 3890)
+  test.check(t, d == 15)
+  test.check(t, e == 8036)
+  Ok(())
+}

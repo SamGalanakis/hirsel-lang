@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: accept
+pub opaque type KeyOnly: key uses {}
+
+fn equal(x: KeyOnly) -> bool {
+  x == x
+}

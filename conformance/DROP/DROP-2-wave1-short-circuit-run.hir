@@ -1,0 +1,60 @@
+// rule: DROP-2
+// expect: run
+// stdout: A
+// stdout: A
+// stdout: A
+// stdout: B
+// stdout: A
+// stdout: ok
+resource type Item {
+  key: u64,
+  label: String,
+  out: Stdout,
+}
+@noalloc drop(x) {
+  out.print(x.out, x.label);
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  {
+    let items: List[Item] = [
+      Item(key: 1, label: "A\n", out: out),
+      Item(key: 2, label: "B\n", out: out)
+    ]
+    failure.check(
+      std@1/list.find(
+        items,
+        fn(x: Item) -> bool uses {out} {
+          out.print(out, x.label)
+          true
+        }
+      ) == Some(0),
+      Bounds()
+    )
+    failure.check(
+      !std@1/list.all(
+        items,
+        fn(x: Item) -> bool uses {out} {
+          out.print(out, x.label)
+          false
+        }
+      ),
+      Bounds()
+    )
+    failure.check(
+      std@1/list.any(
+        items,
+        fn(x: Item) -> bool uses {out} {
+          out.print(out, x.label)
+          true
+        }
+      ),
+      Bounds()
+    )
+  }
+  out.print(out, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

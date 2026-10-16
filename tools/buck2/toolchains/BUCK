@@ -1,0 +1,83 @@
+load("@prelude//toolchains:cxx.bzl", "cxx_tools_info_toolchain")
+load("@prelude//toolchains:genrule.bzl", "system_genrule_toolchain")
+load("@prelude//toolchains:python.bzl", "system_python_bootstrap_toolchain")
+load("@prelude//toolchains:remote_test_execution.bzl", "remote_test_execution_toolchain")
+load("@prelude//tests:test_toolchain.bzl", "noop_test_toolchain")
+load(":llvm.bzl", "llvm_cxx_tools", "llvm_tree", "source_files")
+load(":rust.bzl", "rust_toolchain")
+
+# Both trees are ignored local state that tools/buck2/bootstrap.py installs.
+rust_toolchain(
+    name = "rust",
+    srcs = {p.removeprefix("rust-files/"): p for p in glob(["rust-files/**"])},
+    # The AArch64 runtime archive is the one cross-compiled target.
+    target_triple = select({
+        "prelude//cpu:arm64": "aarch64-unknown-linux-gnu",
+        "DEFAULT": "x86_64-unknown-linux-gnu",
+    }),
+    visibility = ["PUBLIC"],
+)
+
+# Everything clang and lld need to run: the C toolchain and every link.
+llvm_tree(
+    name = "clang",
+    srcs = {p.removeprefix("llvm-files/"): p for p in glob([
+        "llvm-files/bin/clang",
+        "llvm-files/bin/clang++",
+        "llvm-files/bin/hirsel-clang",
+        "llvm-files/bin/hirsel-clang++",
+        "llvm-files/bin/hirsel-llvm-ar",
+        "llvm-files/bin/clang-21",
+        "llvm-files/bin/ld.lld",
+        "llvm-files/bin/lld",
+        "llvm-files/bin/llvm-ar",
+        "llvm-files/lib/*.so.*",
+        "llvm-files/lib/clang/**",
+    ])},
+    visibility = ["PUBLIC"],
+)
+
+# The whole pinned tree, as tools and tests that name LLVM_SYS_211_PREFIX see it.
+llvm_tree(
+    name = "llvm",
+    srcs = {p.removeprefix("llvm-files/"): p for p in glob(["llvm-files/**"], exclude = ["llvm-files/.hirsel-llvm.json"])},
+    visibility = ["PUBLIC"],
+)
+
+# The shared libraries first-party binaries load (libLLVM and the libraries
+# bundled for it), for tests on the pool to carry at their source paths.
+source_files(
+    name = "llvm-libraries",
+    srcs = glob(["llvm-files/lib/*.so*"]),
+    visibility = ["PUBLIC"],
+)
+
+llvm_cxx_tools(name = "cxx_tools", tree = ":clang")
+
+cxx_tools_info_toolchain(
+    name = "cxx",
+    cxx_tools_info = ":cxx_tools",
+    visibility = ["PUBLIC"],
+)
+
+# The prelude's Rust rules name this toolchain too.
+alias(name = "cxx_no_default_deps", actual = ":cxx", visibility = ["PUBLIC"])
+
+system_python_bootstrap_toolchain(name = "python_bootstrap", interpreter = "/usr/bin/python3", visibility = ["PUBLIC"])
+remote_test_execution_toolchain(name = "remote_test_execution", visibility = ["PUBLIC"])
+noop_test_toolchain(name = "test", visibility = ["PUBLIC"])
+
+# libLLVM and its C headers, for llvm-sys (tools/buck2/fixups/llvm-sys).
+prebuilt_cxx_library(
+    name = "libllvm",
+    shared_lib = "llvm-files/lib/libLLVM.so.21.1",
+    soname = "libLLVM.so.21.1",
+    header_dirs = ["llvm-files/include"],
+    preferred_linkage = "shared",
+    visibility = ["PUBLIC"],
+)
+
+system_genrule_toolchain(
+    name = "genrule",
+    visibility = ["PUBLIC"],
+)

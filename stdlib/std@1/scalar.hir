@@ -1,0 +1,4 @@
+// Shared ordinary std error types.
+pub type FormatError = BufferTooSmall()
+
+pub type ParseError = Invalid | OutOfRange

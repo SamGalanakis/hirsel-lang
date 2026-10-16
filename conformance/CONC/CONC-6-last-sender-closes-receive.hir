@@ -1,0 +1,31 @@
+// rule: CONC-6
+// expect: run
+// "dropping the last Sender ends receiving once the buffer drains".
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+@noalloc
+fn closed(value: bool) -> ()
+  requires value {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let (s, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+  let mut r = take receiver
+  discard(take s)
+  closed(
+    match channel.receive(tasks, mut r) {
+      Ok(value) => false,
+      Error(Closed) => true,
+      Error(Canceled(cause)) => false,
+    }
+  )
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

@@ -1,0 +1,17 @@
+// rule: GEN-1
+// expect: accept
+pub opaque type S: copyable uses {} {
+  s: String,
+}
+
+fn dup(x: S) -> (S, S) in x {
+  (x, x)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a = S(s: "hello\n")
+  let (b, c) = dup(a)
+  let _ = out.print(io.stdout(rt)?, b.s)
+  let _ = out.print(io.stdout(rt)?, c.s)
+  Ok(())
+}

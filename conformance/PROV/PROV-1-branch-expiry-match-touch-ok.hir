@@ -1,0 +1,28 @@
+// rule: PROV-1
+// expect: accept
+type R {
+  n: u64,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) -> () {}
+
+fn touch(mut r: R) -> () {
+  r.n = 3
+}
+
+fn probe(take r0: R, c: bool) -> () {
+  let mut r = r0
+  let p = make(r)
+  let mut other = R(n: 0u64)
+  match c {
+    true => {
+      touch(mut other)
+    },
+    false => {},
+  }
+  inspect(r, p)
+}

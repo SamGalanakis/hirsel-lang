@@ -1,0 +1,123 @@
+// rule: CLO-4
+// expect: run
+// stdout: adapted
+// Source adapters over concrete records and fresh callbacks keep their
+// selected creation envelopes.
+type Mapped[T, U] {
+  inner: Iter[T],
+  f: fn(T) -> U,
+}
+
+type Filtered[T] {
+  inner: Iter[T],
+  keep: fn(T) -> bool,
+}
+
+type Taken[T] {
+  inner: Iter[T],
+  left: u64,
+}
+
+type Zipped[T, U] {
+  a: Iter[T],
+  b: Iter[U],
+}
+
+@captures(it, f)
+fn map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] {
+  iter.from(
+    take Mapped(inner: take it, f: take f),
+    fn(mut s: Mapped[T, U]) -> Option[U] {
+      match iter.next(mut s.inner) {
+        Some(x) => Some(s.f(x)),
+        None => None,
+      }
+    }
+  )
+}
+
+@captures(it, keep)
+fn filter[T](take it: Iter[T], take keep: fn(T) -> bool) -> Iter[T] {
+  iter.from(
+    take Filtered(inner: take it, keep: take keep),
+    fn(mut s: Filtered[T]) -> Option[T] {
+      let mut found: Option[T] = None
+      let mut done: bool = false
+      while !done {
+        match iter.next(mut s.inner) {
+          Some(x) => if s.keep(x) {
+            found = Some(x)
+            done = true
+          },
+          None => {
+            done = true
+          },
+        }
+      }
+      found
+    }
+  )
+}
+
+@captures(it)
+fn take_n[T](take it: Iter[T], limit: u64) -> Iter[T] {
+  iter.from(
+    take Taken(inner: take it, left: limit),
+    fn(mut s: Taken[T]) -> Option[T] {
+      if s.left == 0 {
+        None
+      } else {
+        s.left -= 1
+        iter.next(mut s.inner)
+      }
+    }
+  )
+}
+
+@captures(a, b)
+fn zip[T, U](take a: Iter[T], take b: Iter[U]) -> Iter[(T, U)] {
+  iter.from(
+    take Zipped(a: take a, b: take b),
+    fn(mut s: Zipped[T, U]) -> Option[(T, U)] {
+      match iter.next(mut s.a) {
+        Some(x) => match iter.next(mut s.b) {
+          Some(y) => Some((x, y)),
+          None => None,
+        },
+        None => None,
+      }
+    }
+  )
+}
+
+fn count(mut position: u64) -> Option[u64] {
+  if position < 10 {
+    let value = position
+    position += 1
+    Some(value)
+  } else {
+    None
+  }
+}
+
+fn double(x: u64) -> u64 {
+  x * 2
+}
+
+fn odd(x: u64) -> bool {
+  x % 2 == 1
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let evens = map(iter.from(0u64, count), double)
+  let odds = filter(iter.from(0u64, count), odd)
+  let mut pairs = take_n(zip(take evens, take odds), 3)
+  let mut sum: u64 = 0
+  for p in mut pairs {
+    let (e, o) = p
+    sum += e + o
+  }
+  failure.check(sum == 15, Bounds())
+  let _ = out.print(io.stdout(rt)?, "adapted\n")
+  Ok(())
+}

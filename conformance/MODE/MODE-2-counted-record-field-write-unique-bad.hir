@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 12
+type R {
+  x: String,
+}
+
+fn need(take r: unique R) {}
+
+fn example(take initial: unique R, take shared: String) {
+  let mut r = take initial
+  r.x = take shared
+  need(take r)
+}

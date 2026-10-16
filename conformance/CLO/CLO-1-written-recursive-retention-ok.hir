@@ -1,0 +1,14 @@
+// rule: CLO-1
+// expect: accept
+type Chain {
+  next: Option[box Chain],
+  f: fn() -> (),
+}
+
+fn probe(take f: sendable fn() -> (), again: bool) {
+  let mut n: Chain = Chain(next: None, f: copy f)
+  while again {
+    n = Chain(next: Some(box copy n), f: copy f)
+  }
+  n.f()
+}

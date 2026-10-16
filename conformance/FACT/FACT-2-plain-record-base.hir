@@ -1,0 +1,14 @@
+// rule: FACT-2
+// expect: run
+// A distinct fact may use "other plain base[s]".
+type Pair {
+  low: u8,
+  high: u8,
+}
+
+distinct type Interval(v: Pair) where v.low <= v.high
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = Interval(Pair(low: 1, high: 2))
+  Ok(())
+}

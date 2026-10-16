@@ -1,0 +1,10 @@
+// rule: GEN-3
+// expect: accept
+// Shows "shape(T) describes a type’s fields and variants as a value."
+type Choice = First | Last(u32)
+
+fn example() -> () {
+  let _ = shape(Choice)
+  ()
+}
+// Reserved for future compile-time reflection: spec v21 "Reserved for future compile-time features".

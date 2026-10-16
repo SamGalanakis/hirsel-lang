@@ -1,0 +1,16 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 15
+// "A copy of p keeps p’s identity only until the copy’s first mutation or reassignment."
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn change(mut d: Dir) -> () {
+  ()
+}
+
+fn example(d: Dir, other: Dir, value: File of d) -> () {
+  let mut local_dir = d
+  change(mut local_dir)
+  inspect(local_dir, value)
+}

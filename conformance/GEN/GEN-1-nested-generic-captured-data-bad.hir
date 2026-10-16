@@ -1,0 +1,8 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 5
+fn outer[T: copyable + inert](x: T) -> () {
+  fn inner[U: data](take y: U) -> () {
+    let compared = x == x
+  }
+  ()
+}

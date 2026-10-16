@@ -1,0 +1,10 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// A closure literal's header follows the same rule as a function type
+// (#72). Its `in env` result would drop the parameter x.
+fn example(y: Bytes) -> () {
+  let f = fn(x: Bytes) -> Bytes in env {
+    copy y
+  }
+  ()
+}

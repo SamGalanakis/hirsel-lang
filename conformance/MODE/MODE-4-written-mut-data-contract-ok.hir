@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: accept
+fn number(x: sendable u64) -> sendable u64 {
+  x
+}
+
+fn replace(mut x: sendable Bytes, take y: sendable Bytes) {
+  x = y
+}
+
+fn good() {
+  let mut x: sendable Bytes = b"a"
+  replace(mut x, b"b")
+}

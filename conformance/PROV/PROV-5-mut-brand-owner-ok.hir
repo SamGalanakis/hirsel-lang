@@ -1,0 +1,16 @@
+// rule: PROV-5
+// expect: accept
+// "A field named by a sibling’s brand is neither ... passed mut except together with the whole record."
+type Log {
+  dir: Dir,
+  file: File of .dir,
+}
+
+fn change(mut d: Dir) -> () {
+  ()
+}
+
+fn example(mut log: Log) -> () {
+  let mut copied = log.dir
+  change(mut copied)
+}

@@ -1,0 +1,35 @@
+// rule: PROV-1
+// expect: accept
+type R {
+  n: u64,
+  other: u64,
+}
+
+fn bump(mut n: u64) {
+  n = 3
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn make_n(r: R) -> Option[u8 of r.n] {
+  None
+}
+
+fn make_other(r: R) -> Option[u8 of r.other] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) {}
+
+fn inspect_n(r: R, p: Option[u8 of r.n]) {}
+
+fn inspect_other(r: R, p: Option[u8 of r.other]) {}
+
+fn probe(xs: List[R]) {
+  let mut r = xs[0]
+  r.n = 3
+  let q = make_other(r)
+  inspect_other(r, q)
+}

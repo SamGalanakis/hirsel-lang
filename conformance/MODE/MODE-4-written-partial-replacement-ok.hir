@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: accept
+type R {
+  payload: sendable Bytes,
+}
+
+fn sink(x: sendable Bytes) {}
+
+fn probe(take r: R) {
+  let mut held: R = take r
+  held.payload = b"new"
+  sink(held.payload)
+}

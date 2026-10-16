@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 7
+// A tuple part written `sendable fn` holds only a function value that may
+// cross tasks, as a parameter of that type does.
+fn probe(take f: fn() -> u64) -> u64 {
+  let n = 0u64
+  let pair: (sendable fn() -> u64, u64) = (f, n)
+  let (g, k) = pair
+  g() + k
+}

@@ -1,0 +1,16 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 15
+// The generic flat tuple form keeps the local root's locality as well.
+type R[T] {
+  part: unique T,
+}
+
+fn probe[T: flat](take r: R[T] in r) {
+  let built = (
+    {
+      r
+    }.part,
+    1u8
+  )
+  let frozen = shared.freeze(take built)
+}

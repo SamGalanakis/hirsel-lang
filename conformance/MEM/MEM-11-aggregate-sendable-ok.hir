@@ -1,0 +1,11 @@
+// rule: MEM-11
+// expect: accept
+type R {
+  items: List[u64],
+}
+
+fn cross[T: sendable](take x: T) {}
+
+fn probe() {
+  cross(R(items: [1, 2]))
+}

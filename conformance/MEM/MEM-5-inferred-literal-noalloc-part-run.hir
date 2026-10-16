@@ -1,0 +1,65 @@
+// rule: MEM-5
+// expect: run
+// stdout: ok
+// "The allocation contract is part of closure and dictionary types." An
+// inferred closure literal carries the `@noalloc` evidence its body proves,
+// as it carries its `uses` evidence (#58), so it is received by a written
+// `@noalloc` part at any depth, through a called closure into a list
+// element, into a tuple binding, and through an unannotated alias.
+@noalloc
+fn seven() -> u64 {
+  7
+}
+
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+fn listed() -> u64 {
+  let l: List[(@noalloc fn() -> u64 uses {}, u64)] = [
+    fn() {
+      (
+        fn() {
+          seven()
+        },
+        0u64
+      )
+    }()
+  ]
+  let (f, _) = l[0]
+  invoke(f)
+}
+
+fn bound() -> u64 {
+  let pair: (@noalloc fn() -> u64 uses {}, u64) = fn() {
+    (
+      fn() {
+        seven()
+      },
+      1u64
+    )
+  }()
+  let (f, n) = pair
+  invoke(f) + n
+}
+
+fn aliased() -> u64 {
+  let f = fn() {
+    seven()
+  }
+  let g = f
+  invoke(g)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if listed() + bound() + aliased() == 22 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

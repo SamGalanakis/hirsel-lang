@@ -1,0 +1,16 @@
+// rule: PROV-5
+// expect: reject PROV-1 at line 15
+// "Destructuring it rebrands the field to the new local bound for f."
+type Log {
+  dir: Dir,
+  file: File of .dir,
+}
+
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn example(take log: Log, other: Dir) -> () {
+  let Log(dir: d, file: value) = take log
+  inspect(other, value)
+}

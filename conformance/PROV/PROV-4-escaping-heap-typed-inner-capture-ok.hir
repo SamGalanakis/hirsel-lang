@@ -1,0 +1,14 @@
+// rule: PROV-4
+// expect: accept
+// The heap twin may be captured by the returned closure.
+fn probe() -> fn() -> u64 {
+  let x: String in heap = "x"
+  let pair = (x, 1u8)
+  let inner: fn() -> u64 = fn() {
+    let (s, n) = pair
+    string.byte_len(s)
+  }
+  fn() {
+    inner()
+  }
+}

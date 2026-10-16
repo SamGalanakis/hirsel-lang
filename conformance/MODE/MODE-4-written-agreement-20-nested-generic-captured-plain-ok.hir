@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+// Regression from parameter/passing; TIR/TypeMismatch/closure parameter.
+fn outer[T: plain](x: T) -> () {
+  fn inner[U](mut y: U) -> () {}
+  ()
+}

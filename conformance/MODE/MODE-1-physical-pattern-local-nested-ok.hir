@@ -1,0 +1,23 @@
+// rule: MODE-1
+// expect: accept
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+type N {
+  p: Pair,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {}
+
+fn probe(mut x: Bytes, mut y: Bytes) {
+  let n = N(p: Pair(left: view(x), right: view(y)))
+  let mut N(p: Pair(left: a, right: b)) = take n
+  a = b"fresh"
+  bump(mut x)
+}

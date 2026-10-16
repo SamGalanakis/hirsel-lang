@@ -1,0 +1,13 @@
+// rule: MODE-5
+// expect: accept
+// "Capturing a non-sendable value makes it non-sendable."
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(take x: u64) -> () {
+  let action: sendable fn() -> u64 uses {} = fn() {
+    x
+  }
+  cross(take action)
+}

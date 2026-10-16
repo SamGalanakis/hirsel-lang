@@ -1,0 +1,8 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn probe(take f: sendable fn() -> u64) -> u64 {
+  let agree_held_144: List[(List[sendable fn() -> u64], u64)] = [([f], 0u64)]
+  let (jobs, _) = agree_held_144[0]
+  jobs[0]()
+}

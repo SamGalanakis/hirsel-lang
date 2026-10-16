@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+// "accepts only unique arguments"
+fn require_unique(mut x: unique Bytes) -> () {
+  x = b"new"
+}
+
+fn example(mut x: Bytes) -> () {
+  require_unique(mut x)
+}

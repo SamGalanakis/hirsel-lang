@@ -1,0 +1,14 @@
+// rule: LANG-7
+// expect: fail SEM-1 at line 7
+// stdout: serving
+// A diverging self-tail call loops. Ten thousand restarts, far past the call depth
+// limit, reuse one frame, and the only exit is the failure edge once n reaches zero.
+fn serve(n: u64) -> Never {
+  let _ = 10u64 / n
+  serve(n - 1u64)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, "serving\n")
+  serve(10000u64)
+}

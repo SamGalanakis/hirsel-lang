@@ -1,0 +1,17 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 16
+// spec: #60
+// A mut parameter is handed back to its caller, so the operation that ends a
+// brand it carries has no valid continuation.
+type Rec {
+  a: u64,
+  b: u64,
+}
+
+fn change(mut r: Rec) -> () {
+  ()
+}
+
+fn example(mut r: Rec, mut other: Rec of r) -> () {
+  change(mut r)
+}

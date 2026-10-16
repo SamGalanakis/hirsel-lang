@@ -1,0 +1,41 @@
+// rule: PROV-1
+// expect: accept
+// A binding introduced before a loop and replaced, field-written or
+// reassigned inside it continues across the loop, so a brand made from it
+// after the loop names its current incarnation (#78).
+type R {
+  k: u64,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) {}
+
+fn replaced(take r0: R, c: bool) {
+  let mut r = take r0
+  while c {
+    r = R(k: 1u64)
+  }
+  inspect(r, make(r))
+}
+
+fn written(take r0: R, c: bool) {
+  let mut r = take r0
+  while c {
+    r.k = 1u64
+  }
+  let p = make(r)
+  inspect(r, p)
+}
+
+fn reassigned(take r0: R, c: bool) {
+  let mut r = take r0
+  let mut k = c
+  while k {
+    r = r
+    k = false
+  }
+  inspect(r, make(r))
+}

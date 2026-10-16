@@ -1,0 +1,13 @@
+// rule: GEN-1
+// expect: accept
+type Wrap[T] {
+  value: T,
+}
+
+type Indirect[T] {
+  value: Wrap[T],
+}
+
+type Datum: data {
+  value: Indirect[u32],
+}

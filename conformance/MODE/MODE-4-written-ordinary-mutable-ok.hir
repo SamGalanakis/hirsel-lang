@@ -1,0 +1,6 @@
+// rule: MODE-4
+// expect: accept
+fn good(take old: Bytes) {
+  let mut x: Bytes = b"a"
+  x = take old
+}

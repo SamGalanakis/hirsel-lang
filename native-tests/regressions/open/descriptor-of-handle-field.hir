@@ -1,0 +1,22 @@
+// native/llvm/emission: invalid Ready unit: no runtime descriptor for layout N: Malformed("a drop program shorter than its fields' con
+// under x86_64/regions/elide/reuse/llvm-O2/whole/diagnostic: native emission in main: standalone@0::main: invalid Ready unit: no runtime descriptor for layout 14: Malformed("a drop program shorter than its fields' contributions")
+type Output {
+  port: Stdout,
+}
+
+@noalloc
+fn port(rt: Stdout) -> Output {
+  Output(port: rt)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let f = fn() uses {Io} {
+    let ports = port(grant_stdout)
+    out.print(ports.port, "ok\n")
+  }
+  let _ = fn() {
+    f
+  }()()
+  Ok(())
+}

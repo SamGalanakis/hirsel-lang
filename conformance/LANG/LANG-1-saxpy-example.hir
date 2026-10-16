@@ -1,0 +1,9 @@
+// rule: LANG-1
+// expect: accept
+// Shows "No methods, no use, no conditional operator, no test sublanguage."
+@noalloc
+pub fn saxpy[n: size](a: f32, x: Inline[f32, n], mut y: Inline[f32, n]) -> () {
+  for i in 0..n {
+    y[i] = a * x[i] + y[i]
+  }
+}

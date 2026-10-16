@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: accept
+type R {
+  shared: Shared[Bytes],
+  xs: List[u64],
+}
+
+fn need(take r: unique R) {}
+
+fn example(take a: Shared[Bytes], take b: Shared[Bytes], take xs: unique List[u64]) {
+  let mut r = R(shared: take a, xs: take xs)
+  r.shared = take b
+  need(take r)
+}

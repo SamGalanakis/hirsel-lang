@@ -1,0 +1,18 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 12
+// "Written/contextual result promises are not inferred." A closure literal
+// with no written result promises no uniqueness, as a named function whose
+// result type does not write `unique` promises none, even though the body
+// returns a list it built itself.
+fn sink(xs: unique List[u64]) -> u64 {
+  list.len(xs)
+}
+
+fn probe() -> u64 {
+  sink(
+    fn() {
+      let xs: List[u64] = [1]
+      xs
+    }()
+  )
+}

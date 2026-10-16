@@ -1,0 +1,17 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 12
+// Writing the closure into caller storage through a mut parameter lets it outlive the arena.
+type H {
+  f: fn() -> u64,
+}
+
+fn probe(a: Arena, mut out: H) {
+  let x: String in a = "x"
+  let pair = (x, 1u8)
+  out = H(
+    f: fn() {
+      let (s, n) = pair
+      string.byte_len(s)
+    }
+  )
+}

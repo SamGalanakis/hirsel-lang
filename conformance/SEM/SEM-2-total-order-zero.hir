@@ -1,0 +1,24 @@
+// rule: SEM-2
+// expect: run
+// stdout: ok
+// "float.total_order for sorting" follows IEEE totalOrder.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let zero: f64 = 0.0
+  let order: i32 = float.total_order(-zero, zero)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if order < 0 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

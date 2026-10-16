@@ -1,0 +1,12 @@
+// rule: OWN-3
+// expect: accept
+type Holder {
+  items: Map[u8, u8],
+  other: u8,
+}
+
+fn probe(mut h: Holder) {
+  for (k, v) in h.items {
+    h.other = 3
+  }
+}

@@ -1,0 +1,19 @@
+// rule: MEM-12
+// expect: accept
+// "A flat list of variable-size elements is sequential" — " it can be walked but not indexed".
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+flat type Items {
+  items: List[Item],
+}
+
+fn first(xs: Items) -> u64 {
+  let mut n: u64 = 0
+  for x in xs.items {
+    n = x.n
+  }
+  n
+}

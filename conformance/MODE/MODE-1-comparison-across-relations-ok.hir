@@ -1,0 +1,34 @@
+// rule: MODE-1
+// expect: accept
+// A comparison borrows both operands and reads their contents, so values of
+// one type compare whatever their relations, arena placement and brands.
+type R {
+  n: u64,
+  other: u64,
+}
+
+fn pick(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  x
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn make_n(r: R) -> Option[u8 of r.n] {
+  None
+}
+
+fn heap_and_arena(a: Arena) -> bool {
+  let h: Bytes = b"one"
+  let r = pick(a, h)
+  let placed: Bytes in a = b"two"
+  r == h && placed != h && h == placed
+}
+
+fn brands(take x: R) -> bool {
+  let r = copy x
+  let whole = make(r)
+  let part = make_n(r)
+  whole == part
+}

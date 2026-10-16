@@ -1,0 +1,39 @@
+// rule: SEM-2
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  core@1/test.check(t, core@1/f32.bits(core@1/f32.from_bits(0u32)) == 0u32)
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(2147483648u32)) == 2147483648u32
+  )
+  core@1/test.check(t, core@1/f32.bits(core@1/f32.from_bits(1u32)) == 1u32)
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(2147483649u32)) == 2147483649u32
+  )
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(2139095040u32)) == 2139095040u32
+  )
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(4294967295u32)) == 2143289344u32
+  )
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(2139095039u32)) == 2139095039u32
+  )
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(2143289344u32)) == 2143289344u32
+  )
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(2139095041u32)) == 2143289344u32
+  )
+  core@1/test.check(
+    t,
+    core@1/f32.bits(core@1/f32.from_bits(4290772992u32)) == 2143289344u32
+  )
+  Ok(())
+}

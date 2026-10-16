@@ -1,0 +1,13 @@
+// rule: CLO-4
+// expect: accept
+// A Plain state copy shares nothing.
+@captures(state)
+fn build(take state: u64) -> Iter[u64] {
+  iter.from(
+    take state,
+    fn(mut held: u64) -> Option[u64] {
+      let shared = copy held
+      None
+    }
+  )
+}

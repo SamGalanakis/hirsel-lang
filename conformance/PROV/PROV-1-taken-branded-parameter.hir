@@ -1,0 +1,5 @@
+// rule: PROV-1
+// expect: accept
+fn commit_one(dir: Dir, take a: AtomicFile of dir) -> Result[(), FileError] {
+  file.commit(dir, take a)
+}

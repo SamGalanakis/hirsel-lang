@@ -1,0 +1,17 @@
+// rule: OWN-1
+// expect: accept
+resource type Trace {
+  text: String,
+}
+drop(x) {
+  ()
+}
+
+type Holder {
+  t: Trace,
+}
+
+fn g(mut h: Trace, take x: Holder) -> () {
+  let Holder(t: t) = take x
+  h = take t
+}

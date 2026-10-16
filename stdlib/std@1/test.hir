@@ -1,0 +1,92 @@
+// Adapted from Zig lib/std/testing.zig expectEqualInner, commit
+// bff490a23889750de7096d9057c0a432efc929a8. Copyright (c) Zig contributors.
+// Hirsel borrows Data and uses its structural equality, including IEEE floats.
+@noalloc
+pub fn equal[T: data](t: Test, actual: T, expected: T) -> () {
+  core@1/test.check(t, actual == expected)
+}
+
+// Adapted from Zig lib/std/math.zig approxEqAbs/approxEqRel and their tests,
+// commit bff490a23889750de7096d9057c0a432efc929a8.
+// Copyright (c) Zig contributors. Hirsel combines both explicit tolerances,
+// allows zero relative tolerance, and rejects unequal nonfinite inputs.
+@noalloc
+pub fn approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> () {
+  core@1/test.check(t, absolute >= 0.0 && relative >= 0.0)
+  if actual == expected {
+    return
+  }
+  let exponent: u64 = 0x7ff0000000000000
+  let finite = core@1/f64.bits(actual) & exponent != exponent && core@1/f64.bits(
+    expected
+  ) & exponent != exponent
+  core@1/test.check(t, finite)
+  let difference = if actual >= expected {
+    actual - expected
+  } else {
+    expected - actual
+  }
+  let a = if actual < 0.0 {
+    -actual
+  } else {
+    actual
+  }
+  let b = if expected < 0.0 {
+    -expected
+  } else {
+    expected
+  }
+  let scale = if a >= b {
+    a
+  } else {
+    b
+  }
+  let tolerance = relative * scale
+  // Unlike Zig, avoid inf <= inf when finite subtraction or
+  // scaling overflows. Unequal finite inputs prove scale > 0; normalization
+  // bounds each operand's magnitude by 1 and the difference by 2.
+  let overflowed = core@1/f64.bits(difference) & exponent == exponent || core@1/f64.bits(
+    tolerance
+  ) & exponent == exponent
+  let relative_ok = if overflowed {
+    let normalized = actual / scale - expected / scale
+    let distance = if normalized < 0.0 {
+      -normalized
+    } else {
+      normalized
+    }
+    distance <= relative
+  } else {
+    difference <= tolerance
+  }
+  core@1/test.check(t, difference <= absolute || relative_ok)
+}
+
+// No matching Zig/Rust std property runner: the catalogue fixes this protocol
+// at 100 sequential cases, with no shrinking callback or generator state API.
+// The explicit generator receives the recorded Test grant unchanged.
+pub fn for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
+  let mut index: u64 = 0
+  while index < 100 {
+    let passed = {
+      let value = gen(t)
+      law(value)
+    }
+    core@1/test.check_case(t, passed, index)
+    index += 1
+  }
+}
+
+// Adapted from Zig lib/std/testing.zig expectError, commit
+// bff490a23889750de7096d9057c0a432efc929a8. Copyright (c) Zig contributors.
+// Hirsel transfers any error payload instead of comparing a fixed error code.
+// An unexpected Ok value is destroyed before core test.fail ends the test.
+pub fn expect_error[T, E](t: Test, take value: Result[T, E]) -> E {
+  match take value {
+    Error(error) => take error,
+    Ok(success) => {
+      { let _ = take success }
+      core@1/test.fail(t)
+    },
+  }
+}

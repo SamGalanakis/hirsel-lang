@@ -1,0 +1,26 @@
+// rule: SEM-3
+// expect: run
+// stdout: nfc
+fn slice_nfc(s: String) -> String uses {} {
+  match string.position(s, 2) {
+    Some(a) => match string.position(s, 5) {
+      Some(b) => std@1/unicode.normalize_nfc(string.slice(s, a, b)),
+      None() => "wrong",
+    },
+    None() => "wrong",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let src: String = "!!e\u{301}? Output? Output"
+  let alias = copy src
+  let normalized = slice_nfc(src)
+  failure.check(
+    normalized == "\u{e9}" && alias == "!!e\u{301}? Output? Output",
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "nfc\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

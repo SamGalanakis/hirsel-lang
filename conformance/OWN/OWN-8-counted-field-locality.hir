@@ -1,0 +1,10 @@
+// rule: OWN-8
+// expect: accept
+// "With the part in the owner’s locality."
+type Rec {
+  items: Bytes,
+}
+
+fn example(r: Rec) -> Bytes in r {
+  r.items
+}

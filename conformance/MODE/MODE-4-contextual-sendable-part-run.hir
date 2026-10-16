@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: run
+// A capture-free literal satisfies a written sendable list part.
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let jobs: List[sendable fn() -> u64] = [
+    fn() {
+      1
+    }
+  ]
+  match jobs[0]() == 1 {
+    true => Ok(()),
+    false => Error(()),
+  }
+}

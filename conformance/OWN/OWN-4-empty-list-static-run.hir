@@ -1,0 +1,148 @@
+// rule: OWN-4
+// expect: run
+// stdout: dropped ok
+// stdout: copied ok
+// stdout: frozen ok
+// stdout: pushed ok
+// stdout: reserved ok
+// stdout: passed ok
+// stdout: nested ok
+// stdout: consumed ok
+// stdout: keyed ok
+// "First mutation of shared storage detaches it." An empty list holds no
+// element, so its first push or reserve gives it storage of its own while
+// every copy, element and frozen value taken earlier stays empty.
+fn output_error[E](take e: E) -> () {}
+
+fn dropped() -> bool {
+  let xs: List[u64] = []
+  let ys: List[String] = []
+  list.len(xs) == 0 && list.len(ys) == 0
+}
+
+fn copied() -> bool {
+  let mut a: List[u64] = []
+  let b = copy a
+  list.push(mut a, 7)
+  let mut c = copy b
+  list.push(mut c, 8)
+  list.push(mut c, 9)
+  list.len(a) == 1 && a[0] == 7 && list.len(b) == 0 && list.len(c) == 2 && c[1] == 9
+}
+
+fn frozen() -> bool {
+  let e: List[u8] = []
+  let kept = copy e
+  let b = bytes.from_list(take e)
+  let text_ok = match string.from_bytes(copy b) {
+    Ok(s) => s == "",
+    Error(_) => false,
+  }
+  bytes.len(b) == 0 && list.len(kept) == 0 && text_ok
+}
+
+fn pushed() -> bool {
+  let mut names: List[String] = []
+  list.push(mut names, "x")
+  list.push(mut names, "y")
+  let mut empty: List[u64] = []
+  let none: bool = match list.pop(mut empty) {
+    Some(_) => false,
+    None => true,
+  }
+  list.len(names) == 2 && names[1] == "y" && none && list.len(empty) == 0
+}
+
+fn reserved() -> bool {
+  let mut r: List[u64] = []
+  list.reserve(mut r, 64u64)
+  for i in 0u64..64u64 {
+    list.push(mut r, i)
+  }
+  let mut z: List[u64] = []
+  list.reserve(mut z, 0u64)
+  list.push(mut z, 5)
+  list.len(r) == 64 && r[63] == 63 && list.len(z) == 1 && z[0] == 5
+}
+
+fn extend(mut rows: List[u64], n: u64) -> () {
+  for i in 0u64..n {
+    list.push(mut rows, i)
+  }
+}
+
+fn passed() -> bool {
+  let mut rows: List[u64] = []
+  let saved = copy rows
+  extend(mut rows, 5)
+  list.len(rows) == 5 && rows[4] == 4 && list.len(saved) == 0
+}
+
+fn nested() -> bool {
+  let mut grid: List[List[u64]] = [[], []]
+  let earlier = copy grid
+  list.push(mut grid[1], 2)
+  grid[0] = [1]
+  list.len(grid[0]) == 1 && grid[1][0] == 2 && list.len(earlier[0]) == 0 && list.len(
+    earlier[1]
+  ) == 0
+}
+
+fn consumed() -> bool {
+  let xs: List[u64] = []
+  let mut seen: u64 = 0
+  for x in xs {
+    seen += x + 1
+  }
+  let ys: List[String] = []
+  for y in ys {
+    seen += 1
+  }
+  let zs: List[u64] = []
+  seen == 0 && zs == []
+}
+
+fn keyed() -> bool {
+  let mut m: Map[u64, u64] = map.empty()
+  let empty = copy m
+  map.insert(mut m, 1, 10)
+  let mut s: Set[u64] = set.empty()
+  set.insert(mut s, 3)
+  map.get(m, 1) == Some(10) && map.get(empty, 1) == None && set.contains(s, 3)
+}
+
+fn verdict(ok: bool) -> String {
+  if ok {
+    " ok\n"
+  } else {
+    " bad\n"
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let o = io.stdout(rt) ? grant_error
+  out.print(o, "dropped") ? output_error
+  out.print(o, verdict(dropped())) ? output_error
+  out.print(o, "copied") ? output_error
+  out.print(o, verdict(copied())) ? output_error
+  out.print(o, "frozen") ? output_error
+  out.print(o, verdict(frozen())) ? output_error
+  out.print(o, "pushed") ? output_error
+  out.print(o, verdict(pushed())) ? output_error
+  out.print(o, "reserved") ? output_error
+  out.print(o, verdict(reserved())) ? output_error
+  out.print(o, "passed") ? output_error
+  out.print(o, verdict(passed())) ? output_error
+  out.print(o, "nested") ? output_error
+  out.print(o, verdict(nested())) ? output_error
+  out.print(o, "consumed") ? output_error
+  out.print(o, verdict(consumed())) ? output_error
+  out.print(o, "keyed") ? output_error
+  out.print(o, verdict(keyed())) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

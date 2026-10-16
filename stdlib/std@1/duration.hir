@@ -1,0 +1,117 @@
+// Adapted unit composition from Rust library/core/src/time.rs Duration::new/as_nanos.
+// Reference commit f6c1107f8be13e48465e12c0fd26e6a39fe18e4f; copyright Rust Project Contributors (third-party/NOTICES.md).
+@noalloc
+pub fn from_parts(seconds: i64, nanoseconds: i32) -> std@1/time.Duration uses {} {
+  let wide_seconds: i128 = core@1/int.widen(seconds)
+  let wide_nanos: i128 = core@1/int.widen(nanoseconds)
+  std@1/time.Duration(nanoseconds: wide_seconds * 1000000000 + wide_nanos)
+}
+
+// Contract-specific parser: neither referenced Zig nor Rust std has signed seconds-text parsing.
+// Accumulate unsigned magnitude with a prechecked bound; MIN is one larger.
+@noalloc
+pub fn parse(text: String) -> Result[std@1/time.Duration, std@1/scalar.ParseError] uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let len = core@1/bytes.len(bytes)
+  if len == 0 {
+    return Error(Invalid())
+  }
+  let negative = bytes[0] == 45
+  let mut i: u64 = if negative || bytes[0] == 43 {
+    1
+  } else {
+    0
+  }
+  let begin = i
+  let mut seconds: u128 = 0
+  let mut overflow: bool = false
+  let bound = 170141183460469231731687303715u128
+  while i < len && bytes[i] >= 48 && bytes[i] <= 57 {
+    let digit: u128 = core@1/int.widen(bytes[i] - 48)
+    if seconds > bound / 10 || seconds == bound / 10 && digit > bound % 10 {
+      overflow = true
+    } else if !overflow {
+      seconds = seconds * 10 + digit
+    }
+    i += 1
+  }
+  if i == begin {
+    return Error(Invalid())
+  }
+  let mut fraction: u128 = 0
+  let mut digits: u64 = 0
+  if i < len && bytes[i] == 46 {
+    i += 1
+    while i < len && bytes[i] >= 48 && bytes[i] <= 57 {
+      if digits == 9 {
+        return Error(Invalid())
+      }
+      let digit: u128 = core@1/int.widen(bytes[i] - 48)
+      fraction = fraction * 10 + digit
+      digits += 1
+      i += 1
+    }
+    if digits == 0 {
+      return Error(Invalid())
+    }
+  }
+  if i >= len || bytes[i] != 115 || i + 1 != len {
+    return Error(Invalid())
+  }
+  while digits < 9 {
+    fraction *= 10
+    digits += 1
+  }
+  let limit = if negative {
+    170141183460469231731687303715884105728u128
+  } else {
+    170141183460469231731687303715884105727u128
+  }
+  if overflow || seconds == bound && fraction > limit % 1000000000 {
+    return Error(OutOfRange())
+  }
+  let magnitude = seconds * 1000000000 + fraction
+  let raw = if negative {
+    core@1/int.wrapping_add(~magnitude, 1)
+  } else {
+    magnitude
+  }
+  let nanos: i128 = core@1/int.truncate(raw)
+  Ok(std@1/time.Duration(nanoseconds: nanos))
+}
+
+// Adapted decimal fraction emission from Rust library/core/src/time.rs Debug::fmt_decimal.
+// Reference commit f6c1107f8be13e48465e12c0fd26e6a39fe18e4f; fixed seconds unit and signed i128 replace unsigned auto units.
+pub fn format(value: std@1/time.Duration) -> String uses {} {
+  let raw: u128 = core@1/int.truncate(value.nanoseconds)
+  let negative = value.nanoseconds < 0
+  let magnitude = if negative {
+    core@1/int.wrapping_add(~raw, 1)
+  } else {
+    raw
+  }
+  let mut builder: List[u8] = []
+  if negative {
+    core@1/list.push(mut builder, 45)
+  }
+  std@1/u128.format_into(magnitude / 1000000000, mut builder)
+  let mut fraction = magnitude % 1000000000
+  if fraction != 0 {
+    core@1/list.push(mut builder, 46)
+    let mut divisor: u128 = 100000000
+    while fraction != 0 {
+      let digit: u8 = core@1/int.narrow(fraction / divisor)
+      core@1/list.push(mut builder, digit + 48)
+      fraction %= divisor
+      divisor /= 10
+    }
+  }
+  core@1/list.push(mut builder, 115)
+  match std@1/text.finish(take builder) {
+    Ok(text) => take text,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}

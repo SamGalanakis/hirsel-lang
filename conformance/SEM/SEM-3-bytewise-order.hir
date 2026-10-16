@@ -1,0 +1,24 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+// "order ... bytewise".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a: String = "z"
+  let b: String = "é"
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if a < b {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

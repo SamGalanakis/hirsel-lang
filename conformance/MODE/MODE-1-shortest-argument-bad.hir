@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 13
+// "At the call site it is local to the shortest-lived of them."
+fn choose(a: Bytes, b: Bytes, pick: bool) -> Bytes in {a, b} {
+  if pick {
+    a
+  } else {
+    b
+  }
+}
+
+fn example(take a: Bytes, b: Bytes) -> Bytes {
+  choose(a, b, true)
+}

@@ -1,0 +1,38 @@
+fn segment(take s: String) -> List[String] uses {} {
+  let mut pieces: List[String] = []
+  for piece in std@1/unicode.graphemes(s) {
+    core@1/list.push(mut pieces, copy piece)
+  }
+  take pieces
+}
+
+pub fn batch(take xs: List[String]) -> List[List[String]] uses {} {
+  let mut results: List[List[String]] = []
+  for s in take xs {
+    core@1/list.push(mut results, segment(take s))
+  }
+  take results
+}
+
+pub fn sliced(take xs: List[String]) -> List[List[String]] uses {} {
+  let mut results: List[List[String]] = []
+  for s in take xs {
+    let wrapped = std@1/string.concat("🇦\u{200d}", std@1/string.concat(s, "\u{301}Z"))
+    let size = core@1/string.byte_len(s)
+    match core@1/string.position(wrapped, 7) {
+      Some(first) => match core@1/string.position(wrapped, 7 + size) {
+        Some(last) => {
+          let slice = core@1/string.slice(wrapped, first, last)
+          core@1/list.push(mut results, segment(copy slice))
+        },
+        None => {},
+      },
+      None => {},
+    }
+  }
+  take results
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

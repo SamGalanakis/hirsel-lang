@@ -1,0 +1,26 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+type Values {
+  xs: List[u64],
+  n: u64,
+}
+
+fn finish(take v: unique Values) -> u64 {
+  v.n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut v = Values(xs: [1, 2, 3], n: 0)
+  v.n = 4
+  let ok = finish(take v) == 4
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

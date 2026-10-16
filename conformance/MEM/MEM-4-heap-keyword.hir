@@ -1,0 +1,23 @@
+// rule: MEM-4
+// expect: run
+// stdout: ok
+// "heap is a keyword denoting the counted heap as an Arena".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let text: String = copy_to(heap, "heap")
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if text == "heap" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

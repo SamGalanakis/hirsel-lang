@@ -1,0 +1,9 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. A let relation naming a binding admits the arenas that binding
+// holds. z holds y's arena b, so y is within z.
+fn good(b: Arena, y: Bytes in b) -> u64 {
+  let z = y
+  let v: Bytes in z = y
+  0
+}

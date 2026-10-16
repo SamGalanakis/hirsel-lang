@@ -1,0 +1,17 @@
+// rule: PROV-4
+// expect: accept
+// The heap twin may be written into caller storage.
+type H {
+  f: fn() -> u64,
+}
+
+fn probe(mut out: H) {
+  let x: String in heap = "x"
+  let pair = (x, 1u8)
+  out = H(
+    f: fn() {
+      let (s, n) = pair
+      string.byte_len(s)
+    }
+  )
+}

@@ -1,0 +1,14 @@
+// rule: CLO-4
+// expect: accept
+// "Returned or stored closures are global ... never borrowed parameters."
+type Holder {
+  action: fn() -> () uses {},
+}
+
+fn example(take x: Bytes) -> Holder {
+  Holder(
+    action: fn() {
+      let _ = x
+    }
+  )
+}

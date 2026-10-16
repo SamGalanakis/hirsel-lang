@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 9
+// map.get's result is `Option[V] in m` (#90). While it is live the map stays
+// borrowed, exactly as a slots.get result keeps its Slots borrowed.
+fn inspect(found: Option[Bytes]) -> () {}
+
+fn probe(mut m: Map[u8, Bytes], take value: Bytes) {
+  let found = map.get(m, 1)
+  map.insert(mut m, 3, take value)
+  inspect(found)
+}

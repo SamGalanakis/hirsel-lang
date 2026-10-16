@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+// "A value may cross tasks only if sendable."
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(take x: Dir) -> () {
+  cross(take x)
+}

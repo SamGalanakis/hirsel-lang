@@ -1,0 +1,31 @@
+// native/ready/cleanup: no drop body instance for LayoutId(N)
+// hirsel run --native: native ready in total: Cleanup(Unsupported("no drop body instance for LayoutId(22)")); consuming a list of (Iter[u64], u64) drops the iterator part with no drop body (corpus: CLO-4-iter-called-closure-part-run)
+fn next_value(mut n: u64) -> Option[u64] {
+  if n < 3 {
+    n = n + 1
+    Some(n)
+  } else {
+    None
+  }
+}
+
+fn total() -> u64 {
+  let l: List[(Iter[u64], u64)] = [(iter.from(0u64, next_value), 4u64)]
+  let mut sum: u64 = 0
+  for (it, n) in take l {
+    sum = sum + n
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if total() == 4 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

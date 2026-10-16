@@ -1,0 +1,6 @@
+rc-trace v1
+max 16
+# A holder cannot be released while a borrow it guards is live.
+alloc r1 0
+borrow b1 r1
+drop r1

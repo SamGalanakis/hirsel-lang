@@ -1,0 +1,47 @@
+// rule: LANG-11
+// expect: run
+// stdout: ok
+// "A block, branch or arm is transparent to its consumer's use."
+// A counted part of a binding the block declares leaves the block as a share,
+// through `copy v[0]` for a borrowing consumer or through an owning consumer
+// such as a `let`.
+// A whole binding the block declares moves out, so a part of the block's value
+// is a part of storage that outlives it.
+fn copied() -> u64 {
+  list.len(
+    {
+      let v: List[List[u64]] = [[1, 2]]
+      copy v[0]
+    }
+  )
+}
+
+fn bound() -> u64 {
+  let x = {
+    let v: List[List[u64]] = [[1, 2, 3]]
+    v[0]
+  }
+  list.len(x)
+}
+
+fn moved() -> u64 {
+  list.len(
+    {
+      let v: List[List[u64]] = [[1]]
+      v
+    }[0]
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = copied() == 2 && bound() == 3 && moved() == 1
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

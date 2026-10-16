@@ -1,0 +1,137 @@
+// Box reads follow issue #98; implementation is owned by box-read.
+// Lossless JSON node pool, separately owned spelling and linked children.
+type JsonNode { tag: u8, first: u64, next: u64, spelling: Bytes }
+fn owned(data: Bytes) -> Bytes {
+  let mut output_bytes: List[u8] = []
+  list.reserve(mut output_bytes, bytes.len(data))
+  for i in 0u64..bytes.len(data) { list.push(mut output_bytes, data[i]) }
+  bytes.from_list(take output_bytes)
+}
+fn node(mut nodes: List[box JsonNode], tag: u8, first: u64, spelling: Bytes) -> u64 {
+  let index = list.len(nodes)
+  list.push(mut nodes, box JsonNode(tag: tag, first: first, next: 0u64, spelling: owned(spelling)))
+  index
+}
+fn hex_digit(c: u8) -> bool {
+  (c >= 48u8 && c <= 57u8) || (c >= 65u8 && c <= 70u8) || (c >= 97u8 && c <= 102u8)
+}
+fn quoted(data: Bytes, mut position: u64) -> u64 {
+  let start = position
+  failure.check(data[position] == 34u8, TextInvariant())
+  position += 1u64
+  while true {
+    let c = data[position]
+    position += 1u64
+    if c == 34u8 { break }
+    failure.check(c >= 32u8, TextInvariant())
+    if c == 92u8 {
+      let escape = data[position]
+      position += 1u64
+      if escape == 117u8 {
+        for digit in 0u64..4u64 { failure.check(hex_digit(data[position]), TextInvariant()); position += 1u64 }
+      } else {
+        failure.check(escape == 34u8 || escape == 92u8 || escape == 47u8 || escape == 98u8 || escape == 102u8 || escape == 110u8 || escape == 114u8 || escape == 116u8, TextInvariant())
+      }
+    }
+  }
+  position - start
+}
+fn numeric(data: Bytes) {
+  let mut position: u64 = 0
+  if data[position] == 45u8 { position += 1u64 }
+  failure.check(position < bytes.len(data), TextInvariant())
+  if data[position] == 48u8 { position += 1u64 }
+  else {
+    failure.check(data[position] >= 49u8 && data[position] <= 57u8, TextInvariant())
+    while position < bytes.len(data) && data[position] >= 48u8 && data[position] <= 57u8 { position += 1u64 }
+  }
+  if position < bytes.len(data) && data[position] == 46u8 {
+    position += 1u64
+    let start = position
+    while position < bytes.len(data) && data[position] >= 48u8 && data[position] <= 57u8 { position += 1u64 }
+    failure.check(position > start, TextInvariant())
+  }
+  if position < bytes.len(data) && (data[position] == 101u8 || data[position] == 69u8) {
+    position += 1u64
+    if position < bytes.len(data) && (data[position] == 43u8 || data[position] == 45u8) { position += 1u64 }
+    let start = position
+    while position < bytes.len(data) && data[position] >= 48u8 && data[position] <= 57u8 { position += 1u64 }
+    failure.check(position > start, TextInvariant())
+  }
+  failure.check(position == bytes.len(data), TextInvariant())
+}
+fn parse(data: Bytes, mut position: u64, mut nodes: List[box JsonNode]) -> u64 {
+  let c = data[position]
+  if c == 34u8 {
+    let start = position
+    let length = quoted(data, mut position)
+    node(mut nodes, 0u8, 0u64, bytes.slice(data, start, start + length))
+  } else if c == 91u8 || c == 123u8 {
+    let object = c == 123u8
+    let close: u8 = if object { 125u8 } else { 93u8 }
+    position += 1u64
+    let mut first: u64 = 0
+    let mut last: u64 = 0
+    while data[position] != close {
+      if first != 0u64 { failure.check(data[position] == 44u8, TextInvariant()); position += 1u64 }
+      let child = if object {
+        let start = position
+        let length = quoted(data, mut position)
+        failure.check(data[position] == 58u8, TextInvariant())
+        position += 1u64
+        let value = parse(data, mut position, mut nodes)
+        node(mut nodes, 3u8, value, bytes.slice(data, start, start + length))
+      } else { parse(data, mut position, mut nodes) }
+      if first == 0u64 { first = child } else { nodes[last].next = child }
+      last = child
+    }
+    position += 1u64
+    let empty: Bytes = b""
+    node(mut nodes, if object { 2u8 } else { 1u8 }, first, empty)
+  } else {
+    let start = position
+    while position < bytes.len(data) && data[position] != 44u8 && data[position] != 93u8 && data[position] != 125u8 { position += 1u64 }
+    let spelling = bytes.slice(data, start, position)
+    let t: Bytes = b"true"
+    let f: Bytes = b"false"
+    let nil: Bytes = b"null"
+    if spelling != t && spelling != f && spelling != nil { numeric(spelling) }
+    node(mut nodes, 0u8, 0u64, spelling)
+  }
+}
+fn append(mut output: List[u8], data: Bytes) {
+  for i in 0u64..bytes.len(data) { list.push(mut output, data[i]) }
+}
+fn emit(nodes: List[box JsonNode], index: u64, mut output: List[u8]) {
+  let tag = nodes[index].tag
+  if tag == 0u8 { append(mut output, nodes[index].spelling) }
+  else if tag == 3u8 {
+    append(mut output, nodes[index].spelling)
+    list.push(mut output, 58u8)
+    emit(nodes, nodes[index].first, mut output)
+  } else {
+    list.push(mut output, if tag == 1u8 { 91u8 } else { 123u8 })
+    let mut child = nodes[index].first
+    while child != 0u64 {
+      if child != nodes[index].first { list.push(mut output, 44u8) }
+      emit(nodes, child, mut output)
+      child = nodes[child].next
+    }
+    list.push(mut output, if tag == 1u8 { 93u8 } else { 125u8 })
+  }
+}
+fn workload(data: Bytes) -> Bytes {
+  // A source-owned dummy occupies the C pool's null index; it is never read.
+  let empty: Bytes = b""
+  let mut nodes: List[box JsonNode] = [box JsonNode(tag: 0u8, first: 0u64, next: 0u64, spelling: empty)]
+  list.reserve(mut nodes, bytes.len(data) + 1u64)
+  let mut position: u64 = 0
+  let root = parse(data, mut position, mut nodes)
+  failure.check(position == bytes.len(data), TextInvariant())
+  let mut output: List[u8] = []
+  list.reserve(mut output, bytes.len(data) * 2u64 + 256u64)
+  emit(nodes, root, mut output)
+  let encoded = bytes.from_list(take output)
+  failure.check(encoded == data, TextInvariant())
+  encoded
+}

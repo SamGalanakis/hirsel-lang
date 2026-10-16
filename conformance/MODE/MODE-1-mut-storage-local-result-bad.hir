@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 8
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn put(mut slot: Bytes, v: Bytes) -> () {
+  slot = v
+}
+
+fn build(x: Bytes) -> Bytes {
+  let mut slot: Bytes = b"a"
+  put(mut slot, view(x))
+  slot
+}

@@ -1,0 +1,17 @@
+// rule: CT-2
+// expect: run
+// Materialisation occurs "before anything depends on it".
+const FIRST: u32 = comptime 3
+
+const SECOND: u32 = comptime (FIRST + 4)
+
+@noalloc
+fn checked(x: u32) -> ()
+  requires x == 7 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  checked(SECOND)
+  Ok(())
+}

@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+// Comparing an element reads through a view; the list stays unique (#76).
+fn bump(mut xs: unique List[String]) -> () {
+  ()
+}
+
+fn example() -> () {
+  let mut xs: unique List[String] = ["a"]
+  let same = xs[0u64] == "a"
+  bump(mut xs)
+}

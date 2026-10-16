@@ -1,0 +1,24 @@
+// rule: GEN-1
+// spec: #48
+// expect: reject GEN-1 at line 21
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn cmp(a: Trace, b: Trace) -> i32 uses {} {
+  0
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let by: Order[Trace] = Order(compare: cmp)
+  let mut m: SortedMap[Trace, u8] of by = sorted_map.empty(by)
+  let k = Trace(stdout: o, text: "key\n")
+  sorted_map.insert(by, mut m, k, 1)
+  let _ = out.print(o, "inserted\n")
+  Ok(())
+}

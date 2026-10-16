@@ -1,0 +1,31 @@
+// rule: DROP-2
+// expect: run
+// stdout: ok
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let valid_source: Bytes = b"ok"
+  let invalid_source: Bytes = b"\xff"
+  let valid: bool = match string.from_bytes(take valid_source) {
+    Ok(s) => s == "ok",
+    Error(bytes) => false,
+  }
+  let invalid: bool = match string.from_bytes(take invalid_source) {
+    Ok(s) => false,
+    Error(bytes) => bytes == b"\xff",
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid && invalid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

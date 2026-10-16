@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Check that an LLVM install is exactly the pin in llvm-21.lock.
+#
+#   check [--prefix DIR]
+#
+# DIR is the directory holding bin/llvm-config. It defaults to $LLVM_SYS_211_PREFIX, else to
+# the lock's prefix. There is no search of PATH and no fallback to another LLVM: a wrong
+# version, a static-only install or a missing tool is a failure, never a skip.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+lock="$here/llvm-21.lock"
+repo="$(cd "$here/../.." && pwd)"
+
+fail() { echo "native-toolchain check: $*" >&2; exit 1; }
+
+# Prints the value of a scalar `key` record.
+lock_value() {
+  local value
+  value="$(awk -v k="$1" '$1 == k { sub(/^[^ ]+ /, ""); print; found = 1 } END { exit !found }' "$lock")" \
+    || fail "llvm-21.lock has no '$1' record"
+  printf '%s\n' "$value"
+}
+
+prefix=""
+while (( $# > 0 )); do
+  case "$1" in
+    --prefix) (( $# >= 2 )) || fail "--prefix needs a directory"; prefix="$2"; shift 2 ;;
+    *) echo "usage: check [--prefix DIR]" >&2; exit 2 ;;
+  esac
+done
+lock_prefix="$(lock_value prefix)"
+prefix="${prefix:-${LLVM_SYS_211_PREFIX:-$lock_prefix}}"
+
+version="$(lock_value llvm_version)"
+major="${version%%.*}"
+llvm_config="$prefix/bin/llvm-config"
+[[ -x "$llvm_config" ]] || fail "no executable llvm-config at $llvm_config"
+
+actual="$("$llvm_config" --version)" || fail "$llvm_config --version failed"
+if [[ "${actual%%.*}" != "$major" ]]; then
+  fail "llvm-config reports LLVM $actual: wrong major version, the pin is $version"
+fi
+[[ "$actual" == "$version" ]] || fail "llvm-config reports LLVM $actual: wrong minor or patch version or a suffix, the pin is $version"
+
+shared_mode="$("$llvm_config" --shared-mode)"
+[[ "$shared_mode" == "shared" ]] || fail "llvm-config reports shared mode '$shared_mode'; the pin links libLLVM dynamically"
+libdir="$("$llvm_config" --libdir)"
+shared="$libdir/$(lock_value shared_library)"
+[[ -e "$shared" ]] || fail "missing $shared; the pin needs the shared libLLVM (static-only installs are rejected)"
+includedir="$("$llvm_config" --includedir)"
+[[ -f "$includedir/llvm-c/Core.h" ]] || fail "missing development headers: $includedir/llvm-c/Core.h"
+
+built=" $("$llvm_config" --targets-built) "
+for target in $(lock_value targets); do
+  [[ "$built" == *" $target "* ]] || fail "LLVM was built without the $target target"
+done
+
+bindir="$("$llvm_config" --bindir)"
+for tool in clang ld.lld; do
+  [[ -x "$bindir/$tool" ]] || fail "missing $bindir/$tool"
+  tool_version="$("$bindir/$tool" --version | head -n 1)"
+  [[ "$tool_version" == *" $version"* ]] || fail "$bindir/$tool reports '$tool_version', not $version"
+done
+
+# The system prefix is the apt.llvm.org install: every locked package is installed at the
+# locked version. A local `install --unpack` prefix has no dpkg records to compare.
+if [[ "$prefix" == "$lock_prefix" ]] && command -v dpkg-query > /dev/null; then
+  apt_version="$(lock_value apt_version)"
+  while read -r _ package arch _; do
+    installed="$(dpkg-query -W -f '${Version}' "$package:$arch" 2> /dev/null || true)"
+    [[ "$installed" == "$apt_version" ]] \
+      || fail "package $package:$arch is '${installed:-not installed}', the pin is $apt_version"
+  done < <(grep '^deb ' "$lock")
+fi
+
+# The binding: Cargo.lock resolves llvm-sys to the pinned version and checksum.
+sys_version="$(lock_value llvm_sys_version)"
+sys_checksum="$(lock_value llvm_sys_checksum)"
+locked="$(awk '/^\[\[package\]\]/ { name = ""; version = "" }
+  /^name = / { name = $3 } /^version = / { version = $3 }
+  /^checksum = / && name == "\"llvm-sys\"" { print version, $3 }' "$repo/Cargo.lock" | tr -d '"')"
+[[ "$locked" == "$sys_version $sys_checksum" ]] \
+  || fail "Cargo.lock has llvm-sys '${locked:-absent}', the pin is $sys_version $sys_checksum"
+
+# The shared library loads and reports the pinned version at run time.
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+"$bindir/clang" -std=c11 -Wall -Werror -I"$includedir" "$here/fixtures/version.c" \
+  -L"$libdir" -l"LLVM-$major" -Wl,-rpath,"$libdir" -o "$scratch/version" \
+  || fail "could not link fixtures/version.c against $shared"
+loaded="$("$scratch/version")" || fail "fixtures/version.c failed to run against $shared"
+[[ "$loaded" == "$version" ]] || fail "the loaded libLLVM reports $loaded, the pin is $version"
+
+echo "native-toolchain check: LLVM $version at $prefix, llvm-sys $sys_version"

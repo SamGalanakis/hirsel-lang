@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "host": "x86_64-unknown-linux-gnu",
+  "rust_version": "1.99.0",
+  "components": [
+    {
+      "archive_prefix": "rustc-1.99.0-x86_64-unknown-linux-gnu/rustc",
+      "name": "rustc",
+      "sha256": "97a912c9b284bf6628a0f3e16ff6b364d8c14e7935a2238ad042dff9072111e8",
+      "url": "https://github.com/hermeticbuild/rust-redist/releases/download/1.99.0/rustc-1.99.0-x86_64-unknown-linux-gnu.tar.zst"
+    },
+    {
+      "archive_prefix": "clippy-1.99.0-x86_64-unknown-linux-gnu/clippy-preview",
+      "name": "clippy",
+      "sha256": "afb9e0505fd913a84b3a2b2fdf52b1d1d039973e1e02ca6dfcccecbb1fc6f5c5",
+      "url": "https://github.com/hermeticbuild/rust-redist/releases/download/1.99.0/clippy-1.99.0-x86_64-unknown-linux-gnu.tar.zst"
+    },
+    {
+      "archive_prefix": "rustfmt-1.99.0-x86_64-unknown-linux-gnu/rustfmt-preview",
+      "name": "rustfmt",
+      "sha256": "576d7a5ed1d4b0c1f8a8766af19a94eb052dc9f3c8db25facaac72ebc606396e",
+      "url": "https://github.com/hermeticbuild/rust-redist/releases/download/1.99.0/rustfmt-1.99.0-x86_64-unknown-linux-gnu.tar.zst"
+    },
+    {
+      "archive_prefix": "rust-std-1.99.0-x86_64-unknown-linux-gnu/rust-std-x86_64-unknown-linux-gnu",
+      "name": "rust-std",
+      "sha256": "fc165c760a64463d4aa56b2ecda6c7e63b525737668bcc613e1f9058100d6a46",
+      "url": "https://github.com/hermeticbuild/rust-redist/releases/download/1.99.0/rust-std-1.99.0-x86_64-unknown-linux-gnu.tar.zst"
+    },
+    {
+      "archive_prefix": "rust-std-1.99.0-aarch64-unknown-linux-gnu/rust-std-aarch64-unknown-linux-gnu",
+      "name": "rust-std-aarch64",
+      "sha256": "31a2340697bcc392974882712a4d0bce96bd7834a4a25aee14224ba43b5c64c2",
+      "url": "https://github.com/hermeticbuild/rust-redist/releases/download/1.99.0/rust-std-1.99.0-aarch64-unknown-linux-gnu.tar.zst"
+    }
+  ]
+}

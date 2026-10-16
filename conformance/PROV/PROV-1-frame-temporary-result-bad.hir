@@ -1,0 +1,21 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 16
+// spec: #60
+// "A brand ends when p ... leaves scope." A body's temporaries end before its
+// result reaches the caller, so the result cannot be branded by one of them.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn within() -> () {
+  match fn() {
+    mk(fresh())
+  }() {
+    Some(x) => (),
+    None => (),
+  }
+}

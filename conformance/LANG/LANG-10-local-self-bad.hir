@@ -1,0 +1,14 @@
+// rule: LANG-10
+// expect: reject LANG-10 at line 10
+// Shows "Only top-level definitions recurse; local fns cannot refer to themselves or later locals."
+// Local function signatures allow allocation by default (#2).
+fn example(n: u32) -> u32 {
+  fn loop(x: u32) -> u32 {
+    if x == 0 {
+      0
+    } else {
+      loop(x - 1)
+    }
+  }
+  loop(n)
+}

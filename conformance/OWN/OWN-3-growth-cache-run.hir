@@ -1,0 +1,92 @@
+// rule: OWN-3
+// expect: run
+// stdout: ok
+// exit: 0
+// "A mut borrow is exclusive." Growth through a mut list keeps its contents,
+// grows past any reservation, and never writes through a shared copy, whether
+// the list was reserved, grown by an earlier push, shared or passed on.
+fn output_error[E](take e: E) -> () {}
+
+fn reserved() -> bool {
+  let mut rows: List[u32] = []
+  list.reserve(mut rows, 100)
+  for i in 0u64..100u64 {
+    list.push(mut rows, int.narrow(i % 1000u64))
+  }
+  list.len(rows) == 100 && rows[0] == 0 && rows[99] == 99
+}
+
+fn past_reservation() -> bool {
+  let mut rows: List[u8] = []
+  list.reserve(mut rows, 3)
+  for i in 0u64..300u64 {
+    list.push(mut rows, int.narrow(i % 251u64))
+  }
+  list.len(rows) == 300 && rows[2] == 2 && rows[251] == 0 && rows[299] == 48
+}
+
+fn shared_each_push() -> bool {
+  let mut rows: List[u64] = []
+  list.reserve(mut rows, 64)
+  let mut kept: bool = true
+  for i in 0u64..64u64 {
+    let saved = copy rows
+    list.push(mut rows, i)
+    kept = kept && list.len(saved) == i
+  }
+  kept && list.len(rows) == 64 && rows[63] == 63
+}
+
+fn extend(mut rows: List[u64], n: u64) -> () {
+  for i in 0u64..n {
+    list.push(mut rows, i)
+  }
+}
+
+fn passed_on() -> bool {
+  let mut rows: List[u64] = []
+  list.push(mut rows, 7)
+  let saved = copy rows
+  extend(mut rows, 40)
+  for i in 0u64..40u64 {
+    list.push(mut rows, i)
+  }
+  list.len(saved) == 1 && list.len(rows) == 81 && rows[0] == 7 && rows[40] == 39 && rows[80] == 39
+}
+
+fn error_after_growth(mut rows: List[u64]) -> Result[(), ()] {
+  for i in 0u64..20u64 {
+    list.push(mut rows, i)
+  }
+  Error(())
+}
+
+fn grown_by_failed_call() -> bool {
+  let mut rows: List[u64] = []
+  let failed: bool = match error_after_growth(mut rows) {
+    Ok(_) => false,
+    Error(_) => true,
+  }
+  for i in 20u64..100u64 {
+    list.push(mut rows, i)
+  }
+  failed && list.len(rows) == 100 && rows[19] == 19 && rows[99] == 99
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let ok = reserved() && past_reservation() && shared_each_push() && passed_on() && grown_by_failed_call()
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

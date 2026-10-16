@@ -1,0 +1,5 @@
+// rule: GEN-1
+// expect: accept
+fn probe(m: Map[u8, Bytes]) -> () {
+  let found = map.get(m, 1)
+}

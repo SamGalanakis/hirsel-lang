@@ -1,0 +1,29 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// "A brand ends when p ... leaves scope." A closure's result may be branded
+// by an owner that outlives the closure, and a borrowed computed owner lasts
+// for the statement that uses the result.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn captured(d: List[u64]) -> () {
+  match fn() {
+    mk(d)
+  }() {
+    Some(x) => (),
+    None => (),
+  }
+}
+
+fn borrowed() -> () {
+  match mk(fresh()) {
+    Some(x) => (),
+    None => (),
+  }
+}

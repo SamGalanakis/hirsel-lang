@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "SEM-5-wave2-map-same-entries-opaque-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../crates/hirsel-driver/tests/fixtures/text_opaque/hirsel.json",
+      "package": {
+        "name": "opaque_data",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

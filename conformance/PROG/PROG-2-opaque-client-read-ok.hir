@@ -1,0 +1,5 @@
+// rule: PROG-2
+// expect: accept
+fn probe(h: vendor.Hidden) -> u64 {
+  vendor.read(h)
+}

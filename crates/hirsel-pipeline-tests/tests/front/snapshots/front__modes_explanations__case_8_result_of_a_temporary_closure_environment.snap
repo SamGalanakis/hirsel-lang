@@ -1,0 +1,26 @@
+---
+source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
+expression: "rendered(\"CLO/CLO-1-captured-local-field-content-bad.hir\")"
+---
+error[MODE-1]: a local result retains a temporary that ends with the function: it depends on a temporary, but the result outlives this function
+ --> ../../conformance/CLO/CLO-1-captured-local-field-content-bad.hir:19:3
+  19 |   fn() {
+     |   ^^^^^^ 
+ --> ../../conformance/CLO/CLO-1-captured-local-field-content-bad.hir:19:3
+  19 |   fn() {
+     |   ^^^^^^ provided: a temporary created here ends with its enclosing statement or block
+ --> ../../conformance/CLO/CLO-1-captured-local-field-content-bad.hir:19:3
+  19 |   fn() {
+     |   ^^^^^^ then: a closure over local content returns results local to its environment (CLO-1)
+ --> ../../conformance/CLO/CLO-1-captured-local-field-content-bad.hir:15:44
+  15 | fn example(take h: Holder, seed: Bytes) -> Bytes in {h, seed} {
+     |                                            ^^^^^^^^^^^^^^^^^^ required: a result may depend on the caller's storage, not on a temporary of this body
+ --> ../../conformance/CLO/CLO-1-captured-local-field-content-bad.hir:19:3
+  19 |   fn() {
+     |   ^^^^^^ this also fails here for the same cause (MODE-1)
+ --> ../../conformance/CLO/CLO-1-captured-local-field-content-bad.hir:19:3
+  19 |   fn() {
+     |   ^^^^^^ required: this use outlives the temporary's scope
+  = help: 1. read `r.value` directly, without the closure (no cost)
+  = help: 2. `unique (fn() { .. })()` (deep copy: allocates, costs O(size), and is not allowed under `@noalloc`)
+  = note: this also fails: MODE-1: a local view cannot outlive its temporary source scope: it depends on a temporary, but it is used after that scope ends

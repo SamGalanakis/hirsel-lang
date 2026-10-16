@@ -1,0 +1,16 @@
+// rule: SEM-2
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs: Array[f64] = [
+    100000000000000000000.0f64,
+    1.0f64,
+    -100000000000000000000.0f64,
+    1.0f64
+  ]
+  core@1/test.check(t, std@1/f64.sum(xs) == 0.0f64)
+  core@1/test.check(t, std@1/f64.sum_exact(xs) == 2.0f64)
+  let odd: Array[f64] = [1.0f64, 2.0f64, 3.0f64, 4.0f64, 5.0f64]
+  core@1/test.check(t, std@1/f64.sum(odd) == 15.0f64)
+  core@1/test.check(t, std@1/f64.sum_exact(odd) == 15.0f64)
+  Ok(())
+}

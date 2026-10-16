@@ -1,0 +1,40 @@
+// Box reads follow issue #98; implementation is owned by box-read.
+// Parse individually allocated events, validate, traverse and release the batch.
+type Event { code: u8, amount: u64, next: u64 }
+fn validate(code: u8, amount: u64) -> Result[u64, u64] {
+  if code < 25u8 && amount <= 900u64 { Ok(amount * (int.widen(code) + 1u64)) }
+  else { Error(int.widen(code)) }
+}
+fn workload(data: Bytes) -> Bytes {
+  let mut position: u64 = 0
+  let n = decimal(data, mut position)
+  failure.check(data[position] == 10u8, TextInvariant())
+  position += 1u64
+  let mut events: List[Option[box Event]] = [None()]
+  list.reserve(mut events, n + 1u64)
+  let mut head: u64 = 0
+  for i in 0u64..n {
+    let code = decimal(data, mut position)
+    failure.check(code <= 255u64, Arithmetic())
+    failure.check(data[position] == 44u8, TextInvariant())
+    position += 1u64
+    let amount = decimal(data, mut position)
+    failure.check(data[position] == 10u8, TextInvariant())
+    position += 1u64
+    let index = list.len(events)
+    list.push(mut events, Some(box Event(code: int.narrow(code), amount: amount, next: head)))
+    head = index
+  }
+  failure.check(position == bytes.len(data), TextInvariant())
+  let mut total: u64 = 0
+  while head != 0u64 {
+    match events[head] {
+      Some(event) => {
+        total += match validate(event.code, event.amount) { Ok(value) => value, Error(code) => 10000u64 + code }
+        head = event.next
+      },
+      None() => { failure.check(false, Bounds()); head = 0u64 },
+    }
+  }
+  number(total)
+}

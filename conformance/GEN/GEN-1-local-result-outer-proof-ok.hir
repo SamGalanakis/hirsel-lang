@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: accept
+fn same[T](x: T) -> T in x {
+  x
+}
+
+fn relay[U: copyable](x: U) -> U in x {
+  same(x)
+}

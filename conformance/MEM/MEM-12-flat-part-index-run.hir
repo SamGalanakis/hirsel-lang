@@ -1,0 +1,66 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+// exit: 0
+// A fixed element of a flat record's list or byte part is indexed in place
+// on a flat parameter, on a loop element of a flat list and on a local, and
+// each is read at its source type.
+flat type Message {
+  id: u64,
+  tags: List[u64],
+  payload: Bytes,
+}
+
+flat type Messages {
+  items: List[Message],
+}
+
+fn first_byte(m: Message) -> u8 {
+  m.payload[0]
+}
+
+fn last_byte(m: Message) -> u8 {
+  m.payload[bytes.len(m.payload) - 1u64]
+}
+
+fn tag_sum(messages: Messages) -> u64 {
+  let mut s: u64 = 0
+  for m in messages.items {
+    let t = m.tags[0]
+    s += t + m.tags[list.len(m.tags) - 1u64]
+  }
+  s
+}
+
+fn local_index() -> u64 {
+  let m = Message(id: 4, tags: [11, 12, 13], payload: b"xyz")
+  let b: u64 = int.widen(m.payload[1])
+  m.tags[2] + b
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a = Message(id: 1, tags: [5, 6], payload: b"ab")
+  let messages = Messages(
+    items: [
+      Message(id: 2, tags: [7], payload: b"c"),
+      Message(id: 3, tags: [8, 9, 10], payload: b"de")
+    ]
+  )
+  let ok = first_byte(copy a) == 97u8 && last_byte(a) == 98u8 && tag_sum(messages) == 7u64 + 7u64 + 8u64 + 10u64 && local_index() == 13u64 + 121u64
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+fn output_error[E](take e: E) -> () {}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

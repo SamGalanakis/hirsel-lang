@@ -1,0 +1,11 @@
+pub opaque type Pure: plain + sendable + inert uses {} {
+  s: u64,
+}
+
+pub fn make(s: u64) -> Pure {
+  Pure(s: s)
+}
+
+pub fn compute(p: Pure, x: u64) -> u64 {
+  x + 1
+}

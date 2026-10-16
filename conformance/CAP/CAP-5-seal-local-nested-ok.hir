@@ -1,0 +1,19 @@
+// rule: CAP-5
+// expect: accept
+@capability(local)
+pub opaque type LocalFacet: noalloc_drop uses {} {
+  n: u64,
+}
+
+fn scoped(body: fn() -> u64 uses {LocalFacet}) -> u64 {
+  body()
+}
+
+fn probe() -> u64 {
+  let c = LocalFacet(n: 7)
+  scoped(
+    fn() {
+      c.n
+    }
+  )
+}

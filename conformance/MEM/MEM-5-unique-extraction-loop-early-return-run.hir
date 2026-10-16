@@ -1,0 +1,33 @@
+// rule: MEM-5
+// expect: run
+// stdout: 3 2
+// Each iteration deep-copies a nonempty list under a read loan, and the loop
+// is left only by a return from its body, on the copy's length in one call
+// and at the limit in the other. The loan ends on every exit edge of the copy.
+fn find(b: List[u8], limit: u64) -> u64 {
+  let mut i: u64 = 0
+  while true {
+    let data = unique b
+    if core@1/list.len(data) == i {
+      return i
+    }
+    if i == limit {
+      return limit
+    }
+    i += 1u64
+  }
+  0
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let b: List[u8] = [1u8, 2u8, 3u8]
+  let found = find(b, 10u64)
+  let exhausted = find(b, 2u64)
+  let line: String = if found == 3u64 && exhausted == 2u64 {
+    "3 2\n"
+  } else {
+    "other\n"
+  }
+  let _ = out.print(io.stdout(rt)?, line)
+  Ok(())
+}

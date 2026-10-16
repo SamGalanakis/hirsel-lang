@@ -1,0 +1,25 @@
+// rule: SEM-2
+// expect: run
+// stdout: ok
+// "float.min_number/max_number ignore NaN".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let zero: f64 = 0.0
+  let nan = zero / zero
+  let value = float.max_number(3.0f64, nan)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if value == 3.0 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

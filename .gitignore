@@ -1,0 +1,22 @@
+# Logs
+*.log
+*.log.*
+
+# Cargo build output
+/target/
+
+# Buck2: pinned tools, build outputs and the local remote-execution configuration.
+/.buck2/
+/buck-out/
+/.buckconfig.local
+/tools/buck2/toolchains/rust-files/
+/tools/buck2/toolchains/llvm-files/
+/tools/buck2/bin/
+/tools/buck2/__pycache__/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

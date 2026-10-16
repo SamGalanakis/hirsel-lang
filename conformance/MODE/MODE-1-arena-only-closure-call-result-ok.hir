@@ -1,0 +1,42 @@
+// rule: MODE-1
+// expect: accept
+// Under §04/P2 and #80, a closure call's result may share what its environment
+// captures. Each capture here is arena-only storage of this body, so the result
+// holds only its arena bound and read loans that end at return, and it is
+// within `in a`, as `choose(a, t, y)` is.
+fn mk(a: Arena) -> Bytes in a {
+  b"x"
+}
+
+fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {a, x} {
+  x
+}
+
+fn literal(a: Arena, y: Bytes) -> Bytes in a {
+  let t = mk(a)
+  choose(
+    a,
+    fn() {
+      t
+    }(),
+    y
+  )
+}
+
+fn named(a: Arena, y: Bytes) -> Bytes in a {
+  let t = mk(a)
+  let g = fn() {
+    t
+  }
+  choose(a, g(), y)
+}
+
+fn fresh(a: Arena, y: Bytes) -> Bytes in a {
+  choose(
+    a,
+    fn() {
+      mk(a)
+    }(),
+    y
+  )
+}

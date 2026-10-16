@@ -1,0 +1,28 @@
+// rule: MEM-4
+// expect: run
+// stdout: ok
+// "copy_to(heap, x) deep-copies out".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let text: String = arena.with(
+    fn(a: Arena) -> String {
+      let inside: String in a = "copied"
+      copy_to(heap, inside)
+    }
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if text == "copied" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

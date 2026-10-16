@@ -1,0 +1,14 @@
+// rule: MODE-7
+// expect: accept
+// "... closures many."
+fn make() -> fn() -> u64 uses {} {
+  fn() {
+    let n: u64 = 1
+    n
+  }
+}
+
+fn example() -> (u64, u64) {
+  let action = make()
+  (action(), action())
+}

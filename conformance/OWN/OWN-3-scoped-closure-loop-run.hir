@@ -1,0 +1,32 @@
+// rule: OWN-3
+// expect: run
+// entry: test_scoped
+// A scoped closure called through a helper in a loop is borrowed for each
+// call, with no per-call retain or release (closure-iter/scoped kernel).
+fn apply(value: u64, f: fn(u64) -> u64 uses {}) -> u64 uses {f} {
+  f(value)
+}
+
+fn kernel(n: u64) -> u64 {
+  let offsets: List[u64] = [3u64]
+  let factor: u64 = 2
+  let add = fn(value: u64) -> u64 uses {} {
+    value + offsets[0u64]
+  }
+  let multiply = fn(value: u64) -> u64 uses {} {
+    value * factor
+  }
+  let mut total: u64 = 0
+  for i in 0u64..n {
+    let value = apply(i, add)
+    if value % 2u64 == 0u64 {
+      total += apply(value, multiply) + add(0u64)
+    }
+  }
+  total
+}
+
+pub fn test_scoped(t: Test) -> Result[(), ()] {
+  test.check(t, kernel(8u64) == 68u64)
+  Ok(())
+}

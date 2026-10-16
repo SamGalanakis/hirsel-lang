@@ -1,0 +1,7 @@
+// rule: OWN-6
+// expect: run
+// stdout: hello
+// stdout:  space stays 
+// stdout:
+// exit: 7
+fn main() {}

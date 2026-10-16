@@ -1,0 +1,35 @@
+pub opaque type Hidden: data + copyable uses {} {
+  value: u64,
+  text: String,
+}
+
+pub opaque type Choice: data uses {} = Empty | Full(u64)
+
+pub fn build() -> Hidden {
+  Hidden(value: 11, text: "owner")
+}
+
+pub fn read(h: Hidden) -> u64 {
+  h.value
+}
+
+pub fn unpack(take h: Hidden) -> String {
+  let Hidden(value: _, text: s) = take h
+  s
+}
+
+pub fn choose() -> Choice {
+  Full(13)
+}
+
+pub fn inspect(c: Choice) -> u64 {
+  match c {
+    Empty() => 0,
+    Full(n) => n,
+  }
+}
+
+pub type Visible {
+  value: u64,
+  text: String,
+}

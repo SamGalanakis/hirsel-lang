@@ -1,0 +1,17 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 3
+pub opaque type S: plain + flat uses {} {
+  s: String,
+}
+
+fn dup(x: S) -> (S, S) {
+  (x, x)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a = S(s: "hello\n")
+  let (b, c) = dup(a)
+  let _ = out.print(io.stdout(rt)?, b.s)
+  let _ = out.print(io.stdout(rt)?, c.s)
+  Ok(())
+}

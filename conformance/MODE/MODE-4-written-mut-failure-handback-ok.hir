@@ -1,0 +1,8 @@
+// rule: MODE-4
+// expect: accept
+fn example(mut s: sendable String) -> u64 {
+  let previous = unique s
+  s = "changed"
+  let bytes = string.as_bytes(previous)
+  bytes.len(bytes)
+}

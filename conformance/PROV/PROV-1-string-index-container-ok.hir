@@ -1,0 +1,17 @@
+// rule: PROV-1
+// expect: accept
+fn make(r: List[String]) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: List[String], p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn probe(take r0: List[String]) -> () {
+  let mut r = r0
+  let p = make(r)
+  r[0] = "s"
+  let fresh = make(r)
+  inspect(r, fresh)
+}

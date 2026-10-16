@@ -1,0 +1,7 @@
+// rule: MODE-6
+// expect: accept
+pub fn capture(n: Net) -> fn() -> Result[List[SocketAddr], NetError] uses {Net} {
+  fn() {
+    net.resolve(n, "example.com", 80u16)
+  }
+}

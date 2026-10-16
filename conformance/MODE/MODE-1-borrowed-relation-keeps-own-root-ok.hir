@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: accept
+// Under v22 S2, the result names x as well as a, so it keeps x's own root.
+fn f(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  x
+}

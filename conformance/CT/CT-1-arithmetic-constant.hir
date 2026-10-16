@@ -1,0 +1,4 @@
+// rule: CT-1
+// expect: accept
+// "comptime e evaluates e while compiling, to initialise a declared constant".
+pub const VALUE: u32 = comptime (2 + 3)

@@ -1,0 +1,41 @@
+// rule: CLO-1
+// expect: run
+// stdout: ok
+// "Captures are borrows." "Written/contextual result promises are not
+// inferred."
+// A closure that yields a captured local returns a share of it, local to its
+// environment and global here because the capture's content is. Its inferred
+// result promises no uniqueness, so the local's own unique row does not make
+// returning the share a MODE-2 error.
+type R {
+  name: String,
+}
+
+fn count() -> u64 {
+  let xs: List[R] = [R(name: "ab")]
+  string.byte_len(
+    fn() {
+      xs
+    }()[0].name
+  )
+}
+
+fn record() -> u64 {
+  let r = R(name: "abc")
+  let f = fn() {
+    r
+  }
+  string.byte_len(f().name)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if count() == 2 && record() == 3 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

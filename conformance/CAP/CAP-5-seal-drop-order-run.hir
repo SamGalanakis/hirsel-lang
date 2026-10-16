@@ -1,0 +1,17 @@
+// rule: CAP-5
+// expect: run
+// stdout: ba
+@capability(global)
+pub opaque resource type Writer: () uses {Stdout} {
+  out: Stdout,
+  text: String,
+}
+drop(self) {
+  let _ = out.print(self.out, self.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a = Writer(out: io.stdout(rt)?, text: "a\n")
+  let b = Writer(out: io.stdout(rt)?, text: "b")
+  Ok(())
+}

@@ -1,0 +1,8 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 5
+fn pick(xs: List[Bytes], x: Bytes) -> Bytes in x {
+  for e in xs {
+    return e
+  }
+  x
+}

@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+// `unique x` of a value already unique makes no copy (MEM-5), so x stays
+// local to its own argument and cannot be returned as a global result.
+fn preserve(take x: unique Bytes in x) -> unique Bytes {
+  unique x
+}

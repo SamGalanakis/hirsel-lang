@@ -1,0 +1,12 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 11
+// A result is as local as a taken argument was only when it names that
+// parameter. Naming only y, it cannot hold x's arena storage, which the
+// function's own binding ends.
+fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {x, y} {
+  x
+}
+
+fn relay(a: Arena, take x: Bytes in a, y: Bytes) -> Bytes in y {
+  choose(a, x, y)
+}

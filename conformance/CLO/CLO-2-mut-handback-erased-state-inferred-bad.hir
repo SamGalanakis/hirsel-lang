@@ -1,0 +1,35 @@
+// rule: CLO-2
+// expect: reject MODE-4 at line 21
+// The twin of CLO-2-mut-handback-erased-state-annotated-run without the
+// written type. The binding's inferred state holds no authority, and
+// `restart` may store any `Iter[u64]` in it (spec #91).
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    None
+  } else {
+    n += 1
+    Some(n)
+  }
+}
+
+fn restart(mut it: Iter[u64]) -> () {
+  it = iter.from(0u64, count)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut it = iter.from(1u64, count)
+  restart(mut it)
+  let mut last: u64 = 0
+  for x in mut it {
+    last = x
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if last == 2 {
+      "2\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

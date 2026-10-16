@@ -1,0 +1,26 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 24
+// An unannotated binding's type is the one inferred where it is declared.
+// Here `quiet()` is `uses {}`, so the binding is, and it cannot be handed to an
+// open-`uses` `mut` parameter that may store a function holding authority.
+fn sandbox(g: fn() -> () uses {}) -> () {
+  g()
+}
+
+fn quiet() -> fn() -> () uses {} {
+  fn() {
+    ()
+  }
+}
+
+fn set(mut p: fn() -> (), rt: Stdout) -> () {
+  p = fn() {
+    let _ = out.print(rt, "x")
+  }
+}
+
+fn probe(rt: Stdout) -> () {
+  let mut p = quiet()
+  set(mut p, rt)
+  sandbox(p)
+}

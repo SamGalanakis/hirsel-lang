@@ -1,0 +1,34 @@
+// rule: CLO-4
+// expect: run
+// stdout: created
+// stdout: created
+@captures(state, next)
+fn build[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] {
+  iter.from(take state, take next)
+}
+
+fn step(mut position: u64) -> Option[u64] {
+  if position < 2 {
+    let value = position
+    position += 1
+    Some(value)
+  } else {
+    None
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut it = build(0u64, step)
+  let mut count: u64 = 0
+  while count < 3 {
+    match iter.next(mut it) {
+      Some(value) => {
+        failure.check(value == count, Bounds())
+        let _ = out.print(io.stdout(rt)?, "created\n")
+      },
+      None => failure.check(count == 2, Bounds()),
+    }
+    count += 1
+  }
+  Ok(())
+}

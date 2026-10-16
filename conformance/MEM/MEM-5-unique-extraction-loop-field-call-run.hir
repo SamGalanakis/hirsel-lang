@@ -1,0 +1,33 @@
+// rule: MEM-5
+// expect: run
+// stdout: 2
+// The std@1/http shape, a deep copy of a borrowed record's field, consumed by
+// a call, in a loop with a conditional return. The copy can fail; its read
+// loan on the field ends on that failure edge as on success.
+type Request {
+  input: List[u8],
+  wanted: u64,
+}
+
+fn decode(r: Request) -> u64 {
+  let mut tries: u64 = 0
+  while true {
+    let data = core@1/bytes.from_list(unique r.input)
+    tries += 1u64
+    if core@1/bytes.len(data) + tries == r.wanted {
+      return tries
+    }
+  }
+  0
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let r = Request(input: [7u8, 8u8, 9u8], wanted: 5u64)
+  let line: String = if decode(r) == 2u64 {
+    "2\n"
+  } else {
+    "other\n"
+  }
+  let _ = out.print(io.stdout(rt)?, line)
+  Ok(())
+}

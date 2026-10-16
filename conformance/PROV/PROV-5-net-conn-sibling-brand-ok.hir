@@ -1,0 +1,10 @@
+// rule: PROV-5
+// expect: accept
+resource type Conn {
+  net: Net,
+  stream: Stream of .net,
+}
+
+fn build(a: Net, b: Net, take s: Stream of a) -> Conn {
+  Conn(net: a, stream: take s)
+}

@@ -1,0 +1,9 @@
+// rule: PROV-2
+// expect: accept
+fn use_pos(s: Dir, p: bool) -> () {
+  ()
+}
+
+fn probe(s: Dir, p: bool of s) -> () {
+  use_pos(s, !p)
+}

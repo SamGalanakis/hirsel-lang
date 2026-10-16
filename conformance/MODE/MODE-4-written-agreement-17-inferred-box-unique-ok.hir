@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: accept
+// Regression from tail/local-result; TIR/TypeMismatch/call result.
+type R {
+  xs: unique List[Bytes],
+}
+
+fn probe(take r: R) {
+  let built = box unique {
+    fn(agree_x: R) {
+      agree_x
+    }(r)
+  }.xs
+  let frozen = shared.freeze(take built)
+}

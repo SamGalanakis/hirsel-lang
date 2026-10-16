@@ -1,0 +1,31 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 24
+// spec: #50
+// The block names one computed owner and the value belongs to another.
+fn fresh() -> List[u64] {
+  []
+}
+
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn inspect(d: List[u64], p: Option[u8 of d]) -> () {}
+
+fn probe() -> () {
+  let owner = fresh()
+  let other = fresh()
+  let value = mk(
+    {
+      owner
+      owner
+    }
+  )
+  inspect(
+    {
+      other
+      other
+    },
+    value
+  )
+}

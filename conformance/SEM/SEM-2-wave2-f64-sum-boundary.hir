@@ -1,0 +1,33 @@
+// rule: SEM-2
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let empty: Array[f64] = []
+  core@1/test.check(t, core@1/f64.bits(std@1/f64.sum(empty)) == 0u64)
+  core@1/test.check(t, core@1/f64.bits(std@1/f64.sum_exact(empty)) == 0u64)
+  let zero: Array[f64] = [-0.0f64, -0.0f64, -0.0f64]
+  core@1/test.check(t, core@1/f64.bits(std@1/f64.sum(zero)) == 9223372036854775808u64)
+  core@1/test.check(
+    t,
+    core@1/f64.bits(std@1/f64.sum_exact(zero)) == 9223372036854775808u64
+  )
+  let positive: Array[f64] = [core@1/f64.from_bits(9218868437227405312u64), 1.0f64]
+  core@1/test.check(
+    t,
+    core@1/f64.bits(std@1/f64.sum_exact(positive)) == 9218868437227405312u64
+  )
+  let opposite: Array[f64] = [
+    core@1/f64.from_bits(9218868437227405312u64),
+    core@1/f64.from_bits(18442240474082181120u64)
+  ]
+  core@1/test.check(
+    t,
+    core@1/f64.bits(std@1/f64.sum(opposite)) == 9221120237041090560u64
+  )
+  core@1/test.check(
+    t,
+    core@1/f64.bits(std@1/f64.sum_exact(opposite)) == 9221120237041090560u64
+  )
+  let tiny: Array[f64] = [core@1/f64.from_bits(1u64), core@1/f64.from_bits(1u64)]
+  core@1/test.check(t, core@1/f64.bits(std@1/f64.sum_exact(tiny)) == 2u64)
+  Ok(())
+}

@@ -1,0 +1,7 @@
+// rule: LANG-12
+// expect: accept
+type R = Zero | One(u8)
+
+fn probe() {
+  let x: R = Zero
+}

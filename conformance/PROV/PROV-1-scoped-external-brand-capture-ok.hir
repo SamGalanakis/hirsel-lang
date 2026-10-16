@@ -1,0 +1,8 @@
+// rule: PROV-1
+// expect: accept
+fn probe(s: String, x: String of s) -> u64 {
+  let f = fn() {
+    string.byte_len(x)
+  }
+  f()
+}

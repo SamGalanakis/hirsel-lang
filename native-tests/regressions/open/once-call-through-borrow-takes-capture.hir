@@ -1,0 +1,25 @@
+// native/heap/heap: UninitializedScan: once call through a borrow takes a capture
+// the caller only borrows the once callable, its body takes x out of the environment, and the caller's release of the callable then drops the environment with x moved out (hirsel-rc library harness: UninitializedScan: drop of uninitialized LayoutId(N)) (heap engine only: the LLVM executable of `hirsel run --native` prints ok)
+fn probe() -> once fn() -> u64 {
+  let x: String in heap = "x"
+  fn() {
+    string.byte_len(take x)
+  }
+}
+
+fn called() -> u64 {
+  let f = probe()
+  f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if called() == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

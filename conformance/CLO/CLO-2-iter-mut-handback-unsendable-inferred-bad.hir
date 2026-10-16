@@ -1,0 +1,21 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 19
+// Both iterators are unsendable; erased capture authority still must be exact.
+fn next_value(mut s: String) -> Option[u64] {
+  let _ = string.byte_len(s)
+  None
+}
+
+fn step(mut rt: Io) -> Option[u64] {
+  None
+}
+
+fn reset(mut it: Iter[u64], take rt: Io) -> () {
+  it = iter.from(take rt, step)
+}
+
+fn probe(take rt: Io, take s: String) -> Result[(), ()] {
+  let mut it = iter.from(take s, next_value)
+  reset(mut it, take rt)
+  Ok(())
+}

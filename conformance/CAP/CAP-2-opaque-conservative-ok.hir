@@ -1,0 +1,9 @@
+// rule: CAP-2
+// expect: accept
+pub opaque type Marker: plain uses {Stdout} {
+  n: u32,
+}
+
+fn marker() -> Marker {
+  Marker(n: 7u32)
+}

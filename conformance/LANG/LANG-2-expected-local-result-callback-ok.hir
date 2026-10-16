@@ -1,0 +1,13 @@
+// rule: LANG-2
+// expect: accept
+// The expected type of the call is a local value, which is its receiver's
+// access mode. The type argument inferred from it is plain Bytes, and the
+// callback literal is expected to return that, not a local result.
+fn example(seed: Bytes) -> Bytes in seed {
+  arena.with(
+    fn(a: Arena) {
+      let value: Bytes in a = b"inside"
+      copy_to(heap, value)
+    }
+  )
+}

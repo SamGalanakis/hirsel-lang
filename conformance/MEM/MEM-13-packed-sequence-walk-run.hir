@@ -1,0 +1,45 @@
+// rule: MEM-13
+// expect: run
+// stdout: 1
+// stdout: 6
+// stdout: 4
+// stdout: 11
+// "a sequence of Packed values is sequential", so a for loop walks its
+// elements, each at its own variant's extent.
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn score(x: Packed[Choice], large: bool) -> u64 {
+  if large {
+    x.Large.value * x.Large.extra
+  } else {
+    x.Small.value
+  }
+}
+
+fn total(xs: List[Packed[Choice]]) -> u64 {
+  let mut sum = 0u64
+  let mut k = 0u64
+  for x in xs {
+    sum = sum + score(x, k == 1u64)
+    k = k + 1u64
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let xs: List[Packed[Choice]] = [
+    Small(value: 1),
+    Large(value: 2, extra: 3),
+    Small(value: 4)
+  ]
+  let mut k = 0u64
+  for x in xs {
+    let _ = out.print(out, std@1/u64.to_string(score(x, k == 1u64)))
+    let _ = out.print(out, "\n")
+    k = k + 1u64
+  }
+  let _ = out.print(out, std@1/u64.to_string(total(xs)))
+  let _ = out.print(out, "\n")
+  Ok(())
+}

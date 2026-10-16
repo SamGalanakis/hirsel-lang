@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "probe",
+    "version": "2"
+  },
+  "sources": [
+    {
+      "path": "probe.hir",
+      "module": [
+        "api"
+      ]
+    }
+  ],
+  "dependencies": []
+}

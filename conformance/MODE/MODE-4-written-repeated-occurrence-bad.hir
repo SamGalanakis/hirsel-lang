@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn both[T](x: sendable T, y: sendable T) {}
+
+fn probe(take a: sendable Bytes, take b: Bytes) {
+  both(a, b)
+}

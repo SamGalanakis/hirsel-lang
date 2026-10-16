@@ -1,0 +1,41 @@
+// rule: SEM-5
+// expect: run
+// stdout: 312 312
+// Keyed reads "change neither the container nor its order" (#90), so iteration
+// stays in insertion order whichever keys were read, hit or missed.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant_error
+  let mut m: Map[u64, u64] = map.empty()
+  map.insert(mut m, 3, 30)
+  map.insert(mut m, 1, 10)
+  map.insert(mut m, 2, 20)
+  let mut s: Set[u64] = set.empty()
+  set.insert(mut s, 3)
+  set.insert(mut s, 1)
+  set.insert(mut s, 2)
+  let last = map.get(m, 2)
+  let first = map.get(m, 3)
+  let missing = map.get(m, 9)
+  let found = set.contains(s, 2) == set.contains(s, 3)
+  let absent = set.contains(s, 9)
+  let mut keys: u64 = 0
+  for (k, v) in m {
+    keys = keys * 10 + k
+  }
+  let mut members: u64 = 0
+  for member in s {
+    members = members * 10 + member
+  }
+  out.print(out, std@1/u64.to_string(keys)) ? output_error
+  out.print(out, " ") ? output_error
+  out.print(out, std@1/u64.to_string(members)) ? output_error
+  out.print(out, "\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

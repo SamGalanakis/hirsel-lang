@@ -1,0 +1,13 @@
+// rule: GEN-1
+// expect: accept
+pub opaque type Count: plain + data + inert + noalloc_drop uses {} {
+  n: u32,
+}
+
+pub fn make(n: u32) -> Count {
+  Count(n: n)
+}
+
+pub fn read(c: Count) -> u32 {
+  c.n
+}

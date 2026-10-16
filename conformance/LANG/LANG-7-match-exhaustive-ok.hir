@@ -1,0 +1,12 @@
+// rule: LANG-7
+// expect: accept
+// Shows "No overloading, type classes, implicit conversions (including between error types), macros, exceptions, any or casts."
+type Choice = First | Last
+
+@noalloc
+fn example(x: Choice) -> u32 {
+  match x {
+    First => 1,
+    Last => 2,
+  }
+}

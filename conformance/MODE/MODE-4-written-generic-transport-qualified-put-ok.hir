@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+fn put[T](mut xs: List[sendable T], take x: sendable T) {
+  list.push(mut xs, take x)
+}
+
+fn probe() {
+  let mut xs: List[sendable Bytes] = []
+  put(mut xs, b"a")
+}

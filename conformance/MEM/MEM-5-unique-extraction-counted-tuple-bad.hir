@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 5
+@noalloc
+fn probe(x: (u64, String)) -> unique (u64, String) {
+  unique x
+}

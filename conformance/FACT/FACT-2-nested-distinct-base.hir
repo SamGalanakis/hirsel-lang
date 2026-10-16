@@ -1,0 +1,11 @@
+// rule: FACT-2
+// expect: run
+// A distinct type can use "other plain base[s]" and inherits their bounds.
+distinct type Percent(v: u8) where v <= 100
+
+distinct type Nonzero(v: Percent) where v != Percent(0)
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = Nonzero(Percent(100))
+  Ok(())
+}

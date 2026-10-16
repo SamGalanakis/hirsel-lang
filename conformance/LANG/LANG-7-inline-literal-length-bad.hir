@@ -1,0 +1,6 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 5
+// An Inline literal has exactly its type's length.
+fn three() -> Inline[u8, 3] {
+  [1u8, 2u8]
+}

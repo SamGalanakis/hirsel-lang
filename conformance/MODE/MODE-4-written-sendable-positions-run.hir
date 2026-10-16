@@ -1,0 +1,61 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// `sendable` written on a function type normalizes in every binding the
+// grammar lets it qualify, here a borrowed or `mut` parameter, a closure's
+// parameters, a `let mut` binding with `once`, and parts of a tuple, a list
+// and an `Option`. Each keeps the promise, so what it holds may be handed to
+// a parameter that requires a sendable function.
+fn needs(take g: sendable fn() -> u64) -> u64 {
+  g()
+}
+
+fn lend(g: sendable fn() -> u64) -> u64 {
+  g()
+}
+
+fn reset(mut g: sendable fn() -> u64) -> () {
+  g = seven
+}
+
+fn seven() -> u64 {
+  7
+}
+
+fn probe(take q: sendable fn() -> u64) -> u64 {
+  let borrowed = fn(g: sendable fn() -> u64) {
+    lend(g)
+  }
+  let replaced = fn(mut g: sendable fn() -> u64) {
+    reset(mut g)
+  }
+  let mut held: sendable fn() -> u64 = fn() {
+    1
+  }
+  replaced(mut held)
+  let mut single: sendable once fn() -> u64 = fn() {
+    1
+  }
+  single = seven
+  let pair: (sendable fn() -> u64, u64) = (seven, 0)
+  let (first, _) = pair
+  let list: List[sendable fn() -> u64] = [seven]
+  let option: Option[sendable fn() -> u64] = Some(seven)
+  let total = borrowed(q) + needs(take held) + single() + needs(take first) + list[0]()
+  match option {
+    Some(g) => total + g(),
+    None => 0,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 42 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

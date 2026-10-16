@@ -1,0 +1,8 @@
+// rule: PROV-1
+// expect: accept
+// A sequence literal transports its elements' evidence, and `[p]` holds a
+// position of `text`, so it is a `List[StrPos of text]`.
+fn single(text: String, p: StrPos of text) -> u64 {
+  let positions: List[StrPos of text] = [p]
+  list.len(positions)
+}

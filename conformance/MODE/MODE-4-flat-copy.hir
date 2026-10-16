@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: accept
+// "flat values (copied)."
+flat type Item {
+  sku: String,
+  qty: u32,
+}
+
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(take x: Item) -> () {
+  cross(copy x)
+}

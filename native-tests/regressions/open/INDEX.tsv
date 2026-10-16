@@ -1,0 +1,35 @@
+# Every open reason in ../exclusions.tsv: its class, how many (case, engine) rows carry it, and the
+# shortest corpus case that shows it. Kinds found only by `agree --native full` have a program in this
+# directory, named in its first line. Regenerate after a bless.
+# class	rows	reason	shortest case
+native-unavailable	30	import: projection Index(LocalId(N)) of a Opaque { owner: ?	conformance/CT/CT-2-keyed-materialization-empty.hir
+compiler-error	28	import: validator: Layout	conformance/SEM/SEM-3-positions-empty-terminal.hir
+native-unavailable	28	ready: no drop body instance for LayoutId(N)	conformance/MODE/MODE-2-plain-list-mut-then-consume-run.hir
+native-unavailable	26	ready: operation u64.to_string has no native entry	conformance/CLO/CLO-2-counted-copy-capture-run.hir
+native-unavailable	24	ready: operation map.empty has no native entry	conformance/GEN/GEN-1-sortedmap-runtime-equality-ok.hir
+compiler-error	20	export: Operational(OperationalFailure { operation: "native instance graph", message: "?: an indirect call carries gen	conformance/LANG/LANG-2-nested-call-type-run.hir
+native-unavailable	10	ready: a drop of conditionally initialized SlotId(N)	conformance/DROP/DROP-2-moved-storage-write-loop.hir
+native-unavailable	6	ready: operation list.push has no native entry	conformance/FACT/FACT-1-append-example.hir
+native-unavailable	6	ready: operation sorted_map.empty has no native entry	conformance/GEN/GEN-1-sorted-map-copyable-key.hir
+native-unavailable	6	ready: a drop of a Block { payload: LayoutId(N) } with a moved or finalized part	conformance/CLO/CLO-1-return-local-capture-run.hir
+native-unavailable	4	ready: operation forget has no native entry	conformance/DROP/DROP-4-implicit-abort.hir
+native-unavailable	4	ready: operation set.contains has no native entry	conformance/MEM/MEM-3-set-contains-deep-key-fail.hir
+compiler-error	3	emission: invalid Ready unit: a flat copy of a layout that is not flat	conformance/MEM/MEM-12-explicit-copy.hir
+known-bug	3	heap: TypeConfusion: a flat extent holds a handle	conformance/MEM/MEM-12-explicit-copy.hir
+compiler-error	2	import: Import(InstanceId(N), Layout(main, Invalid("Simd lanes must be sized integers or floats")))	conformance/MEM/MEM-8-bool-splat.hir
+native-unavailable	2	emission: native emission does not support a value of dynamic extent yet	conformance/MEM/MEM-13-payload-tag-ok.hir
+native-unavailable	2	heap: Unsupported: dynamic size of LayoutId(N)	conformance/MEM/MEM-13-payload-tag-ok.hir
+native-unavailable	2	import: no native layout for Path	conformance/PROV/PROV-2-runtime-handle-narrow.hir
+native-unavailable	2	ready: a decomposed drop of an aggregate with ActiveVariant { tag_offset: N, form: Ordinal, variants: [(N, [Child { o	conformance/DROP/DROP-2-guarded-product-take-run.hir
+native-unavailable	2	ready: operation set.empty has no native entry	conformance/SEM/SEM-5-set-equality.hir
+native-unavailable	2	ready: operation string.from_bytes has no native entry	conformance/SEM/SEM-3-invalid-utf8-returned.hir
+compiler-error	2	import: validator: Type	conformance/MODE/MODE-3-once-function-write-run.hir
+compiler-error	1	emission: invalid Ready unit: no runtime descriptor for layout N: Malformed("a drop program shorter than its fields' con	conformance/MODE/MODE-3-borrowed-resource-many-run.hir
+compiler-error	1	emission: invalid Ready unit: a unique copy of a value that is not a block	conformance/MODE/MODE-2-deep-copy-preserves-aliases.hir
+known-bug	1	heap: UninitializedScan: drop of uninitialized LayoutId(N)	conformance/CLO/CLO-4-taken-heap-capture-run.hir
+known-bug	1	heap: ViewDetached: view under LoanId(N) used after its backing owner changed (was Ptr { alloc: AllocId(N), generati	conformance/OWN/OWN-3-element-sibling-field-block-argument-run.hir
+native-unavailable	1	emission: native emission does not support map and set construction yet	conformance/CT/CT-2-wrapper-run.hir
+native-unavailable	1	heap: Unsupported: Map construction of Opaque { owner: Map }	conformance/CT/CT-2-wrapper-run.hir
+native-unavailable	1	heap: Unsupported: operation operand Ptr(Ptr { alloc: AllocId(N), generation: N, offset: N })	conformance/SEM/SEM-2-sum-tree.hir
+native-unavailable	1	heap: Unsupported: structural comparison of a sequence	conformance/MEM/MEM-3-structural-equality.hir
+native-unavailable	1	heap: Unsupported: unique copy of a non-block value	conformance/MODE/MODE-2-deep-copy-preserves-aliases.hir

@@ -1,0 +1,10 @@
+[package]
+name = "hirsel-codec"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-types = { path = "../hirsel-types" }

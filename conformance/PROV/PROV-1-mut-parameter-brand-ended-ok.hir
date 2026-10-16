@@ -1,0 +1,25 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// A mut parameter keeps the brand its caller sees while the owner is only
+// read, and a borrowed parameter's ended brand is simply not used again.
+type Rec {
+  a: u64,
+  b: u64,
+}
+
+fn look(r: Rec) -> () {
+  ()
+}
+
+fn change(mut r: Rec) -> () {
+  ()
+}
+
+fn example(mut r: Rec, mut other: Rec of r) -> () {
+  look(r)
+}
+
+fn borrowed(mut r: Rec, other: Rec of r) -> () {
+  change(mut r)
+}

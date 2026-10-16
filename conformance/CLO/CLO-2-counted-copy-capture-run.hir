@@ -1,0 +1,16 @@
+// rule: CLO-2
+// expect: run
+// stdout: 1
+fn probe() -> fn() -> u64 {
+  let x: String = "x"
+  fn() {
+    string.byte_len(x)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let f = probe()
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(f()))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

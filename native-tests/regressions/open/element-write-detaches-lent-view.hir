@@ -1,0 +1,39 @@
+// native/heap/heap: ViewDetached: a block argument's write detaches the list an earlier argument's view lends
+// xs[i].n = 5 detaches xs from ys while same() holds a view of xs[i].name (OWN-3, OWN-4); the heap checker sees the view used after its backing owner changed (heap engine only: the LLVM executable of `hirsel run --native` prints ok)
+type R {
+  name: String,
+  n: u64,
+}
+
+fn same(s: String, k: u64) -> u64 {
+  if s == "ab" {
+    k
+  } else {
+    0
+  }
+}
+
+fn sibling() -> u64 {
+  let mut xs: List[R] = [R(name: "ab", n: 1)]
+  let i = 0u64
+  let ys = copy xs
+  same(
+    xs[i].name,
+    {
+      xs[i].n = 5
+      1
+    }
+  ) + xs[0].n * 10 + ys[0].n * 100
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if sibling() == 151 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,31 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// A `let mut` binding with a written function type may later hold any value
+// of that type, so its storage crosses tasks only as the written type does,
+// whatever its initializer proves. Replacing a capture-free literal with a
+// function that is not sendable is an ordinary write.
+@noalloc
+fn seven() -> u64 {
+  7
+}
+
+fn probe(take q: fn() -> u64) -> u64 {
+  let mut f: fn() -> u64 = fn() {
+    1
+  }
+  f = q
+  f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

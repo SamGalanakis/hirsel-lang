@@ -1,0 +1,323 @@
+(heapcheck-program
+  (TargetSpec "x86_64-unknown-linux-gnu" "x86-64"
+    (list)
+    (Little) 8
+    (ScalarAlignments 1 2 4 8 16 4 8 8 16)
+    (SysV64)
+    (Elf) "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+    (ArtifactVersions 23 3 1 4 0))
+  (LayoutTable #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3 1
+    (list
+      (LayoutRecord
+        (LayoutKey
+          (none)
+          (none) #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3)
+        (Scalar
+          (U64))
+        (Fixed 8) 8
+        (list)
+        (none)
+        (Fields)
+        (list)
+        (list)
+        (Bits)
+        (none)
+        (list
+          (Heap)
+          (LocalRegion))
+        (AbiInputs
+          (list
+            (pair 0
+              (U64))) 0))
+      (LayoutRecord
+        (LayoutKey
+          (none)
+          (none) #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3)
+        (Scalar
+          (Bool))
+        (Fixed 1) 1
+        (list)
+        (none)
+        (Fields)
+        (list)
+        (list)
+        (Bits)
+        (none)
+        (list
+          (Heap)
+          (LocalRegion))
+        (AbiInputs
+          (list
+            (pair 0
+              (Bool))) 0))
+      (LayoutRecord
+        (LayoutKey
+          (none)
+          (none) #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3)
+        (Aggregate)
+        (Fixed 8) 8
+        (list
+          (FieldLayout 0 0 0 0))
+        (none)
+        (Fields)
+        (list)
+        (list)
+        (Bits)
+        (none)
+        (list
+          (Heap)
+          (LocalRegion))
+        (AbiInputs
+          (list) 0))
+      (LayoutRecord
+        (LayoutKey
+          (none)
+          (none) #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3)
+        (Block 2)
+        (Fixed 8) 8
+        (list)
+        (none)
+        (Fields)
+        (list
+          (Counted 0))
+        (list
+          (Release 0))
+        (Dup)
+        (none)
+        (list
+          (Heap)
+          (LocalRegion))
+        (AbiInputs
+          (list) 0))
+      (LayoutRecord
+        (LayoutKey
+          (none)
+          (none) #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3)
+        (Block 2)
+        (Fixed 8) 8
+        (list)
+        (none)
+        (Fields)
+        (list
+          (Uncounted 0))
+        (list)
+        (Bits)
+        (none)
+        (list
+          (Heap)
+          (LocalRegion))
+        (AbiInputs
+          (list) 0))
+      (LayoutRecord
+        (LayoutKey
+          (none)
+          (none) #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3)
+        (Aggregate)
+        (Fixed 8) 8
+        (list
+          (FieldLayout 0 0 4 0))
+        (none)
+        (Fields)
+        (list
+          (Uncounted 0))
+        (list)
+        (Bits)
+        (none)
+        (list
+          (Heap)
+          (LocalRegion))
+        (AbiInputs
+          (list) 0))
+      (LayoutRecord
+        (LayoutKey
+          (none)
+          (none) #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 3)
+        (Block 5)
+        (Fixed 8) 8
+        (list)
+        (none)
+        (Fields)
+        (list
+          (Counted 0))
+        (list
+          (Release 0))
+        (Dup)
+        (none)
+        (list
+          (Heap)
+          (LocalRegion))
+        (AbiInputs
+          (list) 0)))
+    (list
+      (FnAbi
+        (FnAbiKey #60c92f6a74b17f39630dace3daf96d6098689cfa40b154cc9be3791ff6e61014 1)
+        (Definition)
+        (Many) 1 0 0
+        (none) 0
+        (none)
+        (list) 1)))
+  (list
+    (LirUnit
+      (UnitHeader
+        (Rc) 23
+        (Source)
+        (InputIdentity 11 #129a1e7efb7f261960cd22cf61a43afb3602da1616b6a941a635e4327915a243)
+        (DefPath "fixture" "0"
+          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #8d107446c2d8fd49d6a034cca9f1a31b3b2b852bba009f9f47774d13b8a5a3f7 #414586e0dff5f3d39e38200847dda22526ee1aba5ebd766d75753468aaa2950b 0)
+      (list
+        (LirType
+          (RegionMark) 0)
+        (LirType
+          (Scalar
+            (U64)) 0)
+        (LirType
+          (Uncounted) 4)
+        (LirType
+          (Block) 6))
+      (list
+        (ValueInfo 0
+          (Owned))
+        (ValueInfo 1
+          (Plain))
+        (ValueInfo 2
+          (Plain))
+        (ValueInfo 1
+          (Plain))
+        (ValueInfo 1
+          (Plain))
+        (ValueInfo 3
+          (Owned)))
+      (list)
+      (list
+        (AddressInfo
+          (Value 2)
+          (range 0 1) 1)
+        (AddressInfo
+          (Value 2)
+          (range 1 1) 1))
+      (list
+        (Block
+          (Body)
+          (range 0 0)
+          (range 0 6) 0)
+        (Block
+          (FailureCleanup)
+          (range 0 0)
+          (range 6 0) 0)
+        (Block
+          (Body)
+          (range 0 0)
+          (range 6 3) 0))
+      (list
+        (Call 0
+          (some 2) 2)
+        (Propagate)
+        (Return
+          (none)))
+      (list
+        (RegionEnter 0 0)
+        (Const 1 0)
+        (RegionReserve 2 0 2 1 0)
+        (Store 0 1 3)
+        (Address 1 1)
+        (Read 4 1 2
+          (Bits))
+        (Construct 5 0 3)
+        (RegionExit 0 0 4)
+        (Release 5 6
+          (All) 0 5)) 0
+      (list)
+      (list)
+      (list
+        (ScopeInfo
+          (none)))
+      (SideTables
+        (list
+          (CallSite
+            (Operation 0)
+            (list) 0
+            (range 0 1)
+            (none)
+            (some
+              (Heap))
+            (Effects "reads" "writes" "owns" "may_fail" "allocates" "observable" "barrier") 0))
+        (list
+          (ConstructSite 0
+            (Tuple) 6
+            (range 0 1)
+            (Heap)
+            (some
+              (Fixed
+                (Heap 0))) 0))
+        (list)
+        (list
+          (ConstantData 1
+            (Integer 6)))
+        (list)
+        (list
+          (OperationId
+            (DefPath "fixture" "0"
+              (list "heap") "print") #edada4e79f7346131accb80d32cbb42906fb05bf45b56f9ca3e298ddd8fe4c0f))
+        (list)
+        (list
+          (FailureEdge 0
+            (none) 0
+            (range 0 0))
+          (FailureEdge 1
+            (none) 0
+            (range 0 0))
+          (FailureEdge 3
+            (none) 0
+            (range 0 0))
+          (FailureEdge 4
+            (none) 0
+            (range 0 0))
+          (FailureEdge 5
+            (none) 0
+            (range 0 0))
+          (FailureEdge 6
+            (none) 0
+            (range 0 0)))
+        (list
+          (Edge 1
+            (range 0 0))
+          (Edge 1
+            (range 0 0))
+          (Edge 2
+            (range 0 0))
+          (Edge 1
+            (range 0 0))
+          (Edge 1
+            (range 0 0))
+          (Edge 1
+            (range 0 0))
+          (Edge 1
+            (range 0 0)))
+        (list)
+        (list
+          (RegionInstance 0 0))
+        (list)
+        (list) 1
+        (list
+          (SourceAnchor 0 0 0
+            (SiteRange 0 0)))
+        (list
+          (CleanupAnchor 0 0 0
+            (SiteRange 0 0)))
+        (list))
+      (Pools
+        (list)
+        (list)
+        (list
+          (Field 0)
+          (Field 0))
+        (list)
+        (list
+          (CallArgument 0
+            (Borrow)
+            (Value 4)))
+        (list
+          (FieldValue 0 2))
+        (list)
+        (list))))
+  (list))

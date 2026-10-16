@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: accept
+fn example(take s: (sendable String) in s) {
+  let bytes = string.as_bytes(s)
+}
+
+fn escape(take s: sendable String) -> Bytes {
+  string.as_bytes(s)
+}

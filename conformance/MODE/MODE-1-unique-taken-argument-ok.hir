@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: accept
+// A unique conversion of a copy of taken storage is still that storage for the
+// result (P2). Here the result is kept by a let in this frame, which bounds it.
+fn id(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  x
+}
+
+fn kept(a: Arena, take z: Bytes in a) -> u64 {
+  let r = id(a, unique copy z)
+  1u64
+}

@@ -1,0 +1,31 @@
+// rule: DET-1
+// expect: run
+// entry: exercise
+fn scripted(t: Test, connections: List[NetConnection], tls: PeerTls) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: tls,
+        connections: connections
+      )
+    ]
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = scripted(
+    t,
+    [Open([Expect(b"GET / HTTP/1.1\r\n\r\n"), Send(b"HTTP/1.1 200 OK\r\n\r\nok")])],
+    Plain()
+  )
+  let mut s = net.connect(n, "example.com", 80u16, Unbounded())?
+  net.write_all(n, mut s, b"GET / HTTP/1.1\r\n\r\n")?
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut s, mut buf, 100u64)? == 21u64)
+  test.check(t, bytes.from_list(take buf) == b"HTTP/1.1 200 OK\r\n\r\nok")
+  Ok(())
+}

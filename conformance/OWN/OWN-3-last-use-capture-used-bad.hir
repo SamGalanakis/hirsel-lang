@@ -1,0 +1,18 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 16
+// A closure capturing storage is called after the `mut` call (OWN-3, §04).
+fn look(x: Bytes) -> u64 {
+  0
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut b: Bytes) -> u64 {
+  let f = fn() -> u64 {
+    look(b)
+  }
+  bump(mut b)
+  f()
+}

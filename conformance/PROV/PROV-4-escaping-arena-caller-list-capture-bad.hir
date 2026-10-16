@@ -1,0 +1,14 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 9
+// Pushing the closure into a caller list lets it outlive the arena.
+fn probe(a: Arena, mut out: List[fn() -> u64]) {
+  let x: String in a = "x"
+  let pair = (x, 1u8)
+  list.push(
+    mut out,
+    fn() {
+      let (s, n) = pair
+      string.byte_len(s)
+    }
+  )
+}

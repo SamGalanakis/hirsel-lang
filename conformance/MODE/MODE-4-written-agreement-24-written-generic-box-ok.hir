@@ -1,0 +1,6 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/mode; TIR/TypeMismatch/constructor field.
+fn good[T](take x: unique (sendable T)) -> box sendable T {
+  box take x
+}

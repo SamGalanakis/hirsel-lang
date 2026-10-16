@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: accept
+fn probe() {
+  let xs: List[Bytes] = [b"y"]
+  let mut x: box List[Bytes] = box [b"x"]
+  x = box unique xs
+}

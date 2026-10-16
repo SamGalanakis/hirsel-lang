@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+// Regression from holder/sequence-element; TIR/InvalidProjection.
+fn probe(take f: sendable fn() -> u64) -> u64 {
+  let n = 0u64
+  let agree_held_231: List[((sendable fn() -> u64, u64), u64)] = [((f, n), 0u64)]
+  let (pair, _) = agree_held_231[0]
+  let (g, k) = pair
+  g() + k
+}

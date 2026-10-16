@@ -1,0 +1,11 @@
+// rule: DROP-3
+// expect: accept
+// "Infallible"; errors are discarded.
+type Stop = StopNow()
+
+resource type Value {
+  status: Result[(), Stop],
+}
+drop(x) {
+  let _ = x.status
+}

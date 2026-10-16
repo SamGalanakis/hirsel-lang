@@ -1,0 +1,42 @@
+// rule: MODE-3
+// expect: run
+// stdout: ok
+// The accepted twins, where storage written `once` receives a once function,
+// whole or as an element, and many storage receives a many function.
+fn loud() -> once fn() -> u64 {
+  fn() {
+    1
+  }
+}
+
+fn quiet() -> fn() -> u64 {
+  fn() {
+    2
+  }
+}
+
+fn set(mut p: fn() -> u64) -> () {
+  p = quiet()
+}
+
+fn total() -> u64 {
+  let mut g = loud()
+  g = loud()
+  let mut l: List[once fn() -> u64] = [loud()]
+  l[0] = loud()
+  let mut q: fn() -> u64 = quiet()
+  set(mut q)
+  g() + q() + q()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if total() == 5 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

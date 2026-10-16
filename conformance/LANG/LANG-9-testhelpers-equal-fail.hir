@@ -1,0 +1,7 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 6
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  std@1/test.equal(t, 1u64, 2u64)
+  Ok(())
+}

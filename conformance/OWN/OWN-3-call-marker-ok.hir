@@ -1,0 +1,10 @@
+// rule: OWN-3
+// expect: accept
+// "mut x at the call site."
+fn change(mut x: u64) -> () {
+  x = 1
+}
+
+fn example(mut x: u64) -> () {
+  change(mut x)
+}

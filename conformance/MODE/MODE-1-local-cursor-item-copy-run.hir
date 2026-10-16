@@ -1,0 +1,24 @@
+// rule: MODE-1
+// expect: run
+// stdout: cursor
+fn view(x: String) -> String in x {
+  x
+}
+
+fn probe(take xs: Set[String] in xs, seed: String) -> u64 {
+  let mut keep = view(seed)
+  for x in take xs {
+    keep = copy x
+  }
+  string.byte_len(keep)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: Set[String] = set.empty()
+  let _ = set.insert(mut xs, "abc")
+  let seed: String = "s"
+  if probe(take xs, seed) == 3u64 {
+    let _ = out.print(io.stdout(rt)?, "cursor\n")
+  }
+  Ok(())
+}

@@ -1,0 +1,21 @@
+// rule: GEN-1
+// spec: #48
+// expect: run
+// stdout: value
+resource type Trace {
+  stdout: Stdout,
+}
+drop(v) {
+  let _ = out.print(v.stdout, "value\n")
+}
+
+fn add[K: copyable, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) {
+  sorted_map.insert(by, mut m, k, take v)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let by = u32.order
+  let mut m: SortedMap[u32, Trace] of by = sorted_map.empty(by)
+  add(by, mut m, 1, Trace(stdout: io.stdout(rt)?))
+  Ok(())
+}

@@ -1,0 +1,28 @@
+// rule: MODE-1
+// expect: accept
+// "A local(x) result may refer to x." A result may refer to the named
+// parameter, to a global temporary, or to a local temporary it does not leave
+// the function with.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn fresh() -> Bytes {
+  b"fresh"
+}
+
+fn named(x: Bytes) -> Bytes in x {
+  view(x)
+}
+
+fn unbound(x: Bytes) -> Bytes in x {
+  view(fresh())
+}
+
+fn kept(x: Bytes) -> () {
+  let s = view(copy x)
+}
+
+fn nested(x: Bytes) -> () {
+  let s = view(view(x))
+}

@@ -1,0 +1,7 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 6
+type R[T] {}
+
+fn probe() {
+  let x = R
+}

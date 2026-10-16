@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+fn send[T: sendable](take x: T) {}
+
+fn probe(take x: Ptr[u8]) {
+  send(take x)
+}

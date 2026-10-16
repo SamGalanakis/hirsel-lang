@@ -1,0 +1,7 @@
+// rule: LANG-12
+// expect: reject LANG-12 at line 6
+fn rename[T](from x: T) {}
+
+fn probe() {
+  rename(x: 1)
+}

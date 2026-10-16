@@ -1,0 +1,56 @@
+@noalloc
+pub fn format[n: size](value: bool, mut buffer: Inline[u8, n]) -> Result[
+  u64,
+  std@1/scalar.FormatError
+] uses {} {
+  let count: u64 = if value {
+    4
+  } else {
+    5
+  }
+  if n < count {
+    return Error(BufferTooSmall)
+  }
+  if value {
+    buffer[0] = 116
+    buffer[1] = 114
+    buffer[2] = 117
+    buffer[3] = 101
+  } else {
+    buffer[0] = 102
+    buffer[1] = 97
+    buffer[2] = 108
+    buffer[3] = 115
+    buffer[4] = 101
+  }
+  Ok(count)
+}
+
+// Appends `true` or `false` to `out`; to_string is that text.
+pub fn format_into(value: bool, mut out: List[u8]) -> () uses {} {
+  std@1/text.append(
+    mut out,
+    if value {
+      "true"
+    } else {
+      "false"
+    }
+  )
+}
+
+pub fn to_string(value: bool) -> String uses {} {
+  let mut out: List[u8] = []
+  format_into(value, mut out)
+  std@1/internal.decimal.finish(take out)
+}
+
+@noalloc
+pub fn parse(text: String) -> Result[bool, std@1/scalar.ParseError] uses {} {
+  if text == "true" {
+    Ok(true)
+  } else if text == "false" {
+    Ok(false)
+  } else {
+    Error(Invalid)
+  }
+}

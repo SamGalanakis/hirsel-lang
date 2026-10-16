@@ -1,0 +1,6 @@
+[package]
+name = "hirsel-span"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true

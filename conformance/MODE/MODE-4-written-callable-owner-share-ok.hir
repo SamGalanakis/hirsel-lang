@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+fn whole(take jobs: sendable List[sendable fn() -> u64]) {}
+
+fn good() {
+  let jobs: List[sendable fn() -> u64] = [
+    fn() {
+      1
+    }
+  ]
+  whole(take jobs)
+}

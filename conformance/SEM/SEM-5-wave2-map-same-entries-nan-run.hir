@@ -1,0 +1,11 @@
+// rule: SEM-5
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut a: Map[u64, f64] = map.empty()
+  let mut b: Map[u64, f64] = map.empty()
+  map.insert(mut a, 1, 0.0f64 / 0.0f64)
+  map.insert(mut b, 1, 0.0f64 / 0.0f64)
+  failure.check(!std@1/map.same_entries(a, a), TextInvariant())
+  failure.check(!std@1/map.same_entries(a, b), TextInvariant())
+  Ok(())
+}

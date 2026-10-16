@@ -1,0 +1,15 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 11
+fn example(a: String, b: String, select: bool) -> () {
+  let position = if select {
+    string.position(a, 0)
+  } else {
+    string.position(b, 0)
+  }
+  match position {
+    Some(p) => {
+      string.byte_offset(a, p);
+    },
+    None() => (),
+  }
+}

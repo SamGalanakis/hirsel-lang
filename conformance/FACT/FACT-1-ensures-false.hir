@@ -1,0 +1,13 @@
+// rule: FACT-1
+// expect: fail FACT-1 at line 6
+// "requires e is checked on entry; ensures e before return"; a false contract fails.
+@noalloc
+fn id(x: u32) -> u32
+  ensures result != x {
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = id(1)
+  Ok(())
+}

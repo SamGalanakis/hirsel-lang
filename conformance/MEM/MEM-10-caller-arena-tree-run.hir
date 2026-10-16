@@ -1,0 +1,54 @@
+// rule: MEM-10
+// expect: run
+// stdout: 633
+// "A result with a relation is built directly in the caller's destination", its named arena.
+// The binarytrees/region workload at depth 6, with one arena per temporary tree and one for the retained tree.
+type Tree = Leaf | Branch(left: box Tree, right: box Tree)
+
+fn tree(a: Arena, depth: u64) -> (box Tree) in a {
+  if depth == 0u64 {
+    box Leaf()
+  } else {
+    box Branch(left: tree(a, depth - 1u64), right: tree(a, depth - 1u64))
+  }
+}
+
+fn check(t: box Tree) -> u64 {
+  match t {
+    Leaf() => 1u64,
+    Branch(left: l, right: r) => 1u64 + check(l) + check(r),
+  }
+}
+
+fn workload(depth: u64) -> u64 {
+  arena.with(
+    fn(long_arena: Arena) -> u64 {
+      let long = tree(long_arena, depth)
+      let mut total = arena.with(
+        fn(a: Arena) -> u64 {
+          let stretch = tree(a, depth + 1u64)
+          check(stretch)
+        }
+      )
+      let mut d: u64 = 4
+      while d <= depth {
+        for iteration in 0u64..1u64 << depth - d {
+          total += arena.with(
+            fn(a: Arena) -> u64 {
+              let temporary = tree(a, d)
+              check(temporary)
+            }
+          )
+        }
+        d += 2u64
+      }
+      total + check(long)
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(workload(6)))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

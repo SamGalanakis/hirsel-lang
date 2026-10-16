@@ -1,0 +1,11 @@
+// rule: PROV-1
+// expect: accept
+// "A copy of p keeps p’s identity ... until ... mutation or reassignment."
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn example(d: Dir, value: File of d) -> () {
+  let copied_dir = d
+  inspect(copied_dir, value)
+}

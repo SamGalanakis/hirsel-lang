@@ -1,0 +1,23 @@
+// rule: OWN-4
+// expect: run
+// stdout: ok
+// "First mutation of shared storage detaches it." A copy of a constant
+// shares its static storage, so the first write detaches the copy and the
+// constant still reads its own elements, including the untouched sibling.
+const XS: List[List[u64]] = [[1], [2], [3]]
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut ys = copy XS
+  ys[0] = [9]
+  ys[1][0] = 8
+  if (XS[0][0], XS[1][0], XS[2][0], ys[0][0], ys[1][0], ys[2][0]) == (1, 2, 3, 9, 8, 3) {
+    out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  } else {
+    out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

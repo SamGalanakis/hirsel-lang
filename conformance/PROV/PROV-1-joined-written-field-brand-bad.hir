@@ -1,0 +1,23 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 22
+// A brand made before the branch names the field that one path renews, so
+// using it after the join is PROV-1.
+type R {
+  k: u64,
+  s: String,
+}
+
+fn make_k(r: R) -> Option[u8 of r.k] {
+  None
+}
+
+fn inspect_k(r: R, p: Option[u8 of r.k]) {}
+
+fn branch(c: bool) {
+  let mut r = R(k: 0u64, s: "a")
+  let p = make_k(r)
+  if c {
+    r.k = 1u64
+  }
+  inspect_k(r, p)
+}

@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: accept
+fn need[T: flat](take x: unique T) -> ()
+
+fn outer[T: flat](take x: unique T) -> () {
+  let action: fn() -> () = fn() {
+    let copied = copy x
+  }
+  need(take x)
+  action()
+}

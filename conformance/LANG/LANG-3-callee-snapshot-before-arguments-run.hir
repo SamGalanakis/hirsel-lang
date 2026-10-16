@@ -1,0 +1,25 @@
+// rule: LANG-3
+// expect: run
+// entry: test_snapshot
+fn make(base: u64) -> fn(u64) -> u64 uses {} {
+  let payload: List[u64] = [base]
+  fn(x: u64) -> u64 uses {} {
+    payload[0u64] + x
+  }
+}
+
+fn snapshot() -> u64 {
+  let mut f = make(7u64)
+  let other = make(99u64)
+  f(
+    {
+      f = other
+      0u64
+    }
+  )
+}
+
+pub fn test_snapshot(t: Test) -> Result[(), ()] {
+  test.check(t, snapshot() == 7u64)
+  Ok(())
+}

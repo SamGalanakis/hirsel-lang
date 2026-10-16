@@ -1,0 +1,25 @@
+// rule: DROP-2
+// expect: run
+// stdout: B é
+// stdout: A Å
+resource type Item {
+  label: String,
+  out: Stdout,
+}
+drop(x) {
+  out.print(x.out, std@1/unicode.normalize_nfc(x.label));
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  let a = Item(label: "A \u{212b}\n", out: out)
+  let b = Item(label: "B e\u{301}\n", out: out)
+  let normalized = std@1/unicode.normalize_nfc(b.label)
+  failure.check(normalized == "B \u{e9}\n", TextInvariant())
+  failure.check(a.label == "A \u{212b}\n", TextInvariant())
+  std@1/unicode.normalize_nfc("temporary")
+  failure.check(true, Bounds())
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

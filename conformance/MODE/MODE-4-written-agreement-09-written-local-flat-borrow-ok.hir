@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: accept
+// Regression from parameter/passing; TIR/TypeMismatch/call argument.
+flat type Item {
+  sku: String,
+  qty: u32,
+}
+
+fn cross[T](x: sendable T) -> () {
+  ()
+}
+
+fn example(x: Item) -> () {
+  cross(x)
+}

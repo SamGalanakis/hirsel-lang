@@ -1,0 +1,17 @@
+// rule: DROP-2
+// expect: fail SEM-1 at line 8
+// entry: trial
+resource type Watch {
+  n: u8,
+}
+@noalloc drop(w) {
+  core@1/failure.check(w.n == 7, Arithmetic())
+}
+
+// The unexpected Ok value is destroyed before test.fail: its failing
+// finalizer is the first recorded failure.
+pub fn trial(t: Test) -> Result[(), ()] {
+  let unexpected: Result[Watch, u64] = Ok(Watch(n: 8))
+  let code = std@1/test.expect_error(t, take unexpected)
+  Ok(())
+}

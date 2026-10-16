@@ -1,0 +1,7 @@
+// rule: LANG-7
+// expect: accept
+type R = Only()
+
+fn probe() {
+  let x: R = Only()
+}

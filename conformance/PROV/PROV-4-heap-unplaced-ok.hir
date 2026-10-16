@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: accept
+// spec: #62
+// A value constructed where the heap is expected is placed there, and a
+// result declared in heap keeps the proof.
+fn make() -> Bytes in heap {
+  b"heap"
+}
+
+fn on_heap() -> Bytes in heap {
+  make()
+}
+
+fn anywhere() -> Bytes {
+  make()
+}

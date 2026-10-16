@@ -1,0 +1,13 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 10
+@noalloc
+fn through(g: fn() -> () uses {}) -> () {
+  ()
+}
+
+fn probe() -> () {
+  let f: @noalloc fn(g: fn() -> () uses {}) -> () uses {} = fn(g: fn() -> () uses {}) {
+    through(g)
+  }
+  ()
+}

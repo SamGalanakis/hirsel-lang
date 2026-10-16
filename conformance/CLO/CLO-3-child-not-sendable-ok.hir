@@ -1,0 +1,17 @@
+// rule: CLO-3
+// expect: accept
+// "It captures sendable values ... by copy or take."
+fn example(tasks: Tasks, take x: unique Bytes) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          let _ = take x
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

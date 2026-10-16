@@ -1,0 +1,16 @@
+// rule: LANG-15
+// expect: accept
+// A noncopyable field alias permits reads even with let mut.
+resource type Index {
+  index: u64,
+}
+
+type R {
+  item: Index,
+}
+
+fn f(mut r: R) {
+  let mut start = r.item
+  let _ = start.index
+  let _ = start.index
+}

@@ -1,0 +1,7 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 5
+// Shows "A literal or bare variant takes its type from the expected type; with neither it is an error."
+fn example() -> () {
+  let x = "x"
+  ()
+}

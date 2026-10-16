@@ -1,0 +1,6 @@
+// rule: LANG-7
+// expect: accept
+fn example() {
+  std@1/duration.from_parts(0, 0i32)
+  ()
+}

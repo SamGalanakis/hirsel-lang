@@ -1,0 +1,12 @@
+// rule: MODE-3
+// expect: reject MODE-3 at line 11
+// "once" values may be called at most once. A `mut` parameter of a many
+// function type is called again after the write, so a write cannot store a
+// once function in it, whole or as an element.
+fn loud() -> once fn() -> () {
+  fn() {}
+}
+
+fn set(mut p: fn() -> ()) -> () {
+  p = loud()
+}

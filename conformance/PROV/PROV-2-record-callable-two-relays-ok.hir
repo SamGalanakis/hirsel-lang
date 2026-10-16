@@ -1,0 +1,22 @@
+// rule: PROV-2
+// expect: accept
+type Holder[F] {
+  action: F,
+}
+
+fn use_pos(s: Dir, p: u64 of s) {}
+
+fn relay[F](take value: F) -> F {
+  value
+}
+
+fn example(s: Dir, p: u64 of s) {
+  let holder = Holder(
+    action: fn() {
+      use_pos(s, p)
+    }
+  )
+  let first = relay(take holder)
+  let second = relay(take first)
+  second.action()
+}

@@ -1,0 +1,14 @@
+// rule: OWN-2
+// expect: accept
+type R {
+  n: Bytes,
+}
+
+fn probe() {
+  let mut r = R(n: b"old")
+  let xs: Array[u8] = [0u8, 1u8]
+  for i in take xs {
+    r = R(n: b"new")
+    let x = take r
+  }
+}

@@ -1,0 +1,19 @@
+// rule: PROV-1
+// expect: accept
+// spec: #60
+// A block's value may be branded by an owner that outlives the block.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn probe() -> () {
+  let r = fresh()
+  let value = {
+    mk(r)
+  }
+  let other = take value
+}

@@ -1,0 +1,4 @@
+// rule: GEN-1
+// expect: reject CAP-2 at line 3
+@capability(global)
+pub opaque type Gate: inert uses {}

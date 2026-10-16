@@ -1,0 +1,10 @@
+// rule: MEM-9
+// expect: reject MEM-9 at line 9
+// A same-spelled user type grants no Unsafe authority.
+type Unsafe {
+  n: u32,
+}
+
+fn example(permit: Unsafe) -> u8 {
+  int.unchecked_add(permit, 1, 2)
+}

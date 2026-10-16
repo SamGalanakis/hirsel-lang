@@ -1,0 +1,32 @@
+// rule: CLO-1
+// expect: run
+// stdout: 15
+// Closures over a closure local to its environment run with the content that
+// environment views. g uses f's result in place, h returns it.
+fn view(x: String) -> String in x {
+  x
+}
+
+fn total(p: String) -> u64 {
+  let xs: List[(u64, String)] = [(1, view(p)), (2, view(p))]
+  let mut sum: u64 = 0
+  for (n, v) in take xs {
+    let f = fn() {
+      v
+    }
+    let g = fn() {
+      string.byte_len(f())
+    }
+    let h = fn() {
+      f()
+    }
+    sum += n + g() + string.byte_len(h())
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(total("abc")))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

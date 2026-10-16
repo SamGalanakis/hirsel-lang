@@ -1,0 +1,5 @@
+// rule: MEM-5
+// expect: accept
+fn probe(s: String, mut builder: List[u8]) -> Result[(), std@1/json.JsonError] uses {} {
+  std@1/json.write(Text(s), mut builder)
+}

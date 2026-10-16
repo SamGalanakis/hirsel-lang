@@ -1,0 +1,10 @@
+// rule: OWN-2
+// expect: accept
+// The plain value is copied into the take parameter and stays usable.
+fn bump(take n: u64) -> () {}
+
+fn probe() -> u64 {
+  let mut r: u64 = 1
+  bump(r)
+  r
+}

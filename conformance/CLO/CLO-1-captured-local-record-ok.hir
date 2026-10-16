@@ -1,0 +1,30 @@
+// rule: CLO-1
+// expect: accept
+// The same closure result may be read while the record lives, and a record
+// built from global content is global through the closure too.
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn keep(take b: Bytes) {}
+
+fn compare(mut x: Bytes) -> bool {
+  let slot = Pair(left: view(x), right: view(x))
+  fn() {
+    slot.right
+  }() == b"new"
+}
+
+fn fresh() {
+  let slot = Pair(left: b"left", right: b"right")
+  keep(
+    fn() {
+      slot.right
+    }()
+  )
+}

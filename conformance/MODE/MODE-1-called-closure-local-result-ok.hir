@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: accept
+// "A value is global or local."
+// A closure whose inferred result is local to its borrowed capture hands that
+// local value to its caller, which may return it under the same declaration.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn example(a: Bytes) -> Bytes in a {
+  fn() {
+    view(a)
+  }()
+}

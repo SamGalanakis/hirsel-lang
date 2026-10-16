@@ -1,0 +1,11 @@
+// rule: PROG-2
+// expect: accept
+// Shows "A public signature cannot mention a private type."
+pub type Hidden {
+  n: u32,
+}
+
+@noalloc
+pub fn create() -> Hidden {
+  Hidden(n: 0)
+}

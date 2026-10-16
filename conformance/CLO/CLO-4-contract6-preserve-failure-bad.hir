@@ -1,0 +1,7 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 5
+@preserves_captures(it)
+fn step[T](mut it: Iter[T], take replacement: Iter[T]) {
+  it = take replacement
+  failure.check(false, Bounds())
+}

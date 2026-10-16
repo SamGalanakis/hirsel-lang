@@ -1,0 +1,32 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 28
+// "Implicit destruction is a call for this rule, including replacements,
+// discarded temporaries and every exit path." The `@noalloc` closure body
+// discards the `Token` that `make()` returns, so the frame destroys it, and
+// its finalizer is not declared `@noalloc`.
+resource type Token {
+  n: u32,
+}
+drop(x) {
+  ()
+}
+
+@noalloc
+fn make() -> Token {
+  Token(n: 1)
+}
+
+@noalloc
+fn invoke(f: @noalloc fn() -> u32 uses {}) -> u32 {
+  f()
+}
+
+@noalloc
+fn probe() -> u32 {
+  invoke(
+    fn() {
+      make()
+      1
+    }
+  )
+}

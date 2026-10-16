@@ -1,0 +1,14 @@
+// rule: FAIL-1
+// expect: fail SEM-1 at line 6
+// "reported at their source position"; evaluating a contract cites the arithmetic rule.
+@noalloc
+fn checked(n: u8) -> u8
+  requires n + 1 > n {
+  n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let n: u8 = 255
+  let outcome = checked(n)
+  Ok(())
+}

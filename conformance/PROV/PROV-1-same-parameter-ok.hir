@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: accept
+// "An operation taking a branded value requires the same p."
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn example(d: Dir, other: Dir, value: File of d) -> () {
+  inspect(d, value)
+}

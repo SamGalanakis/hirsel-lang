@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 12
+// A parameter written `sendable fn` receives only a function value that
+// may cross tasks, whatever its passing mode. A taken parameter whose type
+// does not state `sendable` promises nothing of the kind, so it cannot be
+// handed on to one that does.
+fn needs(take g: sendable fn() -> u64) -> u64 {
+  g()
+}
+
+fn probe(take f: fn() -> u64) -> u64 {
+  needs(take f)
+}

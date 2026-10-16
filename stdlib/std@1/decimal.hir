@@ -1,0 +1,376 @@
+// Count first so capacity failure leaves every byte unchanged.
+@noalloc
+pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u8, n]) -> Result[
+  u64,
+  std@1/scalar.FormatError
+] uses {} {
+  let mut count: u64 = 1
+  let mut remaining = value
+  while remaining >= 10 {
+    count += 1
+    remaining /= 10
+  }
+  let prefix: u64 = if negative {
+    1
+  } else {
+    0
+  }
+  if n < count + prefix {
+    return Error(BufferTooSmall)
+  }
+  remaining = value
+  let mut i = count + prefix
+  while i > prefix {
+    i -= 1
+    let digit: u8 = core@1/int.narrow(remaining % 10)
+    buffer[i] = digit + 48
+    remaining /= 10
+  }
+  if negative {
+    buffer[0] = 45
+  }
+  Ok(count + prefix)
+}
+
+// Overflow does not excuse invalid trailing syntax: validate the complete input.
+@noalloc
+pub fn read_unsigned(
+  text: String,
+  signed: bool,
+  positive_limit: u128,
+  negative_limit: u128
+) -> Result[(u128, bool), std@1/scalar.ParseError] uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let length = core@1/bytes.len(bytes)
+  if length == 0 {
+    return Error(Invalid)
+  }
+  let negative = bytes[0] == 45
+  if negative && !signed {
+    return Error(Invalid)
+  }
+  let mut i: u64 = if negative {
+    1
+  } else {
+    0
+  }
+  if i == length {
+    return Error(Invalid)
+  }
+  let limit = if negative {
+    negative_limit
+  } else {
+    positive_limit
+  }
+  let mut value: u128 = 0
+  let mut overflow: bool = false
+  while i < length {
+    let byte = bytes[i]
+    if byte < 48 || byte > 57 {
+      return Error(Invalid)
+    }
+    let digit: u128 = core@1/int.widen(byte - 48)
+    if !overflow {
+      if value > limit / 10 || value == limit / 10 && digit > limit % 10 {
+        overflow = true
+      } else {
+        value = value * 10 + digit
+      }
+    }
+    i += 1
+  }
+  if overflow {
+    Error(OutOfRange)
+  } else {
+    Ok((value, negative))
+  }
+}
+
+// The UTF-8 text a formatter appended to an empty builder.
+pub fn finish(take builder: List[u8]) -> String uses {} {
+  match core@1/string.from_bytes(core@1/bytes.from_list(take builder)) {
+    Ok(text) => take text,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+// Appends the first `count` bytes of a `format` buffer.
+pub fn append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> () uses {} {
+  core@1/list.reserve(mut out, core@1/list.len(out) + count)
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, buffer[i])
+    i += 1
+  }
+}
+
+// Two decimal digits per entry, "00" through "99": Rust core::fmt::num's
+// DECIMAL_PAIRS (third-party/NOTICES.md).
+const DECIMAL_PAIRS: Bytes = b"00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899"
+
+// The 16 least significant digits of `value`, zero padded, at
+// buffer[start..start + 16] (Rust's `enc_16lsd`).
+fn sixteen_digits(value: u64, mut buffer: Inline[u8, 39], start: u64) -> () uses {} {
+  let mut remain = value
+  let mut offset = start + 16
+  while offset > start {
+    offset -= 4
+    let quad = remain % 10000
+    let high = quad / 100 * 2
+    let low = quad % 100 * 2
+    buffer[offset] = DECIMAL_PAIRS[high]
+    buffer[offset + 1] = DECIMAL_PAIRS[high + 1]
+    buffer[offset + 2] = DECIMAL_PAIRS[low]
+    buffer[offset + 3] = DECIMAL_PAIRS[low + 1]
+    remain /= 10000
+  }
+}
+
+// The digits of `value` end at buffer[end]; returns the index of the first.
+// Four digits per step from the pair table, then one pair, then a last
+// digit; zero is the one digit "0".
+fn leading_digits(value: u64, mut buffer: Inline[u8, 39], end: u64) -> u64 uses {} {
+  let mut offset = end
+  let mut remain = value
+  while remain > 999 {
+    offset -= 4
+    let quad = remain % 10000
+    let high = quad / 100 * 2
+    let low = quad % 100 * 2
+    buffer[offset] = DECIMAL_PAIRS[high]
+    buffer[offset + 1] = DECIMAL_PAIRS[high + 1]
+    buffer[offset + 2] = DECIMAL_PAIRS[low]
+    buffer[offset + 3] = DECIMAL_PAIRS[low + 1]
+    remain /= 10000
+  }
+  if remain > 9 {
+    offset -= 2
+    let pair = remain % 100 * 2
+    remain /= 100
+    buffer[offset] = DECIMAL_PAIRS[pair]
+    buffer[offset + 1] = DECIMAL_PAIRS[pair + 1]
+  }
+  if remain != 0 || value == 0 {
+    offset -= 1
+    buffer[offset] = DECIMAL_PAIRS[remain * 2 + 1]
+  }
+  offset
+}
+
+// The decimal digits of `magnitude` at the end of `buffer`; returns the
+// offset of the first. Adapted from Rust core::fmt::num u128 `_fmt_inner`
+// (third-party/NOTICES.md): a magnitude above u64 takes its least significant
+// sixteen digits one or two times, and the rest fill the 39-byte scratch from
+// its end, four per step from the pair table.
+fn fill_digits(magnitude: u128, mut buffer: Inline[u8, 39]) -> u64 uses {} {
+  if magnitude <= 18446744073709551615 {
+    return leading_digits(core@1/int.narrow(magnitude), mut buffer, 39)
+  }
+  sixteen_digits(core@1/int.narrow(magnitude % 10000000000000000), mut buffer, 23)
+  let high = magnitude / 10000000000000000
+  if high < 10000000000000000 {
+    return leading_digits(core@1/int.narrow(high), mut buffer, 23)
+  }
+  sixteen_digits(core@1/int.narrow(high % 10000000000000000), mut buffer, 7)
+  leading_digits(core@1/int.narrow(high / 10000000000000000), mut buffer, 7)
+}
+
+// Appends the decimal text of `magnitude` to `out`, after a minus sign when
+// `negative`, after one reservation of its exact count. A magnitude within
+// u64 is written inline into a local 20-byte scratch: passing the scratch to
+// a helper by `mut` costs about twice the digit work. Wider magnitudes take
+// `fill_digits`.
+pub fn append(mut out: List[u8], magnitude: u128, negative: bool) -> () uses {} {
+  let sign: u64 = if negative {
+    1
+  } else {
+    0
+  }
+  if magnitude > 18446744073709551615 {
+    let mut buffer: Inline[u8, 39] = [
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8
+    ]
+    let mut first = fill_digits(magnitude, mut buffer)
+    core@1/list.reserve(mut out, core@1/list.len(out) + sign + 39 - first)
+    if negative {
+      core@1/list.push(mut out, 45)
+    }
+    while first < 39 {
+      core@1/list.push(mut out, buffer[first])
+      first += 1
+    }
+    return ()
+  }
+  let mut buffer: Inline[u8, 20] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let value: u64 = core@1/int.narrow(magnitude)
+  let mut offset: u64 = 20
+  let mut remain = value
+  while remain > 999 {
+    offset -= 4
+    let quad = remain % 10000
+    remain /= 10000
+    let high = quad / 100 * 2
+    let low = quad % 100 * 2
+    buffer[offset] = DECIMAL_PAIRS[high]
+    buffer[offset + 1] = DECIMAL_PAIRS[high + 1]
+    buffer[offset + 2] = DECIMAL_PAIRS[low]
+    buffer[offset + 3] = DECIMAL_PAIRS[low + 1]
+  }
+  if remain > 9 {
+    offset -= 2
+    let pair = remain % 100 * 2
+    remain /= 100
+    buffer[offset] = DECIMAL_PAIRS[pair]
+    buffer[offset + 1] = DECIMAL_PAIRS[pair + 1]
+  }
+  if remain != 0 || value == 0 {
+    offset -= 1
+    buffer[offset] = DECIMAL_PAIRS[remain * 2 + 1]
+  }
+  core@1/list.reserve(mut out, core@1/list.len(out) + sign + 20 - offset)
+  if negative {
+    core@1/list.push(mut out, 45)
+  }
+  while offset < 20 {
+    core@1/list.push(mut out, buffer[offset])
+    offset += 1
+  }
+}
+
+// The decimal text of `magnitude`, after a minus sign when `negative`: the
+// digits of `append` in a fresh list reserved to their exact count, one
+// allocation that never grows.
+pub fn exact_text(magnitude: u128, negative: bool) -> String uses {} {
+  if magnitude > 18446744073709551615 {
+    let mut wide: List[u8] = []
+    append(mut wide, magnitude, negative)
+    return finish(take wide)
+  }
+  let value: u64 = core@1/int.narrow(magnitude)
+  let mut buffer: Inline[u8, 20] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut offset: u64 = 20
+  let mut remain = value
+  while remain > 999 {
+    offset -= 4
+    let quad = remain % 10000
+    remain /= 10000
+    let high = quad / 100 * 2
+    let low = quad % 100 * 2
+    buffer[offset] = DECIMAL_PAIRS[high]
+    buffer[offset + 1] = DECIMAL_PAIRS[high + 1]
+    buffer[offset + 2] = DECIMAL_PAIRS[low]
+    buffer[offset + 3] = DECIMAL_PAIRS[low + 1]
+  }
+  if remain > 9 {
+    offset -= 2
+    let pair = remain % 100 * 2
+    remain /= 100
+    buffer[offset] = DECIMAL_PAIRS[pair]
+    buffer[offset + 1] = DECIMAL_PAIRS[pair + 1]
+  }
+  if remain != 0 || value == 0 {
+    offset -= 1
+    buffer[offset] = DECIMAL_PAIRS[remain * 2 + 1]
+  }
+  let mut builder: List[u8] = []
+  if negative {
+    core@1/list.reserve(mut builder, 21 - offset)
+    core@1/list.push(mut builder, 45)
+  } else {
+    core@1/list.reserve(mut builder, 20 - offset)
+  }
+  while offset < 20 {
+    core@1/list.push(mut builder, buffer[offset])
+    offset += 1
+  }
+  match core@1/string.from_bytes(core@1/bytes.from_list(take builder)) {
+    Ok(text) => take text,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}

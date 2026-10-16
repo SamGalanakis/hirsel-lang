@@ -1,0 +1,3 @@
+// rule: OWN-6
+// expect: reject OWN-6 at line 3
+fn rejected() {}

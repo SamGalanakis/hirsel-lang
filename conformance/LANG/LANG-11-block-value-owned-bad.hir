@@ -1,0 +1,15 @@
+// rule: LANG-11
+// expect: reject MODE-1 at line 13
+// "A block's value is its final expression."
+// Provisional reading (spec issue 50). Where the consumer needs an owned value
+// the block's final expression is an owned use, exactly as without the braces.
+// A borrowed parameter cannot be handed out as the owned result.
+type Rec {
+  items: Bytes,
+}
+
+fn leak(r: Rec) -> Rec {
+  {
+    r
+  }
+}

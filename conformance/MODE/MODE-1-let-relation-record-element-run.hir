@@ -1,0 +1,34 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// A binding's relation is a contract, and its content is at most as
+// long-lived as the relation says (§04). Global content in a list of records
+// declared `in i` is read through its elements under that contract, also
+// through a block that yields the binding (#50).
+type R {
+  name: String,
+  n: u64,
+}
+
+fn count(i: u64) -> u64 {
+  let xs: List[R] in i = [R(name: "ab", n: 1)]
+  let direct = xs[0].n + string.byte_len(xs[0].name)
+  direct + string.byte_len(
+    {
+      xs
+    }[0].name
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = count(1) == 5
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

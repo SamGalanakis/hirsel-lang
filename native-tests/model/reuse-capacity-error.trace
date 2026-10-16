@@ -1,0 +1,7 @@
+rc-trace v1
+max 16
+# Reuse is keyed on exact capacity.
+alloc r1 2
+reset r1 t1
+drain
+reuse t1 r2 1

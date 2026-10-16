@@ -1,0 +1,37 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// The twin of MODE-4-mut-handback-sendable-storage-bad and
+// MODE-4-mut-handback-plain-storage-bad; storage and parameter both state
+// `sendable`, and what comes back may be handed to a parameter requiring it.
+fn replace(mut p: sendable fn() -> u64, take q: sendable fn() -> u64) -> () {
+  p = q
+}
+
+fn needs(take g: sendable fn() -> u64) -> u64 {
+  g()
+}
+
+fn probe(take q: sendable fn() -> u64) -> u64 {
+  let mut f: sendable fn() -> u64 = fn() {
+    1
+  }
+  replace(mut f, take q)
+  needs(take f)
+}
+
+fn seven() -> u64 {
+  7
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

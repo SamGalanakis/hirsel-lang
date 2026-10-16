@@ -1,0 +1,22 @@
+// rule: OWN-2
+// expect: accept
+fn predicate(x: u64) -> bool uses {} {
+  true
+}
+
+fn keep(take s: String, n: u64) -> String uses {} {
+  take s
+}
+
+fn example() -> () {
+  let xs: String = "a"
+  std@1/list.fold(
+    {
+      let values: List[u64] = [1]
+      take values
+    },
+    copy xs,
+    keep
+  )
+  string.byte_len(xs);
+}

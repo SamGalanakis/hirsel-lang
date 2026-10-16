@@ -1,0 +1,52 @@
+// rule: LANG-11
+// expect: run
+// stdout: ok
+// Inside a closure a block that names a captured binding is that capture,
+// and an element read through it is borrowed in place as it is without the
+// braces.
+type Rec {
+  items: Array[String],
+}
+
+fn first(r: Rec) -> u64 {
+  fn() {
+    string.byte_len(
+      {
+        r
+      }.items[0]
+    )
+  }()
+}
+
+fn plain(r: Rec) -> u64 {
+  fn() {
+    string.byte_len(r.items[0])
+  }()
+}
+
+fn call_first(fs: Array[fn() -> u64 uses {}]) -> u64 {
+  fn() {
+    {
+      fs
+      fs
+    }[0]()
+  }()
+}
+
+fn seven() -> u64 {
+  7
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let r = Rec(items: ["abc", "d"])
+  let ok = first(r) == 3 && plain(r) == 3 && call_first([seven]) == 7
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

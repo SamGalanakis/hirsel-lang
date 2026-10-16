@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "wrapper",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "wrapper.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../probe@2/hirsel.json",
+      "package": {
+        "name": "probe",
+        "version": "2"
+      },
+      "expose": [
+        {
+          "head": "vendor",
+          "module": [
+            "api"
+          ]
+        }
+      ]
+    }
+  ]
+}

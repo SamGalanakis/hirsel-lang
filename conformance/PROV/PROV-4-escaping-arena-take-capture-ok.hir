@@ -1,0 +1,8 @@
+// rule: PROV-4
+// expect: accept
+fn probe() -> once fn() -> u64 {
+  let x: String in heap = "x"
+  fn() {
+    string.byte_len(take x)
+  }
+}

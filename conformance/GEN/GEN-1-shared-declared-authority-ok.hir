@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: accept
+type W[T: inert] {
+  value: T,
+}
+
+fn probe(x: W[Shared[u32]]) {}

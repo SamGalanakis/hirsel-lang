@@ -1,0 +1,13 @@
+// rule: LANG-8
+// expect: accept
+// "e ? C maps the error through C, a path naming a one-argument variant or function".
+type Failure = Wrapped(u8)
+
+fn wrap(take code: u8) -> Failure {
+  Wrapped(code)
+}
+
+fn example(r: Result[(), u8]) -> Result[(), Failure] {
+  r ? wrap
+  Ok(())
+}

@@ -1,0 +1,14 @@
+// rule: MODE-3
+// expect: accept
+// A many function may be invoked through a read-only scoped capture.
+fn invoke(f: fn() uses {}) {
+  ()
+}
+
+fn example(take action: fn() uses {}) {
+  invoke(
+    fn() {
+      action()
+    }
+  )
+}

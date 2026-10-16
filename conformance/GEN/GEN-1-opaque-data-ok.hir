@@ -1,0 +1,14 @@
+// rule: GEN-1
+// expect: accept
+pub opaque type F: data uses {} {
+  f: u64,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a = F(f: 1u64)
+  let b = F(f: 2u64)
+  if a == b {
+    let _ = out.print(io.stdout(rt)?, "eq\n")
+  }
+  Ok(())
+}

@@ -1,0 +1,13 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 11
+// "Type arguments are never written in expressions."
+// A generic function has no function-value type, so only a direct call can
+// choose its type arguments.
+fn identity[T](take x: T) -> T {
+  x
+}
+
+fn example() -> u64 {
+  let f = identity
+  f(1u64)
+}

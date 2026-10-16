@@ -1,0 +1,13 @@
+// rule: FACT-3
+// expect: fail FACT-1 at line 6
+// "Every contract and fact is checked at run time"; proving cannot change acceptance.
+@noalloc
+fn required(x: u32) -> u32
+  requires x > 10 {
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = required(0)
+  Ok(())
+}

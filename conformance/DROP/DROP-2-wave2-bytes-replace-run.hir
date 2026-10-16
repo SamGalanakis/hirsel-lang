@@ -1,0 +1,24 @@
+// rule: DROP-2
+// expect: run
+// stdout: before
+// stdout: B
+// stdout: A
+resource type Watch {
+  data: Bytes,
+  label: String,
+  out: Stdout,
+}
+@noalloc drop(w) {
+  out.print(w.out, w.label);
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  let a = Watch(data: b"aaa", label: "A\n", out: out)
+  let b = Watch(data: b"bbb", label: "B\n", out: out)
+  out.print(out, "before\n") ? Output
+  std@1/bytes.replace(a.data, b"a", b.data)
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

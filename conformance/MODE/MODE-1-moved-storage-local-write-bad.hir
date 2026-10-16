@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 14
+// The binding's storage is global by its type. Being moved on the way into
+// the assignment does not let it receive a local value, here a copy of a
+// borrowed record.
+type R {
+  n: Bytes,
+}
+
+fn f(take x: R, z: R, flag: bool) -> () {
+  let mut r = x
+  let mut c = flag
+  while c {
+    r = copy z
+    let _ = take r
+    c = false
+  }
+}

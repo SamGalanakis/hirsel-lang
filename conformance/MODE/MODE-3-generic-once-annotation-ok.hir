@@ -1,0 +1,5 @@
+// rule: MODE-3
+// expect: accept
+fn identity[T](take x: T) -> T {
+  x
+}

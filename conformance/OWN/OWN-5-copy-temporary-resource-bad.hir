@@ -1,0 +1,16 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 15
+// "Resources (Senders included) ... Moved or borrowed only."
+// A freshly built resource is as noncopyable as a named one.
+resource type Trace {
+  text: String,
+}
+drop(x) {}
+
+fn keep(take x: Trace) -> () {
+  ()
+}
+
+fn example() -> () {
+  keep(copy Trace(text: "fresh"))
+}

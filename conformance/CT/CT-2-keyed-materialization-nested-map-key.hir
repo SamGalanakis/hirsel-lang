@@ -1,0 +1,33 @@
+// rule: CT-2
+// expect: run
+// stdout: 1221
+fn key(reverse: bool) -> Map[u64, u64] {
+  let mut m: Map[u64, u64] = map.empty()
+  if reverse {
+    map.insert(mut m, 1, 10)
+    map.insert(mut m, 2, 20)
+  } else {
+    map.insert(mut m, 2, 20)
+    map.insert(mut m, 1, 10)
+  }
+  take m
+}
+
+fn build() -> Map[Map[u64, u64], u64] {
+  let mut m: Map[Map[u64, u64], u64] = map.empty()
+  map.insert(mut m, key(true), 1)
+  map.insert(mut m, key(false), 2)
+  take m
+}
+
+const M: Map[Map[u64, u64], u64] = build()
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  for (k, v) in M {
+    for (n, x) in k {
+      let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+    }
+  }
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

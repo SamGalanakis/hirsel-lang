@@ -1,0 +1,42 @@
+// rule: MEM-7
+// expect: run
+// stdout: moved
+resource type Token {
+  text: String,
+}
+
+type Holder {
+  token: Token,
+}
+
+fn extract(take x: unique box Holder) -> unique Token {
+  let Holder(token: t) = take x
+  take t
+}
+
+type Choice = Empty | Full(token: Token)
+
+fn extract_choice(take x: unique box Choice) -> unique Token {
+  match take x {
+    Empty() => Token(text: "empty"),
+    Full(token: t) => take t,
+  }
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let value = box Holder(token: Token(text: "moved"))
+  let token = extract(take value)
+  let choice: box Choice = box Full(token: Token(text: "variant"))
+  let part = extract_choice(take choice)
+  failure.check(part.text == "variant", TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, token.text) ? output_error
+  out.print(io.stdout(rt) ? grant_error, "\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

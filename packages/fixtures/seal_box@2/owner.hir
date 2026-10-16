@@ -1,0 +1,12 @@
+@capability(global)
+pub opaque type ReadDir: plain + noalloc_drop uses {Dir} {
+  d: Dir,
+}
+
+pub fn make(d: Dir) -> ReadDir {
+  ReadDir(d: d)
+}
+
+pub fn raw(r: ReadDir) -> Dir {
+  r.d
+}

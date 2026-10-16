@@ -1,0 +1,7 @@
+// rule: CAP-5
+// expect: accept
+pub type Alias = vendor.ReadDir
+
+pub fn probe(r: Alias) -> Dir {
+  vendor.raw(r)
+}

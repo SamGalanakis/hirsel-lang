@@ -1,0 +1,6 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 5
+fn probe(take job: fn() -> u64) {
+  let mut xs: List[sendable fn() -> u64] = []
+  list.push(mut xs, take job)
+}

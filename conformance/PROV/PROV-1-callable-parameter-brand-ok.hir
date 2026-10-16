@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: accept
+// The callback header states the brand the callee declares.
+fn apply(f: fn(d: Dir, x: File of d) -> ()) -> () {
+  ()
+}
+
+fn example() -> () {
+  apply(fn(d: Dir, x: File of d) {})
+}

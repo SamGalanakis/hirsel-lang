@@ -1,0 +1,106 @@
+// rule: OWN-4
+// expect: run
+// stdout: alone ok
+// stdout: shared ok
+// stdout: copied ok
+// stdout: lent ok
+// "First mutation of shared storage detaches it." A call handed only plain
+// values cannot add a holder to a list, so writes after it find the list as
+// unique as before it; a copy taken before or between such calls still keeps
+// its own elements.
+fn output_error[E](take e: E) -> () {}
+
+fn mix(h: u64, value: u64) -> u64 {
+  let wide: u128 = int.widen(h) * 131u128 + int.widen(value)
+  int.truncate(wide)
+}
+
+fn filled(n: u64) -> List[u64] {
+  let mut rows: List[u64] = []
+  for i in 0u64..n {
+    list.push(mut rows, i)
+  }
+  rows
+}
+
+fn alone() -> bool {
+  let mut rows = filled(4)
+  let mut h: u64 = 1
+  for i in 0u64..32u64 {
+    rows[i % 4u64] = h
+    h = mix(h, i)
+    rows[(i + 1u64) % 4u64] = h
+  }
+  rows[0] == h && rows[3] != h && rows[2] != 2
+}
+
+fn shared() -> bool {
+  let mut rows = filled(4)
+  let earlier = copy rows
+  let mut h: u64 = 1
+  for i in 0u64..8u64 {
+    h = mix(h, i)
+    rows[i % 4u64] = h
+  }
+  earlier[0] == 0 && earlier[3] == 3 && rows[3] == h
+}
+
+fn copied() -> bool {
+  let mut rows = filled(4)
+  let mut kept: List[u64] = []
+  let mut h: u64 = 1
+  for i in 0u64..8u64 {
+    rows[0] = h
+    h = mix(h, i)
+    if i == 3u64 {
+      kept = copy rows
+    }
+    rows[1] = h
+  }
+  kept[0] != rows[0] && kept[1] != rows[1] && rows[1] == h && kept[2] == 2
+}
+
+fn total(rows: List[u64]) -> u64 {
+  let mut sum: u64 = 0
+  for x in rows {
+    sum = int.wrapping_add(sum, x)
+  }
+  sum
+}
+
+fn lent() -> bool {
+  let mut rows = filled(4)
+  let earlier = copy rows
+  let mut h: u64 = 1
+  for i in 0u64..8u64 {
+    h = mix(h, total(rows))
+    rows[i % 4u64] = h
+  }
+  total(earlier) == 6 && rows[3] == h
+}
+
+fn verdict(ok: bool) -> String {
+  if ok {
+    " ok\n"
+  } else {
+    " bad\n"
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let o = io.stdout(rt) ? grant_error
+  out.print(o, "alone") ? output_error
+  out.print(o, verdict(alone())) ? output_error
+  out.print(o, "shared") ? output_error
+  out.print(o, verdict(shared())) ? output_error
+  out.print(o, "copied") ? output_error
+  out.print(o, verdict(copied())) ? output_error
+  out.print(o, "lent") ? output_error
+  out.print(o, verdict(lent())) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,8 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 6
+// Each element of a literal is kept against the expected element brand, so a
+// position of `other` cannot be listed as a position of `text`.
+fn single(text: String, other: String, q: StrPos of other) -> u64 {
+  let positions: List[StrPos of text] = [q]
+  list.len(positions)
+}

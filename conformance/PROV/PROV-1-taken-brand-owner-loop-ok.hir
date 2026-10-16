@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: accept
+// The brand names a borrowed parameter, so the declaration stands and the
+// loop in the body is checked.
+fn total(xs: List[u64], seed: Bytes of xs) -> u64 {
+  let ys: List[u64] = [1, 2]
+  let mut sum: u64 = 0
+  for y in take ys {
+    sum += y
+  }
+  for x in xs {
+    sum += x
+  }
+  sum
+}

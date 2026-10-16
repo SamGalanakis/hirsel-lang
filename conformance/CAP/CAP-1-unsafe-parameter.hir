@@ -1,0 +1,7 @@
+// rule: CAP-1
+// expect: accept
+// "Unsafe arrive[s] only as typed parameters".
+@noalloc
+fn authority(u: Unsafe) -> () {
+  ()
+}

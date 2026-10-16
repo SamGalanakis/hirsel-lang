@@ -1,0 +1,27 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// The twin of MODE-1-let-relation-record-element-run.hir without a written
+// relation, with a binding in scope for the agreement campaign to name.
+type R {
+  name: String,
+  n: u64,
+}
+
+fn count(i: u64) -> u64 {
+  let xs: List[R] = [R(name: "ab", n: 1)]
+  xs[0].n + string.byte_len(xs[0].name)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = count(1) == 3
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

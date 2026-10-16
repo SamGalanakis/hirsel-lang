@@ -1,0 +1,27 @@
+# Corpus cases `native --sanitize` runs under Valgrind memcheck on the system-allocator
+# archive beside smoke.txt: each allocates and frees counted heap blocks (boxes, lists,
+# strings, maps and sets), so a use after free or double free of one is a libc error
+# memcheck reports. Keep each a fast program.
+conformance/DROP/DROP-2-wave1-resource-run.hir
+conformance/FACT/FACT-3-reserved-push-run.hir
+conformance/LANG/LANG-11-block-local-share-run.hir
+conformance/MEM/MEM-12-flat-list-builder-run.hir
+conformance/MEM/MEM-3-keyed-read-nested-key-run.hir
+conformance/MEM/MEM-7-box-read-binarytrees-run.hir
+conformance/MEM/MEM-7-box-read-borrowed-run.hir
+conformance/MEM/MEM-7-box-read-cow-run.hir
+conformance/MEM/MEM-7-box-read-field-loan-run.hir
+conformance/MEM/MEM-7-box-read-nested-run.hir
+conformance/MEM/MEM-7-box-read-take-run.hir
+conformance/MODE/MODE-1-consuming-loop-local-run.hir
+conformance/MODE/MODE-4-written-transport-growth-run.hir
+conformance/OWN/OWN-1-borrowed-assign-share-run.hir
+conformance/OWN/OWN-3-growth-cache-run.hir
+conformance/OWN/OWN-4-first-push-aligned-run.hir
+conformance/PROV/PROV-5-field-read-record-take-run.hir
+conformance/SEM/SEM-1-format-into-appends-run.hir
+conformance/SEM/SEM-3-json-nesting-run.hir
+conformance/SEM/SEM-3-wave2-text-slice-run.hir
+conformance/SEM/SEM-4-set-cursor-last-use-run.hir
+conformance/SEM/SEM-4-wave1-collections-run.hir
+conformance/SEM/SEM-4-wave1-counted-run.hir

@@ -1,0 +1,11 @@
+// rule: MODE-7
+// expect: accept
+// "Modes inside bodies are inferred."
+fn wants(mut x: unique Bytes) -> () {
+  ()
+}
+
+fn example() -> () {
+  let mut x: Bytes = b"fresh"
+  wants(mut x)
+}

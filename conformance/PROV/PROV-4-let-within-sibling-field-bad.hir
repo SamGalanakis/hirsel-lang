@@ -1,0 +1,15 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 13
+// v22 R3 and #82. A let relation naming a field path admits only what that
+// field holds. z.p holds x, in a, so y, in b, is not within z.p, although z's
+// sibling field z.q holds b.
+type Two {
+  p: Bytes,
+  q: Bytes,
+}
+
+fn lax(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> u64 {
+  let z = Two(p: x, q: y)
+  let v: Bytes in z.p = y
+  0
+}

@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+fn fresh() -> Bytes {
+  b"f"
+}
+
+fn pick() -> Bytes {
+  let mut slot: unique Bytes = b"s"
+  slot = fresh()
+  slot
+}

@@ -1,0 +1,21 @@
+// rule: GEN-1
+// expect: run
+// stdout: unordered
+// Shows "Structural, computed from the type, no user instances."
+@noalloc
+fn equal[T: data](a: T, b: T) -> bool {
+  a == b
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let nan: f64 = 0.0 / 0.0
+  let _ = out.print(
+    io.stdout(rt)?,
+    if equal(nan, nan) {
+      "wrong\n"
+    } else {
+      "unordered\n"
+    }
+  )
+  Ok(())
+}

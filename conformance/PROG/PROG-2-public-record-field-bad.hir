@@ -1,0 +1,10 @@
+// rule: PROG-2
+// expect: reject PROG-2 at line 9
+// Shows "A public signature cannot mention a private type."
+type Hidden {
+  n: u32,
+}
+
+pub type Visible {
+  value: Hidden,
+}

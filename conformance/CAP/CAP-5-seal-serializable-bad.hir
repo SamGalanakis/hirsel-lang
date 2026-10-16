@@ -1,0 +1,7 @@
+// rule: CAP-5
+// expect: reject SER-1 at line 3
+@serializable
+@capability(global)
+pub opaque type Facet: plain uses {} {
+  n: u64,
+}

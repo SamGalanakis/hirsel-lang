@@ -1,0 +1,14 @@
+// rule: CLO-2
+// expect: accept
+// "The call’s ... authority summary ... [is] the join of callee and closure."
+fn invoke(f: fn() -> Dir uses {Dir}) -> Dir {
+  f()
+}
+
+fn example(d: Dir) -> Dir {
+  invoke(
+    fn() {
+      d
+    }
+  )
+}

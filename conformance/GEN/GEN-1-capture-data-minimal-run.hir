@@ -1,0 +1,43 @@
+// rule: GEN-1
+// expect: run
+// stdout: ok
+fn outer(xs: Inline[u8, 3]) -> u64 {
+  let bias: u64 = 2
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n + bias
+  }
+  fn() {
+    length(xs)
+  }()
+}
+
+fn snapshot(xs: Inline[u8, 3]) -> u64 {
+  let mut bias: u64 = 2
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n + bias
+  }
+  bias = 9
+  fn() {
+    length(xs) + length(xs)
+  }()
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(xs) == 5 && snapshot(xs) == 10 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,16 @@
+// rule: OWN-1
+// expect: accept
+resource type Trace {
+  text: String,
+}
+drop(x) {
+  ()
+}
+
+type Holder {
+  t: Trace,
+}
+
+fn dup(mut a: Trace, take b: Trace) -> () {
+  a = take b
+}

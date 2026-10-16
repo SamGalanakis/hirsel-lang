@@ -1,0 +1,10 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 9
+// A brand is identity evidence, not operand type. A branded value compares with an unbranded one, and the result is unbranded.
+fn need(xs: Array[u8], ok: bool of xs) -> () {
+  ()
+}
+
+fn example(xs: Array[u8], i: u64 of xs) -> () {
+  need(xs, i < array.len(xs))
+}

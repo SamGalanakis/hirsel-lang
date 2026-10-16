@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+type Holder {
+  value: Bytes,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn example(h: Holder) -> Bytes {
+  identity(h).value
+}

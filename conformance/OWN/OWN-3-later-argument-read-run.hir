@@ -1,0 +1,44 @@
+// rule: OWN-3
+// expect: run
+// stdout: ok
+// A mut argument names a place. Its storage is lent when the callee is
+// entered, after every argument has been evaluated in source order, so a
+// later argument may still read it.
+type Pair {
+  n: u64,
+  other: u64,
+}
+
+fn add(mut n: u64, extra: u64) -> () {
+  n = n + extra
+}
+
+fn set(mut x: u64, value: u64) -> () {
+  x = value
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: List[u64] = [7]
+  list.push(mut xs, list.len(xs))
+  list.push(mut xs, xs[0] + xs[1])
+  let mut p = Pair(n: 1, other: 2)
+  add(mut p.n, p.n + p.other)
+  let mut i: u64 = 0
+  set(
+    mut xs[i],
+    {
+      i = 2
+      xs[i]
+    }
+  )
+  let ok = list.len(xs) == 3 && xs[0] == 8 && xs[1] == 1 && xs[2] == 8 && p.n == 4
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,21 @@
+// rule: MEM-5
+// expect: accept
+pub opaque type Domain: plain + inert uses {} {
+  n: u64,
+}
+
+type Dto {
+  n: u64,
+}
+
+fn from_dto(x: Dto) -> Option[Domain] {
+  let n: u64 = x.n
+  if n <= 100 {
+    Some(Domain(n: n))
+  } else {
+    None
+  }
+}
+
+@noalloc
+fn discard(take x: Domain) {}

@@ -1,0 +1,18 @@
+// rule: PROV-2
+// expect: accept
+// "file.narrow(d, f) -> Option[File of d] narrows at run time."
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn example(a: Dir, b: Dir, take fa: File of a, take fb: File of b, pick: bool) -> () {
+  let chosen = if pick {
+    take fa
+  } else {
+    take fb
+  }
+  match file.narrow(a, take chosen) {
+    Some(value) => inspect(a, value),
+    None => (),
+  }
+}

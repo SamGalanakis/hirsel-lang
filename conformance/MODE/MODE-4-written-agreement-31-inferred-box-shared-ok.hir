@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: accept
+// Regression from tail/closure-capture; TIR/TypeMismatch/sendable receipt.
+type R {
+  part: Shared[Bytes],
+}
+
+fn probe(take r: R) {
+  let built = box {
+    {
+      let agree_f = fn() {
+        r
+      }
+      agree_f()
+    }
+  }.part
+}

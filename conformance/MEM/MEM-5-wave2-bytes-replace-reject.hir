@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 5
+@noalloc
+fn probe(src: Bytes) -> Bytes in src uses {} {
+  std@1/bytes.replace(src, b"a", b"b")
+}

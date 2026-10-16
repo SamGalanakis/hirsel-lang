@@ -1,0 +1,12 @@
+# llvm-sys's build script asks llvm-config for flags and compiles
+# wrappers/target.c. Under Buck2 the pinned tree (toolchains//:libllvm) supplies
+# both directly: the C wrapper compiles against its headers and every Rust
+# binary links its libLLVM, exactly what force-dynamic selects under Cargo.
+buildscript.run = false
+extra_deps = ["toolchains//:libllvm"]
+
+[[cxx_library]]
+name = "targetwrappers"
+srcs = ["wrappers/target.c"]
+compiler_flags = ["-D_GNU_SOURCE", "-D__STDC_CONSTANT_MACROS", "-D__STDC_FORMAT_MACROS", "-D__STDC_LIMIT_MACROS"]
+deps = ["toolchains//:libllvm"]

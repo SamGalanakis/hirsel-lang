@@ -1,0 +1,5 @@
+// rule: CAP-5
+// expect: reject PROG-2 at line 4
+pub fn probe(r: vendor.ReadDir) -> Dir {
+  r.d
+}

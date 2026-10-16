@@ -1,0 +1,21 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 17
+// "A mut borrow is exclusive."
+// Provisional reading (spec issue 50). A counted part read out of a block is
+// read through a borrow of the block's value. It is neither a place nor an
+// owned temporary, so it cannot be lent exclusively.
+type Rec {
+  items: Array[Bytes],
+}
+
+fn set(mut b: Bytes) -> () {
+  ()
+}
+
+fn example(mut r: Rec) -> () {
+  set(
+    mut {
+      r
+    }.items[0]
+  )
+}

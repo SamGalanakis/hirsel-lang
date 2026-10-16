@@ -1,0 +1,7 @@
+// rule: LANG-7
+// expect: accept
+// Shows "(equality only)"; independent sizes cannot convert implicitly.
+@noalloc
+fn example[n: size, m: size](xs: Inline[u32, n]) -> Inline[u32, n] {
+  xs
+}

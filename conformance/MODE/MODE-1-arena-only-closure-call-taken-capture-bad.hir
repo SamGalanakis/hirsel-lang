@@ -1,0 +1,22 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 15
+// The ratified #43/#70/P2 clause does not let unnamed taken storage escape. A
+// closure that captures the taken parameter z shares z's storage, so its call
+// is not arena-only, and a result omitting z is MODE-1, as `copy z` is.
+fn mk(a: Arena) -> Bytes in a {
+  b"x"
+}
+
+fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {a, x} {
+  x
+}
+
+fn f(a: Arena, y: Bytes, take z: Bytes in a) -> Bytes in a {
+  choose(
+    a,
+    fn() {
+      z
+    }(),
+    y
+  )
+}

@@ -1,0 +1,18 @@
+// rule: MODE-2
+// expect: accept
+fn view(x: Shared[Bytes]) -> Shared[Bytes] in x {
+  x
+}
+
+fn need(mut x: unique Shared[Bytes]) -> () {
+  ()
+}
+
+fn example(take x0: unique Shared[Bytes]) -> () {
+  let mut x = x0
+  {
+    let v = view(x)
+    ()
+  }
+  need(mut x)
+}

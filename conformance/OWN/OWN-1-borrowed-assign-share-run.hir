@@ -1,0 +1,61 @@
+// rule: OWN-1
+// expect: run
+// stdout: kept
+// stdout: kept
+// stdout: kept
+// stdout: kept
+// stdout: kept
+// "Caller keeps it." Assigning a borrowed parameter into existing owned
+// storage installs a share of it, as an aggregate field or local result does
+// (issue #73); a share is local to the parameter (MODE-1).
+fn output_error[E](take e: E) -> () {}
+
+type Holder {
+  value: String,
+}
+
+fn whole(x: String) -> String in x {
+  let mut r: String in x = "a"
+  r = x
+  r
+}
+
+fn after_copy(x: String) -> String in x {
+  let mut s = copy x
+  s = x
+  s
+}
+
+fn field(take dst: Holder, x: String) -> Holder in x {
+  let mut owned: Holder in owned = take dst
+  owned.value = x
+  take owned
+}
+
+fn unannotated_field(x: String) -> () {
+  let mut r: Holder in r = Holder(value: "a")
+  r.value = x
+}
+
+fn unannotated(seed: Bytes) -> () {
+  let mut r: Bytes in r = b"a"
+  r = seed
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let x: String = "kept\n"
+  out.print(io.stdout(rt) ? grant_error, whole(x)) ? output_error
+  out.print(io.stdout(rt) ? grant_error, after_copy(x)) ? output_error
+  let h = field(Holder(value: "a"), x)
+  out.print(io.stdout(rt) ? grant_error, h.value) ? output_error
+  unannotated_field(x)
+  unannotated(b"seed")
+  out.print(io.stdout(rt) ? grant_error, x) ? output_error
+  out.print(io.stdout(rt) ? grant_error, x) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

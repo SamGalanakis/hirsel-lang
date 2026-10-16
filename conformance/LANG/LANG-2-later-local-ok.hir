@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: accept
+// Shows "A literal or bare variant takes its type from the expected type; with neither it is an error."
+@noalloc
+fn example() -> u32 {
+  let y: u32 = 1
+  let x = y
+  x
+}

@@ -1,0 +1,34 @@
+// rule: PROV-1
+// expect: run
+resource type Cursor {
+  text: String,
+  pos: StrPos of .text,
+}
+
+fn sent(mut c: Cursor) {}
+
+fn reposition(mut c: Cursor, pos: StrPos of c.text) {
+  c.pos = pos
+  sent(mut c)
+}
+
+fn offset(take c: Cursor) -> u64 {
+  let Cursor(text: text, pos: pos) = take c
+  string.byte_offset(text, pos)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let text: String = "ab"
+  match string.position(text, 0u64) {
+    Some(pos) => {
+      let mut c = Cursor(text: text, pos: pos)
+      match string.position(c.text, 1u64) {
+        Some(next) => reposition(mut c, next),
+        None => test.check(t, false),
+      }
+      test.check(t, offset(take c) == 1u64)
+    },
+    None => test.check(t, false),
+  }
+  Ok(())
+}

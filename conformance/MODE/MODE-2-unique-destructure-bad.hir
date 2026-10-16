@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: accept
+// "A value is unique or aliased."
+// Taking a part from a currently deep-unique record retains its unique
+// ownership evidence, while the physical field type remains declared.
+type Rec {
+  items: Bytes,
+  n: u64,
+}
+
+fn example(take r: unique Rec) -> unique Bytes {
+  let Rec(items: items, ..) = take r
+  take items
+}

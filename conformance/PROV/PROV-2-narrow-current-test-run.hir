@@ -1,0 +1,63 @@
+// rule: PROV-2
+// expect: run
+// entry: test_narrow
+pub fn test_narrow(t: Test) -> Result[(), FileError] {
+  let p = path.of("sub/value")
+  let dir = test.dir(t, [(p, b"data")])
+  let live = file.open(dir, p)?
+  test.check(
+    t,
+    match file.narrow(dir, take live) {
+      Some(g) => true,
+      None => false,
+    }
+  )
+  let old = file.open(dir, p)?
+  let alias = file.open(dir, p)?
+  file.write_bytes(dir, p, b"data")?
+  test.check(
+    t,
+    match file.narrow(dir, take old) {
+      Some(g) => false,
+      None => true,
+    }
+  )
+  test.check(
+    t,
+    match file.narrow(dir, take alias) {
+      Some(g) => false,
+      None => true,
+    }
+  )
+  let unlinked = file.open(dir, p)?
+  file.remove(dir, p)?
+  file.write_bytes(dir, p, b"data")?
+  test.check(
+    t,
+    match file.narrow(dir, take unlinked) {
+      Some(g) => false,
+      None => true,
+    }
+  )
+  let published = file.open(dir, p)?
+  let mut pending = file.create_atomic(dir, p)?
+  file.write_all(dir, mut pending, b"data")?
+  file.commit(dir, take pending)?
+  test.check(
+    t,
+    match file.narrow(dir, take published) {
+      Some(g) => false,
+      None => true,
+    }
+  )
+  let fresh = file.open(dir, p)?
+  let sub = dir.narrow(dir, path.of("sub"))?
+  test.check(
+    t,
+    match file.narrow(sub, take fresh) {
+      Some(g) => true,
+      None => false,
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,5 @@
+// rule: FACT-2
+// expect: reject FACT-2 at line 5
+// "where is allowed only on a distinct type".
+
+type Percent { v: u8 } where v <= 100

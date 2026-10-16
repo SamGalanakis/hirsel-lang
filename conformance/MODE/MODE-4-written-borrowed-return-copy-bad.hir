@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 15
+type R {
+  payload: sendable Bytes,
+}
+
+fn sink(x: sendable Bytes) {}
+
+fn copied(r: R) -> Bytes in r {
+  copy r.payload
+}
+
+fn probe(r: R) {
+  let received = copied(r)
+  sink(received)
+}

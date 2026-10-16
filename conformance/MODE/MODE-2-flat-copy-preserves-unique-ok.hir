@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: accept
+@noalloc
+fn need[T: flat](mut x: unique T) -> ()
+
+fn outer[T: flat](take x: unique T) -> () {
+  let mut owned = take x
+  let copied = copy owned
+  need(mut owned)
+}

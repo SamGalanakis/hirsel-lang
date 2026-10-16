@@ -1,0 +1,33 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// The twin of MODE-4-header-parameter-callable-bad; a function that asks
+// less of its argument stands where callers promise a sendable one.
+fn apply(take h: fn(take g: sendable fn() -> u64) -> u64, take g: sendable fn() -> u64) -> u64 {
+  h(take g)
+}
+
+fn probe(take q: sendable fn() -> u64) -> u64 {
+  apply(
+    fn(take g: fn() -> u64) {
+      g()
+    },
+    take q
+  )
+}
+
+fn seven() -> u64 {
+  7
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

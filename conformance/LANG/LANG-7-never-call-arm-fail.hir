@@ -1,0 +1,24 @@
+// rule: LANG-7
+// expect: fail SEM-1 at line 6
+// The diverging arm drops its owned value, then fails inside the Never callee.
+fn stop(step: u8) -> Never {
+  // Overflows on the first call: the only exit is the failure edge.
+  stop(step + 255u8)
+}
+
+fn probe(flag: bool, take label: String) -> u64 {
+  match flag {
+    true => 7u64,
+    false => {
+      {
+        let _ = take label
+      }
+      stop(1u8)
+    },
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(probe(false, "dropped")))
+  Ok(())
+}

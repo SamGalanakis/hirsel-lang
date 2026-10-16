@@ -1,0 +1,16 @@
+// rule: GEN-4
+// expect: accept
+// Shows "T is laid out as T in every instantiation."
+type Rec[T] {
+  value: T,
+}
+
+@noalloc
+fn wrap[T](take x: T) -> Rec[T] {
+  Rec(value: take x)
+}
+
+@noalloc
+fn example(take x: Inline[u32, 4]) -> Rec[Inline[u32, 4]] {
+  wrap(take x)
+}

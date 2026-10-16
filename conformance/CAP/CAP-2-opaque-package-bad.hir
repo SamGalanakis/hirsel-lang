@@ -1,0 +1,15 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 1
+fn sandbox(f: fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let p = vendor.make(io.stdout(rt)?)
+  let n = sandbox(
+    fn() -> u64 uses {} {
+      vendor.compute(p, 41)
+    }
+  )
+  Ok(())
+}

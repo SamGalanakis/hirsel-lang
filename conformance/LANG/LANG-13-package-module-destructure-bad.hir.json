@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "resource_probe",
+    "version": "1"
+  },
+  "entry": {
+    "module": [
+      "client"
+    ],
+    "name": "probe"
+  },
+  "sources": [
+    {
+      "path": "LANG-13-package-module-destructure-bad.hir",
+      "module": [
+        "client"
+      ]
+    },
+    {
+      "path": "../../packages/fixtures/resource/token.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": []
+}

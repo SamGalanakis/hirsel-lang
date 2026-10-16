@@ -1,0 +1,974 @@
+{
+  "gate-agree": {
+    "anon_peak_mib": 2676,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 58.1,
+    "memory_kb": 4194304,
+    "p95_cores": 3.08,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 816,
+    "timed_runs": 816,
+    "window": [
+      1792153700,
+      1792182004
+    ]
+  },
+  "gate-agree-full": {
+    "anon_peak_mib": 3417,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 1636.2,
+    "memory_kb": 5505024,
+    "p95_cores": 3.85,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 27,
+    "timed_runs": 27,
+    "window": [
+      1792184104,
+      1792184119
+    ]
+  },
+  "gate-conformance": {
+    "anon_peak_mib": 587,
+    "cpu_class": "fast",
+    "cpu_count": 1,
+    "mean_wall_seconds": 49.8,
+    "memory_kb": 1048576,
+    "p95_cores": 1.0,
+    "requested": [
+      "2/1048576",
+      "4/4194304"
+    ],
+    "runs": 2416,
+    "timed_runs": 2416,
+    "window": [
+      1792153555,
+      1792184127
+    ]
+  },
+  "gate-native-smoke": {
+    "anon_peak_mib": 1260,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 25.5,
+    "memory_kb": 2097152,
+    "p95_cores": 3.84,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 54,
+    "timed_runs": 54,
+    "window": [
+      1792153853,
+      1792182017
+    ]
+  },
+  "hirsel-check-unittest": {
+    "anon_peak_mib": 40,
+    "cpu_class": "",
+    "cpu_count": 2,
+    "mean_wall_seconds": 31.3,
+    "memory_kb": 524288,
+    "p95_cores": 1.64,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 54,
+    "timed_runs": 49,
+    "window": [
+      1792153126,
+      1792182381
+    ]
+  },
+  "hirsel-cli-bin-hirsel-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 30,
+    "timed_runs": 0,
+    "window": [
+      1792153054,
+      1792177002
+    ]
+  },
+  "hirsel-cli-test-cli": {
+    "anon_peak_mib": 795,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 171.6,
+    "memory_kb": 1310720,
+    "p95_cores": 1.38,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 47,
+    "timed_runs": 46,
+    "window": [
+      1792153206,
+      1792182455
+    ]
+  },
+  "hirsel-codec-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 21,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184113
+    ]
+  },
+  "hirsel-conformance-bin-native-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 51,
+    "timed_runs": 0,
+    "window": [
+      1792153040,
+      1792184123
+    ]
+  },
+  "hirsel-conformance-test-it": {
+    "anon_peak_mib": 457,
+    "cpu_class": "",
+    "cpu_count": 3,
+    "mean_wall_seconds": 16.2,
+    "memory_kb": 786432,
+    "p95_cores": 2.82,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 59,
+    "timed_runs": 56,
+    "window": [
+      1792153084,
+      1792182378
+    ]
+  },
+  "hirsel-conformance-test-spec_links": {
+    "anon_peak_mib": 3,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.5,
+    "memory_kb": 524288,
+    "p95_cores": 0.66,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 9,
+    "timed_runs": 1,
+    "window": [
+      1792176609,
+      1792182367
+    ]
+  },
+  "hirsel-conformance-unittest": {
+    "anon_peak_mib": 2072,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 105.8,
+    "memory_kb": 3407872,
+    "p95_cores": 3.05,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 54,
+    "timed_runs": 53,
+    "window": [
+      1792153129,
+      1792182373
+    ]
+  },
+  "hirsel-core-contract-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 14,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184113
+    ]
+  },
+  "hirsel-diag-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 14,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184111
+    ]
+  },
+  "hirsel-driver-test-it": {
+    "anon_peak_mib": 2204,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 123.2,
+    "memory_kb": 3407872,
+    "p95_cores": 3.46,
+    "requested": [
+      "4/4194304",
+      "5/4194304"
+    ],
+    "runs": 391,
+    "timed_runs": 305,
+    "window": [
+      1792153153,
+      1792182465
+    ]
+  },
+  "hirsel-driver-test-it-scaling": {
+    "anon_peak_mib": 1226,
+    "cpu_class": "",
+    "cpu_count": 3,
+    "mean_wall_seconds": 48.2,
+    "memory_kb": 2097152,
+    "p95_cores": 2.53,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 49,
+    "timed_runs": 49,
+    "window": [
+      1792153248,
+      1792182435
+    ]
+  },
+  "hirsel-driver-test-it-stdlib": {
+    "anon_peak_mib": 2025,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 101.0,
+    "memory_kb": 3145728,
+    "p95_cores": 3.57,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 384,
+    "timed_runs": 377,
+    "window": [
+      1792153108,
+      1792182485
+    ]
+  },
+  "hirsel-driver-test-stack_depth": {
+    "anon_peak_mib": 46,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.3,
+    "memory_kb": 524288,
+    "p95_cores": 0.63,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 49,
+    "timed_runs": 1,
+    "window": [
+      1792153046,
+      1792184119
+    ]
+  },
+  "hirsel-driver-unittest": {
+    "anon_peak_mib": 2,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.2,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 48,
+    "timed_runs": 0,
+    "window": [
+      1792153034,
+      1792182365
+    ]
+  },
+  "hirsel-engine-test-it": {
+    "anon_peak_mib": 16,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 27,
+    "timed_runs": 0,
+    "window": [
+      1792153035,
+      1792182355
+    ]
+  },
+  "hirsel-engine-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 30,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792184115
+    ]
+  },
+  "hirsel-fmt-test-corpus": {
+    "anon_peak_mib": 8,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 2.1,
+    "memory_kb": 524288,
+    "p95_cores": 1.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 27,
+    "timed_runs": 20,
+    "window": [
+      1792153034,
+      1792184113
+    ]
+  },
+  "hirsel-fmt-unittest": {
+    "anon_peak_mib": 2,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 27,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184112
+    ]
+  },
+  "hirsel-heapcheck-test-it": {
+    "anon_peak_mib": 102,
+    "cpu_class": "",
+    "cpu_count": 3,
+    "mean_wall_seconds": 5.5,
+    "memory_kb": 524288,
+    "p95_cores": 2.18,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 64,
+    "timed_runs": 52,
+    "window": [
+      1792153041,
+      1792184118
+    ]
+  },
+  "hirsel-heapcheck-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 45,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184115
+    ]
+  },
+  "hirsel-intern-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 18,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184112
+    ]
+  },
+  "hirsel-interp-test-it": {
+    "anon_peak_mib": 61,
+    "cpu_class": "",
+    "cpu_count": 2,
+    "mean_wall_seconds": 0.3,
+    "memory_kb": 524288,
+    "p95_cores": 1.89,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 35,
+    "timed_runs": 2,
+    "window": [
+      1792153037,
+      1792184115
+    ]
+  },
+  "hirsel-interp-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 33,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792184114
+    ]
+  },
+  "hirsel-kernels-test-vectors": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 11,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184111
+    ]
+  },
+  "hirsel-kernels-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 15,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184111
+    ]
+  },
+  "hirsel-lexer-test-conformance": {
+    "anon_peak_mib": 2,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.5,
+    "memory_kb": 524288,
+    "p95_cores": 0.58,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 22,
+    "timed_runs": 1,
+    "window": [
+      1792153032,
+      1792184112
+    ]
+  },
+  "hirsel-lexer-unittest": {
+    "anon_peak_mib": 2,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 2.1,
+    "memory_kb": 524288,
+    "p95_cores": 1.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 28,
+    "timed_runs": 24,
+    "window": [
+      1792153033,
+      1792184113
+    ]
+  },
+  "hirsel-lir-test-it": {
+    "anon_peak_mib": 5,
+    "cpu_class": "",
+    "cpu_count": 2,
+    "mean_wall_seconds": 0.8,
+    "memory_kb": 524288,
+    "p95_cores": 1.77,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 51,
+    "timed_runs": 13,
+    "window": [
+      1792153033,
+      1792184116
+    ]
+  },
+  "hirsel-lir-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 42,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184114
+    ]
+  },
+  "hirsel-llvm-test-it": {
+    "anon_peak_mib": 37,
+    "cpu_class": "",
+    "cpu_count": 3,
+    "mean_wall_seconds": 10.1,
+    "memory_kb": 524288,
+    "p95_cores": 2.76,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 48,
+    "timed_runs": 46,
+    "window": [
+      1792153043,
+      1792182363
+    ]
+  },
+  "hirsel-llvm-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 42,
+    "timed_runs": 0,
+    "window": [
+      1792153034,
+      1792184119
+    ]
+  },
+  "hirsel-lower-unittest": {
+    "anon_peak_mib": 27,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 3.6,
+    "memory_kb": 524288,
+    "p95_cores": 1.14,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 33,
+    "timed_runs": 32,
+    "window": [
+      1792153041,
+      1792184116
+    ]
+  },
+  "hirsel-modes-unittest": {
+    "anon_peak_mib": 55,
+    "cpu_class": "",
+    "cpu_count": 3,
+    "mean_wall_seconds": 15.6,
+    "memory_kb": 524288,
+    "p95_cores": 2.18,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 63,
+    "timed_runs": 59,
+    "window": [
+      1792153083,
+      1792184126
+    ]
+  },
+  "hirsel-parser-test-it": {
+    "anon_peak_mib": 20,
+    "cpu_class": "",
+    "cpu_count": 2,
+    "mean_wall_seconds": 0.9,
+    "memory_kb": 524288,
+    "p95_cores": 1.87,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 31,
+    "timed_runs": 10,
+    "window": [
+      1792153032,
+      1792184113
+    ]
+  },
+  "hirsel-parser-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 26,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184113
+    ]
+  },
+  "hirsel-pipeline-tests-test-front": {
+    "anon_peak_mib": 1907,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 107.7,
+    "memory_kb": 3145728,
+    "p95_cores": 3.05,
+    "requested": [
+      "4/4194304",
+      "4/4521984"
+    ],
+    "runs": 123,
+    "timed_runs": 119,
+    "window": [
+      1792153160,
+      1792182506
+    ]
+  },
+  "hirsel-pipeline-tests-test-rc": {
+    "anon_peak_mib": 2160,
+    "cpu_class": "",
+    "cpu_count": 4,
+    "mean_wall_seconds": 108.4,
+    "memory_kb": 3407872,
+    "p95_cores": 3.4,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 275,
+    "timed_runs": 266,
+    "window": [
+      1792153106,
+      1792182586
+    ]
+  },
+  "hirsel-proof-export-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 10,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792184114
+    ]
+  },
+  "hirsel-rc-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 44,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792184114
+    ]
+  },
+  "hirsel-resolve-unittest": {
+    "anon_peak_mib": 2,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.2,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 40,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792184114
+    ]
+  },
+  "hirsel-rt-test-it": {
+    "anon_peak_mib": 176,
+    "cpu_class": "",
+    "cpu_count": 2,
+    "mean_wall_seconds": 3.0,
+    "memory_kb": 524288,
+    "p95_cores": 1.96,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 56,
+    "timed_runs": 50,
+    "window": [
+      1792153041,
+      1792182358
+    ]
+  },
+  "hirsel-rt-unittest": {
+    "anon_peak_mib": 29,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.2,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 42,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792182355
+    ]
+  },
+  "hirsel-run-config-test-it": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 10,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184113
+    ]
+  },
+  "hirsel-run-config-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 14,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184112
+    ]
+  },
+  "hirsel-signature-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 33,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792184113
+    ]
+  },
+  "hirsel-span-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 15,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184110
+    ]
+  },
+  "hirsel-syntax-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 19,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184112
+    ]
+  },
+  "hirsel-tir-unittest": {
+    "anon_peak_mib": 1,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.1,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 25,
+    "timed_runs": 0,
+    "window": [
+      1792153033,
+      1792184113
+    ]
+  },
+  "hirsel-types-test-wire": {
+    "anon_peak_mib": 10,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.2,
+    "memory_kb": 524288,
+    "p95_cores": 0.0,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 25,
+    "timed_runs": 0,
+    "window": [
+      1792153032,
+      1792184114
+    ]
+  },
+  "hirsel-types-unittest": {
+    "anon_peak_mib": 11,
+    "cpu_class": "",
+    "cpu_count": 3,
+    "mean_wall_seconds": 3.4,
+    "memory_kb": 524288,
+    "p95_cores": 2.56,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 39,
+    "timed_runs": 27,
+    "window": [
+      1792153037,
+      1792184116
+    ]
+  },
+  "hirsel-validate-test-it": {
+    "anon_peak_mib": 7,
+    "cpu_class": "",
+    "cpu_count": 3,
+    "mean_wall_seconds": 1.7,
+    "memory_kb": 524288,
+    "p95_cores": 2.51,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 52,
+    "timed_runs": 27,
+    "window": [
+      1792153034,
+      1792184117
+    ]
+  },
+  "hirsel-validate-unittest": {
+    "anon_peak_mib": 31,
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 3.8,
+    "memory_kb": 524288,
+    "p95_cores": 1.54,
+    "requested": [
+      "4/4194304"
+    ],
+    "runs": 25,
+    "timed_runs": 24,
+    "window": [
+      1792153036,
+      1792184118
+    ]
+  }
+}

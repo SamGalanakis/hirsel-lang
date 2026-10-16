@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 8
+fn first[T](a: T, b: T) -> () {
+  ()
+}
+
+fn example(n: u32) -> () {
+  first(1, n)
+}

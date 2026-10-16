@@ -1,0 +1,7 @@
+// rule: LANG-1
+// expect: reject LANG-1 at line 6
+// Shows "No methods, no use, no conditional operator, no test sublanguage."
+@noalloc
+fn count(xs: List[u32]) -> u64 {
+  xs.len()
+}

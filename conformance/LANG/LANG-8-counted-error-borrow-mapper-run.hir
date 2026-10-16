@@ -1,0 +1,27 @@
+// rule: LANG-8
+// expect: run
+// entry: test_mappers
+fn ignore(e: Bytes) {}
+
+fn decode(take b: Bytes) -> Result[(), ()] {
+  string.from_bytes(take b) ? ignore
+  Ok(())
+}
+
+pub fn test_mappers(t: Test) -> Result[(), ()] {
+  test.check(
+    t,
+    match decode(b"\xff") {
+      Error(()) => true,
+      Ok(()) => false,
+    }
+  )
+  test.check(
+    t,
+    match decode(b"valid") {
+      Error(()) => false,
+      Ok(()) => true,
+    }
+  )
+  Ok(())
+}

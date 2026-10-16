@@ -1,0 +1,16 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 15
+// Shows "Structural, computed from the type, no user instances."
+type Record {
+  n: box u32,
+}
+
+@noalloc
+fn bound[T: flat](x: T) -> () {
+  ()
+}
+
+@noalloc
+fn example(x: Record) -> () {
+  bound(x)
+}

@@ -1,0 +1,14 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 13
+resource type Sized[n: size] {
+  payload: Inline[u32, n],
+}
+
+fn make[n: size](xs: Inline[u32, n]) -> Sized[n] {
+  Sized(payload: xs)
+}
+
+fn probe() {
+  let a: Inline[u32, 3] = [1, 2, 3]
+  let incompatible: Sized[4] = make(a)
+}

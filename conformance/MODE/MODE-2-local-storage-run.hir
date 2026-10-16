@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: run
+// stdout: fresh
+fn fresh() -> String {
+  "fresh\n"
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut slot: String = "initial\n"
+  slot = fresh()
+  let _ = out.print(stdout, slot)
+  Ok(())
+}

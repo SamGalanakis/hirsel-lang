@@ -1,0 +1,37 @@
+// rule: CLO-2
+// expect: run
+// stdout: printed
+// The twin of CLO-2-mut-handback-erased-state-bad. `reset` takes the state
+// and returns a new one, so the caller's binding gets the result's type,
+// which holds `Stdout`. `iter.next` only advances the state it is lent, so its
+// `mut` parameter keeps the argument's own captures (spec #91), and the
+// iterator is called where its authority is allowed.
+fn next_value(mut n: u64) -> Option[u64] {
+  None
+}
+
+fn step(mut s: Stdout) -> Option[u64] {
+  let _ = out.print(s, "printed\n")
+  None
+}
+
+fn reset(take it: Iter[u64], take rt: Stdout) -> Iter[u64] {
+  iter.from(take rt, step)
+}
+
+fn drive(take g: once fn() -> ()) -> () {
+  g()
+}
+
+pub fn main(take rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let it = iter.from(0u64, next_value)
+  let replaced = reset(take it, take grant_stdout)
+  drive(
+    fn() {
+      let mut held = take replaced
+      let _ = iter.next(mut held)
+    }
+  )
+  Ok(())
+}

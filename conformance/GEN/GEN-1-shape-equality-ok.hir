@@ -1,0 +1,5 @@
+// rule: GEN-1
+// expect: accept
+fn equal(x: Array[u32]) -> bool {
+  x == x
+}

@@ -1,0 +1,12 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 8
+// A value owns the blocks of its parts, so an escaping environment that copies a
+// tuple holding an arena string outlives the arena (PROV-4, CLO-4).
+fn probe(a: Arena) -> fn() -> u64 {
+  let x: String in a = "x"
+  let pair = (x, 1u8)
+  fn() {
+    let (s, n) = pair
+    string.byte_len(s)
+  }
+}

@@ -1,0 +1,19 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 9
+// A task closure that takes a capture owns it. A borrowed parameter is not
+// the function's to give away. The scope callback is the first closure that
+// would have to own it.
+fn example(tasks: Tasks, r: Receiver[u64]) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          let _ = take r
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

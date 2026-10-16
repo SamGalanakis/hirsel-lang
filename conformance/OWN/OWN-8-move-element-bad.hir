@@ -1,0 +1,6 @@
+// rule: OWN-8
+// expect: reject OWN-8 at line 5
+// "To move a part out of an owned value, destructure the whole."
+fn example(take xs: Array[Bytes]) -> () {
+  let item = take xs[0]
+}

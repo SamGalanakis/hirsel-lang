@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: accept
+// A sequence placed in an arena holds elements that live there or on the
+// heap.
+fn list(a: Arena, take src: Bytes in a) -> () {
+  let items: List[Bytes] in a = [take src]
+}
+
+fn heap_list(a: Arena, take src: Bytes in heap) -> () {
+  let items: List[Bytes] in a = [take src]
+}

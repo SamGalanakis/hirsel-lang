@@ -1,0 +1,14 @@
+// rule: FACT-1
+// expect: run
+// "before(e) evaluates e on entry"; ensures sees the final mut value.
+@noalloc
+fn increment(mut x: u32) -> ()
+  ensures x == before(x) + 1 {
+  x += 1
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let mut value: u32 = 4
+  increment(mut value)
+  Ok(())
+}

@@ -1,0 +1,23 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 16
+// A closure call over arena-only captures holds its arena bound, so a result
+// related to another arena receives a value in `a` (PROV-4), as the direct
+// argument would.
+fn mk(a: Arena) -> Bytes in a {
+  b"x"
+}
+
+fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {a, x} {
+  x
+}
+
+fn f(a: Arena, b: Arena, y: Bytes) -> Bytes in b {
+  let t = mk(a)
+  choose(
+    a,
+    fn() {
+      t
+    }(),
+    y
+  )
+}

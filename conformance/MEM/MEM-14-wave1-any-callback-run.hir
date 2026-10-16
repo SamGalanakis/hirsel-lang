@@ -1,0 +1,13 @@
+// rule: MEM-14
+// expect: run
+@noalloc
+fn callback(x: u64) -> bool uses {} {
+  failure.check(true, Bounds())
+  true
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut xs: unique List[u64] = [1, 2, 3]
+  std@1/list.any(xs, callback)
+  Ok(())
+}

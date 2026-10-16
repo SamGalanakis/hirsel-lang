@@ -1,0 +1,17 @@
+// rule: OWN-8
+// expect: accept
+type Chain {
+  next: List[Chain],
+  f: fn() -> (),
+}
+
+fn probe(take f: (sendable fn() -> ()) in f, again: bool) {
+  let mut n: Chain = Chain(
+    next: [Chain(next: [Chain(next: [], f: copy f)], f: copy f)],
+    f: copy f
+  )
+  while again {
+    n = copy n.next[0].next[0]
+  }
+  n.f()
+}

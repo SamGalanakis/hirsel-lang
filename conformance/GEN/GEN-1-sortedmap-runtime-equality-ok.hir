@@ -1,0 +1,23 @@
+// rule: GEN-1
+// expect: run
+// stdout: eq
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut m: Map[u32, u8] = map.empty()
+  map.insert(mut m, 1, 1)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if m == m {
+      "eq\n"
+    } else {
+      "ne\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

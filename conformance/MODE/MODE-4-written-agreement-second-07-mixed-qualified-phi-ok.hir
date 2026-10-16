@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn close(take f: File) -> () {
+  ()
+}
+
+fn example(a: Dir, take fa: sendable File, take fb: File, pick: bool) -> () {
+  let chosen = if pick {
+    take fa
+  } else {
+    take fb
+  }
+  close(take chosen)
+}

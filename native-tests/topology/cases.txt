@@ -1,0 +1,25 @@
+# Multi-unit corpus cases run as one object, one object per unit and twenty seeded random
+# partitions (PROG-5): every partition must observe what the reference does.
+conformance/CLO/CLO-2-bound-derived-capability-run.hir
+conformance/CLO/CLO-2-derived-capability-field-run.hir
+conformance/CLO/CLO-2-explicit-derived-capability-run.hir
+conformance/CLO/CLO-2-immediate-derived-capability-run.hir
+conformance/CLO/CLO-2-parameter-derived-capability-run.hir
+conformance/CT/CT-2-closed-frame-run.hir
+conformance/DROP/DROP-2-kept-temporary-closed-run.hir
+conformance/DROP/DROP-2-kept-temporary-failure-run.hir
+conformance/DROP/DROP-2-kept-temporary-nested-run.hir
+conformance/DROP/DROP-2-kept-temporary-order-run.hir
+conformance/DROP/DROP-2-named-source-order-run.hir
+conformance/GEN/GEN-1-borrowed-root-comparison-run.hir
+conformance/GEN/GEN-1-generic-float-ieee.hir
+conformance/LANG/LANG-3-take-temporaries-early-exit.hir
+conformance/MODE/MODE-1-result-holder-field-release-run.hir
+conformance/MODE/MODE-1-result-holder-replacement-releases-loan-run.hir
+conformance/MODE/MODE-2-plain-unique-inert.hir
+conformance/OWN/OWN-1-borrowed-assign-share-run.hir
+conformance/PROV/PROV-1-copied-prefix-if-run.hir
+conformance/PROV/PROV-1-copied-prefix-match-run.hir
+conformance/PROV/PROV-1-copied-prefix-range-run.hir
+conformance/PROV/PROV-1-copied-prefix-while-run.hir
+conformance/PROV/PROV-1-copied-prefix-write-run.hir

@@ -1,0 +1,6 @@
+// rule: CAP-1
+// expect: accept
+// Authority "arrive[s] only as typed parameters"; projections require Io.
+pub fn project(rt: Io) -> Result[Stdout, GrantError] {
+  io.stdout(rt)
+}

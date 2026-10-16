@@ -1,0 +1,9 @@
+rc-trace v1
+max 16
+# T10 views a region block's heap field; the local cannot be dropped while the view lives.
+alloc r1 0
+region-open g1
+region-alloc g1 l1 1
+region-store l1 0 r1
+borrow-local b1 l1 0
+local-drop l1

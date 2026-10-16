@@ -1,0 +1,27 @@
+// rule: MODE-1
+// expect: accept
+// A global collection is consumed, a local one is read in place, and a local
+// set may be consumed because its elements are plain keys.
+fn total(take xs: List[u64]) -> u64 {
+  let mut n: u64 = 0
+  for x in take xs {
+    n = n + x
+  }
+  n
+}
+
+fn read(take xs: List[u64] in xs) -> u64 {
+  let mut n: u64 = 0
+  for x in xs {
+    n = n + x
+  }
+  n
+}
+
+fn keys(take s: Set[u64] in s) -> u64 {
+  let mut n: u64 = 0
+  for x in take s {
+    n = n + x
+  }
+  n
+}

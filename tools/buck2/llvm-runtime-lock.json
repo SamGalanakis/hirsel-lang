@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "about": "Ubuntu noble libraries libLLVM 21 and clang load that a minimal Ubuntu 24.04 (minbase) worker image lacks. bootstrap_llvm.py unpacks their shared objects into the LLVM tree's lib/, beside libLLVM (RUNPATH $ORIGIN/../lib).",
+  "debs": [
+    {
+      "name": "libedit2_3.1-20230828-1build1_amd64.deb",
+      "sha256": "3afbc8ddf835049dd4d88275b9d13680e4c4cdd59e191cbd63424152cc08e00e",
+      "size": 97586,
+      "urls": [
+        "http://archive.ubuntu.com/ubuntu/pool/main/libe/libedit/libedit2_3.1-20230828-1build1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libedit2_3.1-20230828-1build1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libbsd0_0.12.1-1build1.1_amd64.deb",
+      "sha256": "f3857b0863ac5cfd4263e9bf6cfb1d4be88d5321e4070d5bc2b62b0949e6c86f",
+      "size": 41238,
+      "urls": [
+        "http://archive.ubuntu.com/ubuntu/pool/main/libb/libbsd/libbsd0_0.12.1-1build1.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libbsd0_0.12.1-1build1.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libxml2_2.9.14+dfsg-1.3ubuntu3.10_amd64.deb",
+      "sha256": "c5a065f85c1e6f605741e365e40cad71c3ceb0e85e2791400bd35b8896e12ad1",
+      "size": 763592,
+      "urls": [
+        "http://archive.ubuntu.com/ubuntu/pool/main/libx/libxml2/libxml2_2.9.14%2bdfsg-1.3ubuntu3.10_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libxml2_2.9.14+dfsg-1.3ubuntu3.10_amd64.deb"
+      ]
+    },
+    {
+      "name": "libicu74_74.2-1ubuntu3.1_amd64.deb",
+      "sha256": "c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8",
+      "size": 10860078,
+      "urls": [
+        "http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu74_74.2-1ubuntu3.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libicu74_74.2-1ubuntu3.1_amd64.deb"
+      ]
+    }
+  ]
+}

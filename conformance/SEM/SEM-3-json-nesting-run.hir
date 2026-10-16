@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < std@1/json.MAX_NESTING {
+    core@1/list.push(mut builder, 91)
+    i += 1
+  }
+  core@1/list.push(mut builder, 48)
+  i = 0
+  while i < std@1/json.MAX_NESTING {
+    core@1/list.push(mut builder, 93)
+    i += 1
+  }
+  let text = match std@1/text.finish(take builder) {
+    Ok(s) => s,
+    Error(_) => "",
+  }
+  let value = match std@1/json.parse(copy text) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      {
+        let empty: std@1/json.Value = Null()
+        empty
+      }
+    },
+  }
+  match std@1/json.stringify(value) {
+    Ok(s) => failure.check(s == text, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  let too_deep = std@1/string.concat("[", std@1/string.concat(text, "]"))
+  match std@1/json.parse(take too_deep) {
+    Error(Nesting(128)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let over: std@1/json.Value = Array([box take value])
+  match std@1/json.stringify(over) {
+    Error(Nesting(128)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let mut output: List[u8] = []
+  match std@1/json.write(over, mut output) {
+    Error(Nesting(128)) => failure.check(
+      core@1/list.len(output) == 128,
+      TextInvariant()
+    ),
+    _ => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

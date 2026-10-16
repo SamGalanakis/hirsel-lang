@@ -1,0 +1,28 @@
+[package]
+name = "hirsel-engine"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-check-protocol = { path = "../hirsel-check-protocol" }
+hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-diag = { path = "../hirsel-diag" }
+hirsel-span = { path = "../hirsel-span" }
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-types = { path = "../hirsel-types" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-validate = { path = "../hirsel-validate" }
+hirsel-lexer = { path = "../hirsel-lexer" }
+hirsel-fmt = { path = "../hirsel-fmt" }
+hirsel-parser = { path = "../hirsel-parser" }
+hirsel-interp = { path = "../hirsel-interp" }
+hirsel-proof-export = { path = "../hirsel-proof-export" }
+hirsel-resolve = { path = "../hirsel-resolve" }
+serde_json = "1"
+serde = "1"
+
+[build-dependencies]
+hirsel-run-config = { path = "../hirsel-run-config" }

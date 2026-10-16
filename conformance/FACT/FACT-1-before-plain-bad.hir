@@ -1,0 +1,7 @@
+// rule: FACT-1
+// expect: reject FACT-1 at line 5
+// "before(e) evaluates e on entry and requires it to be plain".
+fn length(xs: List[u32]) -> u64
+  ensures before(xs) == xs {
+  list.len(xs)
+}

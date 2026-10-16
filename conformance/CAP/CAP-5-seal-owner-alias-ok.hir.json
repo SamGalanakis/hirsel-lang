@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "seal_box",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "CAP-5-seal-owner-alias-ok.hir",
+      "module": [
+        "sibling"
+      ]
+    },
+    {
+      "path": "../../packages/fixtures/seal_box@1/owner.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [
+      "sibling"
+    ],
+    "name": "probe"
+  }
+}

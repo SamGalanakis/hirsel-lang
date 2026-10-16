@@ -1,0 +1,19 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 17
+// "Cleanup effects of erased closures ... are carried in their complete
+// value types." The unannotated literal's row proves that destroying it does
+// not allocate, while the written parameter type permits allocating cleanup.
+// `set` may store any function of that type in `f`, whose destruction would
+// then be read as non-allocating. A `mut` hand-back is exact.
+fn set(mut p: @noalloc fn() -> u64 uses {}, take q: @noalloc fn() -> u64 uses {}) -> () {
+  p = q
+}
+
+fn probe(take q: @noalloc fn() -> u64 uses {}) -> u64 {
+  let n: u64 = 1
+  let mut f = fn() {
+    n
+  }
+  set(mut f, take q)
+  f()
+}

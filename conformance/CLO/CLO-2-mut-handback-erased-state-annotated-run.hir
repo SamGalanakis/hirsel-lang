@@ -1,0 +1,36 @@
+// rule: CLO-2
+// expect: run
+// stdout: 2
+// A `let mut` binding with a written `Iter[u64]` holds what its type states,
+// unknown captures, so a user function with a `mut` parameter of type `Iter[u64]`
+// receives it exactly and may replace its state (spec #91).
+fn count(mut n: u64) -> Option[u64] {
+  if n == 2 {
+    None
+  } else {
+    n += 1
+    Some(n)
+  }
+}
+
+fn restart(mut it: Iter[u64]) -> () {
+  it = iter.from(0u64, count)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut it: Iter[u64] = iter.from(1u64, count)
+  restart(mut it)
+  let mut last: u64 = 0
+  for x in mut it {
+    last = x
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if last == 2 {
+      "2\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

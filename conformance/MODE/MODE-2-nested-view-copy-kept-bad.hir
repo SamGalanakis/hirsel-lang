@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 7
+fn probe() {
+  let xs: List[Bytes] = [b"x"]
+  let x = box unique xs
+  let keep: bool = true
+  let y: box List[Bytes] = copy x
+}

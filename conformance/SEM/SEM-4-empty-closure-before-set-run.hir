@@ -1,0 +1,14 @@
+// rule: SEM-4
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut s: Set[u64] = set.empty()
+  set.insert(
+    mut s,
+    fn() {
+      1u64
+    }()
+  )
+  let empty: Set[u64] = set.empty()
+  for x in empty {}
+  Ok(())
+}

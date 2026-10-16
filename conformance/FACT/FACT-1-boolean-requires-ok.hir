@@ -1,0 +1,8 @@
+// rule: FACT-1
+// expect: accept
+// "Each is any pure boolean expression over the parameters".
+@noalloc
+fn id(x: u32) -> u32
+  requires x > 0 {
+  x
+}

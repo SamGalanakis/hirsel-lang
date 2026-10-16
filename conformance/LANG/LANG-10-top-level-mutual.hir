@@ -1,0 +1,20 @@
+// rule: LANG-10
+// expect: accept
+// Shows "Only top-level definitions recurse; local fns cannot refer to themselves or later locals."
+@noalloc
+fn even(n: u32) -> bool {
+  if n == 0 {
+    true
+  } else {
+    odd(n - 1)
+  }
+}
+
+@noalloc
+fn odd(n: u32) -> bool {
+  if n == 0 {
+    false
+  } else {
+    even(n - 1)
+  }
+}

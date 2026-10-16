@@ -1,0 +1,15 @@
+// rule: MEM-12
+// expect: accept
+flat type R {
+  d: u64,
+}
+
+fn need_inert[T: inert](x: T) -> () {}
+
+fn launder[T: flat](x: T) -> () {
+  need_inert(x)
+}
+
+fn go(r: R) -> () {
+  launder(r)
+}

@@ -1,0 +1,43 @@
+// rule: SEM-1
+// expect: run
+fn check_outside(nanos: i128) -> () uses {} {
+  match std@1/time.format(std@1/time.Timestamp(unix_nanoseconds: nanos)) {
+    Error(OutOfRange()) => (),
+    Ok(_) => failure.check(false, Arithmetic()),
+  }
+}
+
+fn check_shift(text: String) -> () uses {} {
+  match std@1/time.parse(text) {
+    Ok(value) => match std@1/time.format(value) {
+      Error(OutOfRange()) => (),
+      Ok(_) => failure.check(false, Arithmetic()),
+    },
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  match std@1/time.parse("") {
+    Error(Invalid()) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  check_outside(-170141183460469231731687303715884105728)
+  check_outside(170141183460469231731687303715884105727)
+  check_outside(-62167219200000000001)
+  check_outside(253402300800000000000)
+  check_shift("0000-01-01T00:00:00+00:01")
+  check_shift("9999-12-31T23:59:59-00:01")
+  match std@1/time.parse("0000-02-29T00:00:00Z") {
+    Ok(value) => match std@1/time.format(value) {
+      Ok(text) => failure.check(text == "0000-02-29T00:00:00Z", TextInvariant()),
+      Error(_) => failure.check(false, Arithmetic()),
+    },
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  match std@1/time.parse("1970-01-01T00:00:00-00:00") {
+    Ok(value) => failure.check(value.unix_nanoseconds == 0, Arithmetic()),
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}

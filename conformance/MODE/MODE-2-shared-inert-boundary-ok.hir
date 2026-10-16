@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: accept
+type R {
+  part: unique Shared[Bytes],
+  items: Bytes,
+}
+
+fn need(mut r: unique R) {}
+
+fn probe(take s: Shared[Bytes], take xs: unique Bytes) {
+  let other = copy s
+  let mut r = R(part: copy s, items: take xs)
+  need(mut r)
+}

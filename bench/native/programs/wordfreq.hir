@@ -1,0 +1,46 @@
+// Box reads follow issue #98; implementation is owned by box-read.
+// Insertion-ordered, fixed keyed FNV hash table and separately owned token copies.
+// Index zero is an unused boxed sentinel; C/Rust use a null table slot.
+// Same bucket chains and node-pool algorithm as the frozen C/Rust references.
+type Word { key: Bytes, count: u64, next: u64 }
+fn whitespace(c: u8) -> bool { c == 32u8 || c == 10u8 || c == 13u8 || c == 9u8 || c == 11u8 || c == 12u8 }
+fn owned(data: Bytes) -> Bytes {
+  let mut result_bytes: List[u8] = []
+  list.reserve(mut result_bytes, bytes.len(data))
+  for i in 0u64..bytes.len(data) { list.push(mut result_bytes, data[i]) }
+  bytes.from_list(take result_bytes)
+}
+fn append(mut out: List[u8], data: Bytes) {
+  for i in 0u64..bytes.len(data) { list.push(mut out, data[i]) }
+}
+fn workload(data: Bytes) -> Bytes {
+  let mut nodes: List[box Word] = [box Word(key: b"", count: 0u64, next: 0u64)]
+  list.reserve(mut nodes, bytes.len(data) + 1u64)
+  let mut buckets: List[u64] = []
+  list.reserve(mut buckets, 256u64)
+  for bucket in 0u64..256u64 { list.push(mut buckets, 0u64) }
+  let mut pos: u64 = 0
+  while pos < bytes.len(data) {
+    while pos < bytes.len(data) && whitespace(data[pos]) { pos += 1u64 }
+    if pos == bytes.len(data) { break }
+    let start = pos
+    while pos < bytes.len(data) && !whitespace(data[pos]) { pos += 1u64 }
+    let token = owned(bytes.slice(data, start, pos))
+    let bucket = (checksum(token) ^ 0x4d3142u64) % 256u64
+    let mut index = buckets[bucket]
+    while index != 0u64 && nodes[index].key != token { index = nodes[index].next }
+    if index == 0u64 {
+      let new_index = list.len(nodes)
+      list.push(mut nodes, box Word(key: owned(token), count: 1u64, next: buckets[bucket]))
+      buckets[bucket] = new_index
+    } else { nodes[index].count += 1u64 }
+  }
+  let mut out: List[u8] = []
+  list.reserve(mut out, bytes.len(data) * 2u64 + 256u64)
+  for index in 1u64..list.len(nodes) {
+    append(mut out, nodes[index].key)
+    list.push(mut out, 9u8)
+    append(mut out, number(nodes[index].count))
+  }
+  bytes.from_list(take out)
+}

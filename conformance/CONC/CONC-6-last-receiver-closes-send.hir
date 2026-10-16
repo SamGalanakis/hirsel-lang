@@ -1,0 +1,32 @@
+// rule: CONC-6
+// expect: run
+// "Dropping the last Receiver ... makes later sends return Closed".
+fn discard[T](take x: T) -> () {
+  ()
+}
+
+@noalloc
+fn closed(value: bool) -> ()
+  requires value {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let (sender, r): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+  let mut s = take sender
+  discard(take r)
+  let status: Result[(), (u32, ChannelError)] = channel.send(tasks, mut s, 9)
+  closed(
+    match status {
+      Ok(()) => false,
+      Error((value, Closed)) => value == 9,
+      Error((value, Canceled(cause))) => false,
+    }
+  )
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

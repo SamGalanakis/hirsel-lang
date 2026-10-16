@@ -1,0 +1,8 @@
+// rule: LANG-4
+// expect: accept
+// Shows "Module path heads live in their own namespace and resolve only before a ."
+fn example(n: u64) -> () {
+  let u64: u64 = n
+  let _ = u64.order
+  ()
+}

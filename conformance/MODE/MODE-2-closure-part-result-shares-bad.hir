@@ -1,0 +1,20 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+// A closure that returns a counted part of a captured record shares it, as
+// reading `r.items` directly does, so the record is no longer unique.
+type Rec {
+  items: Array[u64],
+}
+
+fn bump(mut x: unique Rec) -> () {
+  ()
+}
+
+fn probe(a: Arena) -> u64 {
+  let mut r: unique Rec in a = Rec(items: [1, 2])
+  let old = fn() {
+    r.items
+  }()
+  bump(mut r)
+  old[0]
+}

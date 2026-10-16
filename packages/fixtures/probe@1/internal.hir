@@ -1,0 +1,4 @@
+@noalloc
+pub fn secret() -> u64 uses {} {
+  42
+}

@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 6
+// Shows "Structural, computed from the type, no user instances."
+@noalloc
+fn example(a: Io, b: Io) -> bool {
+  a == b
+}

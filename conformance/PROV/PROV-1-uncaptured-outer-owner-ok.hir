@@ -1,0 +1,23 @@
+// rule: PROV-1
+// expect: accept
+// A nested function may name an owner of the enclosing function in its
+// parameter and result types without capturing it. Its callers prove the
+// argument against that owner, and the result carries the same name back.
+fn fresh() -> List[u64] {
+  []
+}
+
+fn mk(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: List[u64], p: Option[u8 of r]) -> () {}
+
+fn outer() -> () {
+  let x = fresh()
+  fn inner(y: Option[u8 of x]) -> Option[u8 of x] {
+    y
+  }
+  let v = inner(mk(x))
+  inspect(x, v)
+}

@@ -1,0 +1,37 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut builder: List[u8] = [65u8, 66u8]
+  let retained = bytes.from_list(copy builder)
+  std@1/text.append(mut builder, "é")
+  failure.check(retained == b"AB", TextInvariant())
+  failure.check(std@1/text.finish(take builder) == Ok("ABé"), TextInvariant())
+  let outer = bytes.slice(string.as_bytes("prefixé😀TAIL"), 6, 12)
+  let inner = bytes.slice(outer, 2, 6)
+  failure.check(
+    bytes.len(inner) == 4 && inner[0] == 240u8 && inner[3] == 128u8,
+    TextInvariant()
+  )
+  let parsed: String = match string.from_bytes(take inner) {
+    Ok(text) => take text,
+    Error(bytes) => {
+      let discarded = take bytes
+      "bad"
+    },
+  }
+  match string.position(parsed, 0) {
+    Some(a) => match string.position(parsed, 4) {
+      Some(b) => failure.check(
+        string.slice(parsed, a, b) == "😀" && string.slice(parsed, b, b) == "",
+        TextInvariant()
+      ),
+      None() => failure.check(false, TextInvariant()),
+    },
+    None() => failure.check(false, TextInvariant()),
+  }
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

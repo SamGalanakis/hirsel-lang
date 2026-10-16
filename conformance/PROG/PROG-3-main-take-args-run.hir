@@ -1,0 +1,7 @@
+// rule: PROG-3
+// expect: run
+// stdout: launched
+pub fn main(rt: Io, take args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, "launched\n")
+  Ok(())
+}

@@ -1,0 +1,6 @@
+// rule: PROG-2
+// expect: reject PROG-2 at line 5
+fn main(s: String) {
+  let v = vendor.view_value(s)
+  let cursor = vendor.open(v)
+}

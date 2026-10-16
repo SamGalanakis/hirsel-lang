@@ -1,0 +1,9 @@
+// rule: MODE-4
+// expect: accept
+type Packet[T] {
+  data: sendable T,
+}
+
+fn good[T](take x: sendable T) -> Packet[T] {
+  Packet(data: take x)
+}

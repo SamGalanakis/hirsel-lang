@@ -1,0 +1,20 @@
+// rule: OWN-1
+// expect: run
+// stdout: guard
+resource type Guard {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "guard\n")
+}
+
+fn guard(stdout: Stdout, text: String) -> Guard in text {
+  Guard(stdout: stdout)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let text: String = "guard\n"
+  let g = guard(stdout, text)
+  Ok(())
+}

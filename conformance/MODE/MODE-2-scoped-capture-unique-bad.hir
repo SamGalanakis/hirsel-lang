@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+fn demand(mut action: unique fn() -> ()) -> () {}
+
+fn example(text: String) -> () {
+  let mut action = fn() {
+    let _ = text
+  }
+  demand(mut action)
+}

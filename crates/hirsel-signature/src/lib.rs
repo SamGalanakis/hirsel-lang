@@ -1,0 +1,2354 @@
+//! Written headers → self-contained semantic signatures (LANG-6).
+//! No body is visited. Missing syntax is rejected; omissions have fixed defaults.
+mod contracts;
+mod destruction;
+mod import;
+pub mod protocol;
+use hirsel_check_protocol::declaration::{
+    PART_LOCALITY, builtin_bound, environment_alone, environment_candidates, written_local,
+};
+use hirsel_check_protocol::header::{Input, NormalizedDeclaration, OwnerRepresentation};
+use hirsel_diag::{Diagnostic, RuleId};
+use hirsel_intern::Interner;
+use hirsel_span::Span;
+use hirsel_syntax as ast;
+use hirsel_types::encoding::fingerprint;
+use hirsel_types::*;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Normalizes one header/type declaration. TypeIds belong to the returned store.
+/// Dependencies include contracts and named types; query errors propagate unchanged.
+pub fn normalize(
+    input: Input<'_>,
+    provider: &mut dyn SignatureProvider,
+) -> Result<QueryOutput<Signature>, QueryError> {
+    normalize_owned(input, provider).map(|output| output.public)
+}
+pub fn normalize_owned(
+    input: Input<'_>,
+    provider: &mut dyn SignatureProvider,
+) -> Result<NormalizedDeclaration, QueryError> {
+    let failure = std::cell::RefCell::new(None);
+    let result = normalize_inner(input, provider, &failure);
+    failure.into_inner().map_or(result, Err)
+}
+fn normalize_inner(
+    input: Input<'_>,
+    provider: &mut dyn SignatureProvider,
+    failure: &std::cell::RefCell<Option<QueryError>>,
+) -> Result<NormalizedDeclaration, QueryError> {
+    let item = input
+        .tree
+        .items
+        .get(input.item.0 as usize)
+        .ok_or_else(|| diagnostic("LANG-6", Span::default(), "missing item header"))?;
+    let name_span = item.name_span;
+    let duplicate = if input.declaration_sites.is_empty() {
+        input
+            .tree
+            .items
+            .iter()
+            .take(input.item.0 as usize)
+            .any(|previous| previous.definition == item.definition)
+    } else {
+        let index = input
+            .declaration_sites
+            .iter()
+            .position(|site| site.definition == item.definition && site.name_span == name_span)
+            .ok_or_else(|| {
+                diagnostic(
+                    "LANG-6",
+                    name_span,
+                    "item name is missing from module declaration input",
+                )
+            })?;
+        input.declaration_sites[..index]
+            .iter()
+            .any(|previous| previous.definition == item.definition)
+    };
+    if duplicate {
+        return Err(diagnostic(
+            "LANG-7",
+            name_span,
+            "duplicate definition; overloading is forbidden",
+        ));
+    }
+    let mut n = Normalizer {
+        input: &input,
+        provider,
+        types: TypeStore::default(),
+        own_representation: None,
+        generics: vec![],
+        outer_generics: vec![],
+        parameters: vec![],
+        parameter_syntax: vec![],
+        outer_parameters: vec![],
+        siblings: vec![],
+        dependencies: BTreeMap::new(),
+        snapshots: BTreeMap::new(),
+        builtin_declarations: BTreeMap::new(),
+        active: BTreeSet::new(),
+        aliases: BTreeSet::new(),
+        arena_places: BTreeSet::new(),
+        current_parameter: None,
+        public: item.visibility == ast::Visibility::Public,
+        span: item.origin.span,
+        proof_failure: failure,
+    };
+    if matches!(item.kind, ast::ItemKind::Type { .. })
+        && item
+            .attributes
+            .iter()
+            .any(|a| input.symbols.resolve(a.name) == Some("capability"))
+        && item
+            .attributes
+            .iter()
+            .any(|a| input.symbols.resolve(a.name) == Some("serializable"))
+    {
+        return Err(diagnostic(
+            "SER-1",
+            item.origin.span,
+            "a capability cannot opt into a serializable schema",
+        ));
+    }
+    let attrs = n.attributes(&item.attributes, &item.kind)?;
+    let mut implementation_authority = None;
+    let mut kind = match &item.kind {
+        ast::ItemKind::Function { signature, abi, .. } => {
+            if item.visibility == ast::Visibility::PublicOpaque {
+                return Err(diagnostic(
+                    "PROG-2",
+                    item.origin.span,
+                    "pub opaque applies only to types",
+                ));
+            }
+            let mut f = n.function(signature, &attrs, false)?;
+            if abi.is_some() || input.metadata.exported_c {
+                if !f.generics.is_empty() {
+                    return Err(diagnostic(
+                        "GEN-4",
+                        item.origin.span,
+                        "foreign and exported C functions must be monomorphic",
+                    ));
+                }
+                if abi.is_some() && !input.metadata.unsafe_ffi {
+                    return Err(diagnostic(
+                        "PROG-4",
+                        item.origin.span,
+                        "extern requires an unsafe ffi package",
+                    ));
+                }
+                if abi.as_deref().is_some_and(|s| s != "c") {
+                    return Err(diagnostic(
+                        "PROG-4",
+                        item.origin.span,
+                        "only the c ABI is supported",
+                    ));
+                }
+                if abi.is_some() && !f.parameters.iter().any(|p| n.is_unsafe(p.ty)) {
+                    return Err(diagnostic(
+                        "PROG-4",
+                        item.origin.span,
+                        "extern requires a declared Unsafe capability parameter",
+                    ));
+                }
+                for p in &f.parameters {
+                    if !n.is_unsafe(p.ty) && !n.ffi_type(p.ty, &mut BTreeSet::new()) {
+                        return Err(diagnostic(
+                            "PROG-4",
+                            item.origin.span,
+                            "type is not permitted by the foreign interface",
+                        ));
+                    }
+                }
+                if !n.ffi_type(f.result, &mut BTreeSet::new()) {
+                    return Err(diagnostic(
+                        "PROG-4",
+                        item.origin.span,
+                        "foreign result type is not permitted",
+                    ));
+                }
+                {
+                    let abi = abi.as_deref().unwrap_or("c");
+                    let mut foreign = input.metadata.foreign.clone().ok_or_else(|| {
+                        diagnostic(
+                            "PROG-4",
+                            item.origin.span,
+                            "foreign aliasing contract must be supplied explicitly",
+                        )
+                    })?;
+                    if foreign.abi != abi || foreign.aliasing_contract.is_empty() {
+                        return Err(diagnostic(
+                            "PROG-4",
+                            item.origin.span,
+                            "invalid foreign contract",
+                        ));
+                    }
+                    foreign.blocking = attrs.blocking;
+                    f.foreign = Some(foreign);
+                }
+            }
+            SignatureKind::Function(f)
+        }
+        ast::ItemKind::Const { ty, .. } => {
+            if item.visibility == ast::Visibility::PublicOpaque {
+                return Err(diagnostic(
+                    "PROG-2",
+                    item.origin.span,
+                    "pub opaque applies only to types",
+                ));
+            }
+            SignatureKind::Const(n.ty(*ty, Position::Result)?)
+        }
+        ast::ItemKind::Type {
+            flavor,
+            generics,
+            bounds,
+            authority,
+            body,
+            drop,
+        } => {
+            n.generics = n.generic_parameters(generics)?;
+            if drop.is_some() && *flavor != ast::TypeFlavor::Resource {
+                return Err(diagnostic(
+                    "LANG-7",
+                    item.origin.span,
+                    "only resources declare drop",
+                ));
+            }
+            if matches!(body, ast::TypeBody::Opaque)
+                && item.visibility != ast::Visibility::PublicOpaque
+            {
+                return Err(diagnostic(
+                    "PROG-2",
+                    item.origin.span,
+                    "only opaque types omit representation",
+                ));
+            }
+            if attrs.capability.is_some() && item.visibility != ast::Visibility::PublicOpaque {
+                return Err(diagnostic(
+                    "PROG-2",
+                    item.origin.span,
+                    "capabilities require opaque type declarations",
+                ));
+            }
+            if item.visibility == ast::Visibility::PublicOpaque
+                && (authority.is_none() || bounds.is_none())
+            {
+                return Err(diagnostic(
+                    if attrs.capability.is_some()
+                        && authority.is_none()
+                        && !matches!(body, ast::TypeBody::Opaque)
+                    {
+                        "CAP-5"
+                    } else {
+                        "LANG-6"
+                    },
+                    item.name_span,
+                    "opaque bounds and authority must be stated",
+                ));
+            }
+            if (attrs.serializable || bounds.iter().flatten().any(|b| *b == Bound::Serializable))
+                && (item.visibility == ast::Visibility::PublicOpaque
+                    || *flavor == ast::TypeFlavor::Resource
+                    || attrs.capability.is_some()
+                    || matches!(body, ast::TypeBody::Distinct { fact: Some(_), .. }))
+            {
+                return Err(diagnostic(
+                    "SER-1",
+                    item.origin.span,
+                    "serializable requires transparent data without authority, brands or refinements; convert through a data DTO",
+                ));
+            }
+            let public_deps = n.dependencies.clone();
+            let repr = n.type_body(body)?;
+            n.own_representation = repr;
+            let opaque = item.visibility == ast::Visibility::PublicOpaque;
+            if opaque {
+                n.dependencies = public_deps.clone();
+            }
+            if let ast::TypeBody::Distinct { field, .. } = body {
+                n.parameters = vec![Some(n.name(field.name)?)];
+            }
+            let fact = if let ast::TypeBody::Distinct { fact: Some(e), .. } = body {
+                if !repr.is_some_and(|r| n.satisfies(r, Bound::Plain)) {
+                    return Err(diagnostic(
+                        "FACT-2",
+                        item.origin.span,
+                        "a distinct fact requires a plain base",
+                    ));
+                }
+                Some(n.contract(ast::ContractKind::Requires, *e, 0)?)
+            } else {
+                None
+            };
+            if *flavor == ast::TypeFlavor::Flat
+                && repr.is_some_and(|r| !n.flat_storage(r, &mut BTreeSet::new()))
+            {
+                return Err(diagnostic(
+                    "MEM-12",
+                    item.origin.span,
+                    "MEM-12: flat fields require pointer-free storage without capabilities, handles or resources",
+                ));
+            }
+            let destructor_allocation = if drop.as_ref().is_some_and(|d| d.noalloc) {
+                Allocation::NoAlloc
+            } else {
+                Allocation::MayAllocate
+            };
+            let fields_drop = repr.map_or(DropAllocation::MayAllocate, |r| n.drop_summary(r));
+            let noalloc_drop = fields_drop == DropAllocation::NoAlloc
+                && (*flavor != ast::TypeFlavor::Resource
+                    || destructor_allocation == Allocation::NoAlloc);
+            let mut inferred = n.structural_bounds(repr, *flavor, attrs.capability);
+            if noalloc_drop {
+                inferred.push(Bound::NoallocDrop);
+            }
+            let declared_authority = match authority {
+                Some(paths) => n.authority(paths)?,
+                None => AuthoritySummary::inert(),
+            };
+            // CAP-5: the implementation ceiling is an owner input, including
+            // its nominal dependencies. It never enters the public fingerprint.
+            if attrs.capability.is_some() {
+                n.dependencies = public_deps;
+                if repr.is_some() {
+                    implementation_authority = Some(declared_authority.clone());
+                }
+            }
+            let field_authority = n.type_authority(repr);
+            // CAP-2: "An explicit summary cannot erase field authority."
+            // Opaque clients use only the export; the owner must prove it.
+            if opaque && repr.is_some() && !field_authority.is_subset_of(&declared_authority) {
+                let mut error = diagnostic(
+                    if attrs.capability.is_some() {
+                        "CAP-5"
+                    } else {
+                        "CAP-2"
+                    },
+                    item.origin.span,
+                    "opaque authority summary omits representation authority",
+                );
+                if attrs.capability.is_some() {
+                    if let QueryError::Diagnostics(ds) = &mut error {
+                        ds[0].notes.push(format!("owner representation retains {field_authority:?}; private ceiling is {declared_authority:?}"));
+                        if let ast::TypeBody::Record(fields) = body {
+                            if let Some(Type {
+                                kind: TypeKind::Record(parts),
+                                ..
+                            }) = repr.and_then(|r| n.types.get(r))
+                            {
+                                for (field, part) in fields.iter().zip(parts) {
+                                    let held = n.type_authority(Some(part.ty));
+                                    if !held.is_subset_of(&declared_authority) {
+                                        ds[0].secondary.push(hirsel_diag::Label {
+                                            span: field.origin.span,
+                                            message: format!(
+                                                "field `{}` and its destruction retain {held:?}",
+                                                n.name(field.name)?
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return Err(error);
+            }
+            if attrs.capability == Some(CapabilityKind::Global)
+                && repr.is_some_and(|root| n.scoped_representation(root))
+            {
+                return Err(diagnostic(
+                    "MODE-6",
+                    item.origin.span,
+                    "a global capability representation cannot retain scoped content",
+                ));
+            }
+            let authority = if opaque {
+                declared_authority
+            } else {
+                field_authority.join(declared_authority)
+            };
+            let authority = if attrs.capability.is_some() {
+                AuthoritySummary::Known(
+                    vec![AuthorityTerm::Capability(item.definition.clone())].into(),
+                )
+            } else {
+                authority
+            };
+            if !opaque || repr.is_some() {
+                inferred.retain(|b| *b != Bound::Inert);
+                if authority == AuthoritySummary::inert() {
+                    inferred.push(Bound::Inert);
+                }
+            }
+            let alias =
+                matches!(body, ast::TypeBody::Alias(_)) && *flavor != ast::TypeFlavor::Distinct;
+            let serializable = (attrs.serializable || alias)
+                && authority == AuthoritySummary::inert()
+                && repr.is_some_and(|root| n.satisfies(root, Bound::Serializable));
+            if attrs.serializable && !serializable {
+                return Err(diagnostic(
+                    "SER-1",
+                    item.origin.span,
+                    "every serialized field needs an admitted schema; opaque or validated types require a data DTO",
+                ));
+            }
+            if serializable {
+                inferred.push(Bound::Serializable);
+            }
+            for bound in bounds.iter().flatten() {
+                if (matches!(bound, Bound::Inert | Bound::Flat | Bound::Serializable)
+                    && attrs.capability.is_some())
+                    || (attrs.capability == Some(CapabilityKind::Scoped)
+                        && matches!(bound, Bound::Plain | Bound::Copyable | Bound::Sendable))
+                    || (matches!(bound, Bound::Data | Bound::Key)
+                        && (*flavor == ast::TypeFlavor::Resource || attrs.capability.is_some()))
+                    || ((!opaque || repr.is_some()) && !inferred.contains(bound))
+                {
+                    return Err(diagnostic(
+                        if *bound == Bound::Serializable {
+                            "SER-1"
+                        } else if attrs.capability.is_some() && *bound == Bound::Inert {
+                            "CAP-2"
+                        } else if attrs.capability.is_some() && *bound == Bound::Sendable {
+                            "MODE-4"
+                        } else if attrs.capability.is_some() && *bound == Bound::Serializable {
+                            "SER-1"
+                        } else {
+                            "GEN-1"
+                        },
+                        item.origin.span,
+                        "declared bound is not structural",
+                    ));
+                }
+            }
+            if opaque {
+                inferred = bounds.clone().unwrap_or_default();
+            }
+            inferred.sort();
+            inferred.dedup();
+            SignatureKind::Type(TypeDefinition {
+                loop_source: n.loop_source(&item.attributes)?,
+                destructor_allocation,
+                generics: n.generics.clone(),
+                representation: if opaque { None } else { repr },
+                bounds: inferred,
+                authority,
+                capability: attrs.capability,
+                implementation_authority: None,
+                serializable: attrs.serializable,
+                layout: Layout {
+                    flat: *flavor == ast::TypeFlavor::Flat,
+                    ..attrs.layout
+                },
+                distinct: *flavor == ast::TypeFlavor::Distinct,
+                resource: *flavor == ast::TypeFlavor::Resource,
+                drop: drop.as_ref().map(|_| item.definition.clone()),
+                fact,
+            })
+        }
+    };
+    n.finish_drop_summaries(&mut kind);
+    let dependencies = n
+        .dependencies
+        .into_iter()
+        .map(|(definition, fingerprint)| SignatureDependency {
+            definition,
+            fingerprint,
+        })
+        .collect::<Vec<_>>();
+    let owner = match &kind {
+        SignatureKind::Type(declaration) => n.own_representation.map(|root| OwnerRepresentation {
+            types: n.types.clone(),
+            declaration: TypeDefinition {
+                representation: Some(root),
+                implementation_authority,
+                ..declaration.clone()
+            },
+        }),
+        _ => None,
+    };
+    let mut signature = Signature {
+        metadata: SignatureMetadata {
+            visibility: item.visibility,
+            alias: item.visibility != ast::Visibility::PublicOpaque
+                && matches!(
+                    item.kind,
+                    ast::ItemKind::Type {
+                        body: ast::TypeBody::Alias(_),
+                        ..
+                    }
+                ),
+            schema: vec![],
+            unsafe_ffi: input.metadata.unsafe_ffi,
+            exported_c: input.metadata.exported_c,
+            roles: NominalRoles {
+                unsafe_capability: input.metadata.unsafe_capability.clone(),
+                result_type: input.metadata.result_type.clone(),
+                tasks_capability: input.metadata.tasks_capability.clone(),
+                scope_capability: input.metadata.scope_capability.clone(),
+                heap: input.metadata.heap.clone(),
+            },
+        },
+
+        definition: item.definition.clone(),
+        // An opaque public declaration has no TypeId roots. Its defining
+        // graph belongs only to owner above; even unreachable private rows
+        // would expose field/variant names through the public store.
+        types: if item.visibility == ast::Visibility::PublicOpaque {
+            TypeStore::default()
+        } else {
+            n.types
+        },
+        kind,
+        fingerprint: ast::ContentHash::default(),
+    };
+    signature.fingerprint = fingerprint(&signature, &dependencies)
+        .map_err(|_| diagnostic("LANG-6", item.origin.span, "invalid signature type graph"))?;
+    Ok(NormalizedDeclaration {
+        public: QueryOutput {
+            value: signature,
+            diagnostics: vec![],
+            dependencies,
+        },
+        owner,
+    })
+}
+fn diagnostic(rule: &str, span: Span, message: &str) -> QueryError {
+    QueryError::Diagnostics(vec![Diagnostic::error(
+        RuleId::new(rule).unwrap(),
+        span,
+        message,
+    )])
+}
+#[derive(Clone, Copy)]
+enum Position {
+    Borrow,
+    Take,
+    Result,
+    Field,
+}
+#[derive(Default)]
+struct Attributes {
+    noalloc: bool,
+    incomplete: bool,
+    blocking: bool,
+    layout: Layout,
+    capability: Option<CapabilityKind>,
+    serializable: bool,
+}
+struct Normalizer<'a, 'b> {
+    input: &'a Input<'a>,
+    provider: &'b mut dyn SignatureProvider,
+    types: TypeStore,
+    own_representation: Option<TypeId>,
+    generics: Vec<GenericParameter>,
+    outer_generics: Vec<Vec<GenericParameter>>,
+    parameters: Vec<Option<String>>,
+    parameter_syntax: Vec<ast::TypeExprId>,
+    outer_parameters: Vec<(Vec<Option<String>>, Vec<ast::TypeExprId>)>,
+    siblings: Vec<String>,
+    dependencies: BTreeMap<ast::DefPath, ast::ContentHash>,
+    snapshots: BTreeMap<ast::DefPath, SignatureRef>,
+    builtin_declarations: BTreeMap<TypeId, SignatureRef>,
+    active: BTreeSet<ast::TypeExprId>,
+    aliases: BTreeSet<ast::DefPath>,
+    /// Relation places lowered from a written arena placement (PROV-4).
+    arena_places: BTreeSet<Origin>,
+    /// The parameter whose type is being lowered, so `take x: T in x` names
+    /// its own argument (MODE-1).
+    current_parameter: Option<usize>,
+    public: bool,
+    span: Span,
+    proof_failure: &'b std::cell::RefCell<Option<QueryError>>,
+}
+impl Normalizer<'_, '_> {
+    /// A relation's lifetime sources: every reach except its arena places,
+    /// which are where its blocks live (PROV-4).
+    fn lifetime(&self, relation: &Relation) -> Relation {
+        relation.retain(|r| !matches!(r, Reach::Place(o) if self.arena_places.contains(o)))
+    }
+    /// A relation's arena places only.
+    fn placement(&self, relation: &Relation) -> Relation {
+        relation.retain(|r| matches!(r, Reach::Place(o) if self.arena_places.contains(o)))
+    }
+    fn proof_failure<T>(&self, error: QueryError, fallback: T) -> T {
+        self.proof_failure.borrow_mut().get_or_insert(error);
+        fallback
+    }
+    fn name(&self, s: hirsel_intern::Symbol) -> Result<String, QueryError> {
+        self.input
+            .symbols
+            .resolve(s)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                diagnostic(
+                    "LANG-6",
+                    self.span,
+                    "symbol does not belong to input interner",
+                )
+            })
+    }
+    fn path_name(&self, p: &ast::Path) -> Option<&str> {
+        if p.package.is_none() && p.segments.len() == 1 {
+            self.input.symbols.resolve(p.segments[0])
+        } else {
+            None
+        }
+    }
+    fn generic_parameters(
+        &self,
+        gs: &[ast::GenericParam],
+    ) -> Result<Vec<GenericParameter>, QueryError> {
+        let mut names = BTreeSet::new();
+        gs.iter()
+            .map(|g| {
+                let name = self.name(g.name)?;
+                if !names.insert(name.clone()) {
+                    return Err(diagnostic(
+                        "GEN-1",
+                        self.span,
+                        "duplicate generic parameter",
+                    ));
+                }
+                Ok(match &g.kind {
+                    ast::GenericKind::Size => GenericParameter::Size { name },
+                    ast::GenericKind::Type(bs) => {
+                        let mut bounds = bs.clone();
+                        bounds.sort();
+                        bounds.dedup();
+                        GenericParameter::Type {
+                            name,
+                            bounds: bounds.into(),
+                        }
+                    }
+                })
+            })
+            .collect()
+    }
+    fn attributes(
+        &self,
+        as_: &[ast::Attribute],
+        kind: &ast::ItemKind,
+    ) -> Result<Attributes, QueryError> {
+        let mut result = Attributes::default();
+        let mut seen = BTreeSet::new();
+        for a in as_ {
+            let name = self.name(a.name)?;
+            if !seen.insert(name.clone()) {
+                return Err(diagnostic("LANG-6", a.origin.span, "duplicate attribute"));
+            }
+            let function = matches!(kind, ast::ItemKind::Function { .. });
+            let type_ = matches!(kind, ast::ItemKind::Type { .. });
+            let valid = match name.as_str() {
+                "noalloc" | "incomplete" | "advance_only" | "preserves_captures" | "captures" => {
+                    function
+                }
+                "blocking" => matches!(kind, ast::ItemKind::Function { abi: Some(_), .. }),
+                "layout" | "packed" | "align" | "soa" | "capability" | "loop_source"
+                | "serializable" => type_,
+                _ => false,
+            };
+            if !valid {
+                return Err(diagnostic(
+                    "LANG-6",
+                    a.origin.span,
+                    "attribute is not permitted here",
+                ));
+            }
+            match name.as_str() {
+                "advance_only" | "preserves_captures" | "captures" => {
+                    if !matches!(a.arguments.as_slice(), [ast::AttributeArgument::StatePromise(s)] if !s.selectors.is_empty())
+                    {
+                        return Err(diagnostic(
+                            "LANG-6",
+                            a.origin.span,
+                            "a callable contract requires nonempty parameter selectors",
+                        ));
+                    }
+                }
+                "loop_source" => {
+                    if !matches!(
+                        a.arguments.as_slice(),
+                        [ast::AttributeArgument::LoopSource(_)]
+                    ) {
+                        return Err(diagnostic(
+                            "SEM-4",
+                            a.origin.span,
+                            "@loop_source requires open and next paths",
+                        ));
+                    }
+                }
+                "noalloc" | "incomplete" | "blocking" | "packed" | "soa" | "serializable" => {
+                    if !a.arguments.is_empty() {
+                        return Err(diagnostic(
+                            "LANG-6",
+                            a.origin.span,
+                            "attribute takes no arguments",
+                        ));
+                    }
+                    match name.as_str() {
+                        "noalloc" => result.noalloc = true,
+                        "incomplete" => result.incomplete = true,
+                        "blocking" => result.blocking = true,
+                        "packed" => result.layout.packed = true,
+                        "serializable" => result.serializable = true,
+                        _ => result.layout.soa = true,
+                    }
+                }
+                "layout" => {
+                    if let [ast::AttributeArgument::Name(s)] = a.arguments.as_slice() {
+                        if self.name(*s)? != "c" {
+                            return Err(diagnostic("LANG-7", a.origin.span, "unsupported layout"));
+                        }
+                        result.layout.c = true;
+                    } else {
+                        return Err(diagnostic("LANG-7", a.origin.span, "layout requires c"));
+                    }
+                }
+                "align" => {
+                    if let [ast::AttributeArgument::Integer(v)] = a.arguments.as_slice() {
+                        let n = v
+                            .replace('_', "")
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|n| n.is_power_of_two())
+                            .ok_or_else(|| {
+                                diagnostic(
+                                    "LANG-7",
+                                    a.origin.span,
+                                    "alignment must be a positive power of two",
+                                )
+                            })?;
+                        result.layout.align = Some(n);
+                    } else {
+                        return Err(diagnostic(
+                            "LANG-7",
+                            a.origin.span,
+                            "align requires an integer",
+                        ));
+                    }
+                }
+                "capability" => {
+                    result.capability = match a.arguments.as_slice() {
+                        [ast::AttributeArgument::Keyword(ast::Keyword::Global)] => {
+                            Some(CapabilityKind::Global)
+                        }
+                        [ast::AttributeArgument::Keyword(ast::Keyword::Local)] => {
+                            Some(CapabilityKind::Scoped)
+                        }
+                        _ => {
+                            return Err(diagnostic(
+                                "LANG-6",
+                                a.origin.span,
+                                "capability requires global or local",
+                            ));
+                        }
+                    };
+                }
+                _ => unreachable!(),
+            }
+        }
+        Ok(result)
+    }
+    fn loop_source(
+        &mut self,
+        attributes: &[ast::Attribute],
+    ) -> Result<Option<LoopSourceDeclaration>, QueryError> {
+        let Some(a) = attributes
+            .iter()
+            .find(|a| self.input.symbols.resolve(a.name) == Some("loop_source"))
+        else {
+            return Ok(None);
+        };
+        let [ast::AttributeArgument::LoopSource(s)] = a.arguments.as_slice() else {
+            return Err(diagnostic(
+                "SEM-4",
+                a.origin.span,
+                "@loop_source requires open and next paths",
+            ));
+        };
+        Ok(Some(LoopSourceDeclaration {
+            open: self.definition(&s.open, None)?,
+            next: self.definition(&s.next, None)?,
+            option: ast::DefPath(ast::ItemPath {
+                package: ast::PackageId {
+                    name: "core".into(),
+                    version: "1".into(),
+                },
+                modules: vec![],
+                name: "Option".into(),
+            }),
+        }))
+    }
+    fn generic(&self, name: &str) -> Option<(u32, u32, &GenericParameter)> {
+        std::iter::once(&self.generics)
+            .chain(self.outer_generics.iter().rev())
+            .enumerate()
+            .find_map(|(depth, gs)| {
+                gs.iter().enumerate().find_map(|(ordinal, g)| {
+                    let n = match g {
+                        GenericParameter::Type { name, .. } | GenericParameter::Size { name } => {
+                            name
+                        }
+                    };
+                    (n == name).then_some((depth as u32, ordinal as u32, g))
+                })
+            })
+    }
+    fn declarations(&self) -> GenericDeclarations {
+        GenericDeclarations::from_binders(
+            std::iter::once(&self.generics)
+                .chain(self.outer_generics.iter().rev())
+                .enumerate()
+                .map(|(d, ps)| (GenericBinder::Bound(d as u32), ps.clone())),
+        )
+    }
+    fn function(
+        &mut self,
+        s: &ast::FunctionSyntax,
+        outer: &Attributes,
+        closure: bool,
+    ) -> Result<FunctionType, QueryError> {
+        let saved_g = self.generics.clone();
+        self.outer_generics.push(saved_g.clone());
+        self.outer_parameters
+            .push((self.parameters.clone(), self.parameter_syntax.clone()));
+        self.parameter_syntax = s.parameters.iter().map(|p| p.ty).collect();
+        let own_g = self.generic_parameters(&s.generics)?;
+        // Nested function-type binders are not in the grammar (#24).
+        if closure && !own_g.is_empty() {
+            return Err(diagnostic(
+                "GEN-1",
+                self.span,
+                "function types cannot declare generic binders",
+            ));
+        }
+        self.generics = own_g.clone();
+        self.parameters = s
+            .parameters
+            .iter()
+            .map(|p| p.name.map(|n| self.name(n)).transpose())
+            .collect::<Result<_, _>>()?;
+        let mut names = BTreeSet::new();
+        let mut labels = BTreeSet::new();
+        for p in &s.parameters {
+            if !closure && p.name.is_none() {
+                return Err(diagnostic(
+                    "LANG-6",
+                    self.span,
+                    "declaration parameter requires a name and type",
+                ));
+            }
+            if let Some(name) = p.name {
+                if !names.insert(name) {
+                    return Err(diagnostic("LANG-12", self.span, "duplicate parameter name"));
+                }
+            }
+            if let Some(label) = p.label {
+                if !labels.insert(label) {
+                    return Err(diagnostic(
+                        "LANG-12",
+                        self.span,
+                        "duplicate parameter label",
+                    ));
+                }
+            }
+        }
+        let dummy = ast::ItemKind::Function {
+            signature: s.clone(),
+            body: None,
+            abi: None,
+        };
+        let attrs = self.attributes(&s.attributes, &dummy)?;
+        let current = self.current_parameter;
+        let mut parameters = s
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                self.current_parameter = Some(i);
+                let ty = self.ty(
+                    p.ty,
+                    if p.passing == PassingMode::Take {
+                        Position::Take
+                    } else {
+                        Position::Borrow
+                    },
+                );
+                self.current_parameter = current;
+                let ty = ty?;
+                Ok(Parameter {
+                    name: p.name.map(|n| self.name(n)).transpose()?,
+                    label: p.label.map(|n| self.name(n)).transpose()?,
+                    passing: p.passing,
+                    ty,
+                })
+            })
+            .collect::<Result<Vec<_>, QueryError>>()?;
+        let result = match s.result {
+            Some(t) => self.ty(t, Position::Result)?,
+            None => self.push(TypeKind::Tuple(vec![].into()), Position::Result)?,
+        };
+        // MODE-1: a named function has no environment, so its local result
+        // names its sources (spec #70).
+        if !closure
+            && (self
+                .types
+                .get(result)
+                .unwrap()
+                .modes
+                .relation
+                .has_environment()
+                || s.result.and_then(|t| written_local(self.input.tree, t)) == Some(true))
+        {
+            return Err(diagnostic(
+                "MODE-1",
+                s.result.map_or(self.span, |t| {
+                    self.input.tree.types[t.0 as usize].origin.span
+                }),
+                "a named function has no environment: its local result names its sources, `in x`",
+            ));
+        }
+        // MODE-1 (#72): a function type's `in env` alone may not narrow a
+        // non-Plain parameter out of its result.
+        if closure && let Some(span) = s.result.and_then(|t| environment_alone(self.input.tree, t))
+        {
+            let candidates: Vec<String> = parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !self.satisfies(p.ty, Bound::Plain))
+                .map(|(i, p)| {
+                    p.name
+                        .as_ref()
+                        .map_or_else(|| format!("parameter {}", i + 1), |n| n.to_string())
+                })
+                .collect();
+            if !candidates.is_empty() {
+                return Err(diagnostic(
+                    "MODE-1",
+                    span,
+                    &environment_candidates(&candidates),
+                ));
+            }
+        }
+        let arenas: BTreeSet<ParamId> = match &self.input.metadata.heap {
+            Some(heap) => parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| hirsel_types::is_arena_type(&self.types, p.ty, &heap.arena))
+                .map(|(i, _)| ParamId(i as u32))
+                .collect(),
+            None => BTreeSet::new(),
+        };
+        let arena_parameter = |o: &Origin| {
+            matches!(o.root, OriginRoot::Parameter(hirsel_types::ParameterRef::Bound {
+                depth: 0,
+                parameter,
+            }) if o.fields.is_empty() && arenas.contains(&parameter))
+        };
+        let mut result =
+            local_result_destination(&mut self.types, result, &parameters, arena_parameter);
+        let mut state_promises = BTreeMap::<RelationPlace, StatePromise>::new();
+        let mut captures = Vec::new();
+        for attribute in &s.attributes {
+            let [ast::AttributeArgument::StatePromise(promise)] = attribute.arguments.as_slice()
+            else {
+                continue;
+            };
+            for path in &promise.selectors {
+                let (origin, _) = self.typed_origin(path, false, true)?;
+                let OriginRoot::Parameter(
+                    parameter @ ParameterRef::Bound {
+                        depth: 0,
+                        parameter: ordinal,
+                    },
+                ) = origin.root
+                else {
+                    return Err(diagnostic(
+                        "LANG-6",
+                        promise.origin.span,
+                        "a callable selector names its own parameter and explicit fields",
+                    ));
+                };
+                let selector = RelationPlace {
+                    parameter,
+                    fields: origin.fields,
+                };
+                if promise.kind == ast::StatePromiseKind::Captures {
+                    captures.push(selector);
+                } else {
+                    if parameters[ordinal.0 as usize].passing != PassingMode::Mut {
+                        return Err(diagnostic(
+                            "MEM-14",
+                            promise.origin.span,
+                            "a state preservation selector requires a mut parameter",
+                        ));
+                    }
+                    let row = state_promises
+                        .entry(selector.clone())
+                        .or_insert(StatePromise {
+                            selector,
+                            advance_only: false,
+                            preserve_captures: false,
+                        });
+                    row.advance_only |= promise.kind == ast::StatePromiseKind::AdvanceOnly;
+                    row.preserve_captures = true;
+                }
+            }
+        }
+        if !captures.is_empty() {
+            captures.sort();
+            captures.dedup();
+            let mut row = self.types.get(result).unwrap().clone();
+            if !matches!(
+                row.kind,
+                TypeKind::Function(_)
+                    | TypeKind::Builtin {
+                        kind: BuiltinType::Iter,
+                        ..
+                    }
+            ) {
+                return Err(diagnostic(
+                    "CLO-4",
+                    self.span,
+                    "@captures requires a callable or erased iterator result",
+                ));
+            }
+            row.erased_captures = Some(ErasedCaptures::FromArguments(captures.into()));
+            result = self.types.push(row);
+        }
+        let state_promises: SharedSlice<_> = state_promises.into_values().collect();
+        apply_state_promises(&mut self.types, &mut parameters, &state_promises);
+        let authority = AuthoritySummary::Known(
+            parameters
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    self.capability(p.ty).map(|_| {
+                        AuthorityTerm::Parameter(hirsel_types::ParameterRef::bound(ParamId(
+                            i as u32,
+                        )))
+                    })
+                })
+                .collect(),
+        );
+        let uses = match &s.uses {
+            None => Uses::Unrestricted,
+            Some(ps) => Uses::Only(self.authority(ps)?),
+        };
+        let authority = if closure {
+            match &uses {
+                Uses::Unrestricted => AuthoritySummary::Unknown,
+                Uses::Only(a) => a.clone(),
+            }
+        } else {
+            authority
+        };
+        let contracts = s
+            .contracts
+            .iter()
+            .enumerate()
+            .map(|(i, c)| self.contract(c.kind, c.expression, i as u32))
+            .collect::<Result<_, _>>()?;
+        let error = result_error(
+            &self.types,
+            result,
+            &NominalRoles {
+                unsafe_capability: self.input.metadata.unsafe_capability.clone(),
+                result_type: self.input.metadata.result_type.clone(),
+                tasks_capability: self.input.metadata.tasks_capability.clone(),
+                scope_capability: self.input.metadata.scope_capability.clone(),
+                heap: self.input.metadata.heap.clone(),
+            },
+        );
+        self.outer_generics.pop();
+        self.generics = saved_g;
+        (self.parameters, self.parameter_syntax) = self.outer_parameters.pop().unwrap();
+        Ok(FunctionType {
+            state_promises,
+            generics: own_g.into(),
+            parameters: parameters.into(),
+            result,
+            error,
+            allocation: if outer.noalloc || attrs.noalloc {
+                Allocation::NoAlloc
+            } else {
+                Allocation::MayAllocate
+            },
+            authority,
+            uses,
+            contracts,
+            incomplete: outer.incomplete || attrs.incomplete,
+            foreign: None,
+        })
+    }
+    fn push(&mut self, kind: TypeKind, pos: Position) -> Result<TypeId, QueryError> {
+        let mut modes = Modes::global();
+        if matches!(pos, Position::Borrow) {
+            modes.relation = Relation::environment();
+        }
+        let id = self.types.push(Type {
+            drop_allocation: self.drop_kind(&kind, &mut BTreeSet::new()),
+
+            kind,
+            modes,
+            sendability_requirement: hirsel_types::SendabilityRequirement::None,
+            allocation_target: None,
+            erased_captures: None,
+            brand: Brand::default(),
+        });
+        let mut adjusted = self.types.get(id).unwrap().clone();
+        let generics = self.declarations();
+        // The callback records dependencies, but never accesses owner type rows.
+        let types = std::mem::take(&mut self.types);
+        let plain = structural_property(
+            &types,
+            id,
+            StructuralProperty::Plain,
+            &generics,
+            &mut |path| self.property_signature(path),
+        );
+        self.types = types;
+        if plain? {
+            adjusted.canonicalize_plain();
+        }
+        let normalized = self.types.push(adjusted.clone());
+        adjusted.modes.sendability = self.sendability(normalized)?;
+        Ok(self.types.push(adjusted))
+    }
+    fn property_signature(
+        &mut self,
+        path: &ast::DefPath,
+    ) -> Result<Option<SignatureRef>, QueryError> {
+        if *path == self.input.tree.items[self.input.item.0 as usize].definition {
+            // The current declaration is not published yet. Recursive nominal
+            // proofs remain conservative until its representation is complete.
+            return Ok(self.snapshots.get(path).cloned());
+        }
+        self.snapshot(path).map(Some)
+    }
+    fn sendability(&mut self, root: TypeId) -> Result<Sendability, QueryError> {
+        // A declared receiving contract supplies entry assumptions, with every
+        // caller/result edge independently checked before receipt.
+        if self.types.get(root).unwrap().sendability_requirement == SendabilityRequirement::Sendable
+        {
+            return Ok(Sendability::Sendable);
+        }
+        let generics = self.declarations();
+        let types = std::mem::take(&mut self.types);
+        let result = structural_sendability(&types, root, &generics, &mut |path| {
+            self.property_signature(path)
+        });
+        self.types = types;
+        result
+    }
+    fn definition(
+        &mut self,
+        p: &ast::Path,
+        id: Option<ast::TypeExprId>,
+    ) -> Result<ast::DefPath, QueryError> {
+        if let Some(id) = id {
+            if let Some((_, ResolvedName::Definition(d))) =
+                self.input.resolution.types.iter().find(|(t, _)| *t == id)
+            {
+                return Ok(d.clone());
+            }
+        }
+        self.provider
+            .lookup(self.input.context, p, self.input.symbols)
+            .result
+    }
+    fn snapshot(&mut self, d: &ast::DefPath) -> Result<SignatureRef, QueryError> {
+        if let Some(s) = self.snapshots.get(d) {
+            self.dependencies.insert(d.clone(), s.fingerprint);
+            return Ok(s.clone());
+        }
+        let s = self.provider.signature(d)?;
+        if s.definition != *d {
+            return Err(diagnostic(
+                "LANG-6",
+                self.span,
+                "provider returned the wrong definition",
+            ));
+        }
+        self.dependencies.insert(d.clone(), s.fingerprint);
+        self.snapshots.insert(d.clone(), s.clone());
+        Ok(s)
+    }
+    fn ty(&mut self, id: ast::TypeExprId, pos: Position) -> Result<TypeId, QueryError> {
+        let t = self
+            .input
+            .tree
+            .types
+            .get(id.0 as usize)
+            .ok_or_else(|| diagnostic("LANG-6", self.span, "missing written type"))?
+            .clone();
+        if !self.active.insert(id) {
+            return Err(diagnostic(
+                "LANG-7",
+                t.origin.span,
+                "recursive syntax type graph",
+            ));
+        }
+        let prev = self.span;
+        self.span = t.origin.span;
+        let result = match &t.kind {
+            ast::TypeExprKind::Error => {
+                return Err(diagnostic(
+                    "LANG-6",
+                    t.origin.span,
+                    "missing written type; signatures cannot infer it",
+                ));
+            }
+            ast::TypeExprKind::Tuple(ts) => {
+                let ts = ts.iter().map(|t| self.part(*t)).collect::<Result<_, _>>()?;
+                self.push(TypeKind::Tuple(ts), pos)?
+            }
+            ast::TypeExprKind::Box(t) => {
+                let t = self.part(*t)?;
+                self.push(TypeKind::Box(t), pos)?
+            }
+            ast::TypeExprKind::Function(s) => {
+                let f = self.function(s, &Attributes::default(), true)?;
+                self.push(TypeKind::Function(f), pos)?
+            }
+            ast::TypeExprKind::Qualified {
+                base,
+                modifiers,
+                brand,
+                relation,
+            } => {
+                let id = self.ty(*base, pos)?;
+                let mut t = self.types.get(id).unwrap().clone();
+                let plain = self.satisfies(id, Bound::Plain);
+                self.qualify(&mut t, modifiers, brand.as_ref(), relation.as_ref(), pos)?;
+                if plain {
+                    t.canonicalize_plain();
+                }
+                let declaration = self.builtin_declarations.get(&id).cloned();
+                let id = self.types.push(t);
+                if let Some(declaration) = declaration {
+                    self.builtin_declarations.insert(id, declaration);
+                }
+                id
+            }
+            ast::TypeExprKind::Named { path, arguments } => {
+                let name = self.path_name(path).map(str::to_owned);
+                if name.as_deref() == Some("any") {
+                    return Err(diagnostic("LANG-7", t.origin.span, "any is not a type"));
+                }
+                if let Some((depth, i, g)) = name.as_deref().and_then(|name| self.generic(name)) {
+                    if !arguments.is_empty() {
+                        return Err(diagnostic(
+                            "GEN-1",
+                            t.origin.span,
+                            "generic parameter cannot be applied",
+                        ));
+                    }
+                    match g {
+                        GenericParameter::Type { .. } => self.push(
+                            TypeKind::Parameter(TypeParameterRef::Bound {
+                                depth,
+                                parameter: TypeParamId(i),
+                            }),
+                            pos,
+                        )?,
+                        GenericParameter::Size { .. } => {
+                            return Err(diagnostic(
+                                "GEN-1",
+                                t.origin.span,
+                                "size parameter cannot be used as a type",
+                            ));
+                        }
+                    }
+                } else if let Some(p) = name.as_deref().and_then(primitive) {
+                    if !arguments.is_empty() {
+                        return Err(diagnostic(
+                            "LANG-7",
+                            t.origin.span,
+                            "primitive type cannot take arguments",
+                        ));
+                    }
+                    self.push(TypeKind::Primitive(p), pos)?
+                } else {
+                    let args = arguments
+                        .iter()
+                        .map(|a| self.argument(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if let Some(b) = name.as_deref().and_then(builtin) {
+                        let declaration = if let Some((_, ResolvedName::Definition(d))) =
+                            self.input.resolution.types.iter().find(|(t, _)| *t == id)
+                        {
+                            let declaration = self.snapshot(d)?;
+                            matches!(declaration.kind, SignatureKind::Type(_))
+                                .then_some(declaration)
+                        } else {
+                            None
+                        };
+                        self.builtin_arguments(b, &args, declaration.as_deref())?;
+                        let id = self.push(
+                            TypeKind::Builtin {
+                                kind: b,
+                                arguments: args.into(),
+                            },
+                            pos,
+                        )?;
+                        if let Some(declaration) = declaration {
+                            self.builtin_declarations.insert(id, declaration);
+                        }
+                        id
+                    } else {
+                        let d = self.definition(path, Some(id))?;
+                        let own = &self.input.tree.items[self.input.item.0 as usize];
+                        let s = if own.definition == d {
+                            None
+                        } else {
+                            Some(self.snapshot(&d)?)
+                        };
+                        let gs = if let Some(s) = &s {
+                            match &s.kind {
+                                SignatureKind::Type(t) => t.generics.clone(),
+                                _ => {
+                                    return Err(diagnostic(
+                                        "LANG-7",
+                                        t.origin.span,
+                                        "value definition used as a type",
+                                    ));
+                                }
+                            }
+                        } else {
+                            self.generics.clone()
+                        };
+                        self.check_arguments(&gs, &args)?;
+                        let public = s
+                            .as_ref()
+                            .map_or(own.visibility != ast::Visibility::Private, |s| {
+                                s.metadata.visibility != ast::Visibility::Private
+                            });
+                        if self.public && !public {
+                            return Err(diagnostic(
+                                "PROG-2",
+                                prev,
+                                "public signature mentions a private type",
+                            ));
+                        }
+                        if s.as_ref().is_some_and(|s| s.metadata.alias) {
+                            let s = s.ok_or_else(|| {
+                                diagnostic("LANG-7", t.origin.span, "recursive type alias")
+                            })?;
+                            if !self.aliases.insert(d.clone()) {
+                                return Err(diagnostic(
+                                    "LANG-7",
+                                    t.origin.span,
+                                    "recursive type alias",
+                                ));
+                            }
+                            let SignatureKind::Type(def) = &s.kind else {
+                                unreachable!()
+                            };
+                            let r = def.representation.ok_or_else(|| {
+                                diagnostic(
+                                    "LANG-7",
+                                    t.origin.span,
+                                    "opaque type cannot be an alias",
+                                )
+                            })?;
+                            let imported = self.import(
+                                r,
+                                &s.types,
+                                &args,
+                                &mut BTreeMap::new(),
+                                &mut BTreeSet::new(),
+                            )?;
+                            self.aliases.remove(&d);
+                            let mut ty = self.types.get(imported).unwrap().clone();
+                            if matches!(pos, Position::Borrow)
+                                && !self.satisfies(imported, Bound::Plain)
+                            {
+                                ty.modes.relation = Relation::environment()
+                                    .union(&self.placement(&ty.modes.relation));
+                            }
+                            let adjusted = self.types.push(ty.clone());
+                            ty.modes.sendability = self.sendability(adjusted)?;
+                            self.types.push(ty)
+                        } else {
+                            if let Some(Signature {
+                                kind: SignatureKind::Type(def),
+                                types,
+                                ..
+                            }) = s.as_deref()
+                            {
+                                if let Some(repr) = def.representation {
+                                    if !args.is_empty() {
+                                        // Import normalizes actual declaration fields and records
+                                        // their signature reads; proof policy lives in shared helpers.
+                                        self.import(
+                                            repr,
+                                            types,
+                                            &args,
+                                            &mut BTreeMap::new(),
+                                            &mut BTreeSet::new(),
+                                        )?;
+                                    }
+                                }
+                            }
+                            let id = self.push(
+                                TypeKind::Named {
+                                    definition: d,
+                                    arguments: args.into(),
+                                },
+                                pos,
+                            )?;
+                            id
+                        }
+                    }
+                }
+            }
+        };
+        self.span = prev;
+        self.active.remove(&id);
+        Ok(result)
+    }
+    /// A field, payload, element or type argument is as local as its owner and
+    /// its current content (OWN-8; spec #71).
+    /// Locality written on one, or reaching it through an alias, is LANG-7.
+    fn part(&mut self, id: ast::TypeExprId) -> Result<TypeId, QueryError> {
+        let ty = self.ty(id, Position::Field)?;
+        if !self
+            .lifetime(&self.types.get(ty).unwrap().modes.relation)
+            .is_global()
+        {
+            return Err(diagnostic(
+                "LANG-7",
+                self.input.tree.types[id.0 as usize].origin.span,
+                PART_LOCALITY,
+            ));
+        }
+        Ok(ty)
+    }
+    fn argument(&mut self, a: &ast::TypeArgument) -> Result<GenericArgument, QueryError> {
+        match a {
+            ast::TypeArgument::SizeLiteral(n) => Ok(GenericArgument::Size(Size::Constant(*n))),
+            ast::TypeArgument::Type(id) => {
+                if let Some(ast::TypeExpr {
+                    kind: ast::TypeExprKind::Named { path, arguments },
+                    ..
+                }) = self.input.tree.types.get(id.0 as usize)
+                {
+                    if arguments.is_empty() {
+                        if let Some(name) = self.path_name(path) {
+                            if let Some((depth, i, GenericParameter::Size { .. })) =
+                                self.generic(name)
+                            {
+                                return Ok(GenericArgument::Size(Size::Parameter(
+                                    SizeParameterRef::Bound {
+                                        depth,
+                                        parameter: SizeParamId(i),
+                                    },
+                                )));
+                            }
+                        }
+                    }
+                }
+                Ok(GenericArgument::Type(self.part(*id)?))
+            }
+        }
+    }
+    fn check_arguments(
+        &self,
+        gs: &[GenericParameter],
+        args: &[GenericArgument],
+    ) -> Result<(), QueryError> {
+        if gs.len() != args.len() {
+            return Err(diagnostic(
+                "GEN-1",
+                self.span,
+                "wrong generic argument count",
+            ));
+        }
+        for (g, a) in gs.iter().zip(args) {
+            match (g, a) {
+                (GenericParameter::Size { .. }, GenericArgument::Size(_)) => {}
+                (GenericParameter::Type { bounds, .. }, GenericArgument::Type(t)) => {
+                    for b in bounds {
+                        if !self.satisfies(*t, *b) {
+                            return Err(diagnostic(
+                                if *b == Bound::Serializable {
+                                    "SER-1"
+                                } else {
+                                    "GEN-1"
+                                },
+                                self.span,
+                                "type argument does not satisfy structural bound",
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(diagnostic(
+                        "GEN-1",
+                        self.span,
+                        "type/size argument kind mismatch",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    fn builtin_arguments(
+        &self,
+        b: BuiltinType,
+        a: &[GenericArgument],
+        declaration: Option<&Signature>,
+    ) -> Result<(), QueryError> {
+        let kinds = match b {
+            BuiltinType::Map | BuiltinType::SortedMap => vec![false, false],
+            BuiltinType::Inline | BuiltinType::Simd => vec![false, true],
+            BuiltinType::FnPtr => {
+                if a.is_empty() || !a.iter().all(|a| matches!(a, GenericArgument::Type(_))) {
+                    return Err(diagnostic(
+                        "GEN-1",
+                        self.span,
+                        "FnPtr requires type arguments",
+                    ));
+                }
+                return Ok(());
+            }
+            _ => vec![false],
+        };
+        if a.len() != kinds.len()
+            || a.iter()
+                .zip(kinds)
+                .any(|(a, size)| size != matches!(a, GenericArgument::Size(_)))
+        {
+            return Err(diagnostic(
+                "GEN-1",
+                self.span,
+                "wrong builtin type/size arguments",
+            ));
+        }
+        if let Some(declaration) = declaration {
+            if let Some((rule, message)) =
+                schema_failure(&self.types, a, &declaration.metadata.schema, |ty, bound| {
+                    self.satisfies(ty, bound)
+                })
+            {
+                return Err(diagnostic(rule.as_str(), self.span, message));
+            }
+        }
+        if let Some(b) = builtin_bound(b) {
+            if let GenericArgument::Type(t) = a[0] {
+                if !self.satisfies(t, b) {
+                    return Err(diagnostic(
+                        "GEN-1",
+                        self.span,
+                        "builtin argument does not satisfy its bound",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    fn type_body(&mut self, b: &ast::TypeBody) -> Result<Option<TypeId>, QueryError> {
+        let kind = match b {
+            ast::TypeBody::Opaque => return Ok(None),
+            ast::TypeBody::Alias(t) => return self.ty(*t, Position::Field).map(Some),
+            ast::TypeBody::Distinct { field, .. } => TypeKind::Record(
+                vec![Field {
+                    growable: field.growable,
+                    name: self.name(field.name)?,
+                    ty: self.part(field.ty)?,
+                }]
+                .into(),
+            ),
+            ast::TypeBody::Record(fs) => {
+                self.siblings = fs
+                    .iter()
+                    .map(|f| self.name(f.name))
+                    .collect::<Result<_, _>>()?;
+                let mut seen = BTreeSet::new();
+                let mut fields = vec![];
+                for f in fs {
+                    if !seen.insert(f.name) {
+                        return Err(diagnostic(
+                            "LANG-12",
+                            f.origin.span,
+                            "duplicate record field",
+                        ));
+                    }
+                    fields.push(Field {
+                        growable: f.growable,
+                        name: self.name(f.name)?,
+                        ty: self.part(f.ty)?,
+                    });
+                }
+                TypeKind::Record(fields.into())
+            }
+            ast::TypeBody::Variants(vs) => {
+                let mut seen = BTreeSet::new();
+                let mut variants = vec![];
+                for v in vs {
+                    if !seen.insert(v.name) {
+                        return Err(diagnostic("LANG-7", self.span, "duplicate variant"));
+                    }
+                    let mut labels = BTreeSet::new();
+                    let labelled = v.fields.first().is_some_and(|(n, _)| n.is_some());
+                    let mut fields = vec![];
+                    for (name, t) in &v.fields {
+                        if name.is_some() != labelled || name.is_some_and(|n| !labels.insert(n)) {
+                            return Err(diagnostic(
+                                "LANG-12",
+                                self.span,
+                                "variant payload labels must be uniform and unique",
+                            ));
+                        }
+                        fields.push((name.map(|s| self.name(s)).transpose()?, self.part(*t)?));
+                    }
+                    variants.push(Variant {
+                        name: self.name(v.name)?,
+                        fields: fields.into(),
+                    });
+                }
+                TypeKind::Variant(variants.into())
+            }
+        };
+        Ok(Some(self.push(kind, Position::Field)?))
+    }
+    fn parameter(&self, name: &str) -> Option<(ParameterRef, ast::TypeExprId)> {
+        std::iter::once((&self.parameters, &self.parameter_syntax))
+            .chain(
+                self.outer_parameters
+                    .iter()
+                    .rev()
+                    .map(|(names, syntax)| (names, syntax)),
+            )
+            .enumerate()
+            .find_map(|(depth, (names, syntax))| {
+                let index = names.iter().position(|n| n.as_deref() == Some(name))?;
+                Some((
+                    ParameterRef::Bound {
+                        depth: depth as u32,
+                        parameter: ParamId(index as u32),
+                    },
+                    *syntax.get(index)?,
+                ))
+            })
+    }
+    fn origin(&mut self, p: &ast::Path, sibling: bool) -> Result<Origin, QueryError> {
+        self.typed_origin(p, sibling, false)
+            .map(|(origin, _)| origin)
+    }
+    /// The origin a written path names. With `typed`, also the type of the
+    /// parameter or field it ends at; a definition origin has no value type.
+    fn typed_origin(
+        &mut self,
+        p: &ast::Path,
+        sibling: bool,
+        typed: bool,
+    ) -> Result<(Origin, Option<TypeId>), QueryError> {
+        if p.segments.is_empty() {
+            return Err(diagnostic("LANG-6", self.span, "empty origin path"));
+        }
+        let name = self.name(p.segments[0])?;
+        let root = if sibling {
+            OriginRoot::Sibling(FieldId(
+                self.siblings
+                    .iter()
+                    .position(|s| s == &name)
+                    .ok_or_else(|| diagnostic("LANG-6", self.span, "unknown sibling origin"))?
+                    as u32,
+            ))
+        } else if let Some((parameter, _)) = self.parameter(&name) {
+            OriginRoot::Parameter(parameter)
+        } else {
+            let d = self.definition(p, None)?;
+            return Ok((
+                Origin {
+                    root: OriginRoot::Definition(d),
+                    fields: vec![].into(),
+                },
+                None,
+            ));
+        };
+        let mut current = match &root {
+            OriginRoot::Parameter(_) if typed || p.segments.len() > 1 => {
+                let (_, syntax) = self.parameter(&name).unwrap();
+                Some(self.ty(syntax, Position::Field)?)
+            }
+            OriginRoot::Sibling(i) => {
+                let item = &self.input.tree.items[self.input.item.0 as usize];
+                if let ast::ItemKind::Type {
+                    body: ast::TypeBody::Record(fs),
+                    ..
+                } = &item.kind
+                {
+                    Some(self.ty(fs[i.0 as usize].ty, Position::Field)?)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let mut fields = vec![];
+        for s in p.segments.iter().skip(1) {
+            let name = self.name(*s)?;
+            let id = current
+                .ok_or_else(|| diagnostic("LANG-6", self.span, "origin has no record fields"))?;
+            let mut id = id;
+            // #98: a written field place crosses the same payload as a source read.
+            while let TypeKind::Box(payload) = self.types.get(id).unwrap().kind {
+                fields.push(FieldId(0));
+                id = payload;
+            }
+            let t = self.types.get(id).unwrap().clone();
+            let fs = match t.kind {
+                TypeKind::Record(fs) => fs,
+                TypeKind::Named {
+                    definition,
+                    arguments,
+                } => {
+                    let sig = self.snapshot(&definition)?;
+                    if let SignatureKind::Type(def) = &sig.kind {
+                        if let Some(r) = def.representation {
+                            if let Some(Type {
+                                kind: TypeKind::Record(fs),
+                                ..
+                            }) = sig.types.get(r)
+                            {
+                                let fs = fs.clone();
+                                let i =
+                                    fs.iter().position(|f| f.name == name).ok_or_else(|| {
+                                        diagnostic("LANG-6", self.span, "unknown origin field")
+                                    })?;
+                                fields.push(FieldId(i as u32));
+                                let imported = self.import(
+                                    fs[i].ty,
+                                    &sig.types,
+                                    &arguments,
+                                    &mut BTreeMap::new(),
+                                    &mut BTreeSet::new(),
+                                )?;
+                                current = Some(imported);
+                                continue;
+                            }
+                        }
+                    }
+                    return Err(diagnostic("LANG-6", self.span, "origin is not a record"));
+                }
+                _ => return Err(diagnostic("LANG-6", self.span, "origin is not a record")),
+            };
+            let i = fs
+                .iter()
+                .position(|f| f.name == name)
+                .ok_or_else(|| diagnostic("LANG-6", self.span, "unknown origin field"))?;
+            fields.push(FieldId(i as u32));
+            current = Some(fs[i].ty);
+        }
+        Ok((
+            Origin {
+                root,
+                fields: fields.into(),
+            },
+            current,
+        ))
+    }
+    /// Lower a qualified type's modifiers, brand and relation (LANG-7, MODE-1,
+    /// PROV-1, PROV-4). A relation place names this callable's parameters
+    /// (and their field paths, #77), an arena, `heap` or `env`.
+    fn qualify(
+        &mut self,
+        t: &mut Type,
+        modifiers: &[ast::TypeModifier],
+        brand: Option<&ast::BrandSyntax>,
+        relation: Option<&ast::RelationSyntax>,
+        pos: Position,
+    ) -> Result<(), QueryError> {
+        let mut seen = BTreeSet::new();
+        for m in modifiers {
+            if !seen.insert(*m) {
+                return Err(diagnostic(
+                    "LANG-7",
+                    self.span,
+                    "a modifier is written once: repeat it nowhere",
+                ));
+            }
+            match m {
+                ast::TypeModifier::Unique => t.modes.uniqueness = Uniqueness::Unique,
+                ast::TypeModifier::Once => {
+                    // MODE-3 describes function values. Until spec #40 defines
+                    // conditional generic multiplicity, require a known callable.
+                    if !matches!(t.kind, TypeKind::Function(_)) {
+                        return Err(diagnostic(
+                            "MODE-3",
+                            self.span,
+                            "once requires a function type",
+                        ));
+                    }
+                    t.modes.multiplicity = Multiplicity::Once;
+                }
+                ast::TypeModifier::Sendable => {
+                    t.sendability_requirement = SendabilityRequirement::Sendable;
+                }
+            }
+        }
+        if let Some(b) = brand {
+            t.brand = Brand {
+                alternatives: vec![self.origin(&b.path, b.sibling)?].into(),
+            }
+        }
+        if let Some(r) = relation {
+            t.modes.relation = self.relation(&t.modes.relation, r, pos)?;
+        }
+        t.canonicalize_shared_uniqueness();
+        let id = self.types.push(t.clone());
+        if self.satisfies(id, Bound::Plain) {
+            t.canonicalize_plain();
+        }
+        let normalized = self.types.push(t.clone());
+        t.modes.sendability = self.sendability(normalized)?;
+        // Declared receiving positions are body-entry assumptions: callers must
+        // independently prove receipt before this evidence is available.
+        if t.sendability_requirement == SendabilityRequirement::Sendable {
+            t.modes.sendability = Sendability::Sendable;
+        }
+        Ok(())
+    }
+    /// A written relation over a position's default (MODE-1). Arena places
+    /// set where fresh blocks go (PROV-4); other places bound the lifetime.
+    /// A borrowed or mut parameter keeps its own root (S2), a taken parameter
+    /// naming itself is local to its own argument, and `heap` is the empty
+    /// relation.
+    fn relation(
+        &mut self,
+        default: &Relation,
+        r: &ast::RelationSyntax,
+        pos: Position,
+    ) -> Result<Relation, QueryError> {
+        let span = r.origin.span;
+        let mut lifetime = Relation::global();
+        let mut placement = Relation::global();
+        for place in &r.places {
+            match place {
+                ast::RelationPlace::Heap => {}
+                ast::RelationPlace::Environment => {
+                    // A part's relation is LANG-7 where the part is used.
+                    if matches!(pos, Position::Borrow | Position::Take) {
+                        return Err(diagnostic(
+                            "MODE-1",
+                            span,
+                            "`env` is a closure or function type's environment: a parameter is not related to it",
+                        ));
+                    }
+                    lifetime = lifetime.union(&Relation::environment());
+                }
+                ast::RelationPlace::Path(p) => {
+                    let parameter = (p.segments.len() == 1)
+                        .then(|| self.path_name(p).map(str::to_owned))
+                        .flatten()
+                        .and_then(|name| self.parameter(&name));
+                    let (origin, is_arena) = match parameter {
+                        Some((parameter, syntax)) => {
+                            // A parameter named in its own relation is its own
+                            // root: `take x: T in x` is local to its argument,
+                            // and a borrowed `x: T in x` adds nothing (S2).
+                            if matches!(pos, Position::Take | Position::Borrow)
+                                && self.current_parameter.is_some_and(|i| {
+                                    parameter == ParameterRef::bound(ParamId(i as u32))
+                                })
+                            {
+                                if matches!(pos, Position::Take) {
+                                    lifetime = lifetime.union(&Relation::environment());
+                                }
+                                continue;
+                            }
+                            (
+                                Origin {
+                                    root: OriginRoot::Parameter(parameter),
+                                    fields: vec![].into(),
+                                },
+                                self.arena_syntax(syntax),
+                            )
+                        }
+                        None => {
+                            let (origin, _) = self.typed_origin(p, false, false)?;
+                            (origin, false)
+                        }
+                    };
+                    if is_arena {
+                        self.arena_places.insert(origin.clone());
+                        placement = placement.union(&Relation::place(origin));
+                    } else if matches!(origin.root, OriginRoot::Parameter(_)) {
+                        lifetime = lifetime.union(&Relation::place(origin));
+                    } else {
+                        return Err(diagnostic(
+                            "MODE-1",
+                            span,
+                            "a relation names parameters, arenas, `heap` or `env`",
+                        ));
+                    }
+                }
+            }
+        }
+        // PROV-4: fresh blocks have one destination.
+        if placement.reaches().len() > 1 {
+            return Err(diagnostic(
+                "PROV-4",
+                span,
+                "a relation names at most one arena directly",
+            ));
+        }
+        Ok(match pos {
+            // S2: a written relation adds to a borrowed parameter's own root.
+            Position::Borrow => self.lifetime(default).union(&lifetime).union(&placement),
+            _ => lifetime.union(&placement),
+        })
+    }
+    /// Whether a parameter's written type is the registry's Arena (PROV-4),
+    /// judged on its syntax so a relation naming it never lowers it again.
+    fn arena_syntax(&mut self, mut id: ast::TypeExprId) -> bool {
+        while let ast::TypeExprKind::Qualified { base, .. } =
+            &self.input.tree.types[id.0 as usize].kind
+        {
+            id = *base;
+        }
+        let ast::TypeExprKind::Named { path, arguments } =
+            &self.input.tree.types[id.0 as usize].kind
+        else {
+            return false;
+        };
+        let Some(heap) = self.input.metadata.heap.clone() else {
+            return false;
+        };
+        if !arguments.is_empty()
+            || self
+                .path_name(path)
+                .is_some_and(|n| self.generic(n).is_some())
+        {
+            return false;
+        }
+        let path = path.clone();
+        self.definition(&path, Some(id))
+            .is_ok_and(|d| d == heap.arena)
+    }
+    fn authority(&mut self, ps: &[ast::Path]) -> Result<AuthoritySummary, QueryError> {
+        let mut terms = BTreeSet::new();
+        for p in ps {
+            if let Some(name) = self.path_name(p) {
+                if let Some((parameter, _)) = self.parameter(name) {
+                    terms.insert(AuthorityTerm::Parameter(parameter));
+                    continue;
+                }
+                if let Some((depth, i, GenericParameter::Type { .. })) = self.generic(name) {
+                    terms.insert(AuthorityTerm::TypeParameter(TypeParameterRef::Bound {
+                        depth,
+                        parameter: TypeParamId(i),
+                    }));
+                    continue;
+                }
+            }
+            let d = self.definition(p, None)?;
+            let item = &self.input.tree.items[self.input.item.0 as usize];
+            if d == item.definition
+                && item
+                    .attributes
+                    .iter()
+                    .any(|a| self.input.symbols.resolve(a.name) == Some("capability"))
+            {
+                // The nominal identity is fixed by the declaration before its
+                // implementation ceiling is checked. Reading its unpublished
+                // snapshot here would introduce a false signature cycle.
+                terms.insert(AuthorityTerm::Capability(d));
+                continue;
+            }
+            let signature = self.snapshot(&d)?;
+            if self.input.tree.items[self.input.item.0 as usize].visibility
+                != ast::Visibility::Private
+                && signature.metadata.visibility == ast::Visibility::Private
+                && !self.input.tree.items[self.input.item.0 as usize]
+                    .attributes
+                    .iter()
+                    .any(|a| self.input.symbols.resolve(a.name) == Some("capability"))
+            {
+                return Err(diagnostic(
+                    "PROG-2",
+                    self.span,
+                    "public authority summary mentions a private type",
+                ));
+            }
+            terms.insert(AuthorityTerm::Capability(d));
+        }
+        Ok(AuthoritySummary::Known(terms.into_iter().collect()))
+    }
+    fn capability(&self, t: TypeId) -> Option<CapabilityKind> {
+        if let TypeKind::Named { definition, .. } = &self.types.get(t)?.kind {
+            if let SignatureKind::Type(d) = &self.snapshots.get(definition)?.kind {
+                return d.capability;
+            }
+        }
+        None
+    }
+    fn type_authority(&self, t: Option<TypeId>) -> AuthoritySummary {
+        let Some(root) = t else {
+            return AuthoritySummary::inert();
+        };
+        let item = &self.input.tree.items[self.input.item.0 as usize];
+        if item
+            .attributes
+            .iter()
+            .any(|a| self.input.symbols.resolve(a.name) == Some("capability"))
+        {
+            return self.authority_proof(
+                root,
+                &AuthoritySummary::Known(
+                    vec![AuthorityTerm::Capability(item.definition.clone())].into(),
+                ),
+            );
+        }
+        // A recursive declaration has no published snapshot yet. Compute its
+        // field summary as a least fixed point, then use the same declaration
+        // proof as consumers. Actual recursive arguments can add constant caps.
+        let mut own = AuthoritySummary::inert();
+        if let Some(representation) = self.own_representation {
+            // Terms range over the finite declared graph; this monotone join
+            // stabilizes without spending a recursive expansion budget.
+            loop {
+                let next = self.authority_proof(representation, &own);
+                if next == own {
+                    return self.authority_proof(root, &own);
+                }
+                own = next;
+            }
+        }
+        self.authority_proof(root, &AuthoritySummary::Unknown)
+    }
+    fn authority_proof(&self, root: TypeId, own: &AuthoritySummary) -> AuthoritySummary {
+        let item = &self.input.tree.items[self.input.item.0 as usize];
+        let roles = NominalRoles {
+            unsafe_capability: self.input.metadata.unsafe_capability.clone(),
+            result_type: self.input.metadata.result_type.clone(),
+            tasks_capability: self.input.metadata.tasks_capability.clone(),
+            scope_capability: self.input.metadata.scope_capability.clone(),
+            heap: self.input.metadata.heap.clone(),
+        };
+        structural_authority(
+            &self.types,
+            root,
+            &roles,
+            &self.declarations(),
+            &mut |id, path| {
+                Ok::<_, hirsel_types::QueryError>(match path {
+                    Some(path)
+                        if path == &item.definition
+                            && matches!(item.kind, ast::ItemKind::Type { .. }) =>
+                    {
+                        Some(std::sync::Arc::new(Signature {
+                            metadata: SignatureMetadata::default(),
+                            definition: path.clone(),
+                            types: TypeStore::default(),
+                            kind: SignatureKind::Type(TypeDefinition {
+                                loop_source: None,
+                                destructor_allocation: Allocation::MayAllocate,
+                                generics: self.generics.clone(),
+                                representation: None,
+                                bounds: vec![],
+                                authority: own.clone(),
+                                capability: None,
+                                implementation_authority: None,
+                                serializable: false,
+                                layout: Layout::default(),
+                                distinct: false,
+                                resource: false,
+                                drop: None,
+                                fact: None,
+                            }),
+                            fingerprint: Default::default(),
+                        }))
+                    }
+                    Some(path) => self.snapshots.get(path).cloned(),
+                    None => self.builtin_declarations.get(&id).cloned(),
+                })
+            },
+        )
+        .unwrap()
+    }
+    fn structural_bounds(
+        &self,
+        t: Option<TypeId>,
+        flavor: ast::TypeFlavor,
+        capability: Option<CapabilityKind>,
+    ) -> Vec<Bound> {
+        [
+            Bound::Plain,
+            Bound::Flat,
+            Bound::Data,
+            Bound::Key,
+            Bound::Sendable,
+            Bound::Inert,
+            Bound::Copyable,
+        ]
+        .into_iter()
+        .filter(|b| {
+            if capability.is_some()
+                && (matches!(b, Bound::Inert | Bound::Flat | Bound::Data | Bound::Key)
+                    || capability == Some(CapabilityKind::Scoped)
+                        && matches!(b, Bound::Plain | Bound::Copyable | Bound::Sendable))
+            {
+                return false;
+            }
+            if flavor == ast::TypeFlavor::Resource
+                && matches!(
+                    b,
+                    Bound::Plain | Bound::Copyable | Bound::Data | Bound::Key | Bound::Flat
+                )
+            {
+                return false;
+            }
+            if flavor == ast::TypeFlavor::Flat {
+                if *b == Bound::Plain {
+                    return false;
+                }
+                if *b == Bound::Flat || *b == Bound::Sendable {
+                    return t.is_some_and(|t| self.flat_storage(t, &mut BTreeSet::new()));
+                }
+            }
+            t.is_some_and(|t| self.satisfies(t, *b))
+        })
+        .collect()
+    }
+    fn scoped_representation(&self, root: TypeId) -> bool {
+        let AuthoritySummary::Known(terms) = self.type_authority(Some(root)) else {
+            return true;
+        };
+        if terms.iter().any(|term| match term {
+            AuthorityTerm::Capability(path) => self.snapshots.get(path).is_some_and(|s|
+                matches!(&s.kind, SignatureKind::Type(d) if d.capability == Some(CapabilityKind::Scoped))),
+            _ => false,
+        }) {
+            return true;
+        }
+        let mut pending = vec![root];
+        let mut seen = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let row = self.types.get(id).unwrap();
+            if !row.modes.relation.is_global() {
+                return true;
+            }
+            if let TypeKind::Parameter(p) = &row.kind {
+                let bounds = self.declarations().bounds(*p).to_vec();
+                if !bounds.contains(&Bound::Plain) && !bounds.contains(&Bound::Sendable) {
+                    return true;
+                }
+            }
+            // Pointer and shape actuals describe addresses/types, not retained values.
+            if matches!(
+                row.kind,
+                TypeKind::Builtin {
+                    kind: BuiltinType::Ptr
+                        | BuiltinType::FnPtr
+                        | BuiltinType::SlotId
+                        | BuiltinType::Shape,
+                    ..
+                }
+            ) {
+                continue;
+            }
+            pending.extend(row.kind.value_parts());
+        }
+        false
+    }
+    fn flat_storage(&self, id: TypeId, seen: &mut BTreeSet<TypeId>) -> bool {
+        if !seen.insert(id) {
+            return false;
+        }
+        let result = match &self.types.get(id).unwrap().kind {
+            TypeKind::Primitive(_) => true,
+            TypeKind::Parameter(p) => self.declarations().get(*p).is_some_and(|g| matches!(g, GenericParameter::Type { bounds, .. } if implies(bounds, Bound::Flat))),
+            TypeKind::Tuple(ts) => ts.iter().all(|t| self.flat_storage(*t, seen)),
+            TypeKind::Record(fs) => fs.iter().all(|f| self.flat_storage(f.ty, seen)),
+            TypeKind::Variant(vs) => vs.iter().all(|v| v.fields.iter().all(|(_,t)| self.flat_storage(*t, seen))),
+            TypeKind::Named { definition, arguments } => {
+                // MEM-12: "no capability/function/handle/resource". Plain
+                // alone is not layout evidence (capabilities are Plain too).
+                self.snapshots.get(definition).is_some_and(|s| matches!(&s.kind,
+                    SignatureKind::Type(d) if d.capability.is_none() && !d.resource))
+                    && arguments.iter().all(|a| match a {
+                        GenericArgument::Type(t) => self.flat_storage(*t, seen),
+                        _ => true,
+                    })
+                    && self.satisfies(id, Bound::Flat)
+            },
+            TypeKind::Builtin { kind, arguments } if matches!(kind, BuiltinType::List|BuiltinType::Inline|BuiltinType::Simd|BuiltinType::Packed) => arguments.iter().all(|a| match a { GenericArgument::Type(t) => self.flat_storage(*t, seen), _ => true }),
+            _ => false,
+        };
+        seen.remove(&id);
+        result
+    }
+    fn satisfies(&self, t: TypeId, b: Bound) -> bool {
+        if b == Bound::Serializable {
+            return self
+                .serializable(t)
+                .unwrap_or_else(|error| self.proof_failure(error, false));
+        }
+        if matches!(b, Bound::Data | Bound::Key) {
+            return structural_equality(&self.types, t, b, &self.declarations(), &mut |path| {
+                Ok::<_, hirsel_types::QueryError>(self.snapshots.get(path).cloned())
+            })
+            .unwrap_or_else(|error| self.proof_failure(error, false));
+        }
+        if b == Bound::Inert {
+            return self.type_authority(Some(t)) == AuthoritySummary::inert();
+        }
+        if b == Bound::NoallocDrop {
+            return self.drop_summary(t) == DropAllocation::NoAlloc;
+        }
+        if b == Bound::Flat {
+            return structural_flat(&self.types, t, &self.declarations(), &mut |path| {
+                Ok::<_, hirsel_types::QueryError>(self.snapshots.get(path).cloned())
+            })
+            .unwrap_or_else(|error| self.proof_failure(error, false));
+        }
+        let property = match b {
+            Bound::Plain => StructuralProperty::Plain,
+            Bound::Copyable => StructuralProperty::Copyable,
+            Bound::Sendable => StructuralProperty::Sendable,
+            _ => unreachable!("every other structural bound is handled above"),
+        };
+        structural_property(
+            &self.types,
+            t,
+            property,
+            &self.declarations(),
+            &mut |path| Ok::<_, hirsel_types::QueryError>(self.snapshots.get(path).cloned()),
+        )
+        .unwrap_or_else(|error| self.proof_failure(error, false))
+    }
+    fn serializable(&self, root: TypeId) -> Result<bool, QueryError> {
+        let item = &self.input.tree.items[self.input.item.0 as usize];
+        structural_serializable(&self.types, root, &self.declarations(), &mut |path| {
+            if path != &item.definition {
+                return Ok(self.snapshots.get(path).cloned());
+            }
+            let ast::ItemKind::Type { flavor, body, .. } = &item.kind else {
+                return Ok(None);
+            };
+            let opted = item
+                .attributes
+                .iter()
+                .any(|a| self.input.symbols.resolve(a.name) == Some("serializable"));
+            Ok(Some(std::sync::Arc::new(Signature {
+                definition: path.clone(),
+                metadata: SignatureMetadata {
+                    visibility: item.visibility,
+                    alias: matches!(body, ast::TypeBody::Alias(_))
+                        && *flavor != ast::TypeFlavor::Distinct,
+                    ..Default::default()
+                },
+                types: self.types.clone(),
+                kind: SignatureKind::Type(TypeDefinition {
+                    loop_source: None,
+                    generics: self.generics.clone(),
+                    representation: self.own_representation,
+                    bounds: vec![],
+                    authority: self.type_authority(self.own_representation),
+                    capability: None,
+                    implementation_authority: None,
+                    serializable: opted,
+                    layout: Layout::default(),
+                    distinct: *flavor == ast::TypeFlavor::Distinct,
+                    resource: *flavor == ast::TypeFlavor::Resource,
+                    drop: None,
+                    fact: None,
+                    destructor_allocation: Allocation::MayAllocate,
+                }),
+                fingerprint: Default::default(),
+            })))
+        })
+    }
+    fn is_unsafe(&self, t: TypeId) -> bool {
+        matches!(&self.types.get(t).unwrap().kind,TypeKind::Named{definition,..} if self.input.metadata.unsafe_capability.as_ref()==Some(definition) && self.capability(t).is_some())
+    }
+    fn ffi_type(&self, t: TypeId, seen: &mut BTreeSet<TypeId>) -> bool {
+        if !seen.insert(t) {
+            return false;
+        }
+        match &self.types.get(t).unwrap().kind {
+            TypeKind::Primitive(p) => {
+                !matches!(p, Primitive::String | Primitive::Bool | Primitive::Never)
+            }
+            TypeKind::Tuple(ts) => ts.is_empty(),
+            TypeKind::Builtin { kind, .. } => matches!(kind, BuiltinType::Ptr | BuiltinType::FnPtr),
+            TypeKind::Named { definition, .. } => self.snapshots.get(definition).is_some_and(|s| {
+                if let SignatureKind::Type(d) = &s.kind {
+                    d.layout.flat || (d.layout.c && implies(&d.bounds, Bound::Data))
+                } else {
+                    false
+                }
+            }),
+            _ => false,
+        }
+    }
+}
+fn implies(bs: &[Bound], b: Bound) -> bool {
+    bs.contains(&b)
+        || (b == Bound::Copyable && bs.contains(&Bound::Plain))
+        || (b == Bound::Data && bs.contains(&Bound::Key))
+        || (b == Bound::Inert && bounds_imply_inert(bs))
+}
+fn primitive(s: &str) -> Option<Primitive> {
+    Some(match s {
+        "bool" => Primitive::Bool,
+        "u8" => Primitive::U8,
+        "u16" => Primitive::U16,
+        "u32" => Primitive::U32,
+        "u64" => Primitive::U64,
+        "u128" => Primitive::U128,
+        "i8" => Primitive::I8,
+        "i16" => Primitive::I16,
+        "i32" => Primitive::I32,
+        "i64" => Primitive::I64,
+        "i128" => Primitive::I128,
+        "f32" => Primitive::F32,
+        "f64" => Primitive::F64,
+        "String" => Primitive::String,
+        "Bytes" => Primitive::Bytes,
+        "Never" => Primitive::Never,
+        _ => return None,
+    })
+}
+fn builtin(s: &str) -> Option<BuiltinType> {
+    Some(match s {
+        "Array" => BuiltinType::Array,
+        "List" => BuiltinType::List,
+        "Map" => BuiltinType::Map,
+        "Set" => BuiltinType::Set,
+        "SortedMap" => BuiltinType::SortedMap,
+        "Inline" => BuiltinType::Inline,
+        "Simd" => BuiltinType::Simd,
+        "Packed" => BuiltinType::Packed,
+        "Shared" => BuiltinType::Shared,
+        "Slots" => BuiltinType::Slots,
+        "SlotId" => BuiltinType::SlotId,
+        "Region" => BuiltinType::Region,
+        "Iter" => BuiltinType::Iter,
+        "Task" => BuiltinType::Task,
+        "Sender" => BuiltinType::Sender,
+        "Receiver" => BuiltinType::Receiver,
+        "Mutex" => BuiltinType::Mutex,
+        "Atomic" => BuiltinType::Atomic,
+        "Ptr" => BuiltinType::Ptr,
+        "FnPtr" => BuiltinType::FnPtr,
+        "Shape" => BuiltinType::Shape,
+        _ => return None,
+    })
+}
+
+// Field markers are signature metadata; the checker owns MEM-12 growable legality.
+
+#[cfg(test)]
+mod tests;

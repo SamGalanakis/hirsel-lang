@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "package": { "name": "application", "version": "1" },
+  "entry": { "module": [], "name": "exercise" },
+  "sources": [{ "path": "DET-1-http-fetch-repeat-run.hir", "module": [] }],
+  "dependencies": [{ "manifest": "../../stdlib/std@1/hirsel.json", "package": { "name": "std", "version": "1" }, "expose": [] }]
+}

@@ -1,0 +1,37 @@
+// rule: DROP-2
+// expect: fail SEM-1 at line 29
+// stdout: g
+// stdout: kept
+// stdout: first
+// On a failure exit the binding drops before the temporary it keeps.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn make(stdout: Stdout, take text: String) -> Trace {
+  Trace(stdout: stdout, text: text)
+}
+
+fn wrap(t: Trace, stdout: Stdout, take text: String) -> Trace in t {
+  Trace(stdout: stdout, text: text)
+}
+
+fn close(take t: Trace in t) {
+  ()
+}
+
+fn probe(stdout: Stdout, first: Trace) {
+  let g = wrap(wrap(first, stdout, "kept\n"), stdout, "g\n")
+  let _ = 1u8 / 0u8
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let first = make(stdout, "first\n")
+  probe(stdout, first)
+  Ok(())
+}

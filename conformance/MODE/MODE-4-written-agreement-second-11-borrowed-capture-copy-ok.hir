@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+type Rec {
+  items: Array[u64],
+}
+
+fn probe(a: Arena) -> u64 {
+  let r: sendable (unique Rec) = Rec(items: [1, 2])
+  let old = fn() {
+    r.items
+  }()
+  let c = fn() {
+    r
+  }
+  old[0]
+}

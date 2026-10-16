@@ -1,0 +1,21 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 20
+fn invoke(f: fn() -> Bytes in env uses {}) -> Bytes in f uses {} {
+  f()
+}
+
+fn need(mut x: unique Bytes) -> () {
+  ()
+}
+
+fn example(mut x: unique Bytes) -> () {
+  {
+    let v = invoke(
+      fn() -> Bytes in env uses {} {
+        x
+      }
+    )
+    ()
+  }
+  need(mut x)
+}

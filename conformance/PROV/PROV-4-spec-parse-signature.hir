@@ -1,0 +1,13 @@
+// rule: PROV-4
+// expect: accept
+// "x’s blocks live in explicit arena a" (the spec’s parse result placement).
+type Ast {
+  bytes: Bytes,
+}
+
+type ParseError = Bad()
+
+fn parse(arena: Arena, src: Bytes) -> Result[Ast, ParseError] in arena {
+  let bytes: Bytes in arena = b"parsed"
+  Ok(Ast(bytes: take bytes))
+}

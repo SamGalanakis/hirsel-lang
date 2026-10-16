@@ -1,0 +1,6 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 6
+
+// An element is as local as its collection, so a type argument writes no locality.
+
+fn count(xs: List[Bytes in env]) -> u64 { list.len(xs) }

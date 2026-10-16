@@ -1,0 +1,13 @@
+// rule: CAP-2
+// expect: accept
+type Wrap[T] {
+  value: T,
+}
+
+fn need[T: inert](x: T) {}
+
+fn probe[T: data](x: Wrap[T]) {
+  fn inner[U: plain](y: U) {
+    need(x)
+  }
+}

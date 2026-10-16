@@ -1,0 +1,11 @@
+// rule: PROV-5
+// expect: reject PROV-5 at line 10
+// "A field named by a sibling’s brand is neither replaced ... except together with the whole record."
+type Log {
+  dir: Dir,
+  file: File of .dir,
+}
+
+fn example(mut log: Log, d: Dir) -> () {
+  log.dir = d
+}

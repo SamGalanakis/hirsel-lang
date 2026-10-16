@@ -1,0 +1,11 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 10
+// "every call goes through a signature declared @noalloc".
+fn callee() -> u8 {
+  1
+}
+
+@noalloc
+fn caller() -> u8 {
+  callee()
+}

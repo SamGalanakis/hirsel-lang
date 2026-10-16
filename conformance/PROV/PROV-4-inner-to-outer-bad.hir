@@ -1,0 +1,20 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 15
+// "In explicit arena a or in something that outlives it."
+fn store(a: Arena, mut dst: Bytes in a, take src: Bytes in a) -> () {
+  dst = take src
+}
+
+fn example() -> () {
+  arena.with(
+    fn(outer: Arena) {
+      arena.with(
+        fn(inner: Arena) {
+          let mut dst: Bytes in outer = b"outer"
+          let src: Bytes in inner = b"inner"
+          store(outer, mut dst, take src)
+        }
+      )
+    }
+  )
+}

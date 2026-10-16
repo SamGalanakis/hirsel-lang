@@ -1,0 +1,15 @@
+// rule: CAP-2
+// expect: accept
+fn sandbox(f: fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let p = vendor.make(0u64)
+  let n = sandbox(
+    fn() -> u64 uses {} {
+      vendor.compute(p, 41)
+    }
+  )
+  Ok(())
+}

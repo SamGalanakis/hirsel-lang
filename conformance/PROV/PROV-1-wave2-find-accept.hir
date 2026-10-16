@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: accept
+fn probe(s: String, other: String) -> () {
+  match std@1/string.find(s, "é") {
+    Some(p) => {
+      string.byte_offset(s, p);
+    },
+    None() => (),
+  }
+}

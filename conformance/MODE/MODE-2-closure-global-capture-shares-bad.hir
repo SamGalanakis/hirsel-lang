@@ -1,0 +1,20 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+// A closure that returns a counted part of a captured heap record shares it, as
+// reading `r.items` directly does, so the record is no longer unique (#80).
+type Rec {
+  items: List[String],
+}
+
+fn bump(mut x: unique Rec) -> () {
+  x.items[0] = "new"
+}
+
+fn probe() -> u64 {
+  let mut r: unique Rec = Rec(items: ["old"])
+  let old = fn() {
+    r.items
+  }()
+  bump(mut r)
+  1
+}

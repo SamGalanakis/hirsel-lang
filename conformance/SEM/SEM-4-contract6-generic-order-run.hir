@@ -1,0 +1,57 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+@loop_source(open, next)
+type View[T: copyable, U: copyable] {
+  source: String,
+  a: T,
+  b: U,
+}
+
+type Cursor[A: copyable, B: copyable] {
+  source: String,
+  a: A,
+  b: B,
+  position: u64,
+}
+
+@noalloc
+fn view(s: String) -> View[u64, u8] in s {
+  View(source: copy s, a: 7u64, b: 9u8)
+}
+
+@noalloc
+fn open[T: copyable, U: copyable](v: View[T, U]) -> Cursor[U, T] in v {
+  Cursor(source: copy v.source, a: copy v.b, b: copy v.a, position: 0)
+}
+
+@noalloc
+fn next[T: copyable, U: copyable](mut c: Cursor[U, T]) -> Option[T] in c {
+  if c.position == 0 {
+    c.position = 1
+    Some(copy c.b)
+  } else {
+    None
+  }
+}
+
+@noalloc
+fn sum(s: String) -> u64 {
+  let mut n: u64 = 0
+  for item in view(s) {
+    n += item
+  }
+  n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if sum("a") == 7u64 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

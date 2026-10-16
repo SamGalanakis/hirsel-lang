@@ -1,0 +1,14 @@
+// rule: GEN-1
+// expect: run
+// stdout: same
+fn same(x: Bytes) -> bool {
+  x == b"fresh"
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  if same(b"fresh") {
+    let _ = out.print(stdout, "same\n")
+  }
+  Ok(())
+}

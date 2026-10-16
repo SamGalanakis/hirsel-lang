@@ -1,0 +1,10 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 7
+type R {
+  value: Bytes,
+}
+
+fn probe(take x: R) -> () of x.value
+  ensures true {
+  ()
+}

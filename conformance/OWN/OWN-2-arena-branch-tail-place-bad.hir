@@ -1,0 +1,23 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 15
+// Under LANG-11 (#50), the `else` arm passes the arena-placed local `t` itself to a
+// take parameter without `take` (#83).
+fn mk(a: Arena) -> Bytes in a {
+  b"x"
+}
+
+fn keep(a: Arena, take x: Bytes in a) -> Bytes in {a, x} {
+  x
+}
+
+fn example(a: Arena, c: bool) -> Bytes in a {
+  let t = mk(a)
+  keep(
+    a,
+    if c {
+      mk(a)
+    } else {
+      t
+    }
+  )
+}

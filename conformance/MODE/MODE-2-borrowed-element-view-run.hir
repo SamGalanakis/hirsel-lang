@@ -1,0 +1,35 @@
+// rule: MODE-2
+// expect: run
+// stdout: 1
+// stdout: b
+// An element read through a borrowed parameter leaves the list unique, so the
+// update happens in place (#76 Option 2).
+fn first_len(x: String) -> u64 {
+  string.byte_len(x)
+}
+
+fn replace(mut xs: unique List[String]) -> () {
+  xs[0u64] = "b"
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut xs: unique List[String] = ["a"]
+  let n = first_len(xs[0u64])
+  replace(mut xs)
+  let _ = out.print(
+    io.stdout(rt) ? grant_error,
+    if n == 1 {
+      "1\n"
+    } else {
+      "?\n"
+    }
+  )
+  let _ = out.print(io.stdout(rt) ? grant_error, xs[0u64])
+  let _ = out.print(io.stdout(rt) ? grant_error, "\n")
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

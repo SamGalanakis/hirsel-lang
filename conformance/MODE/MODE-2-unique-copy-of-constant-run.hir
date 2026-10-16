@@ -1,0 +1,26 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// A deep copy builds fresh blocks, so `unique` of a constant is writable in
+// place by a `unique` parameter while the constant keeps its elements.
+const XS: List[List[u64]] = [[1], [2]]
+
+fn edit(mut xs: unique List[List[u64]]) -> () {
+  xs[0][0] = 9
+  xs[1] = [8]
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut ys = unique XS
+  edit(mut ys)
+  if (XS[0][0], XS[1][0], ys[0][0], ys[1][0]) == (1, 2, 9, 8) {
+    out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  } else {
+    out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

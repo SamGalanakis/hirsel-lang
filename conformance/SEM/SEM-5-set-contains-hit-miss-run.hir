@@ -1,0 +1,33 @@
+// rule: SEM-5
+// expect: run
+// stdout: yes no no
+// set.contains reports membership by key equality (#90).
+fn output_error[E](take e: E) -> () {}
+
+fn show(found: bool) -> String {
+  if found {
+    "yes"
+  } else {
+    "no"
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant_error
+  let empty: Set[String] = set.empty()
+  let mut s: Set[String] = set.empty()
+  set.insert(mut s, "one")
+  set.insert(mut s, "two")
+  out.print(out, show(set.contains(s, "two"))) ? output_error
+  out.print(out, " ") ? output_error
+  out.print(out, show(set.contains(s, "three"))) ? output_error
+  out.print(out, " ") ? output_error
+  out.print(out, show(set.contains(empty, "one"))) ? output_error
+  out.print(out, "\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

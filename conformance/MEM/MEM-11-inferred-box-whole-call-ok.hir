@@ -1,0 +1,14 @@
+// rule: MEM-11
+// expect: accept
+type R {
+  xs: unique List[Bytes],
+}
+
+fn fresh() -> unique R {
+  R(xs: [b"x"])
+}
+
+fn probe() {
+  let built = box fresh()
+  let frozen = shared.freeze(take built)
+}

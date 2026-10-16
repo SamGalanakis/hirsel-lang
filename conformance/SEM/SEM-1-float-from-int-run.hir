@@ -1,0 +1,265 @@
+// rule: SEM-1
+// expect: run
+// stdout: ok
+// Rust coretests/tests/num/floats.rs exact integer limits and from_u64_i64;
+// core/src/num/f32.rs and f64.rs nearest-even cast examples.
+@noalloc
+fn bits32_i8(x: i8) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_i8(x: i8) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_i16(x: i16) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_i16(x: i16) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_i32(x: i32) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_i32(x: i32) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_i64(x: i64) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_i64(x: i64) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_i128(x: i128) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_i128(x: i128) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_u8(x: u8) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_u8(x: u8) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_u16(x: u16) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_u16(x: u16) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_u32(x: u32) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_u32(x: u32) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_u64(x: u64) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_u64(x: u64) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits32_u128(x: u128) -> u32 {
+  f32.bits(float.from_int(x))
+}
+
+@noalloc
+fn bits64_u128(x: u128) -> u64 {
+  f64.bits(float.from_int(x))
+}
+
+pub type RunError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
+  failure.check(bits32_i8(0i8) == 0u32, Bounds())
+  failure.check(bits64_i8(0i8) == 0u64, Bounds())
+  failure.check(bits32_i8(1i8) == 1065353216u32, Bounds())
+  failure.check(bits64_i8(1i8) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_i8(42i8) == 1109917696u32, Bounds())
+  failure.check(bits64_i8(42i8) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_i8(127i8) == 1123942400u32, Bounds())
+  failure.check(bits64_i8(127i8) == 4638637247447433216u64, Bounds())
+  failure.check(bits32_i8(-1i8) == 3212836864u32, Bounds())
+  failure.check(bits64_i8(-1i8) == 13830554455654793216u64, Bounds())
+  failure.check(bits32_i8(-128i8) == 3271557120u32, Bounds())
+  failure.check(bits64_i8(-128i8) == 13862079653046386688u64, Bounds())
+  failure.check(bits32_u8(0u8) == 0u32, Bounds())
+  failure.check(bits64_u8(0u8) == 0u64, Bounds())
+  failure.check(bits32_u8(1u8) == 1065353216u32, Bounds())
+  failure.check(bits64_u8(1u8) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_u8(42u8) == 1109917696u32, Bounds())
+  failure.check(bits64_u8(42u8) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_u8(255u8) == 1132396544u32, Bounds())
+  failure.check(bits64_u8(255u8) == 4643176031446892544u64, Bounds())
+  failure.check(bits32_i16(0i16) == 0u32, Bounds())
+  failure.check(bits64_i16(0i16) == 0u64, Bounds())
+  failure.check(bits32_i16(1i16) == 1065353216u32, Bounds())
+  failure.check(bits64_i16(1i16) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_i16(42i16) == 1109917696u32, Bounds())
+  failure.check(bits64_i16(42i16) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_i16(32767i16) == 1191181824u32, Bounds())
+  failure.check(bits64_i16(32767i16) == 4674736138332667904u64, Bounds())
+  failure.check(bits32_i16(-1i16) == 3212836864u32, Bounds())
+  failure.check(bits64_i16(-1i16) == 13830554455654793216u64, Bounds())
+  failure.check(bits32_i16(-32768i16) == 3338665984u32, Bounds())
+  failure.check(bits64_i16(-32768i16) == 13898108450065350656u64, Bounds())
+  failure.check(bits32_u16(0u16) == 0u32, Bounds())
+  failure.check(bits64_u16(0u16) == 0u64, Bounds())
+  failure.check(bits32_u16(1u16) == 1065353216u32, Bounds())
+  failure.check(bits64_u16(1u16) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_u16(42u16) == 1109917696u32, Bounds())
+  failure.check(bits64_u16(42u16) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_u16(65535u16) == 1199570688u32, Bounds())
+  failure.check(bits64_u16(65535u16) == 4679239875398991872u64, Bounds())
+  failure.check(bits32_i32(0i32) == 0u32, Bounds())
+  failure.check(bits64_i32(0i32) == 0u64, Bounds())
+  failure.check(bits32_i32(1i32) == 1065353216u32, Bounds())
+  failure.check(bits64_i32(1i32) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_i32(42i32) == 1109917696u32, Bounds())
+  failure.check(bits64_i32(42i32) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_i32(2147483647i32) == 1325400064u32, Bounds())
+  failure.check(bits64_i32(2147483647i32) == 4746794007244308480u64, Bounds())
+  failure.check(bits32_i32(-1i32) == 3212836864u32, Bounds())
+  failure.check(bits64_i32(-1i32) == 13830554455654793216u64, Bounds())
+  failure.check(bits32_i32(-2147483648i32) == 3472883712u32, Bounds())
+  failure.check(bits64_i32(-2147483648i32) == 13970166044103278592u64, Bounds())
+  failure.check(bits32_u32(0u32) == 0u32, Bounds())
+  failure.check(bits64_u32(0u32) == 0u64, Bounds())
+  failure.check(bits32_u32(1u32) == 1065353216u32, Bounds())
+  failure.check(bits64_u32(1u32) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_u32(42u32) == 1109917696u32, Bounds())
+  failure.check(bits64_u32(42u32) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_u32(4294967295u32) == 1333788672u32, Bounds())
+  failure.check(bits64_u32(4294967295u32) == 4751297606873776128u64, Bounds())
+  failure.check(bits32_i64(0i64) == 0u32, Bounds())
+  failure.check(bits64_i64(0i64) == 0u64, Bounds())
+  failure.check(bits32_i64(1i64) == 1065353216u32, Bounds())
+  failure.check(bits64_i64(1i64) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_i64(42i64) == 1109917696u32, Bounds())
+  failure.check(bits64_i64(42i64) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_i64(9223372036854775807i64) == 1593835520u32, Bounds())
+  failure.check(bits64_i64(9223372036854775807i64) == 4890909195324358656u64, Bounds())
+  failure.check(bits32_i64(-1i64) == 3212836864u32, Bounds())
+  failure.check(bits64_i64(-1i64) == 13830554455654793216u64, Bounds())
+  failure.check(bits32_i64(-9223372036854775808i64) == 3741319168u32, Bounds())
+  failure.check(
+    bits64_i64(-9223372036854775808i64) == 14114281232179134464u64,
+    Bounds()
+  )
+  failure.check(bits32_u64(0u64) == 0u32, Bounds())
+  failure.check(bits64_u64(0u64) == 0u64, Bounds())
+  failure.check(bits32_u64(1u64) == 1065353216u32, Bounds())
+  failure.check(bits64_u64(1u64) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_u64(42u64) == 1109917696u32, Bounds())
+  failure.check(bits64_u64(42u64) == 4631107791820423168u64, Bounds())
+  failure.check(bits32_u64(18446744073709551615u64) == 1602224128u32, Bounds())
+  failure.check(bits64_u64(18446744073709551615u64) == 4895412794951729152u64, Bounds())
+  failure.check(bits32_i128(0i128) == 0u32, Bounds())
+  failure.check(bits64_i128(0i128) == 0u64, Bounds())
+  failure.check(bits32_i128(1i128) == 1065353216u32, Bounds())
+  failure.check(bits64_i128(1i128) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_i128(42i128) == 1109917696u32, Bounds())
+  failure.check(bits64_i128(42i128) == 4631107791820423168u64, Bounds())
+  failure.check(
+    bits32_i128(170141183460469231731687303715884105727i128) == 2130706432u32,
+    Bounds()
+  )
+  failure.check(
+    bits64_i128(170141183460469231731687303715884105727i128) == 5179139571476070400u64,
+    Bounds()
+  )
+  failure.check(bits32_i128(-1i128) == 3212836864u32, Bounds())
+  failure.check(bits64_i128(-1i128) == 13830554455654793216u64, Bounds())
+  failure.check(
+    bits32_i128(-170141183460469231731687303715884105728i128) == 4278190080u32,
+    Bounds()
+  )
+  failure.check(
+    bits64_i128(-170141183460469231731687303715884105728i128) == 14402511608330846208u64,
+    Bounds()
+  )
+  failure.check(bits32_u128(0u128) == 0u32, Bounds())
+  failure.check(bits64_u128(0u128) == 0u64, Bounds())
+  failure.check(bits32_u128(1u128) == 1065353216u32, Bounds())
+  failure.check(bits64_u128(1u128) == 4607182418800017408u64, Bounds())
+  failure.check(bits32_u128(42u128) == 1109917696u32, Bounds())
+  failure.check(bits64_u128(42u128) == 4631107791820423168u64, Bounds())
+  failure.check(
+    bits32_u128(340282366920938463463374607431768211455u128) == 2139095040u32,
+    Bounds()
+  )
+  failure.check(
+    bits64_u128(340282366920938463463374607431768211455u128) == 5183643171103440896u64,
+    Bounds()
+  )
+  failure.check(bits32_u64(16777215u64) == 1266679807u32, Bounds())
+  failure.check(bits64_u64(16777215u64) == 4715268809320038400u64, Bounds())
+  failure.check(bits32_u64(16777216u64) == 1266679808u32, Bounds())
+  failure.check(bits64_u64(16777216u64) == 4715268809856909312u64, Bounds())
+  failure.check(bits32_u64(16777217u64) == 1266679808u32, Bounds())
+  failure.check(bits64_u64(16777217u64) == 4715268810125344768u64, Bounds())
+  failure.check(bits32_u64(16777218u64) == 1266679809u32, Bounds())
+  failure.check(bits64_u64(16777218u64) == 4715268810393780224u64, Bounds())
+  failure.check(bits32_u64(16777219u64) == 1266679810u32, Bounds())
+  failure.check(bits64_u64(16777219u64) == 4715268810662215680u64, Bounds())
+  failure.check(bits32_u64(9007199254740991u64) == 1509949440u32, Bounds())
+  failure.check(bits64_u64(9007199254740991u64) == 4845873199050653695u64, Bounds())
+  failure.check(bits32_u64(9007199254740992u64) == 1509949440u32, Bounds())
+  failure.check(bits64_u64(9007199254740992u64) == 4845873199050653696u64, Bounds())
+  failure.check(bits32_u64(9007199254740993u64) == 1509949440u32, Bounds())
+  failure.check(bits64_u64(9007199254740993u64) == 4845873199050653696u64, Bounds())
+  failure.check(bits32_u64(9007199254740994u64) == 1509949440u32, Bounds())
+  failure.check(bits64_u64(9007199254740994u64) == 4845873199050653697u64, Bounds())
+  failure.check(bits32_u64(9007199254740995u64) == 1509949440u32, Bounds())
+  failure.check(bits64_u64(9007199254740995u64) == 4845873199050653698u64, Bounds())
+  failure.check(bits32_i64(-16777217i64) == 3414163456u32, Bounds())
+  failure.check(bits64_i64(-16777217i64) == 13938640846980120576u64, Bounds())
+  failure.check(bits32_i64(-16777219i64) == 3414163458u32, Bounds())
+  failure.check(bits64_i64(-16777219i64) == 13938640847516991488u64, Bounds())
+  failure.check(bits32_i64(-9007199254740993i64) == 3657433088u32, Bounds())
+  failure.check(bits64_i64(-9007199254740993i64) == 14069245235905429504u64, Bounds())
+  failure.check(bits32_i64(-9007199254740995i64) == 3657433088u32, Bounds())
+  failure.check(bits64_i64(-9007199254740995i64) == 14069245235905429506u64, Bounds())
+  // Crossing through f64 first would double-round these f32 results.
+  failure.check(bits32_u64(9007199791611905u64) == 1509949441u32, Bounds())
+  failure.check(bits64_u64(9007199791611905u64) == 4845873199319089152u64, Bounds())
+  failure.check(bits32_i64(-9007199791611905i64) == 3657433089u32, Bounds())
+  failure.check(bits64_i64(-9007199791611905i64) == 14069245236173864960u64, Bounds())
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}

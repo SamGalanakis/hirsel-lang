@@ -1,0 +1,8 @@
+// rule: MODE-5
+// expect: reject CLO-4 at line 5
+// "Capturing a local value makes it local (scoped)."
+fn example(x: Bytes) -> fn() -> Bytes uses {} {
+  fn() {
+    x
+  }
+}

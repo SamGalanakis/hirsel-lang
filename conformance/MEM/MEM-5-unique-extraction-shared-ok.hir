@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn probe(x: Shared[Bytes]) -> Shared[Bytes] {
+  unique x
+}

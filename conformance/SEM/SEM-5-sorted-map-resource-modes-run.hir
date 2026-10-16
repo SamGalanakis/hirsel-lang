@@ -1,0 +1,35 @@
+// rule: SEM-5
+// expect: run
+// stdout: old
+// stdout: drop-old
+// stdout: new
+// stdout: new
+// stdout: drop-new
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "drop-")
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let by = u32.order
+  let mut m: SortedMap[u32, Trace] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 1, Trace(stdout: o, text: "old\n"))
+  for (k, v) in m {
+    let _ = out.print(o, v.text)
+  }
+  for (k, v) in mut m {
+    v = Trace(stdout: o, text: "new\n")
+  }
+  for (k, v) in m {
+    let _ = out.print(o, v.text)
+  }
+  for (k, v) in take m {
+    let _ = out.print(o, v.text)
+  }
+  Ok(())
+}

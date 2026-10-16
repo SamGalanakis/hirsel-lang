@@ -1,0 +1,7 @@
+// rule: LANG-9
+// expect: accept
+// Shows "Tests are ordinary functions, pure or taking the Test capability"
+pub fn test_equal(t: Test) -> () {
+  let n: u32 = 1
+  test.check(t, n == 1)
+}

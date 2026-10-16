@@ -1,0 +1,22 @@
+// rule: CLO-1
+// expect: reject MODE-2 at line 17
+// "Captures are borrows." "Copying, sharing a part or passing as a plain mut
+// argument ends a binding's uniqueness."
+// The closure returns a share of its captured local, so its result is aliased
+// and cannot satisfy a `unique` parameter.
+type R {
+  name: String,
+}
+
+fn keep(take xs: unique List[R]) -> u64 {
+  list.len(xs)
+}
+
+fn count() -> u64 {
+  let xs: List[R] = [R(name: "ab")]
+  keep(
+    take fn() {
+      xs
+    }()
+  )
+}

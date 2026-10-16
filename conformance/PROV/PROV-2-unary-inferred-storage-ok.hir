@@ -1,0 +1,7 @@
+// rule: PROV-2
+// expect: accept
+fn probe(s: Dir, p: i64 of s) -> () {
+  let mut q = p
+  q = p
+  ()
+}

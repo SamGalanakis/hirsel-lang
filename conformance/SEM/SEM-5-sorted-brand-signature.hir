@@ -1,0 +1,6 @@
+// rule: SEM-5
+// expect: accept
+// "SortedMap is of an Order".
+fn identity(by: Order[u8], take m: SortedMap[u8, u8] of by) -> SortedMap[u8, u8] of by {
+  take m
+}

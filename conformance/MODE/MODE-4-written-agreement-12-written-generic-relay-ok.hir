@@ -1,0 +1,19 @@
+// rule: MODE-4
+// expect: accept
+// Regression from argument/related-binding; TIR/TypeMismatch/call result.
+fn sink[E](take e: sendable E) {}
+
+fn relay[E](take e: sendable E) -> sendable E {
+  e
+}
+
+fn good[E](take a: sendable E, take b: E) {
+  sink(
+    relay(
+      {
+        let agree_related_182: (sendable E) in agree_related_182 = take a
+        take agree_related_182
+      }
+    )
+  )
+}

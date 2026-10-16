@@ -1,0 +1,42 @@
+// rule: SEM-2
+// expect: run
+// Independent integer rational oracle; sum normal significands in units of 2^-50, then round once to 24 bits.
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs: Array[f32] = [
+    core@1/f32.from_bits(914892142u32),
+    core@1/f32.from_bits(1221705545u32),
+    core@1/f32.from_bits(3249562445u32),
+    core@1/f32.from_bits(1163855676u32),
+    core@1/f32.from_bits(1233272159u32),
+    core@1/f32.from_bits(937099082u32),
+    core@1/f32.from_bits(959842847u32),
+    core@1/f32.from_bits(884395071u32),
+    core@1/f32.from_bits(1154213191u32),
+    core@1/f32.from_bits(3238410173u32),
+    core@1/f32.from_bits(3241441671u32),
+    core@1/f32.from_bits(3071597632u32),
+    core@1/f32.from_bits(1197021096u32),
+    core@1/f32.from_bits(3028138352u32),
+    core@1/f32.from_bits(3336933864u32),
+    core@1/f32.from_bits(3127410602u32),
+    core@1/f32.from_bits(1102565536u32),
+    core@1/f32.from_bits(3291746645u32),
+    core@1/f32.from_bits(3030919489u32),
+    core@1/f32.from_bits(3052320108u32),
+    core@1/f32.from_bits(3318141838u32),
+    core@1/f32.from_bits(1147662492u32),
+    core@1/f32.from_bits(3125285249u32),
+    core@1/f32.from_bits(3088077674u32),
+    core@1/f32.from_bits(928620816u32),
+    core@1/f32.from_bits(3361595467u32),
+    core@1/f32.from_bits(3140451191u32),
+    core@1/f32.from_bits(1192881992u32),
+    core@1/f32.from_bits(1235155892u32),
+    core@1/f32.from_bits(2992901373u32),
+    core@1/f32.from_bits(3053692655u32),
+    core@1/f32.from_bits(3378109375u32),
+    core@1/f32.from_bits(986693076u32)
+  ]
+  core@1/test.check(t, core@1/f32.bits(std@1/f32.sum_exact(xs)) == 1238688380u32)
+  Ok(())
+}

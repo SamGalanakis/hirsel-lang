@@ -1,0 +1,31 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+fn scripted(t: Test, connections: List[NetConnection], tls: PeerTls) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: tls,
+        connections: connections
+      )
+    ]
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = scripted(t, [Open([])], Plain())
+  test.check(
+    t,
+    match net.connect(n, "other.com", 80u16, Unbounded()) {
+      Error(NotGranted()) => true,
+      _ => false,
+    }
+  )
+  let s = net.connect(n, "example.com", 80u16, Unbounded())?
+  net.close(n, take s)
+  Ok(())
+}

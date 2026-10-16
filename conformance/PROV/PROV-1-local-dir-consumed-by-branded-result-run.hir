@@ -1,0 +1,12 @@
+// rule: PROV-1
+// expect: run
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  let d = test.dir(t, [])
+  let f = file.open(d, path.of("a"))
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

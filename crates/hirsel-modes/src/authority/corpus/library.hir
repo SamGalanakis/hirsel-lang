@@ -1,0 +1,160 @@
+// Test-local signatures from v20 section 22. No implementations.
+// CAP-1/2/4, LANG-9, CONC-3
+@noalloc
+fn io.stdout(rt: Io) -> Result[Stdout, GrantError]
+@noalloc
+fn io.tasks(rt: Io) -> Result[Tasks, GrantError]
+@noalloc
+fn io.monotonic_clock(rt: Io) -> Result[MonotonicClock, GrantError]
+@noalloc
+fn io.net(rt: Io) -> Result[Net, GrantError]
+@noalloc
+fn io.random(rt: Io) -> Result[Random, GrantError]
+fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
+fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
+fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
+fn path.of(text: String) -> Path
+@noalloc
+fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
+fn std@1/u64.to_string(n: u64) -> String
+@noalloc
+fn test.check(t: Test, condition: bool) -> ()
+fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
+fn std@1/test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
+
+// CAP-1/2, PROV-1/2, DROP-2/4
+fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
+fn file.narrow(d: Dir, take f: File) -> Option[File of d]
+fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]
+fn file.size(d: Dir, p: Path) -> Result[u64, FileError]
+fn file.read_bytes(d: Dir, p: Path) -> Result[Bytes, FileError] in d
+fn file.write_bytes(d: Dir, p: Path, take data: Bytes) -> Result[(), FileError]
+@noalloc
+fn file.remove(d: Dir, p: Path) -> Result[(), FileError]
+fn file.create_atomic(d: Dir, p: Path) -> Result[AtomicFile of d, FileError]
+fn file.write_all(d: Dir, mut f: AtomicFile of d, data: Bytes) -> Result[(), FileError]
+fn file.commit(d: Dir, take f: AtomicFile of d) -> Result[(), FileError]
+fn std@1/bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src
+
+// CONC-2/3/5/6/7, CLO-3, FAIL-2
+fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
+fn task.async[R: sendable](s: Scope, take f: once fn() -> R) -> Task[R] of s
+fn task.await[R](s: Scope, take h: Task[R] of s) -> R
+@noalloc
+fn task.cancel[R](s: Scope, h: Task[R] of s) -> ()
+fn task.detach[R](s: Scope, take h: Task[R] of s) -> ()
+@noalloc
+fn task.check_canceled(s: Scope) -> Result[(), CancelError]
+fn task.isolate[R: sendable](tasks: Tasks, take body: once fn() -> R) -> Result[R, Failure]
+fn mutex.create[T: sendable](tasks: Tasks, take v: unique T) -> Mutex[T]
+fn mutex.with[T, R: sendable](tasks: Tasks, m: Mutex[T], body: fn(mut v: unique T) -> R uses {}) -> R
+fn channel.open[T: sendable](tasks: Tasks) -> (Sender[T], Receiver[T])
+fn sender.dup[T](tasks: Tasks, s: Sender[T]) -> Sender[T]
+fn channel.send[T: sendable](tasks: Tasks, mut s: Sender[T], take v: T) -> Result[(), (T, ChannelError)]
+fn channel.receive[T](tasks: Tasks, mut r: Receiver[T]) -> Result[T, ChannelError]
+fn atomic.create[A](tasks: Tasks, value: A) -> Atomic[A]
+@noalloc
+fn atomic.load[A](tasks: Tasks, a: Atomic[A]) -> A
+@noalloc
+fn atomic.store[A](tasks: Tasks, a: Atomic[A], value: A) -> ()
+
+// MEM-4/5/11/14, PROV-1/4, SEM-4
+@noalloc
+fn arena.with[R](body: fn(a: Arena) -> R) -> R
+@noalloc
+fn arena.bounded[R](cap: u64, body: fn(a: Arena) -> R) -> Result[R, OutOfSpace]
+fn arena.seal[T](take a: Arena in a, take root: T in root) -> Region[T]
+@noalloc
+fn region.with[T, R](mut r: Region[T], body: fn(root: T) -> R) -> R
+fn copy_to[T: copyable](a: Arena, x: T) -> T in a
+fn shared.freeze[T: inert](take x: unique T) -> Shared[T]
+fn shared.thaw[T](take s: Shared[T]) -> Result[unique T, Shared[T]]
+fn slots.empty[T]() -> Slots[T]
+fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s
+@noalloc
+fn slots.get[T](s: Slots[T], id: SlotId[T] of s) -> Option[T] in s
+fn slots.remove[T](mut s: Slots[T], id: SlotId[T] of s) -> Option[T]
+@noalloc
+fn list.len[T](xs: List[T]) -> u64
+@noalloc
+fn array.len[T](xs: Array[T]) -> u64
+fn list.push[T](mut xs: List[T], take value: T) -> ()
+fn iter.from[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] uses {state, next}
+fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
+fn iter.next[T](mut it: Iter[T]) -> Option[T]
+
+// SEM-1/2/3/5, GEN-2, MEM-8/9
+@noalloc
+fn int.widen[I, J](value: I) -> J
+@noalloc
+fn int.try_narrow[I, J](value: I) -> Option[J]
+@noalloc
+fn int.narrow[I, J](value: I) -> J
+@noalloc
+fn int.truncate[I, J](value: I) -> J
+@noalloc
+fn int.wrapping_add[I](a: I, b: I) -> I
+@noalloc
+fn int.saturating_add[I](a: I, b: I) -> I
+@noalloc
+fn int.checked_add[I](a: I, b: I) -> Option[I]
+@noalloc
+fn int.div_floor[I](a: I, b: I) -> I
+@noalloc
+fn int.mod[I](a: I, b: I) -> I
+@noalloc
+fn int.div_exact[I](a: I, b: I) -> I
+@noalloc
+fn int.unchecked_add[I](permit: Unsafe, a: I, b: I) -> I
+@noalloc
+fn float.min[F](a: F, b: F) -> F
+@noalloc
+fn float.max[F](a: F, b: F) -> F
+@noalloc
+fn float.min_number[F](a: F, b: F) -> F
+@noalloc
+fn float.max_number[F](a: F, b: F) -> F
+@noalloc
+fn float.mul_add[F](a: F, b: F, c: F) -> F
+@noalloc
+fn float.total_order[F](a: F, b: F) -> i32
+@noalloc
+fn float.to_i32[F](value: F) -> Result[i32, FloatIntError]
+@noalloc
+fn float.from_int[I, F](value: I) -> F
+@noalloc
+fn std@1/f32.sum(xs: Array[f32]) -> f32
+@noalloc
+fn std@1/f64.sum(xs: Array[f64]) -> f64
+fn std@1/f32.sum_exact(xs: Array[f32]) -> f32
+fn std@1/f64.sum_exact(xs: Array[f64]) -> f64
+@noalloc
+fn string.byte_len(s: String) -> u64
+@noalloc
+fn string.scalars(s: String) -> ScalarView in s
+@noalloc
+fn string.positions(s: String) -> PositionView of s in s
+@noalloc
+fn std@1/unicode.graphemes(s: String) -> std@1/unicode.GraphemeView in s
+@noalloc
+fn std@1/unicode.graphemes_open(v: std@1/unicode.GraphemeView) -> std@1/unicode.GraphemeCursor in v uses {}
+@noalloc
+fn std@1/unicode.graphemes_next(mut c: std@1/unicode.GraphemeCursor) -> Option[String] in c uses {}
+fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s
+fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
+fn map.empty[K: key, V]() -> Map[K, V]
+fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
+@noalloc
+fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
+@noalloc
+fn std@1/map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
+fn set.empty[T: key]() -> Set[T]
+fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
+@noalloc
+fn set.contains[T: key](s: Set[T], value: T) -> bool
+fn sorted_map.empty[K, V](by: Order[K]) -> SortedMap[K, V] of by
+fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()
+@noalloc
+fn simd.splat[A, n: size](value: A) -> Simd[A, n]
+@noalloc
+fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]

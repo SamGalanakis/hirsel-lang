@@ -1,0 +1,20 @@
+// rule: CAP-2
+// expect: accept
+// "inert means the summary is empty"; summaries join held authority.
+resource type AtomicFile {
+  dir: Dir,
+  tmp: Path,
+  dst: Path,
+}
+drop(f) {
+  let _ = file.remove(f.dir, f.tmp)
+}
+
+@noalloc
+fn inert_only[T: inert](x: T) -> () {
+  ()
+}
+
+fn check(take token: AtomicFile, value: u32) -> () {
+  inert_only(value)
+}

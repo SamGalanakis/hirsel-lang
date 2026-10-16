@@ -1,0 +1,16 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 15
+// "Distinct fields are separate storage."
+fn both(mut a: u64, mut b: u64) -> () {
+  a = 1
+  b = 2
+}
+
+type Rec {
+  a: u64,
+  b: u64,
+}
+
+fn example(mut r: Rec) -> () {
+  both(mut r.a, mut r.a)
+}

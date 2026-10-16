@@ -1,0 +1,15 @@
+// rule: OWN-1
+// expect: accept
+// "A plain value is copied by reading it." Taking it into owned storage
+// installs that copy.
+fn probe(x: u64) -> u64 {
+  let mut y = 1u64
+  y = take x
+  y
+}
+
+fn from_mut(mut x: u64) -> u64 {
+  let mut y = 1u64
+  y = take x
+  y
+}

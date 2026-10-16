@@ -1,0 +1,14 @@
+// rule: CAP-3
+// expect: reject CAP-3 at line 11
+// A restricted body "holds only what it is passed" and declares "uses {}".
+fn restricted(body: fn(tx: Tx) -> () uses {}) -> () {
+  ()
+}
+
+fn query(cap: Stdout, n: u32) -> () {
+  restricted(
+    fn(tx: Tx) {
+      let _ = cap
+    }
+  )
+}

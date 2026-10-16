@@ -1,0 +1,8 @@
+// rule: SEM-4
+// expect: accept
+fn probe(s: Set[u64]) {
+  let owned = copy s
+  for x in take owned {
+    let _ = x
+  }
+}

@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn accept(x: Option[Bytes]) {}
+
+fn bad(x: Option[sendable Bytes]) {
+  accept(x)
+}

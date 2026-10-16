@@ -1,0 +1,6 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type Row {
+  value: u64,
+}

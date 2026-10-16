@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 6
+fn need[T: noalloc_drop](take x: T) -> () {}
+
+fn probe(take x: SortedMap[u8, u8]) {
+  need(take x)
+}

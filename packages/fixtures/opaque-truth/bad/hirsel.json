@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "lib",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "lib.hir",
+      "module": [
+        "api"
+      ]
+    }
+  ],
+  "dependencies": []
+}

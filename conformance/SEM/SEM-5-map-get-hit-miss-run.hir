@@ -1,0 +1,32 @@
+// rule: SEM-5
+// expect: run
+// stdout: 20 none none
+// "map.get returns the value stored under an equal key, or None" (#90).
+fn output_error[E](take e: E) -> () {}
+
+fn show(found: Option[u64]) -> String {
+  match found {
+    Some(v) => std@1/u64.to_string(v),
+    None => "none",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant_error
+  let empty: Map[String, u64] = map.empty()
+  let mut m: Map[String, u64] = map.empty()
+  map.insert(mut m, "one", 10)
+  map.insert(mut m, "two", 20)
+  out.print(out, show(map.get(m, "two"))) ? output_error
+  out.print(out, " ") ? output_error
+  out.print(out, show(map.get(m, "three"))) ? output_error
+  out.print(out, " ") ? output_error
+  out.print(out, show(map.get(empty, "one"))) ? output_error
+  out.print(out, "\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

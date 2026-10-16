@@ -1,0 +1,15 @@
+// rule: CLO-1
+// expect: reject CLO-1 at line 12
+// "It may not assign outer let mut names."
+fn invoke(f: fn() -> () uses {}) -> () {
+  f()
+}
+
+fn example() -> () {
+  let mut n: u64 = 0
+  invoke(
+    fn() {
+      n = 1
+    }
+  )
+}

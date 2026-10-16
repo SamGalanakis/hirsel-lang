@@ -1,0 +1,5 @@
+// rule: MODE-4
+// expect: accept
+fn good[T](take x: sendable T) -> List[sendable T] {
+  [take x]
+}

@@ -1,0 +1,11 @@
+// rule: MEM-11
+// expect: reject MEM-11 at line 10
+// "for T inert and holding no resources".
+resource type Token {
+  n: u8,
+}
+drop(x) {}
+
+fn freeze(take x: unique Token) -> Shared[Token] {
+  shared.freeze(take x)
+}

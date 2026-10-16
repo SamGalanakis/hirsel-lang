@@ -1,0 +1,18 @@
+// rule: MODE-2
+// expect: accept
+// "A Shared root inside it is a boundary."
+type Rec {
+  shared: Shared[Bytes],
+  items: Bytes,
+}
+
+fn require_unique(mut r: unique Rec) -> () {
+  ()
+}
+
+fn example(take s: Shared[Bytes], take x: unique Bytes) -> () {
+  let other = copy s
+  let mut r = Rec(shared: take s, items: take x)
+  require_unique(mut r)
+  let _ = other
+}

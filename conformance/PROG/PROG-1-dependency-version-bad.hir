@@ -1,0 +1,9 @@
+// rule: PROG-1
+// expect: reject LANG-7 at line 7
+fn consume(x: probe@1/api.Widget) {}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let x: probe@2/api.Widget = newvendor.Widget(value: 42)
+  consume(x)
+  Ok(())
+}

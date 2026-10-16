@@ -1,0 +1,37 @@
+// rule: MEM-13
+// expect: run
+// stdout: 1
+// stdout: 4
+// stdout: 11
+// stdout: 22
+// stdout: 1
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let out = io.stdout(rt) ? Grant
+  let xs: List[(Packed[Choice], u64)] = [
+    (Small(value: 1), 11u64),
+    (Large(value: 3, extra: 4), 22u64)
+  ]
+  let (small, a) = xs[0]
+  let (large, b) = xs[1]
+  let _ = out.print(out, std@1/u64.to_string(small.Small.value))
+  let _ = out.print(out, "\n")
+  let _ = out.print(out, std@1/u64.to_string(large.Large.extra))
+  let _ = out.print(out, "\n")
+  let _ = out.print(out, std@1/u64.to_string(a))
+  let _ = out.print(out, "\n")
+  let _ = out.print(out, std@1/u64.to_string(b))
+  let _ = out.print(out, "\n")
+  let f = fn() {
+    copy small
+  }
+  let captured = f()
+  let _ = out.print(out, std@1/u64.to_string(captured.Small.value))
+  let _ = out.print(out, "\n")
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

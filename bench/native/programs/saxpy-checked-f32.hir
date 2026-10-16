@@ -1,0 +1,19 @@
+// Same source-order arithmetic and exact IEEE-bit checksum as the frozen C reference.
+fn workload(data: Bytes) -> Bytes {
+  let mut pos: u64 = 0
+  let n = decimal(data, mut pos)
+  let mut x: List[f32] = []
+  let mut y: List[f32] = []
+  list.reserve(mut x, n)
+  list.reserve(mut y, n)
+  for i in 0u64..n {
+    let a: f32 = float.from_int(i % 127u64)
+    let b: f32 = float.from_int(i % 31u64)
+    list.push(mut x, a * 0.25f32)
+    list.push(mut y, b * 0.125f32)
+  }
+  for i in 0u64..n { y[i] = 1.5f32 * x[i] + y[i] }
+  let mut sum: u64 = 0
+  for i in 0u64..n { sum = int.wrapping_add(sum, int.widen(f32.bits(y[i]))) }
+  number(sum)
+}

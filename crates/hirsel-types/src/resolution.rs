@@ -1,0 +1,85 @@
+use crate::*;
+use hirsel_span::Span;
+use hirsel_syntax::{ItemId, PackageId, StmtId};
+
+/// Every attempted manifest lookup is retained, including misses. The explicit
+/// manifest revision closes the gap in SignatureDependency (spec issue #4).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DependencyRead {
+    ProviderLookup {
+        context: FileContext,
+        package: Option<PackageId>,
+        segments: Vec<String>,
+        output: LookupOutput,
+    },
+    Lookup {
+        context: FileContext,
+        package: Option<PackageId>,
+        segments: Vec<String>,
+        manifest: ContentHash,
+        result: Result<DefPath, LookupError>,
+    },
+    ModuleHead {
+        context: FileContext,
+        head: String,
+        manifest: ContentHash,
+        exposed: bool,
+    },
+    Signature {
+        definition: DefPath,
+        fingerprint: Option<ContentHash>,
+    },
+}
+
+/// Contextual ordinals belong to this nominal owner, never to a file or Symbol.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContextualName {
+    Constructor(DefPath),
+    Variant {
+        owner: DefPath,
+        variant: VariantId,
+    },
+    Field {
+        owner: DefPath,
+        variant: Option<VariantId>,
+        field: FieldId,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub enum NameSite {
+    Expression(ExprId),
+    Pattern(PatternId),
+    Type(TypeExprId),
+    Statement(StmtId),
+    Item(ItemId),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeferredName {
+    pub site: NameSite,
+    pub span: Span,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GenericParameterName {
+    Type(TypeParameterRef),
+    Size(SizeParameterRef),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenericBinding {
+    pub owner: NameSite,
+    pub name: Symbol,
+    pub parameter: GenericParameterName,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LookupError {
+    Missing,
+    Ambiguous,
+    Invisible(DefPath),
+    /// Provider diagnostics are emitted only at a real use, never a reservation probe.
+    Provider(Vec<Diagnostic>),
+}

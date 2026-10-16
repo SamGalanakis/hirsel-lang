@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 15
+// The argument contributes its arena bound, so a result whose relation omits
+// the arena cannot keep it. The accepted twin is MODE-1-arena-only-argument-result-ok.
+fn mk(a: Arena) -> Bytes in a {
+  b"x"
+}
+
+fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {a, x} {
+  x
+}
+
+fn copied(a: Arena, y: Bytes) -> Bytes in y {
+  let m = mk(a)
+  choose(a, copy m, y)
+}

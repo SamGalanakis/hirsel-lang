@@ -1,0 +1,26 @@
+// rule: DROP-2
+// expect: run
+// stdout: A
+resource type Acc {
+  total: u64,
+  out: Stdout,
+}
+@noalloc drop(x) {
+  out.print(x.out, "A\n");
+}
+
+fn add(take acc: Acc, value: u64) -> Acc uses {acc} {
+  let mut next = take acc
+  next.total += value
+  failure.check(true, Bounds())
+  take next
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let xs: List[u64] = [1, 2, 3]
+  let folded = std@1/list.fold(xs, Acc(total: 0, out: io.stdout(rt) ? Grant), add)
+  failure.check(folded.total == 6, Bounds())
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

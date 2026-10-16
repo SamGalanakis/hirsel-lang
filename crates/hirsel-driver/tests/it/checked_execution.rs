@@ -1,0 +1,894 @@
+//! Checked execution as a third witness: every trap
+//! rule fires on lowered, hand-edited TIR, and each accepted twin runs in
+//! checked mode exactly as it runs normally.
+use hirsel_driver::*;
+use hirsel_engine::*;
+use hirsel_interp::checked::TrapRule;
+use hirsel_interp::{Outcome, library::LaunchError};
+use hirsel_syntax::DefPath;
+use hirsel_tir::{Definition, DefinitionRef, TirProvider};
+use std::collections::BTreeMap;
+
+/// Serves edited definitions in place of the engine's own.
+struct Edited<'a> {
+    engine: &'a mut QueryEngine,
+    replaced: BTreeMap<DefPath, DefinitionRef>,
+}
+impl TirProvider for Edited<'_> {
+    fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, hirsel_types::QueryError> {
+        match self.replaced.get(path) {
+            Some(definition) => Ok(definition.clone()),
+            None => self.engine.definition(path),
+        }
+    }
+    fn constant(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<hirsel_tir::MaterializedRef, hirsel_types::QueryError> {
+        self.engine.constant(path)
+    }
+    fn constant_definitions(&mut self) -> Result<Vec<DefPath>, hirsel_types::QueryError> {
+        self.engine.constant_definitions()
+    }
+}
+
+fn accepted(source: &str) -> QueryEngine {
+    if !source.contains("std@1/") {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("source.hir", source.into()).unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .all(|d| d.severity != hirsel_diag::Severity::Error),
+            "{:?}",
+            output.diagnostics
+        );
+        return engine;
+    }
+    let mut loaded = load_program_source(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_numeric.hir"),
+        Some(source),
+    )
+    .unwrap();
+    loaded
+        .check_for_execution()
+        .unwrap_or_else(|e| panic!("{source}\n{e:?}"));
+    loaded.engine
+}
+fn path(name: &str) -> DefPath {
+    let mut path = entry_path(&default_context());
+    path.0.name = name.into();
+    path
+}
+fn lowered(engine: &mut QueryEngine, name: &str) -> Definition {
+    (*engine.lower_to_tir(&path(name)).unwrap().value).clone()
+}
+/// Run `main` with some definitions replaced; `None` when normal execution
+/// cannot run it (arenas are M2 outside checked execution).
+fn run(engine: &mut QueryEngine, edits: &[Definition], checked: bool) -> Option<(Outcome, String)> {
+    let runtime = if checked {
+        engine.checked_runtime_types()
+    } else {
+        engine.runtime_types()
+    }
+    .unwrap();
+    run_with(engine, edits, runtime)
+}
+fn run_with(
+    engine: &mut QueryEngine,
+    edits: &[Definition],
+    runtime: hirsel_interp::aggregate::RuntimeTypes,
+) -> Option<(Outcome, String)> {
+    let entry = entry_path(&default_context());
+    let signature = engine.item_signature(&entry).unwrap().value;
+    let sources = engine.sources.clone();
+    let mut provider = Edited {
+        engine,
+        replaced: edits
+            .iter()
+            .map(|d| (d.path.clone(), DefinitionRef::new(d.clone())))
+            .collect(),
+    };
+    let config = RunConfiguration {
+        entry,
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    match hirsel_interp::library::launch_with_runtime(
+        &mut provider,
+        &sources,
+        &signature,
+        &config,
+        SimulationConfig::default(),
+        hirsel_interp::Limits::default(),
+        &runtime,
+    ) {
+        Ok(launched) => Some((
+            launched.execution.outcome,
+            String::from_utf8(launched.execution.stdout).unwrap(),
+        )),
+        Err(LaunchError::Execution { cause, .. })
+            if matches!(*cause, LaunchError::Unavailable(_)) =>
+        {
+            None
+        }
+        Err(error) => panic!("{error:?}"),
+    }
+}
+fn trapped(outcome: Option<(Outcome, String)>) -> TrapRule {
+    match outcome {
+        Some((Outcome::Trapped(trap), _)) => trap.rule,
+        other => panic!("expected a trap, got {other:?}"),
+    }
+}
+fn printed(outcome: Option<(Outcome, String)>) -> String {
+    match outcome {
+        Some((Outcome::Returned { exit_code: 0, .. }, stdout)) => stdout,
+        other => panic!("expected a clean exit, got {other:?}"),
+    }
+}
+/// The IR checker's verdict on an edited definition.
+fn validator_rejects(engine: &mut QueryEngine, definition: &Definition) -> bool {
+    let input = engine.export_native_input().unwrap();
+    let signatures: BTreeMap<_, _> = input
+        .signatures
+        .iter()
+        .map(|(p, s)| (p.clone(), (**s).clone()))
+        .collect();
+    !hirsel_validate::validate(definition, &signatures)
+        .violations
+        .is_empty()
+}
+fn named_locals(body: &hirsel_tir::Body) -> Vec<usize> {
+    body.locals
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.storage == hirsel_tir::Storage::Local)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Review 3 finding 2 (`y1`), rejected at source today (MODE-1). Its accepted
+/// twin binds `t` outside the block; moving `t`'s storage into the block
+/// rebuilds the reviewer's program as IR.
+const LOCAL_RESULT: &str = "fn wrap(x: String) -> List[String] in x { [copy x] }\nfn n(xs: List[String]) -> u64 { list.len(xs) }\nfn probe(x: String) -> u64 { let t = copy x; let slot = { let u = wrap(t); copy u }; n(slot) }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let s: String = \"abc\"\n  if probe(s) == 1u64 { let _ = out.print(io.stdout(rt)?, \"one\\n\") }\n  Ok(())\n}";
+
+#[test]
+fn a_copy_of_a_local_result_traps_after_its_source_scope_exits() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(LOCAL_RESULT);
+        assert_eq!(printed(run(&mut engine, &[], false)), "one\n");
+        assert_eq!(printed(run(&mut engine, &[], true)), "one\n");
+        let mut probe = lowered(&mut engine, "probe");
+        let body = &mut probe.bodies[0];
+        let (t, u) = match named_locals(body)[..] {
+            [t, u, ..] => (t, u),
+            _ => panic!("probe binds t, u and slot"),
+        };
+        body.locals[t].scope = body.locals[u].scope;
+        // The interpreter alone still prints: it never frees a region.
+        assert_eq!(printed(run(&mut engine, &[probe.clone()], false)), "one\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[probe.clone()], true)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+        assert!(validator_rejects(&mut engine, &probe));
+    });
+}
+
+#[test]
+fn a_result_declared_global_cannot_carry_a_borrowed_parameter() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(LOCAL_RESULT);
+        // Forge `wrap`'s declared result as global: its list still holds a part
+        // of the borrowed `x`, which ends with the call.
+        let mut wrap = lowered(&mut engine, "wrap");
+        let result = wrap.bodies[0].result;
+        let mut row = wrap.types.get(result).unwrap().clone();
+        row.modes.relation = hirsel_types::Relation::global();
+        wrap.bodies[0].result = wrap.types.push(row);
+        assert_eq!(printed(run(&mut engine, &[wrap.clone()], false)), "one\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[wrap], true)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+    });
+}
+
+/// Review 3 finding 1 (`k1`), rejected at source today (PROV-4): the returned
+/// closure captures `(x, 1u8)` with `x` in the arena, and runs after it closed.
+const ARENA_CLOSURE: &str = "fn mk(a: Arena) -> fn() -> u64 { let x: String = \"xy\"; let p = (x, 1u8); fn() { let (s, n) = p; string.byte_len(s) } }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let grant_stdout = io.stdout(rt)?\n\n  let f = arena.with(fn(a: Arena) -> fn() -> u64 { mk(a) })\n  if f() == 2u64 { let _ = out.print(grant_stdout, \"two\\n\") }\n  Ok(())\n}";
+
+#[test]
+fn a_returned_closure_over_arena_content_traps_after_the_arena_ends() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(ARENA_CLOSURE);
+        assert_eq!(printed(run(&mut engine, &[], false)), "two\n");
+        assert_eq!(printed(run(&mut engine, &[], true)), "two\n");
+        // Place `x` in `a`, as `let x: String in a` declares.
+        let mut mk = lowered(&mut engine, "mk");
+        let body = &mut mk.bodies[mk.entry.0 as usize];
+        let x = named_locals(body)[0];
+        let mut row = mk.types.get(body.locals[x].ty).unwrap().clone();
+        row.modes.relation =
+            row.modes
+                .relation
+                .union(&hirsel_types::Relation::place(hirsel_types::Origin {
+                    root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::Body {
+                        scope: body.parameter_scope,
+                        parameter: hirsel_types::ParamId(0),
+                    }),
+                    fields: Default::default(),
+                }));
+        let placed = mk.types.push(row);
+        body.locals[x].ty = placed;
+        for place in body.places.iter_mut() {
+            if place.root.0 as usize == x && place.projection.is_empty() {
+                place.ty = placed;
+            }
+        }
+        // The interpreter alone still prints: an arena allocates nothing there.
+        assert_eq!(printed(run(&mut engine, &[mk.clone()], false)), "two\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[mk.clone()], true)),
+            TrapRule::ArenaUseAfterEnd
+        );
+        assert!(validator_rejects(&mut engine, &mk));
+    });
+}
+
+const RESOURCES: &str = "resource type Trace { stdout: Stdout, text: String }\n  drop(x) { let _ = out.print(x.stdout, x.text) }\nfn look(t: Trace) -> u64 { string.byte_len(t.text) }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let stdout = io.stdout(rt)?\n  let a = Trace(stdout: stdout, text: \"a\\n\")\n  let b = Trace(stdout: stdout, text: \"b\\n\")\n  let n = look(a)\n  Ok(())\n}";
+
+#[test]
+fn a_resource_finalised_twice_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(RESOURCES);
+        assert_eq!(printed(run(&mut engine, &[], true)), "b\na\n");
+        // `look` drops its borrowed parameter: `a` is finalised twice.
+        let mut look = lowered(&mut engine, "look");
+        let body = &mut look.bodies[0];
+        let parameter = body.parameters[0];
+        let place = body
+            .places
+            .iter()
+            .position(|p| p.root == parameter && p.projection.is_empty() && p.loan.is_none())
+            .unwrap();
+        let actions = body
+            .cleanup_actions(hirsel_tir::CleanupId(0))
+            .cloned()
+            .chain([hirsel_tir::CleanupAction::Drop {
+                place: hirsel_tir::PlaceId(place as u32),
+                if_live: true,
+            }])
+            .collect();
+        let cleanup = body.add_cleanup(actions);
+        for block in body.blocks.iter_mut() {
+            if let hirsel_tir::Terminator::Return { cleanup: c, .. } = &mut block.terminator {
+                *c = cleanup;
+            }
+        }
+        assert_eq!(
+            printed(run(&mut engine, &[look.clone()], false)),
+            "a\nb\na\n"
+        );
+        assert_eq!(
+            trapped(run(&mut engine, &[look], true)),
+            TrapRule::FinalizerCount
+        );
+    });
+}
+
+/// Rewrite every cleanup list of `main` with `edit`.
+fn edit_cleanups(
+    main: &mut Definition,
+    edit: impl Fn(Vec<hirsel_tir::CleanupAction>) -> Vec<hirsel_tir::CleanupAction>,
+) {
+    let body = &mut main.bodies[main.entry.0 as usize];
+    for id in 0..body.cleanups.len() {
+        let id = hirsel_tir::CleanupId(id as u32);
+        let actions = body.cleanup_actions(id).cloned().collect();
+        body.set_cleanup(id, edit(actions));
+    }
+}
+fn drops_of(main: &Definition, locals: &[usize]) -> Vec<hirsel_tir::PlaceId> {
+    let body = &main.bodies[main.entry.0 as usize];
+    locals
+        .iter()
+        .map(|l| {
+            hirsel_tir::PlaceId(
+                body.places
+                    .iter()
+                    .position(|p| p.root.0 as usize == *l && p.projection.is_empty())
+                    .unwrap() as u32,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn resources_finalised_in_declaration_order_trap() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(RESOURCES);
+        let mut main = lowered(&mut engine, "main");
+        let body = &main.bodies[main.entry.0 as usize];
+        let resources: Vec<usize> = named_locals(body)
+            .into_iter()
+            .filter(|l| {
+                matches!(
+                    main.types.get(body.locals[*l].ty).map(|t| &t.kind),
+                    Some(hirsel_types::TypeKind::Named { definition, .. })
+                        if definition.0.name == "Trace"
+                )
+            })
+            .collect();
+        let [a, b] = drops_of(&main, &resources)[..] else {
+            panic!("main owns a and b")
+        };
+        // Swap every `Drop b; Drop a` into `Drop a; Drop b`.
+        edit_cleanups(&mut main, |mut actions| {
+            let at = |p| {
+                actions.iter().position(
+                    |x| matches!(x, hirsel_tir::CleanupAction::Drop { place, .. } if *place == p),
+                )
+            };
+            if let (Some(i), Some(j)) = (at(a), at(b)) {
+                actions.swap(i, j);
+            }
+            actions
+        });
+        assert_eq!(printed(run(&mut engine, &[main.clone()], false)), "a\nb\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[main], true)),
+            TrapRule::FinalizerOrder
+        );
+    });
+}
+
+const NOALLOC: &str = "@noalloc\nfn count(xs: List[u64]) -> u64 { list.len(xs) }\nfn grow(xs: List[u64]) -> u64 { list.len(xs) + 1u64 }\n@noalloc\nfn tally(xs: List[u64]) -> u64 { let ys: List[u64] = [1u64]; list.len(ys) + list.len(xs) }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let xs: List[u64] = [1u64, 2u64]\n  if count(xs) + tally(xs) == 5u64 { let _ = out.print(io.stdout(rt)?, \"five\\n\") }\n  let g = grow(xs)\n  Ok(())\n}";
+
+#[test]
+fn a_heap_block_constructed_in_a_noalloc_body_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(NOALLOC);
+        assert_eq!(printed(run(&mut engine, &[], true)), "five\n");
+        let mut tally = lowered(&mut engine, "tally");
+        let mut heap = 0;
+        for rvalue in tally.bodies[0].rvalues.iter_mut() {
+            if let hirsel_tir::Rvalue::Construct { destination, .. } = rvalue {
+                *destination = hirsel_types::Destination::Heap;
+                heap += 1;
+            }
+        }
+        assert_eq!(heap, 1, "tally constructs one list");
+        assert_eq!(printed(run(&mut engine, &[tally.clone()], false)), "five\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[tally], true)),
+            TrapRule::AllocationInNoalloc
+        );
+    });
+}
+
+#[test]
+fn an_allocating_call_from_a_noalloc_body_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(NOALLOC);
+        let mut count = lowered(&mut engine, "count");
+        let mut calls = 0;
+        for block in count.bodies[0].blocks.iter_mut() {
+            if let hirsel_tir::Terminator::Call {
+                callee:
+                    hirsel_tir::Callee::Definition {
+                        path: callee,
+                        arguments,
+                    },
+                ..
+            } = &mut block.terminator
+            {
+                *callee = path("grow");
+                arguments.clear();
+                calls += 1;
+            }
+        }
+        assert_eq!(calls, 1, "count calls list.len once");
+        assert_eq!(printed(run(&mut engine, &[count.clone()], false)), "");
+        assert_eq!(
+            trapped(run(&mut engine, &[count], true)),
+            TrapRule::AllocatingCallInNoalloc
+        );
+    });
+}
+
+#[test]
+fn a_noalloc_block_that_escapes_its_frame_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "fn make() -> List[u64] { [1u64] }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  if list.len(make()) == 1u64 { let _ = out.print(io.stdout(rt)?, \"one\\n\") }\n  Ok(())\n}",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "one\n");
+        // Forge `make` as `@noalloc`: its fresh list can only be region-placed,
+        // and that region ends before the caller reads the result.
+        let mut runtime = engine.checked_runtime_types().unwrap();
+        runtime
+            .checked
+            .as_mut()
+            .unwrap()
+            .noalloc
+            .insert(path("make"));
+        assert_eq!(
+            trapped(run_with(&mut engine, &[], runtime)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+    });
+}
+
+#[test]
+fn a_library_local_result_keeps_the_borrowed_binding_scope() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "fn probe(x: Bytes) -> bool {\n  let t = copy x\n  let slot = { let u = bytes.slice(t, 0, bytes.len(t)); copy u }\n  slot == b\"bbc\"\n}\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  if probe(b\"bbc\") { let _ = out.print(io.stdout(rt)?, \"yes\\n\") }\n  Ok(())\n}",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "yes\n");
+        let mut probe = lowered(&mut engine, "probe");
+        let body = &mut probe.bodies[0];
+        let names = named_locals(body);
+        body.locals[names[0]].scope = body.locals[names[1]].scope;
+        assert_eq!(printed(run(&mut engine, &[probe.clone()], false)), "yes\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[probe], true)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+    });
+}
+
+#[test]
+fn native_callbacks_cannot_return_their_ended_parameter_storage() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let grant_stdout = io.stdout(rt)?\n\n  let it = iter.from(0u64, fn(mut n: u64) -> Option[String] {\n    if n == 0u64 { n = 1u64; Some(\"item\") } else { None }\n  })\n  let mut mapped = iter.map(take it, fn(x: String) -> List[String] { [\"fresh\"] })\n  let item = iter.next(mut mapped)\n  match item { Some(xs) => { let _ = out.print(grant_stdout, \"one\\n\") }, None => {} }\n  Ok(())\n}",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "one\n");
+        let mut main = lowered(&mut engine, "main");
+        let mapper = main
+            .bodies
+            .iter_mut()
+            .find(|b| {
+                b.parameters.len() == 1
+                    && b.locals.iter().any(|l| {
+                        matches!(
+                            main.types.get(l.ty).map(|t| &t.kind),
+                            Some(hirsel_types::TypeKind::Builtin {
+                                kind: hirsel_types::BuiltinType::List,
+                                ..
+                            })
+                        )
+                    })
+            })
+            .unwrap();
+        let parameter = mapper.parameters[0];
+        let parameter_place = mapper
+            .places
+            .iter()
+            .position(|p| p.root == parameter && p.projection.is_empty())
+            .unwrap();
+        let literal = mapper
+            .rvalues
+            .iter_mut()
+            .find(|r| {
+                matches!(
+                    r,
+                    hirsel_tir::Rvalue::Constant(hirsel_tir::Constant::String(_))
+                )
+            })
+            .unwrap();
+        *literal = hirsel_tir::Rvalue::Use(hirsel_tir::Operand {
+            place: hirsel_tir::PlaceId(parameter_place as u32),
+            usage: hirsel_types::UseKind::Copy,
+        });
+        assert_eq!(printed(run(&mut engine, &[main.clone()], false)), "one\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[main], true)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+    });
+}
+
+#[test]
+fn deep_unique_extraction_under_noalloc_traps_even_when_discarded() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "@noalloc fn promise(x: List[u64]) {}
+fn clone_it(x: List[u64]) { let y = unique x }
+pub fn main(rt: Io, args: Args) -> Result[(), ()] { promise([1u64]); Ok(()) }",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "");
+        // Keep the declared noalloc contract and replace only its TIR body.
+        let mut forged = lowered(&mut engine, "clone_it");
+        forged.path = path("promise");
+        assert_eq!(printed(run(&mut engine, &[forged.clone()], false)), "");
+        assert_eq!(
+            trapped(run(&mut engine, &[forged], true)),
+            TrapRule::AllocationInNoalloc
+        );
+    });
+}
+
+#[test]
+fn a_shared_counted_write_under_noalloc_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "@noalloc fn promise(take xs: List[u64]) -> u64 { 9u64 }\nfn change(take xs: List[u64]) -> u64 { let mut ys = take xs; ys[0u64] = 9u64; ys[0u64] }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let xs: List[u64] = [1u64]\n  if promise(copy xs) == 9u64 { let _ = out.print(io.stdout(rt)?, \"nine\\n\") }\n  Ok(())\n}",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "nine\n");
+        let mut forged = lowered(&mut engine, "change");
+        forged.path = path("promise");
+        assert_eq!(
+            printed(run(&mut engine, &[forged.clone()], false)),
+            "nine\n"
+        );
+        assert_eq!(
+            trapped(run(&mut engine, &[forged], true)),
+            TrapRule::AllocationInNoalloc
+        );
+    });
+}
+
+#[test]
+fn an_implicit_allocating_destructor_under_noalloc_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "resource type R { n: u64 } drop(x) {}
+@noalloc fn promise() {}
+fn dispose() { let r = R(n: 1u64) }
+pub fn main(rt: Io, args: Args) -> Result[(), ()] { promise(); Ok(()) }",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "");
+        let mut forged = lowered(&mut engine, "dispose");
+        forged.path = path("promise");
+        assert_eq!(printed(run(&mut engine, &[forged.clone()], false)), "");
+        assert_eq!(
+            trapped(run(&mut engine, &[forged], true)),
+            TrapRule::AllocatingCallInNoalloc
+        );
+    });
+}
+
+#[test]
+fn declaration_order_is_independent_of_storage_live_order() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(RESOURCES);
+        let mut main = lowered(&mut engine, "main");
+        let body = &mut main.bodies[0];
+        let owners: Vec<_> = named_locals(body).into_iter().filter(|i| {
+            matches!(main.types.get(body.locals[*i].ty).map(|t| &t.kind), Some(hirsel_types::TypeKind::Named { definition, .. }) if definition.0.name == "Trace")
+        }).collect();
+        let [a, b] = owners[..] else {
+            panic!("two resources")
+        };
+        // Reserve b's storage before a's, while declaration and construction
+        // order remain a then b. StorageLive is not a declaration event.
+        for block in &mut body.blocks {
+            block.instructions.retain(|i| !matches!(i.kind, hirsel_tir::InstructionKind::StorageLive(l) if l.0 as usize == b));
+            if let Some(at) = block.instructions.iter().position(|i| matches!(i.kind, hirsel_tir::InstructionKind::StorageLive(l) if l.0 as usize == a)) {
+                let mut live = block.instructions[at].clone();
+                live.kind = hirsel_tir::InstructionKind::StorageLive(hirsel_tir::LocalId(b as u32));
+                block.instructions.insert(at, live);
+            }
+        }
+        assert_eq!(printed(run(&mut engine, &[main.clone()], true)), "b\na\n");
+        let [a, b] = drops_of(&main, &owners)[..] else {
+            unreachable!()
+        };
+        edit_cleanups(&mut main, |mut actions| {
+            let first = actions.iter().position(
+                |x| matches!(x, hirsel_tir::CleanupAction::Drop { place, .. } if *place == a),
+            );
+            let second = actions.iter().position(
+                |x| matches!(x, hirsel_tir::CleanupAction::Drop { place, .. } if *place == b),
+            );
+            if let (Some(i), Some(j)) = (first, second) {
+                actions.swap(i, j);
+            }
+            actions
+        });
+        assert_eq!(printed(run(&mut engine, &[main.clone()], false)), "a\nb\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[main], true)),
+            TrapRule::FinalizerOrder
+        );
+    });
+}
+
+#[test]
+fn nested_scope_order_survives_separate_cleanup_chains_on_failure() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "resource type R { n: u64 } drop(x) {}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a = R(n: 1u64)
+  { let b = R(n: 2u64); let z = 1u64 / 0u64 }
+  Ok(())
+}",
+        );
+        assert!(matches!(
+            run(&mut engine, &[], true),
+            Some((Outcome::Failed(_), _))
+        ));
+        let mut main = lowered(&mut engine, "main");
+        let body = &main.bodies[0];
+        let owners: Vec<_> = named_locals(body).into_iter().filter(|i| {
+            matches!(main.types.get(body.locals[*i].ty).map(|t| &t.kind), Some(hirsel_types::TypeKind::Named { definition, .. }) if definition.0.name == "R")
+        }).collect();
+        let [a, b] = drops_of(&main, &owners)[..] else {
+            panic!("two resources")
+        };
+        // Put the outer drop in its own earlier chain; the eventual failure
+        // chain still has the inner drop. A per-chain monotonic audit misses it.
+        let body = &mut main.bodies[0];
+        let cleanup = body.add_cleanup(vec![hirsel_tir::CleanupAction::Drop {
+            place: a,
+            if_live: true,
+        }]);
+        let block = body.blocks.iter_mut().find(|block| block.instructions.iter().any(|i| {
+            matches!(i.kind, hirsel_tir::InstructionKind::StorageLive(l) if l.0 as usize == owners[1])
+        })).unwrap();
+        let at = block.instructions.iter().position(|i| matches!(i.kind, hirsel_tir::InstructionKind::Assign { destination, .. } if destination == b)).unwrap();
+        let mut instruction = block.instructions[at].clone();
+        instruction.kind = hirsel_tir::InstructionKind::RunCleanup(cleanup);
+        block.instructions.insert(at + 1, instruction);
+        assert!(matches!(
+            run(&mut engine, &[main.clone()], false),
+            Some((Outcome::Failed(_), _))
+        ));
+        assert_eq!(
+            trapped(run(&mut engine, &[main], true)),
+            TrapRule::FinalizerOrder
+        );
+    });
+}
+
+#[test]
+fn a_tail_restart_poisons_the_previous_invocations_binding_scopes() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "fn descend(n: u64, text: String) -> u64 {\n  if n == 0u64 { string.byte_len(text) } else { descend(n-1u64, text) }\n}\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  if descend(3u64, \"abc\") == 3u64 { let _ = out.print(io.stdout(rt)?, \"three\\n\") }\n  Ok(())\n}",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "three\n");
+        let mut descend = lowered(&mut engine, "descend");
+        let body = &mut descend.bodies[0];
+        assert_eq!(body.tail_sites.len(), 1);
+        let block_id = body.tail_sites[0].call_block;
+        let parameter = body.parameters[1];
+        let place = body
+            .places
+            .iter()
+            .find(|p| p.root == parameter && p.projection.is_empty())
+            .unwrap()
+            .clone();
+        let local = hirsel_tir::LocalId(body.locals.len() as u32);
+        body.locals.push(hirsel_tir::Local {
+            storage: hirsel_tir::Storage::Local,
+            ty: place.ty,
+            scope: hirsel_tir::ScopeId(0),
+            span: body.blocks[block_id.0 as usize].span,
+        });
+        let source = hirsel_tir::PlaceId(body.places.len() as u32);
+        body.places.push(place.clone());
+        let destination = hirsel_tir::PlaceId(body.places.len() as u32);
+        body.places.push(hirsel_tir::Place {
+            root: local,
+            ..place
+        });
+        let value = hirsel_tir::RvalueId(body.rvalues.len() as u32);
+        body.rvalues
+            .push(hirsel_tir::Rvalue::Use(hirsel_tir::Operand {
+                place: source,
+                usage: hirsel_types::UseKind::Copy,
+            }));
+        let block = &mut body.blocks[block_id.0 as usize];
+        block.instructions.push(hirsel_tir::Instruction {
+            kind: hirsel_tir::InstructionKind::Assign { destination, value },
+            span: block.span,
+            on_failure: hirsel_tir::CleanupId(0),
+        });
+        let hirsel_tir::Terminator::Call { arguments, .. } = &mut block.terminator else {
+            unreachable!()
+        };
+        arguments
+            .iter_mut()
+            .find(|a| a.parameter.0 == 1)
+            .unwrap()
+            .value
+            .place = destination;
+        assert_eq!(
+            printed(run(&mut engine, &[descend.clone()], false)),
+            "three\n"
+        );
+        assert_eq!(
+            trapped(run(&mut engine, &[descend], true)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+    });
+}
+
+#[test]
+fn fresh_and_moved_unique_blocks_need_no_detach_even_in_aliased_storage() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "@noalloc fn fresh() -> u64 { let mut xs: List[u64] = [1u64]; xs[0u64] = 7u64; xs[0u64] }\n@noalloc fn changed(take xs: unique List[u64]) -> u64 { let mut ys = take xs; ys[0u64] = 9u64; ys[0u64] }\n@noalloc fn scalar(x: u64) -> u64 { unique x }\n@noalloc fn nested() { let mut xs: List[List[u64]] = [[1u64]]; xs[0u64][0u64] = 2u64 }\nresource type Safe { n: u64 } @noalloc drop(x) {}\n@noalloc fn dispose(take x: Safe) {}\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let xs: List[u64] = [1u64]\n  nested()\n  dispose(Safe(n: 1u64))\n  if fresh() + changed(take xs) + scalar(1u64) == 17u64 { let _ = out.print(io.stdout(rt)?, \"seventeen\\n\") }\n  Ok(())\n}",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "seventeen\n");
+    });
+}
+
+#[test]
+fn a_plain_field_of_a_borrowed_capture_keeps_no_lifetime() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "flat type Item { text: String, n: u64 }
+fn dup[T: flat](take w: T) -> T { (fn() { w })() }
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let original = Item(text: \"flat\", n: 7)
+  let copied = dup(take original)
+  Ok(())
+}",
+        );
+        assert_eq!(
+            printed(run(&mut engine, &[], true)),
+            printed(run(&mut engine, &[], false))
+        );
+    });
+}
+
+#[test]
+fn nested_callable_content_still_traps_after_its_source_scope_ends() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(include_str!(
+            "../../../../conformance/CLO/CLO-1-consumed-loop-content-capture-nested-run.hir"
+        ));
+        assert_eq!(printed(run(&mut engine, &[], false)), "15\n");
+        assert_eq!(printed(run(&mut engine, &[], true)), "15\n");
+        let mut total = lowered(&mut engine, "total");
+        let body = &mut total.bodies[total.entry.0 as usize];
+        let v = body
+            .rvalues
+            .iter()
+            .find_map(|r| match r {
+                hirsel_tir::Rvalue::Closure { captures, .. } => {
+                    Some(body.places[captures[0].place.0 as usize].root.0 as usize)
+                }
+                _ => None,
+            })
+            .expect("f captures v");
+        let scope = hirsel_tir::ScopeId(body.scopes.len() as u32);
+        let mut nested = body.scopes[body.locals[v].scope.0 as usize].clone();
+        nested.parent = Some(body.locals[v].scope);
+        body.scopes.push(nested);
+        body.locals[v].scope = scope;
+        let block = body
+            .blocks
+            .iter_mut()
+            .find(|b| {
+                matches!(
+                    &b.terminator,
+                    hirsel_tir::Terminator::Call {
+                        callee: hirsel_tir::Callee::Definition { path, .. }, ..
+                    } if path.0.name.as_str() == "byte_len"
+                )
+            })
+            .expect("total consumes h result in byte_len");
+        // Rebuild a real escape: v lives in an inner scope that ends after
+        // h() returns, while the result holder survives until byte_len.
+        let mut end = block.instructions.last().unwrap().clone();
+        end.kind = hirsel_tir::InstructionKind::EndScope(scope);
+        block.instructions.push(end);
+        assert_eq!(printed(run(&mut engine, &[total.clone()], false)), "15\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[total.clone()], true)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+        assert!(validator_rejects(&mut engine, &total));
+    });
+}
+
+/// The environment itself stays bounded by the region: a closure built in a
+/// forged `@noalloc` frame and returned traps when the caller calls it.
+#[test]
+fn a_region_placed_closure_environment_that_escapes_its_frame_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(
+            "fn make(take text: String) -> fn() -> u64 { fn() { string.byte_len(text) } }\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let f = make(take \"abc\")\n  if f() == 3u64 { let _ = out.print(io.stdout(rt)?, \"three\\n\") }\n  Ok(())\n}",
+        );
+        assert_eq!(printed(run(&mut engine, &[], true)), "three\n");
+        let mut runtime = engine.checked_runtime_types().unwrap();
+        runtime
+            .checked
+            .as_mut()
+            .unwrap()
+            .noalloc
+            .insert(path("make"));
+        assert_eq!(
+            trapped(run_with(&mut engine, &[], runtime)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+    });
+}
+
+#[test]
+fn borrowed_protocol_single_yield_composes_the_original_source() {
+    let source = r#"
+@loop_source(open, next)
+type View { source: String }
+type Cursor { source: String }
+fn view(s: String) -> View in s { View(source: copy s) }
+fn open(v: View) -> Cursor in v { Cursor(source: copy v.source) }
+fn next(mut c: Cursor) -> Option[String] in c { Some(copy c.source) }
+fn first(s: String) -> String in s {
+  for piece in view(s) { return copy piece }
+  s
+}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, first("a"))
+  Ok(())
+}
+"#;
+    let mut engine = accepted(source);
+    assert_eq!(printed(run(&mut engine, &[], false)), "a");
+    assert_eq!(printed(run(&mut engine, &[], true)), "a");
+}
+
+#[test]
+fn borrowed_protocol_lifetime_transfer_requires_the_published_receipt() {
+    let source = include_str!("../../../../conformance/SEM/SEM-4-contract6-borrowed-run.hir");
+    let mut engine = accepted(source);
+    let mut first = lowered(&mut engine, "first");
+    assert_eq!(printed(run(&mut engine, &[], true)), "a\n");
+    first.protocol_associations[0].association.fingerprint = Default::default();
+    assert!(validator_rejects(&mut engine, &first));
+    assert_eq!(
+        trapped(run(&mut engine, &[first], true)),
+        TrapRule::RegionUseAfterScopeExit
+    );
+}
+
+// Independent of std@1/uri: borrowed String -> unique -> constructor -> return.
+const UNIQUE_CONSTRUCTOR: &str = r#"
+type Wrapped { text: String }
+fn wrap(text: String) -> Wrapped { Wrapped(text: unique text) }
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s: String = "x"
+  let w = wrap(s)
+  let _ = out.print(io.stdout(rt)?, w.text)
+  Ok(())
+}
+"#;
+
+#[test]
+fn a_borrowed_string_copied_into_a_constructor_still_cannot_escape() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(UNIQUE_CONSTRUCTOR);
+        let mut wrap = lowered(&mut engine, "wrap");
+        let mut replaced = 0;
+        for body in &mut wrap.bodies {
+            for rvalue in &mut body.rvalues {
+                if let hirsel_tir::Rvalue::Unary {
+                    op: hirsel_syntax::UnaryOp::Unique,
+                    value,
+                } = rvalue
+                {
+                    // An ordinary counted share retains the own-root loan.
+                    *rvalue = hirsel_tir::Rvalue::Use(value.clone());
+                    replaced += 1;
+                }
+            }
+        }
+        assert_eq!(replaced, 1);
+        assert_eq!(printed(run(&mut engine, &[wrap.clone()], false)), "x");
+        assert_eq!(
+            trapped(run(&mut engine, &[wrap.clone()], true)),
+            TrapRule::RegionUseAfterScopeExit
+        );
+        assert!(validator_rejects(&mut engine, &wrap));
+    });
+}

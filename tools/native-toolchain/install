@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Install the LLVM pin in llvm-21.lock.
+#
+#   install                 print the pinned apt.llvm.org commands (the default; changes nothing)
+#   install --run           run them; needs root and changes the system
+#   install --unpack DIR    verify each locked .deb and unpack it under DIR with `dpkg -x`,
+#                           without root; prints the environment that selects it
+#   install --source        print the pinned source build (shared libLLVM, X86 and AArch64)
+#
+# Every .deb is checked against its locked SHA-256 and size before it is used.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+lock="$here/llvm-21.lock"
+
+fail() { echo "native-toolchain install: $*" >&2; exit 1; }
+usage() { echo "usage: install [--run | --unpack DIR | --source]" >&2; exit 2; }
+
+lock_value() {
+  local value
+  value="$(awk -v k="$1" '$1 == k { sub(/^[^ ]+ /, ""); print; found = 1 } END { exit !found }' "$lock")" \
+    || fail "llvm-21.lock has no '$1' record"
+  printf '%s\n' "$value"
+}
+
+apt_version="$(lock_value apt_version)"
+mapfile -t packages < <(awk '$1 == "deb" { print $2 }' "$lock")
+
+apt_commands() {
+  local pinned=() package
+  for package in "${packages[@]}"; do pinned+=("$package=$apt_version"); done
+  cat <<EOF
+install -d -m 0755 /etc/apt/keyrings
+curl -fsSL $(lock_value apt_key_url) -o /etc/apt/keyrings/apt.llvm.org.asc
+echo '$(lock_value apt_source)' | sed 's|^deb |deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] |' > /etc/apt/sources.list.d/llvm-21.list
+apt-get update
+apt-get install -y --no-install-recommends ${pinned[*]}
+apt-mark hold ${packages[*]}
+EOF
+}
+
+# Prints the path of a verified copy of one locked .deb, fetching it into $2 when the apt
+# cache has no copy.
+verified_deb() {
+  local package="$1" downloads="$2" arch sha size name file
+  read -r _ _ arch sha size < <(awk -v p="$package" '$1 == "deb" && $2 == p' "$lock")
+  name="${package}_${apt_version#*:}_${arch}.deb"
+  file="/var/cache/apt/archives/${package}_${apt_version/:/%3a}_${arch}.deb"
+  if [[ ! -f "$file" ]]; then
+    file="$downloads/$name"
+    curl -fsSL "$(lock_value apt_pool)/$name" -o "$file" || fail "could not download $name"
+  fi
+  [[ "$(stat -c %s "$file")" == "$size" ]] || fail "$file is not $size bytes"
+  [[ "$(sha256sum "$file" | cut -d ' ' -f 1)" == "$sha" ]] || fail "$file does not have SHA-256 $sha"
+  printf '%s\n' "$file"
+}
+
+case "${1:-}" in
+  "")
+    (( $# == 0 )) || usage
+    echo "# Run as root to install the pin; then run tools/native-toolchain/check."
+    apt_commands
+    ;;
+  --run)
+    (( $# == 1 )) || usage
+    [[ "$(id -u)" == 0 ]] || fail "--run changes the system and needs root; run 'install' to see the commands"
+    bash -euo pipefail -c "$(apt_commands)"
+    ;;
+  --unpack)
+    (( $# == 2 )) || usage
+    command -v dpkg > /dev/null || fail "--unpack needs dpkg"
+    mkdir -p "$2"
+    root="$(cd "$2" && pwd)"
+    downloads="$(mktemp -d)"
+    trap 'rm -rf "$downloads"' EXIT
+    for package in "${packages[@]}"; do
+      dpkg -x "$(verified_deb "$package" "$downloads")" "$root"
+    done
+    llvm_prefix="$root$(lock_value prefix)"
+    "$here/check" --prefix "$llvm_prefix"
+    echo "export LLVM_SYS_211_PREFIX=$llvm_prefix"
+    echo "export LD_LIBRARY_PATH=$root/usr/lib/x86_64-linux-gnu\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+    ;;
+  --source)
+    (( $# == 1 )) || usage
+    cat <<EOF
+# The pinned source build: LLVM, clang and lld with a shared libLLVM-21.so.
+curl -fsSLO $(lock_value source_url)
+echo '$(lock_value source_sha256)  llvm-project-$(lock_value llvm_version).src.tar.xz' | sha256sum -c -
+tar xf llvm-project-$(lock_value llvm_version).src.tar.xz
+cmake -S llvm-project-$(lock_value llvm_version).src/llvm -B build -G Ninja \\
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="\$PREFIX" \\
+  -DLLVM_ENABLE_PROJECTS='clang;lld' -DLLVM_TARGETS_TO_BUILD='X86;AArch64' \\
+  -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON
+cmake --build build --target install
+tools/native-toolchain/check --prefix "\$PREFIX"
+EOF
+    ;;
+  *) usage ;;
+esac

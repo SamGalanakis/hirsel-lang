@@ -1,0 +1,26 @@
+// rule: PROV-4
+// expect: accept
+// A unique value extracted from a mixed join may be used locally, and one
+// extracted from a join of heap values is global.
+fn local_use(a: Arena, c: bool) -> u64 {
+  let x: String in a = "x"
+  let y: String = "y"
+  let s = if c {
+    x
+  } else {
+    y
+  }
+  let u = unique s
+  string.byte_len(u)
+}
+
+fn heap_join(c: bool) -> String {
+  let x: String = copy_to(heap, "x")
+  let y: String = "y"
+  let s = if c {
+    x
+  } else {
+    y
+  }
+  unique s
+}

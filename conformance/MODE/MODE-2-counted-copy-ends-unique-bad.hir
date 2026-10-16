@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+@noalloc
+fn need(mut x: unique String) -> ()
+
+fn outer(take x: unique String) -> () {
+  let mut owned = take x
+  let copied = copy owned
+  need(mut owned)
+}

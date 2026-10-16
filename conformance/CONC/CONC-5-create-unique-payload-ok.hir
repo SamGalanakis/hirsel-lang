@@ -1,0 +1,8 @@
+// rule: CONC-5
+// expect: accept
+// Mutex creation requires a unique value "for sendable T".
+fn make(tasks: Tasks) -> () {
+  let xs: List[u32] = [1]
+  let retained: u32 = 1
+  let m: Mutex[List[u32]] = mutex.create(tasks, take xs)
+}

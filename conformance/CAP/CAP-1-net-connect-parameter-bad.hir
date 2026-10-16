@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 4
+pub fn probe() {
+  let _ = net.connect("example.com", 80u16, Unbounded())
+}

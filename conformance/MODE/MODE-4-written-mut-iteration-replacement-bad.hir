@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 7
+fn put(mut xs: sendable List[String], take y: String) -> () {
+  for x in mut xs {
+    x = copy y
+  }
+}

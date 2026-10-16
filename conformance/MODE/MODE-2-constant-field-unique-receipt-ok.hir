@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: accept
+type R {
+  xs: unique List[Bytes],
+}
+
+const C: R = R(xs: [b"x"])
+
+fn freeze(take xs: unique List[Bytes]) {}
+
+fn probe() {
+  freeze(unique (C).xs)
+}

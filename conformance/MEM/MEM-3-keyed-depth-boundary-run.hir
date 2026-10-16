@@ -1,0 +1,30 @@
+// rule: MEM-3
+// expect: run
+// stdout: boundary
+// 543 Link/box pairs plus End/Some reach exactly 1,088 edges.
+type Chain = End(value: Option[u64]) | Link(next: box Chain)
+
+fn boundary() -> Chain {
+  let mut c: Chain = End(value: Some(0u64))
+  for i in 0u64..543u64 {
+    c = Link(next: box take c)
+  }
+  take c
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let key = boundary()
+  let mut m: Map[Chain, u64] = map.empty()
+  map.insert(mut m, key, 7)
+  let found = map.get(m, key)
+  let hit = match found {
+    Some(value) => value == 7u64,
+    None => false,
+  }
+  let mut s: Set[Chain] = set.empty()
+  set.insert(mut s, copy key)
+  if hit && set.contains(s, key) {
+    let _ = out.print(io.stdout(rt)?, "boundary\n")
+  }
+  Ok(())
+}

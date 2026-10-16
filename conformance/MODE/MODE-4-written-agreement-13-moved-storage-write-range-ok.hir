@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+// Regression from expression/closure-call; TIR/TypeMismatch/call result.
+type R {
+  n: Bytes,
+}
+
+fn probe() {
+  let mut r = fn() {
+    R(n: b"old")
+  }()
+}

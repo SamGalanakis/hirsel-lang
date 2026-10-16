@@ -1,0 +1,39 @@
+// rule: FAIL-4
+// expect: run
+// stdout: ok
+// "A failure ... kills that mutex"; a normal body permits later acquisition.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let initial: u8 = 0
+  let m = mutex.create(tasks, take initial)
+  mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u8) -> () uses {} {
+      value = 7
+    }
+  )
+  let outcome: u8 = mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u8) -> u8 uses {} {
+      value
+    }
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outcome == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,7 @@
+// rule: LANG-6
+// expect: accept
+// Shows "No part of a signature is ever inferred from a body."
+@noalloc
+fn example(x: u32) {
+  ()
+}

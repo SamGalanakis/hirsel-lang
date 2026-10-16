@@ -1,0 +1,23 @@
+{
+  "baseline_executable": 444,
+  "baseline_minus_native_unlisted": [],
+  "command": "cargo run --release -p hirsel-conformance --bin native -- --full",
+  "configurations": 42,
+  "excluded": {
+    "compiler-error": 2,
+    "native-unavailable": 6
+  },
+  "generated_cases": 128,
+  "heap_pass": 440,
+  "llvm_pass": 440,
+  "matrix_version": 1,
+  "max_rss_kib": 674760,
+  "mismatch_artifacts_replayed": 0,
+  "mismatching_cases_reduced": 0,
+  "observation_schema": 1,
+  "stale_exclusions": [],
+  "topology_cases": 23,
+  "topology_partitions": 22,
+  "tree": "2b9a2e20",
+  "wall_seconds": 1157.45
+}

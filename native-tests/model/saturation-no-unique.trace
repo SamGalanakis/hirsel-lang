@@ -1,0 +1,11 @@
+rc-trace v1
+max 3
+# Once Immortal, a block never passes the uniqueness test again (T05 is rejected), even
+# with a single remaining holder.
+alloc r1 1
+alloc r2 0
+dup r1 r3
+dup r3 r4
+drop r3
+drop r4
+write r1 0 r2

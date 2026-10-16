@@ -1,0 +1,7 @@
+// rule: SEM-5
+// expect: accept
+fn probe(mut m: Map[u8, u8]) {
+  for (k, v) in mut m {
+    v = 3
+  }
+}

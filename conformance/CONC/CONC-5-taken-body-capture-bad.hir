@@ -1,0 +1,13 @@
+// rule: CONC-5
+// expect: reject CONC-5 at line 10
+// "the body holds no authority, so it cannot block, do I/O, take another lock or use a channel".
+// Passing the body literal with take does not change the parameter it is built for.
+fn replace(tasks: Tasks, m: Mutex[List[u32]], d: Dir) -> () {
+  mutex.with(
+    tasks,
+    m,
+    take fn(mut value: unique List[u32]) {
+      let held = d
+    }
+  )
+}

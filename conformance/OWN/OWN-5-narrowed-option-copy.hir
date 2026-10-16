@@ -1,0 +1,12 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 7
+fn probe(rt: Io) -> Result[(), FileError] {
+  let d = io.dir(rt, path.of("."))?
+  let f = file.open(d, path.of("a.txt"))?
+  let narrowed = file.narrow(d, take f)
+  let _ = match copy narrowed {
+    Some(h) => (),
+    None => (),
+  }
+  Ok(())
+}

@@ -1,0 +1,31 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+flat type Items {
+  items: List[Item],
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs = Items(items: [Item(text: "a", n: 1)])
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if list.len(xs.items) == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

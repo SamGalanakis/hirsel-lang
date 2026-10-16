@@ -1,0 +1,15 @@
+// rule: MEM-10
+// expect: run
+fn pick(xs: List[Bytes], x: Bytes) -> Bytes in {xs, x} {
+  for e in xs {
+    return e
+  }
+  {
+    let agree_tail: List[Bytes] = [x]
+    agree_tail[0]
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

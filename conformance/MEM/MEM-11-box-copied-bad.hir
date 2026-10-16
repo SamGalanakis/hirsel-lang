@@ -1,0 +1,6 @@
+// rule: MEM-11
+// expect: reject MEM-11 at line 5
+fn probe(take xs: unique List[Bytes]) {
+  let built: box List[Bytes] = box copy xs
+  let frozen: Shared[box List[Bytes]] = shared.freeze(take built)
+}

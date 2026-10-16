@@ -1,0 +1,19 @@
+// rule: MEM-3
+// expect: fail MEM-3 at line 17
+// A keyed read of an empty set still hashes its key (#90).
+type Chain = End(value: Option[u64]) | Link(next: box Chain)
+
+fn chain(depth: u64) -> Chain {
+  let mut c: Chain = End(value: None)
+  for i in 0..depth {
+    c = Link(next: box take c)
+  }
+  take c
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let s: Set[Chain] = set.empty()
+  let deep = chain(544)
+  let found = set.contains(s, deep)
+  Ok(())
+}

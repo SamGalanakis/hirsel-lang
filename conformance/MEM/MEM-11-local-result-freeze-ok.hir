@@ -1,0 +1,13 @@
+// rule: MEM-11
+// expect: accept
+fn view(x: List[Bytes]) -> List[Bytes] in x {
+  x
+}
+
+fn stash(mut xs: List[List[Bytes]], take v: List[Bytes]) -> () {
+  list.push(mut xs, take v)
+}
+
+fn example(take x: unique List[Bytes], mut xs: List[List[Bytes]]) -> Shared[List[Bytes]] {
+  shared.freeze(take x)
+}

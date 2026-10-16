@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 10
+// The copies are aliased, so the relayed pair cannot be declared to hold
+// unique parts.
+fn relay[U](take x: U) -> U {
+  x
+}
+
+fn owned[T: copyable](take x: unique T) -> (unique T, unique T) {
+  relay((copy x, copy x))
+}

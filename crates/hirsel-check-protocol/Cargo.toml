@@ -1,0 +1,17 @@
+[package]
+name = "hirsel-check-protocol"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Existing consumer tests retain every moved protocol/helper control.
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+hirsel-span = { path = "../hirsel-span" }
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-types = { path = "../hirsel-types" }

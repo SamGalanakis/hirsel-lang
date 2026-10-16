@@ -1,0 +1,5 @@
+// rule: LANG-1
+// expect: reject LANG-1 at line 5
+// Shows "No methods, no use, no conditional operator, no test sublanguage."
+@noalloc
+fn identity<T>(take x: T) -> T { x }

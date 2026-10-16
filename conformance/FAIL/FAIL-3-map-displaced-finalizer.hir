@@ -1,0 +1,27 @@
+// rule: FAIL-3
+// expect: fail SEM-1 at line 15
+// stdout: old
+// stdout: new
+// stdout: keep
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+  bad: bool,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+  if x.bad {
+    let z: i32 = 0
+    let _ = 1 / z
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let keep = Trace(stdout: o, text: "keep\n", bad: false)
+  let mut m: Map[u8, Trace] = map.empty()
+  map.insert(mut m, 1, Trace(stdout: o, text: "old\n", bad: true))
+  map.insert(mut m, 1, Trace(stdout: o, text: "new\n", bad: false))
+  let _ = out.print(o, "unreachable\n")
+  Ok(())
+}

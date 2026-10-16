@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn probe(a: Arena, x: Bytes in a) -> unique Bytes in a {
+  unique x
+}

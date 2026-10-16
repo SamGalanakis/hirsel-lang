@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: accept
+// A counted copy is aliased. A type argument inferred from a tuple of
+// copies describes aliased parts, not the unique parameter they were read from.
+fn second[U](x: U) -> () {
+  ()
+}
+
+fn relay[U](take x: U) -> U {
+  x
+}
+
+fn first[T: copyable](x: unique T) -> () {
+  second((copy x, copy x))
+}
+
+fn owned[T: copyable](take x: unique T) -> (T, T) {
+  relay((copy x, copy x))
+}

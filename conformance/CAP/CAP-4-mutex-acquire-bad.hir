@@ -1,0 +1,11 @@
+// rule: CAP-4
+// expect: reject CAP-4 at line 5
+// "Every atomic operation and every mutex acquisition takes the Tasks capability".
+fn operation(tasks: Tasks, m: Mutex[u32]) -> () {
+  mutex.with(
+    m,
+    fn(mut value: unique u32) {
+      ()
+    }
+  )
+}

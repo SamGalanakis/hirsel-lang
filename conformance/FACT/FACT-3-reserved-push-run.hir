@@ -1,0 +1,101 @@
+// rule: FACT-3
+// expect: run
+// stdout: ok
+// exit: 0
+// "An implementation may remove a check it proves cannot fail; that changes
+// cost only." A push per index below a fresh list's reservation appends
+// without its capacity test; conditional pushes, breaks, a copy taken before
+// the loop and lists rebuilt in an outer loop keep their contents, and pushes
+// past the reservation still grow.
+fn output_error[E](take e: E) -> () {}
+
+fn bytes_below(n: u64) -> bool {
+  let mut payload: List[u8] = []
+  list.reserve(mut payload, n)
+  for j in 0u64..n {
+    list.push(mut payload, int.narrow(97u64 + (n + j * 7u64) % 26u64))
+  }
+  let last: u8 = if n == 0u64 {
+    0u8
+  } else {
+    payload[n - 1u64]
+  }
+  let first: u8 = if n == 0u64 {
+    97u8
+  } else {
+    payload[0]
+  }
+  list.len(payload) == n && first == 97u8 + int.narrow(n % 26u64) && (n == 0u64 || last == int.narrow(
+    97u64 + (n + (n - 1u64) * 7u64) % 26u64
+  ))
+}
+
+type Row {
+  id: u64,
+  name: String,
+}
+
+fn rows_below(n: u64) -> bool {
+  let mut rows: List[Row] = []
+  list.reserve(mut rows, n)
+  for j in 0u64..n {
+    list.push(mut rows, Row(id: j, name: "row"))
+  }
+  list.len(rows) == n && rows[n - 1u64].id == n - 1u64 && rows[0].name == "row"
+}
+
+fn conditional_rebuilt() -> bool {
+  let mut total: u64 = 0
+  for k in 0u64..6u64 {
+    let n = k * 5u64
+    let mut xs: List[u64] = []
+    list.reserve(mut xs, n)
+    for j in 0u64..n {
+      if j % 3u64 != 1u64 {
+        list.push(mut xs, j + k)
+      }
+      if j == 20u64 {
+        break
+      }
+    }
+    total = total + list.len(xs)
+  }
+  total == 47u64
+}
+
+fn shared_before() -> bool {
+  let mut xs: List[u64] = []
+  list.reserve(mut xs, 30)
+  let saved = copy xs
+  for j in 0u64..30u64 {
+    list.push(mut xs, j)
+  }
+  list.len(xs) == 30u64 && xs[29] == 29u64 && list.len(saved) == 0u64
+}
+
+fn past_reservation() -> bool {
+  let mut xs: List[u64] = []
+  list.reserve(mut xs, 4)
+  for j in 0u64..100u64 {
+    list.push(mut xs, j)
+  }
+  list.len(xs) == 100u64 && xs[99] == 99u64
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let ok = bytes_below(0) && bytes_below(1) && bytes_below(127) && rows_below(33) && conditional_rebuilt() && shared_before() && past_reservation()
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

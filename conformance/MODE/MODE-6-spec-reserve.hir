@@ -1,0 +1,16 @@
+// rule: MODE-6
+// expect: accept
+// "Tx is a scoped capability ... it cannot leave the body" (the spec’s transaction example).
+pub fn reserve(db: Db, sku: Sku, n: u32) -> Result[Reservation, TxFailure[StockError]] {
+  store.transact(
+    db,
+    fn(tx: Tx) {
+      let have = stock.get(tx, sku)?
+      if have < n {
+        return Error(OutOfStock(sku))
+      }
+      stock.put(tx, sku, have - n)?
+      Ok(reservations.insert(tx, Reservation(sku: sku, count: n))?)
+    }
+  )
+}

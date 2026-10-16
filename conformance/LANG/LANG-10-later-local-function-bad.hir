@@ -1,0 +1,13 @@
+// rule: LANG-10
+// expect: reject LANG-10 at line 7
+// Shows "Only top-level definitions recurse; local fns cannot refer to themselves or later locals."
+// Local function signatures allow allocation by default (#2).
+fn example(n: u32) -> u32 {
+  fn first(x: u32) -> u32 {
+    second(x)
+  }
+  fn second(x: u32) -> u32 {
+    x
+  }
+  first(n)
+}

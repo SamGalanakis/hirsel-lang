@@ -1,0 +1,20 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 16
+// "no block may be constructed whose destination may be the counted heap"
+// Returning the local list itself from a `@noalloc` closure sends its block to
+// the caller, so its construction may reach the counted heap.
+@noalloc
+fn invoke(f: @noalloc fn() -> List[u64] uses {}) -> u64 {
+  let n = f()
+  n[0]
+}
+
+@noalloc
+fn example() -> u64 {
+  invoke(
+    fn() {
+      let n: List[u64] = [7]
+      n
+    }
+  )
+}

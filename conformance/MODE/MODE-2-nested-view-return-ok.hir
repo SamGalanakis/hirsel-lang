@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: accept
+fn build() -> box List[Bytes] {
+  let xs: List[Bytes] = [b"x"]
+  let built = box unique xs
+  take built
+}

@@ -1,0 +1,21 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 19
+// The record inside `xs` holds the view of `s` and is read after the `mut`,
+// so the loan on `s` is live there (§04).
+type R {
+  name: String,
+}
+
+fn view(x: String) -> String in x {
+  copy x
+}
+
+fn bump(mut x: String) {
+  ()
+}
+
+fn count(mut s: String) -> u64 {
+  let xs: List[R] = [R(name: view(s))]
+  bump(mut s)
+  string.byte_len(xs[0].name)
+}

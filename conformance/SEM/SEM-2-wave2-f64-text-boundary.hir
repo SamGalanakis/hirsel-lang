@@ -1,0 +1,37 @@
+// rule: SEM-2
+// expect: run
+@noalloc
+fn parsed_bits(t: Test, text: String, expected: u64) -> () {
+  match std@1/f64.parse(text) {
+    Ok(value) => core@1/test.check(t, core@1/f64.bits(value) == expected),
+    Error(_) => core@1/test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  core@1/test.check(t, std@1/f64.to_string(core@1/f64.from_bits(0u64)) == "0")
+  parsed_bits(t, "0", 0u64)
+  core@1/test.check(
+    t,
+    std@1/f64.to_string(core@1/f64.from_bits(9223372036854775808u64)) == "-0"
+  )
+  parsed_bits(t, "-0", 9223372036854775808u64)
+  core@1/test.check(
+    t,
+    std@1/f64.to_string(core@1/f64.from_bits(9218868437227405312u64)) == "inf"
+  )
+  parsed_bits(t, "inf", 9218868437227405312u64)
+  core@1/test.check(
+    t,
+    std@1/f64.to_string(core@1/f64.from_bits(18442240474082181120u64)) == "-inf"
+  )
+  parsed_bits(t, "-inf", 18442240474082181120u64)
+  core@1/test.check(
+    t,
+    std@1/f64.to_string(core@1/f64.from_bits(9221120237041090560u64)) == "NaN"
+  )
+  parsed_bits(t, "NaN", 9221120237041090560u64)
+  parsed_bits(t, "-1e-10000", 9223372036854775808u64)
+  parsed_bits(t, "0e999999999999999999999999999999", 0u64)
+  Ok(())
+}

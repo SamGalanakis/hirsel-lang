@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 16
+fn sink(x: sendable Bytes) {}
+
+fn pass[T: copyable](x: T) -> T in x {
+  copy x
+}
+
+fn probe() {
+  let x: sendable Bytes = b"a"
+  let f = fn() {
+    sink(x)
+  }
+  let g = pass(f)
+  let alias = copy x
+  g()
+}

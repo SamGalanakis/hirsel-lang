@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: accept
+fn example() -> () {
+  let _ = fn(x: String) {
+    ()
+  }
+}

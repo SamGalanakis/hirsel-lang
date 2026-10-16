@@ -1,0 +1,23 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 21
+// A closure that returns the result of a captured closure local to its
+// environment returns content local to the same environment, which a take
+// parameter cannot keep. The accepted twin uses that result in place.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn keep(take b: Bytes) {}
+
+fn pairs(p: Bytes) {
+  let xs: List[(u64, Bytes)] = [(1, view(p))]
+  for (n, v) in take xs {
+    let f = fn() {
+      v
+    }
+    let h = fn() {
+      f()
+    }
+    keep(h())
+  }
+}

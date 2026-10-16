@@ -1,0 +1,18 @@
+[package]
+name = "hirsel-rc"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-diag = { path = "../hirsel-diag" }
+hirsel-lir = { path = "../hirsel-lir" }
+hirsel-span = { path = "../hirsel-span" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-types = { path = "../hirsel-types" }
+
+[dev-dependencies]
+hirsel-heapcheck = { path = "../hirsel-heapcheck" }

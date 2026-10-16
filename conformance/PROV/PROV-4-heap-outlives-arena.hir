@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: accept
+// "heap outlives every arena."
+fn store(a: Arena, mut dst: Bytes in a, take src: Bytes in a) -> () {
+  dst = take src
+}
+
+fn example() -> () {
+  arena.with(
+    fn(a: Arena) {
+      let mut dst: Bytes in a = b"arena"
+      let heap_value: Bytes in heap = b"heap"
+      store(a, mut dst, take heap_value)
+    }
+  )
+}

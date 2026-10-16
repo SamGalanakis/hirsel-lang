@@ -1,0 +1,10 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 5
+// "tasks" arrive "only as typed parameters".
+pub fn launch() -> () {
+  task.scope(
+    fn(s: Scope) {
+      ()
+    }
+  )
+}

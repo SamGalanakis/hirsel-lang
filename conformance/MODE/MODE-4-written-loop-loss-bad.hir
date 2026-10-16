@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 9
+fn sink(x: sendable Bytes) {}
+
+fn probe(take x: sendable Bytes, again: bool) {
+  while again {
+    let alias = copy x
+  }
+  sink(x)
+}

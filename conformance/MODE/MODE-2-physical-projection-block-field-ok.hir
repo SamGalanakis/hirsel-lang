@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: accept
+type R {
+  xs: unique List[Bytes],
+}
+
+fn probe(take r: R) {
+  let built = copy {
+    r
+  }.xs
+}

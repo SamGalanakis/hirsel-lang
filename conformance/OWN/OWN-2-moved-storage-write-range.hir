@@ -1,0 +1,13 @@
+// rule: OWN-2
+// expect: accept
+type R {
+  n: Bytes,
+}
+
+fn probe() {
+  let mut r = R(n: b"old")
+  for i in 0u8..3u8 {
+    r = R(n: b"new")
+    let x = take r
+  }
+}

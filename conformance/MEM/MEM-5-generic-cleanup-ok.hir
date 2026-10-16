@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn discard[T: noalloc_drop](take x: T) -> () {
+  ()
+}

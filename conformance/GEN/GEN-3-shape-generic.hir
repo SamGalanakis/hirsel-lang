@@ -1,0 +1,8 @@
+// rule: GEN-3
+// expect: accept
+// Shows "shape(T) describes a type’s fields and variants as a value."
+fn example[T](x: T) -> () {
+  let _ = shape(T)
+  ()
+}
+// Reserved for future compile-time reflection: spec v21 "Reserved for future compile-time features".

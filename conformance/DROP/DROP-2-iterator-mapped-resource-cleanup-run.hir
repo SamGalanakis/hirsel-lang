@@ -1,0 +1,31 @@
+// rule: DROP-2
+// expect: run
+// stdout: pulled
+// stdout: mapped
+// stdout: remaining
+// The pulled item leaves the iterator before the mapper runs. Its returned
+// resource is dropped before the iterator's remaining captured state.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn step(mut state: Trace) -> Option[Trace] {
+  Some(Trace(stdout: state.stdout, text: "pulled\n"))
+}
+
+fn mapper(x: Trace) -> Trace {
+  Trace(stdout: x.stdout, text: "mapped\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s = io.stdout(rt)?
+  let state = Trace(stdout: s, text: "remaining\n")
+  let inner = iter.from(take state, step)
+  let mut mapped = iter.map(take inner, mapper)
+  let _ = iter.next(mut mapped)
+  Ok(())
+}

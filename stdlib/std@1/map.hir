@@ -1,0 +1,30 @@
+// Equality ignores insertion order and borrows all entries, including opaque data.
+@noalloc
+pub fn same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool {
+  let mut a_count: u64 = 0
+  let mut b_count: u64 = 0
+  for _ in a {
+    a_count += 1
+  }
+  for _ in b {
+    b_count += 1
+  }
+  if a_count != b_count {
+    return false
+  }
+  // map.get returns an owned V, whose opaque destruction contract need not
+  // promise noalloc_drop. Borrowed scans retain the original data-only bound.
+  for entry in a {
+    let mut found: bool = false
+    for other in b {
+      if entry == other {
+        found = true
+        break
+      }
+    }
+    if !found {
+      return false
+    }
+  }
+  true
+}

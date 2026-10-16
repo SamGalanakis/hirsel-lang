@@ -1,0 +1,17 @@
+// rule: CONC-2
+// expect: accept
+// "Every task handle is awaited or explicitly detached".
+fn launch(tasks: Tasks) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          ()
+        }
+      )
+      task.detach(s, take h)
+    }
+  )
+}

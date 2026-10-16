@@ -1,0 +1,22 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 19
+// "A value in a cannot outlive a."
+// A tree that a callee builds in its caller's arena lives in that arena, so
+// the arena.with callback cannot return it without copying it out.
+type Tree = Leaf | Branch(left: box Tree, right: box Tree)
+
+fn tree(a: Arena, depth: u64) -> (box Tree) in a {
+  if depth == 0u64 {
+    box Leaf()
+  } else {
+    box Branch(left: tree(a, depth - 1u64), right: tree(a, depth - 1u64))
+  }
+}
+
+fn kept() -> box Tree {
+  arena.with(
+    fn(a: Arena) -> box Tree {
+      tree(a, 3u64)
+    }
+  )
+}

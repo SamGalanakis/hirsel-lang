@@ -1,0 +1,17 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 15
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut xs: List[Trace] = [Trace(stdout: stdout, text: "old\n")]
+  let i: u64 = 7
+  xs[i] = Trace(stdout: stdout, text: "new\n")
+  Ok(())
+}

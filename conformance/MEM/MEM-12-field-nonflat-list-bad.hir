@@ -1,0 +1,10 @@
+// rule: MEM-12
+// expect: reject MEM-12 at line 8
+// "with no pointers"; "List of flat elements".
+type Item {
+  text: String,
+}
+
+flat type Value {
+  field: List[Item],
+}

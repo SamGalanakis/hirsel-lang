@@ -1,0 +1,6 @@
+// rule: CLO-1
+// expect: accept
+// "A scoped closure cannot be ... returned."
+fn example(take action: fn() -> () uses {}) -> fn() -> () uses {} in action {
+  take action
+}

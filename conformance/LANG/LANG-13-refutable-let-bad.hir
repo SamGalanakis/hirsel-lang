@@ -1,0 +1,8 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 6
+// Shows "Refutable patterns appear only in match"
+@noalloc
+fn example(x: Option[u32]) -> u32 {
+  let Some(n) = x
+  n
+}

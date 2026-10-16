@@ -1,0 +1,8 @@
+rc-trace v1
+max 16
+# T14 dispose shallow-frees raw storage without a scan or a second finalizer.
+alloc r1 0 fin
+reset r1 t1
+finalize ok
+drain
+dispose t1

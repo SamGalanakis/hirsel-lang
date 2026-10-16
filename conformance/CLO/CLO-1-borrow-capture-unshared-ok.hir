@@ -1,0 +1,12 @@
+// rule: CLO-1
+// expect: accept
+fn one(b: String) -> u64 {
+  1
+}
+
+fn example() -> u64 {
+  let a: String = "shared"
+  fn() {
+    one(a)
+  }()
+}

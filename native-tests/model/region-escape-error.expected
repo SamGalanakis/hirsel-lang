@@ -1,0 +1,13 @@
+rc-trace v1 max 16
+error at step 3 (line 6): T23 region-close: a local reference into region g1 is still live
+heap
+  @0 live gen 1 uncounted region g1 arity 0
+credits
+borrows
+locals
+  l1 -> @0#1
+tokens
+work
+regions
+  g1 blocks [@0]
+events

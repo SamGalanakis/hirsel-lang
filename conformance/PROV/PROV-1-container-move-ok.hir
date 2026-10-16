@@ -1,0 +1,13 @@
+// rule: PROV-1
+// expect: accept
+// "Moving ... the container ends [its brand]."
+fn inspect(s: Slots[u64], id: SlotId[u64] of s) -> () {
+  let _ = slots.get(s, id)
+}
+
+fn example(take s: Slots[u64]) -> () {
+  let mut owned = take s
+  let item: u64 = 1
+  let id = slots.insert(mut owned, take item)
+  inspect(owned, id)
+}

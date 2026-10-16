@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 8
+fn need(mut x: unique Bytes) {}
+
+fn probe() {
+  let mut slot: Bytes = b"fresh"
+  let alias = copy slot
+  need(mut slot)
+}

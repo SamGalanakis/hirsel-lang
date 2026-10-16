@@ -1,0 +1,7 @@
+// rule: PROG-2
+// expect: accept
+fn main(s: String) {
+  for piece in vendor.view_value(s) {
+    let n = string.byte_len(piece)
+  }
+}

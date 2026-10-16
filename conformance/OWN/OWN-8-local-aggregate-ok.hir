@@ -1,0 +1,20 @@
+// rule: OWN-8
+// expect: accept
+// Parts live in their owner's locality, so an aggregate built from a local
+// operand is itself local.
+type Rec {
+  items: Bytes,
+}
+
+fn count(r: Rec) -> u64 {
+  1
+}
+
+fn example(x: Bytes) -> u64 {
+  let r = Rec(items: copy x)
+  count(r)
+}
+
+fn view(x: Bytes) -> Rec in x {
+  Rec(items: x)
+}

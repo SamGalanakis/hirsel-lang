@@ -1,0 +1,9 @@
+// rule: PROV-2
+// expect: accept
+// "A closure’s result may not be ... of the closure’s own parameters."
+fn example() -> () {
+  let action = fn(d: Dir, take value: File of d) -> File {
+    take value
+  }
+  let _ = action
+}

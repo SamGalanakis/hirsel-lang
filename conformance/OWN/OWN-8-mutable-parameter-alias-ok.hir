@@ -1,0 +1,18 @@
+// rule: OWN-8
+// expect: accept
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn observe(x: Trace) -> () {
+  ()
+}
+
+fn probe(mut x: Trace) -> () {
+  let old = x
+  observe(old)
+}

@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "client",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "PROG-2-contract6-private-operations-direct-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/fixtures/contract6@1/hirsel.json",
+      "package": {
+        "name": "contract6",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "vendor",
+          "module": []
+        }
+      ]
+    }
+  ]
+}

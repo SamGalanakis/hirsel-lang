@@ -1,0 +1,13 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 11
+resource type Token {
+  n: u32,
+}
+drop(x) {
+  ()
+}
+
+@noalloc
+fn discard(take x: Token) -> () {
+  ()
+}

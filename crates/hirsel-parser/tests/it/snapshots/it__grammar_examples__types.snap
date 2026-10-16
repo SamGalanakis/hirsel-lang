@@ -1,0 +1,64 @@
+---
+source: crates/hirsel-parser/tests/it/grammar_examples.rs
+expression: snapshot
+---
+@layout(c) @align(8) @packed @soa pub type Record[T] { dir: Dir
+ file: File of .dir, items: Inline[T,4] }
+flat type Flat { x: u32 }
+resource type Resource { dir: Dir } drop(x) {}
+distinct type Percent(v: u8) where v <= 100
+type Choice = A | B(u32) | C(x: box Choice)
+type Single = Single()
+type Alias = Map[String,T]
+@capability(global) pub opaque type Cap: plain uses {Cap}
+pub const C: u32 = comptime f()
+
+item 0 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Record" }) Origin { span: Span { file: FileId(0), start: 0, end: 105 }, tokens: TokenRange { start: 0, end: 57 } } TokenRange { start: 0, end: 57 } hash=[2d, ae, 56, 83, 33, ad, 52, a0, 73, 9b, 15, 53, 81, 6c, 9b, 71, ec, 9d, 85, d9, 37, 7e, 5b, 73, 4b, 7e, 71, cf, e6, 82, a8, cf]
+  Public [Attribute { name: Symbol(0), arguments: [Name(Symbol(1))], origin: Origin { span: Span { file: FileId(0), start: 0, end: 10 }, tokens: TokenRange { start: 0, end: 5 } } }, Attribute { name: Symbol(2), arguments: [Integer("8")], origin: Origin { span: Span { file: FileId(0), start: 11, end: 20 }, tokens: TokenRange { start: 6, end: 11 } } }, Attribute { name: Symbol(3), arguments: [], origin: Origin { span: Span { file: FileId(0), start: 21, end: 28 }, tokens: TokenRange { start: 12, end: 14 } } }, Attribute { name: Symbol(4), arguments: [], origin: Origin { span: Span { file: FileId(0), start: 29, end: 33 }, tokens: TokenRange { start: 15, end: 17 } } }]
+  Type { flavor: Ordinary, generics: [GenericParam { name: Symbol(8), kind: Type([]) }], bounds: None, authority: None, body: Record([FieldSyntax { growable: false, name: Symbol(9), ty: TypeExprId(0), origin: Origin { span: Span { file: FileId(0), start: 55, end: 63 }, tokens: TokenRange { start: 29, end: 33 } } }, FieldSyntax { growable: false, name: Symbol(11), ty: TypeExprId(2), origin: Origin { span: Span { file: FileId(0), start: 65, end: 83 }, tokens: TokenRange { start: 35, end: 44 } } }, FieldSyntax { growable: false, name: Symbol(14), ty: TypeExprId(4), origin: Origin { span: Span { file: FileId(0), start: 85, end: 103 }, tokens: TokenRange { start: 46, end: 55 } } }]), drop: None }
+item 1 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Flat" }) Origin { span: Span { file: FileId(0), start: 106, end: 131 }, tokens: TokenRange { start: 58, end: 72 } } TokenRange { start: 57, end: 72 } hash=[f2, d3, b1, 6f, 43, eb, 2a, 67, ff, bc, 83, a3, dd, 21, 60, 74, 52, 49, 93, fd, 21, 83, 18, 95, 1c, 13, 25, 88, ad, 54, 32, 94]
+  Private []
+  Type { flavor: Flat, generics: [], bounds: None, authority: None, body: Record([FieldSyntax { growable: false, name: Symbol(18), ty: TypeExprId(5), origin: Origin { span: Span { file: FileId(0), start: 123, end: 129 }, tokens: TokenRange { start: 66, end: 70 } } }]), drop: None }
+item 2 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Resource" }) Origin { span: Span { file: FileId(0), start: 132, end: 178 }, tokens: TokenRange { start: 73, end: 95 } } TokenRange { start: 72, end: 95 } hash=[61, 6e, d2, 08, e9, 8c, 2b, cb, 5e, a6, 81, 56, 48, b3, 67, 8d, 87, a4, 47, 1d, 26, 60, 7c, b4, 20, cc, 7e, ea, ed, 54, d7, c0]
+  Private []
+  Type { flavor: Resource, generics: [], bounds: None, authority: None, body: Record([FieldSyntax { growable: false, name: Symbol(9), ty: TypeExprId(6), origin: Origin { span: Span { file: FileId(0), start: 157, end: 165 }, tokens: TokenRange { start: 81, end: 85 } } }]), drop: Some(DropSyntax { noalloc: false, binding: Symbol(18), body: ExprId(0) }) }
+item 3 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Percent" }) Origin { span: Span { file: FileId(0), start: 179, end: 222 }, tokens: TokenRange { start: 96, end: 115 } } TokenRange { start: 95, end: 115 } hash=[a8, 23, a7, 71, 19, a6, fa, 7f, 6f, d4, ca, 9c, 85, da, 2a, 05, e5, 32, 12, a6, cf, a8, ad, 69, 72, 0e, ca, 82, c7, c7, 58, ef]
+  Private []
+  Type { flavor: Distinct, generics: [], bounds: None, authority: None, body: Distinct { field: FieldSyntax { growable: false, name: Symbol(25), ty: TypeExprId(7), origin: Origin { span: Span { file: FileId(0), start: 201, end: 206 }, tokens: TokenRange { start: 102, end: 106 } } }, fact: Some(ExprId(3)) }, drop: None }
+item 4 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Choice" }) Origin { span: Span { file: FileId(0), start: 223, end: 266 }, tokens: TokenRange { start: 116, end: 142 } } TokenRange { start: 115, end: 142 } hash=[e6, 68, 62, 76, 88, c6, f2, 9f, 79, a5, 97, 39, 15, ab, a1, 6f, cd, a6, db, 76, b8, 87, 77, 9f, a8, e4, 16, 3b, 38, 1c, f6, ad]
+  Private []
+  Type { flavor: Ordinary, generics: [], bounds: None, authority: None, body: Variants([VariantSyntax { name: Symbol(29), fields: [] }, VariantSyntax { name: Symbol(30), fields: [(None, TypeExprId(8))] }, VariantSyntax { name: Symbol(31), fields: [(Some(Symbol(18)), TypeExprId(10))] }]), drop: None }
+item 5 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Single" }) Origin { span: Span { file: FileId(0), start: 267, end: 289 }, tokens: TokenRange { start: 143, end: 152 } } TokenRange { start: 142, end: 152 } hash=[24, 45, 0a, 28, 0e, 5a, 92, ed, 19, be, 9d, 33, 5e, a7, 7b, 12, 00, 38, 33, d5, 93, 14, e8, cf, 69, 9f, b0, f0, b7, ac, 35, 21]
+  Private []
+  Type { flavor: Ordinary, generics: [], bounds: None, authority: None, body: Variants([VariantSyntax { name: Symbol(33), fields: [] }]), drop: None }
+item 6 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Alias" }) Origin { span: Span { file: FileId(0), start: 290, end: 316 }, tokens: TokenRange { start: 153, end: 165 } } TokenRange { start: 152, end: 165 } hash=[d7, 83, 39, 45, fc, 76, bb, 9f, 5d, ea, e0, 3b, 52, 3a, cd, b0, 90, 7f, d5, 77, 3e, ac, 07, c8, 48, 9a, 1e, c0, c0, 9e, 7f, f9]
+  Private []
+  Type { flavor: Ordinary, generics: [], bounds: None, authority: None, body: Alias(TypeExprId(13)), drop: None }
+item 7 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "Cap" }) Origin { span: Span { file: FileId(0), start: 317, end: 374 }, tokens: TokenRange { start: 166, end: 188 } } TokenRange { start: 165, end: 188 } hash=[bd, 7f, 80, e5, ac, 33, 06, 6c, 87, 75, ef, 0d, 8f, e9, 4a, d3, 17, 7c, 7e, 12, a6, 63, 69, 2d, 72, d8, 18, 1e, 3e, 46, 9f, 83]
+  PublicOpaque [Attribute { name: Symbol(37), arguments: [Keyword(Global)], origin: Origin { span: Span { file: FileId(0), start: 317, end: 336 }, tokens: TokenRange { start: 166, end: 171 } } }]
+  Type { flavor: Ordinary, generics: [], bounds: Some([Plain]), authority: Some([Path { package: None, segments: [Symbol(40)] }]), body: Opaque, drop: None }
+item 8 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "C" }) Origin { span: Span { file: FileId(0), start: 375, end: 406 }, tokens: TokenRange { start: 189, end: 205 } } TokenRange { start: 188, end: 205 } hash=[67, a7, 8a, 02, 16, bc, cd, bb, fb, ea, cb, 91, 65, 67, dc, 66, e1, 63, 84, d3, ae, ec, 0b, ae, 5a, d5, 1d, 28, 7b, 0b, 92, 1b]
+  Public []
+  Const { ty: TypeExprId(14), value: ExprId(6) }
+expr 0 Origin { span: Span { file: FileId(0), start: 176, end: 178 }, tokens: TokenRange { start: 93, end: 95 } }: Block { statements: [], tail: None }
+expr 1 Origin { span: Span { file: FileId(0), start: 214, end: 215 }, tokens: TokenRange { start: 110, end: 111 } }: Path(Path { package: None, segments: [Symbol(25)] })
+expr 2 Origin { span: Span { file: FileId(0), start: 219, end: 222 }, tokens: TokenRange { start: 114, end: 115 } }: Literal(Integer("100"))
+expr 3 Origin { span: Span { file: FileId(0), start: 214, end: 222 }, tokens: TokenRange { start: 110, end: 115 } }: Binary { op: Le, left: ExprId(1), right: ExprId(2) }
+expr 4 Origin { span: Span { file: FileId(0), start: 403, end: 404 }, tokens: TokenRange { start: 202, end: 203 } }: Path(Path { package: None, segments: [Symbol(45)] })
+expr 5 Origin { span: Span { file: FileId(0), start: 403, end: 406 }, tokens: TokenRange { start: 202, end: 205 } }: Call { callee: ExprId(4), arguments: [] }
+expr 6 Origin { span: Span { file: FileId(0), start: 394, end: 406 }, tokens: TokenRange { start: 200, end: 205 } }: Comptime(ExprId(5))
+type 0 Origin { span: Span { file: FileId(0), start: 60, end: 63 }, tokens: TokenRange { start: 32, end: 33 } }: Named { path: Path { package: None, segments: [Symbol(10)] }, arguments: [] }
+type 1 Origin { span: Span { file: FileId(0), start: 71, end: 75 }, tokens: TokenRange { start: 38, end: 39 } }: Named { path: Path { package: None, segments: [Symbol(12)] }, arguments: [] }
+type 2 Origin { span: Span { file: FileId(0), start: 71, end: 83 }, tokens: TokenRange { start: 38, end: 44 } }: Qualified { base: TypeExprId(1), modifiers: [], brand: Some(BrandSyntax { sibling: true, path: Path { package: None, segments: [Symbol(9)] } }), relation: None }
+type 3 Origin { span: Span { file: FileId(0), start: 99, end: 100 }, tokens: TokenRange { start: 51, end: 52 } }: Named { path: Path { package: None, segments: [Symbol(8)] }, arguments: [] }
+type 4 Origin { span: Span { file: FileId(0), start: 92, end: 103 }, tokens: TokenRange { start: 49, end: 55 } }: Named { path: Path { package: None, segments: [Symbol(15)] }, arguments: [Type(TypeExprId(3)), SizeLiteral(4)] }
+type 5 Origin { span: Span { file: FileId(0), start: 126, end: 129 }, tokens: TokenRange { start: 69, end: 70 } }: Named { path: Path { package: None, segments: [Symbol(19)] }, arguments: [] }
+type 6 Origin { span: Span { file: FileId(0), start: 162, end: 165 }, tokens: TokenRange { start: 84, end: 85 } }: Named { path: Path { package: None, segments: [Symbol(10)] }, arguments: [] }
+type 7 Origin { span: Span { file: FileId(0), start: 204, end: 206 }, tokens: TokenRange { start: 105, end: 106 } }: Named { path: Path { package: None, segments: [Symbol(26)] }, arguments: [] }
+type 8 Origin { span: Span { file: FileId(0), start: 243, end: 246 }, tokens: TokenRange { start: 128, end: 129 } }: Named { path: Path { package: None, segments: [Symbol(19)] }, arguments: [] }
+type 9 Origin { span: Span { file: FileId(0), start: 259, end: 265 }, tokens: TokenRange { start: 140, end: 141 } }: Named { path: Path { package: None, segments: [Symbol(28)] }, arguments: [] }
+type 10 Origin { span: Span { file: FileId(0), start: 255, end: 265 }, tokens: TokenRange { start: 138, end: 141 } }: Box(TypeExprId(9))
+type 11 Origin { span: Span { file: FileId(0), start: 307, end: 313 }, tokens: TokenRange { start: 161, end: 162 } }: Named { path: Path { package: None, segments: [Symbol(36)] }, arguments: [] }
+type 12 Origin { span: Span { file: FileId(0), start: 314, end: 315 }, tokens: TokenRange { start: 163, end: 164 } }: Named { path: Path { package: None, segments: [Symbol(8)] }, arguments: [] }
+type 13 Origin { span: Span { file: FileId(0), start: 303, end: 316 }, tokens: TokenRange { start: 159, end: 165 } }: Named { path: Path { package: None, segments: [Symbol(35)] }, arguments: [Type(TypeExprId(11)), Type(TypeExprId(12))] }
+type 14 Origin { span: Span { file: FileId(0), start: 388, end: 391 }, tokens: TokenRange { start: 196, end: 197 } }: Named { path: Path { package: None, segments: [Symbol(19)] }, arguments: [] }

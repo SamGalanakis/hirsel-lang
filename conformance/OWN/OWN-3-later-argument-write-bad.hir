@@ -1,0 +1,17 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 11
+// A borrowed argument is lent until the call returns. A later argument
+// cannot replace the storage it names.
+fn total(xs: List[u64], extra: ()) -> u64 {
+  list.len(xs)
+}
+
+fn main() -> () {
+  let mut xs: List[u64] = [1]
+  let n = total(
+    xs,
+    {
+      xs = []
+    }
+  )
+}

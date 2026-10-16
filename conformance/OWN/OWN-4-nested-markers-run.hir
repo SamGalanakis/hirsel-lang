@@ -1,0 +1,49 @@
+// rule: OWN-4
+// expect: run
+// stdout: ok
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+fn need[T: flat](take x: unique T) -> () {}
+
+fn dup[T: flat](take w: T) -> T {
+  need(take copy w)
+  w
+}
+
+fn consume(take x: String) {}
+
+fn counted(take w: String) -> String {
+  consume(take copy w)
+  w
+}
+
+fn reversed(take w: String) -> String {
+  copy take w
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let original = Item(text: "flat", n: 7)
+  let copied = dup(take original)
+  let a = counted("counted")
+  let b = reversed("reversed")
+  let ok = copied.n == 7 && copied.text == "flat" && a == "counted" && b == "reversed"
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

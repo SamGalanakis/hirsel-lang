@@ -1,0 +1,24 @@
+// A `match` on a variant value held in a register: the heap executor and
+// emission refused the switch ("switch on a non-scalar").
+type Fig = Dot | Line(len: u64) | Rect(w: u64, h: u64)
+
+fn area(s: Fig) -> u64 {
+  match s {
+    Dot => 0u64,
+    Line(len: n) => n,
+    Rect(w: w, h: h) => w * h,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let total = area(Dot) + area(Line(len: 3u64)) + area(Rect(w: 2u64, h: 5u64))
+  let _ = out.print(
+    io.stdout(rt)?,
+    if total == 13u64 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

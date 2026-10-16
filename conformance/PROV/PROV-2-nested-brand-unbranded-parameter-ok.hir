@@ -1,0 +1,30 @@
+// rule: PROV-2
+// expect: accept
+// spec: #60
+// A brand is identity evidence. A branded data value may be borrowed or
+// taken by a parameter that names no brand, at any depth of its type. The
+// callee simply does not know the brand.
+fn fresh() -> List[u64] {
+  []
+}
+
+fn mk(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn count(v: Option[u8]) -> u8 {
+  0
+}
+
+fn eat(take v: Option[u8]) -> u8 {
+  0
+}
+
+fn temporary() -> u8 {
+  count(mk(fresh()))
+}
+
+fn named() -> u8 {
+  let r = fresh()
+  count(mk(r)) + eat(mk(r))
+}

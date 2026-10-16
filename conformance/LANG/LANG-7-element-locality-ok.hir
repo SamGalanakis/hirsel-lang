@@ -1,0 +1,6 @@
+// rule: LANG-7
+// expect: accept
+// The collection carries the locality; its elements are as local as it is.
+fn count(xs: List[Bytes]) -> u64 {
+  list.len(xs)
+}

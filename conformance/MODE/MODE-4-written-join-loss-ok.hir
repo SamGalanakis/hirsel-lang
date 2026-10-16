@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: accept
+fn sink(take x: sendable Bytes) {}
+
+fn touch(x: sendable Bytes) {}
+
+fn good(flag: bool) {
+  let x: sendable Bytes = b"a"
+  if flag {
+    let _ = touch(x)
+  }
+  sink(take x)
+}

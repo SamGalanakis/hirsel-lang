@@ -1,0 +1,14 @@
+// rule: MODE-3
+// expect: reject MODE-3 at line 9
+// Capturing once stays once; a borrow cannot consume the captured callable.
+fn invoke(f: fn() uses {}) {
+  ()
+}
+
+fn example(take action: once fn() uses {}) {
+  invoke(
+    fn() {
+      action()
+    }
+  )
+}

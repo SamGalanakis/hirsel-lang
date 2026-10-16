@@ -1,0 +1,15 @@
+// rule: OWN-8
+// expect: reject MODE-1 at line 14
+// Parts live in their owner's locality, so an aggregate built from a local
+// operand is itself local and cannot be kept where a global is required.
+type Rec {
+  items: Bytes,
+}
+
+fn keep(take r: Rec) -> () {
+  ()
+}
+
+fn example(x: Bytes) -> () {
+  keep(Rec(items: copy x))
+}

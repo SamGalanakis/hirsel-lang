@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: accept
+// "unique x deep-copies when x is not provably unique."
+fn require_unique(mut x: unique Bytes) -> () {
+  x = b"new"
+}
+
+fn example(x: Bytes) -> () {
+  let mut owned = unique x
+  require_unique(mut owned)
+}

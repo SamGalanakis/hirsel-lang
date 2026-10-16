@@ -1,0 +1,8 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut xs: unique List[u64] = unique [1, 2]
+  let bytes: Bytes = b"ab"
+  bytes.slice(bytes, 0, 2)
+  Ok(())
+}

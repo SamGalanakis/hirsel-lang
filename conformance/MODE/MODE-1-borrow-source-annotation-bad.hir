@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: accept
+// v22 (S2) a written relation on a borrowed parameter adds to its own root,
+// so the relation `in owner` on x is legal.
+fn view(owner: String, x: String in owner) -> () {
+  ()
+}

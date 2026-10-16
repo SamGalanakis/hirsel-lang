@@ -1,0 +1,20 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 18
+// v22 #77, caller side. A call whose result is related to p.a loans the
+// argument's p.a, so p.a cannot be replaced while the result lives.
+type Pair {
+  a: String,
+  b: String,
+}
+
+fn get(p: Pair) -> String in p.a {
+  p.a
+}
+
+fn caller(x: String, y: String) -> u64 {
+  let mut p = Pair(a: x, b: x)
+  let r = get(p)
+  p.b = y
+  p.a = y
+  string.byte_len(r)
+}

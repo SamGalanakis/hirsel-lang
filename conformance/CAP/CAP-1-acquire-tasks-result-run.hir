@@ -1,0 +1,6 @@
+// rule: CAP-1
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.tasks(rt)?
+  Ok(())
+}

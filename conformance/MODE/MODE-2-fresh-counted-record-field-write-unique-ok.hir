@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: accept
+type R {
+  x: String,
+}
+
+fn need(take r: unique R) {}
+
+fn example() {
+  let mut r = R(x: "a")
+  r.x = "b"
+  need(take r)
+}

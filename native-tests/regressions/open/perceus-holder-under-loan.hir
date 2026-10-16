@@ -1,0 +1,30 @@
+// native/heap/perceus: validator: HolderUnderLoan
+// under x86_64/regions/elide/reuse/heap+inject: native perceus validator in main: HolderUnderLoan(LoanId(0)) at Site { block: Some(BlockId(8)), index: Some(1) }
+fn output_error[E](take e: E) -> () {}
+
+type Text {
+  text: String,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a = Text(text: "old")
+  let b = copy a
+  let last_use_view = fn() {
+    copy a
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if b.text == "old" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  let _ = last_use_view()
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

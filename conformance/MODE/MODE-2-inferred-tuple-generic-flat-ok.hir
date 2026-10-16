@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: accept
+type R[T] {
+  part: unique T,
+}
+
+fn probe[T: flat](take r: R[T]) {
+  let built = (
+    {
+      r
+    }.part,
+    1u8
+  )
+  let frozen = shared.freeze(take built)
+}

@@ -1,0 +1,36 @@
+// rule: LANG-3
+// expect: run
+// stdout: b
+// stdout: a
+// stdout: a=1
+// stdout: b=2
+type Pair {
+  a: u32,
+  b: u32,
+}
+
+fn stamp(out: Stdout, text: String, value: u32) -> u32 {
+  let _ = out.print(out, text)
+  value
+}
+
+fn show(out: Stdout, ok: bool, text: String) -> () {
+  let _ = out.print(
+    out,
+    if ok {
+      text
+    } else {
+      "wrong field value\n"
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let pair = Pair(
+    b: stamp(io.stdout(rt)?, "b\n", 2),
+    a: stamp(io.stdout(rt)?, "a\n", 1)
+  )
+  show(io.stdout(rt)?, pair.a == 1, "a=1\n")
+  show(io.stdout(rt)?, pair.b == 2, "b=2\n")
+  Ok(())
+}

@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn probe(x: (u64, bool)) -> unique (u64, bool) {
+  unique x
+}

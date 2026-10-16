@@ -1,0 +1,31 @@
+// rule: MODE-2
+// expect: accept
+// "copy x ... yields an aliased value." A called closure whose inferred result
+// is a copy, a getter result or a captured placed value publishes the same
+// result row as its body.
+type P {
+  x: u32,
+  y: u32,
+}
+
+fn copied(take x: unique Bytes) -> () {
+  let y = fn() {
+    copy x
+  }()
+  let t = (take x, take y)
+}
+
+fn got(s: Slots[u64], id: SlotId[u64] of s) -> () {
+  let _ = fn() {
+    slots.get(s, id)
+  }()
+}
+
+fn shared(a: String) -> () {
+  let f = fn() {
+    let u = fn() {
+      unique a
+    }()
+  }
+  f()
+}

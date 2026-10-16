@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 12
+fn cross[T: sendable](take x: T) {}
+
+fn bad(take state: unique Bytes) {
+  let it: Iter[u64] = iter.from(
+    take state,
+    fn(mut st: Bytes) -> Option[u64] {
+      None
+    }
+  )
+  cross(take it)
+}

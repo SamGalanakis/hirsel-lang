@@ -1,0 +1,20 @@
+// rule: CLO-2
+// expect: accept
+resource type Token {
+  n: u64,
+}
+drop(t) {}
+
+fn inspect(t: Token) {}
+
+fn repeat(f: fn() uses {}) {
+  f()
+  f()
+}
+
+fn example(take t: Token) {
+  let f = fn() {
+    inspect(t)
+  }
+  repeat(f)
+}

@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: accept
+fn example() -> u64 {
+  let fs: Array[fn() -> u64 uses {}] = [
+    fn() -> u64 {
+      1
+    }
+  ]
+  fn() {
+    fs[0]()
+  }()
+}

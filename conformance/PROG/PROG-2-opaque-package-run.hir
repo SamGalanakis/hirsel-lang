@@ -1,0 +1,19 @@
+// rule: PROG-2
+// expect: run
+type Hidden = owner.Hidden
+
+type Alias = Hidden
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let h: owner.Hidden = owner.Hidden(value: 17, text: "package")
+  test.check(t, h.value == 17)
+  let Alias(value: n, text: s): owner.Hidden = take h
+  test.check(t, n == 17 && s == "package")
+  let c: owner.Choice = Full(19)
+  let answer: u64 = match c {
+    Empty() => 0,
+    Full(payload) => payload,
+  }
+  test.check(t, answer == 19)
+  Ok(())
+}

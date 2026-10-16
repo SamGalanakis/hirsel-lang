@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Run a source port with a fixed small input through the complete native matrix."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+ROOT = Path(__file__).resolve().parent
+INPUTS = {'binarytrees': b'4\n', 'records-messages/scalar': b'8\n',
+          'saxpy-checked/integer': b'8\n', 'saxpy-checked/f32': b'8\n',
+          'saxpy-checked/f64': b'8\n', 'records-messages/flat': b'8\n', 'slots-churn': b'260\n',
+          'closure-iter/scoped': b'8\n', 'closure-iter/erased': b'8\n',
+          'resource-failure/throughput': b'18\n', 'resource-failure/heavy': b'8\n',
+          'persistent-list-map/unique': b'4\n', 'persistent-list-map/shared': b'4\n',
+          'batch-validation': b'2\n3,40\n30,2\n', 'expr-compiler': b'(x+2)\n',
+          'json-roundtrip': b'{"key":[1,"\\u00e9",true]}', 'wordfreq': 'é alpha é\n'.encode()}
+def byte_literal(data):
+    # Hirsel bytes literals forbid raw non-ASCII and Unicode escapes.
+    return 'b"' + ''.join(chr(b) if 32 <= b < 127 and b not in (34, 92)
+                          else f'\\x{b:02x}' for b in data) + '"'
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    choice = parser.add_mutually_exclusive_group(required=True)
+    choice.add_argument('--case', choices=INPUTS)
+    choice.add_argument('--source', type=Path, help='standalone source control')
+    args = parser.parse_args()
+    repo = ROOT.parent.parent
+    if args.source:
+        source = args.source.resolve()
+        control = source.read_text()
+    else:
+        source = ROOT/'programs'/f'{args.case.replace("/", "-")}.hir'
+        common = (ROOT/'programs/common.hir').read_text().split('pub fn main(',1)[0]
+        literal = byte_literal(INPUTS[args.case])
+        control = source.read_text()+'\n'+common+f'''
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+  let result_bytes = workload({literal})
+  let text = string.from_bytes(take result_bytes) ? error
+  out.print(io.stdout(rt) ? error, text) ? error
+  Ok(())
+}}
+'''
+    with tempfile.TemporaryDirectory(prefix='hirsel-bench-control-') as temporary:
+        root = Path(temporary)
+        case = Path('conformance/OWN')/('OWN-3-bench-'+source.name)
+        (root/case).parent.mkdir(parents=True)
+        (root/case).write_text('// rule: OWN-3\n// expect: run\n\n/* fixed-input benchmark control */\n'+control)
+        sidecar = dict(schema=1, package=dict(name='benchmark', version='1'),
+                       entry=dict(module=[], name='main'), sources=[dict(path=case.name, module=[])],
+                       dependencies=[dict(manifest=str(repo/'stdlib/std@1/hirsel.json'),
+                                          package=dict(name='std', version='1'), expose=[])])
+        (root/case).with_suffix('.hir.json').write_text(json.dumps(sidecar, indent=2)+'\n')
+        (root/'conformance').mkdir(exist_ok=True)
+        (root/'conformance/passing.txt').write_text(str(case)+'\n')
+        (root/'docs').mkdir(); (root/'docs/spec').symlink_to(repo/'docs/spec',target_is_directory=True)
+        (root/'native-tests/regressions').mkdir(parents=True)
+        (root/'native-tests/regressions/exclusions.tsv').write_text('# case\tconfiguration\tclass\treason\n')
+        (root/'native-tests/topology').mkdir()
+        (root/'native-tests/topology/cases.txt').write_text('')
+        env = os.environ.copy()
+        env.update(CARGO_BUILD_JOBS='4', HIRSEL_JOBS='4', RUST_TEST_THREADS='4')
+        result = subprocess.run(['cargo','run','--release','-p','hirsel-conformance','--bin','native','--',
+                                 '--full','--filter',source.stem,'--root',str(root),'--jobs','4',
+                                 '--out',str(ROOT/'build/controls'/source.stem)],cwd=repo,env=env)
+        return result.returncode
+if __name__ == '__main__': raise SystemExit(main())

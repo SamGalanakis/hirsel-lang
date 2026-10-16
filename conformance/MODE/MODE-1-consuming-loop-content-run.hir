@@ -1,0 +1,53 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// An owning cursor and its elements are as local as the collection the loop
+// takes, judged by the value consumed. A binding declared local that holds
+// fresh global content yields global elements, which may be kept.
+type Keep {
+  last: String,
+}
+
+fn keep_last(mut keep: Keep) -> u64 {
+  let xs: List[String] in xs = ["a", "bcd"]
+  let mut count: u64 = 0
+  for x in take xs {
+    count += string.byte_len(x)
+    keep.last = x
+  }
+  count
+}
+
+fn keep_pair(mut keep: Keep) -> u64 {
+  let xs: List[(u64, String)] in xs = [(1, "a"), (2, "pq")]
+  let mut sum: u64 = 0
+  for (n, text) in take xs {
+    sum += n
+    keep.last = text
+  }
+  sum
+}
+
+fn total() -> u64 {
+  let xs: List[u64] in xs = [1, 2, 3]
+  let mut sum: u64 = 0
+  for x in take xs {
+    sum += x
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut keep = Keep(last: "")
+  let first = keep_last(mut keep) == 4 && keep.last == "bcd"
+  let ok = first && keep_pair(mut keep) == 3 && keep.last == "pq" && total() == 6
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

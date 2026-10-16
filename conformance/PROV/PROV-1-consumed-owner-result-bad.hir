@@ -1,0 +1,19 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 15
+// spec: #60
+// "A brand ends when p is ... moved." The call consumes the computed owner
+// it was handed, so its result is branded by nothing that still exists.
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn within() -> () {
+  match mk(take fresh()) {
+    Some(x) => (),
+    None => (),
+  }
+}

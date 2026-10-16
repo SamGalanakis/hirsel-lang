@@ -1,0 +1,56 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// A consuming loop may take a local collection of any kind. Its cursor and
+// each bound element are as local as the collection was.
+fn total(take xs: List[u64] in xs) -> u64 {
+  let mut n: u64 = 0
+  for x in take xs {
+    n = n + x
+  }
+  n
+}
+
+fn lengths(s: List[String]) -> u64 {
+  let v = copy s
+  let mut n: u64 = 0
+  for x in take v {
+    let y = x
+    n = n + string.byte_len(y)
+  }
+  n
+}
+
+fn pairs(take m: Map[u64, String] in m) -> u64 {
+  let mut n: u64 = 0
+  for (k, v) in take m {
+    n = n + k + string.byte_len(v)
+  }
+  n
+}
+
+fn elements(take xs: Array[String] in xs) -> u64 {
+  let mut n: u64 = 0
+  for x in take xs {
+    n = n + string.byte_len(x)
+  }
+  n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let words: List[String] = ["a", "bcd"]
+  let mut m: Map[u64, String] = map.empty()
+  map.insert(mut m, 5, "xy")
+  let ok = total([1, 2, 3]) == 6 && lengths(words) == 4 && pairs(take m) == 7 && elements(
+    ["pq", "r"]
+  ) == 3
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

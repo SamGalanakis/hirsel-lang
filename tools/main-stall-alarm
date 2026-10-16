@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Append an alarm when main gets no commit while lanes are working.
+
+    tools/main-stall-alarm [--minutes 40]
+
+Run it every few minutes from a scheduler. It fetches origin/main; when main's
+newest commit is older than --minutes and some lane worktree of this
+repository moved its HEAD (committed, rebased, switched) within that window,
+it appends one line to $HIRSEL_MAIN_RUNS/alarms.log (the directory
+tools/main-full-run.sh writes to), at most once per window for the same main
+commit. Worktrees of the scheduled full run are not lanes.
+"""
+
+import argparse
+import calendar
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def git(*arguments, cwd=REPO):
+    return subprocess.run(['git', *arguments], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+def lane_worktrees(since, full_run_trees):
+    """Worktrees other than the main checkout and the full run's, whose HEAD
+    moved after `since` (seconds since the epoch)."""
+    active = []
+    main_checkout = Path(git('rev-parse', '--show-toplevel').strip()).resolve()
+    for block in git('worktree', 'list', '--porcelain').split('\n\n'):
+        fields = dict(line.split(' ', 1) for line in block.splitlines() if ' ' in line)
+        path = Path(fields.get('worktree', '')).resolve()
+        if not fields.get('worktree') or path == main_checkout or path.parent == full_run_trees or not path.is_dir():
+            continue
+        try:
+            moved = Path(git('rev-parse', '--git-path', 'logs/HEAD', cwd=path).strip())
+            moved = moved if moved.is_absolute() else path / moved
+            if moved.stat().st_mtime >= since:
+                active.append(path.name)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    return sorted(active)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--minutes', type=int, default=40)
+    args = parser.parse_args()
+    runs = Path(os.environ.get('HIRSEL_MAIN_RUNS') or
+                Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'hirsel/main-runs')
+    trees = Path(os.environ.get('HIRSEL_MAIN_WORKTREES') or runs / 'worktrees').resolve()
+    window = args.minutes * 60
+    now = time.time()
+    git('fetch', '-q', 'origin', 'main')
+    sha, committed = git('log', '-1', '--format=%H %ct', 'refs/remotes/origin/main').split()
+    age = now - int(committed)
+    if age < window:
+        return 0
+    lanes = lane_worktrees(now - window, trees)
+    if not lanes:
+        return 0
+    runs.mkdir(parents=True, exist_ok=True)
+    log = runs / 'alarms.log'
+    for line in reversed(log.read_text().splitlines() if log.exists() else []):
+        stamp, _, rest = line.partition(' ')
+        if f'origin/main {sha[:12]} ' in rest:
+            if now - calendar.timegm(time.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ')) < window:
+                return 0
+            break
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
+    with log.open('a') as out:
+        out.write(f'{stamp} main stalled: no commit for {age / 60:.0f} min (origin/main {sha[:12]} '
+                  f'at {time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(committed)))}) while '
+                  f'{len(lanes)} lanes work: {", ".join(lanes)}\n')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

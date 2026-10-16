@@ -1,0 +1,51 @@
+// rule: PROV-4
+// expect: accept
+type Ast {
+  bytes: Bytes,
+}
+
+fn consume(a: Arena, take value: Ast in a) {}
+
+fn use(a: Arena) {
+  consume(a, Ast(bytes: b"parsed"))
+}
+
+fn heap_use() {
+  consume(heap, Ast(bytes: b"parsed"))
+}
+
+fn bytes(a: Arena, take value: Bytes in a) {}
+
+fn direct_bytes(a: Arena) {
+  bytes(a, b"parsed")
+}
+
+type Choice = Data(Bytes) | Empty
+
+fn choice(a: Arena, take value: Choice in a) {}
+
+fn direct_choice(a: Arena) {
+  choice(a, Data(b"parsed"))
+}
+
+type Boxed[T] {
+  value: T,
+}
+
+fn boxed(a: Arena, take value: Boxed[Bytes] in a) {}
+
+fn direct_boxed(a: Arena) {
+  boxed(a, Boxed(value: b"parsed"))
+}
+
+type Error = Failed()
+
+fn consume_result(a: Arena, take value: Result[Ast, Error] in a) {}
+
+fn direct_result(a: Arena) {
+  consume_result(a, Ok(Ast(bytes: b"parsed")))
+}
+
+fn existing_field(a: Arena, take payload: Bytes in a) {
+  consume(a, Ast(bytes: take payload))
+}

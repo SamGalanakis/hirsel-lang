@@ -1,0 +1,8 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 7
+
+// A field is as local as its owner and its current content, so its type
+// writes no locality.
+
+type Holder { value: Bytes in env }
+fn first(x: Holder) -> Bytes in x { x.value }

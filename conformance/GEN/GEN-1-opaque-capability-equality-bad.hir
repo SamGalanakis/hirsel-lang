@@ -1,0 +1,4 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 3
+@capability(global)
+pub opaque type Datum: data uses {}

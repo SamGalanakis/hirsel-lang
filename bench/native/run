@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Build, verify all reference bytes, or collect preregistered paired samples."""
+import argparse
+import json
+import os
+import random
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+from suite import (ROOT, HIRSEL, PROTOCOL, build, command, expected_checksum,
+                   controlled_environment, freeze, hardware, load_manifest, native_target, participants,
+                   sha, snapshot, native_spec, parse_measurement)
+
+
+def invoke(participant, cmd, stats=False, **kwargs):
+    """Runtime telemetry is an admitted file, independent of program stderr."""
+    if not stats or participant not in HIRSEL:
+        return subprocess.run(cmd, capture_output=True, env=controlled_environment(), cwd=ROOT, **kwargs)
+    with tempfile.TemporaryDirectory(prefix='hirsel-native-count-') as tmp:
+        report = Path(tmp)/'measurement'
+        env = controlled_environment()
+        if stats and participant in HIRSEL:
+            env['HIRSEL_RT_MEASUREMENT'] = str(report)
+        proc = subprocess.run(cmd, capture_output=True, env=env, cwd=ROOT, **kwargs)
+        proc.measurement = None
+        if stats and participant in HIRSEL and proc.returncode == 0:
+            try:
+                proc.measurement = parse_measurement(report.read_text())
+            except (OSError, ValueError):
+                pass
+        return proc
+
+
+def verify(m,build_data,hirsel=None):
+    tests=0
+    failures=[]
+    unavailable=[]
+    for case in m['cases']:
+        for p in participants(m,case,hirsel):
+            for stats in (False,True):
+                if stats and p in HIRSEL and not native_spec(hirsel,p,case).get('counter_command'):
+                    unavailable.append({'case':case['id'],'participant':p,'reason':'instrumented runtime pending'})
+                    continue
+                proc=invoke(p,command(p,case,1,build_data,hirsel,stats,True),stats)
+                expected=(ROOT/case['oracle']).read_bytes()
+                tests+=1
+                if proc.returncode or proc.stdout!=expected:
+                    failures.append({'case':case['id'],'participant':p,'stats':stats,'returncode':proc.returncode,
+                                     'stdout_hex':proc.stdout.hex(),'stderr':proc.stderr.decode(errors='replace')})
+                checksum_proc=invoke(p,command(p,case,3,build_data,hirsel,stats),stats)
+                tests+=1
+                if checksum_proc.returncode or checksum_proc.stdout!=expected_checksum(case,3):
+                    failures.append({'case':case['id'],'participant':p,'stats':stats,'repeats':3,
+                                     'error':'checksum mismatch','returncode':checksum_proc.returncode,
+                                     'stdout_hex':checksum_proc.stdout.hex(),'stderr':checksum_proc.stderr.decode(errors='replace')})
+                if stats and not proc.returncode:
+                    try:
+                        if p in HIRSEL:
+                            assert proc.measurement is not None and checksum_proc.measurement is not None
+                            assert proc.measurement['live_bytes'] == checksum_proc.measurement['live_bytes'] == 0
+                            continue
+                        counts=json.loads(proc.stderr)
+                        if case['case']=='binarytrees' and p not in HIRSEL:
+                            nodes=int(expected)
+                            depth=int((ROOT/case['input']).read_bytes())
+                            arena=p.endswith('/arena')
+                            requests=nodes+1+(not arena)
+                            requested_bytes=nodes*16+2*len((ROOT/case['input']).read_bytes())+256
+                            if not arena:requested_bytes+=(depth+3)*8
+                            assert counts['allocation_requests']==requests
+                            assert counts['requested_bytes']==requested_bytes
+                        assert all(isinstance(counts[k],int) and counts[k]>=0 for k in
+                                   ('allocation_requests','requested_bytes','copied_bytes','count_operations',
+                                    'reuse_hits','reuse_misses','arena_peak_reserved_bytes'))
+                    except (ValueError,KeyError,AssertionError):
+                        failures.append({'case':case['id'],'participant':p,'stats':True,'error':'missing counters'})
+    return {'checks':tests,'failures':failures,'passed':not failures,'unavailable':unavailable,
+            'input_oracles':{c['id']:{'input':c['input_sha256'],'oracle':c['oracle_sha256']} for c in m['cases']},
+            'participants_by_case':{c['id']:participants(m,c,hirsel) for c in m['cases']}}
+
+
+def sample(p,case,repeats,cpu,build_data,hirsel,stats=False):
+    if stats and p in HIRSEL and not native_spec(hirsel,p,case).get('counter_command'):
+        return {'participant':p,'unavailable':'instrumented runtime pending'}
+    before=snapshot(cpu)
+    with tempfile.TemporaryDirectory(prefix='hirsel-native-time-') as tmp:
+        usage=Path(tmp)/'usage.json'
+        cmd=['/usr/bin/time','-f','{"peak_rss_kib":%M,"user_seconds":%U,"system_seconds":%S}',
+             '-o',str(usage),'taskset','-c',str(cpu)]+command(p,case,repeats,build_data,hirsel,stats)
+        start=time.perf_counter_ns()
+        proc=invoke(p,cmd,stats)
+        elapsed=(time.perf_counter_ns()-start)/1e9
+        try:metrics=json.loads(usage.read_text())
+        except (ValueError,OSError):metrics={}
+    valid=proc.returncode==0 and proc.stdout==expected_checksum(case,repeats)
+    result={'participant':p,'seconds':elapsed,'repeats':repeats,'returncode':proc.returncode,
+            'stdout':proc.stdout.decode(errors='replace'),'stderr':proc.stderr.decode(errors='replace'),
+            'oracle_ok':valid,'before':before,'after':snapshot(cpu),'costs':metrics,'command':cmd[8:]}
+    if stats and proc.returncode==0:
+        if p in HIRSEL:
+            result['counters']=proc.measurement
+            if proc.measurement is None or proc.measurement['live_bytes'] != 0:
+                result['oracle_ok']=False
+        else:
+            try:result['counters']=json.loads(proc.stderr)
+            except ValueError:result['oracle_ok']=False
+    return result
+
+
+def collect_case(case,ps,cpu,build_data,hirsel,rng,checkpoint=None,calibration_seconds=0.5):
+    # One identical repeat count for every participant, including every Hirsel
+    # config. Calibrate CPU work, not elapsed time inflated by host contention.
+    # These programs are single-threaded; CPU work bounds uncontended wall time.
+    # GNU time rounds to 10ms, so require at least twice the unchanged 250ms floor.
+    if calibration_seconds < PROTOCOL['minimum_seconds'] * 2:
+        raise ValueError("calibration must provide at least twice the timing floor")
+    repeats=1;pilots=[]
+    def save(record):
+        if checkpoint:checkpoint(record)
+        return record
+    for _ in range(12):
+        round_pilots=[sample(p,case,repeats,cpu,build_data,hirsel) for p in ps]
+        pilots+=round_pilots
+        if not all(p['oracle_ok'] for p in round_pilots):
+            return save({'id':case['id'],'repeats':repeats,'pilots':pilots,'error':'pilot failed','warmups':[],'rounds':[],'counter_runs':[]})
+        minimum=min(p['costs'].get('user_seconds', 0) +
+                    p['costs'].get('system_seconds', 0) for p in round_pilots)
+        if minimum>=calibration_seconds:break
+        # Coarse CPU-time zeroes need bounded growth, not an enormous jump.
+        factor=min(16, calibration_seconds*1.25/max(minimum,0.01))
+        repeats=max(repeats+1,int(repeats*factor)+1)
+    else:
+        return save({'id':case['id'],'repeats':repeats,'pilots':pilots,'error':'calibration exhausted','warmups':[],'rounds':[],'counter_runs':[]})
+    warmups=[];rounds=[]
+    record={'id':case['id'],'repeats':repeats,'pilots':pilots,'warmups':warmups,'rounds':rounds,'counter_runs':[],
+            'calibration':{'metric':'user_seconds + system_seconds','minimum_seconds':calibration_seconds}}
+    save(record)
+    for phase,count,output in [('warmup',PROTOCOL['warmups'],warmups),('timing',PROTOCOL['rounds'],rounds)]:
+        for i in range(count):
+            order=ps.copy();rng.shuffle(order)
+            samples=[sample(p,case,repeats,cpu,build_data,hirsel) for p in order]
+            output.append({'round':i,'phase':phase,'order':order,'samples':samples})
+            save(record)
+            print(f"{case['id']}: {phase} {i+1}/{count}",flush=True)
+    # Counts use their own executables, fresh processes and a single epoch.
+    # This avoids a calibrated allocator stress run overflowing instrumentation.
+    counter_runs=[sample(p,case,1,cpu,build_data,hirsel,stats=True) for p in ps]
+    record['counter_runs']=counter_runs
+    return save(record)
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--freeze',action='store_true',help='seal current sources and fixture digests before evaluation')
+    parser.add_argument('--verify',action='store_true',help='all input/language/allocator timing and counter byte checks')
+    parser.add_argument('--build-only',action='store_true')
+    parser.add_argument('--reuse-build',type=Path,help='previous build.json; binary digests are checked')
+    parser.add_argument('--output',type=Path,default=ROOT/'out/local-samples.json')
+    parser.add_argument('--cpu',type=int)
+    parser.add_argument('--calibration-seconds',type=float,default=0.5,
+                        help='minimum pilot CPU work (>=0.5s); validity remains 250ms wall time')
+    parser.add_argument('--case',action='append',help='exact case IDs; a subset remains incomplete')
+    parser.add_argument('--hirsel',type=Path,help='N/F/J command specifications for all four configurations')
+    parser.add_argument('--machine',type=Path,help='preregistered dedicated-machine declaration; local smoke otherwise')
+    args=parser.parse_args()
+    if args.freeze:freeze();return
+    m=load_manifest();hirsel=json.loads(args.hirsel.read_text()) if args.hirsel else None
+    if hirsel:
+        assert set(hirsel)<=set(HIRSEL) and hirsel,'unknown Hirsel configuration'
+        for group in hirsel.values():
+            for v in (group['cases'].values() if 'cases' in group else [group]):
+                assert all(k in v for k in ('compile_seconds','text_bytes','source_sha256','binary_sha256','command'))
+                for key in ('command','counter_command'):
+                    if key not in v: continue
+                    assert isinstance(v[key],list) and all(isinstance(x,str) for x in v[key])
+                    assert sha(v[key][0])==v['binary_sha256' if key=='command' else 'counter_binary_sha256']
+    if args.reuse_build:
+        build_data=json.loads(args.reuse_build.read_text())
+        assert build_data['source_sha256']==m['source_sha256']
+        for data in build_data['executables'].values():assert sha(data['path'])==data['sha256']
+    else:
+        build_data=build(m);build_data['source_sha256']=m['source_sha256']
+        (ROOT/'build/build.json').write_text(json.dumps(build_data,indent=2)+'\n')
+    if args.build_only:return
+    correctness=verify(m,build_data,hirsel)
+    if args.verify:
+        args.output.parent.mkdir(parents=True,exist_ok=True)
+        args.output.write_text(json.dumps({'schema':1,'manifest_sha256':sha(ROOT/'manifest.json'),
+                                         'build':build_data,'correctness':correctness},indent=2)+'\n')
+        print(f"{correctness['checks']} reference byte/counter checks; {len(correctness['failures'])} failures")
+        if not correctness['passed']:raise SystemExit(1)
+        return
+    if not correctness['passed']:
+        args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps({'correctness':correctness},indent=2)+'\n')
+        raise SystemExit('reference correctness failed; retained report')
+    cpu=args.cpu if args.cpu is not None else min(os.sched_getaffinity(0))
+    assert cpu in os.sched_getaffinity(0)
+    machine=json.loads(args.machine.read_text()) if args.machine else None
+    cases=[c for c in m['cases'] if args.case is None or c['id'] in args.case]
+    assert cases and (args.case is None or {c['id'] for c in cases}==set(args.case)),'unknown case'
+    dataset={'schema':1,'target':native_target(),'protocol':PROTOCOL,'manifest_sha256':sha(ROOT/'manifest.json'),
+             'manifest':m,'build':build_data,'correctness':correctness,'hardware':hardware(cpu),
+             'machine':machine,'hirsel_build':hirsel,'exclusion_policy':'No automated exclusions; retain every failed, short or noisy sample. Any rerun is a separate dataset.',
+             'allocator_environment':{'LD_PRELOAD':None,'MALLOC_CONF':None,'MIMALLOC_*':None,'GLIBC_TUNABLES':None},'cases':[]}
+    args.output.parent.mkdir(parents=True,exist_ok=True)
+    # Randomization is per invocation and fully reconstructable from seed and
+    # manifest case order, including filtered smoke cases.
+    rng=random.Random(PROTOCOL['order_seed'])
+    for c in cases:
+        print(f"collecting {c['id']} on CPU {cpu}",flush=True)
+        dataset['cases'].append({'id':c['id'],'error':'measurement in progress'})
+        def checkpoint(record):
+            dataset['cases'][-1]=record
+            staged=args.output.with_suffix(args.output.suffix+'.new')
+            staged.write_text(json.dumps(dataset,indent=2)+'\n')
+            os.replace(staged,args.output)
+        collect_case(c,participants(m,c,hirsel),cpu,build_data,hirsel,rng,checkpoint,calibration_seconds=args.calibration_seconds)
+    print(args.output)
+
+if __name__=='__main__':main()

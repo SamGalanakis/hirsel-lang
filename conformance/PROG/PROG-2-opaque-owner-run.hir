@@ -1,0 +1,62 @@
+// rule: PROG-2
+// expect: run
+// stdout: opaque
+pub opaque type Hidden[T: data + copyable]: data + copyable uses {} {
+  value: T,
+  text: String,
+}
+
+pub opaque type Choice: data uses {} = Empty | Full(u64)
+
+fn build() -> Hidden[u64] {
+  Hidden(value: 3, text: "opaque")
+}
+
+fn read(h: Hidden[u64]) -> u64 {
+  h.value
+}
+
+fn unpack(take h: Hidden[u64]) -> String {
+  let Hidden(value: _, text: s) = take h
+  s
+}
+
+fn choose() -> Choice {
+  Full(7)
+}
+
+fn inspect(c: Choice) -> u64 {
+  match c {
+    Empty() => 0,
+    Full(n) => n,
+  }
+}
+
+pub opaque resource type Token: () uses {} {
+  value: u64,
+}
+@noalloc drop(token) {
+  let _ = token.value
+}
+
+fn token_value() -> u64 {
+  let token = Token(value: 5)
+  token.value
+}
+
+const seed: Hidden[u64] = Hidden(value: 29, text: "constant")
+
+fn constant_value() -> u64 {
+  let h = seed
+  h.value
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let h = build()
+  if read(h) == 3 && inspect(choose()) == 7 && token_value() == 5 && constant_value() == 29 {
+    let _ = out.print(output, unpack(take h))
+    let _ = out.print(output, "\n")
+  }
+  Ok(())
+}

@@ -1,0 +1,5 @@
+// rule: MEM-12
+// expect: reject MEM-12 at line 3
+flat type R {
+  value: Mutex[u32],
+}

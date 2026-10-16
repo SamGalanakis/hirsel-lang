@@ -1,0 +1,6 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 5
+// "Borrow (default). Local and read-only for the call."
+fn example(x: Bytes) -> () {
+  x = b"new"
+}

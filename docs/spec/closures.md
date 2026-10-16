@@ -1,0 +1,160 @@
+# Closures
+
+A closure literal `fn(x: T) -> U { .. }` is either **scoped** (it lives no longer than the
+call it is passed to and borrows its captures) or **escaping** (it is stored, returned or
+taken, and owns its captures). Scoped closures are free: their environment lives in the
+caller's region and calls through them are specialised.
+
+```hirsel
+pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U]                       // f scoped, transparent, specialised
+pub fn lazy_map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
+```
+
+### CLO-1: Scoped
+
+A function-typed parameter is local unless taken. A scoped closure cannot be stored or
+returned; its environment lives in the caller's region and never allocates. Its captures
+are borrows. It may not assign outer `let mut` names (use `for` or a fold).
+
+```hirsel
+fn apply(xs: List[u64], f: fn(u64) -> u64) -> List[u64] {
+  let mut out: List[u64] = []
+  for x in xs { list.push(mut out, f(x)) }
+  out
+}
+
+fn shift(xs: List[u64], k: u64) -> List[u64] {
+  apply(xs, fn(x: u64) -> u64 { x + k })      // borrows k for the call
+}
+```
+
+A body knows about a borrowed or `mut` non-plain capture exactly what a function body
+knows about a borrowed or `mut` parameter of the same type: it is a local view, and its
+non-plain parts and copies stay local. Owned copied and taken captures are the
+environment's own values. An inferred local result of a closure is `in env`. The closure
+value specializes that result to global only when some capture is borrowed, every captured
+source's current content is global throughout, and no parameter is a borrowed or `mut`
+non-plain value; checking the body keeps the environment-local result. Written and
+contextual result promises are not inferred. If receiving rows hide local current content,
+the closure and all its holders keep an environment-local result and keep their call
+dependencies, and a receiving or capture slot that promises a global result rejects it
+([MODE-1](ownership.md#mode-1-locality)). Specialization keeps the closure's actual
+authority and environment sendability. A closure call whose counted result may share a
+borrowed counted capture ends that capture's uniqueness, as a direct share would.
+
+### CLO-2: Transparent
+
+A scoped closure uses whatever capabilities its context holds. The call's kind, authority
+summary and `@noalloc` status are the join of callee and closure, so `map(xs, f)` needs no
+effect variables. Inside the callee, calling a scoped closure parameter has unknown
+authority unless the parameter declares `uses {..}`; unknown authority is rejected
+wherever `uses` restricts. `uses` bounds the authority entering through captures, not
+every capability kind used inside the frame: parameters arrive from the caller, and
+permitted capability operands can derive further capabilities locally (`Io` to `Stdout`).
+Evidence about a known callee comes from its signature, captures and header, never from
+another implementation's body. A written unrestricted parameter does not meet a
+restricted `uses`.
+
+**Variance of callable promises.** A `mut` hand-back is exact for the whole value type, at
+its root and at every depth: the callable's `uses` and `@noalloc` promise, erased captures
+and cleanup summary. A type argument of a nominal type or a non-sequence builtin (`Option`,
+user generics, `Map`, `Set`, `Shared`, `Iter`, `Mutex`, …) is exact for those promises.
+Sequence elements (`Array`, `List`, `Inline`), tuple, record, variant and box parts, and a
+callable's result and error are read-only positions where a stronger promise serves; a
+callable's non-`mut` parameters are contravariant and its `mut` parameters are exact. The
+same variance applies to written sendability requirements and erased crossing promises:
+read-only reception may forget a crossing requirement or use stronger proved evidence,
+and mutable hand-back is exact for the incoming and outgoing values. Derived data
+evidence is not itself a fixed storage contract. A requirement already entailed by the
+other written modes is redundant, so `sendable` on a plain type does not create a
+distinct invariant contract.
+
+**Declared state promises.** A callable that advances or builds an erased state (an `Iter`
+or a function value) can declare what it preserves. These are general declaration
+attributes, open to every package; omitting one promises nothing. Each selector names one
+of that callable's own parameters, optionally with an explicit field path, and a selected
+state parameter is `mut`.
+
+- `@preserves_captures(it)`: on every normal return, returned error and failure unwind,
+  the selected surviving state keeps its incoming nominal type arguments, ownership mode,
+  source bounds, brands, authority, multiplicity, sendability and destruction-allocation
+  guarantees. It cannot install content with wider authority, a new unlisted source, a
+  stronger crossing or many-use claim, or allocating cleanup hidden by the incoming
+  summary. Narrowing a formal type never erases stronger actual evidence.
+- `@advance_only(it)` includes preservation and permits only advancing the existing
+  erased state: it cannot be replaced, cleared or rebound through a selected field on any
+  path. Traversal bookkeeping may change, visited items may be transferred or dropped, and
+  each `Some` payload moves to the caller. A call through an attenuated static `Iter` type
+  hands the stronger actual contract back unchanged.
+- `@captures(state, next)` on a callable returning an `Iter` or function value: the
+  selected parameters (or their field paths) determine the returned environment's
+  complete authority, source bounds, brands, multiplicity, sendability and
+  destruction-allocation obligations, independently of its yielded item type. At
+  creation, selected non-plain captures are owned through `take` or a separately legal
+  copy; a borrow never owns a resource. Unselected captures are allowed only with
+  independent inert, global, many and noalloc-destruction proofs. A same-shaped generic
+  relay cannot conceal a third source.
+
+```hirsel
+@advance_only(it)
+fn step[T](mut it: Iter[T]) -> Option[T] {
+  iter.next(mut it)
+}
+```
+
+Each promise is a body obligation and a callable promise, proved where the body is checked
+and independently in the IR; it is never an exemption chosen by a definition's name, and no
+public promise is inferred from a body. Calls through direct or indirect declarations prove
+the same guarantee for the same selector before they preserve incoming evidence. A
+stronger declaration satisfies a weaker receiving contract; mutable hand-back stays exact.
+A claimed promise that cannot be proved is rejected: MEM-14 for `@advance_only`, CLO-4 for
+`@preserves_captures` and `@captures`.
+
+### CLO-3: Task closures
+
+The closure passed to `task.async(s, ..)` is once and taken. It captures sendable values
+([MODE-4](ownership.md#mode-4-sendable)) by copy or `take`, and Receivers by `take`; it
+borrows nothing counted. To let several children read one large value, freeze it into a
+`Shared` ([MEM-11](memory.md#mem-11-shared)) and copy the root into each. `task.isolate`'s
+closure follows the same rules. An owning environment cannot take a parameter or capture
+that its creator only borrows (OWN-1). The Receiver capture exception never permits a local
+capture into a global task environment.
+
+### CLO-4: Escaping
+
+Taken function parameters and returned or stored closures are global. They capture global
+values by copy or by explicit `take` (then they are once), never borrowed counted
+parameters or `let mut` names. Their type states their authority as capability types
+(`uses {Dir}`) or as parameters whose authority they inherit (`uses {it, f}`); at a call,
+`uses {p}` becomes the authority summary of the argument for `p`. An explicit binding type
+`fn(...) -> R` supplies an escaping context; an unannotated literal binding is scoped.
+
+In an escaping or task closure, a free `take x` selects an owned capture at construction;
+other free uses copy. Capture selection includes nested closures and is checked once, at
+construction. Plain reads of borrowed parameters copy and are allowed; borrowed counted
+captures and outer `let mut` bindings are forbidden. A taken immutable Receiver may be
+rebound `let mut` inside the child before receiving. Scoped closures borrow; an owning once
+scope-body parameter may take captures without becoming global.
+
+```hirsel
+fn adder(k: u64) -> fn(u64) -> u64 {
+  fn(x: u64) -> u64 { x + k }       // k is plain: copied into the environment
+}
+```
+
+Returning `fn() -> u64 { list.len(xs) }` for a borrowed `xs: List[u64]` is CLO-4: an
+escaping closure cannot capture a borrowed counted value.
+
+A global environment owns the copied or taken owner incarnations and the branded
+relations proved at its creation; ending or replacing the caller's bindings does not end
+them. A branded value alone supplies no owner. Borrowed captures keep their actual source
+identities and loans through generic and aggregate transport; `uses` does not encode
+identity or lifetime. A global callable copied from borrowed storage owns a share of its
+environment; a local callable copy keeps its storage and capture bounds. Nested scoped
+placement cannot escape an owned environment.
+
+### CLO-5: Specialisation
+
+A call passing a closure to a scoped parameter is compiled for that closure, so calls
+through it are direct and inlinable, except for calls inside a recursive cycle, which are
+indirect. This is a cost guarantee, not an observable one.

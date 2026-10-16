@@ -1,0 +1,9 @@
+// rule: MEM-7
+// expect: accept
+// Spec example "@layout(c) type Header" contains inline sized fields.
+@layout(c)
+type Header {
+  magic: u32,
+  len: u16,
+  flags: u16,
+}

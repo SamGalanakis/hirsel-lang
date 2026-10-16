@@ -1,0 +1,5 @@
+// rule: MODE-1
+// expect: accept
+fn probe(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src uses {} {
+  std@1/bytes.replace(src, old, new)
+}

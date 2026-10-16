@@ -1,0 +1,18 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 17
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn send[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn stash(mut xs: List[Bytes], take v: Bytes) -> () {
+  list.push(mut xs, take v)
+}
+
+fn example(take x: unique Bytes, mut xs: List[Bytes]) -> () {
+  stash(mut xs, take view(x))
+  send(take x)
+}

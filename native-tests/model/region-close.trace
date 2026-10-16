@@ -1,0 +1,15 @@
+rc-trace v1
+max 16
+# T18-T23: an uncounted region block holds two outgoing heap credits. Closing the region
+# releases each exactly once: the sole-owned child dies, the shared one survives with one
+# holder, and the region's storage becomes free.
+alloc r1 0
+alloc r2 0
+dup r2 r3
+region-open g1
+region-alloc g1 l1 2
+region-store l1 0 r1
+region-store l1 1 r3
+local-drop l1
+region-close g1
+drain

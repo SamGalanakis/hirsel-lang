@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: accept
+// The result names x, so it may stay as local as x's argument was.
+fn preserve(take x: unique Bytes in x) -> unique Bytes in x {
+  unique x
+}

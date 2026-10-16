@@ -1,0 +1,9 @@
+// rule: CAP-3
+// expect: reject CAP-3 at line 8
+fn effect(io: Io) {}
+
+fn apply(f: fn(Io) uses {}) {}
+
+fn example() {
+  apply(effect)
+}

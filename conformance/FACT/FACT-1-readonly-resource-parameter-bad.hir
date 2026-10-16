@@ -1,0 +1,15 @@
+// rule: FACT-1
+// expect: reject FACT-1 at line 13
+resource type Token {
+  n: u8,
+}
+drop(x) {}
+
+fn eat(take t: Token) -> bool {
+  true
+}
+
+fn probe(take t: Token) -> ()
+  requires eat(take t) {
+  ()
+}

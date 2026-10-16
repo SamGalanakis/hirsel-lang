@@ -1,0 +1,40 @@
+---
+source: crates/hirsel-parser/tests/it/grammar_examples.rs
+expression: snapshot
+---
+fn f() { a..=b || c && d == e | f ^ g & h << i + j * -k
+ return a + b * c }
+
+item 0 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "f" }) Origin { span: Span { file: FileId(0), start: 0, end: 75 }, tokens: TokenRange { start: 0, end: 63 } } TokenRange { start: 0, end: 63 } hash=[62, 31, 8c, b8, 3b, dd, 68, 2b, ae, da, b1, ca, f2, af, 0d, 75, 59, 8b, 1c, fc, 2c, a5, 85, 32, b7, bb, a3, f3, 66, 1e, 1a, 5e]
+  Private []
+  Function { signature: FunctionSyntax { attributes: [], generics: [], parameters: [], result: None, uses: None, contracts: [] }, body: Some(ExprId(28)), abi: None }
+expr 0 Origin { span: Span { file: FileId(0), start: 9, end: 10 }, tokens: TokenRange { start: 8, end: 9 } }: Path(Path { package: None, segments: [Symbol(2)] })
+expr 1 Origin { span: Span { file: FileId(0), start: 13, end: 14 }, tokens: TokenRange { start: 10, end: 11 } }: Path(Path { package: None, segments: [Symbol(3)] })
+expr 2 Origin { span: Span { file: FileId(0), start: 18, end: 19 }, tokens: TokenRange { start: 14, end: 15 } }: Path(Path { package: None, segments: [Symbol(4)] })
+expr 3 Origin { span: Span { file: FileId(0), start: 23, end: 24 }, tokens: TokenRange { start: 18, end: 19 } }: Path(Path { package: None, segments: [Symbol(5)] })
+expr 4 Origin { span: Span { file: FileId(0), start: 28, end: 29 }, tokens: TokenRange { start: 22, end: 23 } }: Path(Path { package: None, segments: [Symbol(6)] })
+expr 5 Origin { span: Span { file: FileId(0), start: 32, end: 33 }, tokens: TokenRange { start: 26, end: 27 } }: Path(Path { package: None, segments: [Symbol(1)] })
+expr 6 Origin { span: Span { file: FileId(0), start: 36, end: 37 }, tokens: TokenRange { start: 30, end: 31 } }: Path(Path { package: None, segments: [Symbol(7)] })
+expr 7 Origin { span: Span { file: FileId(0), start: 40, end: 41 }, tokens: TokenRange { start: 34, end: 35 } }: Path(Path { package: None, segments: [Symbol(8)] })
+expr 8 Origin { span: Span { file: FileId(0), start: 45, end: 46 }, tokens: TokenRange { start: 38, end: 39 } }: Path(Path { package: None, segments: [Symbol(9)] })
+expr 9 Origin { span: Span { file: FileId(0), start: 49, end: 50 }, tokens: TokenRange { start: 42, end: 43 } }: Path(Path { package: None, segments: [Symbol(10)] })
+expr 10 Origin { span: Span { file: FileId(0), start: 54, end: 55 }, tokens: TokenRange { start: 47, end: 48 } }: Path(Path { package: None, segments: [Symbol(11)] })
+expr 11 Origin { span: Span { file: FileId(0), start: 53, end: 55 }, tokens: TokenRange { start: 46, end: 48 } }: Unary { op: Neg, value: ExprId(10) }
+expr 12 Origin { span: Span { file: FileId(0), start: 49, end: 55 }, tokens: TokenRange { start: 42, end: 48 } }: Binary { op: Mul, left: ExprId(9), right: ExprId(11) }
+expr 13 Origin { span: Span { file: FileId(0), start: 45, end: 55 }, tokens: TokenRange { start: 38, end: 48 } }: Binary { op: Add, left: ExprId(8), right: ExprId(12) }
+expr 14 Origin { span: Span { file: FileId(0), start: 40, end: 55 }, tokens: TokenRange { start: 34, end: 48 } }: Binary { op: Shl, left: ExprId(7), right: ExprId(13) }
+expr 15 Origin { span: Span { file: FileId(0), start: 36, end: 55 }, tokens: TokenRange { start: 30, end: 48 } }: Binary { op: BitAnd, left: ExprId(6), right: ExprId(14) }
+expr 16 Origin { span: Span { file: FileId(0), start: 32, end: 55 }, tokens: TokenRange { start: 26, end: 48 } }: Binary { op: BitXor, left: ExprId(5), right: ExprId(15) }
+expr 17 Origin { span: Span { file: FileId(0), start: 28, end: 55 }, tokens: TokenRange { start: 22, end: 48 } }: Binary { op: BitOr, left: ExprId(4), right: ExprId(16) }
+expr 18 Origin { span: Span { file: FileId(0), start: 23, end: 55 }, tokens: TokenRange { start: 18, end: 48 } }: Binary { op: Eq, left: ExprId(3), right: ExprId(17) }
+expr 19 Origin { span: Span { file: FileId(0), start: 18, end: 55 }, tokens: TokenRange { start: 14, end: 48 } }: Binary { op: And, left: ExprId(2), right: ExprId(18) }
+expr 20 Origin { span: Span { file: FileId(0), start: 13, end: 55 }, tokens: TokenRange { start: 10, end: 48 } }: Binary { op: Or, left: ExprId(1), right: ExprId(19) }
+expr 21 Origin { span: Span { file: FileId(0), start: 9, end: 55 }, tokens: TokenRange { start: 8, end: 48 } }: Binary { op: RangeInclusive, left: ExprId(0), right: ExprId(20) }
+expr 22 Origin { span: Span { file: FileId(0), start: 64, end: 65 }, tokens: TokenRange { start: 52, end: 53 } }: Path(Path { package: None, segments: [Symbol(2)] })
+expr 23 Origin { span: Span { file: FileId(0), start: 68, end: 69 }, tokens: TokenRange { start: 56, end: 57 } }: Path(Path { package: None, segments: [Symbol(3)] })
+expr 24 Origin { span: Span { file: FileId(0), start: 72, end: 73 }, tokens: TokenRange { start: 60, end: 61 } }: Path(Path { package: None, segments: [Symbol(4)] })
+expr 25 Origin { span: Span { file: FileId(0), start: 68, end: 73 }, tokens: TokenRange { start: 56, end: 61 } }: Binary { op: Mul, left: ExprId(23), right: ExprId(24) }
+expr 26 Origin { span: Span { file: FileId(0), start: 64, end: 73 }, tokens: TokenRange { start: 52, end: 61 } }: Binary { op: Add, left: ExprId(22), right: ExprId(25) }
+expr 27 Origin { span: Span { file: FileId(0), start: 57, end: 73 }, tokens: TokenRange { start: 50, end: 61 } }: Return(Some(ExprId(26)))
+expr 28 Origin { span: Span { file: FileId(0), start: 7, end: 75 }, tokens: TokenRange { start: 6, end: 63 } }: Block { statements: [StmtId(0)], tail: Some(ExprId(27)) }
+stmt 0 Origin { span: Span { file: FileId(0), start: 9, end: 55 }, tokens: TokenRange { start: 8, end: 50 } }: Expr(ExprId(21))

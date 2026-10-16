@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: accept
+// Regression from holder/closure-value; TIR/TypeMismatch/call result.
+type Rec {
+  b: Bytes,
+}
+
+fn pick() -> Rec {
+  let mut slot: Rec = fn() {
+    Rec(b: b"s")
+  }()
+  slot
+}

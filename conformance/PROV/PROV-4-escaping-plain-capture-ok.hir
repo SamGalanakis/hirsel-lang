@@ -1,0 +1,8 @@
+// rule: PROV-4
+// expect: accept
+fn probe(a: Arena) -> fn() -> u64 {
+  let x: u64 = 1
+  fn() {
+    x
+  }
+}

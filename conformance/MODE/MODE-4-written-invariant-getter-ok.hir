@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: accept
+type Wrap[T] {
+  value: T,
+}
+
+fn get[T: copyable](xs: Wrap[sendable T]) -> T in xs {
+  copy xs.value
+}
+
+fn probe() {
+  let xs: Wrap[sendable Bytes] = Wrap(value: b"a")
+  let y: Bytes = get(xs)
+}

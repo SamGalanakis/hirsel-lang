@@ -1,0 +1,29 @@
+// rule: MEM-6
+// expect: run
+// stdout: ok
+// "exceeding cap is a failure"; an empty body consumes no arena storage.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let cap: u64 = 1
+  let outcome: Result[u8, OutOfSpace] = arena.bounded(
+    cap,
+    fn(a: Arena) -> u8 {
+      7
+    }
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outcome == Ok(7) {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

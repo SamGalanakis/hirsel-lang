@@ -1,0 +1,7 @@
+// rule: GEN-2
+// expect: accept
+// Shows "Order[T], Hasher[T], Eq[T], user records of functions."
+@noalloc
+fn dictionary(by: Order[u32], xs: SortedMap[u32, u32] of by) -> () {
+  ()
+}

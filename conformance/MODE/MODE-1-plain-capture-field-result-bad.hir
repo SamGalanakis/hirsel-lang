@@ -1,0 +1,43 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 18
+// Bytes viewing a String field through a borrowed capture are local to the
+// record, unlike a plain field, so a global result cannot return them.
+resource type Cursor {
+  text: String,
+  pos: StrPos of .text,
+  name: Path,
+}
+
+fn position(c: Cursor) -> StrPos of c.text {
+  fn() {
+    c.pos
+  }()
+}
+
+fn name(c: Cursor) -> Bytes {
+  fn() {
+    string.as_bytes(c.text)
+  }()
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let text: String = "ab"
+  match string.position(text, 1u64) {
+    Some(pos) => {
+      let c = Cursor(text: text, pos: pos, name: path.of("a/b"))
+      test.check(
+        t,
+        string.byte_offset(
+          c.text,
+          fn() {
+            c.pos
+          }()
+        ) == 1u64
+      )
+      test.check(t, string.byte_offset(c.text, position(c)) == 1u64)
+      test.check(t, bytes.len(name(c)) == 2u64)
+    },
+    None => test.check(t, false),
+  }
+  Ok(())
+}

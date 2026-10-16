@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 8
+type Holder {
+  name: String,
+}
+
+fn store(mut h: Holder, x: String) -> () {
+  h = Holder(name: copy x)
+}

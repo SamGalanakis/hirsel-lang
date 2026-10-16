@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+type R {
+  xs: unique List[Bytes],
+}
+
+fn require(take r: unique R) {}
+
+fn probe(take r: unique R) {
+  let built = box {
+    r
+  }.xs
+  require(take r)
+}

@@ -1,0 +1,16 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 15
+resource type Trace {
+  text: String,
+}
+drop(x) {
+  ()
+}
+
+type Holder {
+  t: Trace,
+}
+
+fn store(mut h: Holder, x: Trace) -> () {
+  h.t = x
+}

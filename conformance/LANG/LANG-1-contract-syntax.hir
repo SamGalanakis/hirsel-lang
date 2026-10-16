@@ -1,0 +1,9 @@
+// rule: LANG-1
+// expect: accept
+// Shows "contracts requires/ensures" and "modes written T @ mode"; contracts remain declared syntax.
+@noalloc
+fn increment(x: u32) -> u32
+  requires x < 100
+  ensures result == x + 1 {
+  x + 1
+}

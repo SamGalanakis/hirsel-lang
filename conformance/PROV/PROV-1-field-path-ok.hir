@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: accept
+// "A field path (log.dir)."
+type Log {
+  dir: Dir,
+  file: File of .dir,
+}
+
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn example(log: Log, other: Dir) -> () {
+  inspect(log.dir, log.file)
+}

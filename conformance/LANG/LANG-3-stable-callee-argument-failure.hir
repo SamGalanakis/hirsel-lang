@@ -1,0 +1,14 @@
+// rule: LANG-3
+// expect: fail SEM-1 at line 12
+fn make(base: u64) -> fn(u64) -> u64 uses {} {
+  let payload: List[u64] = [base]
+  fn(x: u64) -> u64 uses {} {
+    payload[0u64] + x
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let f = make(7u64)
+  let _ = f(18446744073709551615u64 + 1u64)
+  Ok(())
+}

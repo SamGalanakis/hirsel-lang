@@ -1,0 +1,61 @@
+// A flat record whose one field is a list built only for its pushes takes the
+// builder's block (the emitter's `adopt_builder`): the header words become the
+// length prefix and count, the descriptor the record's. Its contents equal the
+// same list built as an ordinary list, empty, single and grown past a class.
+// MEM-12-flat-list-builder-run covers more shapes but its fault campaign is too
+// slow for the smoke stage.
+flat type Message {
+  id: u64,
+  tags: List[u64],
+  payload: Bytes,
+}
+
+flat type Messages {
+  items: List[Message],
+}
+
+fn digest(messages: Messages) -> u64 {
+  let mut s: u64 = list.len(messages.items)
+  for m in messages.items {
+    let mut t: u64 = list.len(m.tags)
+    for tag in m.tags {
+      t = int.wrapping_add(t ^ 2654435761u64, tag)
+    }
+    s = int.wrapping_add(s ^ 1540483477u64, m.id ^ t ^ bytes.len(m.payload))
+  }
+  s
+}
+
+fn built(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..n {
+    list.push(mut items, Message(id: i, tags: [i, i + 1u64], payload: b"abc"))
+  }
+  digest(Messages(items: take items))
+}
+
+fn ordinary(n: u64) -> u64 {
+  let mut items: List[Message] = []
+  for i in 0u64..n {
+    let seen = list.len(items)
+    list.push(
+      mut items,
+      Message(id: i + seen - seen, tags: [i, i + 1u64], payload: b"abc")
+    )
+  }
+  digest(Messages(items: take items))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s = io.stdout(rt)?
+  let ok = built(0) == ordinary(0) && built(1) == ordinary(1) && built(6) == ordinary(6)
+  let _ = out.print(
+    s,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

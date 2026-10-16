@@ -1,0 +1,6 @@
+// rule: MEM-8
+// expect: accept
+// "Simd[T, n]" — " fixed width"; n is a declared size parameter.
+type Lanes[n: size] {
+  lanes: Simd[u8, n],
+}

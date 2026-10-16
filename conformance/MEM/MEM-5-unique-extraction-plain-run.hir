@@ -1,0 +1,14 @@
+// rule: MEM-5
+// expect: run
+// stdout: unique
+@noalloc
+fn scalar(x: u64) -> unique u64 {
+  unique x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  if scalar(7u64) == 7u64 {
+    let _ = out.print(io.stdout(rt)?, "unique\n")
+  }
+  Ok(())
+}

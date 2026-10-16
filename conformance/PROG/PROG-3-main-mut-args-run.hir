@@ -1,0 +1,15 @@
+// rule: PROG-3
+// expect: run
+// stdout: launched
+// exit: 1
+// The entry result is Error even though the handed-back Args word is zero.
+pub fn main(rt: Io, mut args: Args) -> Result[(), ()] {
+  args = args
+  let _ = out.print(io.stdout(rt) ? grant_error, "launched\n")
+  Error(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

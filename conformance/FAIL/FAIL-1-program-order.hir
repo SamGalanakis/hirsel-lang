@@ -1,0 +1,9 @@
+// rule: FAIL-1
+// expect: fail SEM-1 at line 6
+// "reported at their source position in program order".
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let n: u8 = 255
+  let first = n + 1
+  let later: u8 = 1 / 0
+  Ok(())
+}

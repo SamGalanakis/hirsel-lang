@@ -1,0 +1,15 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 6
+// entry: trial
+@noalloc
+fn trial(t: Test) {
+  std@1/test.for_all(
+    t,
+    fn(grant: Test) -> u8 {
+      7
+    },
+    fn(value: u8) -> bool uses {} {
+      true
+    }
+  )
+}

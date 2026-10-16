@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 14
+// A plain mut Iter parameter may replace its state with unsendable captures.
+fn step(mut n: u64) -> Option[u64] {
+  None
+}
+
+fn reset(mut it: Iter[u64]) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut it: sendable Iter[u64] = iter.from(0u64, step)
+  reset(mut it)
+  Ok(())
+}

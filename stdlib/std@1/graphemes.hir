@@ -1,0 +1,220 @@
+// Default extended grapheme clusters, Unicode16 UAX #29 revision 45.
+// Copyright 2012-2015 The Rust Project Developers; adapted under MIT.
+// Copyright (c) Zig contributors; UTF-8 decoding adapted under MIT.
+// See third-party/NOTICES.md for full notices and pinned references.
+// The receiver and yielded Strings retain the original source, without allocation.
+@loop_source(graphemes_open, graphemes_next)
+pub opaque type GraphemeView: copyable + inert + noalloc_drop uses {} {
+  source: String,
+}
+
+// Public signature type; representation and associated operations stay private.
+pub opaque type GraphemeCursor: copyable + inert + noalloc_drop uses {} {
+  source: String,
+  position: u64,
+}
+
+// Adapted from src/grapheme.rs::new_graphemes at
+// unicode-segmentation ff47b3187adddb14813e6fb2cfc1a079f58cfddc.
+@noalloc
+pub fn graphemes(s: String) -> GraphemeView in s {
+  GraphemeView(source: copy s)
+}
+
+// Adapted from src/grapheme.rs::GraphemeCursor::new at
+// unicode-segmentation ff47b3187adddb14813e6fb2cfc1a079f58cfddc.
+@noalloc
+fn graphemes_open(v: GraphemeView) -> GraphemeCursor in v uses {} {
+  GraphemeCursor(source: copy v.source, position: 0)
+}
+
+// Range search adapted from src/tables.rs::grapheme_category at
+// unicode-segmentation ff47b3187adddb14813e6fb2cfc1a079f58cfddc.
+@noalloc
+fn grapheme_properties(cp: u32) -> u8 uses {} {
+  if cp >= 0xac00 && cp < 0xd7a4 {
+    if (cp - 0xac00) % 28 == 0 {
+      12
+    } else {
+      13
+    }
+  } else {
+    let mut lo: u64 = 0
+    let mut hi = core@1/bytes.len(GRAPHEME_PROPERTIES) / 7
+    while lo < hi {
+      let mid = lo + (hi - lo) / 2
+      if scalar_at(GRAPHEME_PROPERTIES, mid * 7 + 3) < cp {
+        lo = mid + 1
+      } else {
+        hi = mid
+      }
+    }
+    if lo < core@1/bytes.len(GRAPHEME_PROPERTIES) / 7 && scalar_at(
+      GRAPHEME_PROPERTIES,
+      lo * 7
+    ) <= cp {
+      GRAPHEME_PROPERTIES[lo * 7 + 6]
+    } else {
+      0
+    }
+  }
+}
+
+// Decode one scalar from already validated UTF-8. Offsets are relative to s,
+// including when s itself is an owner-sharing slice with a nonzero origin.
+// Decode masks/shifts adapted from lib/std/unicode.zig::utf8Decode2/3/4,
+// Zig bff490a23889750de7096d9057c0a432efc929a8. String already proves validity.
+@noalloc
+fn grapheme_scalar(s: String, position: u64) -> (u32, u64) uses {} {
+  let bytes = core@1/string.as_bytes(s)
+  let first: u32 = core@1/int.widen(bytes[position])
+  if first < 0x80 {
+    (first, 1)
+  } else {
+    let second: u32 = core@1/int.widen(bytes[position + 1])
+    if first < 0xe0 {
+      ((first & 0x1f) << 6 | second & 0x3f, 2)
+    } else {
+      let third: u32 = core@1/int.widen(bytes[position + 2])
+      if first < 0xf0 {
+        ((first & 0x0f) << 12 | (second & 0x3f) << 6 | third & 0x3f, 3)
+      } else {
+        let fourth: u32 = core@1/int.widen(bytes[position + 3])
+        (
+          (first & 7) << 18 | (second & 0x3f) << 12 | (third & 0x3f) << 6 | fourth & 0x3f,
+          4
+        )
+      }
+    }
+  }
+}
+
+// Adapted from unicode-segmentation src/grapheme.rs::check_pair,
+// ff47b3187adddb14813e6fb2cfc1a079f58cfddc (1.12.0 / Unicode16).
+// Extended mode is fixed; contextual pair outcomes are resolved separately.
+type GraphemePair = GraphemeJoin | GraphemeSplit | GraphemeIndic | GraphemeEmoji | GraphemeRegional
+
+@noalloc
+fn grapheme_pair(previous: u8, current: u8) -> GraphemePair uses {} {
+  let left = previous & 15
+  let right = current & 15
+  if left == 1 && right == 2 {
+    return GraphemeJoin()
+  } // GB3
+  if left >= 1 && left <= 3 {
+    return GraphemeSplit()
+  } // GB4
+  if right >= 1 && right <= 3 {
+    return GraphemeSplit()
+  } // GB5
+  if left == 9 && (right == 9 || right == 10 || right == 12 || right == 13) {
+    return GraphemeJoin()
+  } // GB6
+  if (left == 12 || left == 10) && (right == 10 || right == 11) {
+    return GraphemeJoin()
+  } // GB7
+  if (left == 13 || left == 11) && right == 11 {
+    return GraphemeJoin()
+  } // GB8
+  if right == 4 || right == 5 {
+    return GraphemeJoin()
+  } // GB9
+  if right == 8 || left == 7 {
+    return GraphemeJoin()
+  } // GB9a/9b
+  if current >> 4 & 3 == 1 {
+    return GraphemeIndic()
+  } // GB9c
+  if left == 5 && current & 64 != 0 {
+    return GraphemeEmoji()
+  } // GB11
+  if left == 6 && right == 6 {
+    return GraphemeRegional()
+  } // GB12/13
+  GraphemeSplit() // GB999
+}
+
+// Adapted from the same commit's is_boundary and handle_incb_consonant,
+// handle_emoji, handle_regional: suffix summaries replace reverse pre-context
+// scans because the entire slice is available and iteration is forward only.
+@noalloc
+fn grapheme_break(
+  previous: u8,
+  current: u8,
+  indic: u8,
+  zwj_after_ep: bool,
+  odd_ri: bool
+) -> bool uses {} {
+  match grapheme_pair(previous, current) {
+    GraphemeJoin() => false,
+    GraphemeSplit() => true,
+    GraphemeIndic() => indic != 2,
+    GraphemeEmoji() => !zwj_after_ep,
+    GraphemeRegional() => !odd_ri,
+  }
+}
+
+// Adapted from src/grapheme.rs::Graphemes::next and next_boundary at
+// unicode-segmentation ff47b3187adddb14813e6fb2cfc1a079f58cfddc.
+// The context handlers are compressed into bounded forward suffix state.
+@noalloc
+fn graphemes_next(mut it: GraphemeCursor) -> Option[String] in it uses {} {
+  let start = it.position
+  let length = core@1/string.byte_len(it.source)
+  if start == length {
+    return None
+  }
+  let (cp, width) = grapheme_scalar(it.source, start)
+  let mut previous = grapheme_properties(cp)
+  let mut position = start + width
+  // State describes suffixes ending at previous, never arbitrary prefix scans.
+  let mut indic: u8 = if previous >> 4 & 3 == 1 {
+    1
+  } else {
+    0
+  }
+  let mut ep = previous & 64 != 0
+  let mut zwj_after_ep: bool = false
+  let mut odd_ri = previous & 15 == 6
+  while position < length {
+    let (current_cp, current_width) = grapheme_scalar(it.source, position)
+    let current = grapheme_properties(current_cp)
+    if grapheme_break(previous, current, indic, zwj_after_ep, odd_ri) {
+      break
+    }
+    let gcb = current & 15
+    let incb = current >> 4 & 3
+    if incb == 1 {
+      indic = 1
+    } else {
+      if incb == 3 && indic != 0 {
+        indic = 2
+      } else {
+        if incb != 2 {
+          indic = 0
+        }
+      }
+    }
+    zwj_after_ep = gcb == 5 && ep
+    ep = current & 64 != 0 || gcb == 4 && ep
+    odd_ri = gcb == 6 && !odd_ri
+    previous = current
+    position += current_width
+  }
+  it.position = position
+  // Both offsets are scalar boundaries by construction. These checks acquire
+  // StrPos brands from the exact original source instead of fabricating them.
+  match core@1/string.position(it.source, start) {
+    Some(first) => match core@1/string.position(it.source, position) {
+      Some(last) => Some(core@1/string.slice(it.source, first, last)),
+      None => {
+        core@1/failure.check(false, TextInvariant())
+        None
+      },
+    },
+    None => {
+      core@1/failure.check(false, TextInvariant())
+      None
+    },
+  }
+}

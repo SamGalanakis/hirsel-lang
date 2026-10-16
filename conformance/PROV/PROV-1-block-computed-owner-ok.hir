@@ -1,0 +1,49 @@
+// rule: PROV-1
+// expect: accept
+// spec: #50
+// A block is transparent. One whose final expression names a binding
+// declared outside it has that binding's identity, also when the binding
+// holds a computed value, and a copy of it keeps the copied fields.
+type R {
+  n: u64,
+  other: u64,
+}
+
+fn fresh() -> List[u64] {
+  []
+}
+
+fn mk(d: List[u64]) -> Option[u8 of d] {
+  None
+}
+
+fn inspect(d: List[u64], p: Option[u8 of d]) -> () {}
+
+fn make_other(r: R) -> Option[u8 of r.other] {
+  None
+}
+
+fn inspect_other(r: R, p: Option[u8 of r.other]) -> () {}
+
+fn computed() -> () {
+  let owner = fresh()
+  let value = mk(
+    {
+      owner
+      owner
+    }
+  )
+  inspect(owner, value)
+}
+
+fn copied(take x: R) -> () {
+  let mut r = copy x
+  r.n = 3
+  let s = copy {
+    r
+    r
+  }
+  r.other = 4
+  let q = make_other(s)
+  inspect_other(s, q)
+}

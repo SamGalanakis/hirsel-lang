@@ -1,0 +1,29 @@
+// rule: LANG-15
+// expect: run
+// stdout: ok
+// Replacing either side of a scalar snapshot preserves the other's bits.
+type R {
+  index: u64,
+}
+
+fn snapshot(mut r: R) -> bool {
+  let mut start: u64 = r.index
+  r.index = 9
+  let unchanged = start == 7
+  start = 1
+  unchanged && start == 1 && r.index == 9
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut r = R(index: 7)
+  let ok = snapshot(mut r) && r.index == 9
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

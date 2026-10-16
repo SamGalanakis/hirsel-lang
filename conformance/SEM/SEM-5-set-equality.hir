@@ -1,0 +1,28 @@
+// rule: SEM-5
+// expect: run
+// stdout: ok
+// "Set equality ignores order".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a: Set[u8] = set.empty()
+  set.insert(mut a, 1)
+  set.insert(mut a, 2)
+  let mut b: Set[u8] = set.empty()
+  set.insert(mut b, 2)
+  set.insert(mut b, 1)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if a == b {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

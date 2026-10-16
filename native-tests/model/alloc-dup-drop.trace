@@ -1,0 +1,10 @@
+rc-trace v1
+max 16
+# T01 alloc, T03 dup, T04 release: two holders, the last release kills the block,
+# T16 drain retires it, and T01 then hands the freed address out with a bumped generation.
+alloc r1 0
+dup r1 r2
+drop r1
+drop r2
+drain
+alloc r3 0

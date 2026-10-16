@@ -1,0 +1,20 @@
+[package]
+name = "hirsel-lower"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-span = { path = "../hirsel-span" }
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-types = { path = "../hirsel-types" }
+hirsel-diag = { path = "../hirsel-diag" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-check-protocol = { path = "../hirsel-check-protocol" }
+
+[dev-dependencies]
+hirsel-interp = { path = "../hirsel-interp" }
+hirsel-validate = { path = "../hirsel-validate" }
+insta = "1"

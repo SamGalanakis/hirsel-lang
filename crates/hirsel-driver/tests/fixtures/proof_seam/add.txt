@@ -1,0 +1,4 @@
+standalone@0/add#FACT-1/requires/0 @2:12 sites=1 clause=0
+standalone@0/add#SEM-1/failure-edge/0 @4:3 sites=1
+standalone@0/add#FACT-1/ensures/0 @3:11 sites=1 clause=1
+standalone@0/main#FACT-1/requires-at-call/0 @7:11 sites=1 call=standalone@0/add clause=0

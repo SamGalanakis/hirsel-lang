@@ -1,0 +1,21 @@
+// rule: DROP-4
+// expect: run
+// stdout: abort
+// "Implicit drop is the abort path".
+resource type Transaction {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "abort\n")
+}
+
+fn commit(take x: Transaction) -> Result[(), ()] {
+  let _ = out.print(x.stdout, "commit\n")
+  forget(take x)
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tx = Transaction(stdout: io.stdout(rt)?)
+  Ok(())
+}

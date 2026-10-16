@@ -1,0 +1,12 @@
+// rule: CAP-3
+// expect: accept
+fn repeat(f: fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+fn example() -> u64 {
+  let f: fn() -> u64 uses {} = fn() {
+    1u64
+  }
+  repeat(f)
+}

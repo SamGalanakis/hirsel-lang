@@ -1,0 +1,9 @@
+// rule: SEM-4
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let extensions: List[(String, String)] in rt = [(".gitignore", ""), ("file.ext.", "")]
+  for (input, expected) in extensions {
+    failure.check(input != expected, TextInvariant())
+  }
+  Ok(())
+}

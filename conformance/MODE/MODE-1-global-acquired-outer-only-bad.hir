@@ -1,0 +1,19 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 18
+type Inner {
+  value: Bytes,
+}
+
+type Holder {
+  inner: Inner,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn example(take h: Holder, seed: Bytes) -> Bytes {
+  let mut r: Holder in r = take h
+  r.inner = Inner(value: identity(seed))
+  r.inner.value
+}

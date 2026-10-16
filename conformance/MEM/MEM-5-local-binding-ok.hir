@@ -1,0 +1,8 @@
+// rule: MEM-5
+// expect: accept
+// "Region placement (MEM-10) ... do[es] not count".
+@noalloc
+fn length() -> u8 {
+  let xs: Array[u8] = [7]
+  xs[0]
+}

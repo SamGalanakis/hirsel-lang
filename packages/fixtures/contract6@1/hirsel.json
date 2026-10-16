@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "contract6",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "api.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

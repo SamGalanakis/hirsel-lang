@@ -1,0 +1,114 @@
+// rule: LANG-11
+// expect: run
+// stdout: ok
+// "A global argument lends no bound loan, so a getter over a heap map returns
+// an ordinary global value" (MODE-1). A call whose result is local to a
+// binding the block declares returns a counted share when that binding's
+// content is global, and so does a closure that captures it or a binding
+// that shares a part of it. The share outlives the block, as it outlives a
+// function that returns it.
+type R {
+  name: String,
+}
+
+fn view(x: List[u64]) -> List[u64] in x {
+  x
+}
+
+fn first(x: List[List[u64]]) -> List[u64] in x {
+  x[0]
+}
+
+fn name(r: R) -> String in r {
+  r.name
+}
+
+fn returned() -> List[u64] {
+  let v: List[u64] = [1, 2, 3, 4, 5]
+  view(v)
+}
+
+fn called() -> u64 {
+  list.len(
+    {
+      let v: List[u64] = [1]
+      view(v)
+    }
+  )
+}
+
+fn part() -> u64 {
+  list.len(
+    {
+      let v: List[List[u64]] = [[1, 2]]
+      first(v)
+    }
+  )
+}
+
+fn field() -> u64 {
+  string.byte_len(
+    {
+      let r = R(name: "abc")
+      name(r)
+    }
+  )
+}
+
+fn rebound() -> u64 {
+  string.byte_len(
+    {
+      let r = R(name: "abcd")
+      let n = r.name
+      n
+    }
+  )
+}
+
+fn related() -> u64 {
+  list.len(
+    {
+      let v: List[List[u64]] = [[1, 2, 3, 4, 5, 6]]
+      let w: List[u64] in v = v[0]
+      w
+    }
+  )
+}
+
+fn captured() -> u64 {
+  list.len(
+    {
+      let v: List[u64] = [1, 2, 3, 4, 5, 6, 7]
+      let f = fn() {
+        v
+      }
+      f()
+    }
+  )
+}
+
+fn branch(c: bool) -> u64 {
+  list.len(
+    if c {
+      let v: List[u64] = [1]
+      view(v)
+    } else {
+      []
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let sum = called() + part() + field() + rebound() + list.len(returned()) + related() + captured() + branch(
+    true
+  )
+  let _ = out.print(
+    io.stdout(rt)?,
+    if sum == 29 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

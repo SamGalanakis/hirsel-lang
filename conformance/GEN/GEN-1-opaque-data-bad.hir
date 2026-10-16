@@ -1,0 +1,23 @@
+// rule: GEN-1
+// expect: reject CAP-2 at line 3
+pub opaque type F: data uses {} {
+  f: fn() -> u64,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let a = F(
+    f: fn() -> u64 {
+      1
+    }
+  )
+  let b = F(
+    f: fn() -> u64 {
+      2
+    }
+  )
+  if a == b {
+    let _ = out.print(grant_stdout, "eq\n")
+  }
+  Ok(())
+}

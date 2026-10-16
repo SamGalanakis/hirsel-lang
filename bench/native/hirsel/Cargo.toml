@@ -1,0 +1,17 @@
+[package]
+name = "hirsel-native-build"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+hirsel-driver = { path = "../../../crates/hirsel-driver" }
+hirsel-engine = { path = "../../../crates/hirsel-engine" }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,28 @@
+---
+source: crates/hirsel-lower/src/tests.rs
+expression: a
+---
+definition main entry b0
+body 0 result t2 parameters []
+  slot 0: t2 Temporary scope 0
+  slot 1: t2 Temporary scope 0
+  slot 2: t2 Temporary scope 0
+  place 0: slot 0 [] t2
+  place 1: slot 0 [] t2
+  place 2: slot 1 [] t2
+  place 3: slot 2 [] t2
+  place 4: slot 2 [] t2
+  rvalue 0: Constant(Integer(3))
+  rvalue 1: Use(Operand { place: PlaceId(1), usage: Take })
+  cleanup 0: []
+  block 0:
+    StorageLive(LocalId(0)) fail 0 @0..1
+    Assign { destination: PlaceId(0), value: RvalueId(0) } fail 0 @0..1
+    BindOrigin { source: PlaceId(0), place: PlaceId(1), kind: Fresh } fail 0 @0..1
+    StorageLive(LocalId(1)) fail 0 @0..1
+    Assign { destination: PlaceId(2), value: RvalueId(1) } fail 0 @0..1
+    StorageLive(LocalId(2)) fail 0 @0..1
+    Call { callee: DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: [], name: "generic" })[t2], arguments: [CallArgument { parameter: ParamId(0), value: Operand { place: PlaceId(2), usage: Take } }], destination: PlaceId(3), next: BlockId(1), on_failure: CleanupId(0) } @0..1
+  block 1:
+    BindOrigin { source: PlaceId(3), place: PlaceId(4), kind: Fresh } fail 0 @0..1
+    Return { value: Operand { place: PlaceId(4), usage: Take }, cleanup: CleanupId(0) } @0..1

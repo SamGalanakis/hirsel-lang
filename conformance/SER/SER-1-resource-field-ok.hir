@@ -1,0 +1,11 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type Token {
+  n: u64,
+}
+
+@serializable
+type Row {
+  value: Token,
+}

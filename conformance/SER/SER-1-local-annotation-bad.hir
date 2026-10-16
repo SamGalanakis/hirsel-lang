@@ -1,0 +1,10 @@
+// rule: SER-1
+// expect: reject SER-1 at line 9
+@serializable
+type Row[T: serializable] {
+  value: T,
+}
+
+fn example() {
+  let xs: List[Row[Dir]] = []
+}

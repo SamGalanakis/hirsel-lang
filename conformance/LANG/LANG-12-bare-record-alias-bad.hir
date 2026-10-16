@@ -1,0 +1,11 @@
+// rule: LANG-12
+// expect: reject LANG-12 at line 10
+type A {
+  x: u8,
+}
+
+type R = A
+
+fn probe() {
+  let x = R
+}

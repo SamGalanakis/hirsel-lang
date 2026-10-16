@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: accept
+// A taken Local argument bounds the content it brings. A whole replacement
+// discards that content, so the result needs to name only its new source.
+type Holder {
+  value: String,
+  other: String,
+}
+
+fn refill(take dst: Holder in dst, x: String) -> Holder in x {
+  let mut owned = take dst
+  owned = Holder(value: copy x, other: copy x)
+  take owned
+}

@@ -1,0 +1,32 @@
+// rule: PROV-1
+// expect: accept
+// A field written on one path of a branch or loop renews that field on that
+// path only. After the join a brand made from the field names its current
+// incarnation on every path, also for a binding initialised by construction.
+type R {
+  k: u64,
+  s: String,
+}
+
+fn make_k(r: R) -> Option[u8 of r.k] {
+  None
+}
+
+fn inspect_k(r: R, p: Option[u8 of r.k]) {}
+
+fn branch(c: bool) {
+  let mut r = R(k: 0u64, s: "a")
+  if c {
+    r.k = 1u64
+  }
+  let p = make_k(r)
+  inspect_k(r, p)
+}
+
+fn repeat(c: bool) {
+  let mut r = R(k: 0u64, s: "a")
+  while c {
+    r.k = 1u64
+  }
+  inspect_k(r, make_k(r))
+}

@@ -1,0 +1,5 @@
+// rule: DROP-1
+// expect: reject DROP-1 at line 5
+// "Copyable values have no user-visible destruction".
+type Value { n: u8 }
+  drop(x) {}

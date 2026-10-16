@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn fresh() -> sendable String {
+  "f"
+}
+
+fn pick() -> String {
+  let mut slot = unique fresh()
+  slot
+}

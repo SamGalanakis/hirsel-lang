@@ -1,0 +1,13 @@
+// rule: CLO-1
+// expect: accept
+// The heap form of the same part read, as an `in r` getter of the part is.
+type Rec {
+  items: Array[u64],
+}
+
+fn probe() -> Array[u64] {
+  let r: Rec = Rec(items: [1, 2])
+  fn() {
+    r.items
+  }()
+}

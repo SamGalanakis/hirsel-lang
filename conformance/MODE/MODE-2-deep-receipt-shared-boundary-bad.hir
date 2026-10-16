@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: reject LANG-13 at line 8
+type Rec {
+  items: List[Bytes],
+}
+
+fn probe(take s: unique Shared[Rec]) {
+  let Rec(items: items) = take s
+}

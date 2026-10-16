@@ -1,0 +1,64 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+flat type Entry {
+  text: String,
+  value: u64,
+}
+
+flat type Entries {
+  items: List[Entry],
+}
+
+fn stable() -> u64 {
+  let entries = Entries(
+    items: [Entry(text: "a", value: 3), Entry(text: "bbb", value: 7)]
+  )
+  let mut total = 0u64
+  for entry in entries.items {
+    total += entry.value + string.byte_len(entry.text)
+  }
+  total
+}
+
+fn changed() -> u64 {
+  let mut entries = Entries(items: [Entry(text: "a", value: 3)])
+  let saved = copy entries.items
+  entries = Entries(items: [Entry(text: "b", value: 19)])
+  let mut total = 0u64
+  for entry in saved {
+    total += entry.value
+  }
+  for entry in entries.items {
+    total += entry.value
+  }
+  total
+}
+
+fn conditional() -> u64 {
+  let entries = Entries(items: [Entry(text: "abc", value: 7)])
+  let mut total = 0u64
+  for entry in entries.items {
+    total += entry.value + string.byte_len(entry.text)
+    if entry.value == 7 {
+      let mut revised = copy entry
+      revised.value += 3
+      total += revised.value + string.byte_len(revised.text)
+    }
+  }
+  total
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? output_error,
+    if stable() == 14 && changed() == 22 && conditional() == 23 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

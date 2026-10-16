@@ -1,0 +1,22 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 21
+// "Uses restrictions may narrow, never widen", at every depth (#58). `pass`
+// requires a function whose result is `uses {}`; `p` is written to return a
+// function with open `uses`, which here prints through `rt`, so passing it
+// would hand `sandbox` a callback holding authority.
+fn sandbox(g: fn() -> () uses {}) -> () {
+  g()
+}
+
+fn pass(q: fn() -> fn() -> () uses {}) -> () {
+  sandbox(q())
+}
+
+fn probe(rt: Stdout) -> () {
+  let p: fn() -> fn() -> () = fn() {
+    fn() {
+      let _ = out.print(rt, "x")
+    }
+  }
+  pass(p)
+}

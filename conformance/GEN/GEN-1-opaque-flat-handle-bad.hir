@@ -1,0 +1,5 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 3
+pub opaque type Holder: plain + flat uses {} {
+  id: SlotId[u32],
+}

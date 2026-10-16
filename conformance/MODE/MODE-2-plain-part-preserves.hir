@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: accept
+// "Exclusively owns every counted block reachable from it."
+type Rec {
+  n: u64,
+  items: Bytes,
+}
+
+fn require_unique(mut r: unique Rec) -> () {
+  ()
+}
+
+fn example(mut r: unique Rec) -> () {
+  let n = r.n
+  require_unique(mut r)
+  let _ = n
+}

@@ -1,0 +1,21 @@
+// rule: LANG-7
+// expect: run
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let mut m: Map[u8, Trace] = map.empty()
+  for (k, v) in mut m {
+    v = Trace(
+      stdout: fn() {
+        grant_stdout
+      }(),
+      text: "new\n"
+    )
+  }
+  Ok(())
+}

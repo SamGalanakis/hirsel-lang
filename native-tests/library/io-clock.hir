@@ -1,0 +1,14 @@
+fn error(take e: FileError) -> () {}
+
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let _ = io.monotonic_clock(rt)
+  Ok(())
+}

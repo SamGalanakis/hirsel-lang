@@ -1,0 +1,16 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 14
+type Wrap[T] {
+  value: T,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn probe[T](take x: Wrap[T]) {
+  fn inner[U: plain](y: U) -> bool {
+    let v = x.value
+    v == v
+  }
+}

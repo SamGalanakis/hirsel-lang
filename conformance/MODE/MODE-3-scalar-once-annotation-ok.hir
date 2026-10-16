@@ -1,0 +1,5 @@
+// rule: MODE-3
+// expect: accept
+fn identity(take x: u64) -> u64 {
+  x
+}

@@ -1,0 +1,23 @@
+// rule: DROP-2
+// expect: run
+// stdout: loop
+// stdout: loop
+// "end of the scope that owns it ... on every exit path".
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let begin: u8 = 0
+  let end: u8 = 2
+  for i in begin..end {
+    let value = Trace(stdout: stdout, text: "loop\n")
+    continue
+  }
+  Ok(())
+}

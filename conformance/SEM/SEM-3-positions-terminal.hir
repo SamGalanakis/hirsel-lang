@@ -1,0 +1,17 @@
+// rule: SEM-3
+// expect: run
+@noalloc
+fn check(n: u64) -> ()
+  requires n == 3 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let text: String = "é😀"
+  let mut count: u64 = 0
+  for p in string.positions(text) {
+    count += 1
+  }
+  check(count)
+  Ok(())
+}

@@ -1,0 +1,11 @@
+// rule: PROV-1
+// expect: accept
+// "Except that container brands ... follow the container’s identity."
+fn example(mut s: Slots[u64]) -> () {
+  let first: u64 = 1
+  let second: u64 = 2
+  let id = slots.insert(mut s, take first)
+  let other = slots.insert(mut s, take second)
+  let _ = slots.get(s, id)
+  let _ = other
+}

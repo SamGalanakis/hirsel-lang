@@ -1,0 +1,22 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 75
+// stdout: test failure: seed=0 case=0
+// entry: trial
+fn gen(t: Test) -> String {
+  test.check(t, true)
+  std@1/u64.to_string(7)
+}
+
+fn law(s: String) -> bool uses {} {
+  false
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.check(t, true)
+  std@1/test.for_all(t, gen, law)
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

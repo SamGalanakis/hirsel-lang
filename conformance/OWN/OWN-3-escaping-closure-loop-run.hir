@@ -1,0 +1,36 @@
+// rule: OWN-3
+// expect: run
+// entry: test_escaping
+// A global closure copied out of a loop escapes, so each iteration keeps its own
+// credit while the loop's calls still borrow the original.
+fn apply(value: u64, f: fn(u64) -> u64 uses {}) -> u64 uses {f} {
+  f(value)
+}
+
+fn make(base: u64) -> fn(u64) -> u64 uses {} {
+  let offsets: List[u64] = [base]
+  fn(value: u64) -> u64 uses {} {
+    value + offsets[0u64]
+  }
+}
+
+fn kernel(n: u64, mut total: u64) -> List[fn(u64) -> u64 uses {}] {
+  let add = make(3u64)
+  let mut kept: List[fn(u64) -> u64 uses {}] = []
+  for i in 0u64..n {
+    total += apply(i, add)
+    list.push(mut kept, copy add)
+  }
+  kept
+}
+
+pub fn test_escaping(t: Test) -> Result[(), ()] {
+  let mut total: u64 = 0
+  let kept = kernel(4u64, mut total)
+  test.check(t, total == 18u64)
+  test.check(t, list.len(kept) == 4u64)
+  for j in 0u64..4u64 {
+    test.check(t, apply(j, kept[j]) == j + 3u64)
+  }
+  Ok(())
+}

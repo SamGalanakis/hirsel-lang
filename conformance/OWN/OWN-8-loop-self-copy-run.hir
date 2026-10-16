@@ -1,0 +1,26 @@
+// rule: OWN-8
+// expect: run
+type Chain {
+  next: Option[box Chain],
+  f: fn() -> (),
+}
+
+fn probe(take f: (sendable fn() -> ()) in f, again: bool) {
+  let mut n: Chain = Chain(next: None, f: copy f)
+  let mut repeat = again
+  while repeat {
+    n = copy n
+    repeat = false
+  }
+  n.f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  probe(
+    fn() {
+      ()
+    },
+    true
+  )
+  Ok(())
+}

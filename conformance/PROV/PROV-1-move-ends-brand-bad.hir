@@ -1,0 +1,23 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 19
+// "A brand ends when p is ... moved."
+fn first(s: String) -> Option[StrPos of s] {
+  for p in string.positions(s) {
+    return Some(p)
+  }
+  None
+}
+
+fn inspect(s: String, p: StrPos of s) -> () {
+  ()
+}
+
+fn example(take text: String) -> () {
+  match first(text) {
+    Some(p) => {
+      let moved = take text
+      inspect(moved, p)
+    },
+    None => (),
+  }
+}

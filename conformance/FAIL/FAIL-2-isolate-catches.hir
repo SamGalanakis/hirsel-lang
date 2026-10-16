@@ -1,0 +1,34 @@
+// rule: FAIL-2
+// expect: run
+// stdout: ok
+// "task.isolate ... is the only place a failure is caught".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let status: Result[u8, Failure] = task.isolate(
+    tasks,
+    fn() -> u8 {
+      let n: u8 = 255
+      n + 1
+    }
+  )
+  let caught: bool = match status {
+    Ok(value) => false,
+    Error(failure) => true,
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if caught {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

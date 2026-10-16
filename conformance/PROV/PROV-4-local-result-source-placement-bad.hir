@@ -1,0 +1,12 @@
+// rule: PROV-4
+// expect: accept
+// Under v22 (R3) a global value is within any relation, so it meets the arena
+// placement the result's source carries. v21 rejected this, since a value declared
+// without a placement was not known to live in a.
+fn make() -> Bytes {
+  b"heap"
+}
+
+fn leak(a: Arena, x: Bytes in a) -> Bytes in x {
+  make()
+}

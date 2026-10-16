@@ -1,0 +1,17 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 16
+// The twin of CLO-4-annotated-tuple-callable-return-run. The binding's
+// written type leaves the callable part's authority unknown, so returning
+// the binding where the result states `uses {}` is rejected, although the
+// value it holds captures nothing.
+fn made() -> (fn() -> () uses {}, u64) {
+  let p: (fn() -> (), u64) = fn() {
+    (
+      fn() {
+        ()
+      },
+      8u64
+    )
+  }()
+  p
+}

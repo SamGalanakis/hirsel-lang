@@ -1,0 +1,8 @@
+// rule: MODE-5
+// expect: reject CLO-4 at line 6
+// "Its authority summary ... is the union of its captures’."
+fn example(dir: Dir, clock: MonotonicClock) -> fn() -> (Dir, MonotonicClock) uses {Dir} {
+  fn() {
+    (dir, clock)
+  }
+}

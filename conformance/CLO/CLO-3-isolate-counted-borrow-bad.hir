@@ -1,0 +1,11 @@
+// rule: CLO-3
+// expect: reject CLO-3 at line 7
+// "task.isolate’s closure follows the same rules."
+fn example(tasks: Tasks, take x: unique Bytes) -> () {
+  let _ = task.isolate(
+    tasks,
+    fn() {
+      let _ = x
+    }
+  )
+}

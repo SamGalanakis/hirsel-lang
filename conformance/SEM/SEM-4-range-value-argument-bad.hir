@@ -1,0 +1,7 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 6
+fn consume(take r: Iter[u8]) {}
+
+fn probe() {
+  consume(0u8..2u8)
+}

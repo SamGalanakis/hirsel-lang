@@ -1,0 +1,8 @@
+// rule: MODE-4
+// expect: accept
+fn pair(x: sendable Bytes, take y: Bytes) {}
+
+fn probe() {
+  let x: sendable Bytes = b"a"
+  pair(x, b"b")
+}

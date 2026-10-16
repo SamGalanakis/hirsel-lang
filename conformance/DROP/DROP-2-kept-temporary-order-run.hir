@@ -1,0 +1,39 @@
+// rule: DROP-2
+// expect: run
+// stdout: last
+// stdout: g
+// stdout: kept
+// stdout: first
+// A temporary that a binding keeps is released like a named local declared
+// just before that binding, so it drops after the binding and after later names.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn make(stdout: Stdout, take text: String) -> Trace {
+  Trace(stdout: stdout, text: text)
+}
+
+fn wrap(t: Trace, stdout: Stdout, take text: String) -> Trace in t {
+  Trace(stdout: stdout, text: text)
+}
+
+fn close(take t: Trace in t) {
+  ()
+}
+
+fn probe(stdout: Stdout, first: Trace) {
+  let g = wrap(wrap(first, stdout, "kept\n"), stdout, "g\n")
+  let last = make(stdout, "last\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let first = make(stdout, "first\n")
+  probe(stdout, first)
+  Ok(())
+}

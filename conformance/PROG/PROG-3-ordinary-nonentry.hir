@@ -1,0 +1,7 @@
+// rule: PROG-3
+// expect: accept
+// Shows "The run configuration chooses the entry point"; an ordinary main name imposes no entry requirement.
+@noalloc
+fn main(value: u32) -> u32 {
+  value
+}

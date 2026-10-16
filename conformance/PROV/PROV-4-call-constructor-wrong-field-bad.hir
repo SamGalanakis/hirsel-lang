@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 10
+type Ast {
+  bytes: Bytes,
+}
+
+fn consume(a: Arena, take value: Ast in a) {}
+
+fn bad(a: Arena, b: Arena, take bytes: Bytes in b) {
+  consume(a, Ast(bytes: take bytes))
+}

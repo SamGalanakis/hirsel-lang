@@ -1,0 +1,9 @@
+// rule: CAP-3
+// expect: reject CAP-3 at line 8
+fn repeat(f: fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+fn example(f: fn() -> u64) -> u64 {
+  repeat(f)
+}

@@ -1,0 +1,36 @@
+// Supplemental row B: actual fail-stop and reverse resource destruction.
+// This minimal control requires task.isolate; it is not the source-model row.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn attempt(stdout: Stdout) {
+  let a = Trace(stdout: stdout, text: "a\n")
+  let b = Trace(stdout: stdout, text: "b\n")
+  failure.check(false, Bounds())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  let status: Result[(), Failure] = task.isolate(
+    io.tasks(rt) ? grant_error,
+    fn() {
+      attempt(stdout)
+    }
+  )
+  let text: String = match status {
+    Ok(_) => "bad\n",
+    Error(_) => "caught\n",
+  }
+  let _ = out.print(stdout, text)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

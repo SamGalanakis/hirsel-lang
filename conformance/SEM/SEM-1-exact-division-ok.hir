@@ -1,0 +1,12 @@
+// rule: SEM-1
+// expect: run
+@noalloc
+fn check(n: i32) -> ()
+  requires n == -3 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  check(int.div_exact(-9, 3))
+  Ok(())
+}

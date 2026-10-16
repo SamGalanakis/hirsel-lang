@@ -1,0 +1,12 @@
+rc-trace v1 max 16
+error at step 2 (line 5): T03 dup: @0 is a resource (noncopyable)
+heap
+  @0 live gen 1 count fin 1 heap arity 0 fin
+credits
+  r1 -> @0#1
+borrows
+locals
+tokens
+work
+regions
+events

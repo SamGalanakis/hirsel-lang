@@ -1,0 +1,23 @@
+add max-1+1 ok 9223372036854775807
+add max+1 fail 1
+add min+-1 fail 1
+add min+max ok -1
+div 7/-2 ok -3
+div min/-1 fail 1
+div 1/0 fail 1
+div min/1 ok -9223372036854775808
+shl 1<<63 ok -9223372036854775808
+shl 1<<64 fail 1
+shl 1<<max fail 1
+mul 2^63*2^63 ok 0x40000000000000000000000000000000
+mul max*-1 ok 0x80000000000000000000000000000001
+mul 2^64*2^63 fail 1
+mul -2^64*2^63 ok 0x80000000000000000000000000000000
+packed near-max ok 9223372036854775807
+packed overflow fail 1
+host 5 ok 16
+host max/3 ok 9223372036854775807
+host max fail 1
+mul_add 0x3c30000000000000
+mul_then_add 0x0000000000000000
+div subnormal 0x0004000000000000

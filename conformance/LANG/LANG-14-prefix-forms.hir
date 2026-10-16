@@ -1,0 +1,9 @@
+// rule: LANG-14
+// expect: accept
+// Shows "take, mut, copy and unique are prefix forms."
+fn example(take xs: List[u32]) -> List[u32] {
+  let shared = copy xs
+  let owned = unique shared
+  let result_value = take owned
+  result_value
+}

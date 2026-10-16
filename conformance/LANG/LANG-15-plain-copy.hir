@@ -1,0 +1,8 @@
+// rule: LANG-15
+// expect: accept
+// Shows "let y = x copies a plain value and moves any other"
+@noalloc
+fn example(x: u32) -> (u32, u32) {
+  let y = x
+  (x, y)
+}

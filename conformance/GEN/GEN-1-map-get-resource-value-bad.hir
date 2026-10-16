@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 6
+// map.get's result is an owned read of a borrowed value, so the value type
+// meets the signature-derived Copyable obligation (OWN-1, #43). A resource does not.
+fn probe(m: Map[u8, File]) -> () {
+  let found = map.get(m, 1)
+}

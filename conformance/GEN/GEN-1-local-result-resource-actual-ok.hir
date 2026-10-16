@@ -1,0 +1,16 @@
+// rule: GEN-1
+// expect: accept
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn same[T](take x: T) -> T in x {
+  x
+}
+
+fn example(take x: Trace) -> Trace {
+  same(take x)
+}

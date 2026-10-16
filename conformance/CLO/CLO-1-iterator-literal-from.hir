@@ -1,0 +1,10 @@
+// rule: CLO-1
+// expect: accept
+fn probe() {
+  let it: Iter[u64] = iter.from(
+    0u64,
+    fn(mut n: u64) -> Option[u64] {
+      None
+    }
+  )
+}

@@ -1,0 +1,30 @@
+// rule: DROP-2
+// expect: run
+// stdout: yes
+// stdout: fallback
+// stdout: false
+resource type Token {
+  stdout: Stdout,
+  text: String,
+}
+drop(self) {
+  let _ = out.print(self.stdout, self.text)
+}
+
+fn classify(take p: (Option[Token], bool)) {
+  match take p {
+    (Some(t), true) if t.text == "yes\n" => (),
+    (Some(t), true) => (),
+    (Some(t), false) => (),
+    (None, _) => (),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  classify((Some(Token(stdout: stdout, text: "yes\n")), true))
+  classify((Some(Token(stdout: stdout, text: "fallback\n")), true))
+  classify((Some(Token(stdout: stdout, text: "false\n")), false))
+  classify((None, false))
+  Ok(())
+}

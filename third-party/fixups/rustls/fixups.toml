@@ -1,0 +1,2 @@
+# build.rs only enables nightly read_buf, which this runtime does not select.
+buildscript.run = false

@@ -1,0 +1,8 @@
+// rule: SEM-1
+// expect: fail SEM-1 at line 6
+// "+ - * and unary - fail on overflow"; "/0, MIN / -1 and shifts ≥ width fail".
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let x: i8 = -127 - 1
+  let value: i8 = -x
+  Ok(())
+}

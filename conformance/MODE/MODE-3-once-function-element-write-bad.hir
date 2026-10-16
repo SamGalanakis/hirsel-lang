@@ -1,0 +1,12 @@
+// rule: MODE-3
+// expect: reject MODE-3 at line 11
+// An element of a list of many functions is a many function, so a write cannot
+// store a once function there.
+fn loud() -> once fn() -> () {
+  fn() {}
+}
+
+fn set(mut p: List[fn() -> ()]) -> () {
+  let _ = 0u64
+  p[0] = loud()
+}

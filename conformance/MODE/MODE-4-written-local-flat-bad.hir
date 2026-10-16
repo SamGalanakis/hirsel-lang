@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: reject MODE-1 at line 14
+// "... local values."
+flat type Item {
+  sku: String,
+  qty: u32,
+}
+
+fn cross[T](take x: sendable T) -> () {
+  ()
+}
+
+fn example(take x: Item in x) -> () {
+  cross(take x)
+}

@@ -1,0 +1,18 @@
+// rule: MODE-3
+// expect: accept
+// A part's declared multiplicity is a contract of the aggregate.
+type Holder {
+  action: fn() -> () uses {},
+}
+
+type Single {
+  action: once fn() -> () uses {},
+}
+
+fn example(take action: fn() -> () uses {}) -> Holder {
+  Holder(action: take action)
+}
+
+fn single(take action: once fn() -> () uses {}) -> Single {
+  Single(action: take action)
+}

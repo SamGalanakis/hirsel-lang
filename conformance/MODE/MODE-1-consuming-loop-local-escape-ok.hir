@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: accept
+// The elements of a global collection are global and may be kept.
+type Keep {
+  last: String,
+}
+
+fn keep_last(take xs: List[String], mut keep: Keep) -> () {
+  for x in take xs {
+    keep.last = x
+  }
+}

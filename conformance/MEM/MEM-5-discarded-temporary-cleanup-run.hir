@@ -1,0 +1,44 @@
+// rule: MEM-5
+// expect: run
+// stdout: ok
+// The twin of MEM-5-discarded-temporary-cleanup-bad. The finalizer is
+// declared `@noalloc`, so destroying the discarded `Token` in the `@noalloc`
+// closure body allocates nothing.
+resource type Token {
+  n: u32,
+}
+@noalloc drop(x) {
+  ()
+}
+
+@noalloc
+fn make() -> Token {
+  Token(n: 1)
+}
+
+@noalloc
+fn invoke(f: @noalloc fn() -> u32 uses {}) -> u32 {
+  f()
+}
+
+@noalloc
+fn probe() -> u32 {
+  invoke(
+    fn() {
+      make()
+      1
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe() == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

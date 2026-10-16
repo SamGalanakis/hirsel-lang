@@ -1,0 +1,23 @@
+// rule: CLO-3
+// expect: accept
+type Holder[F] {
+  action: F,
+}
+
+fn relay[F](take f: F) -> F {
+  f
+}
+
+fn use_pos(s: Dir, p: u64 of s) {}
+
+fn probe(s: Dir, p: u64 of s) {
+  let alias = s
+  let action: once fn() = fn() {
+    use_pos(alias, p)
+    let _ = take alias
+  }
+  let holder: Holder[once fn()] = Holder(action: take action)
+  let forwarded = relay(take holder)
+  let Holder(action: final) = take forwarded
+  final()
+}

@@ -1,0 +1,13 @@
+rc-trace v1
+max 16
+# T12 reset of a unique donor produces a pending token; draining the donor turns it into
+# raw storage owned by the token; T13 reuse installs a new value at the same address with
+# the next generation.
+alloc r1 1
+alloc r2 0
+write r1 0 r2
+reset r1 t1
+drain
+drain
+drain
+reuse t1 r3 1

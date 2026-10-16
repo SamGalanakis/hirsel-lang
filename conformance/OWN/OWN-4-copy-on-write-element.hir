@@ -1,0 +1,19 @@
+// rule: OWN-4
+// expect: run
+// stdout: ok
+// "First mutation of shared storage detaches it."
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut xs: Array[u64] = [1, 2]
+  let ys = copy xs
+  xs[0] = 9
+  if (ys[0], xs[0]) == (1, 9) {
+    out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  } else {
+    out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

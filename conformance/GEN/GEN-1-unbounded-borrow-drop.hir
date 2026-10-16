@@ -1,0 +1,12 @@
+// rule: GEN-1
+// expect: accept
+// Shows "Structural, computed from the type, no user instances."
+@noalloc
+fn borrow[T](x: T) -> () {
+  let _ = x
+  ()
+}
+
+fn discard[T](take x: T) -> () {
+  ()
+}

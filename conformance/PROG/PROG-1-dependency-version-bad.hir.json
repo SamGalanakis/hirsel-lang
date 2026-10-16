@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "PROG-1-dependency-version-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/fixtures/probe@1/hirsel.json",
+      "package": {
+        "name": "probe",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "vendor",
+          "module": [
+            "api"
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": "../../packages/fixtures/probe@2/hirsel.json",
+      "package": {
+        "name": "probe",
+        "version": "2"
+      },
+      "expose": [
+        {
+          "head": "newvendor",
+          "module": [
+            "api"
+          ]
+        }
+      ]
+    }
+  ]
+}

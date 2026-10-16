@@ -1,0 +1,10 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 8
+// Packed[T] requires T to be Flat wherever the type is written, a local annotation
+// included, and a counted String payload is not flat (MEM-12).
+type Named = Word(text: String) | Pair(a: String, b: u64)
+
+fn count() -> u64 {
+  let xs: List[Packed[Named]] = [Word(text: "a")]
+  list.len(xs)
+}

@@ -1,0 +1,9 @@
+// rule: MEM-13
+// expect: run
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let mut x: Packed[Choice] = Small(value: 1)
+  x.Small.value = 2
+  Ok(())
+}

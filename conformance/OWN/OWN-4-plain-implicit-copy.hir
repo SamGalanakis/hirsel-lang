@@ -1,0 +1,7 @@
+// rule: OWN-4
+// expect: accept
+// "plain values copy implicitly."
+fn example(take x: u64) -> (u64, u64) {
+  let y = x
+  (x, y)
+}

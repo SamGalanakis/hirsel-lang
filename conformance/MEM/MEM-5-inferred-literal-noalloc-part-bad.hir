@@ -1,0 +1,24 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 12
+// "Every call goes through a signature declared @noalloc." The inner
+// literal calls a function that may allocate, so its row carries no
+// `@noalloc` evidence and the written `@noalloc` part cannot receive it.
+fn seven() -> u64 {
+  let l: List[u64] = [7]
+  l[0]
+}
+
+fn listed() -> u64 {
+  let l: List[(@noalloc fn() -> u64 uses {}, u64)] = [
+    fn() {
+      (
+        fn() {
+          seven()
+        },
+        0u64
+      )
+    }()
+  ]
+  let (f, _) = l[0]
+  f()
+}

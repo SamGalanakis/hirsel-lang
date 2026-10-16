@@ -1,0 +1,8 @@
+// rule: MEM-13
+// expect: reject MEM-13 at line 7
+// "Ordinary variant values ... expose no payload places".
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn edit(mut x: Choice) -> () {
+  x.Small.value = 2
+}

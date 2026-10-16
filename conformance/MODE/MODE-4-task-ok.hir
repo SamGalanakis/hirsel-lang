@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+// "... task handles."
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(s: Scope, take x: Task[u64] of s) -> () {
+  let value = task.await(s, take x)
+  cross(value)
+}

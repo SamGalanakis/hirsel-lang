@@ -1,0 +1,31 @@
+// rule: CLO-4
+// expect: run
+// stdout: ok
+// A once closure that reads its capture without taking it, so the caller's
+// environment releases it, once.
+fn ignore[E](take e: E) {}
+
+fn probe() -> once fn() -> u64 {
+  let x: String in heap = "x"
+  fn() {
+    string.byte_len(x)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let f = probe()
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if f() == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,11 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn callback(a: u64) -> bool uses {} {
+  true
+}
+
+fn example() -> () {
+  let mut xs: unique List[u64] = unique [1]
+  std@1/list.all(xs, callback);
+}

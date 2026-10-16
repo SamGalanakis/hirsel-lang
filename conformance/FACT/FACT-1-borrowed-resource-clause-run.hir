@@ -1,0 +1,26 @@
+// rule: FACT-1
+// expect: run
+// stdout: body
+// stdout: a
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn inspect(t: Trace) -> bool {
+  true
+}
+
+fn probe(take t: Trace) -> ()
+  requires inspect(t) {
+  let _ = out.print(t.stdout, "body\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  probe(take Trace(stdout: stdout, text: "a\n"))
+  Ok(())
+}

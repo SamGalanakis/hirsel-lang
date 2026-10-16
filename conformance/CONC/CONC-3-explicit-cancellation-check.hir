@@ -1,0 +1,12 @@
+// rule: CONC-3
+// expect: accept
+// "task.check_canceled(s)? marks long loops"; checks return explicit errors.
+pub fn checked_loop(tasks: Tasks) -> Result[(), CancelError] {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      task.check_canceled(s)?
+      Ok(())
+    }
+  )
+}

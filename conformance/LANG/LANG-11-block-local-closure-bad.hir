@@ -1,0 +1,19 @@
+// rule: LANG-11
+// expect: reject MODE-1 at line 14
+// "A block, branch or arm is transparent to its consumer's use." A scoped
+// closure borrows what it captures. One that captures a binding the block
+// declares cannot be the block's value, because `v` ends with the block.
+fn call(f: fn() -> u64) -> u64 {
+  f()
+}
+
+fn count() -> u64 {
+  call(
+    {
+      let v: List[u64] = [1]
+      fn() {
+        list.len(v)
+      }
+    }
+  )
+}

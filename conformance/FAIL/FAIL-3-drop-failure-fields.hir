@@ -1,0 +1,50 @@
+// rule: FAIL-3
+// expect: run
+// stdout: field
+// stdout: caught
+// "A failure inside a drop abandons that drop and still releases its fields".
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+resource type Parent {
+  field: Trace,
+}
+drop(x) {
+  let n: u8 = 255
+  let value = n + 1
+  let _ = out.print(x.field.stdout, "unreachable\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let stdout = io.stdout(rt) ? grant_error
+  let status: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() -> () {
+      let parent = Parent(field: Trace(stdout: stdout, text: "field\n"))
+    }
+  )
+  let caught: bool = match status {
+    Ok(value) => false,
+    Error(failure) => true,
+  }
+  let _ = out.print(
+    stdout,
+    if caught {
+      "caught\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

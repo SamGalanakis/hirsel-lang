@@ -1,0 +1,13 @@
+// rule: MEM-5
+// expect: accept
+// "contracts included"; calls require a noalloc signature.
+@noalloc
+fn allocates(x: u8) -> bool {
+  true
+}
+
+@noalloc
+fn contract(x: u8) -> u8
+  requires allocates(x) {
+  x
+}

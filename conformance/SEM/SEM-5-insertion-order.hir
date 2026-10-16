@@ -1,0 +1,29 @@
+// rule: SEM-5
+// expect: run
+// stdout: ok
+// "Map[K" — " key, V] iterates in insertion order".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut m: Map[u8, u8] = map.empty()
+  map.insert(mut m, 2, 20)
+  map.insert(mut m, 1, 10)
+  let mut order: u8 = 0
+  for (k, v) in m {
+    order = order * 10 + k
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if order == 21 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 11
+// A taken parameter's arena storage is not an arena-only argument. A result
+// holding a copy of it must name the parameter (ratified #43/#70/P2). The
+// named twin is MODE-1-local-result-temporary-source-bad, which is accepted.
+fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {a, x} {
+  x
+}
+
+fn relay(a: Arena, y: Bytes, take z: Bytes in a) -> Bytes in a {
+  choose(a, copy z, y)
+}

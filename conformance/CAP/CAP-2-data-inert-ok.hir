@@ -1,0 +1,7 @@
+// rule: CAP-2
+// expect: accept
+fn need[T: inert](x: T) {}
+
+fn probe[T: data](x: T) {
+  need(x)
+}

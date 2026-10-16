@@ -1,0 +1,29 @@
+// rule: DROP-2
+// expect: run
+// stdout: b
+// stdout: a
+// stdout: after
+// "on every exit path ... return".
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn early(stdout: Stdout) -> () {
+  let a = Trace(stdout: stdout, text: "a\n")
+  let b = Trace(stdout: stdout, text: "b\n")
+  if true {
+    return ()
+  }
+  let _ = out.print(stdout, "unreachable\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  early(stdout)
+  let _ = out.print(stdout, "after\n")
+  Ok(())
+}

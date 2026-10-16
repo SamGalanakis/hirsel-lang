@@ -1,0 +1,22 @@
+// rule: CLO-1
+// expect: accept
+// Calling a body-local closure returns its captured content, bounded by p,
+// rather than the short-lived slot holding h. This also seeds agreement edits.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn size(x: Bytes) -> u64 {
+  1
+}
+
+fn pairs(p: Bytes) -> u64 {
+  let w = view(p)
+  let g = fn() {
+    let h = fn() {
+      w
+    }
+    h()
+  }
+  size(g())
+}

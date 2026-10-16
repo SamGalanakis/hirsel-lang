@@ -1,0 +1,27 @@
+// rule: MEM-2
+// expect: run
+// stdout: ok
+// "closures cannot capture themselves"; capturing an earlier immutable value is permitted.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let text: String = "value"
+  let f = fn() -> u64 {
+    string.byte_len(text)
+  }
+  let n = f()
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if n == 5 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

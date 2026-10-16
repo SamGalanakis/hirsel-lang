@@ -1,0 +1,15 @@
+// rule: PROV-2
+// expect: accept
+fn use_pos(s: Dir, p: u64 of s) {}
+
+fn relay[F](take value: F) -> F {
+  value
+}
+
+fn example(s: Dir, p: u64 of s) {
+  let action: fn() uses {Dir} = fn() {
+    use_pos(s, p)
+  }
+  let forwarded = relay(take action)
+  forwarded()
+}

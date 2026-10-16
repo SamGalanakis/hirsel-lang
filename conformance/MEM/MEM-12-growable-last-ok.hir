@@ -1,0 +1,7 @@
+// rule: MEM-12
+// expect: accept
+// "at most one growable field, which must be last".
+flat type Value {
+  tail: u64,
+  items: List[u8] @ growable,
+}

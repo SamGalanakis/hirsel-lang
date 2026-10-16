@@ -1,0 +1,17 @@
+// rule: LANG-3
+// expect: run
+// stdout: a
+// stdout: b
+// Shows "arguments, tuple and constructor fields, operands, then the call."
+fn stamp(rt: Stdout, text: String, value: u64) -> u64 {
+  let _ = out.print(rt, text)
+  value
+}
+
+type Pair = Both(u64, u64)
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let value: Pair = Both(stamp(grant_stdout, "a\n", 1), stamp(grant_stdout, "b\n", 2))
+  Ok(())
+}

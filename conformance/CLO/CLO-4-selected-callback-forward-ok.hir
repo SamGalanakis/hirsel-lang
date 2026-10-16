@@ -1,0 +1,9 @@
+// rule: CLO-4
+// expect: accept
+@noalloc
+fn invoke(
+  action: @noalloc fn(@noalloc fn() -> () uses {}) -> (),
+  other: @noalloc fn() -> () uses {}
+) -> () uses {action} {
+  action(other)
+}

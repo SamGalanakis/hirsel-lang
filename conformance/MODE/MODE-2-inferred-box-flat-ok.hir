@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: accept
+flat type F {
+  text: String,
+}
+
+type R {
+  part: unique F,
+}
+
+fn probe(take r: R) {
+  let built = box {
+    r
+  }.part
+  let frozen = shared.freeze(take built)
+}

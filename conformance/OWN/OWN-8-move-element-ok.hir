@@ -1,0 +1,8 @@
+// rule: OWN-8
+// expect: accept
+// "To move a part out of an owned value, destructure the whole."
+fn example(take xs: Array[Bytes]) -> () {
+  for item in take xs {
+    let _ = take item
+  }
+}

@@ -1,0 +1,10 @@
+// rule: MEM-14
+// expect: accept
+// A body-local callable type's selector names its own parameter.
+fn build() {
+  let step: @advance_only(it) fn(mut it: Iter[u64]) -> Option[u64] = fn(
+    mut it: Iter[u64]
+  ) -> Option[u64] {
+    iter.next(mut it)
+  }
+}

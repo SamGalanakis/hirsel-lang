@@ -1,0 +1,107 @@
+// Box reads follow issue #98; implementation is owned by box-read.
+// Both retained roots share the original recursive list throughout mapping.
+type Node { value: u64, next: Option[box Node] }
+fn mapped_shared(root: Option[box Node]) -> Option[box Node] {
+  let mut current = copy root
+  let mut reversed: Option[box Node] = None()
+  while true {
+    match current {
+      None() => break,
+      Some(node) => {
+        reversed = Some(box Node(value: node.value + 1u64, next: take reversed))
+        current = copy node.next
+      },
+    }
+  }
+  reversed
+}
+fn workload(data: Bytes) -> Bytes {
+  let mut position: u64 = 0
+  let n = decimal(data, mut position)
+  let mut root: Option[box Node] = None()
+  let mut i = n
+  while i > 0u64 { i -= 1u64; root = Some(box Node(value: i, next: take root)) }
+  let retained = copy root
+  let mut values = mapped_shared(root)
+  values = match take values {
+    Some(node) => {
+      let Node(value: value, next: next) = take node
+      Some(box Node(value: value + 7u64, next: take next))
+    },
+    None() => None(),
+  }
+  let mut output: List[u8] = []
+  list.reserve(mut output, n * 44u64 + 256u64)
+  emit(values, mut output)
+  for x in 0u64..4u64 { list.push(mut output, b"---\n"[x]) }
+  emit(retained, mut output)
+  bytes.from_list(take output)
+}
+fn emit(values: Option[box Node], mut output: List[u8]) {
+  match values {
+    None() => {},
+    Some(node) => {
+      let line = number(node.value)
+      for j in 0u64..bytes.len(line) { list.push(mut output, line[j]) }
+      emit(node.next, mut output)
+    },
+  }
+}
+
+// Shared launch, decimal parsing, FNV-1a byte checksum and exact hex printing.
+// The workload is supplied by each benchmark's source before compilation.
+fn error[E](take e: E) -> () {}
+fn decimal(b: Bytes, mut pos: u64) -> u64 {
+  let mut n: u64 = 0
+  while pos < bytes.len(b) && b[pos] >= 48u8 && b[pos] <= 57u8 {
+    n = n * 10u64 + int.widen(b[pos] - 48u8)
+    pos += 1u64
+  }
+  n
+}
+fn checksum(b: Bytes) -> u64 {
+  let mut h: u64 = 14695981039346656037u64
+  for i in 0u64..bytes.len(b) {
+    let x = b[i]
+    let product: u128 = int.widen(h ^ int.widen(x)) * 1099511628211u128
+    h = int.truncate(product)
+  }
+  h
+}
+fn hex(n: u64) -> String {
+  let digits: Bytes = b"0123456789abcdef"
+  let mut out: List[u8] = []
+  for i in 0u64..16u64 {
+    list.push(mut out, digits[(n >> ((15u64 - i) * 4u64)) & 15u64])
+  }
+  list.push(mut out, 10u8)
+  match string.from_bytes(bytes.from_list(take out)) { Ok(s) => take s, Error(_) => "invalid hex\n" }
+}
+fn number(n: u64) -> Bytes {
+  let mut out: List[u8] = []
+  let s = u64.to_string(n)
+  let b = string.as_bytes(s)
+  for i in 0u64..bytes.len(b) { list.push(mut out, b[i]) }
+  list.push(mut out, 10u8)
+  bytes.from_list(take out)
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let input = arg.path(args, 1u64) ? error
+  let rounds_text = path.text(arg.path(args, 2u64) ? error)
+  let mut pos: u64 = 0
+  let rounds = decimal(string.as_bytes(rounds_text), mut pos)
+  let emit_output = match arg.path(args, 3u64) { Ok(p) => p == path.of("--emit"), Error(_) => false }
+  let d = io.dir(rt, path.of(".")) ? error
+  let data = file.read_bytes(d, input) ? error
+  let mut sum: u64 = 0
+  for epoch in 0u64..rounds {
+    let output = workload(data)
+    sum = int.wrapping_add(sum, checksum(output))
+    if emit_output {
+      let text = string.from_bytes(copy output) ? error
+      out.print(io.stdout(rt), text) ? error
+    }
+  }
+  if !emit_output { out.print(io.stdout(rt), hex(sum)) ? error }
+  Ok(())
+}

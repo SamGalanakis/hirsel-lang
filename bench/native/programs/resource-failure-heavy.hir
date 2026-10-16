@@ -1,0 +1,41 @@
+// Source model: identical explicit transaction and reverse cleanup as C/Rust.
+type Resource { id: u8, closed: bool }
+fn event(h: u64, e: u64) -> u64 {
+  let wide: u128 = int.widen(h) * 131u128 + int.widen(e)
+  int.truncate(wide)
+}
+fn destination_digest(data: Inline[u8, 16]) -> u64 {
+  let mut h: u64 = 14695981039346656037u64
+  for j in 0u64..16u64 {
+    let wide: u128 = int.widen(h ^ int.widen(data[j])) * 1099511628211u128
+    h = int.truncate(wide)
+  }
+  h
+}
+fn workload(data: Bytes) -> Bytes {
+  let mut pos: u64 = 0
+  let n = decimal(data, mut pos)
+  let mut total: u64 = 0
+  for i in 0u64..n {
+    let mut resources: List[Resource] = [Resource(id: 1u8, closed: false), Resource(id: 2u8, closed: false)]
+    let mut source: Inline[u8, 16] = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]
+    for j in 0u64..16u64 { source[j] = int.narrow(i % 127u64 + j) }
+    let mut transaction = copy source
+    for j in 0u64..16u64 { transaction[j] += 1u8 }
+    let mut destination: Inline[u8, 16] = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]
+    let failed = i % 2u64 == 0u64
+    if !failed { destination = copy transaction }
+    let mut h = i
+    h = event(event(event(event(h, 1u64), 2u64), 3u64), 4u64)
+    h = event(h, if failed { 6u64 } else { 5u64 })
+    for reverse in 0u64..2u64 {
+      let j = 1u64 - reverse
+      failure.check(!resources[j].closed, Bounds())
+      resources[j].closed = true
+      h = event(h, if resources[j].id == 2u8 { 7u64 } else { 8u64 })
+    }
+    failure.check(resources[0u64].closed && resources[1u64].closed, Bounds())
+    total = int.wrapping_add(total, h ^ destination_digest(destination))
+  }
+  number(total)
+}

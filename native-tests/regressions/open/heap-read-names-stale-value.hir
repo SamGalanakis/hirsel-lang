@@ -1,0 +1,26 @@
+// native/heap/heap: Malformed: read names ValueId(N) but SlotId(N) holds ValueId(N)
+// under x86_64/regions/elide/reuse/heap+inject: native heap in main: Malformed: Malformed: read names ValueId(21) but SlotId(1) holds ValueId(1) at probe block 8 statement 17
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+fn bump(mut x: Bytes) {
+}
+fn probe(mut x: Bytes, mut y: Bytes) {
+  let mut n: u32 = 0u32
+  while n < 3u32 {
+    {
+      let inside = view(mut y)
+      if inside != b"old" {
+      }
+    }
+    n += 1u32
+  }
+  bump(mut y)
+  ()
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut x: Bytes = b"x"
+  let mut y: Bytes = b"old"
+  probe(mut x, mut y)
+  Ok(())
+}

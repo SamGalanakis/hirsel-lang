@@ -1,0 +1,22 @@
+{
+  "buck2": {
+    "release": "2026-09-15",
+    "commit": "6507dd157a6f81a810c48583edf1758dd0c337c5",
+    "prelude_commit": "4d101dce3482c35b32f9f1e7072b354ae789d256",
+    "url": "https://github.com/facebook/buck2/releases/download/2026-09-15/buck2-x86_64-unknown-linux-musl.zst",
+    "archive_sha256": "631eb84a8925d19146e0f5d594b9f2d0b1f0864e63f24e0d5914a75a6a0a4dea",
+    "executable_sha256": "8d91d8d3654531f137ee1a0f2752cd67446065c8a2c65a02ee2c810b7899a4c9"
+  },
+  "prelude_overlay": {
+    "inputs": {
+      "rust/build.bzl": "2a221551779f2e4668ec3e7acac0e97fc9d557126898a6d32843647bf19546ea",
+      "rust/failure_filter.bzl": "b53d328b53f9b319784d121973c95dc63516a1f98c217859bf9151876465270c",
+      "rust/sources.bzl": "a291683f417e408a6f7ba012dff370e83f859050c31b8a5a30dd2132f01e27b2"
+    },
+    "outputs": {
+      "rust/build.bzl": "7b5a38fdcedb5a2e20ccc66988ea80cf27d3532a54459158d04cdaa497d17384",
+      "rust/failure_filter.bzl": "d5213bc9ee0ab7acec4864d609a21768a8dde31cf1b0ed9cf8d75c08d4bfc512",
+      "rust/sources.bzl": "eebeb2fa0f01e7026479e117f5fd1ef01983c9acce80ca51f6554108ea633cec"
+    }
+  }
+}

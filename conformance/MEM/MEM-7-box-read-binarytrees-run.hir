@@ -1,0 +1,34 @@
+// rule: MEM-7
+// expect: run
+// stdout: 127
+type Tree = Leaf | Branch(left: box Tree, right: box Tree)
+
+fn check(t: box Tree) -> u64 {
+  match t {
+    Leaf() => 1,
+    Branch(left: l, right: r) => 1 + check(l) + check(r),
+  }
+}
+
+fn build(depth: u64) -> box Tree {
+  if depth == 0 {
+    box Leaf()
+  } else {
+    box Branch(left: build(depth - 1), right: build(depth - 1))
+  }
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tree = build(6)
+  let count = check(tree)
+  failure.check(count == 127, TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, "127\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,16 @@
+rc-trace v1 max 16
+error at step 5 (line 8): T20 region-store: @1 is published
+heap
+  @0 live gen 1 count fin 1 heap arity 0
+  @1 live gen 1 uncounted region g1 arity 1 published
+credits
+  r1 -> @0#1
+borrows
+locals
+  l1 -> @1#1
+  l2 -> @1#1
+tokens
+work
+regions
+  g1 blocks [@1]
+events

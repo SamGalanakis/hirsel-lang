@@ -1,0 +1,56 @@
+// Decimal conversion is ordinary source; no numeric schema or hidden allocator.
+@noalloc
+pub fn format[n: size](value: i16, mut buffer: Inline[u8, n]) -> Result[
+  u64,
+  std@1/scalar.FormatError
+] uses {} {
+  let wide: i128 = core@1/int.widen(value)
+  let raw: u128 = core@1/int.truncate(wide)
+  let magnitude = if value < 0 {
+    core@1/int.wrapping_add(~raw, 1)
+  } else {
+    raw
+  }
+  std@1/internal.decimal.write_unsigned(magnitude, value < 0, mut buffer)
+}
+
+// Appends the decimal text of `value` to `out`; to_string is that text,
+// built from the same digits in a list reserved to its exact length.
+pub fn format_into(value: i16, mut out: List[u8]) -> () uses {} {
+  let wide: i128 = core@1/int.widen(value)
+  let raw: u128 = core@1/int.truncate(wide)
+  let magnitude = if value < 0 {
+    core@1/int.wrapping_add(~raw, 1)
+  } else {
+    raw
+  }
+  std@1/internal.decimal.append(mut out, magnitude, value < 0)
+}
+
+pub fn to_string(value: i16) -> String uses {} {
+  let wide: i128 = core@1/int.widen(value)
+  let raw: u128 = core@1/int.truncate(wide)
+  let magnitude = if value < 0 {
+    core@1/int.wrapping_add(~raw, 1)
+  } else {
+    raw
+  }
+  std@1/internal.decimal.exact_text(magnitude, value < 0)
+}
+
+@noalloc
+pub fn parse(text: String) -> Result[i16, std@1/scalar.ParseError] uses {} {
+  match std@1/internal.decimal.read_unsigned(text, true, 32767u128, 32768u128) {
+    Error(error) => Error(error),
+    Ok((magnitude, negative)) => {
+      let raw = if negative {
+        core@1/int.wrapping_add(~magnitude, 1)
+      } else {
+        magnitude
+      }
+      let wide: i128 = core@1/int.truncate(raw)
+      let value: i16 = core@1/int.narrow(wide)
+      Ok(value)
+    },
+  }
+}

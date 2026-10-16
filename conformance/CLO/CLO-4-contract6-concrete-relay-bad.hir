@@ -1,0 +1,11 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 10
+// An unselected concrete state is a hidden input.
+@captures(state, next)
+fn build(
+  take state: unique List[u64],
+  take next: fn(mut List[u64]) -> Option[u64],
+  take other: unique List[u64]
+) -> Iter[u64] {
+  iter.from(take other, take next)
+}

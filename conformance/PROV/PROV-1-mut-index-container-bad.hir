@@ -1,0 +1,18 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 17
+fn bump(mut x: u64) {}
+
+fn make(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: List[u64], p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn probe(take r0: List[u64]) -> () {
+  let mut r = r0
+  let p = make(r)
+  bump(mut r[0])
+  inspect(r, p)
+}

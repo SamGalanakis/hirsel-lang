@@ -1,0 +1,9 @@
+// rule: CLO-4
+// expect: accept
+type Fault = Stop()
+
+@preserves_captures(it)
+fn step[T](mut it: Iter[T], take replacement: Iter[T]) -> Result[(), Fault] {
+  let _ = iter.next(mut it)
+  Error(Stop())
+}

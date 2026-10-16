@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 5
+@noalloc
+fn main(xs: Array[f32]) -> f32 {
+  std@1/f32.sum_exact(xs)
+}

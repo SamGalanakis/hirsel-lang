@@ -1,0 +1,27 @@
+// rule: OWN-3
+// expect: run
+// entry: test_replaced
+// A callee replaced while its arguments are evaluated keeps the closure it
+// selected, so the call snapshots it on every iteration of the loop.
+fn make(base: u64) -> fn(u64) -> u64 uses {} {
+  let offsets: List[u64] = [base]
+  fn(value: u64) -> u64 uses {} {
+    value + offsets[0u64]
+  }
+}
+
+pub fn test_replaced(t: Test) -> Result[(), ()] {
+  let mut f = make(3u64)
+  let mut total: u64 = 0
+  for i in 0u64..4u64 {
+    total += f(
+      {
+        f = make(10u64 * (i + 1u64))
+        i
+      }
+    )
+  }
+  test.check(t, total == 69u64)
+  test.check(t, f(0u64) == 40u64)
+  Ok(())
+}

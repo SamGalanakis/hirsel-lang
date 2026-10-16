@@ -1,0 +1,16 @@
+// rule: PROV-5
+// expect: accept
+// "Moving the record keeps the relation."
+type Log {
+  dir: Dir,
+  file: File of .dir,
+}
+
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn example(take log: Log) -> () {
+  let moved = take log
+  inspect(moved.dir, moved.file)
+}

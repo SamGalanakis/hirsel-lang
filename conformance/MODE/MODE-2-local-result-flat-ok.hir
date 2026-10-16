@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: accept
+flat type Item {
+  n: u64,
+}
+
+fn view(x: Item) -> Item in x {
+  x
+}
+
+fn need(mut x: unique Item) -> () {
+  ()
+}
+
+fn example(take x0: unique Item) -> () {
+  let mut x = x0
+  {
+    let v = view(x)
+    ()
+  }
+  need(mut x)
+}

@@ -1,0 +1,28 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+// "a..b, a..=b, no overflow at MAX".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a: u8 = 254
+  let b: u8 = 255
+  let mut count: u64 = 0
+  for x in a..b {
+    count += 1
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if count == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

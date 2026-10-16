@@ -1,0 +1,8 @@
+// rule: MODE-1
+// expect: accept
+fn example(mut s: String) -> u64 {
+  let bytes = string.as_bytes(s)
+  let len = bytes.len(bytes)
+  s = "changed"
+  len
+}

@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 13
+// The nested function's result is declared to belong to x and the value it
+// returns belongs to w.
+fn fresh() -> List[u64] {
+  []
+}
+
+fn outer() -> () {
+  let x = fresh()
+  let w = fresh()
+  fn inner(y: Option[u8 of x], z: Option[u8 of w]) -> Option[u8 of x] {
+    z
+  }
+}

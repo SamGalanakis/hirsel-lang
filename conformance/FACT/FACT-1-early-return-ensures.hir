@@ -1,0 +1,15 @@
+// rule: FACT-1
+// expect: fail FACT-1 at line 5
+@noalloc
+fn positive(x: u32) -> u32
+  ensures result > 0 {
+  if x == 0 {
+    return x
+  }
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let _ = positive(0)
+  Ok(())
+}

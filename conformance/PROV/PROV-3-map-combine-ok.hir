@@ -1,0 +1,15 @@
+// rule: PROV-3
+// expect: accept
+// "Combining two maps requires the same by."
+fn combine(by: Order[u64], a: SortedMap[u64, u64] of by, b: SortedMap[u64, u64] of by) -> () {
+  ()
+}
+
+fn example(
+  first: Order[u64],
+  second: Order[u64],
+  a: SortedMap[u64, u64] of first,
+  b: SortedMap[u64, u64] of first
+) -> () {
+  combine(first, a, b)
+}

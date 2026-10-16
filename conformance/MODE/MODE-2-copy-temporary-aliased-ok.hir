@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: accept
+// "Fresh constructions from unique parts are unique".
+// Without a copy the fresh temporary is unique, and a copy is accepted where
+// an aliased value is.
+fn keep(take x: unique String) -> () {
+  ()
+}
+
+fn share(x: String) -> () {
+  ()
+}
+
+fn example() -> () {
+  keep("fresh")
+  share(copy "fresh")
+}

@@ -1,0 +1,10 @@
+// rule: LANG-4
+// expect: reject LANG-4 at line 8
+// Shows "A local may not shadow another local or a same-package top-level value."
+const n: u32 = 1
+
+@noalloc
+fn example() -> u32 {
+  let n: u32 = 2
+  n
+}

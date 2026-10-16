@@ -1,0 +1,58 @@
+// rule: SEM-4
+// expect: run
+// stdout: cursor last use
+fn output_error[E](take e: E) -> () {}
+
+fn break_last() -> u64 {
+  let mut s: Set[u64] = set.empty()
+  set.insert(mut s, 1)
+  let mut replacement: Set[u64] = set.empty()
+  set.insert(mut replacement, 7)
+  for x in s {
+    s = copy replacement
+    break
+  }
+  let mut sum: u64 = 0
+  for x in s {
+    sum += x
+  }
+  sum
+}
+
+fn return_last() -> u64 {
+  let mut s: Set[u64] = set.empty()
+  set.insert(mut s, 1)
+  let replacement: Set[u64] = set.empty()
+  for x in s {
+    s = copy replacement
+    return 42
+  }
+  0
+}
+
+fn replace_after() -> u64 {
+  let mut s: Set[u64] = set.empty()
+  set.insert(mut s, 1)
+  let replacement: Set[u64] = set.empty()
+  for x in s {
+    break
+  }
+  s = copy replacement
+  let mut sum: u64 = 0
+  for x in s {
+    sum += x
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  if break_last() + return_last() + replace_after() == 49 {
+    out.print(io.stdout(rt) ? grant_error, "cursor last use\n") ? output_error
+  }
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

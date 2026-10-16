@@ -1,0 +1,11 @@
+// rule: MODE-3
+// expect: reject MODE-3 at line 10
+// The twin of MODE-3-mutable-once-binding-run without the refill. The first
+// call consumed the once function the binding held.
+fn twice() -> u64 {
+  let mut g: once fn() -> u64 = fn() -> u64 {
+    1
+  }
+  let first = g()
+  first * 10 + g()
+}

@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 7
+// An expected tuple type supplies the part contracts, and a value shared by
+// a copy no longer satisfies a unique part.
+fn shared(take x: unique Bytes) -> (unique Bytes, Bytes) {
+  let y = copy x
+  (take x, take y)
+}

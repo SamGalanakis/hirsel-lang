@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: accept
+// Regression from holder/closure-result; TIR/TypeMismatch/call result.
+fn equivalent(a: u32, b: u32) -> i32 uses {} {
+  0
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let agree_held_187: List[(Order[u32], u64)] = [
+    fn() {
+      (Order(compare: equivalent), 0u64)
+    }()
+  ]
+  Ok(())
+}

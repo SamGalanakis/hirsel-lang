@@ -1,0 +1,1188 @@
+//! Layout descriptors and the MEM-3 release engine.
+//!
+//! Dead blocks use count/cursor words and consumed payload reference slots for reversal,
+//! so release uses constant native stack and never allocates. A [`Layout`]'s drop program is a
+//! flat list of [`Step`]s in drop order, lowered from the LayoutRecord's nested drop program by
+//! `hirsel_lir::rt_program` (the only producer). [`STEP_TAG`] skips an inactive
+//! variant's steps, and [`STEP_NONNULL`] the dataful variant's of a null-pointer niche when its
+//! word is null; [`STEP_LOOP`] runs its span once per element, highest index first, with a
+//! static count or a dynamic `u64` count read from the value; [`STEP_COLUMN`] runs its span on
+//! one structure-of-arrays column's element of the enclosing loop. Loops and columns are
+//! *frames*: their steps' offsets are from the current element. An inline resource field
+//! appears as a [`STEP_FINALIZE`] followed by its own fields' steps.
+//!
+//! When a child dies, the item is suspended, the child is pushed on top and drained completely,
+//! and the item resumes, so resource drops run depth first in DROP-2 order. The suspended walk
+//! state lives in the dead header's `count` word: the next step in the low
+//! [`STEP_CURSOR_BITS`] bits and, inside loops, the enclosing loops' element indices + 1 in the
+//! bits above as one mixed-radix number. Only an outermost loop has a dynamic count (a dynamic
+//! extent is never inline in another value), so every inner radix is a static count. Resuming
+//! rebuilds the innermost frame from that number by a scan of the enclosing steps, which needs
+//! no storage; so does leaving a nested frame.
+
+use std::ptr;
+
+use crate::alloc::{
+    DOMAIN_HEAP, Header, STATE_FIELDS_PENDING, STATE_FINALIZE_PENDING, STATE_FINALIZING, STATE_RAW,
+    payload,
+};
+use crate::context::RunCtx;
+use crate::count::{COUNT_IMMORTAL, check_live_block};
+use crate::finalize::{Cleanup, DropThunk, run_close, run_finalizer};
+use crate::{STATUS_OK, fault};
+
+/// `Layout::magic`: "HRL1".
+pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
+/// `Layout::version` of this descriptor format.
+pub const LAYOUT_VERSION: u32 = 5;
+/// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
+/// finalizer ends the process (FAIL-3).
+pub const LAYOUT_UNSAFE_FFI: u32 = 1;
+/// `Layout::flags`: the size is dynamic; `Layout::size` is the extent every value has.
+pub const LAYOUT_DYNAMIC: u32 = 2;
+/// A program that can suspend in a loop/column needs the full 40-bit element cursor.
+pub const LAYOUT_WIDE_CURSOR: u32 = 4;
+/// `Layout::flags` (version 5): a fixed-size, non-flat layout. Its arena blocks carry no extent
+/// record before the header; their capacity is `Layout::size` and their alignment
+/// `max(Layout::align, 8)`.
+pub const LAYOUT_NO_EXTENT: u32 = 8;
+
+/// Release the counted block reference stored at `offset`.
+pub const STEP_RELEASE: u32 = 1;
+/// Run `layout`'s finalizer on the inline value at `offset` (borrowed self, shielded).
+pub const STEP_FINALIZE: u32 = 2;
+/// Close the run-context handle stored at `offset` through the Io adapter.
+pub const STEP_CLOSE_HANDLE: u32 = 3;
+/// Unless the `u32` tag at `offset` equals `variant`, skip the next `span` steps.
+pub const STEP_TAG: u32 = 4;
+/// Run the next `span` steps once per element, highest index first; element `i` is at
+/// `offset + i * stride`. The count is `count`, or the `u64` at `count_offset`.
+pub const STEP_LOOP: u32 = 5;
+/// Run the next `span` steps once on the enclosing loop's element `i` of one column, at
+/// `offset + capacity * count + i * stride`, where `capacity` is the `u64` at `count_offset`.
+pub const STEP_COLUMN: u32 = 6;
+/// Unless the pointer word at `offset` is non-null, skip the next `span` steps: the dataful
+/// variant of a null-pointer niche, whose block reference there is never null.
+pub const STEP_NONNULL: u32 = 7;
+/// Skip the span when `variant` names a clear bit of the persistent u64 live word.
+pub const STEP_LIVE_BIT: u32 = 8;
+
+/// Step bits of the logical dead cursor. Simple programs use the count word alone;
+/// wide programs retain the complete remaining forty mixed-radix bits in header plus shadow.
+pub const STEP_CURSOR_BITS: u32 = 24;
+const STEP_CURSOR_MASK: u64 = (1 << STEP_CURSOR_BITS) - 1;
+const NEST_LIMIT: u64 = 1 << (64 - STEP_CURSOR_BITS);
+/// `Step::field` of a step that is never masked out by a partial live mask.
+pub const WHOLE_VALUE: u32 = u32::MAX;
+/// `Step::count_offset` of a loop with a static count.
+pub const NO_OFFSET: u64 = u64::MAX;
+
+/// A layout descriptor: payload size and alignment, the value's own finalizer, and the drop
+/// program for its fields.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Layout {
+    pub magic: u32,
+    pub version: u32,
+    /// The fixed size, or with [`LAYOUT_DYNAMIC`] the bytes every value has.
+    pub size: u64,
+    pub align: u64,
+    /// The value's own user drop body, run before its fields; absent for non-resources.
+    pub finalizer: Option<DropThunk>,
+    pub steps: *const Step,
+    pub step_count: u64,
+    /// Number of top-level fields addressed by a live mask.
+    pub field_count: u32,
+    pub flags: u32,
+}
+
+/// One drop program step. Outside every loop it is active only when its top-level `field` is
+/// live; a live mask never applies inside a loop.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Step {
+    pub kind: u32,
+    pub field: u32,
+    /// [`STEP_TAG`]: the ordinal that keeps the span.
+    pub variant: u32,
+    /// [`STEP_TAG`], [`STEP_NONNULL`], [`STEP_LOOP`], [`STEP_COLUMN`]: the steps that follow and
+    /// belong to it.
+    pub span: u32,
+    pub offset: u64,
+    pub stride: u64,
+    pub count: u64,
+    pub count_offset: u64,
+    /// The inline resource's layout for [`STEP_FINALIZE`].
+    pub layout: *const Layout,
+}
+
+#[inline]
+fn spans(kind: u32) -> bool {
+    matches!(
+        kind,
+        STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT | STEP_LOOP | STEP_COLUMN
+    )
+}
+
+/// Whether a [`STEP_TAG`] or [`STEP_NONNULL`] at `at` skips its span: its variant is inactive.
+#[inline(always)]
+pub(crate) unsafe fn variant_inactive(step: &Step, at: *const u8) -> bool {
+    // SAFETY: `at` addresses the step's tag or niche word inside the value being dropped.
+    unsafe {
+        if step.kind == STEP_TAG {
+            at.cast::<u32>().read_unaligned() != step.variant
+        } else if step.kind == STEP_LIVE_BIT {
+            at.cast::<u64>().read_unaligned() & (1u64 << step.variant) == 0
+        } else {
+            at.cast::<*const u8>().read_unaligned().is_null()
+        }
+    }
+}
+
+/// Reject a malformed descriptor (diagnostic mode).
+pub(crate) unsafe fn check_layout(layout: *const Layout) {
+    if layout.is_null() {
+        fault("a null layout descriptor");
+    }
+    // SAFETY: caller passes a descriptor pointer; its fields are plain data.
+    let layout = unsafe { &*layout };
+    if layout.magic != LAYOUT_MAGIC || layout.version != LAYOUT_VERSION {
+        fault("a layout descriptor has the wrong magic or version");
+    }
+    if layout.align == 0 || !layout.align.is_power_of_two() {
+        fault("a layout descriptor's alignment is not a power of two");
+    }
+    if layout.flags & !(LAYOUT_UNSAFE_FFI | LAYOUT_DYNAMIC | LAYOUT_WIDE_CURSOR | LAYOUT_NO_EXTENT)
+        != 0
+    {
+        fault("a layout descriptor has unknown flags");
+    }
+    if layout.flags & LAYOUT_DYNAMIC != 0 && layout.flags & LAYOUT_NO_EXTENT != 0 {
+        fault("a dynamic layout descriptor claims NO_EXTENT");
+    }
+    if layout.step_count >= STEP_CURSOR_MASK {
+        fault("a layout descriptor has more steps than a dead header's cursor can count");
+    }
+    if layout.step_count > 0 && layout.steps.is_null() {
+        fault("a layout descriptor has steps but no step table");
+    }
+    let steps = if layout.step_count == 0 {
+        &[]
+    } else {
+        // SAFETY: `steps` is nonnull with `step_count` entries.
+        unsafe { std::slice::from_raw_parts(layout.steps, layout.step_count as usize) }
+    };
+    let wide = steps
+        .iter()
+        .any(|step| matches!(step.kind, STEP_LOOP | STEP_COLUMN));
+    if wide && layout.flags & LAYOUT_WIDE_CURSOR == 0 {
+        fault("a loop/column descriptor lacks WIDE_CURSOR");
+    }
+    check_frame(layout, steps, 0, steps.len(), Some(layout.size), 0);
+}
+
+/// Check `steps[start..end]`, one frame's steps, whose element extent is `extent` bytes
+/// (`None`: dynamic) inside `loops` enclosing loops. Recursion follows the descriptor's static
+/// frame nesting, never the data.
+fn check_frame(
+    layout: &Layout,
+    steps: &[Step],
+    start: usize,
+    end: usize,
+    extent: Option<u64>,
+    loops: u32,
+) {
+    let fits = |offset: u64, bytes: u64| {
+        extent.is_none_or(|extent| offset.checked_add(bytes).is_some_and(|e| e <= extent))
+    };
+    // Reversal writes a parent pointer into every consumed reference. Headerless
+    // control words that a resumed frame may read must be disjoint from those slots.
+    // A null-pointer niche deliberately shares its reference word; its guard is read
+    // only before entering that arm, never while reconstructing a suspended cursor.
+    // Two arms of one ordinal tag are exclusive: a control word inside one is never
+    // read on a path that consumes a reference inside another. Diagnostic release
+    // runs this check, so it allocates nothing.
+    //
+    // Visit the frame's steps outside loop/column bodies.
+    fn framed(steps: &[Step], start: usize, end: usize, visit: &mut dyn FnMut(usize)) {
+        let mut at = start;
+        while at < end {
+            let step = &steps[at];
+            visit(at);
+            if spans(step.kind) {
+                let close = at + 1 + step.span as usize;
+                if close > end {
+                    fault("a drop step's span leaves its frame");
+                }
+                at = if matches!(step.kind, STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT) {
+                    at + 1
+                } else {
+                    close
+                };
+            } else {
+                at += 1;
+            }
+        }
+    }
+    let inside = |arm: usize, at: usize| arm < at && at <= arm + steps[arm].span as usize;
+    let exclusive = |a: usize, b: usize| {
+        let mut found = false;
+        framed(steps, start, end, &mut |k| {
+            let tag = &steps[k];
+            if found || tag.kind != STEP_TAG || !inside(k, a) {
+                return;
+            }
+            framed(steps, start, end, &mut |m| {
+                let other = &steps[m];
+                found |= other.kind == STEP_TAG
+                    && other.offset == tag.offset
+                    && other.variant != tag.variant
+                    && inside(m, b);
+            });
+        });
+        found
+    };
+    framed(steps, start, end, &mut |control_at| {
+        let step = &steps[control_at];
+        let control = match step.kind {
+            STEP_TAG => Some((step.offset, 4)),
+            STEP_LIVE_BIT => Some((step.offset, 8)),
+            STEP_LOOP if step.count_offset != NO_OFFSET => Some((step.count_offset, 8)),
+            STEP_COLUMN => Some((step.count_offset, 8)),
+            _ => None,
+        };
+        // Loop/column control words are checked here; their element frames are
+        // independently checked below.
+        let Some((control, width)) = control else {
+            return;
+        };
+        framed(steps, start, end, &mut |slot_at| {
+            let slot = &steps[slot_at];
+            if slot.kind == STEP_RELEASE
+                && control < slot.offset.saturating_add(8)
+                && slot.offset < control.saturating_add(width)
+                && !exclusive(control_at, slot_at)
+            {
+                fault("drop control word aliases a consumed reference slot");
+            }
+        });
+    });
+    let mut at = start;
+    while at < end {
+        let step = &steps[at];
+        if step.field != WHOLE_VALUE && step.field >= layout.field_count {
+            fault("a drop step names a field outside its layout");
+        }
+        let body = at + 1;
+        let close = body + step.span as usize;
+        if spans(step.kind) {
+            if close > end {
+                fault("a drop step's span leaves its frame");
+            }
+        } else if step.span != 0 {
+            fault("a leaf drop step has a span");
+        }
+        match step.kind {
+            STEP_RELEASE | STEP_CLOSE_HANDLE => {
+                if !fits(step.offset, 8) {
+                    fault("a drop step lies outside its layout");
+                }
+            }
+            STEP_FINALIZE => {
+                let child = step.layout;
+                if child.is_null() {
+                    fault("a finalize step has no layout");
+                }
+                // SAFETY: a nonnull descriptor pointer; its fields are plain data.
+                let child = unsafe { &*child };
+                if child.magic != LAYOUT_MAGIC || child.version != LAYOUT_VERSION {
+                    fault("a finalize step's layout has the wrong magic or version");
+                }
+                if child.finalizer.is_none() {
+                    fault("a finalize step's layout has no finalizer");
+                }
+                if !fits(step.offset, child.size) {
+                    fault("a drop step lies outside its layout");
+                }
+            }
+            STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT => {
+                if step.kind == STEP_LIVE_BIT && step.variant >= 64 {
+                    fault("live bit outside its word");
+                }
+                let width = if step.kind == STEP_TAG { 4 } else { 8 };
+                if !fits(step.offset, width) {
+                    fault("a drop step's tag lies outside its layout");
+                }
+                check_frame(layout, steps, body, close, extent, loops);
+            }
+            STEP_LOOP => {
+                let element = if step.count_offset == NO_OFFSET {
+                    let region = step.count.checked_mul(step.stride);
+                    if region.is_none_or(|bytes| !fits(step.offset, bytes)) {
+                        fault("a drop loop lies outside its layout");
+                    }
+                    Some(step.stride)
+                } else {
+                    if loops > 0 {
+                        fault("a drop loop with a dynamic count inside another loop");
+                    }
+                    if !fits(step.count_offset, 8) {
+                        fault("a drop loop's count lies outside its layout");
+                    }
+                    // Stride 0 holds columns, whose fixed part is the value's remainder.
+                    match (step.stride, extent) {
+                        (0, Some(extent)) => Some(extent.saturating_sub(step.offset)),
+                        (0, None) => None,
+                        (stride, _) => Some(stride),
+                    }
+                };
+                check_frame(layout, steps, body, close, element, loops + 1);
+            }
+            STEP_COLUMN => {
+                if loops == 0 {
+                    fault("a drop column outside a loop");
+                }
+                if !fits(step.count_offset, 8) {
+                    fault("a drop column's capacity lies outside its layout");
+                }
+                check_frame(layout, steps, body, close, Some(step.stride), loops);
+            }
+            _ => fault("a drop step has an unknown kind"),
+        }
+        at = if spans(step.kind) { close } else { body };
+    }
+}
+
+/// Cleanup continuations use a tagged internal work pointer, never a counted reference.
+#[inline(always)]
+fn is_cleanup(item: *mut Header) -> bool {
+    item.addr() & 1 != 0
+}
+#[inline]
+fn cleanup(item: *mut Header) -> *mut Cleanup {
+    item.map_addr(|address| address & !1).cast()
+}
+#[inline]
+unsafe fn index_of(item: *mut Header) -> u32 {
+    unsafe {
+        if is_cleanup(item) {
+            (*cleanup(item)).index
+        } else {
+            (*item).index()
+        }
+    }
+}
+#[inline]
+unsafe fn cursor_of(item: *mut Header) -> u64 {
+    unsafe {
+        if is_cleanup(item) {
+            (*cleanup(item)).cursor
+        } else {
+            (*item).cursor()
+        }
+    }
+}
+#[inline]
+unsafe fn save_cursor(item: *mut Header, cursor: u64, layout: *const Layout) {
+    unsafe {
+        if is_cleanup(item) {
+            (*cleanup(item)).cursor = cursor;
+        } else {
+            (*item).set_cursor(cursor, (*layout).flags & LAYOUT_WIDE_CURSOR != 0);
+        }
+    }
+}
+#[inline]
+unsafe fn value_of(item: *mut Header) -> *mut u8 {
+    unsafe {
+        if is_cleanup(item) {
+            (*cleanup(item)).value
+        } else {
+            payload(item)
+        }
+    }
+}
+#[inline]
+unsafe fn field_live(mask: *const u64, field: u32) -> bool {
+    mask.is_null()
+        || field == WHOLE_VALUE
+        || unsafe { *mask.add(field as usize / 64) >> (field % 64) & 1 == 1 }
+}
+/// Start one drain invocation; its stopping boundary is in the caller's activation.
+#[inline]
+pub(crate) unsafe fn push(ctx: &mut RunCtx, item: *mut Header, own_finalizer: bool) {
+    unsafe {
+        if is_cleanup(item) {
+            (*cleanup(item)).parent = ctx.work;
+            (*cleanup(item)).phase = own_finalizer as u32;
+            (*cleanup(item)).cursor = 0;
+        } else {
+            ctx.heap.set_state(
+                item,
+                if own_finalizer {
+                    STATE_FINALIZE_PENDING
+                } else {
+                    STATE_FIELDS_PENDING
+                },
+            );
+            save_cursor(item, 0, ctx.descriptor(index_of(item)));
+        }
+    }
+    ctx.work = item;
+}
+
+/// Hint that the cache line at `address` will be read soon. Never faults, whatever the address.
+#[inline(always)]
+fn prefetch(address: *const u8) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: a prefetch hint has no architectural effect and never faults.
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(address.cast());
+    }
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: as above; PRFM writes no register or memory.
+    unsafe {
+        std::arch::asm!(
+            "prfm pldl1keep, [{address}]",
+            address = in(reg) address,
+            options(nostack, readonly, preserves_flags)
+        );
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = address;
+}
+
+/// T16 DropEdge — consume the credit of one outgoing edge. Returns whether the child died; the
+/// caller then pushes it.
+#[inline]
+unsafe fn consume_edge(ctx: &mut RunCtx, child: *mut Header) -> bool {
+    // SAFETY: an active reference slot holds a counted block reference.
+    unsafe {
+        if ctx.heap.diagnostic {
+            check_live_block(ctx, child);
+        }
+        #[cfg(feature = "measurement")]
+        {
+            ctx.heap.measurement.record("count_decrements", 1);
+            ctx.heap.measurement.count_decrements += 1;
+        }
+        let count = (*child).count;
+        if count == 1 {
+            return true;
+        }
+        if count != COUNT_IMMORTAL {
+            (*child).count = count - 1;
+        }
+        false
+    }
+}
+
+/// The innermost frame of a drop-program walk: the value itself, or a loop's or column's
+/// current element.
+#[derive(Clone, Copy)]
+struct Frame {
+    /// The frame's [`STEP_LOOP`] or [`STEP_COLUMN`] step; unused at the root.
+    op: usize,
+    /// The first step after the frame.
+    end: usize,
+    /// The current element.
+    base: *mut u8,
+    /// The enclosing frame's current element.
+    parent: *mut u8,
+    /// The innermost loop's element index (a column's is its loop's).
+    index: u64,
+    /// Loops and columns enclosing the walk, this frame included; 0 at the root.
+    depth: u32,
+}
+
+impl Frame {
+    fn root(value: *mut u8, end: usize) -> Frame {
+        Frame {
+            op: 0,
+            end,
+            base: value,
+            parent: value,
+            index: 0,
+            depth: 0,
+        }
+    }
+
+    /// The frame `step` (a loop at element `index`, or a column) opens at `op` inside `self`.
+    #[inline]
+    unsafe fn enter(&self, op: usize, step: &Step, index: u64) -> Frame {
+        let offset = if step.kind == STEP_COLUMN {
+            // SAFETY: the column's capacity lies in the enclosing element.
+            let capacity = unsafe {
+                self.base
+                    .add(step.count_offset as usize)
+                    .cast::<u64>()
+                    .read_unaligned()
+            };
+            step.offset
+                .wrapping_add(capacity.wrapping_mul(step.count))
+                .wrapping_add(self.index.wrapping_mul(step.stride))
+        } else {
+            step.offset.wrapping_add(index.wrapping_mul(step.stride))
+        };
+        Frame {
+            op,
+            end: op + 1 + step.span as usize,
+            base: self.base.wrapping_add(offset as usize),
+            parent: self.base,
+            index: if step.kind == STEP_COLUMN {
+                self.index
+            } else {
+                index
+            },
+            depth: self.depth + 1,
+        }
+    }
+}
+
+/// Visit the steps that open frames enclosing step `target`, outermost first.
+#[inline]
+unsafe fn enclosing(steps: *const Step, target: usize, mut visit: impl FnMut(usize, &Step)) {
+    let mut at = 0;
+    while at < target {
+        // SAFETY: `at` precedes `target`, a step of this program.
+        let step = unsafe { &*steps.add(at) };
+        let span = if spans(step.kind) {
+            step.span as usize
+        } else {
+            0
+        };
+        if target <= at + span {
+            if !matches!(step.kind, STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT) {
+                visit(at, step);
+            }
+            at += 1;
+        } else {
+            at += 1 + span;
+        }
+    }
+}
+
+/// Rebuild the innermost frame enclosing step `target` from the enclosing loops' mixed-radix
+/// element indices `nest`: the outermost loop's index is the most significant digit, and each
+/// inner loop's static count is its radix.
+#[cold]
+unsafe fn locate(
+    steps: *const Step,
+    end: usize,
+    value: *mut u8,
+    target: usize,
+    nest: u64,
+) -> Frame {
+    // SAFETY: `target` is a step of this program.
+    unsafe {
+        let mut weight = 1u64;
+        let mut outermost = true;
+        enclosing(steps, target, |_, step| {
+            if step.kind == STEP_LOOP {
+                if !outermost {
+                    weight *= step.count;
+                }
+                outermost = false;
+            }
+        });
+        let mut frame = Frame::root(value, end);
+        let mut rest = nest;
+        let mut outermost = true;
+        enclosing(steps, target, |op, step| {
+            let mut index = 0;
+            if step.kind == STEP_LOOP {
+                if !outermost {
+                    weight /= step.count;
+                }
+                outermost = false;
+                index = rest / weight;
+                rest %= weight;
+            }
+            frame = frame.enter(op, step, index);
+        });
+        frame
+    }
+}
+
+/// The count word of an item suspended before step `next` in `frame`.
+#[inline]
+fn suspended(next: usize, frame: &Frame, nest: u64) -> u64 {
+    if frame.depth == 0 {
+        return next as u64;
+    }
+    if nest + 1 >= NEST_LIMIT {
+        fault("a drop loop nest has more elements than a dead header can count");
+    }
+    next as u64 | (nest + 1) << STEP_CURSOR_BITS
+}
+
+/// Diagnostic mode: a dynamic loop or column over a heap block must lie inside its capacity.
+#[cold]
+unsafe fn check_extent(item: *mut Header, frame: &Frame, step: &Step, count: u64) {
+    // SAFETY: `item` is a dead header.
+    unsafe {
+        if is_cleanup(item) || (*item).domain() != DOMAIN_HEAP {
+            return;
+        }
+        let start = frame.base as u64 - payload(item) as u64;
+        let bytes = if step.kind == STEP_COLUMN {
+            count.checked_mul(step.count.saturating_add(step.stride))
+        } else {
+            count.checked_mul(step.stride)
+        };
+        let fits = bytes
+            .and_then(|b| b.checked_add(step.offset))
+            .and_then(|b| b.checked_add(start))
+            .is_some_and(|e| e <= (*item).capacity());
+        // A column's element must exist: its index stays below the capacity.
+        if !fits || step.kind == STEP_COLUMN && frame.index >= count {
+            fault("a drop loop's elements lie outside the block's capacity");
+        }
+    }
+}
+
+/// What a drain did with its root.
+pub(crate) struct Drained {
+    pub(crate) status: u8,
+    pub(crate) kept_root: bool,
+}
+
+/// Drain the worklist down to `base`. `root` is the item this call pushed; `mask` applies to it
+/// alone. With `keep_root` a root that drains without failure becomes raw storage instead of
+/// being freed (reset). Failures accumulate: every remaining field and sibling is still
+/// released, and the status is returned only after the drain finishes.
+///
+/// The top item runs its steps until one kills a child, which is pushed and drained first. When
+/// that was the item's last step, nothing of the item remains to run: its cursor becomes
+/// [`CURSOR_DRAINED`] and, once the child has drained, it is freed without rereading its
+/// program. Freeing it only then keeps the free order post-order (children before parents), so
+/// the LIFO free lists hand a structure's storage back in the order it is built again.
+pub(crate) unsafe fn drain(
+    ctx: &mut RunCtx,
+    base: *mut Header,
+    root: *mut Header,
+    mask: *const u64,
+    keep_root: bool,
+    anchor: u64,
+) -> Drained {
+    #[cfg(test)]
+    crate::header_tests::count_drain();
+    // SAFETY: caller contract.
+    unsafe {
+        if mask.is_null() && !keep_root {
+            drain_items::<false>(ctx, base, root, mask, keep_root, anchor)
+        } else {
+            drain_items::<true>(ctx, base, root, mask, keep_root, anchor)
+        }
+    }
+}
+
+/// [`drain`]. `ROOTED` is false when the root has neither a live mask nor `keep_root`, so every
+/// item runs alike: an ordinary release.
+#[inline(always)]
+unsafe fn drain_items<const ROOTED: bool>(
+    ctx: &mut RunCtx,
+    base: *mut Header,
+    root: *mut Header,
+    mask: *const u64,
+    keep_root: bool,
+    anchor: u64,
+) -> Drained {
+    let mut status = STATUS_OK;
+    let mut kept_root = false;
+    let mut item = root;
+    let mut parent: *mut Header = ptr::null_mut();
+    let mut fresh = true;
+    while !item.is_null() {
+        unsafe {
+            let layout = ctx.descriptor(index_of(item));
+            let value = value_of(item);
+            if fresh {
+                if item != root || mask.is_null() {
+                    if !is_cleanup(item) {
+                        ctx.heap.set_state(item, STATE_FINALIZING);
+                    }
+                    status |= run_finalizer(ctx, layout, value, anchor);
+                }
+                if !is_cleanup(item) {
+                    ctx.heap.set_state(item, STATE_FIELDS_PENDING);
+                }
+                fresh = false;
+            }
+            let (item_mask, keep) = if ROOTED && item == root {
+                (mask, keep_root)
+            } else {
+                (ptr::null(), false)
+            };
+            let steps = (*layout).steps;
+            let end = (*layout).step_count as usize;
+            let cursor = cursor_of(item);
+            let mut pc = (cursor & STEP_CURSOR_MASK) as usize;
+            // The child a step killed, and the count word the item resumes from.
+            let mut child = ptr::null_mut();
+            let mut resume = 0;
+            if cursor >> STEP_CURSOR_BITS != 0 {
+                // Resume inside loops: rebuild the frame of the step that killed the child.
+                let nest = (cursor >> STEP_CURSOR_BITS) - 1;
+                let frame = locate(steps, end, value, pc - 1, nest);
+                (child, resume) = walk_frames(
+                    ctx,
+                    item,
+                    steps,
+                    frame,
+                    pc,
+                    nest,
+                    item_mask,
+                    anchor,
+                    &mut status,
+                );
+            } else {
+                // Releases and tags outside every loop, the steps of ordinary data, run here
+                // without calls; the first other step continues in `walk_frames`.
+                while pc < end {
+                    let step = &*steps.add(pc);
+                    if ROOTED && !field_live(item_mask, step.field) {
+                        pc += 1;
+                        if spans(step.kind) {
+                            pc += step.span as usize;
+                        }
+                        continue;
+                    }
+                    let at = value.wrapping_add(step.offset as usize);
+                    if step.kind == STEP_RELEASE {
+                        pc += 1;
+                        let killed = at.cast::<*mut Header>().read_unaligned();
+                        if consume_edge(ctx, killed) {
+                            (child, resume) = (killed, pc as u64);
+                            // The resumed item's next read is the next release's child header:
+                            // start it now so it overlaps the child's drain.
+                            if pc < end {
+                                let next = &*steps.add(pc);
+                                if next.kind == STEP_RELEASE
+                                    && (!ROOTED || field_live(item_mask, next.field))
+                                {
+                                    let at = value.wrapping_add(next.offset as usize);
+                                    prefetch(at.cast::<*const u8>().read_unaligned());
+                                }
+                            }
+                            break;
+                        }
+                    } else if step.kind == STEP_TAG
+                        || step.kind == STEP_NONNULL
+                        || step.kind == STEP_LIVE_BIT
+                    {
+                        pc += 1;
+                        if variant_inactive(step, at) {
+                            pc += step.span as usize;
+                        }
+                    } else {
+                        let frame = Frame::root(value, end);
+                        (child, resume) = walk_frames(
+                            ctx,
+                            item,
+                            steps,
+                            frame,
+                            pc,
+                            0,
+                            item_mask,
+                            anchor,
+                            &mut status,
+                        );
+                        break;
+                    }
+                }
+            }
+            if child.is_null() {
+                if keep && status == STATUS_OK {
+                    (*item).restore_descriptor();
+                    ctx.heap.set_state(item, STATE_RAW);
+                    kept_root = true;
+                } else {
+                    finish(ctx, item);
+                }
+                if parent.is_null() {
+                    ctx.work = base;
+                    break;
+                }
+                item = parent;
+                let parent_layout = ctx.descriptor(index_of(item));
+                let cursor = cursor_of(item);
+                let pc = (cursor & STEP_CURSOR_MASK) as usize;
+                let value = value_of(item);
+                let frame = if cursor >> STEP_CURSOR_BITS == 0 {
+                    Frame::root(value, (*parent_layout).step_count as usize)
+                } else {
+                    locate(
+                        (*parent_layout).steps,
+                        (*parent_layout).step_count as usize,
+                        value,
+                        pc - 1,
+                        (cursor >> STEP_CURSOR_BITS) - 1,
+                    )
+                };
+                let step = &*(*parent_layout).steps.add(pc - 1);
+                let slot = frame.base.add(step.offset as usize).cast::<*mut Header>();
+                parent = if item == root {
+                    ptr::null_mut()
+                } else {
+                    slot.read_unaligned()
+                };
+                ctx.work = item;
+                continue;
+            }
+            // A dying child's credit has been consumed. Only non-root slots carry a parent link;
+            // root donor bytes remain intact, including moved/kept fields used by Reuse.
+            save_cursor(item, resume, layout);
+            if item != root {
+                let pc = (resume & STEP_CURSOR_MASK) as usize;
+                let frame = if resume >> STEP_CURSOR_BITS == 0 {
+                    Frame::root(value, end)
+                } else {
+                    locate(steps, end, value, pc - 1, (resume >> STEP_CURSOR_BITS) - 1)
+                };
+                let slot = frame
+                    .base
+                    .add((*steps.add(pc - 1)).offset as usize)
+                    .cast::<*mut Header>();
+                slot.write_unaligned(parent);
+            }
+            parent = item;
+            item = child;
+            let child_layout = ctx.descriptor((*child).index());
+            ctx.heap.set_state(child, STATE_FINALIZE_PENDING);
+            save_cursor(child, 0, child_layout);
+            ctx.work = item;
+            fresh = true;
+        }
+    }
+    Drained { status, kept_root }
+}
+
+/// Run one step that opens no frame on its field at `at`, advancing `pc` past a skipped tag
+/// span. Returns the child a [`STEP_RELEASE`] killed, or null.
+#[inline(always)]
+unsafe fn run_step(
+    ctx: &mut RunCtx,
+    step: &Step,
+    at: *mut u8,
+    pc: &mut usize,
+    anchor: u64,
+    status: &mut u8,
+) -> *mut Header {
+    // SAFETY: `at` addresses the step's field inside the value being dropped.
+    unsafe {
+        match step.kind {
+            STEP_RELEASE => {
+                let child = at.cast::<*mut Header>().read_unaligned();
+                if consume_edge(ctx, child) {
+                    return child;
+                }
+            }
+            STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT => {
+                if variant_inactive(step, at) {
+                    *pc += step.span as usize;
+                }
+            }
+            STEP_FINALIZE => *status |= run_finalizer(ctx, step.layout, at, anchor),
+            STEP_CLOSE_HANDLE => {
+                *status |= run_close(ctx, at.cast::<u64>().read_unaligned(), anchor);
+            }
+            _ => fault("a drop step has an unknown kind"),
+        }
+        ptr::null_mut()
+    }
+}
+
+/// The general drop program walk, for every step kind, from step `pc` in `frame`, whose
+/// enclosing loops' element indices are `nest`: loops and columns open frames, and leaving one
+/// returns to its enclosing frame. Returns the child a step killed (or null when the program
+/// ends) and the count word to resume from.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn walk_frames(
+    ctx: &mut RunCtx,
+    item: *mut Header,
+    steps: *const Step,
+    mut frame: Frame,
+    mut pc: usize,
+    mut nest: u64,
+    mask: *const u64,
+    anchor: u64,
+    status: &mut u8,
+) -> (*mut Header, u64) {
+    // SAFETY: as `drain`; `frame` is a frame of this item's program.
+    unsafe {
+        let value = value_of(item);
+        let step_count = (*ctx.descriptor(index_of(item))).step_count as usize;
+        loop {
+            if pc == frame.end {
+                if frame.depth == 0 {
+                    return (ptr::null_mut(), 0);
+                }
+                let op = &*steps.add(frame.op);
+                if op.kind == STEP_LOOP && frame.index > 0 {
+                    // The next lower element.
+                    frame.index -= 1;
+                    nest -= 1;
+                    frame.base = frame.parent.wrapping_add(
+                        op.offset.wrapping_add(frame.index.wrapping_mul(op.stride)) as usize,
+                    );
+                    pc = frame.op + 1;
+                    continue;
+                }
+                if op.kind == STEP_LOOP {
+                    // Element 0 is done: drop this loop's digit. An inner loop's count is
+                    // static; the outermost leaves no digits.
+                    nest = if frame.depth == 1 { 0 } else { nest / op.count };
+                }
+                frame = if frame.depth == 1 {
+                    Frame::root(value, step_count)
+                } else {
+                    locate(steps, step_count, value, frame.op, nest)
+                };
+                continue;
+            }
+            let step = &*steps.add(pc);
+            pc += 1;
+            if frame.depth == 0 && !field_live(mask, step.field) {
+                if spans(step.kind) {
+                    pc += step.span as usize;
+                }
+                continue;
+            }
+            match step.kind {
+                STEP_LOOP => {
+                    let count = if step.count_offset == NO_OFFSET {
+                        step.count
+                    } else {
+                        frame
+                            .base
+                            .add(step.count_offset as usize)
+                            .cast::<u64>()
+                            .read_unaligned()
+                    };
+                    if count == 0 || step.span == 0 {
+                        pc += step.span as usize;
+                        continue;
+                    }
+                    if ctx.heap.diagnostic && step.count_offset != NO_OFFSET {
+                        check_extent(item, &frame, step, count);
+                    }
+                    let Some(inner) = nest
+                        .checked_mul(count)
+                        .and_then(|n| n.checked_add(count - 1))
+                    else {
+                        fault("a drop loop nest has more elements than a dead header can count")
+                    };
+                    nest = inner;
+                    frame = frame.enter(pc - 1, step, count - 1);
+                }
+                STEP_COLUMN => {
+                    if ctx.heap.diagnostic {
+                        let capacity = frame
+                            .base
+                            .add(step.count_offset as usize)
+                            .cast::<u64>()
+                            .read_unaligned();
+                        check_extent(item, &frame, step, capacity);
+                    }
+                    frame = frame.enter(pc - 1, step, 0);
+                }
+                _ => {
+                    let at = frame.base.wrapping_add(step.offset as usize);
+                    let child = run_step(ctx, step, at, &mut pc, anchor, status);
+                    if !child.is_null() {
+                        return (child, suspended(pc, &frame, nest));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// T16 Free — a drained item's storage is returned (blocks) or its continuation ends.
+#[inline]
+unsafe fn finish(ctx: &mut RunCtx, item: *mut Header) {
+    // SAFETY: `item` is fully drained.
+    unsafe {
+        if is_cleanup(item) {
+            (*cleanup(item)).phase = 0;
+        } else if (*item).domain() == DOMAIN_HEAP {
+            ctx.heap.free(item);
+        } else {
+            fault("an immortal block reached the release worklist");
+        }
+    }
+}
+
+/// T16 Free for compiled drop glue. The glue consumed the last credit of `block` (it read a
+/// count of 1) and has already released every field in the layout's drop order; this returns
+/// the storage. Shallow: it never scans the payload or runs a finalizer, so the glue calls it
+/// only for layouts without one.
+///
+/// # Safety
+/// `ctx` is live and `block` is a live heap block of this context whose only credit the
+/// caller owns and whose fields hold nothing owned any more.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_free(ctx: *mut RunCtx, block: *mut Header) {
+    unsafe {
+        if (*ctx).heap.diagnostic {
+            return free_glue_checked(ctx, block);
+        }
+        let heap = &mut (*ctx).heap;
+        let kind = (*block).descriptor & (3 << crate::alloc::KIND_SHIFT);
+        if kind == 0 {
+            heap.free_small(block);
+        } else if kind == crate::alloc::KIND_LARGE << crate::alloc::KIND_SHIFT {
+            heap.free_large(block);
+        } else {
+            fault("an immortal block reached a free");
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn free_glue_checked(ctx: *mut RunCtx, block: *mut Header) {
+    unsafe {
+        let ctx = &mut *ctx;
+        check_live_block(ctx, block);
+        if (*block).count != 1 {
+            fault("a free of a block that still has other holders");
+        }
+        if (*ctx.descriptor((*block).index())).finalizer.is_some() {
+            fault("a free of a block whose layout has a finalizer");
+        }
+        if (*block).domain() != DOMAIN_HEAP {
+            fault("an immortal block reached a free");
+        }
+        ctx.heap.free(block);
+    }
+}
+
+/// Validate a root release request, reached only in diagnostic mode.
+#[cold]
+#[inline(never)]
+unsafe fn check_root(ctx: &RunCtx, block: *mut Header, layout: *const Layout, mask: *const u64) {
+    // SAFETY: caller passes a block reference and descriptor.
+    unsafe {
+        check_layout(layout);
+        check_live_block(ctx, block);
+        if ctx.descriptor((*block).index()) != layout {
+            fault("header/layout mismatch: the block's header names a different layout");
+        }
+        if (*block).domain() == DOMAIN_HEAP && (*layout).size > ctx.heap.capacity(block) {
+            fault("header/layout mismatch: the layout is larger than the block's capacity");
+        }
+        if !mask.is_null() && (*block).count != 1 {
+            fault("a partially initialized block has more than one holder");
+        }
+    }
+}
+
+/// Consume one holder credit of `block`, draining everything that dies.
+pub(crate) unsafe fn release_block(
+    ctx: &mut RunCtx,
+    block: *mut Header,
+    mask: *const u64,
+    anchor: u64,
+) -> u8 {
+    // SAFETY: caller owns one credit of a live block.
+    unsafe {
+        #[cfg(feature = "measurement")]
+        {
+            ctx.heap.measurement.record("count_decrements", 1);
+            ctx.heap.measurement.count_decrements += 1;
+        }
+        let count = (*block).count;
+        if count == COUNT_IMMORTAL {
+            // T04 DropImmortal — immortal blocks ignore releases.
+            return STATUS_OK;
+        }
+        if count > 1 {
+            // T04 Drop — Finite(n) -> Finite(n - 1).
+            (*block).count = count - 1;
+            return STATUS_OK;
+        }
+        // A scalar/byte payload has no work, including when reached through
+        // an erased String/Bytes owner. T04 DropLast + T16 Free need neither
+        // dead-header cursor setup nor a drain invocation for an empty program.
+        let layout = &*ctx.descriptor((*block).index());
+        if layout.finalizer.is_none() && layout.step_count == 0 {
+            ctx.heap.free(block);
+            return STATUS_OK;
+        }
+        // T04 DropLast — Finite(1) -> Dead, then drain.
+        let base = ctx.work;
+        push(ctx, block, mask.is_null());
+        drain(ctx, base, block, mask, false, anchor).status
+    }
+}
+
+/// Release one holder credit of `block` (T04 Drop, T04 DropLast, T04 DropImmortal). Ordinary freeing
+/// allocates nothing; user finalizers may. `live_mask` is null for a fully initialized value,
+/// else one bit per top-level field for a partially initialized unique block, whose own
+/// finalizer then does not run. Returns [`crate::STATUS_FAILURE`] after cleanup finishes if any
+/// finalizer failed; the failures are in the run context.
+///
+/// # Safety
+/// `ctx` is live, `block` a counted or static block whose header names `layout`, and the caller
+/// owns one credit of it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_release(
+    ctx: *mut RunCtx,
+    block: *mut Header,
+    index: u32,
+    live_mask: *const u64,
+    anchor: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        let ctx = &mut *ctx;
+        if ctx.heap.diagnostic {
+            check_root(ctx, block, ctx.descriptor(index), live_mask);
+        }
+        release_block(ctx, block, live_mask, anchor)
+    }
+}
+
+/// T12 Reset. Consume the donor holder. A unique donor drains its children and finalizers at this
+/// anchor and becomes raw storage written to `out_token`; a shared or immortal donor is released
+/// normally and the token is null (None). If any finalizer fails the storage is disposed, no
+/// token escapes and the status is a failure.
+///
+/// # Safety
+/// As `hirsel_rt_v2_release`; `out_token` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_reset(
+    ctx: *mut RunCtx,
+    block: *mut Header,
+    index: u32,
+    live_mask: *const u64,
+    anchor: u64,
+    out_token: *mut *mut Header,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        let ctx = &mut *ctx;
+        if ctx.heap.diagnostic {
+            check_root(ctx, block, ctx.descriptor(index), live_mask);
+        }
+        out_token.write(ptr::null_mut());
+        if (*block).count != 1 || (*block).domain() != DOMAIN_HEAP {
+            return release_block(ctx, block, live_mask, anchor);
+        }
+        let base = ctx.work;
+        push(ctx, block, live_mask.is_null());
+        #[cfg(feature = "measurement")]
+        {
+            ctx.heap.measurement.record("count_decrements", 1);
+            ctx.heap.measurement.count_decrements += 1;
+        }
+        let drained = drain(ctx, base, block, live_mask, true, anchor);
+        if drained.kept_root {
+            out_token.write(block);
+        }
+        drained.status
+    }
+}

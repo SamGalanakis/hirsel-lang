@@ -1,0 +1,35 @@
+[package]
+name = "hirsel-pipeline-tests"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# The library is empty; the tests are the crate (README.md).
+[lib]
+test = false
+doctest = false
+
+[dev-dependencies]
+hirsel-codec = { path = "../hirsel-codec" }
+sha2 = "0.10"
+hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-diag = { path = "../hirsel-diag" }
+hirsel-driver = { path = "../hirsel-driver" }
+hirsel-engine = { path = "../hirsel-engine" }
+hirsel-heapcheck = { path = "../hirsel-heapcheck" }
+hirsel-interp = { path = "../hirsel-interp" }
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-lir = { path = "../hirsel-lir" }
+hirsel-rc = { path = "../hirsel-rc" }
+hirsel-rt = { path = "../hirsel-rt" }
+hirsel-run-config = { path = "../hirsel-run-config" }
+hirsel-span = { path = "../hirsel-span" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-types = { path = "../hirsel-types" }
+hirsel-validate = { path = "../hirsel-validate" }
+insta = "1"
+proptest = "1"
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

@@ -1,0 +1,7 @@
+// rule: SER-1
+// expect: accept
+fn encode[T: serializable](x: T) {}
+
+fn example(xs: List[u64], x: u64 of xs) {
+  encode(x + 0u64)
+}

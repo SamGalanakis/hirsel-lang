@@ -1,0 +1,17 @@
+fn unrelated(a: u64) -> u64 {
+  a + 1u64
+}
+
+fn also_unrelated(a: u64) -> u64 {
+  a * 2u64
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s = io.stdout(rt)?
+  let _ = out.print(s, "before\n")
+  let one: u64 = 1u64
+  let big: u64 = 18446744073709551615u64
+  let bad = big + one
+  let _ = out.print(s, "after\n")
+  Ok(())
+}

@@ -1,0 +1,11 @@
+// Minimal accepted shape from m1b-lib-map's open report.
+type Chain = End | Link(next: box Chain)
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut c: Chain = End
+  for i in 0u64..543u64 {
+    c = Link(next: box take c)
+  }
+  let _ = take c
+  Ok(())
+}

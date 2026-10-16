@@ -1,0 +1,29 @@
+// rule: GEN-1
+// expect: run
+// stdout: ok
+fn outer[n: size](x: Inline[u8, n]) -> u64 {
+  fn inner[U](take y: U) -> u64 {
+    n
+  }
+  inner(())
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 2] = [1u8, 2u8]
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(xs) == 2 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

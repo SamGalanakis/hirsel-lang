@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 13
+// The copy of a captured arena value still lives in the arena, so it cannot
+// be kept in storage declared without a placement. The accepted twin is
+// PROV-4-captured-arena-copy-ok.
+type Keep {
+  text: String,
+}
+
+fn probe(a: Arena, mut keep: Keep) -> () {
+  let x: String in a = "abc"
+  let f = fn() {
+    keep.text = copy x
+  }
+  f()
+}

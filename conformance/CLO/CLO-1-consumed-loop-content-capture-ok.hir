@@ -1,0 +1,32 @@
+// rule: CLO-1
+// expect: accept
+// Consumed loop content that views a borrowed parameter is local, so a
+// closure over it returns local content, called directly or through a
+// binding, and its unique copy is owned.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn size(x: Bytes) -> u64 {
+  1
+}
+
+fn keep(take b: Bytes) {}
+
+fn pairs(p: Bytes) -> u64 {
+  let xs: List[(u64, Bytes)] = [(1, view(p)), (2, view(p))]
+  let mut sum: u64 = 0
+  for (n, v) in take xs {
+    sum += n + size(
+      fn() {
+        v
+      }()
+    )
+    let f = fn() {
+      v
+    }
+    sum += size(f())
+    keep(unique f())
+  }
+  sum
+}

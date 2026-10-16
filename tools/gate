@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+"""The gate: run what a change can affect, once, all at once.
+
+    tools/gate                  # the change from the merge base with origin/main
+    tools/gate --base <commit>  # the change from <commit> (for example a replay)
+    tools/gate --full           # every stage, for main's scheduled run
+
+Per push, the changed paths select the work (tools/buck2/impact.py):
+documentation alone gets a link and whitespace check; the gate's own tooling
+its tests; everything else the Buck2 tests that read a changed file, directly
+or through a dependency, and the corpus campaigns (conformance, agreement,
+native smoke) the change can affect. The workspace build, Clippy and every
+selected test and campaign run as one Buck2 invocation, so the pool runs them
+concurrently, while formatting and the build-file check run beside it here.
+
+A passing change is remembered by its identity (gating.change_identity: the
+patch-id of the lane's own diff, and the crates it touches). When main moves
+under an unchanged change and it rebases cleanly, the next run only builds the
+workspace and checks formatting.
+
+--full runs every stage, including the unrestricted campaigns, the release
+profile, the full_gate_ tests and tools/check-native.sh; it reports every stage
+and fails after the last (tools/main-full-run.sh).
+"""
+
+import argparse
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools/buck2'))
+sys.dont_write_bytecode = True
+import agree  # noqa: E402
+import conformance  # noqa: E402
+import gating  # noqa: E402
+from gating import say  # noqa: E402
+import impact  # noqa: E402
+
+PY = sys.executable
+for name, value in (('CARGO_BUILD_JOBS', '4'), ('HIRSEL_JOBS', '4'), ('RUST_TEST_THREADS', '4')):
+    os.environ.setdefault(name, value)
+
+
+# ---------------------------------------------------------------- documentation
+
+LINK = re.compile(r'\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)')
+
+
+def link_target(document, link):
+    """The repository path a relative Markdown link names, or None for a URL or an anchor."""
+    if re.match(r'^[a-z][a-z0-9+.-]*:', link) or link.startswith('#'):
+        return None
+    link = link.split('#')[0]
+    base = ROOT if link.startswith('/') else (ROOT / document).parent
+    return (base / link.lstrip('/')).resolve()
+
+
+def docs_check(base, documents, paths):
+    """Links added to the changed documents resolve, links anywhere into a deleted
+    path are gone, and the documents add no whitespace errors."""
+    errors = []
+    for document in documents:
+        path = ROOT / document
+        if not path.is_file() or not document.endswith('.md'):
+            continue
+        tracked = subprocess.run(['git', 'cat-file', '-e', f'{base}:{document}'], cwd=ROOT,
+                                 capture_output=True).returncode == 0
+        added = (gating.git('diff', '-U0', base, '--', document) if tracked else path.read_text())
+        lines = [line[1:] for line in added.splitlines() if line.startswith('+') and not line.startswith('+++')] \
+            if tracked else added.splitlines()
+        for line in lines:
+            for link in LINK.findall(line):
+                target = link_target(document, link)
+                if target is not None and not target.exists():
+                    errors.append(f'{document}: link {link} names nothing')
+    deleted = {(ROOT / p).resolve() for p in paths if not (ROOT / p).exists()}
+    if deleted:
+        for document in gating.git('ls-files', '*.md').split():
+            text = (ROOT / document).read_text(errors='replace') if (ROOT / document).is_file() else ''
+            for link in LINK.findall(text):
+                target = link_target(document, link)
+                if target in deleted:
+                    errors.append(f'{document}: link {link} names a deleted path')
+    whitespace = subprocess.run(['git', 'diff', '--check', base, '--', *documents], cwd=ROOT,
+                                capture_output=True, text=True)
+    if whitespace.returncode:
+        errors.append(whitespace.stdout.strip())
+    return (1 if errors else 0), '\n'.join(errors)
+
+
+# ---------------------------------------------------------------- per push
+
+class Report:
+    def __init__(self):
+        self.rows = []      # (passed, label, detail lines)
+
+    def add(self, passed, label, details=()):
+        self.rows.append((passed, label, [d for d in details if d]))
+
+    @property
+    def passed(self):
+        return all(passed for passed, _, _ in self.rows)
+
+    def print(self, seconds):
+        say(f'gate: summary ({seconds:.0f} s)')
+        for passed, label, details in self.rows:
+            say(f'  {"pass" if passed else "FAIL"}  {label}')
+            for detail in details:
+                say('        ' + detail.replace('\n', '\n        '))
+        failed = sum(not passed for passed, _, _ in self.rows)
+        say(f'gate: {"passed" if not failed else f"failed: {failed} of {len(self.rows)}"} ({seconds:.0f} s)')
+
+
+def local_rows(report, results):
+    for name, command, status, output, seconds in results:
+        details = [] if status == 0 else [gating.last_lines(output, 20), 'rerun: ' + ' '.join(
+            str(part).replace(str(ROOT) + '/', '') for part in command)]
+        report.add(status == 0, f'{name} ({seconds:.0f} s)', details)
+
+
+def campaign_row(report, name, results, targets, summarize):
+    shards = [results.get(gating.short(t)) for t in targets]
+    seconds = max((r['seconds'] for r in shards if r), default=0)
+    failed = [(gating.short(t), r) for t, r in zip(targets, shards) if not r or r['status'] != gating.PASS]
+    if failed:
+        for target, result in failed:
+            if result is None:
+                report.add(False, f'{target}: no result (see the build failures and the log)')
+            else:
+                report.add(False, f'{target} ({gating.STATUS.get(result["status"], result["status"])}, '
+                           f'{result["seconds"]:.0f} s)', gating.rerun(target, result['details']))
+        return
+    try:
+        summary = summarize({gating.short(t): results[gating.short(t)]['details'] for t in targets})
+    except (ValueError, KeyError, TypeError) as error:
+        report.add(False, f'{name}: {error}')
+        return
+    report.add(True, f'{name}: {len(targets)} target{"s" * (len(targets) > 1)} (slowest {seconds:.0f} s)', summary)
+
+
+def conformance_summary(outputs):
+    return conformance.summarize(outputs, len(outputs))
+
+
+def agreement_summary(outputs):
+    total = agree.summarize(outputs)
+    return [f'{total["checked"]} variants checked, {total["skipped"]} skipped, 0 flagged']
+
+
+def smoke_summary(outputs):
+    return []
+
+
+def test_rows(report, results, tests):
+    for target in tests:
+        name = gating.short(target)
+        result = results.get(name)
+        if result is None:
+            report.add(False, f'{name}: no result (see the build failures and the log)')
+        elif result['status'] in (gating.PASS, gating.SKIP, gating.OMITTED):
+            report.add(True, f'{name} ({result["seconds"]:.0f} s)')
+        else:
+            report.add(False, f'{name} ({gating.STATUS.get(result["status"], result["status"])}, '
+                       f'{result["seconds"]:.0f} s)', gating.rerun(name, result['details']))
+
+
+def prepare(report):
+    started = time.monotonic()
+    result = subprocess.run([PY, str(ROOT / 'tools/buck2/prepare.py')], cwd=ROOT, capture_output=True, text=True)
+    if result.returncode:
+        report.add(False, 'Buck2 toolchains and pool configuration', [gating.last_lines(result.stdout + result.stderr)])
+        return False
+    say(f'gate: Buck2 prepared ({time.monotonic() - started:.0f} s)')
+    return True
+
+
+def build_only(report, log):
+    """The build and formatting check of a change that already passed."""
+    local = gating.Local()
+    local.start('formatting', [PY, str(ROOT / 'tools/buck2/fmt.py'), '--check'])
+    targets = gating.uquery(gating.BUILD_SET)
+    started = time.monotonic()
+    with open(log, 'w') as out:
+        status = gating.buck2('build', '--materializations', 'none', *targets, stdout=out, stderr=subprocess.STDOUT).returncode
+    report.add(status == 0, f'workspace build: {len(targets)} targets ({time.monotonic() - started:.0f} s)',
+               [] if status == 0 else [gating.last_lines(Path(log).read_text(errors='replace'), 30)])
+    local_rows(report, local.finish())
+
+
+def push_gate(base_ref):
+    started = time.monotonic()
+    base = gating.merge_base(base_ref)
+    identity = gating.change_identity(base)
+    if not identity:
+        say(f'gate: the worktree does not differ from {base[:12]}; nothing to check')
+        return 0
+    selection = gating.Selection(base)
+    c = selection.classified
+    say(f'gate: {len(selection.paths)} changed paths from {base[:12]} (change {identity[:12]})')
+    errors = gating.policy_errors()
+    report = Report()
+    for error in errors:
+        report.add(False, error)
+    if errors:
+        report.print(time.monotonic() - started)
+        return 1
+    log = gating.green_path().with_name('hirsel-gate.log')
+    if gating.is_green(identity, selection.crates):
+        say('gate: this change already passed; main moved under it and it rebased cleanly, '
+            'so only the workspace build and formatting run')
+        if prepare(report):
+            build_only(report, log)
+        report.print(time.monotonic() - started)
+        return 0 if report.passed else 1
+    for kind, paths in (('documentation', c.docs), ('gate tooling', c.tools), ('build-wide', c.build_wide),
+                        ('crates', sorted(c.crates)), ('other inputs', [p for p in c.owned if not p.startswith('crates/')])):
+        if paths:
+            say(f'gate: {kind}: ' + ', '.join(paths[:12]) + (f' and {len(paths) - 12} more' if len(paths) > 12 else ''))
+    if isinstance(c.buck, set) and c.buck:
+        say('gate: BUCK rules changed: ' + ', '.join(sorted(c.buck)))
+    local = gating.Local()
+    if c.docs:
+        status, output = docs_check(base, c.docs, selection.paths)
+        report.add(status == 0, f'documentation: links and whitespace in {len(c.docs)} files', [output])
+    needs_buck2 = c.needs_buck2
+    if (c.tools or needs_buck2) and not prepare(report):
+        report.print(time.monotonic() - started)
+        return 1
+    if c.tools or c.everything:
+        for name, command in gating.tool_tests():
+            local.start(name, command)
+    if c.tools or needs_buck2:
+        local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
+    if needs_buck2:
+        local.start('formatting', [PY, str(ROOT / 'tools/buck2/fmt.py'), '--check'])
+        selection.resolve()
+        build = gating.uquery(gating.BUILD_SET)
+        clippy = gating.uquery(gating.CLIPPY_SET)
+        campaigns = selection.campaign_targets()
+        say(f'gate: one Buck2 invocation: build {len(build)} targets, Clippy {len(clippy)}, '
+            f'{len(selection.tests)} test targets, campaigns: '
+            + (', '.join(c for c in impact.CAMPAIGNS if c in selection.campaigns) or 'none'))
+        say(f'gate: Buck2 output: {log}')
+        with tempfile.TemporaryDirectory() as scratch:
+            event_log, build_report = Path(scratch) / 'events.pb.zst', Path(scratch) / 'build.json'
+            invoked = time.monotonic()
+            with open(log, 'w') as out:
+                status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
+                                      *build, *[t + '[clippy.txt]' for t in clippy], *selection.tests, *campaigns,
+                                      '--', '--timeout', str(gating.TIMEOUT), stdout=out, stderr=subprocess.STDOUT).returncode
+            wall = time.monotonic() - invoked
+            results = gating.test_results(event_log) if event_log.exists() else {}
+            failures = gating.build_failures(build_report)
+        for target, error in sorted(failures.items()):
+            report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
+                                                             f'.buck2/bin/buck2 build //:{target}'])
+        report.add(not failures, f'workspace build and Clippy: {len(build)} targets and {len(clippy)} Clippy twins '
+                   f'in one invocation with the tests ({wall:.0f} s)')
+        if not failures:
+            ok, text = gating.clippy_report(clippy)
+            report.add(ok, 'Clippy', [] if ok else [gating.last_lines(text, 40)])
+        for campaign, name, summarize in ((impact.CONFORMANCE, 'conformance', conformance_summary),
+                                          (impact.AGREEMENT, f'agreement ({agree.AGREE_LIMIT} variants)', agreement_summary),
+                                          (impact.NATIVE_SMOKE, 'native smoke', smoke_summary)):
+            if campaign in selection.campaigns:
+                campaign_row(report, name, results, gating.CAMPAIGN_TARGETS[campaign], summarize)
+        test_rows(report, results, selection.tests)
+        if status and report.passed:
+            report.add(False, f'buck2 test exited {status}', [gating.last_lines(Path(log).read_text(errors='replace'), 30)])
+    local_rows(report, local.finish())
+    report.print(time.monotonic() - started)
+    if not report.passed:
+        return 1
+    if gating.change_identity(base) == identity:
+        gating.record_green(identity, selection.crates)
+    else:
+        say('gate: the worktree changed while the gate ran; not recording it as passed')
+    return 0
+
+
+# ---------------------------------------------------------------- full
+
+class Stages:
+    """Run every stage, report each, and fail after the last if any failed."""
+
+    def __init__(self):
+        self.failed = []
+        self.first_status = 0
+        self.started = time.monotonic()
+
+    def run(self, stage, command, **kwargs):
+        started = time.monotonic()
+        say(f'gate: {stage}')
+        try:
+            status = subprocess.run(command, cwd=ROOT, **kwargs).returncode
+        except OSError as error:
+            print(f'gate: {stage}: {error}', file=sys.stderr, flush=True)
+            status = 127
+        seconds = time.monotonic() - started
+        if status:
+            print(f'gate: {stage} failed (exit {status}, {seconds:.0f} s)', file=sys.stderr, flush=True)
+            self.failed.append(stage)
+            self.first_status = self.first_status or status
+        else:
+            say(f'gate: {stage} passed ({seconds:.0f} s)')
+        return status
+
+    def finish(self):
+        seconds = time.monotonic() - self.started
+        if self.failed:
+            print(f'gate: {len(self.failed)} failing stages: {";".join(self.failed)}', file=sys.stderr, flush=True)
+            print(f'gate: failed ({seconds:.0f} s)', file=sys.stderr, flush=True)
+            return self.first_status
+        say(f'gate: passed ({seconds:.0f} s)')
+        return 0
+
+
+def full_gate():
+    # A fresh seed for the randomly seeded tests (TEST_SEED in tools/buck2/defs.bzl),
+    # so the full gate never reuses a cached pass under the per-push seed.
+    seed = os.environ.get('HIRSEL_TEST_SEED') or str(int.from_bytes(os.urandom(4), 'little'))
+    say(f'gate: randomly seeded tests run with PROPTEST_RNG_SEED={seed}')
+    # The campaign stages are targets only under hirsel.full (tools/buck2/defs.bzl).
+    config = ['-c', 'hirsel.full=true', '-c', f'hirsel.test_seed={seed}']
+    os.environ['HIRSEL_BUCK2_CONFIG'] = ' '.join(config)
+    buck2 = [str(ROOT / '.buck2/bin/buck2')]
+    release = ['--target-platforms', '//tools/buck2:release']
+    # Buck2's test runner allows a test ten minutes; the campaigns take hours.
+    timeout, long = ['--timeout', '1800'], ['--timeout', '14400']
+
+    def query(expression):
+        return subprocess.run([*buck2, 'uquery', *config, expression], cwd=ROOT, capture_output=True,
+                              text=True).stdout.split()
+
+    def full_crate_tests(*arguments):
+        # Each profile must cover the compiled inventory once across pool and host.
+        return [PY, 'tools/buck2/full_gate_counts.py', '--run', *buck2, 'test', *config, *arguments,
+                '--', *long, '--test-arg=full_gate_', '--test-arg=--ignored']
+
+    stages = Stages()
+    for name, command in gating.tool_tests():
+        stages.run(f'tool tests: {name}', command)
+    stages.run('Buck2 toolchains and pool configuration', [PY, 'tools/buck2/prepare.py'])
+    stages.run('Buck2 build files match Cargo', [PY, 'tools/buck2/sync.py', '--check'])
+    # Only the verdict matters here: the outputs stay on the pool.
+    stages.run('workspace build', [*buck2, 'build', *config, '//:', '--materializations', 'none'])
+    stages.run('workspace clippy', [PY, 'tools/buck2/clippy.py'])
+    stages.run('formatting', [PY, 'tools/buck2/fmt.py', '--check'])
+    tests = query(gating.ALL_TESTS)
+    libtests = query('kind("_rust_test", //...) - attrfilter(labels, gate, //...)')
+    stages.run('workspace tests', [*buck2, 'test', *config, *tests, '--', *timeout])
+    stages.run('full gate crate tests', full_crate_tests(*libtests))
+    # Sixteen shards of the corpus by path hash; the script prints their summed counts.
+    stages.run('conformance validation and ratchet', [PY, 'tools/buck2/conformance.py'])
+    # The whole seed-1 catalogue in shards, each under its own timeout (AGREE_FULL_TIMEOUT).
+    stages.run('source and IR checker agreement (unrestricted)', [PY, 'tools/buck2/agree.py', '--full'])
+    stages.run('native smoke: heap, x86-64 and real Io replay', [*buck2, 'test', *config, '//:gate-native-smoke', '--', *timeout])
+    stages.run('release tests', [*buck2, 'test', *config, *release, *tests, '--', *timeout])
+    stages.run('full gate crate tests in release', full_crate_tests(*release, *libtests))
+    stages.run('native and Lean checks', ['tools/check-native.sh'])
+    stages.run('native matrix: both targets and named exclusions', [*buck2, 'test', *config, '//:gate-native-full', '--', *long])
+    stages.run('agreement campaign on heap and native code (unrestricted)',
+               [*buck2, 'test', *config, '//:gate-agree-native-full', '--', *long])
+    stages.run('interpreter passing corpus with independent second hash seed',
+               [*buck2, 'test', *config, '//:gate-conformance-hash-seed', '--', *long])
+    stages.run('native passing corpus with independent second hash seed',
+               [*buck2, 'test', *config, '//:gate-native-hash-sweep', '--', *long])
+    return stages.finish()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--full', action='store_true', help='every stage, for main\'s scheduled run')
+    group.add_argument('--base', default='origin/main', help='check the change from this commit\'s merge base')
+    args = parser.parse_args()
+    os.chdir(ROOT)
+    return full_gate() if args.full else push_gate(args.base)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

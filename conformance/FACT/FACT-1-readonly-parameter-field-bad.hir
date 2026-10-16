@@ -1,0 +1,14 @@
+// rule: FACT-1
+// expect: reject FACT-1 at line 12
+type Holder {
+  xs: List[u8],
+}
+
+fn poke(mut xs: List[u8]) -> bool {
+  true
+}
+
+fn probe(mut h: Holder) -> u64
+  requires poke(mut h.xs) {
+  list.len(h.xs)
+}

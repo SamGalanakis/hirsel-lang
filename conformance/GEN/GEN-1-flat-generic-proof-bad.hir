@@ -1,0 +1,8 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 7
+// Plain admits raw pointers; a symbolic Flat obligation needs the written Flat bound.
+fn use_flat[T: flat](x: T) {}
+
+fn example[T: plain](x: T) {
+  use_flat(x)
+}

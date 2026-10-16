@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+fn accept[X: sendable](x: X) -> () {
+  ()
+}
+
+fn outer[T: sendable](x: T) -> () {
+  fn inner[U: sendable](take y: U) -> () {
+    accept(y)
+  }
+  ()
+}

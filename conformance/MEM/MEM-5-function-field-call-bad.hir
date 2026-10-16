@@ -1,0 +1,12 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 11
+// "Every call goes through a signature declared @noalloc." A function held
+// in a field is called by the field's type, which promises no `@noalloc`.
+type Holder {
+  action: fn() -> u64 uses {},
+}
+
+@noalloc
+fn call_field(h: Holder) -> u64 {
+  h.action()
+}

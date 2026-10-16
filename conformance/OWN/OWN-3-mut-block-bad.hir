@@ -1,0 +1,16 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 12
+// "A mut borrow is exclusive."
+// Provisional reading (spec issue 50). A block is not a place. One that names
+// outer storage only borrows it, so there is nothing to lend exclusively.
+fn first(mut a: Array[u64]) -> () {
+  a[0] = 5
+}
+
+fn example(mut xs: Array[u64]) -> () {
+  first(
+    mut {
+      xs
+    }
+  )
+}

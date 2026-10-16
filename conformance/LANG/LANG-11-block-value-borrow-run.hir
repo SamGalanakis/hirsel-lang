@@ -1,0 +1,90 @@
+// rule: LANG-11
+// expect: run
+// stdout: ok
+// exit: 0
+// "A block's value is its final expression."
+// Provisional reading (spec issue 50). A block, branch or arm is transparent to
+// a consumer that only borrows. Its value is the outer storage it names, a
+// computed alternative lives until the consumer finishes, and nothing is moved.
+type Rec {
+  items: Array[String],
+}
+
+fn output_error[E](take e: E) -> () {}
+
+fn width(s: String, n: u64) -> u64 {
+  string.byte_len(
+    if n == 0 {
+      s
+    } else {
+      "other"
+    }
+  )
+}
+
+fn arm(s: String, n: u64) -> u64 {
+  string.byte_len(
+    match n {
+      0 => s,
+      1 => "four",
+      _ => "x",
+    }
+  )
+}
+
+fn first(r: Rec) -> u64 {
+  string.byte_len(
+    {
+      r
+    }.items[0]
+  )
+}
+
+fn repeat(s: String, r: Rec) -> u64 {
+  let mut total: u64 = 0
+  let mut i: u64 = 0
+  while i < 3 {
+    let _ = {
+      s
+    }
+    total = total + string.byte_len(
+      {
+        s
+      }
+    ) + string.byte_len(
+      {
+        r.items
+      }[1]
+    )
+    i = i + 1
+  }
+  total
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let s: String = "ab"
+  let r = Rec(items: ["abc", "d"])
+  let joins = width(s, 0) == 2 && width(s, 1) == 5 && arm(s, 0) == 2 && arm(s, 1) == 4 && arm(
+    s,
+    2
+  ) == 1
+  let ok = joins && repeat(s, r) == 9 && first(r) == 3 && string.byte_len(
+    {
+      s
+    }
+  ) == 2
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

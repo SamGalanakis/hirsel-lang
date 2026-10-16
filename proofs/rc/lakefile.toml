@@ -1,0 +1,10 @@
+name = "rc"
+version = "1.0.0"
+defaultTargets = ["Rc", "rc-trace"]
+
+[[lean_lib]]
+name = "Rc"
+
+[[lean_exe]]
+name = "rc-trace"
+root = "Main"

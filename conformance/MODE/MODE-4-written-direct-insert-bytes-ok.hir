@@ -1,0 +1,6 @@
+// rule: MODE-4
+// expect: accept
+fn probe() {
+  let mut xs: List[sendable Bytes] = [b"first"]
+  list.push(mut xs, b"second")
+}

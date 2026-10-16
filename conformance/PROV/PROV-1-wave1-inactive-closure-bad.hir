@@ -1,0 +1,9 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 7
+fn example(mut source: String, p: StrPos of source) -> () {
+  let option: Option[StrPos of source] = Some(p)
+  source = "changed"
+  let _ = fn() {
+    option
+  }()
+}

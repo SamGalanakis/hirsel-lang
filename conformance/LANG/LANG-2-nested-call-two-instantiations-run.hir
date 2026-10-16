@@ -1,0 +1,32 @@
+// rule: LANG-2
+// expect: run
+// stdout: ok
+// One owner calls a generic nested function that captures its locals at two
+// instantiations, each running its own instance with the same environment.
+fn outer(base: u64) -> u64 {
+  let name: String = "abc"
+  fn measure[T: plain](x: T, k: u64) -> u64 {
+    let y = x
+    string.byte_len(name) + base + k
+  }
+  measure(1u8, 10u64) + measure(2u32, 100u64)
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(5) == 126 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

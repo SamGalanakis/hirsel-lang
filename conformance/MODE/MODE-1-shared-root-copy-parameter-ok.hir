@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: accept
+// Under MEM-11 copying a Shared root acquires an atomic count on an immutable root
+// that is never region-placed, so the copy is global even from a borrow.
+type R {
+  s: Shared[Bytes],
+}
+
+fn root(s: Shared[Bytes]) -> Shared[Bytes] {
+  copy s
+}
+
+fn field(r: R) -> Shared[Bytes] {
+  copy r.s
+}

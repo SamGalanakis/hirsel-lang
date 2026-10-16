@@ -1,0 +1,23 @@
+// rule: FAIL-1
+// expect: run
+// stdout: ok
+// "Result for expected failures"; Error is a value, not a bug failure.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let status: Result[u8, ()] = Error(())
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if status == Error(()) {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

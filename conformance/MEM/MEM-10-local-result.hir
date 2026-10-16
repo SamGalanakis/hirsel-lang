@@ -1,0 +1,29 @@
+// rule: MEM-10
+// expect: run
+// stdout: ok
+// "Placement ... from modes ... never observable".
+fn output_error[E](take e: E) -> () {}
+
+@noalloc
+fn first(xs: Array[String]) -> String in xs {
+  xs[0]
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Array[String] = ["local"]
+  let text = first(xs)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if text == "local" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

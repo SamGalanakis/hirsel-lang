@@ -1,0 +1,14 @@
+---
+source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
+expression: "rendered(\"PROV/PROV-4-constructed-part-relation-bad.hir\")"
+---
+error[PROV-4]: an arena value cannot be kept where no placement is declared: `x` lives in arena `a`, but the result requires the heap
+ --> ../../conformance/PROV/PROV-4-constructed-part-relation-bad.hir:12:3
+  12 |   Ast(s: x)
+     |   ^^^^^^^^^ 
+ --> ../../conformance/PROV/PROV-4-constructed-part-relation-bad.hir:11:7
+  11 |   let x: String in {a, x} = "x"
+     |       ^ provided: placed `in a` by its declared type
+ --> ../../conformance/PROV/PROV-4-constructed-part-relation-bad.hir:10:19
+  10 | fn f(a: Arena) -> Ast {
+     |                   ^^^ required: the result requires `in heap`

@@ -1,0 +1,86 @@
+// rule: SEM-4
+// expect: accept
+// SEM-4 and section 22 enumerate the supported source families.
+type Choice = One(u64) | Two(u64)
+
+flat type Flat {
+  values: List[u64],
+}
+
+fn array(xs: Array[u64]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn list(xs: List[u64]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn inline(xs: Inline[u64, 2]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn packed_array(xs: Array[Packed[Choice]]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn packed_list(xs: List[Packed[Choice]]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn packed_inline(xs: Inline[Packed[Choice], 2]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn flat_list(xs: Flat) {
+  for x in xs.values {
+    let _ = x
+  }
+}
+
+fn map(xs: Map[u64, u64]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn sorted_map(xs: SortedMap[u64, u64]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn set(xs: Set[u64]) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn scalars(xs: ScalarView) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn positions(xs: PositionView) {
+  for x in xs {
+    let _ = x
+  }
+}
+
+fn iterator(mut xs: Iter[u64]) {
+  for x in mut xs {
+    let _ = x
+  }
+}

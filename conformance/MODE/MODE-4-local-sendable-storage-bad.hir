@@ -1,0 +1,14 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 12
+// Frame-related storage written `sendable` holds only sendable callables.
+fn needs(take g: sendable fn() -> u64) -> u64 {
+  g()
+}
+
+fn probe(take q: sendable fn() -> u64, take p: fn() -> u64) -> u64 {
+  let mut held: (sendable fn() -> u64) in q = fn() {
+    1
+  }
+  held = p
+  needs(take held)
+}

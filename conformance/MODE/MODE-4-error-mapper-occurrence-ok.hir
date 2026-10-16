@@ -1,0 +1,39 @@
+// rule: MODE-4
+// expect: accept
+fn workload(data: Bytes) -> Bytes {
+  let mut output: List[u8] = []
+  bytes.from_list(take output)
+}
+
+fn error[E](take e: E) -> () {}
+
+fn decimal(b: Bytes, mut pos: u64) -> u64 {
+  let mut n: u64 = 0
+  n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let input = arg.path(args, 1u64) ? error
+  let rounds_text = path.text(arg.path(args, 2u64) ? error)
+  let mut pos: u64 = 0
+  let rounds = decimal(string.as_bytes(rounds_text), mut pos)
+  let emit_output = match arg.path(args, 3u64) {
+    Ok(p) => p == path.of("--emit"),
+    Error(_) => false,
+  }
+  let d = io.dir(rt, path.of(".")) ? error
+  let data = file.read_bytes(d, input) ? error
+  for epoch in 0u64..rounds {
+    let output = workload(data)
+    if emit_output {
+      let text = string.from_bytes(copy output) ? error
+      out.print(io.stdout(rt) ? grant_error, text) ? error
+    }
+  }
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

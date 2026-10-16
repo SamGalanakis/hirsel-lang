@@ -1,0 +1,19 @@
+// Contiguous four-u64 records; construct, run sixteen updates, sum and release.
+type Row { a: u64, b: u64, c: u64, d: u64 }
+fn workload(data: Bytes) -> Bytes {
+  let mut pos: u64 = 0
+  let n = decimal(data, mut pos)
+  let mut rows: List[Row] = []
+  list.reserve(mut rows, n)
+  for i in 0u64..n { list.push(mut rows, Row(a: i, b: i % 7u64, c: i % 13u64, d: 1u64)) }
+  for pass in 0u64..16u64 {
+    for j in 0u64..n {
+      rows[j].a += rows[j].d
+      rows[j].b += 2u64
+      rows[j].c += rows[j].a % 11u64
+    }
+  }
+  let mut sum: u64 = 0
+  for k in 0u64..n { sum += rows[k].a + rows[k].b + rows[k].c + rows[k].d }
+  number(sum)
+}

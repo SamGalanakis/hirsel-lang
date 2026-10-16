@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: accept
+// "Heap outlives every arena", so a heap value may be kept in storage declared
+// without a placement, and an arena value in storage of the same arena.
+fn store(a: Arena, mut dst: Bytes, take src: Bytes in heap) -> () {
+  dst = take src
+}
+
+fn store_placed(a: Arena, mut dst: Bytes in a, take src: Bytes in a) -> () {
+  dst = take src
+}

@@ -1,0 +1,17 @@
+// rule: OWN-8
+// expect: reject OWN-8 at line 16
+// "To move a part out of an owned value, destructure the whole." Assigning a
+// noncopyable field into other storage would move that part (issue #73).
+resource type Token {
+  n: u8,
+}
+drop(t) {}
+
+type Holder {
+  token: Token,
+}
+
+fn probe(take h: Holder) -> () {
+  let mut r: Token = Token(n: 1u8)
+  r = h.token
+}

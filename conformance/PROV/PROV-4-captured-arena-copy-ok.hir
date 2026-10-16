@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: accept
+// A closure that borrows a value placed in an arena reads a local view of
+// that storage, as a borrowed arena parameter is. A copy of it stays in the
+// arena and may be used inside the closure.
+fn probe(a: Arena) -> u64 {
+  let x: String in a = "abc"
+  let f = fn() {
+    string.byte_len(copy x)
+  }
+  let g = fn() {
+    let y = copy x
+    string.byte_len(y)
+  }
+  f() + g()
+}

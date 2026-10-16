@@ -1,0 +1,13 @@
+rc-trace v1
+max 3
+# Tiny MAX: finite counts are 1..2. The second dup saturates to Immortal (T03), further
+# dups and releases leave it Immortal, and a reset of the last holder yields a none token
+# (T12): the block is retained, never reused.
+alloc r1 1
+dup r1 r2
+dup r2 r3
+dup r3 r4
+drop r2
+drop r3
+drop r4
+reset r1 t1

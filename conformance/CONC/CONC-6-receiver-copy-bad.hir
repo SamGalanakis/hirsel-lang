@@ -1,0 +1,6 @@
+// rule: CONC-6
+// expect: reject OWN-5 at line 5
+// "a Receiver is noncopyable"; it is moved or borrowed, never copied.
+fn consume(take r: Receiver[u32]) -> () {
+  let other = copy r
+}

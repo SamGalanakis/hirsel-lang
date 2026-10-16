@@ -1,0 +1,3 @@
+Alloc { alloc: AllocId(0), owner: "heap", capacity: 16 }
+Release { alloc: AllocId(0), count: Some(0) }
+Free { alloc: AllocId(0) }

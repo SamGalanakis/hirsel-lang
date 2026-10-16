@@ -1,0 +1,7 @@
+// rule: LANG-12
+// expect: accept
+fn rename(from x: u8, to y: u8) {}
+
+fn probe() {
+  rename(to: 2, from: 1)
+}

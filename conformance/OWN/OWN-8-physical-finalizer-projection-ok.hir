@@ -1,0 +1,12 @@
+// rule: OWN-8
+// expect: accept
+resource type R {
+  x: Bytes,
+}
+drop(self) {
+  let part = copy self.x
+}
+
+fn probe() {
+  let r = R(x: b"data")
+}

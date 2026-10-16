@@ -1,0 +1,4 @@
+@noalloc
+pub fn indirect() -> u64 uses {} {
+  vendor.value()
+}

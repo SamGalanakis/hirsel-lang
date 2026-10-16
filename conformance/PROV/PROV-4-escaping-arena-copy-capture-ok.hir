@@ -1,0 +1,9 @@
+// rule: PROV-4
+// expect: accept
+fn probe(a: Arena) -> u64 {
+  let x: String in a = "x"
+  let f = fn() {
+    string.byte_len(x)
+  }
+  f()
+}

@@ -1,0 +1,16 @@
+// rule: FACT-1
+// expect: run
+// stdout: append
+fn append[T](mut xs: unique List[T], take x: T) -> ()
+  ensures list.len(xs) == before(list.len(xs)) + 1 {
+  list.push(mut xs, take x)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: List[u32] = []
+  append(mut xs, 7u32)
+  if list.len(xs) == 1u64 {
+    let _ = out.print(io.stdout(rt)?, "append\n")
+  }
+  Ok(())
+}

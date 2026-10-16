@@ -1,0 +1,21 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 19
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  x = b"changed"
+}
+
+fn probe(mut x: Bytes, mut y: Bytes) -> Bytes in {x, y} {
+  let mut slot = view(x)
+  let mut n: u32 = 0u32
+  while n < 3u32 {
+    slot = view(y)
+    n += 1u32
+  }
+  // The loop result is still read after the mutation.
+  bump(mut y)
+  slot
+}

@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+fn sink[T: sendable](x: box T) {}
+
+fn probe(take x: box sendable Bytes) {
+  let f = fn() {
+    sink(x)
+  }
+  f()
+  let alias = copy x
+}

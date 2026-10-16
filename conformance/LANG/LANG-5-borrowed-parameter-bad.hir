@@ -1,0 +1,7 @@
+// rule: LANG-5
+// expect: reject OWN-1 at line 6
+// Shows "A value changes only through a visible name"
+@noalloc
+fn example(n: u32) -> () {
+  n = 1
+}

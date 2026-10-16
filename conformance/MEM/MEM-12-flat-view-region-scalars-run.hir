@@ -1,0 +1,35 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+flat type Sliced {
+  prefix: String,
+  text: String,
+}
+
+fn count(s: String) -> u64 {
+  let mut n: u64 = 0
+  for x in string.scalars(s) {
+    n += 1
+  }
+  n
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let s = Sliced(prefix: "pad", text: "é")
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if count(s.text) == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

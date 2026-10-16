@@ -1,0 +1,35 @@
+// rule: OWN-4
+// expect: run
+// stdout: ok
+// "First mutation of shared storage detaches it." Inserting into a copy of
+// a constant map detaches the copy from the constant's static storage.
+fn build() -> Map[u64, u64] {
+  let mut m: Map[u64, u64] = map.empty()
+  map.insert(mut m, 1, 10)
+  map.insert(mut m, 2, 20)
+  take m
+}
+
+const M: Map[u64, u64] = build()
+
+fn value() -> u64 {
+  let mut m = copy M
+  map.insert(mut m, 1, 30)
+  match (map.get(M, 1), map.get(m, 1), map.get(m, 2)) {
+    (Some(a), Some(b), Some(c)) => a + b + c,
+    _ => 0,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  if value() == 60 {
+    out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  } else {
+    out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

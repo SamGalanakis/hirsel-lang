@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: accept
+// A part declared unique is a contract of the aggregate, satisfied by a
+// unique value in a record and in a sequence.
+type Holder {
+  items: unique Bytes,
+}
+
+fn build(take x: unique Bytes) -> Holder {
+  Holder(items: take x)
+}
+
+fn list(take x: unique Bytes) -> List[unique Bytes] {
+  [take x]
+}

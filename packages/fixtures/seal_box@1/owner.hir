@@ -1,0 +1,24 @@
+@capability(global)
+pub opaque type ReadDir: plain + noalloc_drop uses {Dir} {
+  d: Dir,
+}
+
+pub fn make(d: Dir) -> ReadDir {
+  ReadDir(d: d)
+}
+
+pub fn raw(r: ReadDir) -> Dir {
+  r.d
+}
+
+@capability(global)
+pub opaque resource type Writer: () uses {Stdout} {
+  out: Stdout,
+}
+drop(self) {
+  let _ = out.print(self.out, "hidden\n")
+}
+
+pub fn discard(take w: Writer) {
+  forget(take w)
+}

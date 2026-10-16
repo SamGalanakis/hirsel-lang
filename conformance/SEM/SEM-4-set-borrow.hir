@@ -1,0 +1,45 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut s: Set[u64] = set.empty()
+  set.insert(mut s, 2u64)
+  set.insert(mut s, 1u64)
+  set.insert(mut s, 2u64)
+  set.insert(mut s, 3u64)
+  let mut sum: u64 = 0
+  let mut count: u64 = 0
+  for x in s {
+    let _ = s == s
+    sum += x
+    count += 1
+  }
+  let empty: Set[u64] = set.empty()
+  for x in empty {
+    count += 100
+  }
+  for x in s {
+    count += 1
+    break
+  }
+  for x in s {
+    count += 1
+    continue
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if sum == 6 && count == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

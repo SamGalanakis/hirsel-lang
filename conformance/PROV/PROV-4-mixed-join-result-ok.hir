@@ -1,0 +1,20 @@
+// rule: PROV-4
+// expect: accept
+// Both branches lend from parameters the result names, and a join of global
+// heap values is global.
+fn pick(c: bool, a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {x, y} {
+  if c {
+    x
+  } else {
+    y
+  }
+}
+
+fn heap_value(c: bool) -> String {
+  let text: String = copy_to(heap, "heap")
+  if c {
+    text
+  } else {
+    "literal"
+  }
+}

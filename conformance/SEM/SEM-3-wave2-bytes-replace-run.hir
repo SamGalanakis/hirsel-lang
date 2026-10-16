@@ -1,0 +1,15 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  failure.check(std@1/bytes.replace(b"aaaaa", b"aa", b"x") == b"xxa", TextInvariant())
+  failure.check(std@1/bytes.replace(b"ababa", b"aba", b"X") == b"Xba", TextInvariant())
+  failure.check(
+    std@1/bytes.replace(b"\xff\0\xff", b"\xff", b"\xfe\xfd") == b"\xfe\xfd\0\xfe\xfd",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/bytes.replace(b"aaaa", b"aa", b"aaa") == b"aaaaaa",
+    TextInvariant()
+  )
+  Ok(())
+}

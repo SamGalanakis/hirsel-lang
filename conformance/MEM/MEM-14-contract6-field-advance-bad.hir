@@ -1,0 +1,13 @@
+// rule: MEM-14
+// expect: reject MEM-14 at line 11
+// The selected field cannot be rebound to another environment.
+type State[T] {
+  it: Iter[T],
+  count: u64,
+}
+
+@advance_only(s.it)
+fn step[T](mut s: State[T], take other: Iter[T]) -> Option[T] {
+  s.it = take other
+  iter.next(mut s.it)
+}

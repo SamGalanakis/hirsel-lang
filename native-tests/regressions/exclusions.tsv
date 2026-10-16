@@ -1,0 +1,5 @@
+# Baseline-passing executable cases a native configuration does not agree on, with
+# the reason. Each row is an unmet promotion obligation, not a
+# waiver. Regenerate with `native --full --bless` only after reading the diff:
+# a new row is a regression unless its reason is new work.
+# case	configuration	class	reason

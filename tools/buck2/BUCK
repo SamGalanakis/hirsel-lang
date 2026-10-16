@@ -1,0 +1,78 @@
+load(":platforms.bzl", "declare_platforms")
+load(":host_transition.bzl", "host_transition")
+
+declare_platforms(
+    name = "platforms",
+    constraints = ["prelude//os:linux", "prelude//cpu:x86_64"],
+)
+
+constraint_setting(name = "profile")
+
+constraint_value(name = "profile_dev", constraint_setting = ":profile", visibility = ["PUBLIC"])
+
+constraint_value(name = "profile_release", constraint_setting = ":profile", visibility = ["PUBLIC"])
+
+# The default target platform: Cargo's dev profile.
+platform(
+    name = "dev",
+    constraint_values = [
+        "prelude//os/constraints:linux",
+        "prelude//cpu/constraints:x86_64",
+        ":profile_dev",
+    ],
+    visibility = ["PUBLIC"],
+)
+
+constraint_setting(name = "panic")
+
+constraint_value(name = "panic_abort", constraint_setting = ":panic", visibility = ["PUBLIC"])
+
+# The runtime archives' configurations (`hirsel_runtime_archives` in defs.bzl).
+platform(
+    name = "runtime-x86_64",
+    constraint_values = [
+        "prelude//os/constraints:linux",
+        "prelude//cpu/constraints:x86_64",
+        ":profile_release",
+        ":panic_abort",
+    ],
+    visibility = ["PUBLIC"],
+)
+
+platform(
+    name = "runtime-aarch64",
+    constraint_values = [
+        "prelude//os/constraints:linux",
+        "prelude//cpu/constraints:arm64",
+        ":profile_release",
+        ":panic_abort",
+    ],
+    visibility = ["PUBLIC"],
+)
+
+# Cargo's release profile: `--target-platforms //tools/buck2:release`.
+platform(
+    name = "release",
+    constraint_values = [
+        "prelude//os/constraints:linux",
+        "prelude//cpu/constraints:x86_64",
+        ":profile_release",
+    ],
+    visibility = ["PUBLIC"],
+)
+
+export_file(name = "test_launcher.sh", src = "test_launcher.sh", visibility = ["PUBLIC"])
+export_file(name = "bundle_archive.py", src = "bundle_archive.py", visibility = ["PUBLIC"])
+
+# Measured seconds per case of each sharded test binary (sync.py, test_costs.py).
+[export_file(name = table, src = table, visibility = ["PUBLIC"]) for table in glob(["test-costs/*.tsv"])]
+
+# One identity for host code, independent of the caller's execution reservation.
+host_transition(
+    name = "host_transition",
+    budget = ":budget",
+    panic = ":panic",
+    profile = ":profile_dev",
+    cpu = "prelude//cpu/constraints:x86_64",
+    visibility = ["PUBLIC"],
+)

@@ -1,0 +1,9 @@
+// rule: MEM-12
+// expect: accept
+type Holder[T] {
+  value: T,
+}
+
+flat type R {
+  value: List[Holder[u32]],
+}

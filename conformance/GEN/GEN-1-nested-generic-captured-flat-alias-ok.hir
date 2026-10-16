@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: accept
+fn outer[T: flat](x: T) -> () {
+  fn inner[U](take y: U) -> () {
+    let alias = x
+    let copied = copy alias
+  }
+  ()
+}

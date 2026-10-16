@@ -1,0 +1,29 @@
+// rule: SER-1
+// expect: accept
+pub opaque type Domain: plain + inert + noalloc_drop uses {} {
+  n: u64,
+}
+
+@serializable
+type Dto {
+  n: u64,
+}
+
+fn to_dto(x: Domain) -> Dto {
+  Dto(n: x.n)
+}
+
+fn from_dto(x: Dto) -> Option[Domain] {
+  let n: u64 = x.n
+  if n <= 100 {
+    Some(Domain(n: n))
+  } else {
+    None
+  }
+}
+
+fn encode[T: serializable](x: T) {}
+
+fn example(x: Domain) {
+  encode(to_dto(x))
+}

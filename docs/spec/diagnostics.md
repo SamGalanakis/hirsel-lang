@@ -1,0 +1,191 @@
+# Diagnostics
+
+A diagnostic reports a failed judgment and cites exactly one rule. When a program violates
+several rules, this part fixes which diagnostic comes first and where its primary span is,
+so that every implementation reports the same first diagnostic. The policy is an oracle for
+diagnostic and driver tests, never an additional reason to reject a valid program.
+
+## Order
+
+Obligations are built from syntax and declared signatures, in source evaluation order
+([LANG-3](language.md#lang-3-evaluation)), including both branches for static checking.
+Prerequisites are checked before the judgments that depend on them: lexical validity,
+syntactic form, name and binder availability, signature well-formedness, then expression
+typing and flow. Judgments whose operands or signatures are invalid are suppressed; mode,
+brand or allocation errors are never manufactured from recovery types.
+
+Across independent obligations, the first diagnostic is the minimum by (source-unit
+manifest path as UTF-8 bytes, primary start byte, primary end byte, rule prefix as ASCII,
+numeric rule suffix). File input order, phase scheduling and topology do not affect this
+order, so a one-file program reports its earliest source site, not whichever check finishes
+first.
+
+## Owners
+
+Each failed obligation has exactly one owner before sorting. A specialized construct owns
+the extra restriction it introduces:
+
+| Construct | Owner |
+|---|---|
+| resource finalization | DROP-3 |
+| arena, flat, `Packed` and `Shared` construction | MEM-4, MEM-12, MEM-13, MEM-11 |
+| scoped-capability escape | MODE-6 |
+| task capture | CLO-3 |
+| mutex payload, capture and result | CONC-5 |
+| channel payload | CONC-6 |
+| iteration marker and place | SEM-4 |
+| contracts and facts | FACT-1, FACT-2 |
+| other closure construction and escape | CLO-1 for scoped values, CLO-4 for escaping capture and authority |
+| a restricted scope-forming callback's authority | CAP-3 |
+| a transparent scoped call's unknown or joined authority | CLO-2 |
+
+These override the general properties they restate, not independent operand errors.
+
+## Expression obligations
+
+For the remaining expression obligations, in this order:
+
+1. **Availability:** OWN-2 use after move; MODE-3 repeated invocation.
+2. **Access:** OWN-1 borrowed parameters, LANG-15 aliases of `mut` parameters, LANG-5
+   immutable bindings; OWN-8 partial moves.
+3. **Copying:** OWN-5 for a concrete noncopyable value; GEN-1 when a generic copyable proof
+   is absent.
+4. **Exclusive call loans:** OWN-3. A conflict with a live loan that a local result holds is
+   MODE-1. A value outside a required relation is PROV-4 when every bound loan it holds
+   outside the relation is on an arena, and MODE-1 otherwise
+   ([PROV-4](brands.md#prov-4-arena-placement)).
+5. **Capability provision:** MEM-9 for `Unsafe` operations, CAP-4 for synchronization,
+   CAP-2 for handle operations, otherwise CAP-1.
+6. **Identity and placement:** PROV-5 sibling construction and owner mutation; PROV-2
+   union, erased or closure-own origins; otherwise PROV-1 concrete brands and PROV-4
+   placement.
+7. **Required modes:** MODE-1, MODE-2, MODE-3, MODE-4, in that order.
+8. **Authority and bounds:** CAP-2 for `inert`, GEN-1 for other bounds.
+9. **Allocation:** MEM-5.
+
+A specialized restriction is tested at the corresponding stage, so an already-moved operand
+fails before its crossing or layout properties are considered. A missing capability
+argument uses the operation's capability owner rather than a derived arity or type
+mismatch. Every other typing failure uses the rule that defines the form; LANG-7 owns type
+incompatibility without a narrower rule. Independent failures at the same stage use the
+source and rule ordering above.
+
+Complete actual generic bounds are prerequisites of the parameter defaults that depend on
+them; a failed instantiation suppresses only those derived checks, never independent
+availability, access, copy, loan or parameter obligations. `sendable` bounds report MODE-4,
+`inert` CAP-2 and other bounds GEN-1. A concrete borrowed noncopyable result extraction is
+OWN-1, before required modes. Returning local content through an inferred closure result is
+MODE-1 only when environment specialization cannot establish a global result; not every
+return of a borrowed capture is rejected. A `mut` constructor operand is OWN-3, a `mut`
+error mapper LANG-8, and bare non-value type names and duplicate top-level paths LANG-7.
+
+**Sendability.** Failure of a written sendability requirement, of an occurrence-specific
+sendability proof, or of a crossing-contract hand-back is MODE-4 at the receiving flow or
+the use requiring that proof. Losing evidence through an otherwise legal copy is not itself
+an error. An independent earlier availability, access, copy, loan, identity or locality
+failure is diagnosed first, and a specialized crossing construct keeps its own
+restriction. When the other type, access and locality obligations are met, failure to
+instantiate or transport a written sendability requirement is MODE-4 at the call or
+receiving flow; the diagnostic identifies the qualified requirement and, when relevant, the
+signature's copying permission or invariant mutable contract that prevents preserving it.
+
+## Causes
+
+An ownership-flow diagnostic reports a provided fact (a value's loans, locality,
+placement, brand, uniqueness or multiplicity) that fails a required fact. Every such
+diagnostic (MODE-1/2/3/4, OWN-1/3, LANG-15, PROV-1/2/4, CLO-1/3/4, MEM-4/11, and
+CONC-5/6 for captures and payloads) names the cause of the provided fact and the cause of
+the required fact. Each cause is a kind from the closed vocabulary below, naming a program
+entity (a binding, parameter, field path, callee and parameter, or closure) with its site,
+as a label or a note. A provided cause may chain through steps; steps that do not change
+the fact are not printed. A loan conflict names the loan's creation and the use that keeps
+it live. Signature well-formedness errors (a misplaced or malformed relation, modifier or
+brand) cite the written form instead. Wording, label order and repair suggestions are not
+specified; the vocabulary changes only with this section.
+
+### Cause vocabulary
+
+| Side | Kinds |
+|---|---|
+| Provided fact | borrowed parameter `x`; `mut` parameter `x`; taken parameter `x` and its relation; local result of `f` and its relation; written relation, brand or modifier of a binding or parameter; temporary `e`, ending with its statement; environment of closure `c` through capture `x`; arena placement in `a` (by annotation, relation or construction); brand `of p` (by annotation or operation); brand erased (by computation or join); identity ended (at the ending action); loan on place `q` and its kind, created at a site; share or copy that ended uniqueness; first call of a once function; storage of this body (binding `x` or the frame), ending with its scope; no placement (declared without one, or joined from different placements); moved or not initialised (moved at a site, or uninitialised on some path); access (a binding without `mut`, a read-only alias, a place passed without `mut` or `take`); last use of a binding; published storage (`Shared` or a sealed region); once function value (written, or forced by its captures); structural property of a type (noncopyable, a resource or a finalizer's own resource, not sendable such as a Receiver part, `Packed` layout); authority (of a capability, a scoped capability, or a function value or capture, against a `uses` restriction); computed operand that only borrows other storage; part `x.f` of an owned value; owner that cannot hold a brand or placement (a closure's own parameter, a sibling field); header of a function value; current content not proved sendable, including the share or replacement that lost its evidence, or the unsatisfied generic or erased crossing obligation |
+| Step | stored at a place; read from field `p.f`; captured by closure `c`; joined at a branch or loop |
+| Required fact | result without a relation (global); result relation `in S`; caller storage `mut x` and its relation; receiving contract of binding `x` (written or inferred at declaration); argument for parameter `p` of `f` and its declared type; escaping store (record field, returned or stored closure, task capture, channel or mutex payload, `shared.freeze`, `arena.seal`); end of a temporary scope; exit of a scope or arena; exclusive action on place `q` (write, move, `mut` or `take`); uniqueness requirement; sendability requirement; many function value (multiplicity); brand or placement required by a use, parameter or annotation (`of p`, arena `a`, the heap or no placement; a branded use needing a live owner; a parameter type naming no brand); closure result outside its own parameters; access requirement (read, copy, deep copy or index); authority bound (a declared `uses` or `inert`); arena contents without resources; written sendable receiving type, generic sendable bound, or exact mutable crossing contract, naming its declaration site |
+
+```text
+error[MODE-1]: this operation requires a global value: `xs` is local to the caller, but the result must be global
+ --> escape.hir:1:41
+   1 | fn escape(xs: List[u64]) -> List[u64] { xs }
+     |                                         ^^
+```
+
+Here the provided fact is "borrowed parameter `xs`" and the required fact "result without
+a relation".
+
+## Folding
+
+Failed obligations of one definition that share a root cause (the same provided cause at the
+same site, whatever requirements they fail) fold into one diagnostic before the first
+diagnostic is selected: the member of the group that the ordering selects first is reported,
+and the others become its notes. Diagnostics with different root causes never fold, so
+folding cannot change which diagnostic is first.
+
+## Primary sites
+
+The primary span is the smallest complete syntactic operation that imposes the failed
+obligation: a call, arguments included, for argument, mode, brand and loan checks; a
+projection or read for use after move; an assignment for write access; a constructor for
+construction; a type or field annotation for an invalid declaration; the closure literal for
+capture mode and escape at construction. A prohibited authority capture instead cites its
+first free use inside the callback, and nested callbacks repeat this policy. Returning or
+storing an already scoped closure cites that use. An unused task handle cites its binding;
+a definition containing `todo` without `@incomplete` cites the first `todo`, and a complete
+caller cites the incomplete call. Implicit cleanup sites follow
+[MEM-5](memory.md#mem-5-allocation); recursive cleanup notes point to fields and
+destructors. A missing closing token uses an empty span at the expected boundary.
+Invalidated brands are reported at their first incompatible use, with the invalidation as a
+note, never as an earlier primary error.
+
+Reserved identifiers cite the keyword (LANG-14), forbidden labels, patterns and facts cite
+their form's rule (LANG-12, LANG-13, FACT-2), and other malformed syntax cites LANG-1, except
+for these missing or malformed declaration components, owned by their own rules:
+
+| Missing or malformed declaration component | Owner |
+|---|---|
+| Parameter, record-field or distinct-field colon; constant type colon or initializer `=`; `fn` after `extern` | LANG-6 |
+| Required ABI string after `extern` | PROG-4 |
+| Opening brace after `uses` | CLO-4 |
+| Structural bound after a bound colon or `+`; closing parenthesis of explicit empty bounds | GEN-1 |
+| Distinct payload parentheses; missing nonopaque type fields or right-hand side; malformed type, mode or growable marker | LANG-7 |
+| Leading bar where the first variant name is required | LANG-4 |
+| Drop binding parentheses | DROP-2 |
+| `comptime` after a generated-body `=` (reserved syntax) | CT-1 |
+
+Required identifier names in declaration and path positions use LANG-4 when absent or
+malformed; list separators, ordinary grouping delimiters and block delimiters keep LANG-1;
+a reserved keyword in a name position keeps LANG-14. These are syntax owners, not
+permission for an unsupported feature.
+
+A growing instantiation cycle cites the earliest type-growing call edge of the cycle by the
+same source ordering ([GEN-5](generics.md#gen-5-polymorphic-recursion)); a comptime
+dependency cycle cites its earliest dependency reference
+([CT-4](compile-time.md#ct-4-order)). A well-typed comptime operation that fails during
+evaluation cites CT-1 at the comptime expression, with the underlying failure as a note;
+step exhaustion cites CT-1 at the comptime expression too. Static errors inside comptime keep
+their ordinary owners. Run-time failures keep their operative rule and failing expression or
+contract site; a false `ensures` cites the declared clause, not a `return`. Run-time order is
+execution order, except for the spawn-order selection of
+[FAIL-2](failure.md#fail-2-boundary).
+
+## Capability and schema declarations
+
+Missing implementation authority is CAP-5 at the seal declaration; representation access
+outside the exact owning package and version is PROG-2. Ordinary opaque summaries keep
+CAP-2. Exported structural-bound failures keep GEN-1 (`sendable` MODE-4, `inert` CAP-2);
+serialization schema admission and opt-in failures use SER-1 at the declaration or the
+encoding use, while malformed bytes are an expected decode error under SER-2. Declaration
+eligibility precedes dependent uses. Outside the owner, authority diagnostics name the seal
+and its declaration, never private representation paths or a suggested hidden grant. Owner
+ceiling failures show the field and destruction chain. Scoped lifetime, capture and
+defining-module destruction obligations keep their prerequisite order and primary sites.
+Launch, header and admission refusals are tooling errors before entry, not source
+diagnostics or language failures.

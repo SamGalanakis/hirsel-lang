@@ -1,0 +1,236 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "std",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "identity.hir",
+      "module": [
+        "probe"
+      ]
+    },
+    {
+      "path": "list.hir",
+      "module": [
+        "list"
+      ]
+    },
+    {
+      "path": "text.hir",
+      "module": [
+        "text"
+      ]
+    },
+    {
+      "path": "string.hir",
+      "module": [
+        "string"
+      ]
+    },
+    {
+      "path": "unicode.hir",
+      "module": [
+        "unicode"
+      ]
+    },
+    {
+      "path": "unicode_tables.hir",
+      "module": [
+        "unicode"
+      ]
+    },
+    {
+      "path": "map.hir",
+      "module": [
+        "map"
+      ]
+    },
+    {
+      "path": "bytes.hir",
+      "module": [
+        "bytes"
+      ]
+    },
+    {
+      "path": "time.hir",
+      "module": [
+        "time"
+      ]
+    },
+    {
+      "path": "scalar.hir",
+      "module": [
+        "scalar"
+      ]
+    },
+    {
+      "path": "bool.hir",
+      "module": [
+        "bool"
+      ]
+    },
+    {
+      "path": "u8.hir",
+      "module": [
+        "u8"
+      ]
+    },
+    {
+      "path": "u16.hir",
+      "module": [
+        "u16"
+      ]
+    },
+    {
+      "path": "u32.hir",
+      "module": [
+        "u32"
+      ]
+    },
+    {
+      "path": "u64.hir",
+      "module": [
+        "u64"
+      ]
+    },
+    {
+      "path": "u128.hir",
+      "module": [
+        "u128"
+      ]
+    },
+    {
+      "path": "i8.hir",
+      "module": [
+        "i8"
+      ]
+    },
+    {
+      "path": "i16.hir",
+      "module": [
+        "i16"
+      ]
+    },
+    {
+      "path": "i32.hir",
+      "module": [
+        "i32"
+      ]
+    },
+    {
+      "path": "i64.hir",
+      "module": [
+        "i64"
+      ]
+    },
+    {
+      "path": "i128.hir",
+      "module": [
+        "i128"
+      ]
+    },
+    {
+      "path": "f32.hir",
+      "module": [
+        "f32"
+      ]
+    },
+    {
+      "path": "f64.hir",
+      "module": [
+        "f64"
+      ]
+    },
+    {
+      "path": "big.hir",
+      "module": [
+        "internal",
+        "big"
+      ]
+    },
+    {
+      "path": "float_decimal.hir",
+      "module": [
+        "internal",
+        "float_decimal"
+      ]
+    },
+    {
+      "path": "superacc.hir",
+      "module": [
+        "internal",
+        "superacc"
+      ]
+    },
+    {
+      "path": "decimal.hir",
+      "module": [
+        "internal",
+        "decimal"
+      ]
+    },
+    {
+      "path": "graphemes.hir",
+      "module": [
+        "unicode"
+      ]
+    },
+    {
+      "path": "grapheme_tables.hir",
+      "module": [
+        "unicode"
+      ]
+    },
+    {
+      "path": "path.hir",
+      "module": [
+        "path"
+      ]
+    },
+    {
+      "path": "duration.hir",
+      "module": [
+        "duration"
+      ]
+    },
+    {
+      "path": "json.hir",
+      "module": [
+        "json"
+      ]
+    },
+    {
+      "path": "test.hir",
+      "module": [
+        "test"
+      ]
+    },
+    {
+      "path": "http_wire.hir",
+      "module": [
+        "http_wire"
+      ]
+    },
+    {
+      "path": "net.hir",
+      "module": [
+        "net"
+      ]
+    },
+    {
+      "path": "uri.hir",
+      "module": [
+        "uri"
+      ]
+    },
+    {
+      "path": "http.hir",
+      "module": [
+        "http"
+      ]
+    }
+  ],
+  "dependencies": []
+}

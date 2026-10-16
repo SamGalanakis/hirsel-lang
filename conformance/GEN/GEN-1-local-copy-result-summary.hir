@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: accept
+fn borrowed_pair[T: copyable](x: T, y: T) -> T in x {
+  let first = copy x
+  let _ = y
+  first
+}

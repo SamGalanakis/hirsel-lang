@@ -1,0 +1,9 @@
+// rule: MODE-4
+// expect: accept
+fn cross[T: sendable](take xs: (T, u64)) {}
+
+fn probe() {
+  let x: Bytes = b"a"
+  let xs = (x, 0u64)
+  cross(take xs)
+}

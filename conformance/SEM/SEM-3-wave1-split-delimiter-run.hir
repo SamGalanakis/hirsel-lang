@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  std@1/string.split("a", ",")
+  Ok(())
+}

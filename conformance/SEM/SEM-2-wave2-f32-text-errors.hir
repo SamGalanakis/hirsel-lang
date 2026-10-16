@@ -1,0 +1,34 @@
+// rule: SEM-2
+// expect: run
+@noalloc
+fn parsed_bits(t: Test, text: String, expected: u32) -> () {
+  match std@1/f32.parse(text) {
+    Ok(value) => core@1/test.check(t, core@1/f32.bits(value) == expected),
+    Error(_) => core@1/test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut short: Inline[u8, 1] = [99]
+  core@1/test.check(t, std@1/f32.format(1.25f32, mut short) == Error(BufferTooSmall))
+  core@1/test.check(t, short == [99u8])
+  parsed_bits(t, "3.4028235e38", 2139095039u32)
+  core@1/test.check(t, std@1/f32.parse("3.4028236e38") == Error(OutOfRange))
+  core@1/test.check(t, std@1/f32.parse("") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("+1") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse(" 1") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1 ") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1_0") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("0x1") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("-NaN") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("nan") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("Infinity") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse(".1") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1.") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1e") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1e+") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1e1e1") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1.2.3") == Error(Invalid))
+  core@1/test.check(t, std@1/f32.parse("1e999z") == Error(Invalid))
+  Ok(())
+}

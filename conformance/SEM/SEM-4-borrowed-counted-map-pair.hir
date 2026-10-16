@@ -1,0 +1,10 @@
+// rule: SEM-4
+// expect: accept
+fn inspect(xs: Map[String, Bytes]) {
+  for (key, value) in xs {
+    let alias = value
+    let _ = key
+    let _ = alias
+  }
+  let _ = xs
+}

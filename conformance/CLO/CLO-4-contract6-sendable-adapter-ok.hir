@@ -1,0 +1,24 @@
+// rule: CLO-4
+// expect: accept
+// An adapter over a sendable iterator returns an environment within its
+// @captures selection, so the result keeps that iterator's crossing
+// evidence.
+type Taken[T] {
+  inner: Iter[T],
+  left: u64,
+}
+
+@captures(it)
+fn take_n[T](take it: sendable Iter[T], limit: u64) -> Iter[T] {
+  iter.from(
+    take Taken(inner: take it, left: limit),
+    fn(mut s: Taken[T]) -> Option[T] {
+      if s.left == 0 {
+        None
+      } else {
+        s.left -= 1
+        iter.next(mut s.inner)
+      }
+    }
+  )
+}

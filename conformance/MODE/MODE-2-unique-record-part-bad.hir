@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+// A part declared unique is a contract of the aggregate, and a value shared
+// by a copy no longer satisfies it.
+type Holder {
+  items: unique Bytes,
+}
+
+fn build(take x: unique Bytes) -> Holder {
+  let y = copy x
+  Holder(items: take x)
+}

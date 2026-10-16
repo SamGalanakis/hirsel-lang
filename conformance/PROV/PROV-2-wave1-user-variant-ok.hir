@@ -1,0 +1,25 @@
+// rule: PROV-2
+// expect: accept
+type Choice[T] = Absent | Idle(u64) | Present(T)
+
+fn example(a: String, p: StrPos of a, select: bool) -> () {
+  let empty: Choice[StrPos of a] = Absent()
+  let idle: Choice[StrPos of a] = Idle(7u64)
+  let populated: Choice[StrPos of a] = Present(p)
+  let choice = if select {
+    take populated
+  } else {
+    if select {
+      take empty
+    } else {
+      take idle
+    }
+  }
+  match choice {
+    Present(q) => {
+      string.byte_offset(a, q);
+    },
+    Absent() => (),
+    Idle(_) => (),
+  }
+}

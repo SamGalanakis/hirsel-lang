@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: accept
+fn need[T](take s: unique Shared[T]) {}
+
+fn probe[T](take s: unique Shared[T]) {
+  let other = copy s
+  need(take s)
+}

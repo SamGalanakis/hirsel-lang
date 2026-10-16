@@ -1,0 +1,36 @@
+// rule: CLO-2
+// expect: reject MODE-4 at line 27
+// A `mut` argument is written back through its parameter. `it` is inferred
+// from `iter.from(0u64, next_value)`, so its state holds no authority, while a
+// written `Iter[u64]` parameter states unknown captures. `reset` may store a
+// state holding `Stdout`, which would then pass for one holding none (spec #91).
+fn next_value(mut n: u64) -> Option[u64] {
+  None
+}
+
+fn step(mut s: Stdout) -> Option[u64] {
+  let _ = out.print(s, "printed\n")
+  None
+}
+
+fn reset(mut it: Iter[u64], take rt: Stdout) -> () {
+  it = iter.from(take rt, step)
+}
+
+fn sandbox(take g: once fn() -> () uses {}) -> () {
+  g()
+}
+
+pub fn main(take rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let mut it = iter.from(0u64, next_value)
+  reset(mut it, take grant_stdout)
+  let sealed = take it
+  sandbox(
+    fn() {
+      let mut held = take sealed
+      let _ = iter.next(mut held)
+    }
+  )
+  Ok(())
+}

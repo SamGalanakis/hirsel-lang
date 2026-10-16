@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/mode; TIR/TypeMismatch/mutable crossing hand-back.
+@noalloc
+fn edit(mut xs: sendable (unique Array[u8])) -> () {
+  xs[0] = 2
+}

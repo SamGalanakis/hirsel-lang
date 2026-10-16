@@ -1,0 +1,16 @@
+// rule: PROV-2
+// expect: accept
+// "A value whose brand is a union is a type error at its first branded use."
+// The joined value forgets the brand one path had and is used unbranded.
+fn close(take f: File) -> () {
+  ()
+}
+
+fn example(a: Dir, take fa: File of a, take fb: File, pick: bool) -> () {
+  let chosen = if pick {
+    take fa
+  } else {
+    take fb
+  }
+  close(take chosen)
+}

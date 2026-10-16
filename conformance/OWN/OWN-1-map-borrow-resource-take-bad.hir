@@ -1,0 +1,15 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 13
+// The first access obligation cites the complete operation (§23).
+resource type Token {
+  n: u8,
+}
+drop(x) {}
+
+fn consume(take x: Token) {}
+
+fn probe(m: Map[u8, Token]) {
+  for (k, v) in m {
+    consume(take v)
+  }
+}

@@ -1,0 +1,11 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 5
+// map.get and set.contains require `key` (#90). `data` admits floats, so no
+// Map or Set over it exists to read, and the bound fails at the container type.
+fn lookup[K: data](m: Map[K, u64], k: K) -> Option[u64] {
+  map.get(m, k)
+}
+
+fn member[T: data](s: Set[T], value: T) -> bool {
+  set.contains(s, value)
+}

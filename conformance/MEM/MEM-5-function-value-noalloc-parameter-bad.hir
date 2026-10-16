@@ -1,0 +1,18 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 17
+// "The allocation contract is part of closure and dictionary types."
+// `invoke` is `@noalloc` because its parameter promises it; a function that
+// may allocate is not such a value, whether or not the caller is `@noalloc`.
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+fn seven() -> u64 {
+  let l: List[u64] = [7]
+  l[0]
+}
+
+fn probe() -> u64 {
+  invoke(seven)
+}

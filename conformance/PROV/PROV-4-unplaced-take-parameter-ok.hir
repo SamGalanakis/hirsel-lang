@@ -1,0 +1,38 @@
+// rule: PROV-4
+// expect: accept
+// spec: #62
+// A borrow cannot keep the value, so an unplaced borrowed parameter accepts
+// an arena value. A take parameter placed in the arena keeps the placement,
+// a generic one carries it in its type argument, and a heap value may be
+// taken anywhere.
+fn measure(y: Bytes) -> u64 {
+  0
+}
+
+fn keep(a: Arena, take y: Bytes in a) -> Bytes in a {
+  y
+}
+
+fn id[T](take y: T) -> T {
+  y
+}
+
+fn heap_keep(take y: Bytes) -> Bytes {
+  y
+}
+
+fn borrowed(a: Arena, take x: Bytes in a) -> u64 {
+  measure(x)
+}
+
+fn placed(a: Arena, take x: Bytes in a) -> Bytes in a {
+  keep(a, take x)
+}
+
+fn generic(a: Arena, take x: Bytes in a) -> Bytes in a {
+  id(take x)
+}
+
+fn from_heap(take x: Bytes in heap) -> Bytes {
+  heap_keep(take x)
+}

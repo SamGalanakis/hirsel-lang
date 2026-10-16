@@ -1,0 +1,49 @@
+// rule: GEN-1
+// expect: run
+// stdout: ok
+resource type Token {
+  n: u64,
+}
+drop(self) {
+  let _ = self.n
+}
+
+fn consume(take t: Token) -> u64 {
+  t.n
+}
+
+fn outer(take t: Token) -> once fn() -> u64 {
+  fn() {
+    let data = take t
+    fn length[n: size](ys: Inline[u8, n]) -> u64 {
+      data.n + n
+    }
+    let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+    fn() {
+      length(xs)
+    }()
+  }
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if {
+      let f = outer(take Token(n: 7))
+      f() == 10
+    } {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

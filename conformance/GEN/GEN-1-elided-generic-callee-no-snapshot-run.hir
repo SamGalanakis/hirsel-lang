@@ -1,0 +1,17 @@
+// rule: GEN-1
+// expect: run
+// entry: test_generic
+fn outer(xs: Inline[u8, 3]) -> u64 {
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n
+  }
+  fn() {
+    length(xs)
+  }()
+}
+
+pub fn test_generic(t: Test) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  test.check(t, outer(xs) == 3u64)
+  Ok(())
+}

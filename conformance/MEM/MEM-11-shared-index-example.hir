@@ -1,0 +1,32 @@
+// rule: MEM-11
+// expect: run
+// stdout: ok
+// Spec example — "read-only data many tasks share; thaw when done".
+fn output_error[E](take e: E) -> () {}
+
+type Index {
+  items: List[u64],
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let built = Index(items: [1, 2])
+  let index: Shared[Index] = shared.freeze(take built)
+  let valid = match shared.thaw(take index) {
+    Ok(thawed) => thawed.items[1] == 2,
+    Error(shared_index) => false,
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

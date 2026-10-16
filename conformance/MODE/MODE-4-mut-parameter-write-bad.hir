@@ -1,0 +1,8 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 7
+// A `mut` parameter written `sendable fn` may store only a function value
+// that may cross tasks; the caller's storage promises it. Its twin is
+// MODE-4-mut-handback-sendable-run, whose `replace` stores a sendable one.
+fn replace(mut p: sendable fn() -> u64, take q: fn() -> u64) -> () {
+  p = q
+}

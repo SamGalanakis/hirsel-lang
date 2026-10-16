@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: accept
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+type Rec {
+  item: Item,
+}
+
+fn need(take x: unique Item) {}
+
+fn probe(take r: unique Rec) {
+  let Rec(item: item) = take r
+  need(copy item)
+}

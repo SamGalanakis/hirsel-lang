@@ -1,0 +1,23 @@
+// rule: DROP-2
+// expect: run
+// stdout: 2
+// stdout: 1
+// stdout: 0
+// "sequences high to low".
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let values: Array[Trace] = [
+    Trace(stdout: stdout, text: "0\n"),
+    Trace(stdout: stdout, text: "1\n"),
+    Trace(stdout: stdout, text: "2\n")
+  ]
+  Ok(())
+}

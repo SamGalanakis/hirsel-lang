@@ -1,0 +1,8 @@
+// rule: CLO-4
+// expect: accept
+// "Never borrowed parameters."
+fn example(take x: Bytes) -> fn() -> () uses {} {
+  fn() {
+    let _ = x
+  }
+}

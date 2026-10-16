@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn need(mut x: unique Bytes) -> () {
+  ()
+}
+
+fn stash(mut xs: List[Bytes], take v: Bytes) -> () {
+  list.push(mut xs, take v)
+}
+
+fn example(take x0: unique Bytes, mut xs: List[Bytes]) -> () {
+  let mut x = x0
+  stash(mut xs, take view(x))
+  need(mut x)
+}

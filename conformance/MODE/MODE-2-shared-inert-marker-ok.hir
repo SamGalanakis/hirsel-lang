@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: accept
+fn need(take s: unique Shared[Bytes]) {}
+
+fn probe(take s: Shared[Bytes]) {
+  let t = unique s
+  need(take t)
+}

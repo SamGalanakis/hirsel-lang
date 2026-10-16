@@ -1,0 +1,6 @@
+// rule: CAP-5
+// expect: accept
+@capability(global)
+pub opaque resource type Facet: () uses {Dir} {
+  d: Dir,
+}

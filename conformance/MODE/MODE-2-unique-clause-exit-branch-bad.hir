@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 12
+fn inspect(x: unique Bytes) -> bool {
+  true
+}
+
+fn weaken(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: unique Bytes, flag: bool) -> ()
+  ensures inspect(x) {
+  if flag {
+    weaken(mut x)
+  }
+  ()
+}

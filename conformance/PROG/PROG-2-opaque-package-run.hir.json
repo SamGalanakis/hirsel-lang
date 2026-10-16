@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "opaque_box",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "PROG-2-opaque-package-run.hir",
+      "module": [
+        "sibling"
+      ]
+    },
+    {
+      "path": "../../packages/fixtures/opaque_box@1/owner.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [
+      "sibling"
+    ],
+    "name": "main"
+  }
+}

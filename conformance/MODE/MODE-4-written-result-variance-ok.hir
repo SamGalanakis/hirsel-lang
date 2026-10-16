@@ -1,0 +1,9 @@
+// rule: MODE-4
+// expect: accept
+fn make() -> sendable Bytes {
+  b"a"
+}
+
+fn good() {
+  let callback: fn() -> Bytes = make
+}

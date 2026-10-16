@@ -1,0 +1,29 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut xs: unique List[u64] = unique [1, 2, 3, 4]
+  list.swap(mut xs, 0, 3)
+  list.swap(mut xs, 1, 1)
+  failure.check(xs == [4, 2, 3, 1], Bounds())
+  failure.check(list.remove(mut xs, 1) == 2, Bounds())
+  failure.check(xs == [4, 3, 1], Bounds())
+  failure.check(list.pop(mut xs) == Some(1), Bounds())
+  failure.check(list.pop(mut xs) == Some(3), Bounds())
+  failure.check(list.pop(mut xs) == Some(4), Bounds())
+  failure.check(list.pop(mut xs) == None(), Bounds())
+  let mut ys: List[String] = ["a", "b"]
+  let alias = copy ys
+  list.reserve(mut ys, 64)
+  list.reserve(mut ys, 0)
+  list.push(mut ys, "c")
+  failure.check(alias == ["a", "b"] && ys == ["a", "b", "c"], Bounds())
+  let mut empty: List[u64] = []
+  list.reserve(mut empty, 0)
+  list.reserve(mut empty, 5)
+  failure.check(list.len(empty) == 0, Bounds())
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

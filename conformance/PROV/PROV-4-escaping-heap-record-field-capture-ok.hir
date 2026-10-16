@@ -1,0 +1,17 @@
+// rule: PROV-4
+// expect: accept
+// The heap twin may be stored in the returned record.
+type Holder {
+  action: fn() -> u64,
+}
+
+fn probe() -> Holder {
+  let x: String in heap = "x"
+  let pair = (x, 1u8)
+  Holder(
+    action: fn() {
+      let (s, n) = pair
+      string.byte_len(s)
+    }
+  )
+}

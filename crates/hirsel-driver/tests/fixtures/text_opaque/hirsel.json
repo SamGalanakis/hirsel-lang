@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "opaque_data",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "owner.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

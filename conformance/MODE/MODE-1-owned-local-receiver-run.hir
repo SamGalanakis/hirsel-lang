@@ -1,0 +1,21 @@
+// rule: MODE-1
+// expect: run
+// stdout: 2
+fn view(x: String) -> String in x {
+  copy x
+}
+
+fn probe(x: String, y: String) -> String in {x, y} {
+  let mut slot = view(x)
+  slot = view(y)
+  slot
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let x: String = "a"
+  let y: String = "bc"
+  let chosen = probe(x, y)
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(string.byte_len(chosen)))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

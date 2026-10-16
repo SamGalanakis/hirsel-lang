@@ -1,0 +1,40 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+flat type Texts {
+  words: List[String],
+  nested: List[List[u64]],
+}
+
+fn total(xs: Texts) -> u64 {
+  let mut sum: u64 = 0
+  for word in xs.words {
+    sum += string.byte_len(word)
+  }
+  for values in xs.nested {
+    for n in values {
+      sum += n
+    }
+  }
+  sum
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs = Texts(words: ["", "abc", "d"], nested: [[2u64, 3u64], [], [7u64]])
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if total(xs) == 16 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

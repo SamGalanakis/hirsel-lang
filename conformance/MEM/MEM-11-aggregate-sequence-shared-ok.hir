@@ -1,0 +1,6 @@
+// rule: MEM-11
+// expect: accept
+fn probe(take s: Shared[List[u8]]) {
+  let built: List[Shared[List[u8]]] = [take s]
+  let frozen: Shared[List[Shared[List[u8]]]] = shared.freeze(take built)
+}

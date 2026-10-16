@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: fail SEM-3 at line 4
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  failure.check(false, TextInvariant())
+  Ok(())
+}

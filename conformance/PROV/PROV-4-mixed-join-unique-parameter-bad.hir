@@ -1,0 +1,13 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 12
+// The same extraction from a join with an arena parameter. A deep copy is made
+// where its source lives (MEM-5), which the join no longer names.
+fn probe(a: Arena, c: bool, take x: String in a) -> String {
+  let y: String = "y"
+  let s = if c {
+    x
+  } else {
+    y
+  }
+  unique s
+}

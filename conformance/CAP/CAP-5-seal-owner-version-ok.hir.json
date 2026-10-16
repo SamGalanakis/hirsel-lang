@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "seal_box",
+    "version": "2"
+  },
+  "sources": [
+    {
+      "path": "CAP-5-seal-owner-version-ok.hir",
+      "module": [
+        "client"
+      ]
+    },
+    {
+      "path": "../../packages/fixtures/seal_box@2/owner.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/fixtures/seal_box@1/hirsel.json",
+      "package": {
+        "name": "seal_box",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "vendor",
+          "module": [
+            "owner"
+          ]
+        }
+      ]
+    }
+  ],
+  "entry": {
+    "module": [
+      "client"
+    ],
+    "name": "probe"
+  }
+}

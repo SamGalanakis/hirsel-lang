@@ -1,0 +1,13 @@
+// rule: LANG-15
+// expect: accept
+// Shows "let y = x copies a plain value and moves any other"
+fn factory() -> fn() -> u32 uses {} {
+  fn() -> u32 {
+    1
+  }
+}
+
+fn example() -> fn() -> u32 uses {} {
+  let f = factory()
+  f
+}

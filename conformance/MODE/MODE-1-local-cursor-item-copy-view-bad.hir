@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 10
+fn view(x: String) -> String in x {
+  x
+}
+
+fn probe(take xs: Set[String] in xs, seed: String) -> u64 {
+  let mut keep = view(seed)
+  for x in take xs {
+    keep = view(copy x)
+  }
+  string.byte_len(keep)
+}

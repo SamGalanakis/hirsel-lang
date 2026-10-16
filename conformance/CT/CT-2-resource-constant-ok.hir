@@ -1,0 +1,7 @@
+// rule: CT-2
+// expect: accept
+type Data {
+  n: u8,
+}
+
+const VALUE: Data = Data(n: 1u8)

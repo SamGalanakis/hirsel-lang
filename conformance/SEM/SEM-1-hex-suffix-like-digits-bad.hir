@@ -1,0 +1,8 @@
+// rule: SEM-1
+// expect: reject LANG-7 at line 6
+// `0x1f32` is the integer 7986, not an f32, so it cannot initialize a float
+// (the reject twin of SEM-1-hex-suffix-like-digits-run).
+fn main() -> f32 {
+  let x: f32 = 0x1f32
+  x
+}

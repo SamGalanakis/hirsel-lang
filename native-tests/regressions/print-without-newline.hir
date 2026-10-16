@@ -1,0 +1,8 @@
+// Output after the last newline reaches the executable's stdout: the launcher
+// returned to C `main` without flushing Rust's line-buffered stdout.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s = io.stdout(rt)?
+  let _ = out.print(s, "b\n")
+  let _ = out.print(s, "a")
+  Ok(())
+}

@@ -1,0 +1,47 @@
+// rule: DROP-2
+// expect: run
+// entry: exercise
+resource type R: noalloc_drop {
+  data: u8,
+}
+@noalloc drop(self) {}
+
+fn make(n: Net) -> Option[R] {
+  match core@1/net.connect(n, "example.com", 80u16, Unbounded()) {
+    Ok(s) => Some(R(data: 0)),
+    Error(_) => None(),
+  }
+}
+
+fn scripted(t: Test, address: String) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: address,
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [Open([])]
+      )
+    ]
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  test.check(
+    t,
+    match make(scripted(t, "example.com")) {
+      Some(r) => r.data == 0u8,
+      None() => false,
+    }
+  )
+  test.check(
+    t,
+    match make(scripted(t, "other.com")) {
+      None() => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

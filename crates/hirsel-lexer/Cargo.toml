@@ -1,0 +1,12 @@
+[package]
+name = "hirsel-lexer"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-span = { path = "../hirsel-span" }
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-diag = { path = "../hirsel-diag" }

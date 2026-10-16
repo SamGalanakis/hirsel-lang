@@ -1,0 +1,23 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 22
+// spec: #60
+// A mut parameter hands its storage back. One that names no brand could
+// store an unmarked value there, and the caller's binding would still claim
+// the brand.
+fn fresh() -> List[u64] {
+  []
+}
+
+fn mk(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn set(mut o: Option[u8]) -> () {
+  o = Some(0)
+}
+
+fn probe() -> () {
+  let r = fresh()
+  let mut v = mk(r)
+  set(mut v)
+}

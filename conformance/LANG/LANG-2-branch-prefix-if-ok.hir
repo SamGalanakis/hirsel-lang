@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: accept
+fn probe(b: bool) {
+  let x = if b {
+    1u8
+  } else {
+    2
+  }
+}

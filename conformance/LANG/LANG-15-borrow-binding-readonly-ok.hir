@@ -1,0 +1,9 @@
+// rule: LANG-15
+// expect: accept
+// Shows "Binding a mut parameter gives a read-only borrow while the binding lives."
+@noalloc
+fn example(mut xs: List[u32]) -> u64 {
+  let y = xs
+  let _ = y[0]
+  list.len(y)
+}

@@ -1,0 +1,8 @@
+// rule: PROG-2
+// expect: accept
+type Hidden = vendor.Visible
+
+fn probe(take h: vendor.Visible) -> String {
+  let Hidden(value: _, text: s): vendor.Visible = take h
+  s
+}

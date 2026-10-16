@@ -1,0 +1,24 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 19
+// A record built from views of a borrowed parameter is as local as they are,
+// so a closure over it returns local content, as the getter twin `get(slot)`
+// of a getter local to its argument does.
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn keep(take b: Bytes) {}
+
+fn probe(mut x: Bytes) {
+  let slot = Pair(left: view(x), right: view(x))
+  keep(
+    fn() {
+      slot.right
+    }()
+  )
+}

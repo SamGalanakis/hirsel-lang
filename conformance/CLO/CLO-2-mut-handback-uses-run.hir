@@ -1,0 +1,54 @@
+// rule: CLO-2
+// expect: run
+// stdout: xok
+// The accepted twins, where a `mut` argument's written function type is the
+// parameter's exactly. An open-`uses` binding keeps its written promise
+// whatever its initializer proves, so it is handed to an open-`uses`
+// parameter, relayed through another, and written directly; a `uses {}`
+// binding is handed to a `uses {}` parameter and still called as one.
+fn sandbox(g: fn() -> () uses {}) -> () {
+  g()
+}
+
+fn quiet() -> fn() -> () uses {} {
+  fn() {
+    ()
+  }
+}
+
+fn loud(rt: Stdout) -> fn() -> () {
+  fn() {
+    let _ = out.print(rt, "x")
+  }
+}
+
+fn set(mut p: fn() -> (), rt: Stdout) -> () {
+  p = loud(rt)
+}
+
+fn relay(mut p: fn() -> (), rt: Stdout) -> () {
+  set(mut p, rt)
+}
+
+fn reset(mut p: fn() -> () uses {}) -> () {
+  p = quiet()
+}
+
+fn probe(rt: Stdout) -> () {
+  let mut p: fn() -> () = quiet()
+  relay(mut p, rt)
+  p()
+  p = quiet()
+  let mut q: fn() -> () uses {} = fn() {
+    ()
+  }
+  reset(mut q)
+  sandbox(q)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  probe(grant_stdout)
+  let _ = out.print(io.stdout(rt)?, "ok\n")
+  Ok(())
+}

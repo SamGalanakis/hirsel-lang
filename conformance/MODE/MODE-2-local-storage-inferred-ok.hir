@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: accept
+fn fresh() -> String {
+  "f"
+}
+
+fn pick() -> String {
+  let mut slot = unique fresh()
+  slot = fresh()
+  slot
+}

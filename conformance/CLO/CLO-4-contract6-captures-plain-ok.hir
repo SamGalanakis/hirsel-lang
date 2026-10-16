@@ -1,0 +1,5 @@
+// rule: CLO-4
+// expect: accept
+fn build[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] {
+  iter.from(take state, take next)
+}

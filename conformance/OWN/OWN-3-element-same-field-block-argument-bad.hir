@@ -1,0 +1,26 @@
+// rule: OWN-3
+// expect: reject OWN-3 at line 19
+// v22 §04 makes all elements of a sequence one place, so a block argument
+// cannot replace the field of an element place an earlier argument lends,
+// whichever index it writes through.
+type R {
+  name: String,
+  n: u64,
+}
+
+fn len(s: String, k: u64) -> u64 {
+  string.byte_len(s) + k
+}
+
+fn same() -> u64 {
+  let mut xs: List[R] = [R(name: "ab", n: 1)]
+  let i = 0u64
+  let ys = copy xs
+  len(
+    xs[i].name,
+    {
+      xs[0].name = "c"
+      1
+    }
+  ) + ys[0].n
+}

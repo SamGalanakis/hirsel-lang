@@ -1,0 +1,88 @@
+// Every native network export against a loopback peer the launcher names in argument 0:
+// narrowing, refusals, connect by literal and by address, timeouts, reads (appending and
+// into a fixed buffer), writes, half-close, peer address, explicit close and drop, and a
+// resolved list's copy and drop.
+fn grant(take e: GrantError) -> () {}
+fn network(take e: NetError) -> () {}
+fn output(take e: OutputError) -> () {}
+fn argument(take e: ArgError) -> () {}
+
+fn refused(r: Result[Net, NetError]) -> bool {
+  match r {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let all = io.net(rt) ? grant
+  let port = match std@1/u16.parse(path.text(arg.path(args, 0u64) ? argument)) {
+    Ok(port) => port,
+    Error(_) => return Error(()),
+  }
+  let n = net.narrow(all, [
+    NetRule(address: "127.0.0.1", port: port, operation: Connect()),
+  ]) ? network
+  if refused(net.narrow(n, [NetRule(address: "localhost", port: port, operation: Connect())])) {
+    out.print(out, "narrow beyond refused\n") ? output
+  }
+  match net.connect(n, "localhost", port, Unbounded()) {
+    Error(NotGranted()) => out.print(out, "name not granted\n") ? output,
+    _ => return Error(()),
+  }
+  match net.connect(n, "127.0.0.1", port, Nanos(0u64)) {
+    Error(InvalidInput()) => out.print(out, "zero timeout invalid\n") ? output,
+    _ => return Error(()),
+  }
+  let addresses = net.resolve(n, "127.0.0.1", port) ? network
+  if list.len(addresses) == 1u64 {
+    out.print(out, "resolved one address\n") ? output
+  }
+  let mut s = net.connect(n, "127.0.0.1", port, Nanos(5000000000u64)) ? network
+  // The peer address is read while connected; after both halves close it is NotConnected.
+  let peer = net.peer_addr(n, s) ? network
+  // A resolved list is a plain sequence under runtime descriptor 0: its copy detaches on
+  // push, and the exit audit requires that both drop with no live block left.
+  let mut copied = copy addresses
+  list.push(mut copied, copy peer)
+  if list.len(copied) == 2u64 {
+    if list.len(addresses) == 1u64 {
+      out.print(out, "copied resolved list\n") ? output
+    }
+  }
+  net.set_read_timeout(n, mut s, Nanos(5000000000u64)) ? network
+  net.set_write_timeout(n, mut s, Unbounded()) ? network
+  let sent = net.write(n, mut s, b"ping") ? network
+  if sent == 0u64 {
+    return Error(())
+  }
+  let rest = bytes.slice(b"ping", sent, 4u64)
+  net.write_all(n, mut s, rest) ? network
+  net.write_all(n, mut s, b" over\n") ? network
+  net.shutdown(n, mut s, Write()) ? network
+  let mut buffer: List[u8] = []
+  // read_into fills a fixed buffer through its compiled body; read appends the rest.
+  let mut head: Inline[u8, 2] = [0u8, 0u8]
+  let got = net.read_into(n, mut s, mut head) ? network
+  if got == 0u64 {
+    return Error(())
+  }
+  list.push(mut buffer, head[0u64])
+  if got == 2u64 {
+    list.push(mut buffer, head[1u64])
+  }
+  let mut reading: bool = true
+  while reading {
+    let count = net.read(n, mut s, mut buffer, 3u64) ? network
+    reading = count != 0u64
+  }
+  match string.from_bytes(bytes.from_list(take buffer)) {
+    Ok(text) => out.print(out, text) ? output,
+    Error(_) => return Error(()),
+  }
+  let second = net.connect_addr(n, peer, Unbounded()) ? network
+  net.close(n, take second)
+  out.print(out, "closed\n") ? output
+  Ok(())
+}

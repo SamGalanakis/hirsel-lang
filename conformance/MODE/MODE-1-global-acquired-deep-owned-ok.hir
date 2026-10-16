@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: accept
+type Inner {
+  value: Bytes,
+}
+
+type Holder {
+  inner: Inner,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn example(take h: Holder) -> Bytes in h {
+  identity(h).inner.value
+}

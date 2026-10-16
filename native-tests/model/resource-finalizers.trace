@@ -1,0 +1,19 @@
+rc-trace v1
+max 16
+# Finalizers are ordered abstract events (T15): the parent's runs first, then its fields
+# are released in reverse order, each child's finalizer before the next sibling's. A failed
+# finalizer still releases the block's fields.
+alloc r1 2 fin
+alloc r2 0 fin
+alloc r3 0 fin
+write r1 0 r2
+write r1 1 r3
+drop r1
+finalize fail
+drain
+finalize ok
+drain
+drain
+finalize ok
+drain
+drain

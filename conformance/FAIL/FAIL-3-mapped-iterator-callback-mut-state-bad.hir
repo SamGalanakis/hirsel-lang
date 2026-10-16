@@ -1,0 +1,32 @@
+// rule: FAIL-3
+// expect: fail SEM-1 at line 15
+// stdout: updated
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn step(mut s: Trace) -> Option[u8] {
+  s.text = "updated\n"
+  let z: u8 = 0
+  let q = 1u8 / z
+  None
+}
+
+fn identity(n: u8) -> u8 {
+  n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let state = Trace(stdout: stdout, text: "initial\n")
+  let mut it: Iter[u8] = iter.map(
+    iter.map(iter.from(take state, step), identity),
+    identity
+  )
+  let first = iter.next(mut it)
+  Ok(())
+}

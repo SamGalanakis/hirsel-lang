@@ -1,0 +1,11 @@
+// rule: LANG-1
+// expect: accept
+// Shows "No methods, no use, no conditional operator, no test sublanguage."
+@noalloc
+fn choose(b: bool) -> u32 {
+  if b {
+    1
+  } else {
+    0
+  }
+}

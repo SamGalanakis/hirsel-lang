@@ -1,0 +1,3 @@
+// rule: OWN-6
+// expect: accept
+fn accepted() {}

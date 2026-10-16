@@ -1,0 +1,30 @@
+fn error(take e: FileError) -> () {}
+
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of(".")) ? error
+  let p = path.of("sample")
+  let mut f = file.create_atomic(d, p) ? error
+  file.write_all(d, mut f, b"data") ? error
+  match file.commit(d, take f) {
+    Error(Canceled(_)) => (),
+    Error(FileFault(_)) => require(false),
+    Error(NotGranted()) => require(false),
+    Ok(_) => require(false),
+  }
+  match file.open(d, p) {
+    Error(_) => (),
+    Ok(opened) => {
+      let _ = take opened
+      require(false)
+    },
+  }
+  Ok(())
+}

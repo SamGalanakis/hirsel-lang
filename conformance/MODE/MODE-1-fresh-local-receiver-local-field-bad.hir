@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 14
+type Holder {
+  value: Bytes,
+}
+
+fn view(x: Holder) -> Holder in x {
+  copy x
+}
+
+fn probe(x: Holder) -> Bytes {
+  let mut slot = view(x)
+  slot = view(x)
+  slot.value
+}

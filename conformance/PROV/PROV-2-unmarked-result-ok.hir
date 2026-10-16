@@ -1,0 +1,15 @@
+// rule: PROV-2
+// expect: accept
+// "Unmarked results carry no brand."
+fn erase(d: Dir, take value: File of d) -> File of d {
+  take value
+}
+
+fn inspect(d: Dir, value: File of d) -> () {
+  ()
+}
+
+fn example(d: Dir, take value: File of d) -> () {
+  let unmarked = erase(d, take value)
+  inspect(d, unmarked)
+}

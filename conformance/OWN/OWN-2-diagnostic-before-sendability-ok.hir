@@ -1,0 +1,10 @@
+// rule: OWN-2
+// expect: accept
+fn cross[T: sendable](take value: T) -> () {
+  ()
+}
+
+fn example(take x: Bytes) -> () {
+  let owned = take x
+  cross(unique owned)
+}

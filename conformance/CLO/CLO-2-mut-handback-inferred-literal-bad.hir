@@ -1,0 +1,14 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 13
+// The binding is unannotated, so its type is the literal's inferred one,
+// `fn() -> () uses {}`. The `mut` parameter is written with open `uses` and
+// may store a function holding authority, so the hand-back is refused. The
+// accepted form writes the binding's type (MODE-2-scoped-capture-unique-ok).
+fn demand(mut action: unique fn() -> ()) -> () {}
+
+fn example(text: u64) -> () {
+  let mut action = fn() {
+    let _ = text
+  }
+  demand(mut action)
+}

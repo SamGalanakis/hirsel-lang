@@ -1,0 +1,24 @@
+// rule: CLO-1
+// expect: run
+// stdout: 3
+// Both execution modes witness the content lifetime through two environments.
+fn view(x: String) -> String in x {
+  x
+}
+
+fn size(p: String) -> u64 {
+  let w = view(p)
+  let g = fn() {
+    let h = fn() {
+      w
+    }
+    h()
+  }
+  string.byte_len(g())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(size("abc")))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

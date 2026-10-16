@@ -1,0 +1,28 @@
+// rule: FAIL-2
+// expect: fail SEM-1 at line 13
+// "with several, the first in spawn order is reported".
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) -> () {
+      let first = task.async(
+        s,
+        fn() -> u8 {
+          let n: u8 = 255
+          n + 1
+        }
+      )
+      let second = task.async(
+        s,
+        fn() -> u8 {
+          let n: u8 = 0
+          n - 1
+        }
+      )
+      task.detach(s, take first)
+      task.detach(s, take second)
+    }
+  )
+  Ok(())
+}

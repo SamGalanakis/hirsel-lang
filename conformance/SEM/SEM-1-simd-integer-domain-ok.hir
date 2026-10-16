@@ -1,0 +1,7 @@
+// rule: SEM-1
+// expect: accept
+// Section 22 ranges I over sized integers; simd.add checks integer lanes.
+fn example() {
+  let a: Simd[u8, 2] = simd.splat(1u8)
+  let b: Simd[u8, 2] = simd.add(a, a)
+}

@@ -1,0 +1,97 @@
+// rule: OWN-8
+// expect: accept
+fn probe_file_narrow(d: Dir, take f: File of d) {
+  let value = file.narrow(d, take f)
+  let _ = match take value {
+    Some(h) => (),
+    None => (),
+  }
+}
+
+fn probe_file_open(d: Dir) {
+  let value = file.open(d, path.of("a"))
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}
+
+fn probe_file_walk(d: Dir) {
+  let value = file.walk(d)
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}
+
+fn probe_io_dir(rt: Io) {
+  let value = io.dir(rt, path.of("."))
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}
+
+fn probe_slots_get(s: Slots[String], id: SlotId[String] of s) {
+  let value = slots.get(s, id)
+  let _ = match take value {
+    Some(h) => (),
+    None => (),
+  }
+}
+
+fn probe_slots_remove(mut s: Slots[String], id: SlotId[String] of s) {
+  let value = slots.remove(mut s, id)
+  let _ = match take value {
+    Some(h) => (),
+    None => (),
+  }
+}
+
+fn probe_channel_receive(tasks: Tasks, mut r: Receiver[u64]) {
+  let value = channel.receive(tasks, mut r)
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}
+
+fn probe_shared_thaw(take s: Shared[u64]) {
+  let value = shared.thaw(take s)
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}
+
+fn probe_int_try_narrow() {
+  let value: Option[u8] = int.try_narrow(10u64)
+  let _ = match take value {
+    Some(h) => (),
+    None => (),
+  }
+}
+
+fn probe_string_from_bytes() {
+  let value = string.from_bytes(b"a")
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}
+
+fn probe_file_create_atomic(d: Dir) {
+  let value = file.create_atomic(d, path.of("a"))
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}
+
+fn probe_arg_path(args: Args) {
+  let value = arg.path(args, 0u64)
+  let _ = match take value {
+    Ok(h) => (),
+    Error(e) => (),
+  }
+}

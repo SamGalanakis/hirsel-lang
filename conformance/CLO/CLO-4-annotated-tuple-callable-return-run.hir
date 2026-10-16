@@ -1,0 +1,32 @@
+// rule: CLO-4
+// expect: run
+// stdout: ok
+// "Their type states their authority as capability types (uses {Dir})." The
+// binding's written type states `uses {}` for the callable part, and the
+// called closure's callable captures nothing, so returning the binding where
+// the result states `uses {}` keeps the promise. agree-five saw CLO-4 here.
+fn made() -> (fn() -> () uses {}, u64) {
+  let p: (fn() -> () uses {}, u64) = fn() {
+    (
+      fn() {
+        ()
+      },
+      8u64
+    )
+  }()
+  p
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let (f, n) = made()
+  f()
+  let _ = out.print(
+    io.stdout(rt)?,
+    if n == 8 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

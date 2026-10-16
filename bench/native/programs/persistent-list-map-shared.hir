@@ -1,0 +1,50 @@
+// Box reads follow issue #98; implementation is owned by box-read.
+// Both retained roots share the original recursive list throughout mapping.
+type Node { value: u64, next: Option[box Node] }
+fn mapped_shared(root: Option[box Node]) -> Option[box Node] {
+  let mut current = copy root
+  let mut reversed: Option[box Node] = None()
+  while true {
+    match current {
+      None() => break,
+      Some(node) => {
+        reversed = Some(box Node(value: node.value + 1u64, next: take reversed))
+        current = copy node.next
+      },
+    }
+  }
+  reversed
+}
+fn workload(data: Bytes) -> Bytes {
+  let mut position: u64 = 0
+  let n = decimal(data, mut position)
+  let mut root: Option[box Node] = None()
+  let mut i = n
+  while i > 0u64 { i -= 1u64; root = Some(box Node(value: i, next: take root)) }
+  let retained = copy root
+  let mut values = mapped_shared(root)
+  values = match take values {
+    Some(node) => {
+      let Node(value: value, next: next) = take node
+      Some(box Node(value: value + 7u64, next: take next))
+    },
+    None() => None(),
+  }
+  let mut output: List[u8] = []
+  list.reserve(mut output, n * 44u64 + 256u64)
+  emit(values, mut output)
+  let separator: Bytes = b"---\n"
+  for x in 0u64..4u64 { list.push(mut output, separator[x]) }
+  emit(retained, mut output)
+  bytes.from_list(take output)
+}
+fn emit(values: Option[box Node], mut output: List[u8]) {
+  match values {
+    None() => {},
+    Some(node) => {
+      let line = number(node.value)
+      for j in 0u64..bytes.len(line) { list.push(mut output, line[j]) }
+      emit(node.next, mut output)
+    },
+  }
+}

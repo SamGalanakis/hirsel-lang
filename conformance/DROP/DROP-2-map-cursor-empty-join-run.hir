@@ -1,0 +1,16 @@
+// rule: DROP-2
+// expect: run
+resource type R {
+  text: String,
+}
+drop(x) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), u64] {
+  let mut m: Map[u8, R] = map.empty()
+  map.insert(mut m, 1, R(text: "abc"))
+  for (k, v) in take m {
+    let _ = string.byte_len(v.text)
+    break
+  }
+  Ok(())
+}

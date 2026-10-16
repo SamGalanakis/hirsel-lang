@@ -1,0 +1,26 @@
+// rule: SEM-2
+// expect: run
+// Independent integer rational oracle; sum normal significands in units of 2^-50, then round once to 24 bits.
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs: Array[f32] = [
+    core@1/f32.from_bits(1238106111u32),
+    core@1/f32.from_bits(933028488u32),
+    core@1/f32.from_bits(1017779693u32),
+    core@1/f32.from_bits(3090747721u32),
+    core@1/f32.from_bits(883485832u32),
+    core@1/f32.from_bits(3016265387u32),
+    core@1/f32.from_bits(1236949825u32),
+    core@1/f32.from_bits(3213833236u32),
+    core@1/f32.from_bits(3038410087u32),
+    core@1/f32.from_bits(3194440952u32),
+    core@1/f32.from_bits(888505213u32),
+    core@1/f32.from_bits(3163468334u32),
+    core@1/f32.from_bits(3153745966u32),
+    core@1/f32.from_bits(917726185u32),
+    core@1/f32.from_bits(934956787u32),
+    core@1/f32.from_bits(1225381774u32),
+    core@1/f32.from_bits(983662352u32)
+  ]
+  core@1/test.check(t, core@1/f32.bits(std@1/f32.sum_exact(xs)) == 1248174974u32)
+  Ok(())
+}

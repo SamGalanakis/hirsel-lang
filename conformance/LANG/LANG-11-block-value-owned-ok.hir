@@ -1,0 +1,31 @@
+// rule: LANG-11
+// expect: accept
+// "A block's value is its final expression."
+// Provisional reading (spec issue 50). Where the consumer needs an owned value
+// the block's final expression is an owned use. A binding declared inside the
+// block is moved out, and an owned parameter is moved by an initialiser.
+type Rec {
+  items: Bytes,
+}
+
+fn keep(take r: Rec) -> Rec {
+  let kept = {
+    r
+  }
+  kept
+}
+
+fn inner(take r: Rec) -> Rec {
+  {
+    let q = r
+    q
+  }
+}
+
+fn pick(take a: Rec, take b: Rec, c: bool) -> Rec {
+  if c {
+    a
+  } else {
+    b
+  }
+}

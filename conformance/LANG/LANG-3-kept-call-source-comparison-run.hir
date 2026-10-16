@@ -1,0 +1,33 @@
+// rule: LANG-3
+// expect: run
+// stdout: ok
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn same(take b: Bytes, c: Bytes) -> bool {
+  view(b) == view(
+    fn() {
+      c
+    }()
+  )
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if same(b"bytes", b"bytes") {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,28 @@
+// rule: MEM-14
+// expect: run
+// stdout: some
+fn next(mut position: u64) -> Option[u64] {
+  if position < 3 {
+    let value = position
+    position += 1
+    Some(value)
+  } else {
+    None
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let step: @advance_only(it) fn(mut it: Iter[u64]) -> Option[u64] = fn(
+    mut it: Iter[u64]
+  ) -> Option[u64] {
+    iter.next(mut it)
+  }
+  let mut it = iter.from(0u64, next)
+  match step(mut it) {
+    Some(v) => {
+      let _ = out.print(io.stdout(rt)?, "some\n")
+    },
+    None => {},
+  }
+  Ok(())
+}

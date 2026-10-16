@@ -1,0 +1,13 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 12
+// "Caller keeps it." A borrowed resource cannot be shared, so assigning it
+// into owned storage would move it out of its caller (issue #73).
+resource type Token {
+  n: u8,
+}
+drop(t) {}
+
+fn probe(x: Token) -> () {
+  let mut r: Token in r = Token(n: 1u8)
+  r = x
+}

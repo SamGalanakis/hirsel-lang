@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+fn open(take x: Bytes) {}
+
+fn good() {
+  let callback: fn(take x: sendable Bytes) = open
+}

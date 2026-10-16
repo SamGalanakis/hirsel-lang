@@ -1,0 +1,19 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 15
+type Choice[T] = Absent | Present(T)
+
+fn example(a: String, b: String, p: StrPos of a, q: StrPos of b, select: bool) -> () {
+  let left: Choice[StrPos of a] = Present(p)
+  let right: Choice[StrPos of b] = Present(q)
+  let choice = if select {
+    take left
+  } else {
+    take right
+  }
+  match choice {
+    Present(r) => {
+      string.byte_offset(a, r);
+    },
+    Absent() => (),
+  }
+}

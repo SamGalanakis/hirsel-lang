@@ -1,0 +1,28 @@
+# Buck2 build of the Cargo workspace (tools/buck2/README.md). Cargo manifests and
+# Cargo.lock stay the source of truth; tools/buck2/sync.py derives every BUCK file.
+# Remote execution settings live in the ignored, generated .buckconfig.local.
+[cells]
+root = .
+# The bundled prelude with tools/buck2/prelude_overlay.py applied (bootstrap.py).
+prelude = .buck2/prelude
+toolchains = tools/buck2/toolchains
+none = none
+[cell_aliases]
+config = prelude
+ovr_config = prelude
+fbcode = none
+fbsource = none
+buck = none
+[external_cells]
+prelude = disabled
+[parser]
+target_platform_detector_spec = target:root//...->root//tools/buck2:dev target:toolchains//...->prelude//platforms:default
+[build]
+execution_platforms = root//tools/buck2:platforms
+[buck2]
+digest_algorithms = SHA256
+[project]
+ignore = .git, buck-out, .buck2, target, tools/buck2/bin
+[buck2_re_client]
+execution_concurrency_limit = 32
+max_concurrent_uploads_per_action = 1

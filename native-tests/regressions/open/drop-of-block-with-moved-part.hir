@@ -1,0 +1,22 @@
+// native/ready/cleanup: a drop of a Block { payload: LayoutId(N) } with a moved or finalized part
+// hirsel run --native: native ready in moved: Cleanup(Unsupported("a drop of a Block { payload: LayoutId(19) } with a moved or finalized part"))
+fn moved() -> u64 {
+  list.len(
+    {
+      let v: List[List[u64]] = [[1]]
+      v
+    }[0]
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if moved() == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

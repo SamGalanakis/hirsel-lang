@@ -1,0 +1,34 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// v22 #77, caller side. A call whose result is related to p.a loans only the
+// argument's p.a, so its sibling p.b stays writable while the result lives.
+// The fields hold borrowed content, so the result does depend on p.a.
+type Pair {
+  a: String,
+  b: String,
+}
+
+fn get(p: Pair) -> String in p.a {
+  p.a
+}
+
+fn caller(x: String, y: String) -> u64 {
+  let mut p = Pair(a: x, b: x)
+  let r = get(p)
+  p.b = y
+  string.byte_len(r) + string.byte_len(p.b)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = caller("one", "three") == 8
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

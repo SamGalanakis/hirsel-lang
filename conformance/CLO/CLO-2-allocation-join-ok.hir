@@ -1,0 +1,17 @@
+// rule: CLO-2
+// expect: accept
+// "The call’s ... @noalloc status [is] the join of callee and closure."
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+@noalloc
+fn example() -> u64 {
+  invoke(
+    fn() {
+      let n: u64 = 1
+      n
+    }
+  )
+}

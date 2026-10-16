@@ -1,0 +1,47 @@
+// rule: PROV-1
+// expect: accept
+// "A brand names the binding its value came from."
+// Provisional reading (spec issue 50). A block whose final expression names
+// outer storage is that storage, so brands taken through it name the binding.
+fn make(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: List[u64], p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn first(s: String) -> Option[StrPos of s] {
+  None
+}
+
+fn at(s: String, p: StrPos of s) -> () {
+  ()
+}
+
+fn probe(take r: List[u64]) -> () {
+  let p = make(
+    {
+      r
+    }
+  )
+  inspect(
+    {
+      r
+    },
+    p
+  )
+  inspect(r, p)
+}
+
+fn example(take text: String) -> () {
+  match first(text) {
+    Some(p) => {
+      let shared = copy {
+        text
+      }
+      at(shared, p)
+    },
+    None => (),
+  }
+}

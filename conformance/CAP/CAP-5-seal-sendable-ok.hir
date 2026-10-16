@@ -1,0 +1,6 @@
+// rule: CAP-5
+// expect: accept
+@capability(global)
+pub opaque type Facet: copyable uses {} {
+  body: fn() -> () uses {},
+}

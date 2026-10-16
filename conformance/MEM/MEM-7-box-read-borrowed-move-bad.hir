@@ -1,0 +1,14 @@
+// rule: MEM-7
+// expect: reject OWN-1 at line 12
+resource type Token {
+  text: String,
+}
+
+type Holder {
+  token: Token,
+}
+
+fn extract(x: box Holder) -> unique Token {
+  let Holder(token: t) = take x
+  take t
+}

@@ -1,0 +1,5 @@
+pub fn main() {
+  let mut builder: List[u8] = []
+  std@1/text.append(mut builder, "text")
+  let s = std@1/text.finish(take builder)
+}

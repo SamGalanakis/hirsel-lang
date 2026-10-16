@@ -1,0 +1,49 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// exit: 0
+// "A unique value exclusively owns every counted block reachable from it."
+// Plain bits own no block, so `unique` written on them changes nothing. The
+// qualified and unqualified spellings are one type, also inside function types.
+type P {
+  x: u32,
+  y: u32,
+}
+
+fn output_error[E](take e: E) -> unique () {}
+
+fn inc(x: unique u32) -> unique u32 {
+  x + 1
+}
+
+fn apply(f: fn(u32) -> u32, x: u32) -> u32 {
+  f(x)
+}
+
+fn twice[T: plain](x: unique T) -> (T, T) {
+  (x, x)
+}
+
+fn sum(n: unique u32, take p: unique P) -> u32 {
+  n + p.x + p.y
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let p: unique P = P(x: 2, y: 3)
+  let q = p
+  let (a, b) = twice(apply(inc, sum(1, q)))
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if a + b + p.x == 16 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

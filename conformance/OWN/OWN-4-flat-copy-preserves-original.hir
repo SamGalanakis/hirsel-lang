@@ -1,0 +1,24 @@
+// rule: OWN-4
+// expect: run
+// stdout: ok
+// "flat values copy with copy x (a memcpy)."
+flat type Item {
+  sku: String,
+  qty: u32,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let original = Item(sku: "item", qty: 1)
+  let mut duplicate = copy original
+  duplicate.qty = 9
+  if (original.qty, duplicate.qty) == (1, 9) {
+    out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  } else {
+    out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

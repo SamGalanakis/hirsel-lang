@@ -1,0 +1,16 @@
+fn error(take e: FileError) -> () {}
+
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of(".")) ? error
+  let child = dir.narrow(d, path.of(".")) ? error
+  let _ = file.size(child, path.of("missing"))
+  Ok(())
+}

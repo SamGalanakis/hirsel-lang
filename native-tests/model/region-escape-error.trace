@@ -1,0 +1,6 @@
+rc-trace v1
+max 16
+# A region cannot close while a local reference into it is live.
+region-open g1
+region-alloc g1 l1 0
+region-close g1

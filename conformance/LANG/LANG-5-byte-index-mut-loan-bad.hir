@@ -1,0 +1,9 @@
+// rule: LANG-5
+// expect: reject LANG-5 at line 8
+fn edit(mut byte: u8) -> () {
+  byte = 1u8
+}
+
+fn example(mut bytes: Bytes) -> () {
+  edit(mut bytes[0])
+}

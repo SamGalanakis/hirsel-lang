@@ -1,0 +1,22 @@
+// rule: PROV-1
+// expect: run
+// stdout: clause
+fn preserve(x: String, y: StrPos of x) -> StrPos of x
+  ensures result == y {
+  y
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let text: String = "a"
+  let mut count: u32 = 0u32
+  for position in string.positions(text) {
+    let returned = preserve(text, position)
+    if returned == position {
+      count += 1u32
+    }
+  }
+  if count == 2u32 {
+    let _ = out.print(io.stdout(rt)?, "clause\n")
+  }
+  Ok(())
+}

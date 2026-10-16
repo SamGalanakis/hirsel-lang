@@ -1,0 +1,647 @@
+//! The native differential gate: `--smoke` (per push), `--full` (the versioned
+//! matrix, the set rule, topology and mismatch artifacts), `--replay` and
+//! `--reduce` of a stored artifact.
+use hirsel_conformance::native::{self, Case, Class, artifact};
+use hirsel_driver::native::{
+    Configuration, Outcome, TargetSpec, Toolchain, full_matrix, smoke_matrix, topology_matrix,
+};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--engine heap|llvm|diagnostic|default|system] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
+                     options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(message) => {
+            eprintln!("native: {message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// The cases `--filter` selects: every case whose ID contains any given text;
+/// without one, all of them.
+#[derive(Default)]
+struct Filter(Vec<String>);
+
+impl Filter {
+    fn keeps(&self, id: &str) -> bool {
+        self.0.is_empty() || self.0.iter().any(|text| id.contains(text.as_str()))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+fn toolchain(matrix: &[Configuration]) -> Result<Toolchain, String> {
+    Toolchain::for_matrix(&native::runtime_cache()?, matrix).map_err(|e| e.to_string())
+}
+
+/// The case IDs a list file names, with their sources.
+fn listed(root: &Path, list: &str) -> Result<Vec<Case>, String> {
+    let text = std::fs::read_to_string(root.join(list)).map_err(|e| format!("{list}: {e}"))?;
+    text.lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|id| {
+            Ok(Case {
+                id: id.to_string(),
+                path: Some(root.join(id)),
+                source: std::fs::read_to_string(root.join(id)).map_err(|e| format!("{id}: {e}"))?,
+            })
+        })
+        .collect()
+}
+
+/// Every case must agree under every configuration. A campaign that checks
+/// nothing fails: no cases, or a case run under no configuration.
+fn all_agree(what: &str, results: &[native::CaseResult]) -> bool {
+    if results.is_empty() {
+        eprintln!("{what}: selected no cases");
+        return false;
+    }
+    let mut ok = true;
+    for result in results {
+        if let Some(reason) = &result.snapshot {
+            eprintln!("{what}: {}: {reason}", result.id);
+            ok = false;
+        } else if result.outcomes.is_empty() {
+            eprintln!("{what}: {}: ran under no configuration", result.id);
+            ok = false;
+        }
+        for (name, _, outcome) in &result.outcomes {
+            match outcome {
+                Outcome::Agree => {}
+                Outcome::Mismatch(actual) => {
+                    eprintln!(
+                        "{what}: {} under {name} observed\n{}",
+                        result.id,
+                        actual.render()
+                    );
+                    ok = false;
+                }
+                Outcome::Unavailable(error) => {
+                    eprintln!("{what}: {} under {name}: {error}", result.id);
+                    ok = false;
+                }
+            }
+        }
+    }
+    ok
+}
+
+fn run() -> Result<bool, String> {
+    let mut hash_seed = 0;
+    let mut hash_seed_explicit = false;
+    let mut mode = None;
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // The host is shared: four cases at a time unless told otherwise.
+    let mut jobs = 4;
+    let mut out = None;
+    let mut filter = Filter::default();
+    let mut bless = false;
+    let mut engine = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        let mut value = || args.next().ok_or(format!("{arg} needs a value\n{USAGE}"));
+        match arg.as_str() {
+            "--smoke" | "--full" | "--sanitize" | "--hash-sweep" => {
+                mode = Some((arg.clone(), PathBuf::new()))
+            }
+            "--replay" | "--reduce" => mode = Some((arg.clone(), value()?.into())),
+            "--bless" => bless = true,
+            "--root" => root = value()?.into(),
+            "--out" => out = Some(PathBuf::from(value()?)),
+            "--filter" => filter.0.push(value()?),
+            "--hash-seed" => {
+                hash_seed = value()?.parse().map_err(|_| "invalid --hash-seed")?;
+                hash_seed_explicit = true;
+            }
+            "--engine" => {
+                use hirsel_driver::native::Runtime;
+                let (class, runtime) = match value()?.as_str() {
+                    "heap" => (Class::Heap, None),
+                    "llvm" => (Class::Llvm, None),
+                    "diagnostic" => (Class::Llvm, Some(Runtime::Diagnostic)),
+                    "default" => (Class::Llvm, Some(Runtime::Default)),
+                    "system" => (Class::Llvm, Some(Runtime::System)),
+                    _ => {
+                        return Err(
+                            "--engine must be heap, llvm, or a runtime archive: diagnostic, default or system"
+                                .into(),
+                        );
+                    }
+                };
+                engine = Some(Selected { class, runtime });
+            }
+            "--jobs" => jobs = value()?.parse().map_err(|_| "invalid --jobs")?,
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(true);
+            }
+            _ => return Err(format!("unknown argument {arg}\n{USAGE}")),
+        }
+    }
+    let (mode, dir) = mode.ok_or(USAGE)?;
+    if engine.is_some() && mode != "--full" {
+        return Err("--engine requires --full".into());
+    }
+    match mode.as_str() {
+        "--smoke" => {
+            let matrix = seeded(smoke_matrix(), hash_seed);
+            let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
+            cases.extend(native::generate::cases(8));
+            let results = native::run_cases(
+                &cases,
+                &matrix,
+                &toolchain(&matrix)?,
+                &native::scratch("smoke")?,
+                jobs,
+            );
+            let mut ok = all_agree("smoke", &results);
+            // Real Io: each case is recorded on real Io and replayed from its
+            // completion tape on simulated Io.
+            let toolchain = toolchain(&matrix)?;
+            let replayed = native::run_cases_with(
+                &cases,
+                &native::scratch("smoke-replay")?,
+                jobs,
+                |case, dir| {
+                    native::replay_source_with_config(
+                        &case.id,
+                        &case.source,
+                        &toolchain,
+                        dir,
+                        matrix[0].options.launch.clone(),
+                    )
+                },
+            );
+            ok &= all_agree("real Io replay", &replayed);
+            println!(
+                "native smoke: {} cases under {} configurations and real Io record and replay{}",
+                results.len(),
+                matrix.len(),
+                if ok { " agree" } else { ": FAILED" }
+            );
+            Ok(ok)
+        }
+        "--sanitize" => {
+            // The smoke and memcheck cases as optimized and unoptimized x86-64
+            // executables on the system-allocator archive under Valgrind
+            // memcheck: emitted code and the runtime together.
+            let matrix = sanitize_matrix(hash_seed);
+            let cases = if filter.is_empty() {
+                let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
+                cases.extend(listed(&root, "native-tests/regressions/memcheck.txt")?);
+                cases.extend(native::generate::cases(8));
+                cases
+            } else {
+                let mut cases = native::baseline(&root)?;
+                cases.retain(|c| filter.keeps(&c.id));
+                cases
+            };
+            let toolchain = toolchain(&matrix)?.under_memcheck();
+            let results = native::run_cases(
+                &cases,
+                &matrix,
+                &toolchain,
+                &native::scratch("sanitize")?,
+                jobs,
+            );
+            let ok = all_agree("memcheck", &results);
+            println!(
+                "native memcheck: {} cases under {} configurations{}",
+                results.len(),
+                matrix.len(),
+                if ok {
+                    " agree with no error"
+                } else {
+                    ": FAILED"
+                }
+            );
+            Ok(ok)
+        }
+        "--full" => full(&root, jobs, out, &filter, bless, hash_seed, engine),
+        "--hash-sweep" => hash_sweep(&root, jobs, &filter, hash_seed),
+        "--replay" | "--reduce" => {
+            let stored = artifact::read(&dir)?;
+            let configuration = artifact::configuration(&stored.configuration)
+                .ok_or_else(|| format!("unknown configuration {}", stored.configuration))?;
+            if hash_seed_explicit && hash_seed != configuration.options.launch.hash_seed {
+                return Err("--hash-seed differs from the stored artifact configuration".into());
+            }
+            let toolchain = toolchain(std::slice::from_ref(&configuration))?;
+            let scratch = native::scratch("replay")?;
+            let reduce = mode == "--reduce";
+            hirsel_engine::with_compiler_stack(move || {
+                let probe = artifact::NativeProbe {
+                    configuration,
+                    toolchain: &toolchain,
+                    dir: &scratch,
+                    warm: None,
+                    source_path: Some(dir.join("source.hir")),
+                };
+                artifact::replay(&stored, &probe)?;
+                if reduce {
+                    print!("{}", artifact::reduce(&stored.source, &probe)?);
+                } else {
+                    println!("replayed: the same expected and actual observations");
+                }
+                Ok(true)
+            })
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// `--engine`: one engine's configurations, or native code on one runtime
+/// archive.
+#[derive(Clone, Copy)]
+struct Selected {
+    class: Class,
+    runtime: Option<hirsel_driver::native::Runtime>,
+}
+
+impl Selected {
+    fn keeps(self, c: &Configuration) -> bool {
+        Class::of(c) == self.class
+            && self.runtime.is_none_or(|r| {
+                matches!(c.engine, hirsel_driver::native::Engine::Native { runtime, .. } if runtime == r)
+            })
+    }
+}
+
+fn full(
+    root: &Path,
+    jobs: usize,
+    out: Option<PathBuf>,
+    filter: &Filter,
+    bless: bool,
+    hash_seed: u64,
+    engine: Option<Selected>,
+) -> Result<bool, String> {
+    if bless && hash_seed != 0 {
+        return Err("--bless requires the baseline hash seed".into());
+    }
+    let out = match out {
+        Some(out) => {
+            std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+            out
+        }
+        None => native::scratch("report")?,
+    };
+    let matrix: Vec<_> = seeded(full_matrix(), hash_seed)
+        .into_iter()
+        .filter(|c| engine.is_none_or(|e| e.keeps(c)))
+        .collect();
+    let toolchain = toolchain(&matrix)?;
+    let mut cases = native::baseline(root)?;
+    let complete = filter.is_empty() && engine.is_none();
+    cases.retain(|c| filter.keeps(&c.id));
+    let results = native::run_cases(&cases, &matrix, &toolchain, &native::scratch("full")?, jobs);
+    let write = |name: &str, text: &str| {
+        std::fs::write(out.join(name), text).map_err(|e| format!("{name}: {e}"))
+    };
+    write("native-matrix.tsv", &native::render_matrix(&results))?;
+    write("case-walls.tsv", &native::render_walls(&results))?;
+    if bless {
+        if !complete {
+            return Err(
+                "--bless needs the whole baseline and both engines, without --filter or --engine"
+                    .into(),
+            );
+        }
+        std::fs::write(
+            root.join(native::EXCLUSIONS),
+            native::render_exclusions(&results),
+        )
+        .map_err(|e| format!("{}: {e}", native::EXCLUSIONS))?;
+    }
+    let exclusions = native::read_exclusions(root)?;
+    let classes: Vec<_> = engine.map_or_else(|| vec![Class::Heap, Class::Llvm], |e| vec![e.class]);
+    let report = native::judge_classes(&results, &exclusions, matrix.len(), complete, &classes);
+    // Every mismatch leaves an artifact, which must replay at once, from a
+    // warmed engine, with the same observations; and each mismatching case's
+    // first artifact is reduced, the reduction keeping the same discrepancy.
+    struct Stored {
+        dir: PathBuf,
+        name: String,
+        first: bool,
+    }
+    let mut stored = Vec::new();
+    for (result, case) in results.iter().zip(&cases) {
+        let mut first = true;
+        for (name, _, outcome) in &result.outcomes {
+            let (Outcome::Mismatch(actual), Some(expected)) = (outcome, &result.reference) else {
+                continue;
+            };
+            let slug: String = format!("{}--{name}", case.id)
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            // Written under one path and replayed from another.
+            let dir = out.join("mismatch").join(&slug);
+            let written = out.join("mismatch").join(format!("{slug}.written"));
+            let _ = std::fs::remove_dir_all(&dir);
+            artifact::write(&written, &case.id, &case.source, name, expected, actual)?;
+            if let Some(path) = &case.path {
+                hirsel_engine::bundle_program(path, &case.source, &written)
+                    .map_err(|e| e.to_string())?;
+            }
+            std::fs::rename(&written, &dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            stored.push(Stored {
+                dir,
+                name: name.clone(),
+                first,
+            });
+            first = false;
+        }
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failures = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for job in 0..jobs.max(1) {
+            let (next, failures, stored, toolchain) = (&next, &failures, &stored, &toolchain);
+            scope.spawn(move || {
+                let scratch = native::scratch(&format!("replay-{job}")).expect("scratch");
+                hirsel_engine::with_compiler_stack(move || {
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(item) = stored.get(index) else { break };
+                        let verdict = (|| {
+                            let artifact = artifact::read(&item.dir)?;
+                            let configuration = artifact::configuration(&item.name)
+                                .ok_or("an unnamed configuration")?;
+                            let probe = artifact::NativeProbe {
+                                configuration,
+                                toolchain,
+                                dir: &scratch,
+                                source_path: Some(item.dir.join("source.hir")),
+                                warm: Some("fn warm(x: u64) -> u64 { x }\ntype Warm { a: u64 }\n"),
+                            };
+                            artifact::replay(&artifact, &probe)?;
+                            if item.first {
+                                let reduced = artifact::reduce(&artifact.source, &probe)?;
+                                std::fs::write(item.dir.join("reduced.hir"), reduced)
+                                    .map_err(|e| e.to_string())?;
+                            }
+                            Ok::<_, String>(())
+                        })();
+                        if let Err(e) = verdict {
+                            failures
+                                .lock()
+                                .unwrap()
+                                .push(format!("{}: {e}", item.dir.display()));
+                        }
+                    }
+                });
+            });
+        }
+    });
+    let failures = failures.into_inner().unwrap();
+    for failure in &failures {
+        eprintln!("native: artifact does not replay or reduce: {failure}");
+    }
+    let mut ok = failures.is_empty();
+    let replayed = stored.len() - failures.len();
+    let reduced = stored.iter().filter(|s| s.first).count();
+    // Topology (PROG-5): the listed multi-unit cases agree as one object, one
+    // object per unit and twenty seeded random partitions.
+    let topology: Vec<_> = seeded(topology_matrix(20), hash_seed)
+        .into_iter()
+        .filter(|c| engine.is_none_or(|e| e.keeps(c)))
+        .collect();
+    let mut partitioned = listed(root, "native-tests/topology/cases.txt")?;
+    partitioned.retain(|c| filter.keeps(&c.id));
+    let topology_results = native::run_cases(
+        &partitioned,
+        &topology,
+        &toolchain,
+        &native::scratch("topology")?,
+        jobs,
+    );
+    write(
+        "topology-matrix.tsv",
+        &native::render_matrix(&topology_results),
+    )?;
+    if complete || !(partitioned.is_empty() || topology.is_empty()) {
+        ok &= all_agree("topology", &topology_results);
+    }
+    // Generated successes and directed failures agree under every
+    // configuration of the matrix.
+    let mut generated = native::generate::cases(64);
+    generated.retain(|c| filter.keeps(&c.id));
+    let generated_results = native::run_cases(
+        &generated,
+        &matrix,
+        &toolchain,
+        &native::scratch("generated")?,
+        jobs,
+    );
+    write(
+        "generated-matrix.tsv",
+        &native::render_matrix(&generated_results),
+    )?;
+    if complete || !generated.is_empty() {
+        ok &= all_agree("generated", &generated_results);
+    }
+    // A restriction may empty a campaign, but not the whole run; the
+    // unrestricted run checks every campaign (all_agree refuses an empty one).
+    if matrix.is_empty() || complete && cases.is_empty() {
+        eprintln!("native: the matrix selected no cases or no configurations");
+        ok = false;
+    }
+    if !complete && cases.is_empty() && partitioned.is_empty() && generated.is_empty() {
+        eprintln!("native: --filter {:?} selected no cases", filter.0);
+        ok = false;
+    }
+    let mut json = report.json();
+    json["generated_cases"] = generated_results.len().into();
+    json["mismatch_artifacts_replayed"] = replayed.into();
+    json["mismatching_cases_reduced"] = reduced.into();
+    json["topology_cases"] = topology_results.len().into();
+    json["topology_partitions"] = topology.len().into();
+    json["report"] = out.display().to_string().into();
+    println!("{json:#}");
+    for line in report.unlisted.iter().chain(&report.stale) {
+        eprintln!("native: {line}");
+    }
+    Ok(ok && report.ok())
+}
+
+fn seeded(mut matrix: Vec<Configuration>, hash_seed: u64) -> Vec<Configuration> {
+    for config in &mut matrix {
+        config.options.launch.hash_seed = hash_seed;
+    }
+    matrix
+}
+/// One shipped-archive optimized whole-program configuration per target over the LLVM passing corpus. Existing
+/// named unsupported cases are outside this sweep; every selected case must agree.
+fn hash_sweep(root: &Path, jobs: usize, filter: &Filter, hash_seed: u64) -> Result<bool, String> {
+    let matrix = hash_sweep_matrix(hash_seed);
+    let exclusions = native::read_exclusions(root)?;
+    let mut cases = native::baseline(root)?;
+    cases.retain(|c| {
+        filter.keeps(&c.id) && !native::listed_under(&exclusions, &c.id, native::Class::Llvm)
+    });
+    if cases.is_empty() {
+        return Err("hash sweep selected no passing cases".into());
+    }
+    let results = native::run_cases(
+        &cases,
+        &matrix,
+        &toolchain(&matrix)?,
+        &native::scratch("hash-sweep")?,
+        jobs,
+    );
+    let ok = all_agree("hash sweep", &results);
+    println!(
+        "native hash sweep: seed {hash_seed}, {} passing cases under {} configurations{}",
+        results.len(),
+        matrix.len(),
+        if ok { " agree" } else { ": FAILED" }
+    );
+    Ok(ok)
+}
+
+/// Memcheck's executables: x86-64 (the only target Valgrind runs here) on the
+/// system-allocator archive, where each fixed-size block is its own libc
+/// allocation, so memcheck sees a use after free or a double free of one. The
+/// default passes as one object at O0 and O3, and the same without regions,
+/// whose bump storage memcheck cannot see into.
+fn sanitize_matrix(hash_seed: u64) -> Vec<Configuration> {
+    use hirsel_driver::native::{Engine, OptLevel, Options, Partition, Runtime};
+    let mut matrix = Vec::new();
+    for regions in [true, false] {
+        for opt in [OptLevel::None, OptLevel::Speed] {
+            matrix.push(Configuration {
+                options: Options {
+                    regions,
+                    ..Options::new(TargetSpec::x86_64_unknown_linux_gnu())
+                },
+                engine: Engine::Native {
+                    opt,
+                    partition: Partition::Whole,
+                    runtime: Runtime::System,
+                },
+            });
+        }
+    }
+    seeded(matrix, hash_seed)
+}
+
+fn hash_sweep_matrix(hash_seed: u64) -> Vec<Configuration> {
+    use hirsel_driver::native::{Engine, OptLevel, Partition, Runtime};
+    seeded(
+        full_matrix()
+            .into_iter()
+            .filter(|c| {
+                c.options.flat_walk
+                    && matches!(
+                        c.engine,
+                        Engine::Native {
+                            opt: OptLevel::Speed,
+                            partition: Partition::Whole,
+                            runtime: Runtime::Default
+                        }
+                    )
+            })
+            .collect(),
+        hash_seed,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn memcheck_runs_whole_x86_executables_on_the_system_allocator_archive() {
+        use hirsel_driver::native::{Engine, OptLevel, Partition, Runtime};
+        let matrix = sanitize_matrix(0);
+        let names: Vec<_> = matrix.iter().map(Configuration::name).collect();
+        assert_eq!(names.len(), 4, "{names:?}");
+        for (regions, opt) in [
+            (true, OptLevel::None),
+            (true, OptLevel::Speed),
+            (false, OptLevel::None),
+            (false, OptLevel::Speed),
+        ] {
+            assert!(
+                matrix.iter().any(|c| {
+                    let o = &c.options;
+                    o.target == TargetSpec::x86_64_unknown_linux_gnu()
+                        && o.regions == regions
+                        && o.elide
+                        && o.reuse
+                        && o.flat_walk
+                        && c.engine
+                            == Engine::Native {
+                                opt,
+                                partition: Partition::Whole,
+                                runtime: Runtime::System,
+                            }
+                }),
+                "regions {regions} {opt:?} missing from {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_filter_keeps_a_case_any_text_selects() {
+        let filter = Filter(vec!["SEM-2".into(), "MEM-4".into()]);
+        assert!(filter.keeps("conformance/SEM/SEM-2-a.hir"));
+        assert!(filter.keeps("conformance/MEM/MEM-4-b.hir"));
+        assert!(!filter.keeps("conformance/OWN/OWN-7-c.hir"));
+        assert!(Filter::default().keeps("conformance/OWN/OWN-7-c.hir"));
+    }
+
+    #[test]
+    fn a_campaign_over_no_cases_or_no_configurations_fails() {
+        let result = |outcomes| native::CaseResult {
+            id: "case.hir".into(),
+            snapshot: None,
+            outcomes,
+            reference: None,
+            wall: Default::default(),
+        };
+        assert!(!all_agree("empty", &[]));
+        assert!(!all_agree("unconfigured", &[result(Vec::new())]));
+        // The control: one case agreeing under one configuration passes.
+        let agreed = vec![("x86_64/heap".into(), Class::Heap, Outcome::Agree)];
+        assert!(all_agree("one", &[result(agreed)]));
+    }
+
+    #[test]
+    fn second_hash_sweep_runs_one_shipped_archive_configuration_per_target() {
+        let matrix = hash_sweep_matrix(1);
+        assert_eq!(matrix.len(), 2);
+        assert_ne!(matrix[0].options.target, matrix[1].options.target);
+        for c in matrix {
+            assert!(c.options.regions && c.options.elide && c.options.reuse && c.options.flat_walk);
+            assert_eq!(
+                c.options.launch,
+                hirsel_driver::native::LaunchInputs {
+                    hash_seed: 1,
+                    ..Default::default()
+                }
+            );
+            assert!(matches!(
+                c.engine,
+                hirsel_driver::native::Engine::Native {
+                    opt: hirsel_driver::native::OptLevel::Speed,
+                    partition: hirsel_driver::native::Partition::Whole,
+                    runtime: hirsel_driver::native::Runtime::Default
+                }
+            ));
+        }
+    }
+}

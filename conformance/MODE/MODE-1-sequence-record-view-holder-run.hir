@@ -1,0 +1,31 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// A holder keeps its loans while it is live (§04). A record inside a list
+// holds the view of `s` it was built from, so the loan on `s` lasts until the
+// last read of `xs[0].name`, not until `xs` is bound.
+type R {
+  name: String,
+}
+
+fn view(x: String) -> String in x {
+  copy x
+}
+
+fn count(s: String) -> u64 {
+  let xs: List[R] = [R(name: view(s))]
+  string.byte_len(xs[0].name)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = count("abc") == 3
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

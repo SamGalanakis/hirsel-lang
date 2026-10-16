@@ -1,0 +1,12 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 11
+// spec: #60
+// "A brand ends when p is ... moved." The written argument moves the owner
+// before the next argument reads the value it brands.
+fn use_pos(s: Dir, p: i64) -> () {
+  ()
+}
+
+fn probe(s: Dir, p: i64 of s) -> () {
+  use_pos(take s, -p)
+}

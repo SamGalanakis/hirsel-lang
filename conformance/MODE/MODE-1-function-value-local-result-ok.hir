@@ -1,0 +1,27 @@
+// rule: MODE-1
+// expect: accept
+// "A result is global unless declared `in x`". A named function used
+// as a value keeps that contract, and each call through the value is local to
+// the arguments it names.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn pick(a: Bytes, b: Bytes) -> Bytes in {a, b} {
+  copy a
+}
+
+fn example(b: Bytes, c: Bytes) -> bool {
+  let f = view
+  let g = pick
+  f(b) == g(b, c)
+}
+
+fn library(d: Dir, p: Path, s: String) -> Result[bool, FileError] {
+  let read = file.read_bytes
+  let same = read(d, p)? == read(d, p)?
+  for x in fn() {
+    std@1/unicode.graphemes
+  }()(s) {}
+  Ok(same)
+}

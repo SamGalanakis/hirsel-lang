@@ -1,0 +1,75 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+flat type Message {
+  text: String,
+  bytes: Bytes,
+  id: u64,
+}
+
+flat type Messages {
+  items: List[Message],
+}
+
+flat type Envelope {
+  prefix: String,
+  message: Message,
+  suffix: u64,
+}
+
+fn copied(message: Message) -> Message in message {
+  copy message
+}
+
+fn copied_text(take message: Message) -> String {
+  copy message.text
+}
+
+fn copied_bytes(take message: Message) -> Bytes {
+  copy message.bytes
+}
+
+fn taken_text(take message: Message) -> String {
+  let Message(text: text, bytes: _, id: _) = take message
+  take text
+}
+
+fn output_error[E](take e: E) -> () {}
+
+fn changed_sum(messages: Messages) -> u64 {
+  let mut sum = 0u64
+  for message in messages.items {
+    let mut changed = copied(copy message)
+    changed.id ^= 291u64
+    sum += changed.id
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let messages = Messages(items: [Message(text: "hello", bytes: b"abc", id: 7)])
+  let sum = changed_sum(messages)
+  let text = copied_text(Message(text: "owned", bytes: b"", id: 1))
+  let bytes = copied_bytes(Message(text: "", bytes: b"bytes", id: 2))
+  let taken = taken_text(Message(text: "taken", bytes: b"drop", id: 3))
+  let envelope = Envelope(
+    prefix: "prefix",
+    message: Message(text: "nested", bytes: b"abc", id: 3),
+    suffix: 99
+  )
+  let mut nested = copy envelope.message
+  nested.id = 4
+  let valid = sum == 292 && text == "owned" && bytes == b"bytes" && taken == "taken" && string.byte_len(
+    nested.text
+  ) == 6 && envelope.message.id == 3 && envelope.suffix == 99
+  let stdout = io.stdout(rt) ? output_error
+  out.print(
+    stdout,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

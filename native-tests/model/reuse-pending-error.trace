@@ -1,0 +1,6 @@
+rc-trace v1
+max 16
+# A token cannot be reused before its donor has finished draining.
+alloc r1 0
+reset r1 t1
+reuse t1 r2 0

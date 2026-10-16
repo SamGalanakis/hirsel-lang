@@ -1,0 +1,5 @@
+// rule: MEM-5
+// expect: accept
+fn main() -> String {
+  std@1/u8.to_string(1u8)
+}

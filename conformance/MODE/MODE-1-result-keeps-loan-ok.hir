@@ -1,0 +1,16 @@
+// rule: MODE-1
+// expect: accept
+// "While a local(x) result lives, its caller treats x as borrowed."
+fn get(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn change(mut x: Bytes) -> () {
+  x = b"new"
+}
+
+fn example(mut x: Bytes) -> Bytes in x {
+  change(mut x)
+  let part = get(x)
+  part
+}

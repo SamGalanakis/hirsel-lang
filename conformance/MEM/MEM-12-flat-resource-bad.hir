@@ -1,0 +1,9 @@
+// rule: MEM-12
+// expect: reject MEM-12 at line 7
+resource type Token {
+  value: u32,
+}
+
+flat type R {
+  value: Token,
+}

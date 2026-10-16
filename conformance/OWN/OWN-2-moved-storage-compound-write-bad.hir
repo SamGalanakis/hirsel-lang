@@ -1,0 +1,7 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 6
+fn probe() {
+  let mut r = 1u8
+  let x = take r
+  r += 1u8
+}

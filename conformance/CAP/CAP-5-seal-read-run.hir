@@ -1,0 +1,32 @@
+// rule: CAP-5
+// expect: run
+@capability(global)
+pub opaque type ReadDir: plain + noalloc_drop uses {Dir} {
+  d: Dir,
+}
+
+@noalloc
+fn read_only(d: Dir) -> ReadDir {
+  ReadDir(d: d)
+}
+
+fn read(r: ReadDir, p: Path) -> Result[Bytes, FileError] {
+  file.read_bytes(r.d, p)
+}
+
+fn restricted(body: fn() -> () uses {ReadDir}) {
+  body()
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let d = test.dir(t, [(path.of("hello"), b"sealed")])
+  let r = read_only(d)
+  restricted(
+    fn() {
+      let bytes = read(r, path.of("hello"))
+      let _ = bytes
+    }
+  )
+  test.check(t, read(r, path.of("hello")) == Ok(b"sealed"))
+  Ok(())
+}

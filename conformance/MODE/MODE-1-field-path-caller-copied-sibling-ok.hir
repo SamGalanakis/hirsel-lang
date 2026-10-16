@@ -1,0 +1,19 @@
+// rule: MODE-1
+// expect: accept
+// v22 #77, a copied argument. The copy shares p, and a result related to p.a
+// reads only p.a of it, so the sibling p.b stays writable while it lives.
+type Pair {
+  a: String,
+  b: String,
+}
+
+fn get(p: Pair) -> String in p.a {
+  p.a
+}
+
+fn caller(x: String, y: String) -> u64 {
+  let mut p = Pair(a: x, b: x)
+  let r = get(copy p)
+  p.b = y
+  string.byte_len(r)
+}

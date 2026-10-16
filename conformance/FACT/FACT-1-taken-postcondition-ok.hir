@@ -1,0 +1,8 @@
+// rule: FACT-1
+// expect: accept
+// "an ensures may name a take parameter only inside before".
+@noalloc
+fn consume(take x: u32) -> u32
+  ensures result == before(x) {
+  x
+}

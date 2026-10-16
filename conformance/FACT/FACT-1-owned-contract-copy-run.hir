@@ -1,0 +1,27 @@
+// rule: FACT-1
+// expect: run
+// stdout: same
+fn poke(mut xs: List[u8]) -> bool {
+  xs[0] = 9u8
+  true
+}
+
+fn probe(mut xs: List[u8]) -> u64
+  requires {
+    let mut owned = copy xs
+    poke(mut owned)
+  } {
+  list.len(xs)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut xs: List[u8] = [1u8]
+  let _ = probe(mut xs)
+  if xs[0] == 1u8 {
+    let _ = out.print(stdout, "same\n")
+  } else {
+    let _ = out.print(stdout, "mutated\n")
+  }
+  Ok(())
+}

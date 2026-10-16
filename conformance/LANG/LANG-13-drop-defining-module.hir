@@ -1,0 +1,15 @@
+// rule: LANG-13
+// expect: accept
+// Shows "Refutable patterns appear only in match"
+resource type Token {
+  n: u32,
+}
+drop(x) {
+  ()
+}
+
+@noalloc
+fn example(take x: Token) -> u32 {
+  let Token(n: n) = take x
+  n
+}

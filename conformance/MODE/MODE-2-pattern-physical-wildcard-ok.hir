@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+type Rec {
+  items: unique Bytes,
+}
+
+fn probe(take r: Rec) {
+  let Rec(items: _) = take r
+}

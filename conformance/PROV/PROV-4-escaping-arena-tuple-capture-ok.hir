@@ -1,0 +1,12 @@
+// rule: PROV-4
+// expect: accept
+// A scoped closure borrows the tuple and ends with the frame that owns the arena value.
+fn probe(a: Arena) -> u64 {
+  let x: String in a = "x"
+  let pair = (x, 1u8)
+  let f = fn() {
+    let (s, n) = pair
+    string.byte_len(s)
+  }
+  f()
+}

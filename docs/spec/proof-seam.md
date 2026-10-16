@@ -1,0 +1,258 @@
+# The proof seam
+
+Hirsel builds no prover. It publishes three prover-neutral primitives that any consumer (a
+Lean projection, an SMT or Why3 verification-condition generator, a Dafny- or Verus-style
+tool, an AI proof agent) builds on out of process: stable **obligation ids**, **content
+hashes** that say when evidence is stale, and a canonical **TIR export** that the importer
+re-validates. This part fixes their shape and the rules every consumer obeys. Rule IDs are
+`PS-n`.
+
+Nothing here changes what compiles or what a program means
+([not in Hirsel](index.md#not-in-hirsel), [FACT-3](contracts.md#fact-3-checking),
+[DET-3](determinism.md#det-3-no-switches)). The export is read-only with respect to the
+compiler: lowering, the low-level IR, interpreter failure records and every other digest
+are unchanged by it.
+
+## Obligation identity
+
+### PS-1: Id
+
+`ObligationId = (DefPath, RuleId, kind, ordinal)`, written `pkg@ver/mod/name#RULE/kind/ordinal`,
+for example `standalone@0/clamp#FACT-1/ensures/0`. The ordinal is the position among the
+definition's sites with the same `(RuleId, kind)` under the canonical traversal
+([PS-3](#ps-3-canonical-traversal)). Ids never contain arena indices, spans or hashes.
+
+### PS-2: Kinds
+
+Kinds are a closed, versioned list. Later clause forms (`invariant`, `decreases`,
+`fails_if`, …) arrive as new kinds; existing kinds and their ordinals never change meaning,
+so adding a kind is not a format break ([PS-12](#ps-12-sidecar-evidence-only)).
+
+| Kind | Site in TIR | Rule | Ordinal over |
+|---|---|---|---|
+| `check` | an `InstructionKind::Check { rule }` that is not a contract site (FACT-2 constructor facts, entry checks, contract checks of closures) | the check's rule | check sites |
+| `failure-edge` | an operation that can take its failure edge: an `Assign` of integer `Add`, `Sub`, `Mul`, `Div`, `Rem`, `Shl`, `Shr` or integer `Neg` (SEM-1); a projected place with an `Index` (MEM-14) or a `VariantField` (MEM-13) projection, one obligation per (body, root, projection) whose sites are every instruction or terminator naming it; a `Terminator::Fail { rule }` | SEM-1, MEM-14, MEM-13, or the `Fail`'s rule | sites; a projected place at its first naming |
+| `requires-at-call` | a `Terminator::Call` whose callee's function type (the signature for `Callee::Definition`, the operand's type for `Callee::Indirect`) has `requires` clauses: one obligation per (call, clause), clauses in declaration order | FACT-1 | (call, clause) pairs |
+| `ensures` | one per `ensures` clause of the definition; its sites are the exit checks on every return path | FACT-1 | clauses, declaration order |
+| `requires` | one per `requires` clause of the definition, the precondition as an assumption; its site is the entry check | FACT-1 | clauses, declaration order |
+
+A contract site is a `Check { rule: FACT-1 }` whose condition is the result of an
+`Indirect` call of a closure over a body listed in `Definition.contracts`, created in the
+entry body. Its clause is the `Definition.contracts` ordinal, and its kind comes from the
+owner signature's `Contract` with that ordinal. Library operation failures belong to the
+callee, call failure edges to the callee's obligations, `Unreachable` to the IR validator
+(it is a compiler assertion, not a user obligation), and MEM-3 depth failures to resource
+limits ([PS-11](#ps-11-proof-never-decides)): none of these produce obligations.
+
+### PS-3: Canonical traversal
+
+Bodies in `Definition.bodies` order, blocks in arena order, instructions in order, then the
+terminator; at one instruction, its own `check` or arithmetic site first, then the places it
+names in field order; at a terminator, its `Fail` or call sites, then its places. Lowering
+appends in source order, so this is source order within each body. An obligation table lists
+the `requires` obligations first, then the sites in this order, then `ensures`.
+
+### PS-4: Stability
+
+An obligation's id is unchanged by:
+
+- any edit to another definition, including its body, its signature, or adding or removing
+  definitions anywhere;
+- an edit to this definition that adds, removes or moves no site of the same
+  `(RuleId, kind)` earlier in PS-3 order (comments, spacing, renames, code of other kinds,
+  sites later in the order).
+
+Its ordinal shifts when a same-`(RuleId, kind)` site is added or removed earlier in the
+order, when code containing such sites is reordered, or when the lowering of this definition
+changes. Ids are positional, not semantic: a consumer that wants to carry evidence across
+such edits re-pairs by checksum ([PS-6](#ps-6-obligation-checksum)) or by its own shape
+matching, never silently. `requires-at-call` ordinals also shift when the callee gains or
+loses a `requires` clause, because the callee's signature changed.
+
+## Content hashes
+
+### PS-5: TIR digest
+
+Per definition, the digest is `H("hirsel.tir.digest.v1", TIR_VERSION, wire text of the
+definition's (Definition …) node)`, where `H` is length-framed SHA-256. The wire text
+([PS-8](#ps-8-encoding)) excludes sessions: spans are location-table indices, syntax-arena
+ids are renumbered per definition, and type ids are indices into the definition's own type
+table. The location table itself is not hashed, so moving the definition in its file, or
+editing anything before it, leaves the digest unchanged. The domain changes only with
+`TIR_VERSION` or a change to the TIR wire form.
+
+### PS-6: Obligation checksum
+
+`H("hirsel.obligation.checksum.v1", id text, TIR digest, (DefPath, signature fingerprint)…)`,
+over every definition the definition's TIR names, itself included (callees, function
+references, constant reads, constructed and matched nominals, named types and capabilities
+in its type graph, origins, protocol association sources), sorted by `DefPath` and
+deduplicated. The export lists these references with their fingerprints. Signature
+fingerprints already include their own dependencies' fingerprints. By
+[LANG-6](language.md#lang-6-signatures) a callee body edit changes neither the caller's TIR
+nor any fingerprint the caller references, so it never changes a caller's checksum; a
+callee signature edit changes its fingerprint and therefore every checksum of every
+referencing definition. The checksum is per definition plus id; a finer per-obligation slice
+may later be added as a new checksum domain beside this one.
+
+### PS-7: What digests bind
+
+Evidence is current for an obligation exactly when its recorded `(ObligationId, checksum)`
+equals the export's. The export header names the `TIR_VERSION`, compiler version, spec hash
+and interface version that produced it; a consumer that pins a checker also records them.
+
+## The export: `hirsel.tir.export.v1`
+
+### PS-8: Encoding
+
+The export is one canonical text in the S-expression form of the `hirsel-codec` crate: one
+spelling per value, so decode-then-encode is byte-identical and two runs of one build on one
+input give identical bytes ([DET-1](determinism.md#det-1-contract)). No debug rendering, map
+iteration order, file id, type-id provenance, address or host path appears.
+
+- **References by name.** Cross-definition references are `DefPath`s. Arena ids appear only
+  inside the artifact that owns the arena (body-local locals and blocks, type-table indices,
+  location-table indices).
+- **Syntax ids.** Expression, pattern, type-expression, statement and item ids are
+  file-arena indices, renumbered per definition by order-preserving rank, so sorted sets stay
+  sorted and the numbering is stable under edits elsewhere in the file.
+- **Interned tables.** Each definition has its own type table and location table, so every
+  definition section is self-contained. A location is `(module, line, column, end line, end
+  column)`, one-based, columns in Unicode scalars; `module` is the source file's module
+  identity (`std@1/net`), never a path. Locations are deduplicated by value and numbered by
+  first occurrence in encoding order. Decoded spans are location handles: `file` is the
+  definition section's ordinal and `start == end` indexes its table.
+
+### PS-9: Contents
+
+- **Header:** the format `hirsel.tir.export.v1`, `TIR_VERSION`, compiler version, spec hash,
+  interface version, and the launch entry with its semantic program revision when the
+  program declares one.
+- **Definitions,** sorted by `DefPath`: path, location table, TIR, TIR digest, references
+  with fingerprints, operations used (callees with a signature in the export and no body,
+  exported or skipped: registry operations, whose signatures carry effects and authority),
+  and the obligation table: PS-1 id, checksum, every TIR site as
+  `(body, block, instruction | terminator, location)` with the first as the primary
+  location, and per kind the callee and clause ordinal, or the clause ordinal and contract
+  code hash.
+- **Signatures,** sorted: every signature the exported definitions and signatures reach,
+  with the dependency list its fingerprint covers and, for a `pub opaque` type, its
+  owner-private representation, which only definitions of the owning package see.
+- **Constants:** the materialized value of every exported constant.
+- **`skipped: [{name, reason}]`:** every definition in the closure whose TIR could not be
+  exported. Mandatory, possibly empty; a consumer turns each entry into a located error,
+  never into silence.
+- **A trailing `(ExportDigest #…)` node:** `H("hirsel.tir.export.digest.v1", export node text)`.
+
+Selection is every definition of the root package plus its semantic closure (the dependency
+walk the semantic program revision uses), so a definition's callees, constants and types are
+always present by signature, and by TIR when they have a body.
+`hirsel export --tir <source|manifest.json> -o <file>` writes the export.
+
+### PS-10: Import
+
+Import runs out of process, linking only the export, codec, TIR, type and validation
+crates. It refuses, with a located error (byte offset as line and column, or the `DefPath`
+and field, or the validator violation's body, block and instruction), on:
+
+- any decode error, unknown tag, noncanonical value or trailing input;
+- a format, `TIR_VERSION` or interface version other than its own (exact equality);
+- an export digest, TIR digest, reference list, obligation table or checksum that does not
+  recompute to the stored value;
+- a signature fingerprint that does not re-derive: every fingerprint (of a declaration, a
+  fact helper or a registry row) has one derivation, its encoding over the dependency list
+  it covers, and the importer recomputes it from the exported signature and that list; an
+  owner view is consistent exactly when it seals to its public signature. Then every
+  dependency, reference and definition signature hash must name those fingerprints;
+- any IR validation violation of any definition, against the signature view of its package.
+
+Import returns the definitions, signatures, tables and skip list. There is no in-process
+plugin API: consumers read the file.
+
+## Rules for consumers
+
+### PS-11: Proof never decides
+
+Proof output never decides acceptance or meaning. It can inform, and it can license a
+[FACT-3](contracts.md#fact-3-checking) check removal; it never rejects or admits a program
+and is never a flag that changes semantics.
+
+### PS-12: Sidecar evidence only
+
+Evidence lives only in a sidecar keyed by `(program revision, ObligationId, checksum)`: the
+checksum decides currency ([PS-7](#ps-7-what-digests-bind)); the revision records the
+program it was checked for and binds any removal set to one launch. Source never carries
+proof syntax or prover hints; source contracts stay executable code
+([FACT-1](contracts.md#fact-1-contracts)). Unknown kinds in a newer export are ignored by
+older consumers, not misread.
+
+### PS-13: Fail-safe removal
+
+A check-removal pass treats every missing, rejected, unreplayable or stale record as "keep
+the check". The low-level IR validator confirms that the set of removed checks equals the
+accepted set; any difference is a compile-time tool error, never a silently kept or removed
+check.
+
+### PS-14: Authority is opaque
+
+A function whose [CAP-2](capabilities.md#cap-2-charged-at-use) authority summary is
+non-empty (any known term, or unknown), and any function value of such a type, gets no
+defining equation in any encoding: it is world-threaded or uninterpreted per call, so
+`clock.now() == clock.now()` is unprovable. This is F*'s `NDET` masking, adopted because
+giving such functions equations lets a prover equate two calls that extraction runs
+separately, which is enough to prove `False`.
+
+### PS-15: Deterministic budgets, replayable evidence
+
+Budgets are deterministic resource counts (steps, heartbeats, conflicts), never wall time;
+wall time is only an outer kill switch and never a verdict. Evidence that cannot be replayed
+with its recorded checker version and budget is not proved.
+
+### PS-16: Named trust
+
+Floats (bit-pattern semantics against a prover's reals or IEEE model), the projection from
+TIR to the consumer's logic, and any native evaluation (`native_decide`, `bv_decide` axioms,
+solver-internal evaluation) are named trust items in whatever ledger a consumer keeps; none
+is implicit.
+
+## Consumers
+
+These sketches show the primitives are sufficient; they are not part of the contract.
+
+- **A Lean projection** emits one module per exported definition over a fixed prelude:
+  fixed-width integers as bit vectors, records and variants as structures and inductives
+  named by `DefPath`, each body a control-flow graph of mutually recursive local functions or
+  a fuel-indexed step relation. `requires` obligations become hypotheses, and every other
+  obligation a theorem named by its id; `requires-at-call` goals cite only the callee's
+  signature contracts. PS-14 functions are opaque constants threaded through a world.
+- **An SMT or Why3 generator** computes weakest preconditions over each definition's control
+  flow, naming each goal by its id. Callees are their contracts; failure edges become
+  assertions of the operation's no-failure condition (no overflow for the width, nonzero
+  divisor, index below length, active variant). Each goal's context is pruned to the
+  definitions whose fingerprints its checksum covers.
+- **An agent loop** reads the export, picks obligations, asks a prover and writes verdicts
+  to the sidecar. Routing back to source uses the primary location; routing a run-time
+  failure to its obligation uses the definition, rule and reported line and column, so a
+  failing test points at the id to strengthen or prove. Stale verdicts are detected by
+  checksum alone.
+
+What lowering erases, and how a consumer recovers it:
+
+- **Loop structure.** `for` and `while` become control-flow cycles and self-tail sites;
+  consumers recover natural loops from back edges, and the header block's location names the
+  source loop. An `invariant` clause form will arrive with its own obligation kind and
+  anchor.
+- **`before(e)` and contract parameter roles.** `before(e)` lowers to an entry temporary
+  passed as a clause argument; whether a clause argument is a parameter, a snapshot or
+  `result` is recoverable by dataflow from the clause call.
+- **Closure contracts** export as `check` obligations with rule FACT-1, not as `requires`
+  or `ensures` of the closure.
+- **Expression trees** are flattened into temporaries in evaluation order, and
+  short-circuit operators become branches; def-use rebuilds them.
+- **Operation semantics.** Registry operations have signatures and effect flags but no
+  bodies or contracts; consumers treat them as uninterpreted (PS-14 where they hold
+  authority).
+- **Termination.** There is no `decreases`; consumers prove partial correctness or supply
+  their own measure.
+- **Failure-site precision.** MEM-13 and MEM-14 failures report at the instruction that first
+  touches the place, so a reported site may map to several candidate obligations.

@@ -1,0 +1,22 @@
+// rule: PROV-4
+// expect: accept
+// A constructed record holds its parts' loans (§04), so it lives in `a` and may
+// be kept where `a` is named, held by an inferred binding, or lent (#79).
+type Ast {
+  s: String,
+}
+
+fn len(s: Ast) -> u64 {
+  1
+}
+
+fn f(a: Arena) -> Ast in a {
+  let x: String in {a, x} = "x"
+  Ast(s: x)
+}
+
+fn g(a: Arena) -> u64 {
+  let x: String in a = "x"
+  let held = Ast(s: x)
+  len(Ast(s: "y")) + len(held)
+}

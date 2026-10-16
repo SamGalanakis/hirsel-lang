@@ -1,0 +1,68 @@
+// rule: LANG-11
+// expect: run
+// stdout: ok
+// exit: 0
+// spec: #50
+// A block that only names outer storage is transparent to a borrowing
+// consumer. One whose value is a binding it declares itself moves that value
+// out, because the binding ends with the block and the consumer still reads.
+fn output_error[E](take e: E) -> () {}
+
+fn view(x: List[u64]) -> List[u64] in x {
+  x
+}
+
+fn direct() -> u64 {
+  list.len(
+    {
+      let v: List[u64] = [1, 2]
+      v
+    }
+  )
+}
+
+fn branch(c: bool) -> u64 {
+  list.len(
+    {
+      let v: List[u64] = [1, 2, 3]
+      if c {
+        v
+      } else {
+        let w: List[u64] = []
+        w
+      }
+    }
+  )
+}
+
+fn viewed(x: List[u64]) -> u64 {
+  {
+    let v = view(x)
+    v
+  }
+  list.len(
+    {
+      let v = view(x)
+      v
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let x: List[u64] = [7]
+  let ok = direct() == 2 && branch(true) == 3 && branch(false) == 0 && viewed(x) == 1
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

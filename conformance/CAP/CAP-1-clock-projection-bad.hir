@@ -1,0 +1,6 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 5
+// Authority "arrive[s] only as typed parameters"; projections require Io.
+pub fn project() -> Result[MonotonicClock, GrantError] {
+  io.monotonic_clock()
+}

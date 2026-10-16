@@ -1,0 +1,7 @@
+// rule: SEM-1
+// expect: accept
+// "No mixed-width operators".
+@noalloc
+fn mixed(a: u8, b: u8) -> u8 {
+  a * b
+}

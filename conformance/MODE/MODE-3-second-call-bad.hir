@@ -1,0 +1,7 @@
+// rule: MODE-3
+// expect: reject MODE-3 at line 6
+// "A once function value may be called at most once."
+fn example(take action: once fn() -> () uses {}) -> () {
+  action()
+  action()
+}

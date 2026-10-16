@@ -1,0 +1,21 @@
+// rule: OWN-4
+// expect: run
+// An empty static sequence retains its full header and element alignment.
+type Choice = One(value: u64) | Pair(value: u64, extra: u64)
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut bytes: List[u8] = []
+  list.push(mut bytes, 1u8)
+  failure.check(bytes[0] == 1u8, TextInvariant())
+  let mut words: List[u64] = []
+  list.push(mut words, 1u64)
+  failure.check(words[0] == 1u64, TextInvariant())
+  let mut wide: List[u128] = []
+  list.push(mut wide, 1u128)
+  failure.check(wide[0] == 1u128, TextInvariant())
+  let mut packed: List[Packed[Choice]] = []
+  list.push(mut packed, One(value: 1u64))
+  list.push(mut packed, Pair(value: 2u64, extra: 3u64))
+  failure.check(list.len(packed) == 2u64, TextInvariant())
+  Ok(())
+}

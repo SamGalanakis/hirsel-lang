@@ -1,0 +1,12 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. One relation is a union of places, and naming x and y admits a value
+// within either, so the loan on a is inside the relation. The v22 pin for an
+// escaping arena is PROV-4-union-arena-outside-result-bad.
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn bad(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {b, x, y} {
+  choose(a, b, x, y)
+}

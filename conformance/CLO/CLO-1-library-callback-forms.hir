@@ -1,0 +1,175 @@
+// rule: CLO-1
+// expect: accept
+fn next_value(mut n: u64) -> Option[u64] {
+  None
+}
+
+fn map_value(n: u64) -> u64 {
+  n
+}
+
+fn generate(t: Test) -> u64 {
+  0
+}
+
+fn law(n: u64) -> bool uses {} {
+  true
+}
+
+fn scope_value(s: Scope) -> u64 {
+  0
+}
+
+fn arena_value(a: Arena) -> u64 {
+  0
+}
+
+fn region_value(n: u64) -> u64 {
+  n
+}
+
+fn mutex_value(mut v: unique u64) -> u64 uses {} {
+  0
+}
+
+fn result_value() -> u64 {
+  0
+}
+
+fn probe_iter_from_named() {
+  let it: Iter[u64] = iter.from(0u64, next_value)
+}
+
+fn probe_iter_map_named(take it: Iter[u64]) {
+  let mapped: Iter[u64] = iter.map(take it, map_value)
+}
+
+fn probe_iter_map_literal(take it: Iter[u64]) {
+  let mapped: Iter[u64] = iter.map(
+    take it,
+    fn(n: u64) -> u64 {
+      n
+    }
+  )
+}
+
+fn probe_test_for_all_named(t: Test) {
+  std@1/test.for_all(t, generate, law)
+}
+
+fn probe_test_for_all_literal(t: Test) {
+  std@1/test.for_all(
+    t,
+    fn(seed: Test) -> u64 {
+      0
+    },
+    law
+  )
+}
+
+fn probe_test_for_all_law_named(t: Test) {
+  std@1/test.for_all(t, generate, law)
+}
+
+fn probe_test_for_all_law_literal(t: Test) {
+  std@1/test.for_all(
+    t,
+    generate,
+    fn(n: u64) -> bool uses {} {
+      true
+    }
+  )
+}
+
+fn probe_task_scope_named(tasks: Tasks) {
+  let n: u64 = task.scope(tasks, scope_value)
+}
+
+fn probe_task_scope_literal(tasks: Tasks) {
+  let n: u64 = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      0
+    }
+  )
+}
+
+fn probe_task_async_named(s: Scope) {
+  let h: Task[u64] of s = task.async(s, result_value)
+  task.detach(s, take h)
+}
+
+fn probe_task_async_literal(s: Scope) {
+  let h: Task[u64] of s = task.async(
+    s,
+    fn() -> u64 {
+      0
+    }
+  )
+  task.detach(s, take h)
+}
+
+fn probe_task_isolate_named(tasks: Tasks) {
+  let n: Result[u64, Failure] = task.isolate(tasks, result_value)
+}
+
+fn probe_task_isolate_literal(tasks: Tasks) {
+  let n: Result[u64, Failure] = task.isolate(
+    tasks,
+    fn() -> u64 {
+      0
+    }
+  )
+}
+
+fn probe_mutex_with_named(tasks: Tasks, m: Mutex[u64]) {
+  let n: u64 = mutex.with(tasks, m, mutex_value)
+}
+
+fn probe_mutex_with_literal(tasks: Tasks, m: Mutex[u64]) {
+  let n: u64 = mutex.with(
+    tasks,
+    m,
+    fn(mut v: unique u64) -> u64 uses {} {
+      0
+    }
+  )
+}
+
+fn probe_arena_with_named() {
+  let n: u64 = arena.with(arena_value)
+}
+
+fn probe_arena_with_literal() {
+  let n: u64 = arena.with(
+    fn(a: Arena) -> u64 {
+      0
+    }
+  )
+}
+
+fn probe_arena_bounded_named() {
+  let n: Result[u64, OutOfSpace] = arena.bounded(1024u64, arena_value)
+}
+
+fn probe_arena_bounded_literal() {
+  let n: Result[u64, OutOfSpace] = arena.bounded(
+    1024u64,
+    fn(a: Arena) -> u64 {
+      0
+    }
+  )
+}
+
+fn probe_region_with_named(mut r: Region[u64]) {
+  let n: u64 = region.with(mut r, region_value)
+}
+
+fn probe_region_with_literal(mut r: Region[u64]) {
+  let n: u64 = region.with(
+    mut r,
+    fn(n: u64) -> u64 {
+      n
+    }
+  )
+}

@@ -1,0 +1,19 @@
+// rule: MODE-4
+// expect: accept
+fn filter[T](take xs: List[T], predicate: fn(T) -> bool) -> List[T] uses {xs, predicate} {
+  let mut out: List[T] = []
+  for item in take xs {
+    if predicate(item) {
+      list.push(mut out, take item)
+    }
+  }
+  take out
+}
+
+fn fold[T, A](xs: List[T], take initial: A, f: fn(take A, T) -> A) -> A uses {xs, initial, f} {
+  let mut accumulator = take initial
+  for item in xs {
+    accumulator = f(take accumulator, item)
+  }
+  take accumulator
+}

@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+from analysis import analyse
+from suite import ROOT, load_manifest, HIRSEL, TARGETS, participants
+
+
+def regions_template(m,report):
+    lines=['# Regions versus counting (informational)', '',
+           'No gate or MEM-10 removal follows from this report. Missing cells are pending evidence; valid local timings remain informational.', '',
+           '| Program/input | Target | Hirsel configuration | Reference variant | Ratio | Upper 95% | H peak RSS KiB | Reference peak RSS KiB | H allocations | Reference allocations |',
+           '|---|---|---|---|---:|---:|---:|---:|---:|---:|']
+    for c in m['cases']:
+        if c['program'] not in ('binarytrees','batch-validation','expr-compiler','json-roundtrip'):continue
+        for target in TARGETS:
+            row=next((r for r in report['cases'] if r['case']==c['id'] and r['target']==target),{})
+            for config in HIRSEL:
+                for p in participants(m,c):
+                    ratio=row.get('ratios',{}).get(config,{}).get('by_variant',{}).get(p,{})
+                    values=[c['id'],target,config,p,ratio.get('ratio','pending'),ratio.get('upper95','pending'),
+                            row.get('costs',{}).get(config,{}).get('peak_rss_kib','pending'),row.get('costs',{}).get(p,{}).get('peak_rss_kib','pending'),
+                            row.get('counters',{}).get(config,{}).get('allocation_requests','pending'),row.get('counters',{}).get(p,{}).get('allocation_requests','pending')]
+                    lines.append('| '+' | '.join(map(str,values))+' |')
+    lines+=['','There is no dedicated free-list reference in the primary baseline set. The regions-off-size-class Hirsel configuration supplies the counting/free-list comparison; C/Rust mimalloc columns remain allocator-specific references. An additional free-list reference would be supplemental and must be registered before evaluation.','']
+    return '\n'.join(lines)
+
+
+def main():
+    p=argparse.ArgumentParser(description='Deterministic fail-closed native performance analysis')
+    p.add_argument('samples',type=Path,nargs='*')
+    p.add_argument('--embedded-manifest',action='store_true',help='analyse archived samples against their embedded frozen contract')
+    p.add_argument('--output',type=Path,default=ROOT/'out/local-analysis.json')
+    p.add_argument('--regions',type=Path,default=ROOT/'out/local-regions.md')
+    args=p.parse_args();datasets=[json.loads(f.read_text()) for f in args.samples]
+    if args.embedded_manifest and not datasets:p.error('--embedded-manifest requires samples')
+    m=load_manifest(datasets[0]['manifest'],check_files=False) if args.embedded_manifest else load_manifest()
+    report=analyse(m,datasets)
+    args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(report,indent=2,sort_keys=True,allow_nan=False)+'\n')
+    args.regions.write_text(regions_template(m,report))
+    print(f"{report['status']}: {len(report['open'])} open obligations, {len(report['failed_cases'])} cases above 1.25, {len(report['inconclusive'])} noisy cases")
+    return 0 if report['status']=='pass' else 2
+
+if __name__=='__main__':raise SystemExit(main())

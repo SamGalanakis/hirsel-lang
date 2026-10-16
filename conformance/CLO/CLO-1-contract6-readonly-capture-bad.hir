@@ -1,0 +1,8 @@
+// rule: CLO-1
+// expect: reject CLO-1 at line 6
+@preserves_captures(it)
+fn step[T](mut it: Iter[T]) {
+  let captured = fn() {
+    let _ = iter.next(mut it)
+  }
+}

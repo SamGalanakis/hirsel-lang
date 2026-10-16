@@ -1,0 +1,13 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 9
+// A shared copy changes the state's ownership evidence.
+@captures(state)
+fn build[S: copyable](take state: S) -> Iter[u64] {
+  iter.from(
+    take state,
+    fn(mut held: S) -> Option[u64] {
+      let shared = copy held
+      None
+    }
+  )
+}

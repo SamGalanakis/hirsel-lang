@@ -1,0 +1,12 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 11
+@noalloc
+fn next(mut state: u32) -> Option[u32] {
+  None
+}
+
+@noalloc
+fn make() -> Iter[u32] {
+  let state: u32 = 0
+  iter.from(take state, next)
+}

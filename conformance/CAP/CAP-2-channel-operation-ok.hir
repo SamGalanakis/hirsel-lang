@@ -1,0 +1,9 @@
+// rule: CAP-2
+// expect: accept
+// "Resources and handles ... give callers no authority"; operations take a capability.
+fn operation(tasks: Tasks, mut s: Sender[u32], take value: u32) -> Result[
+  (),
+  (u32, ChannelError)
+] {
+  channel.send(tasks, mut s, take value)
+}

@@ -1,0 +1,12 @@
+// rule: GEN-1
+// expect: accept
+// Both keyed reads are declared noalloc and need only `key` (#90).
+@noalloc
+fn lookup[K: key](m: Map[K, u64], k: K) -> Option[u64] {
+  map.get(m, k)
+}
+
+@noalloc
+fn member[T: key](s: Set[T], value: T) -> bool {
+  set.contains(s, value)
+}

@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: accept
+type R[T] {
+  part: unique T,
+}
+
+fn probe[T: copyable](take r: R[T]) {
+  let built = box {
+    r
+  }.part
+}

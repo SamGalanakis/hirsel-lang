@@ -1,0 +1,25 @@
+// rule: MODE-1
+// expect: run
+// stdout: kept
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn probe(mut x: Bytes, c: bool) -> Bytes in x {
+  let mut slot = view(x)
+  let mut more = c
+  while more {
+    slot = view(x)
+    more = false
+  }
+  slot
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut data: Bytes = b"old"
+  let got = probe(mut data, true)
+  if got == b"old" {
+    let _ = out.print(io.stdout(rt)?, "kept\n")
+  }
+  Ok(())
+}

@@ -1,0 +1,56 @@
+// Box reads follow issue #98; implementation is owned by box-read.
+// Same individually allocated indexed AST and checked evaluator as phase 1.
+type Node { tag: u8, value: u64, left: u64, right: u64 }
+fn owned(data: Bytes) -> Bytes {
+  let mut result_bytes: List[u8] = []
+  list.reserve(mut result_bytes, bytes.len(data))
+  for i in 0u64..bytes.len(data) { list.push(mut result_bytes, data[i]) }
+  bytes.from_list(take result_bytes)
+}
+fn insert(mut nodes: List[Option[box Node]], tag: u8, value: u64, left: u64, right: u64) -> u64 {
+  let index = list.len(nodes)
+  list.push(mut nodes, Some(box Node(tag: tag, value: value, left: left, right: right)))
+  index
+}
+fn parse(tokens: Bytes, mut position: u64, mut nodes: List[Option[box Node]]) -> u64 {
+  let c = tokens[position]
+  position += 1u64
+  if c == 40u8 {
+    let left = parse(tokens, mut position, mut nodes)
+    let op = tokens[position]
+    position += 1u64
+    failure.check(op == 43u8 || op == 42u8, TextInvariant())
+    let right = parse(tokens, mut position, mut nodes)
+    failure.check(tokens[position] == 41u8, TextInvariant())
+    position += 1u64
+    insert(mut nodes, if op == 43u8 { 2u8 } else { 3u8 }, 0u64, left, right)
+  } else {
+    failure.check(c == 120u8 || (c >= 48u8 && c <= 57u8), TextInvariant())
+    let value: u64 = if c == 120u8 { 3u64 } else { int.widen(c - 48u8) }
+    insert(mut nodes, if c == 120u8 { 1u8 } else { 0u8 }, value, 0u64, 0u64)
+  }
+}
+fn evaluate(nodes: List[Option[box Node]], index: u64) -> u64 {
+  match nodes[index] {
+    Some(node) => if node.tag < 2u8 { node.value } else {
+      let left = evaluate(nodes, node.left)
+      let right = evaluate(nodes, node.right)
+      if node.tag == 2u8 { left + right } else { left * right }
+    },
+    None() => 0u64,
+  }
+}
+fn workload(data: Bytes) -> Bytes {
+  let tokens = owned(data)
+  let mut nodes: List[Option[box Node]] = [None()]
+  list.reserve(mut nodes, bytes.len(data))
+  let mut position: u64 = 0
+  let mut total: u64 = 0
+  while position < bytes.len(tokens) {
+    let index = parse(tokens, mut position, mut nodes)
+    total += evaluate(nodes, index)
+    failure.check(tokens[position] == 10u8, TextInvariant())
+    position += 1u64
+  }
+  number(total)
+}

@@ -1,0 +1,19 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 17
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes) -> Bytes in x {
+  let slot = view(
+    fn() {
+      x
+    }()
+  )
+  bump(mut x)
+  slot
+}

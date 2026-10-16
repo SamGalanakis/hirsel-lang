@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: accept
+// spec: #61
+// "A value in a cannot outlive a." A borrowed arena outlives the call, and a
+// taken arena may be used for values that end inside it.
+fn push[T](a: Arena, mut xs: unique List[T] in a, take x: T in a) -> () {}
+
+fn scratch(take a: Arena) -> u64 {
+  let text: String in a = "scratch"
+  string.byte_len(text)
+}

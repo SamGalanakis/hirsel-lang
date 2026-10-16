@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: accept
+// The twin, a payload of fixed scalars is flat, so the local annotation holds.
+type Named = Word(text: u64) | Pair(a: u64, b: u64)
+
+fn count() -> u64 {
+  let xs: List[Packed[Named]] = [Word(text: 1)]
+  list.len(xs)
+}

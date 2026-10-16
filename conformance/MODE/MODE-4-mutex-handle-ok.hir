@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+// "... mutex ... handles."
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(tasks: Tasks) -> () {
+  let initial: u64 = 0
+  let m = mutex.create(tasks, initial)
+  cross(initial)
+}

@@ -1,0 +1,8 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 6
+fn example() {
+  let text: String = ""
+  std@1/duration.parse(take text)
+  string.byte_len(text)
+  ()
+}

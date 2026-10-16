@@ -1,0 +1,24 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 7
+// "No overloading, type classes, implicit conversions".
+// A callback's parameter passing modes are part of its type, also while the
+// call is still inferring its result type.
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  task.scope(
+    io.tasks(rt) ? Grant,
+    fn(mut s: Scope) {
+      let h = task.async(
+        s,
+        fn() -> u32 {
+          7
+        }
+      )
+      task.detach(s, take h)
+    }
+  )
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

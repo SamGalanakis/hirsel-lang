@@ -1,0 +1,7 @@
+// rule: LANG-14
+// expect: accept
+// Shows "else" is in the keyword list and cannot be a parameter name.
+@noalloc
+fn example(value: u32) -> u32 {
+  0
+}

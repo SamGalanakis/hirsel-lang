@@ -1,0 +1,36 @@
+// rule: DROP-2
+// expect: fail SEM-1 at line 34
+// stdout: first
+// stdout: last
+// stdout: kept
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+resource type Parent {
+  first: Trace,
+  kept: Trace,
+  last: Trace,
+}
+drop(x) {
+  let _ = out.print(x.first.stdout, "parent must not finalize\n")
+}
+
+fn make(stdout: Stdout) -> Parent {
+  Parent(
+    first: Trace(stdout: stdout, text: "first\n"),
+    kept: Trace(stdout: stdout, text: "kept\n"),
+    last: Trace(stdout: stdout, text: "last\n")
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let Parent(kept: kept, ..) = make(stdout)
+  let _ = 255u8 + 1u8
+  Ok(())
+}

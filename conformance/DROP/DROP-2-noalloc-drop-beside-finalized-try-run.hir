@@ -1,0 +1,40 @@
+// rule: DROP-2
+// expect: run
+// stdout: drop F
+// stdout: failed
+resource type R: noalloc_drop {
+  data: u8,
+}
+@noalloc drop(self) {}
+
+resource type F {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "drop F\n")
+}
+
+fn open(stdout: Stdout, ok: bool) -> Result[F, GrantError] {
+  if ok {
+    Ok(F(stdout: stdout))
+  } else {
+    Error(NotGranted())
+  }
+}
+
+fn make(stdout: Stdout, ok: bool) -> Result[R, GrantError] {
+  let f = open(stdout, ok)?
+  Ok(R(data: 0))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let r = make(stdout, true)?
+  match make(stdout, false) {
+    Error(_) => {
+      let _ = out.print(stdout, "failed\n")
+    },
+    Ok(_) => {},
+  }
+  Ok(())
+}

@@ -1,0 +1,14 @@
+// rule: PROV-1
+// expect: accept
+fn make(r: List[u64]) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: List[u64], p: Option[u8 of r]) {}
+
+fn probe(take x: List[u64]) {
+  let mut y = copy x
+  let p = make(x)
+  y[0] = 3u64
+  inspect(x, p)
+}

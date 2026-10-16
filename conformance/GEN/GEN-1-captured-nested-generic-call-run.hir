@@ -1,0 +1,54 @@
+// rule: GEN-1
+// expect: run
+// stdout: ok
+fn outer(xs: Inline[u8, 3]) -> u64 {
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n
+  }
+  fn() {
+    length(xs)
+  }()
+}
+
+fn transitive(xs: Inline[u8, 3]) -> u64 {
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n
+  }
+  fn() {
+    fn() {
+      length(xs)
+    }()
+  }()
+}
+
+fn with_scopes[n: size](xs: Inline[u8, n]) -> u64 {
+  fn length[m: size](ys: Inline[u8, m]) -> u64 {
+    n + m
+  }
+  fn wrapper[k: size](unused: Inline[u8, k]) -> u64 {
+    let two: Inline[u8, 2] = [1u8, 2u8]
+    length(two) + k
+  }
+  let four: Inline[u8, 4] = [1u8, 2u8, 3u8, 4u8]
+  wrapper(four)
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(xs) == 3 && transitive(xs) == 3 && with_scopes(xs) == 9 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

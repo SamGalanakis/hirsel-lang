@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: accept
+// Naming the non-Plain parameter beside the environment covers it (#72).
+fn apply(f: fn(x: Bytes) -> Bytes in {env, x}) -> () {
+  ()
+}

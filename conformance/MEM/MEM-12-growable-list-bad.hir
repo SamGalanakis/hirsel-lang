@@ -1,0 +1,5 @@
+// rule: MEM-12
+// expect: reject MEM-12 at line 4
+flat type Value {
+  items: u8 @ growable,
+}

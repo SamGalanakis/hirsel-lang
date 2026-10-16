@@ -1,0 +1,8 @@
+// rule: SEM-1
+// expect: fail SEM-1 at line 6
+// "fail on overflow".
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let x: u8 = 1
+  let value = -x
+  Ok(())
+}

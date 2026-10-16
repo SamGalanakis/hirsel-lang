@@ -1,0 +1,16 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// v22 #77. A join of p.a and p.b reads within p only, which a relation to
+// p.a does not admit.
+type Pair {
+  a: Bytes,
+  b: Bytes,
+}
+
+fn get(p: Pair, flag: bool) -> Bytes in p.a {
+  if flag {
+    p.a
+  } else {
+    p.b
+  }
+}

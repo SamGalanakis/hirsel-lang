@@ -1,0 +1,24 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// "unique x deep-copies when x is not provably unique."
+type Rec {
+  items: Array[u64],
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let source = Rec(items: [1, 2])
+  let alias = copy source
+  let mut owned = unique source
+  owned.items[0] = 9
+  if (source.items[0], alias.items[0], owned.items[0]) == (1, 1, 9) {
+    out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  } else {
+    out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: accept
+fn inspect(x: box List[Bytes]) {}
+
+fn probe() {
+  let xs: List[Bytes] = [b"x"]
+  let built = box unique xs
+  let received: box List[Bytes] = take built
+  inspect(received)
+}

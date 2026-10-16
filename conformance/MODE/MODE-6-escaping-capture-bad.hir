@@ -1,0 +1,8 @@
+// rule: MODE-6
+// expect: reject MODE-6 at line 5
+// "A scoped capability ... cannot be ... captured by an escaping closure."
+fn example(take cap: Test) -> once fn() -> () uses {Test} {
+  fn() {
+    let _ = take cap
+  }
+}

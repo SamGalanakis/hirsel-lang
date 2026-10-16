@@ -1,0 +1,7 @@
+pub opaque type Hidden: data uses {} {
+  value: String,
+}
+
+pub fn make(take text: String) -> Hidden uses {} {
+  Hidden(value: take text)
+}

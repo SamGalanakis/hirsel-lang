@@ -1,0 +1,9 @@
+// rule: PROV-2
+// expect: accept
+// "A closure’s result may not be in ... the closure’s own parameters."
+fn example() -> () {
+  let action = fn(a: Arena) -> () {
+    let x: Bytes in a = b"x"
+  }
+  let _ = action
+}

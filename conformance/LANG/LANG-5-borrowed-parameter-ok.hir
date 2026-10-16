@@ -1,0 +1,7 @@
+// rule: LANG-5
+// expect: accept
+// Shows "A value changes only through a visible name"
+@noalloc
+fn example(mut n: u32) -> () {
+  n = 1
+}

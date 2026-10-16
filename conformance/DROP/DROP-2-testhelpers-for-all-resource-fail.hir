@@ -1,0 +1,23 @@
+// rule: DROP-2
+// expect: fail LANG-9 at line 75
+// stdout: test failure: seed=0 case=0
+// entry: trial
+resource type Watch {
+  n: u8,
+}
+@noalloc drop(w) {
+  core@1/failure.check(w.n == 7, Arithmetic())
+}
+
+fn generate(t: Test) -> Watch {
+  Watch(n: 7)
+}
+
+fn law(value: Watch) -> bool uses {} {
+  false
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  std@1/test.for_all(t, generate, law)
+  Ok(())
+}

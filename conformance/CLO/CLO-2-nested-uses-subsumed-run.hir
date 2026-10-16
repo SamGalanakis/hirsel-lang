@@ -1,0 +1,74 @@
+// rule: CLO-2
+// expect: run
+// stdout: ok
+// "A value with less held authority satisfies a broader callable promise"
+// at every depth where the value is only read (#58). A function held as a
+// tuple part or returned by another function may promise `uses {}` where the
+// receiving type leaves `uses` open. A function may accept a callback with
+// open `uses` where the receiving type only ever hands it a `uses {}` one
+// ("written unrestricted parameters do not meet restricted uses" is the
+// other direction).
+fn sandbox(g: fn() -> () uses {}) -> u64 {
+  g()
+  1
+}
+
+fn wide(g: fn() -> ()) -> u64 {
+  g()
+  2
+}
+
+fn run(h: fn(g: fn() -> () uses {}) -> u64) -> u64 {
+  h(
+    fn() {
+      ()
+    }
+  )
+}
+
+fn first(p: (fn() -> (), u64)) -> u64 {
+  let (f, n) = p
+  f()
+  n
+}
+
+fn made(take p: (fn() -> () uses {}, u64)) -> (fn() -> (), u64) {
+  p
+}
+
+fn probe() -> u64 {
+  let held: (fn() -> fn() -> () uses {}, u64) = (
+    fn() {
+      fn() {
+        ()
+      }
+    },
+    0u64
+  )
+  let narrow: (fn() -> () uses {}, u64) = (
+    fn() {
+      ()
+    },
+    4u64
+  )
+  let other: (fn() -> () uses {}, u64) = (
+    fn() {
+      ()
+    },
+    4u64
+  )
+  let (outer, zero) = held
+  zero + sandbox(outer()) + run(wide) + first(narrow) + first(made(take other))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe() == 11 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

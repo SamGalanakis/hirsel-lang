@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: run
+@noalloc
+fn check(n: bool) -> ()
+  requires n {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let bytes: Bytes = b"\xff"
+  check(string.from_bytes(take bytes) == Error(b"\xff"))
+  Ok(())
+}

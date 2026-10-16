@@ -1,0 +1,20 @@
+// rule: OWN-1
+// expect: run
+// stdout: once
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "once\n")
+}
+
+fn pick(x: Trace) -> () {
+  let v = x
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a = Trace(stdout: io.stdout(rt)?)
+  pick(a)
+  Ok(())
+}

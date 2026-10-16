@@ -1,0 +1,8 @@
+// rule: CAP-5
+// expect: reject LANG-13 at line 6
+type Alias = owner.Writer
+
+fn probe(take w: owner.Writer) -> Stdout {
+  let Alias(out: grant) = take w
+  grant
+}

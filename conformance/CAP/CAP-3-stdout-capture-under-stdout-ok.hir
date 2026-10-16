@@ -1,0 +1,8 @@
+// rule: CAP-3
+// expect: accept
+fn probe(s: Stdout) {
+  let f = fn() uses {Stdout} {
+    out.print(s, "ok\n")
+  }
+  let _ = f()
+}

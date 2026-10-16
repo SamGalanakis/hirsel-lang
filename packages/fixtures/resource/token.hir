@@ -1,0 +1,4 @@
+pub resource type Token {
+  value: u64,
+}
+@noalloc drop(token) {}

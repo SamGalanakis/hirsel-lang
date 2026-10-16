@@ -1,0 +1,51 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/SamGalanakis/hirsel-lang"
+rust-version = "1.99"
+
+[profile.dev]
+debug = "line-tables-only"
+# Line tables stay in .dwo files beside the objects instead of being copied into every test
+# binary: links write about a third less and backtraces still resolve.
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 1
+
+# Crates whose dev opt-level 1 saves more test seconds per run than it adds
+# compile seconds per edit, each measured: the shared data crates, the IR checker, and the native
+# pipeline's contract, LIR and RC crates. Debug assertions and overflow checks
+# stay on. There is no workspace-wide opt-level 1.
+[profile.dev.package.hirsel-span]
+opt-level = 1
+[profile.dev.package.hirsel-intern]
+opt-level = 1
+[profile.dev.package.hirsel-diag]
+opt-level = 1
+[profile.dev.package.hirsel-syntax]
+opt-level = 1
+[profile.dev.package.hirsel-types]
+opt-level = 1
+[profile.dev.package.hirsel-tir]
+opt-level = 1
+[profile.dev.package.hirsel-validate]
+opt-level = 1
+[profile.dev.package.hirsel-core-contract]
+opt-level = 1
+[profile.dev.package.hirsel-lir]
+opt-level = 1
+[profile.dev.package.hirsel-rc]
+opt-level = 1
+
+# The per-push gate's agreement sample and native smoke (tools/check.sh): release code with
+# incremental reuse, so an edit recompiles what changed rather than every crate below it
+# from scratch. `--release` stays as it was for benchmarks, the runtime archive and the
+# full gate.
+[profile.gate]
+inherits = "release"
+incremental = true

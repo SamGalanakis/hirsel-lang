@@ -1,0 +1,31 @@
+// rule: SEM-4
+// expect: accept
+@loop_source(open_a, next_a)
+type A {
+  source: String,
+}
+
+@loop_source(open_b, next_b)
+type B {
+  source: String,
+}
+
+@noalloc
+fn open_a(v: A) -> B in v {
+  B(source: copy v.source)
+}
+
+@noalloc
+fn open_b(v: B) -> A in v {
+  A(source: copy v.source)
+}
+
+@noalloc
+fn next_a(mut c: B) -> Option[String] in c {
+  None
+}
+
+@noalloc
+fn next_b(mut c: A) -> Option[String] in c {
+  None
+}

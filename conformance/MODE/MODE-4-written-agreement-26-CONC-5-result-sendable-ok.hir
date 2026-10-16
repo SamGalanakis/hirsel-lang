@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: accept
+// Regression from expression/closure-call; TIR/TypeMismatch/generic bound.
+const DATA: Bytes = b"payload"
+
+fn example(tasks: Tasks, m: Mutex[u32]) -> () {
+  let _ = mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u32) uses {} {
+      fn() {
+        unique DATA
+      }()
+    }
+  )
+}

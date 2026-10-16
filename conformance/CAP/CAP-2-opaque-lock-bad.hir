@@ -1,0 +1,16 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 3
+pub opaque type Key: plain + sendable + inert uses {} {
+  t: Tasks,
+  m: Mutex[u32],
+}
+
+fn locked(tasks: Tasks, outer: Mutex[u32], k: Key) -> () {
+  mutex.with(
+    tasks,
+    outer,
+    fn(mut value: unique u32) {
+      mutex.with(k.t, k.m, fn(mut inner: unique u32) {})
+    }
+  )
+}

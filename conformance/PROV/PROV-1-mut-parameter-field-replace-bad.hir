@@ -1,0 +1,13 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 11
+resource type Cursor {
+  text: String,
+  pos: StrPos of .text,
+}
+
+fn sent(mut c: Cursor) {}
+
+fn reposition(mut c: Cursor, other: String, pos: StrPos of other) {
+  c.pos = pos
+  sent(mut c)
+}

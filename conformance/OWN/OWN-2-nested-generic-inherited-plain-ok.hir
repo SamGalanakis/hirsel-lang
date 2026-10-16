@@ -1,0 +1,9 @@
+// rule: OWN-2
+// expect: accept
+fn outer[T: plain](x: T) -> () {
+  fn inner(take y: T) -> () {
+    let a = y
+    let b = y
+  }
+  ()
+}

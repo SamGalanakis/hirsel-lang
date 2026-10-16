@@ -1,0 +1,10 @@
+// rule: MODE-7
+// expect: accept
+// "... everything aliased."
+fn wants(mut x: unique Bytes) -> () {
+  ()
+}
+
+fn example(mut x: unique Bytes) -> () {
+  wants(mut x)
+}

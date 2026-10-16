@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "view_return",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "view.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

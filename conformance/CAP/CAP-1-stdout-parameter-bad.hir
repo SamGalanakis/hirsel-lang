@@ -1,0 +1,6 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 5
+// "stdout" arrives "only as typed parameters".
+pub fn emit() -> Result[(), OutputError] {
+  out.print("hello\n")
+}

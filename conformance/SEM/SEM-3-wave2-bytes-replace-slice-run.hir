@@ -1,0 +1,10 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let source = bytes.slice(b"PREFIXaaaaaTAIL", 6, 11)
+  let old = bytes.slice(b"!aaTAIL", 1, 3)
+  let new = bytes.slice(b"!xTAIL", 1, 2)
+  failure.check(std@1/bytes.replace(source, old, new) == b"xxa", TextInvariant())
+  failure.check(source == b"aaaaa" && old == b"aa" && new == b"x", TextInvariant())
+  Ok(())
+}

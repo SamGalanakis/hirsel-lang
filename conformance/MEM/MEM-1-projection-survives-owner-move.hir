@@ -1,0 +1,31 @@
+// rule: MEM-1
+// expect: run
+// stdout: ok
+// "A projection ... is counted before ... storage ... is ... moved".
+fn output_error[E](take e: E) -> () {}
+
+type Text {
+  text: String,
+}
+
+fn consume(take x: Text) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a = Text(text: "old")
+  let b = copy a.text
+  consume(take a)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if b == "old" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,5 @@
+// rule: MEM-12
+// expect: accept
+flat type R {
+  value: Inline[u32, 1],
+}

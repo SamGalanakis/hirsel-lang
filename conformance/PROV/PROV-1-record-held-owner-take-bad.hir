@@ -1,0 +1,24 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 18
+// "A brand ends when p is ... moved." Moving `text` into the record carries
+// its identity there, so `pos` stays usable while the record holds it. The
+// written take of the record ends that identity with the record's own, and
+// destructuring gives `checked_text` a fresh one (PROV-5).
+resource type Cursor {
+  text: String,
+  pos: StrPos of .text,
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let text: String = "ab"
+  match string.position(text, 1u64) {
+    Some(pos) => {
+      let c = Cursor(text: text, pos: pos)
+      let Cursor(text: checked_text, pos: checked_pos) = take c
+      test.check(t, checked_pos == pos)
+      test.check(t, string.byte_offset(checked_text, checked_pos) == 1u64)
+    },
+    None => test.check(t, false),
+  }
+  Ok(())
+}

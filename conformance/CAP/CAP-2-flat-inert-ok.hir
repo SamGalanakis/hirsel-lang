@@ -1,0 +1,17 @@
+// rule: CAP-2
+// expect: accept
+// MEM-12 proves Flat storage cannot hold capabilities, handles or resources.
+// Therefore its generic authority summary is empty under CAP-2.
+flat type Scalar {
+  value: u32,
+}
+
+fn need[T: inert](x: T) {}
+
+fn probe[T: flat](x: T) {
+  need(x)
+}
+
+fn concrete(x: Scalar) {
+  probe(x)
+}

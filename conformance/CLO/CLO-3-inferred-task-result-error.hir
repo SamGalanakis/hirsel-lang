@@ -1,0 +1,16 @@
+// rule: CLO-3
+// expect: accept
+fn one_size(tasks: Tasks, dir: Dir, path: Path) -> Result[u64, FileError] {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() {
+          file.size(dir, path)
+        }
+      )
+      task.await(s, take child)
+    }
+  )
+}

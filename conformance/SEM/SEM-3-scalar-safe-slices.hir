@@ -1,0 +1,30 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+// "Slicing with a StrPos of s never splits a scalar".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let s: String = "é😀"
+  let mut valid: bool = true
+  for pos in string.positions(s) {
+    let empty = string.slice(s, pos, pos)
+    if empty != "" {
+      valid = false
+    }
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

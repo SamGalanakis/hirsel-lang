@@ -1,0 +1,11 @@
+// rule: FACT-2
+// expect: run
+// "It is checked at construction, so no value ... ever violates it".
+distinct type Percent(v: u8) where v <= 100
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let p = Percent(0)
+  let Percent(n) = p
+  let _ = n
+  Ok(())
+}

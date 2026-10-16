@@ -1,0 +1,291 @@
+// Exact binary superaccumulator (Kulisch): 2240 bits, separate signs.
+// Binary64 needs 2098 value bits plus 64 count bits; 70 limbs suffice for
+// every u64-sized Array. Cancellation precedes one ties-even rounding.
+// See Kulisch, Computer Arithmetic and Validity, de Gruyter 2008.
+pub type Accumulator {
+  plus: Inline[u64, 70],
+  minus: Inline[u64, 70],
+}
+
+@noalloc
+pub fn acc_zero() -> Accumulator uses {} {
+  Accumulator(
+    plus: [
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64
+    ],
+    minus: [
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64,
+      0u64
+    ]
+  )
+}
+
+@noalloc
+fn acc_add_word(mut words: Inline[u64, 70], mantissa: u64, shift: u64) -> () uses {} {
+  let mut i = shift / 32
+  let wide: u128 = core@1/int.widen(mantissa)
+  let bit_shift: u128 = core@1/int.widen(shift % 32)
+  let mut carry = wide << bit_shift
+  while carry > 0 {
+    let low: u64 = core@1/int.narrow(carry & 4294967295u128)
+    let combined = words[i] + low
+    words[i] = combined & 4294967295u64
+    carry = (carry >> 32) + core@1/int.widen(combined >> 32)
+    i += 1
+  }
+}
+
+@noalloc
+pub fn acc_add(mut accumulator: Accumulator, mantissa: u64, shift: u64, negative: bool) -> () uses {} {
+  if negative {
+    acc_add_word(mut accumulator.minus, mantissa, shift)
+  } else {
+    acc_add_word(mut accumulator.plus, mantissa, shift)
+  }
+}
+
+@noalloc
+pub fn acc_finish(
+  accumulator: Accumulator,
+  fraction: u64,
+  exponent_limit: u64,
+  sign_bit: u64,
+  all_negative_zero: bool
+) -> u64 uses {} {
+  let mut order: i32 = 0
+  let mut i: u64 = 70
+  while i > 0 {
+    i -= 1
+    if accumulator.plus[i] != accumulator.minus[i] {
+      order = if accumulator.plus[i] < accumulator.minus[i] {
+        -1
+      } else {
+        1
+      }
+      break
+    }
+  }
+  if order == 0 {
+    return if all_negative_zero {
+      sign_bit
+    } else {
+      0
+    }
+  }
+  let mut words = if order < 0 {
+    accumulator.minus
+  } else {
+    accumulator.plus
+  }
+  let smaller = if order < 0 {
+    accumulator.plus
+  } else {
+    accumulator.minus
+  }
+  let mut borrow: u64 = 0
+  i = 0
+  while i < 70 {
+    let subtrahend = smaller[i] + borrow
+    if words[i] < subtrahend {
+      words[i] = words[i] + 4294967296 - subtrahend
+      borrow = 1
+    } else {
+      words[i] -= subtrahend
+      borrow = 0
+    }
+    i += 1
+  }
+  let sign: u64 = if order < 0 {
+    sign_bit
+  } else {
+    0
+  }
+  i = 70
+  while words[i - 1] == 0 {
+    i -= 1
+  }
+  let mut top: u64 = copy words[i - 1]
+  let mut highest = (i - 1) * 32
+  while top > 1 {
+    top >>= 1
+    highest += 1
+  }
+  if highest >= fraction + exponent_limit - 1 {
+    return sign | exponent_limit << fraction
+  }
+  let mut shift: u64 = if highest > fraction {
+    highest - fraction
+  } else {
+    0
+  }
+  let mut mantissa: u64 = 0
+  i = highest + 1
+  while i > shift {
+    i -= 1
+    mantissa = mantissa << 1 | words[i / 32] >> i % 32 & 1u64
+  }
+  if highest < fraction {
+    return sign | mantissa
+  }
+  if shift > 0 {
+    let guard_limb = (shift - 1) / 32
+    let guard_offset = (shift - 1) % 32
+    let guard = words[guard_limb] >> guard_offset & 1u64
+    let mut sticky: bool = false
+    i = 0
+    while i < guard_limb {
+      sticky = sticky || words[i] != 0
+      i += 1
+    }
+    sticky = sticky || words[guard_limb] & (1u64 << guard_offset) - 1 != 0
+    if guard != 0 && (sticky || mantissa % 2 != 0) {
+      mantissa += 1
+    }
+  }
+  if mantissa == 1u64 << fraction + 1 {
+    mantissa >>= 1
+    shift += 1
+  }
+  let encoded = shift + 1
+  if encoded >= exponent_limit {
+    return sign | exponent_limit << fraction
+  }
+  sign | encoded << fraction | mantissa - (1u64 << fraction)
+}

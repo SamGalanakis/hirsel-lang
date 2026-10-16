@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: reject MODE-4 at line 11
+type Rec {
+  items: unique List[Bytes],
+}
+
+fn cross[T: sendable](take x: T) {}
+
+fn probe(take r: Rec) {
+  let Rec(items: items) = take r
+  cross(take items)
+}

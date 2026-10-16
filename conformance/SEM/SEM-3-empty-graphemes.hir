@@ -1,0 +1,27 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+// "built-in views over a borrowed string ... are loop sources like sequences".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let s: String = ""
+  let mut n: u64 = 0
+  for x in std@1/unicode.graphemes(s) {
+    n += 1
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if n == 0 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

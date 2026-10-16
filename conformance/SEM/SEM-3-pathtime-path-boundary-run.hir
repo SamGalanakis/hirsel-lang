@@ -1,0 +1,55 @@
+// rule: SEM-3
+// expect: run
+fn check_relative(text: String) -> () uses {} {
+  match std@1/path.normalize(path.of(text)) {
+    Ok(q) => failure.check(path.text(q) == ".", TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+fn check_root(text: String) -> () uses {} {
+  match std@1/path.parent(path.of(text)) {
+    None() => (),
+    Some(_) => failure.check(false, TextInvariant()),
+  }
+  failure.check(std@1/path.filename(path.of(text)) == "", TextInvariant())
+  failure.check(std@1/path.extension(path.of(text)) == "", TextInvariant())
+  failure.check(list.len(std@1/path.components(path.of(text))) == 0, TextInvariant())
+}
+
+fn check_name(text: String) -> () uses {} {
+  failure.check(std@1/path.extension(path.of(text)) == "", TextInvariant())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  check_relative("")
+  check_relative(".")
+  check_relative("a/..")
+  check_relative("././")
+  match std@1/path.normalize(path.of("///./")) {
+    Ok(q) => failure.check(path.text(q) == "/", TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match std@1/path.join(path.of(""), path.of("")) {
+    Ok(q) => failure.check(path.text(q) == ".", TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  check_root("")
+  check_root("/")
+  check_root("///")
+  match std@1/path.parent(path.of("a/")) {
+    Some(q) => failure.check(path.text(q) == ".", TextInvariant()),
+    None() => failure.check(false, TextInvariant()),
+  }
+  match std@1/path.parent(path.of("/a/")) {
+    Some(q) => failure.check(path.text(q) == "/", TextInvariant()),
+    None() => failure.check(false, TextInvariant()),
+  }
+  failure.check(std@1/path.components(path.of("./../")) == [".", ".."], TextInvariant())
+  check_name(".hidden")
+  check_name("a.")
+  check_name("plain")
+  failure.check(std@1/path.extension(path.of(".hidden.é")) == "é", TextInvariant())
+  failure.check(std@1/path.extension(path.of("a.b.c")) == "c", TextInvariant())
+  Ok(())
+}

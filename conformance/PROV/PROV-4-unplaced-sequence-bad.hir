@@ -1,0 +1,6 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 5
+// An element of a sequence without a placement cannot live in an arena.
+fn list(a: Arena, take src: Bytes in a) -> () {
+  let items: List[Bytes] = [take src]
+}

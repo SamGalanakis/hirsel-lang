@@ -1,0 +1,34 @@
+// rule: MEM-5
+// expect: run
+// stdout: ok
+// The twin of MEM-5-mut-handback-cleanup-summary-bad. The binding's written
+// type states the parameter's cleanup summary, so the hand-back is exact.
+@noalloc
+fn two() -> u64 {
+  2
+}
+
+fn set(mut p: @noalloc fn() -> u64 uses {}, take q: @noalloc fn() -> u64 uses {}) -> () {
+  p = q
+}
+
+fn probe(take q: @noalloc fn() -> u64 uses {}) -> u64 {
+  let n: u64 = 1
+  let mut f: @noalloc fn() -> u64 uses {} = fn() {
+    n
+  }
+  set(mut f, take q)
+  f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take two) == 2 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

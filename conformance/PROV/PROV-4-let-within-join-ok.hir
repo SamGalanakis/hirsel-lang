@@ -1,0 +1,18 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. A join of an arena value and a global value holds only the
+// arena's loans, so it is within the binding that holds them.
+fn len(b: Bytes) -> u64 {
+  0
+}
+
+fn keep(c: bool, a: Arena) -> u64 {
+  let text: Bytes in a = b"x"
+  let other: Bytes = b"yy"
+  let chosen: Bytes in text = if c {
+    text
+  } else {
+    other
+  }
+  len(chosen)
+}

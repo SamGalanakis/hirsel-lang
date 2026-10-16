@@ -1,0 +1,39 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// v22 #77, a projected argument. The argument place is q.p, so a result
+// related to p.a loans only q.p.a, and the sibling q.p.b stays writable while
+// the result lives.
+type Pair {
+  a: String,
+  b: String,
+}
+
+type Outer {
+  p: Pair,
+  n: u64,
+}
+
+fn get(p: Pair) -> String in p.a {
+  p.a
+}
+
+fn caller(x: String, y: String) -> u64 {
+  let mut q = Outer(p: Pair(a: x, b: x), n: 0u64)
+  let r = get(q.p)
+  q.p.b = y
+  string.byte_len(r) + string.byte_len(q.p.b)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = caller("one", "three") == 8
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

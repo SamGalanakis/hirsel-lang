@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 10
+// An escaping closure owns its copy of a, which is global but shared with b.
+fn need(take x: unique String) {}
+
+fn example() {
+  let a: String = "shared"
+  let b = copy a
+  let f: fn() = fn() {
+    need(copy a)
+  }
+  f()
+}

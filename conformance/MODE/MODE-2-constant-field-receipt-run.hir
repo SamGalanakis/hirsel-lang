@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: run
+// stdout: constant
+type R {
+  xs: unique List[Bytes],
+}
+
+const C: R = R(xs: [b"x"])
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let built = copy (C).xs
+  if built[0] == b"x" {
+    let _ = out.print(io.stdout(rt)?, "constant\n")
+  }
+  Ok(())
+}

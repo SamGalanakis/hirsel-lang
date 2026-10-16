@@ -1,0 +1,26 @@
+// rule: MODE-1
+// expect: accept
+// An arena-only argument, computed, named or copied from a named local,
+// contributes its arena bound and a read loan on its place, and the read loan
+// ends at return (v22 §04, P2). So each result is within `in a`.
+fn mk(a: Arena) -> Bytes in a {
+  b"x"
+}
+
+fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {a, x} {
+  x
+}
+
+fn computed(a: Arena, y: Bytes) -> Bytes in a {
+  choose(a, mk(a), y)
+}
+
+fn named(a: Arena, y: Bytes) -> Bytes in a {
+  let t = mk(a)
+  choose(a, t, y)
+}
+
+fn copied(a: Arena, y: Bytes) -> Bytes in a {
+  let m = mk(a)
+  choose(a, copy m, y)
+}

@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+fn need(take xs: unique List[String]) {}
+
+fn example() {
+  let mut xs: List[String] = ["a"]
+  xs[0] = "b"
+  need(take xs)
+}

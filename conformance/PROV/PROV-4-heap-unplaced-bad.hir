@@ -1,0 +1,13 @@
+// rule: PROV-4
+// expect: accept
+// spec: #62
+// Under v22 (R3) `in heap` is the empty relation, so any global value meets it.
+// v21 rejected this, since a value declared without a placement was not known to
+// be on the heap.
+fn make() -> Bytes {
+  b"somewhere"
+}
+
+fn on_heap() -> Bytes in heap {
+  make()
+}

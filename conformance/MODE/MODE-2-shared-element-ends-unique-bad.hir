@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+// Binding an element shares it (a count), which ends the list's uniqueness for
+// the rest of the binding's scope; comparing it in place does not (#76).
+fn bump(mut xs: unique List[String]) -> () {
+  ()
+}
+
+fn example() -> () {
+  let mut xs: unique List[String] = ["a"]
+  let p = xs[0u64]
+  let same = p == "a"
+  bump(mut xs)
+}

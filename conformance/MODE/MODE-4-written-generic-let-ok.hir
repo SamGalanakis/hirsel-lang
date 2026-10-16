@@ -1,0 +1,6 @@
+// rule: MODE-4
+// expect: accept
+fn good[T](take x: sendable T) -> sendable T {
+  let held: sendable T = take x
+  take held
+}

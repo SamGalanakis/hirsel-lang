@@ -1,0 +1,15 @@
+rc-trace v1 max 16
+error at step 4 (line 7): T05 write: @0 is not unique
+heap
+  @0 live gen 1 count fin 2 heap arity 1
+  @1 live gen 1 count fin 1 heap arity 0
+credits
+  r1 -> @0#1
+  r2 -> @1#1
+  r3 -> @0#1
+borrows
+locals
+tokens
+work
+regions
+events

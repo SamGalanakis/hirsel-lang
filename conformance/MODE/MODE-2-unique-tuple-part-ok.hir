@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: accept
+// An expected tuple type supplies the part contracts, so a unique value
+// satisfies an aliased part. A tuple typed by its operands follows their
+// current uniqueness.
+fn pair(take x: unique Bytes) -> (Bytes, u8) {
+  (take x, 1u8)
+}
+
+fn keep(take x: unique Bytes) -> (unique Bytes, u8) {
+  (take x, 1u8)
+}
+
+fn shared(take x: unique Bytes) -> (Bytes, Bytes) {
+  let y = copy x
+  (take x, take y)
+}
+
+fn inferred(take x: unique Bytes) -> () {
+  let y = copy x
+  let t = (take x, take y)
+}

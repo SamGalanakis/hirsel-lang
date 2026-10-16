@@ -1,0 +1,25 @@
+// rule: CLO-4
+// expect: accept
+// Naming the taken iterator in the result relation leaves the adapter's
+// result as global as that argument (MODE-1); the returned environment's
+// crossing evidence is proved by flow as for an unrelated result
+// (agree --full annotation/relation).
+type Taken[T] {
+  inner: Iter[T],
+  left: u64,
+}
+
+@captures(it)
+fn take_n[T](take it: sendable Iter[T], limit: u64) -> Iter[T] in it {
+  iter.from(
+    take Taken(inner: take it, left: limit),
+    fn(mut s: Taken[T]) -> Option[T] {
+      if s.left == 0 {
+        None
+      } else {
+        s.left -= 1
+        iter.next(mut s.inner)
+      }
+    }
+  )
+}

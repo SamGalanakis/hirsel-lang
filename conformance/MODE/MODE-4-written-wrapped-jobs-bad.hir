@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 9
+fn put[T](mut xs: List[T], take x: T) {
+  list.push(mut xs, take x)
+}
+
+fn probe(take job: fn() -> u64) {
+  let mut xs: List[sendable fn() -> u64] = []
+  put(mut xs, take job)
+}

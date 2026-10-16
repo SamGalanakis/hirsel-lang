@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: accept
+type W[T: inert] {
+  x: T,
+}
+
+fn go(take v: u32) -> W[u32] {
+  W(x: v)
+}

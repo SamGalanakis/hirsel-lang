@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+type Payload = sendable Bytes
+
+fn fresh() -> Payload {
+  b"f"
+}
+
+fn relay(take x: Payload) -> Payload {
+  x
+}

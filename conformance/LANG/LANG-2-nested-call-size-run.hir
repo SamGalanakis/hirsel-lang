@@ -1,0 +1,29 @@
+// rule: LANG-2
+// expect: run
+// stdout: ok
+fn outer(xs: Inline[u8, 3]) -> u64 {
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n
+  }
+  length(xs)
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(xs) == 3 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

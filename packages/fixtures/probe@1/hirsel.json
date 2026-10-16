@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "probe",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "probe.hir",
+      "module": [
+        "api"
+      ]
+    },
+    {
+      "path": "opaque.hir",
+      "module": [
+        "api"
+      ]
+    },
+    {
+      "path": "internal.hir",
+      "module": [
+        "api",
+        "internal"
+      ]
+    }
+  ],
+  "dependencies": []
+}

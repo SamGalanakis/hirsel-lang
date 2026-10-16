@@ -1,0 +1,12 @@
+// rule: LANG-12
+// expect: accept
+// Shows "must be labelled at every call; an unlabelled parameter cannot be."
+@noalloc
+fn read(from x: u32) -> u32 {
+  x
+}
+
+@noalloc
+fn example(x: u32) -> u32 {
+  read(from: x)
+}

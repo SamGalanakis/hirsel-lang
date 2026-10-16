@@ -1,0 +1,7 @@
+// rule: MODE-1
+// expect: accept
+// "The result is no longer-lived than m" (the spec’s getter signature).
+@noalloc
+pub fn get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m {
+  None
+}

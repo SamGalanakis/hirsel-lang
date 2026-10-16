@@ -1,0 +1,48 @@
+// rule: MEM-13
+// expect: run
+// stdout: 20
+// stdout: 253
+// stdout: 21
+// stdout: 20
+// "a sequence of Packed values is sequential", so pushes append each value at
+// its own extent, and a shared copy keeps its elements when the original grows.
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn total(xs: List[Packed[Choice]]) -> u64 {
+  let mut sum = 0u64
+  let mut k = 0u64
+  for x in xs {
+    if k % 3u64 == 0u64 {
+      sum = sum + x.Large.value * x.Large.extra
+    } else {
+      sum = sum + x.Small.value
+    }
+    k = k + 1u64
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let mut xs: List[Packed[Choice]] = []
+  let mut i = 0u64
+  while i < 20u64 {
+    if i % 3u64 == 0u64 {
+      list.push(mut xs, Large(value: i, extra: 2u64))
+    } else {
+      list.push(mut xs, Small(value: i))
+    }
+    i = i + 1u64
+  }
+  let _ = out.print(out, std@1/u64.to_string(list.len(xs)))
+  let _ = out.print(out, "\n")
+  let _ = out.print(out, std@1/u64.to_string(total(xs)))
+  let _ = out.print(out, "\n")
+  let ys = copy xs
+  list.push(mut xs, Small(value: 7u64))
+  let _ = out.print(out, std@1/u64.to_string(list.len(xs)))
+  let _ = out.print(out, "\n")
+  let _ = out.print(out, std@1/u64.to_string(list.len(ys)))
+  let _ = out.print(out, "\n")
+  Ok(())
+}

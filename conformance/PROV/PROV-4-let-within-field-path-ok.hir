@@ -1,0 +1,14 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. A let relation naming a binding's field path admits the arenas
+// the field holds. z.p holds y's arena b, so y is within z.p.
+type Two {
+  p: Bytes,
+  q: Bytes,
+}
+
+fn good(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> u64 {
+  let z = Two(p: y, q: x)
+  let v: Bytes in z.p = y
+  0
+}

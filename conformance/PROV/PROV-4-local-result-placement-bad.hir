@@ -1,0 +1,8 @@
+// rule: PROV-4
+// expect: accept
+// v22 R3. One relation is a union of places. Naming x admits a value within
+// x, including its loan on a, while fresh blocks go to b. The v22 pin for an
+// escaping arena is PROV-4-union-arena-outside-result-bad.
+fn read(a: Arena, b: Arena, x: Bytes in a) -> Bytes in {b, x} {
+  x
+}

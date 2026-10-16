@@ -1,0 +1,22 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 18
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes, mut y: Bytes) {
+  let kept = Pair(left: view(x), right: view(y)).left
+  bump(mut x)
+  let used = kept
+  ()
+}
+// The holder is used after the conflicting action, so its loan is still live (§04).

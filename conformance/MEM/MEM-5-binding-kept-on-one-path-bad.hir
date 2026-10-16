@@ -1,0 +1,40 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 32
+// The twin of MEM-5-binding-moved-on-every-path-run. On the `else` path the
+// `Token` is still owned when its block ends, so the `@noalloc` closure body
+// destroys it there, and its finalizer is not `@noalloc`.
+resource type Token {
+  n: u32,
+}
+drop(x) {
+  ()
+}
+
+@noalloc
+fn make() -> Token {
+  Token(n: 1)
+}
+
+@noalloc
+fn keep(take x: Token, n: u32) -> Token {
+  x
+}
+
+@noalloc
+fn produce(f: @noalloc fn() -> Token uses {}) -> Token {
+  f()
+}
+
+@noalloc
+fn probe(d: u32, flag: bool) -> Token {
+  produce(
+    fn() {
+      let token = make()
+      if flag {
+        keep(take token, d)
+      } else {
+        make()
+      }
+    }
+  )
+}

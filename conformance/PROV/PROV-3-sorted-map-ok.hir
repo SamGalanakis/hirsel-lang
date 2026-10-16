@@ -1,0 +1,10 @@
+// rule: PROV-3
+// expect: accept
+// "File of dir; StrPos of s; SortedMap[K, V] of by; ... SlotId[T] of slots."
+fn inspect(owner: Order[u64], value: SortedMap[u64, u64] of owner) -> () {
+  ()
+}
+
+fn example(a: Order[u64], b: Order[u64], value: SortedMap[u64, u64] of a) -> () {
+  inspect(a, value)
+}

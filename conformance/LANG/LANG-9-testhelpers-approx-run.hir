@@ -1,0 +1,11 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  std@1/test.approx(t, 12.06, 12.0, 0.1, 0.0)
+  std@1/test.approx(t, -12.06, -12.0, 0.1, 0.0)
+  std@1/test.approx(t, 1001.0, 1000.0, 0.0, 0.001)
+  std@1/test.approx(t, 1.0000000000000002, 1.0, 0.0000000000000002220446049250313, 0.0)
+  std@1/test.approx(t, core@1/f64.from_bits(1), 0.0, core@1/f64.from_bits(1), 0.0)
+  Ok(())
+}

@@ -1,0 +1,12 @@
+[package]
+name = "hirsel-heapcheck"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-codec = { path = "../hirsel-codec" }
+hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-lir = { path = "../hirsel-lir" }
+hirsel-syntax = { path = "../hirsel-syntax" }

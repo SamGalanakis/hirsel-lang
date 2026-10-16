@@ -1,0 +1,8 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 6
+fn outer[T: plain](x: T) {
+  fn inner[U: plain](take y: U) {
+    let mut a = x
+    a = y
+  }
+}

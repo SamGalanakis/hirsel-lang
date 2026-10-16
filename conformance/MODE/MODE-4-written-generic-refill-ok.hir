@@ -1,0 +1,5 @@
+// rule: MODE-4
+// expect: accept
+fn good[T](mut x: sendable T, take y: sendable T) {
+  x = take y
+}

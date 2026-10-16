@@ -1,0 +1,58 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+@noalloc
+fn count(s: String) -> u64 uses {} {
+  let mut n: u64 = 0
+  for piece in std@1/unicode.graphemes(s) {
+    n += 1
+  }
+  n
+}
+
+@noalloc
+fn first(s: String) -> String in s uses {} {
+  for piece in std@1/unicode.graphemes(s) {
+    return copy piece
+  }
+  copy s
+}
+
+@noalloc
+fn boundaries(s: String) -> bool uses {} {
+  let mut n: u64 = 0
+  let mut size: u64 = 0
+  for piece in std@1/unicode.graphemes(s) {
+    size += string.byte_len(piece)
+    n += 1
+    continue
+  }
+  n == 5 && size == string.byte_len(s)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GraphemeRunError] {
+  let text: String = "PRe\u{301}👩\u{200d}💻🇩🇪\r\n\u{915}\u{94d}\u{915}TAIL"
+  let valid = match string.position(text, 2) {
+    Some(a) => match string.position(text, string.byte_len(text) - 4) {
+      Some(b) => {
+        let slice = string.slice(text, a, b)
+        boundaries(slice) && first(slice) == "e\u{301}" && count("") == 0 && first("") == "" && count(
+          "\u{1100}\u{1161}\u{11a8}"
+        ) == 1 && count("🇦🇧🇨") == 2 && count("\u{600}x\u{903}") == 1
+      },
+      None => false,
+    },
+    None => false,
+  }
+  out.print(
+    io.stdout(rt) ? Grant,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? Output
+  Ok(())
+}
+
+pub type GraphemeRunError = Grant(GrantError) | Output(OutputError)

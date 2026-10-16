@@ -1,0 +1,16 @@
+rc-trace v1 max 16
+error at step 6 (line 9): T11 end-borrow: borrow b1 still has a live sub-borrow
+heap
+  @0 live gen 1 count fin 1 heap arity 1
+  @1 live gen 1 count fin 1 heap arity 0
+credits
+  r1 -> @0#1
+  @0.0 -> @1#1
+borrows
+  b1 guard r1 parent - -> @0#1
+  b2 guard @0.0 parent b1 -> @1#1
+locals
+tokens
+work
+regions
+events

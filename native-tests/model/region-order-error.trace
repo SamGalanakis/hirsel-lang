@@ -1,0 +1,6 @@
+rc-trace v1
+max 16
+# Only the innermost open region can close.
+region-open g1
+region-open g2
+region-close g1

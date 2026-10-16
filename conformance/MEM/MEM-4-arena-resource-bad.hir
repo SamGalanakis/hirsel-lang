@@ -1,0 +1,11 @@
+// rule: MEM-4
+// expect: reject MEM-4 at line 10
+// "arenas ... hold no resources".
+resource type Token {
+  n: u8,
+}
+drop(x) {}
+
+fn build(a: Arena) -> Array[Token] in a {
+  [Token(n: 1)]
+}

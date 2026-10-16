@@ -1,0 +1,9 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 5
+fn probe() -> fn() -> u64 {
+  let x: String = "x"
+  let f: sendable fn() -> u64 = fn() {
+    string.byte_len(x)
+  }
+  f
+}

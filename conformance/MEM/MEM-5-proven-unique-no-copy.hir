@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn preserve(take x: unique Bytes) -> unique Bytes {
+  unique x
+}

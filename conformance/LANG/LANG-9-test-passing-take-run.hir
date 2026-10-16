@@ -1,0 +1,6 @@
+// rule: LANG-9
+// expect: run
+pub fn main(take t: Test) -> Result[(), ()] {
+  test.check(t, true)
+  Ok(())
+}

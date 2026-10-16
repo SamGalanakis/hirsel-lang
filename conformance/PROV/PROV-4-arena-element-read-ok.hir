@@ -1,0 +1,22 @@
+// rule: PROV-4
+// expect: accept
+// "A relation that names an arena ... says x's blocks live in a or in
+// something that outlives it."
+// An element of an arena-placed list lives where the list does, as a field of
+// an arena-placed record does (OWN-8). A borrowed parameter may read it, a
+// binding of it is placed in the same arena, and a result `in a` may keep it.
+fn scratch(a: Arena) -> u64 {
+  let text: List[String] in a = ["scratch"]
+  string.byte_len(text[0])
+}
+
+fn nested(a: Arena, take src: Bytes) -> u64 {
+  let held: List[List[Bytes]] in a = [[take src]]
+  let items = held[0]
+  list.len(items)
+}
+
+fn keep(a: Arena) -> String in a {
+  let text: List[String] in a = ["kept"]
+  copy text[0]
+}

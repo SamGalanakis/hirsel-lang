@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: accept
+// Regression from argument/passing; TIR/TypeMismatch/sendable receipt.
+type R {
+  n: Bytes,
+}
+
+fn probe() {
+  let mut r = R(n: b"old")
+  let x = take r
+  r = R(n: copy b"new")
+}

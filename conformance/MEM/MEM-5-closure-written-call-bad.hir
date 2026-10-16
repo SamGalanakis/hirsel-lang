@@ -1,0 +1,12 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 9
+fn maybe() -> () {
+  ()
+}
+
+fn probe() -> () {
+  let f: @noalloc fn() -> () uses {} = fn() {
+    maybe()
+  }
+  f()
+}

@@ -1,0 +1,25 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 20
+// After the replacement, the field is written with content local to seed, so
+// the closure's result is local to its environment and a take parameter
+// cannot keep it, as its getter twin `keep(get(r))` cannot.
+type Holder {
+  value: Bytes,
+}
+
+fn identity[T](x: T) -> T in x {
+  x
+}
+
+fn keep(take b: Bytes) {}
+
+fn closure(take h: Holder, seed: Bytes) {
+  let mut r: Holder in r = take h
+  r = Holder(value: b"fresh")
+  r.value = identity(seed)
+  keep(
+    fn() {
+      r.value
+    }()
+  )
+}

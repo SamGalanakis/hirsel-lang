@@ -1,0 +1,13 @@
+// rule: MEM-5
+// expect: accept
+@noalloc
+fn read(s: String) -> u64 {
+  string.byte_len(s)
+}
+
+fn example() {
+  let f: @noalloc fn() -> u64 uses {} = fn() -> u64 {
+    read("new")
+  }
+  ()
+}

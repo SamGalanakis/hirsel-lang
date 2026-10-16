@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: accept
+// "Local values cannot be stored into global values."
+type Rec {
+  items: Bytes,
+}
+
+fn put(take dst: Rec, take src: Bytes) -> Rec {
+  let mut owned = take dst
+  owned.items = take src
+  take owned
+}

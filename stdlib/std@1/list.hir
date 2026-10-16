@@ -1,0 +1,192 @@
+// Collection algorithms use ordinary source calls and ownership.
+@noalloc
+pub fn reverse[T](mut xs: unique List[T]) -> () {
+  let mut lo: u64 = 0
+  let mut hi = core@1/list.len(xs)
+  while lo < hi {
+    hi -= 1
+    if lo < hi {
+      core@1/list.swap(mut xs, lo, hi)
+    }
+    lo += 1
+  }
+}
+
+@noalloc
+fn reverse_range[T](mut xs: unique List[T], begin: u64, end: u64) -> () {
+  let mut lo = begin
+  let mut hi = end
+  while lo < hi {
+    hi -= 1
+    if lo < hi {
+      core@1/list.swap(mut xs, lo, hi)
+    }
+    lo += 1
+  }
+}
+
+// Left rotation uses three reversals, each preserving element ownership.
+@noalloc
+pub fn rotate[T](mut xs: unique List[T], amount: u64) -> () {
+  let len = core@1/list.len(xs)
+  if len == 0 {
+    return
+  }
+  let pivot = amount % len
+  reverse_range(mut xs, 0, pivot)
+  reverse_range(mut xs, pivot, len)
+  reverse(mut xs)
+}
+
+@noalloc
+fn sift[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut root = begin
+  // root < end/2 proves 2*root+1 cannot overflow and has a left child.
+  while root < end / 2 {
+    let mut child = root * 2 + 1
+    if child + 1 < end && by(xs[child], xs[child + 1]) < 0 {
+      child += 1
+    }
+    if by(xs[root], xs[child]) >= 0 {
+      return
+    }
+    core@1/list.swap(mut xs, root, child)
+    root = child
+  }
+}
+
+// In-place, unstable heapsort, O(n log n), including move-only elements.
+@noalloc
+pub fn sort[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let len = core@1/list.len(xs)
+  let mut start = len / 2
+  while start > 0 {
+    start -= 1
+    sift(mut xs, start, len, by)
+  }
+  let mut end = len
+  while end > 1 {
+    end -= 1
+    core@1/list.swap(mut xs, 0, end)
+    sift(mut xs, 0, end, by)
+  }
+}
+
+// First equal element; callers provide input sorted by the same comparator.
+@noalloc
+pub fn binary_search[T](
+  xs: List[T],
+  value: T,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> Option[u64] uses {} {
+  let mut lo: u64 = 0
+  let mut hi = core@1/list.len(xs)
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    if by(xs[mid], value) < 0 {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  if lo < core@1/list.len(xs) && by(xs[lo], value) == 0 {
+    Some(lo)
+  } else {
+    None()
+  }
+}
+
+@noalloc
+pub fn find[T](xs: List[T], predicate: @noalloc fn(T) -> bool) -> Option[u64] uses {xs, predicate} {
+  let mut i: u64 = 0
+  for item in xs {
+    if predicate(item) {
+      return Some(i)
+    }
+    i += 1
+  }
+  None()
+}
+
+pub fn map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] uses {xs, f} {
+  let mut out: List[U] = []
+  for item in xs {
+    core@1/list.push(mut out, f(item))
+  }
+  take out
+}
+
+pub fn filter[T](take xs: List[T], predicate: fn(T) -> bool) -> List[T] uses {xs, predicate} {
+  let mut out: List[T] = []
+  for item in take xs {
+    if predicate(item) {
+      core@1/list.push(mut out, take item)
+    }
+  }
+  take out
+}
+
+pub fn fold[T, A](xs: List[T], take initial: A, f: fn(take A, T) -> A) -> A uses {xs, initial, f} {
+  let mut accumulator = take initial
+  for item in xs {
+    accumulator = f(take accumulator, item)
+  }
+  take accumulator
+}
+
+@noalloc
+pub fn all[T](xs: List[T], predicate: @noalloc fn(T) -> bool) -> bool uses {xs, predicate} {
+  for item in xs {
+    if !predicate(item) {
+      return false
+    }
+  }
+  true
+}
+
+@noalloc
+pub fn any[T](xs: List[T], predicate: @noalloc fn(T) -> bool) -> bool uses {xs, predicate} {
+  for item in xs {
+    if predicate(item) {
+      return true
+    }
+  }
+  false
+}
+
+pub fn partition[T](take xs: List[T], predicate: fn(T) -> bool) -> (List[T], List[T]) uses {xs, predicate} {
+  let mut yes: List[T] = []
+  let mut no: List[T] = []
+  for item in take xs {
+    if predicate(item) {
+      core@1/list.push(mut yes, take item)
+    } else {
+      core@1/list.push(mut no, take item)
+    }
+  }
+  (take yes, take no)
+}
+
+pub fn concat[T](take a: List[T], take b: List[T]) -> List[T] uses {a, b} {
+  let mut out = take a
+  for item in take b {
+    core@1/list.push(mut out, take item)
+  }
+  take out
+}
+
+pub fn dedup[T: data](take xs: List[T]) -> List[T] uses {xs} {
+  let mut out: List[T] = []
+  for item in take xs {
+    let len = core@1/list.len(out)
+    if len == 0 || out[len - 1] != item {
+      core@1/list.push(mut out, take item)
+    }
+  }
+  take out
+}

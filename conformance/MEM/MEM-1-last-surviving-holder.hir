@@ -1,0 +1,25 @@
+// rule: MEM-1
+// expect: run
+// stdout: ok
+// "A block is freed when its last holder drops it"; a surviving holder keeps it alive.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a: String = "kept"
+  let b = copy a
+  a = "replaced"
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if b == "kept" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,5 @@
+// rule: MEM-5
+// expect: accept
+fn probe(take s: String) -> Result[std@1/json.Value, std@1/json.JsonError] uses {} {
+  std@1/json.parse(take s)
+}

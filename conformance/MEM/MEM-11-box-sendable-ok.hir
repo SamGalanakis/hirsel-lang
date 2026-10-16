@@ -1,0 +1,7 @@
+// rule: MEM-11
+// expect: accept
+fn cross[T: sendable](take x: T) {}
+
+fn probe() {
+  cross(box 1u8)
+}

@@ -1,0 +1,58 @@
+// rule: GEN-1
+// expect: run
+// stdout: before
+// stdout: nested
+// stdout: moved
+// stdout: kept
+// stdout: after
+// stdout: done
+resource type Token {
+  stdout: Stdout,
+  text: String,
+}
+drop(self) {
+  let _ = out.print(self.stdout, self.text)
+}
+
+fn consume(take token: Token) {}
+
+fn make(take kept: Token, take moved: Token, release_kept: bool) -> once fn() -> u64 {
+  fn() {
+    fn length[n: size](ys: Inline[u8, n]) -> u64 {
+      string.byte_len(kept.text) + n
+    }
+    let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+    let answer = fn() {
+      length(xs)
+    }()
+    let _ = out.print(kept.stdout, "nested\n")
+    consume(take moved)
+    if release_kept {
+      consume(take kept)
+    }
+    answer
+  }
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  {
+    let f = make(
+      take Token(stdout: stdout, text: "kept\n"),
+      take Token(stdout: stdout, text: "moved\n"),
+      false
+    )
+    out.print(stdout, "before\n") ? ignore
+    let _ = f()
+    out.print(stdout, "after\n") ? ignore
+  }
+  out.print(stdout, "done\n") ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

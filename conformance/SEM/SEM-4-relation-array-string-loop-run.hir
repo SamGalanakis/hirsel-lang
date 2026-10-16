@@ -1,0 +1,9 @@
+// rule: SEM-4
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let shifts: Array[String] in args = ["a", "b"]
+  for text in shifts {
+    failure.check(text == "a" || text == "b", TextInvariant())
+  }
+  Ok(())
+}

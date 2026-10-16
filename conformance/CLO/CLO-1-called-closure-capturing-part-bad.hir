@@ -1,0 +1,17 @@
+// rule: CLO-1
+// expect: reject CLO-1 at line 8
+// "A scoped closure cannot be stored or returned." The inner closure borrows
+// `rt` from its environment, so the called closure cannot return it as a
+// tuple part.
+fn made(rt: Stdout) -> u64 {
+  let pair: (fn() -> (), u64) = fn() {
+    (
+      fn() {
+        let _ = out.print(rt, "x")
+      },
+      1u64
+    )
+  }()
+  let (_, n) = pair
+  n
+}

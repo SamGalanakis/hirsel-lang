@@ -1,0 +1,5 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 3
+pub opaque type Callback: noalloc_drop uses {} {
+  f: fn() uses {},
+}

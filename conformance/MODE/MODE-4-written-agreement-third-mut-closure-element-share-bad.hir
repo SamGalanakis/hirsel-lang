@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 15
+fn observe(x: String) -> () {
+  ()
+}
+
+fn probe(mut xs: sendable List[String]) -> () {
+  for x in mut xs {
+    observe(
+      fn() {
+        x
+      }()
+    )
+  }
+}

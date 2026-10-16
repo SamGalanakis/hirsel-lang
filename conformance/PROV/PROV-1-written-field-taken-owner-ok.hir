@@ -1,0 +1,26 @@
+// rule: PROV-1
+// expect: accept
+// A field written after a computed value is named by the binding, and a value
+// branded by the field is used while the binding still owns it.
+type R {
+  n: u64,
+  other: u64,
+}
+
+fn id(x: R) -> R {
+  copy x
+}
+
+fn make_n(r: R) -> Option[u8 of r.n] {
+  None
+}
+
+fn inspect_n(r: R, p: Option[u8 of r.n]) -> () {}
+
+fn written(x: R) -> () {
+  let mut r = id(x)
+  r.n = 3
+  let q = make_n(r)
+  inspect_n(r, q)
+  let moved = take r
+}

@@ -1,0 +1,7 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 6
+// "A value in a cannot outlive a." A result declared without a placement
+// promises nothing about the arena.
+fn keep(a: Arena, take x: Bytes in a) -> Bytes {
+  x
+}

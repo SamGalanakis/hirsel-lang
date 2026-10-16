@@ -1,0 +1,13 @@
+// rule: CLO-1
+// expect: accept
+// A unique value extracted from a closure's borrowed view of a global list is
+// as global as one extracted from a borrowed parameter's global argument.
+fn consume(take x: box box box List[Bytes]) {}
+
+fn probe() {
+  let xs: List[Bytes] = [b"x"]
+  let x = box box box fn() {
+    unique xs
+  }()
+  consume(take x)
+}

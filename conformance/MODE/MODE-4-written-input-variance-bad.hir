@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn restricted(take x: sendable Bytes) {}
+
+fn bad() {
+  let callback: fn(take x: Bytes) = restricted
+}

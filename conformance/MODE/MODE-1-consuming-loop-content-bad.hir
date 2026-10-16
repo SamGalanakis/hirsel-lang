@@ -1,0 +1,20 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 18
+// A collection built from local views is local whatever its binding
+// declares, and so are the elements a consuming loop yields. One cannot be
+// stored into storage that outlives the loop. The accepted twin is
+// MODE-1-consuming-loop-content-ok.
+type Keep {
+  last: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn keep_last(mut keep: Keep, p: Bytes) -> () {
+  let xs: List[Bytes] = [view(p)]
+  for x in take xs {
+    keep.last = x
+  }
+}

@@ -1,0 +1,9 @@
+// rule: MODE-4
+// expect: accept
+type Packet {
+  data: sendable Bytes,
+}
+
+fn good(take x: sendable Bytes) -> Packet {
+  Packet(data: take x)
+}

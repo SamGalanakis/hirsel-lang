@@ -1,0 +1,10 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 8
+// The slots.get analogue of MODE-1-map-get-result-live-mutation-bad.hir.
+fn inspect(found: Option[Bytes]) -> () {}
+
+fn probe(mut s: Slots[Bytes], id: SlotId[Bytes] of s, take value: Bytes) {
+  let found = slots.get(s, id)
+  let other = slots.insert(mut s, take value)
+  inspect(found)
+}

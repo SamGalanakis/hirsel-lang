@@ -1,0 +1,13 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 12
+// "Written unrestricted parameters do not meet restricted uses." A `Map`
+// value's type argument is exact (spec #92), so a map of `uses {}` callables
+// is not received where a map of callables with unknown authority is
+// expected.
+fn takes(q: Map[u64, fn() -> ()]) -> () {
+  ()
+}
+
+fn probe(p: Map[u64, fn() -> () uses {}]) -> () {
+  takes(p)
+}

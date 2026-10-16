@@ -1,0 +1,21 @@
+// rule: MEM-5
+// expect: run
+// stdout: local
+// A closure literal called inside a `@noalloc` function builds its
+// environment in the frame's region. Its result here is a view through the
+// borrowed capture `xs`, so it is bounded by `xs` (the declared relation),
+// not by the region holding the environment, and may leave the frame.
+@noalloc
+fn first(xs: Array[String]) -> String in xs {
+  fn() {
+    xs
+  }()[0]
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let xs: Array[String] = ["local"]
+  let text = first(xs)
+  let _ = out.print(io.stdout(rt)?, text)
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

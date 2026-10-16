@@ -1,0 +1,23 @@
+// rule: PROV-4
+// expect: accept
+// Placement names where a value's blocks are allocated. Plain bits have no
+// blocks, so `in a` written on them is inert and they leave the arena freely.
+type P {
+  x: u32,
+  y: u32,
+}
+
+fn sum(a: Arena, p: P in a, n: u8 in a) -> u32 in a {
+  p.x + p.y
+}
+
+fn example() -> u32 {
+  arena.with(
+    fn(a: Arena) -> u32 {
+      let n: u8 in a = 254
+      let next = n + 1
+      let p: P in a = P(x: 1, y: 2)
+      sum(a, p, next)
+    }
+  )
+}

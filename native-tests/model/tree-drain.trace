@@ -1,0 +1,19 @@
+rc-trace v1
+max 16
+# A three-level tree is released through the dead worklist (MEM-3): fields go in reverse
+# declaration order and a dying child is drained before its parent's next field.
+alloc r1 2
+alloc r2 1
+alloc r3 0
+alloc r4 0
+write r2 0 r3
+write r1 0 r2
+write r1 1 r4
+drop r1
+drain
+drain
+drain
+drain
+drain
+drain
+drain

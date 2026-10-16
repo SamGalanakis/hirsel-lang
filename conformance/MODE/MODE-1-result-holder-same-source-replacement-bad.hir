@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 15
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes) -> Bytes in x {
+  let mut slot = view(x)
+  slot = view(x)
+  // The installed view still depends on x after the displaced view dies.
+  bump(mut x)
+  slot
+}

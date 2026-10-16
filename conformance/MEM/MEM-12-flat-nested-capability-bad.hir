@@ -1,0 +1,9 @@
+// rule: MEM-12
+// expect: reject MEM-12 at line 7
+type Holder[T] {
+  value: T,
+}
+
+flat type R {
+  value: List[Holder[Dir]],
+}

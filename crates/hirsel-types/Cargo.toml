@@ -1,0 +1,15 @@
+[package]
+name = "hirsel-types"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-span = { path = "../hirsel-span" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-diag = { path = "../hirsel-diag" }
+
+[dev-dependencies]
+serde_json = "1"

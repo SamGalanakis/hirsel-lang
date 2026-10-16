@@ -1,0 +1,32 @@
+// rule: MEM-14
+// expect: accept
+// "insertion and removal keep [identity]".
+fn output_error[E](take e: E) -> () {}
+
+type R {
+  s: Slots[u64],
+  n: u64,
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut r = R(s: slots.empty(), n: 0u64)
+  r = copy r
+  let first: u64 = 10
+  let id = slots.insert(mut r.s, take first)
+  let second: u64 = 20
+  let new_id = slots.insert(mut r.s, take second)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if slots.get(r.s, id) == Some(10) {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

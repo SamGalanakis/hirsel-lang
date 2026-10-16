@@ -1,0 +1,5 @@
+// rule: LANG-4
+// expect: accept
+type Datum: inert {
+  value: u32,
+}

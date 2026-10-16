@@ -1,0 +1,16 @@
+// rule: DROP-2
+// expect: run
+resource type Empty {}
+drop(x) {
+  let _ = 255u8 + 1u8
+}
+
+fn move_empty(take value: Empty) -> Empty {
+  value
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let Empty() = move_empty(Empty())
+  test.check(t, true)
+  Ok(())
+}

@@ -1,0 +1,21 @@
+// rule: DROP-2
+// expect: run
+// stdout: B
+// stdout: A
+resource type Trace {
+  out: Stdout,
+  label: String,
+}
+@noalloc drop(value) {
+  let _ = out.print(value.out, value.label)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a = Trace(out: io.stdout(rt)?, label: "A\n")
+  for piece in std@1/unicode.graphemes("e\u{301}🇩🇪unvisited") {
+    let b = Trace(out: io.stdout(rt)?, label: "B\n")
+    failure.check(true, Bounds())
+    break
+  }
+  Ok(())
+}

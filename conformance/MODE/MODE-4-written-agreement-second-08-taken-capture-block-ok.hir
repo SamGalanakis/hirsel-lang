@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+fn sink(take x: Bytes) -> () {
+  ()
+}
+
+fn example(take x: sendable Bytes) -> once fn() -> () uses {} {
+  fn() {
+    sink(
+      take {
+        x
+      }
+    )
+  }
+}

@@ -1,0 +1,32 @@
+// rule: FAIL-3
+// expect: fail SEM-1 at line 16
+// stdout: v2-taken-by-failing-insert
+// stdout: v1
+// stdout: keep
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn cmpfail(a: u32, b: u32) -> i32 uses {} {
+  let z: i32 = 0
+  1 / z
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let keep = Trace(stdout: o, text: "keep\n")
+  let by: Order[u32] = Order(compare: cmpfail)
+  let mut m: SortedMap[u32, Trace] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 1, Trace(stdout: o, text: "v1\n"))
+  sorted_map.insert(
+    by,
+    mut m,
+    2,
+    Trace(stdout: o, text: "v2-taken-by-failing-insert\n")
+  )
+  Ok(())
+}

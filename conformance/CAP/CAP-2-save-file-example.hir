@@ -1,0 +1,8 @@
+// rule: CAP-2
+// expect: accept
+// "every operation on [a resource] takes the capability it is of".
+pub fn save(dir: Dir, p: Path, data: Bytes) -> Result[(), FileError] {
+  let mut f = file.create_atomic(dir, p)?
+  file.write_all(dir, mut f, data)?
+  file.commit(dir, take f)
+}

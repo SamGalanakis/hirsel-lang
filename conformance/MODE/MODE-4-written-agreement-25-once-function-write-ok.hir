@@ -1,0 +1,22 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/mode; TIR/TypeMismatch/displaced storage content.
+fn loud() -> sendable (once fn() -> u64) {
+  fn() {
+    1
+  }
+}
+
+fn quiet() -> fn() -> u64 {
+  fn() {
+    2
+  }
+}
+
+fn total() -> u64 {
+  let mut g = loud()
+  let mut l: List[once fn() -> u64] = [loud()]
+  l[0] = loud()
+  let mut q: fn() -> u64 = quiet()
+  g() + q() + q()
+}

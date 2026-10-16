@@ -1,0 +1,39 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+// "each item is an owned value"; "for x in mut it advances it".
+fn output_error[E](take e: E) -> () {}
+
+@noalloc
+fn next(mut n: u8) -> Option[u8] {
+  if n == 3 {
+    None
+  } else {
+    let value = n
+    n += 1
+    Some(value)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let state: u8 = 0
+  let mut it: Iter[u8] = iter.from(take state, next)
+  let mut sum: u8 = 0
+  for x in mut it {
+    sum += x
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if sum == 3 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

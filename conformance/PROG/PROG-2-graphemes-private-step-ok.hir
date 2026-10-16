@@ -1,0 +1,7 @@
+// rule: PROG-2
+// expect: accept
+fn inspect(v: std@1/unicode.GraphemeView) {
+  for piece in v {
+    let _ = piece
+  }
+}

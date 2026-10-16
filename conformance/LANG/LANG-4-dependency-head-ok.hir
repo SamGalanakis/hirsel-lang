@@ -1,0 +1,6 @@
+// rule: LANG-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, vendor.value() == 42)
+  Ok(())
+}

@@ -1,0 +1,20 @@
+pub type Widget {
+  value: u64,
+}
+
+pub type Result = Ok(u64) | Error(())
+
+@noalloc
+pub fn value() -> u64 uses {} {
+  84
+}
+
+@noalloc
+fn secret() -> u64 uses {} {
+  84
+}
+
+@noalloc
+pub fn exported() -> u64 uses {} {
+  secret()
+}

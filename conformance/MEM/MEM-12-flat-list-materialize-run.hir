@@ -1,0 +1,28 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+flat type Items {
+  values: List[u64],
+}
+
+fn unpack(items: Items) -> List[u64] in items {
+  copy items.values
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let items = Items(values: [3u64, 7u64])
+  let mut values = unpack(items)
+  values[0] = 11u64
+  let valid = list.len(values) == 2 && values[0] == 11 && values[1] == 7 && items.values[0] == 3
+  out.print(
+    io.stdout(rt) ? output_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

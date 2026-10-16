@@ -1,0 +1,24 @@
+// rule: MEM-14
+// expect: run
+// stdout: ok
+// "Lists are indexed by checked integers".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: List[u8] = [7]
+  let i: u64 = 0
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if xs[i] == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

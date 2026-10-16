@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn sink[E](take e: sendable E) {}
+
+fn bad[E](take a: sendable E, take b: E) {
+  sink(take b)
+}

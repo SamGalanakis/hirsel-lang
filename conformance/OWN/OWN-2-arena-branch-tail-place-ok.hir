@@ -1,0 +1,23 @@
+// rule: OWN-2
+// expect: accept
+// Under LANG-11 (#50), `take` in the arm moves the arena-placed local into the take
+// parameter (#83).
+fn mk(a: Arena) -> Bytes in a {
+  b"x"
+}
+
+fn keep(a: Arena, take x: Bytes in a) -> Bytes in {a, x} {
+  x
+}
+
+fn example(a: Arena, c: bool) -> Bytes in a {
+  let t = mk(a)
+  keep(
+    a,
+    if c {
+      mk(a)
+    } else {
+      take t
+    }
+  )
+}

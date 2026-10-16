@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 5
+@noalloc
+pub fn read(n: Net, mut s: Stream of n, mut buf: List[u8]) {
+  let _ = net.read(n, mut s, mut buf, 1u64)
+}

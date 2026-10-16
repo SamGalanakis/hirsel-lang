@@ -1,0 +1,15 @@
+// rule: CLO-1
+// expect: accept
+// "Captures are borrows."
+fn invoke(f: fn() -> () uses {}) -> () {
+  f()
+}
+
+fn example(take x: Bytes) -> Bytes {
+  invoke(
+    fn() {
+      let _ = x
+    }
+  )
+  take x
+}

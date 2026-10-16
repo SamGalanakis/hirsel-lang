@@ -1,0 +1,13 @@
+// rule: MEM-12
+// expect: accept
+// Spec examples "flat type Item" and "flat type Order" store contiguous data.
+flat type Item {
+  sku: String,
+  qty: u32,
+}
+
+flat type Order {
+  id: u64,
+  customer: String,
+  items: List[Item],
+}

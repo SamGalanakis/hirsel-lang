@@ -1,0 +1,6 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 5
+// "Resources and handles ... give callers no authority"; operations take a capability.
+fn operation(tasks: Tasks, s: Sender[u32]) -> () {
+  let _ = sender.dup(s)
+}

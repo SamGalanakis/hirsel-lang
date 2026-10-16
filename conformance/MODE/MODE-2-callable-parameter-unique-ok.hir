@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: accept
+// The callback header states the parameter modes the callee declares.
+fn apply(f: fn(x: Bytes) -> ()) -> () {
+  ()
+}
+
+fn apply_unique(f: fn(x: unique Bytes) -> ()) -> () {
+  ()
+}
+
+fn example() -> () {
+  apply(fn(x: Bytes) {})
+  apply_unique(fn(x: unique Bytes) {})
+}

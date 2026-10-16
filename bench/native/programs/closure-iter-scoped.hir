@@ -1,0 +1,15 @@
+fn apply(value: u64, f: fn(u64) -> u64 uses {}) -> u64 uses {f} { f(value) }
+fn workload(data: Bytes) -> Bytes {
+  let mut position: u64 = 0
+  let n = decimal(data, mut position)
+  let offset: u64 = 3
+  let factor: u64 = 2
+  let add = fn(value: u64) -> u64 uses {} { value + offset }
+  let multiply = fn(value: u64) -> u64 uses {} { value * factor }
+  let mut total: u64 = 0
+  for i in 0u64..n {
+    let value = apply(i, add)
+    if value % 2u64 == 0u64 { total += apply(value, multiply) }
+  }
+  number(total)
+}

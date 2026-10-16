@@ -1,0 +1,14 @@
+// rule: PROV-4
+// expect: accept
+// The heap twin may be pushed into a caller list.
+fn probe(mut out: List[fn() -> u64]) {
+  let x: String in heap = "x"
+  let pair = (x, 1u8)
+  list.push(
+    mut out,
+    fn() {
+      let (s, n) = pair
+      string.byte_len(s)
+    }
+  )
+}

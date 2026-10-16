@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 11
+// The call through the function value is local to `b`, as a direct call of
+// `view` would be, so its result cannot leave as a global value.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn leak(b: Bytes) -> Bytes {
+  let f = view
+  f(b)
+}

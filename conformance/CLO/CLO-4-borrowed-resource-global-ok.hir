@@ -1,0 +1,18 @@
+// rule: CLO-4
+// expect: accept
+resource type Token {
+  n: u64,
+}
+drop(t) {
+  ()
+}
+
+fn inspect(take token: Token) {
+  let _ = token.n
+}
+
+fn example(take token: Token) -> once fn() uses {} {
+  fn() {
+    inspect(take token)
+  }
+}

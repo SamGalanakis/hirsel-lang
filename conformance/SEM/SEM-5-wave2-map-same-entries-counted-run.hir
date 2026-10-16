@@ -1,0 +1,21 @@
+// rule: SEM-5
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut a: Map[String, String] = map.empty()
+  let mut b: Map[String, String] = map.empty()
+  map.insert(mut a, "é", "😀")
+  map.insert(mut a, "e\u{301}", "AZ")
+  map.insert(mut b, "e\u{301}", "AZ")
+  map.insert(mut b, "é", "😀")
+  failure.check(a != b && std@1/map.same_entries(a, b), TextInvariant())
+  failure.check(
+    match map.get(a, "é") {
+      Some(v) => v == "😀",
+      None() => false,
+    },
+    TextInvariant()
+  )
+  failure.check(std@1/map.same_entries(copy a, take b), TextInvariant())
+  failure.check(std@1/map.same_entries(a, a), TextInvariant())
+  Ok(())
+}

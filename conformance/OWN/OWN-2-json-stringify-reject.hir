@@ -1,0 +1,7 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 5
+fn probe(take value: std@1/json.Value) -> () uses {} {
+  std@1/json.stringify(take value)
+  std@1/json.stringify(value)
+  ()
+}

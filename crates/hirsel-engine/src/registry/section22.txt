@@ -1,0 +1,141 @@
+// CAP-1/2/4, LANG-9, CONC-3
+N fn io.stdout(rt: Io) -> Result[Stdout, GrantError]
+N fn io.tasks(rt: Io) -> Result[Tasks, GrantError]
+N fn io.monotonic_clock(rt: Io) -> Result[MonotonicClock, GrantError]
+N fn io.wall_clock(rt: Io) -> Result[WallClock, GrantError]
+N fn clock.monotonic(clock: MonotonicClock) -> Result[Instant of clock, ClockError]
+N fn clock.wall(clock: WallClock) -> Result[i64, ClockError]
+N fn instant.ticks(value: Instant) -> u64 uses {}
+N fn io.net(rt: Io) -> Result[Net, GrantError]
+N fn io.random(rt: Io) -> Result[Random, GrantError]
+fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
+fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
+fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
+fn path.of(text: String) -> Path
+N fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
+N fn test.check(t: Test, condition: bool) -> ()
+N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
+N fn test.fail(t: Test) -> Never
+fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
+fn test.net(t: Test, peers: List[NetPeer]) -> Net
+
+// CAP-1/2, PROV-1/2, DROP-2/4
+fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
+fn file.narrow(d: Dir, take f: File) -> Option[File of d]
+fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]
+fn file.size(d: Dir, p: Path) -> Result[u64, FileError]
+fn file.read_bytes(d: Dir, p: Path) -> Result[Bytes, FileError] in d
+fn file.write_bytes(d: Dir, p: Path, take data: Bytes) -> Result[(), FileError]
+N fn file.remove(d: Dir, p: Path) -> Result[(), FileError]
+fn file.create_atomic(d: Dir, p: Path) -> Result[AtomicFile of d, FileError]
+fn file.write_all(d: Dir, mut f: AtomicFile of d, data: Bytes) -> Result[(), FileError]
+fn file.commit(d: Dir, take f: AtomicFile of d) -> Result[(), FileError]
+
+// CAP-1/2/3, PROV-1/3, DROP-2/3/4, CONC-3/8, DET-1
+fn net.narrow(n: Net, rules: List[NetRule]) -> Result[Net, NetError]
+fn net.resolve(n: Net, host: String, port: u16) -> Result[List[SocketAddr], NetError]
+fn net.connect(n: Net, host: String, port: u16, timeout: NetTimeout) -> Result[Stream of n, NetError]
+fn net.connect_addr(n: Net, addr: SocketAddr, timeout: NetTimeout) -> Result[Stream of n, NetError]
+fn net.read(n: Net, mut s: Stream of n, mut buffer: List[u8], max: u64) -> Result[u64, NetError]
+N fn net.read_into[k: size](n: Net, mut s: Stream of n, mut buffer: Inline[u8, k]) -> Result[u64, NetError]
+N fn net.write(n: Net, mut s: Stream of n, data: Bytes) -> Result[u64, NetError]
+N fn net.write_all(n: Net, mut s: Stream of n, data: Bytes) -> Result[(), NetError]
+N fn net.shutdown(n: Net, mut s: Stream of n, how: Shutdown) -> Result[(), NetError]
+N fn net.set_read_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]
+N fn net.set_write_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> Result[(), NetError]
+N fn net.peer_addr(n: Net, s: Stream of n) -> Result[SocketAddr, NetError]
+N fn net.close(n: Net, take s: Stream of n) -> ()
+fn tls.connect(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots) -> Result[Stream of n, NetError]
+N fn tls.close(n: Net, take s: Stream of n) -> Result[(), NetError]
+fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
+fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
+N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
+
+// CONC-2/3/5/6/7, CLO-3, FAIL-2
+fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
+fn task.async[R: sendable](s: Scope, take f: once fn() -> R) -> Task[R] of s
+fn task.await[R](s: Scope, take h: Task[R] of s) -> R
+N fn task.cancel[R](s: Scope, h: Task[R] of s) -> ()
+fn task.detach[R](s: Scope, take h: Task[R] of s) -> ()
+N fn task.check_canceled(s: Scope) -> Result[(), CancelError]
+fn task.isolate[R: sendable](tasks: Tasks, take body: once fn() -> R) -> Result[R, Failure]
+fn mutex.create[T: sendable](tasks: Tasks, take v: unique T) -> Mutex[T]
+fn mutex.with[T, R: sendable](tasks: Tasks, m: Mutex[T], body: fn(mut v: unique T) -> R uses {}) -> R
+fn channel.open[T: sendable](tasks: Tasks) -> (Sender[T], Receiver[T])
+fn sender.dup[T](tasks: Tasks, s: Sender[T]) -> Sender[T]
+fn channel.send[T: sendable](tasks: Tasks, mut s: Sender[T], take v: T) -> Result[(), (T, ChannelError)]
+fn channel.receive[T](tasks: Tasks, mut r: Receiver[T]) -> Result[T, ChannelError]
+fn atomic.create[A](tasks: Tasks, value: A) -> Atomic[A]
+N fn atomic.load[A](tasks: Tasks, a: Atomic[A]) -> A
+N fn atomic.store[A](tasks: Tasks, a: Atomic[A], value: A) -> ()
+
+// MEM-4/5/11/14, PROV-1/4, SEM-4
+N fn arena.with[R](body: fn(a: Arena) -> R) -> R
+N fn arena.bounded[R](cap: u64, body: fn(a: Arena) -> R) -> Result[R, OutOfSpace]
+fn arena.seal[T](take a: Arena in a, take root: T in root) -> Region[T]
+N fn region.with[T, R](mut r: Region[T], body: fn(root: T) -> R) -> R
+fn copy_to[T: copyable](a: Arena, x: T) -> T in a
+fn shared.freeze[T: inert](take x: unique T) -> Shared[T]
+fn shared.thaw[T](take s: Shared[T]) -> Result[unique T, Shared[T]]
+fn slots.empty[T]() -> Slots[T]
+fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s
+N fn slots.get[T](s: Slots[T], id: SlotId[T] of s) -> Option[T] in s
+fn slots.remove[T](mut s: Slots[T], id: SlotId[T] of s) -> Option[T]
+N fn list.len[T](xs: List[T]) -> u64
+N fn array.len[T](xs: Array[T]) -> u64
+fn list.push[T](mut xs: List[T], take value: T) -> ()
+N fn list.pop[T](mut xs: unique List[T]) -> Option[T]
+N fn list.remove[T](mut xs: unique List[T], index: u64) -> T
+N fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()
+fn list.reserve[T](mut xs: List[T], capacity: u64) -> ()
+fn iter.from[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] uses {state, next}
+fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
+fn iter.next[T](mut it: Iter[T]) -> Option[T]
+
+// SEM-1/2/3/5, GEN-2, MEM-8/9
+N fn int.widen[I, J](value: I) -> J
+N fn int.try_narrow[I, J](value: I) -> Option[J]
+N fn int.narrow[I, J](value: I) -> J
+N fn int.truncate[I, J](value: I) -> J
+N fn int.wrapping_add[I](a: I, b: I) -> I
+N fn int.saturating_add[I](a: I, b: I) -> I
+N fn int.checked_add[I](a: I, b: I) -> Option[I]
+N fn int.div_floor[I](a: I, b: I) -> I
+N fn int.mod[I](a: I, b: I) -> I
+N fn int.div_exact[I](a: I, b: I) -> I
+N fn int.unchecked_add[I](permit: Unsafe, a: I, b: I) -> I
+N fn float.min[F](a: F, b: F) -> F
+N fn float.max[F](a: F, b: F) -> F
+N fn float.min_number[F](a: F, b: F) -> F
+N fn float.max_number[F](a: F, b: F) -> F
+N fn float.mul_add[F](a: F, b: F, c: F) -> F
+N fn float.total_order[F](a: F, b: F) -> i32
+N fn float.to_i32[F](value: F) -> Result[i32, FloatIntError]
+N fn float.from_int[I, F](value: I) -> F
+N fn f32.bits(value: f32) -> u32
+N fn f32.from_bits(value: u32) -> f32
+N fn f64.bits(value: f64) -> u64
+N fn f64.from_bits(value: u64) -> f64
+N fn string.byte_len(s: String) -> u64
+N fn string.scalars(s: String) -> ScalarView in s
+N fn string.positions(s: String) -> PositionView of s in s
+N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s
+fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
+N fn bytes.len(src: Bytes) -> u64
+fn bytes.from_list(take src: List[u8]) -> Bytes
+N fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src
+N fn string.as_bytes(s: String) -> Bytes in s
+N fn string.position(s: String, offset: u64) -> Option[StrPos of s]
+N fn string.byte_offset(s: String, pos: StrPos of s) -> u64
+fn path.text(p: Path) -> String
+N fn failure.check(condition: bool, rule: CheckRule) -> () uses {}
+fn map.empty[K: key, V]() -> Map[K, V]
+fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
+N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
+fn set.empty[T: key]() -> Set[T]
+fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
+N fn set.contains[T: key](s: Set[T], value: T) -> bool
+fn sorted_map.empty[K, V](by: Order[K]) -> SortedMap[K, V] of by
+fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()
+N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
+N fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]

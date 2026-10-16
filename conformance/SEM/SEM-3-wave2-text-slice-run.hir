@@ -1,0 +1,26 @@
+// rule: SEM-3
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let source: String = "PREFIX é😀 TAIL"
+  let inner: String in source = match string.position(source, 6) {
+    Some(a) => match string.position(source, 14) {
+      Some(b) => string.slice(source, a, b),
+      None() => "bad",
+    },
+    None() => "bad",
+  }
+  failure.check(
+    match std@1/string.find(inner, "😀") {
+      Some(p) => string.byte_offset(inner, p) == 3,
+      None() => false,
+    },
+    TextInvariant()
+  )
+  failure.check(std@1/string.starts_with(inner, " é"), TextInvariant())
+  failure.check(std@1/string.ends_with(inner, "😀 "), TextInvariant())
+  failure.check(std@1/string.trim(inner) == "é😀", TextInvariant())
+  failure.check(std@1/string.ascii_lower(inner) == " é😀 ", TextInvariant())
+  failure.check(std@1/string.ascii_upper(inner) == " é😀 ", TextInvariant())
+  failure.check(std@1/string.concat(inner, "!") == " é😀 !", TextInvariant())
+  Ok(())
+}

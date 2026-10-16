@@ -1,0 +1,16 @@
+// rule: CLO-1
+// expect: accept
+// A finalizer's value is a borrowed parameter of its body, and a closure there
+// knows it as such, so reading a part through the closure is a local read.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(
+    x.stdout,
+    fn() {
+      x.text
+    }()
+  )
+}

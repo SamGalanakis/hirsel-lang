@@ -1,0 +1,7 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 15
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  std@1/test.approx(t, 1.0, 1.0, 0.0, -1.0)
+  Ok(())
+}

@@ -1,0 +1,485 @@
+// JSON DOM contracts: STD-OP-json.* and TYPE-ROW-Value/JsonError.
+pub type Value = Null | Bool(bool) | Number(String) | Text(String) | Array(
+  List[box Value]
+) | Object(Map[String, box Value])
+
+pub type JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber
+
+// Policy counts open arrays/objects; scalars do not consume a level.
+pub const MAX_NESTING: u64 = 128
+
+// Adapted serde_json src/de.rs parse_integer digit recognition,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+@noalloc
+fn json_digit(c: u8) -> bool uses {} {
+  c >= 48 && c <= 57
+}
+
+// Adapted serde_json src/de.rs peek_or_null,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: EOF is the zero sentinel.
+@noalloc
+fn json_peek(data: Bytes, pos: u64) -> u8 uses {} {
+  if pos < core@1/bytes.len(data) {
+    data[pos]
+  } else {
+    0
+  }
+}
+
+// Adapted serde_json src/de.rs parse_whitespace,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+@noalloc
+fn json_whitespace(data: Bytes, mut pos: u64) -> () uses {} {
+  while pos < core@1/bytes.len(data) {
+    let c = data[pos]
+    if c != 32 && c != 9 && c != 10 && c != 13 {
+      break
+    }
+    pos += 1
+  }
+}
+
+// Adapted serde_json src/de.rs parse_integer/parse_decimal/parse_exponent,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8 (MIT/Apache-2.0).
+// Scan grammar only: no float conversion, overflow, or loss of number spelling.
+@noalloc
+fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
+  if json_peek(data, pos) == 45 {
+    pos += 1
+  }
+  let first = json_peek(data, pos)
+  if first == 48 {
+    pos += 1
+    if json_digit(json_peek(data, pos)) {
+      return Error(Syntax(pos))
+    }
+  } else if first >= 49 && first <= 57 {
+    while json_digit(json_peek(data, pos)) {
+      pos += 1
+    }
+  } else {
+    return Error(Syntax(pos))
+  }
+  if json_peek(data, pos) == 46 {
+    pos += 1
+    if !json_digit(json_peek(data, pos)) {
+      return Error(Syntax(pos))
+    }
+    while json_digit(json_peek(data, pos)) {
+      pos += 1
+    }
+  }
+  if json_peek(data, pos) == 101 || json_peek(data, pos) == 69 {
+    pos += 1
+    if json_peek(data, pos) == 43 || json_peek(data, pos) == 45 {
+      pos += 1
+    }
+    if !json_digit(json_peek(data, pos)) {
+      return Error(Syntax(pos))
+    }
+    while json_digit(json_peek(data, pos)) {
+      pos += 1
+    }
+  }
+  Ok(())
+}
+
+// Adapted serde_json src/read.rs scratch string copying,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: copy validated token bytes.
+fn json_owned_text(data: Bytes, start: u64, end: u64) -> String uses {} {
+  let mut output: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut output, data[i])
+    i += 1
+  }
+  match std@1/text.finish(take output) {
+    Ok(s) => s,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+// Adapted serde_json src/read.rs decode_hex_escape/decode_four_hex_digits,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: safe bytewise accumulation.
+@noalloc
+fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
+  let mut n: u64 = 0
+  let mut i: u64 = 0
+  while i < 4 {
+    let c = json_peek(data, pos)
+    let d: u64 = if c >= 48 && c <= 57 {
+      core@1/int.widen(c - 48)
+    } else if c >= 65 && c <= 70 {
+      core@1/int.widen(c - 55)
+    } else if c >= 97 && c <= 102 {
+      core@1/int.widen(c - 87)
+    } else {
+      return Error(Syntax(pos))
+    }
+    n = n * 16 + d
+    pos += 1
+    i += 1
+  }
+  Ok(n)
+}
+
+// Adapted serde_json src/read.rs push_wtf8_codepoint,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+// Only validated Unicode scalars reach this encoder; safe List operations.
+fn json_scalar_utf8(n: u64, mut output: List[u8]) -> () uses {} {
+  if n < 128 {
+    core@1/list.push(mut output, core@1/int.narrow(n))
+  } else {
+    if n < 2048 {
+      core@1/list.push(mut output, core@1/int.narrow(192u64 | n >> 6))
+    } else {
+      if n < 65536 {
+        core@1/list.push(mut output, core@1/int.narrow(224u64 | n >> 12))
+      } else {
+        core@1/list.push(mut output, core@1/int.narrow(240u64 | n >> 18))
+        core@1/list.push(mut output, core@1/int.narrow(128u64 | n >> 12 & 63))
+      }
+      core@1/list.push(mut output, core@1/int.narrow(128u64 | n >> 6 & 63))
+    }
+    core@1/list.push(mut output, core@1/int.narrow(128u64 | n & 63))
+  }
+}
+
+// Adapted serde_json src/read.rs parse_str_bytes/parse_escape/parse_unicode_escape,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Strict UTF-8 mode only.
+fn json_quoted(data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
+  if json_peek(data, pos) != 34 {
+    return Error(Syntax(pos))
+  }
+  pos += 1
+  let mut output: List[u8] = []
+  while pos < core@1/bytes.len(data) {
+    let c = data[pos]
+    pos += 1
+    if c == 34 {
+      return match std@1/text.finish(take output) {
+        Ok(s) => Ok(s),
+        Error(_) => Error(Syntax(pos)),
+      }
+    }
+    if c < 32 {
+      return Error(Syntax(pos - 1))
+    }
+    if c != 92 {
+      core@1/list.push(mut output, c)
+    } else {
+      if pos == core@1/bytes.len(data) {
+        return Error(Syntax(pos))
+      }
+      let e = data[pos]
+      pos += 1
+      if e == 34 || e == 92 || e == 47 {
+        core@1/list.push(mut output, e)
+      } else if e == 98 {
+        core@1/list.push(mut output, 8)
+      } else if e == 102 {
+        core@1/list.push(mut output, 12)
+      } else if e == 110 {
+        core@1/list.push(mut output, 10)
+      } else if e == 114 {
+        core@1/list.push(mut output, 13)
+      } else if e == 116 {
+        core@1/list.push(mut output, 9)
+      } else if e == 117 {
+        let mut n = json_hex4(data, mut pos)?
+        if n >= 56320 && n <= 57343 {
+          return Error(Syntax(pos - 4))
+        }
+        if n >= 55296 && n <= 56319 {
+          if json_peek(data, pos) != 92 {
+            return Error(Syntax(pos))
+          }
+          pos += 1
+          if json_peek(data, pos) != 117 {
+            return Error(Syntax(pos))
+          }
+          pos += 1
+          let low = json_hex4(data, mut pos)?
+          if low < 56320 || low > 57343 {
+            return Error(Syntax(pos - 4))
+          }
+          n = 65536 + (n - 55296) * 1024 + low - 56320
+        }
+        json_scalar_utf8(n, mut output)
+      } else {
+        return Error(Syntax(pos - 1))
+      }
+    }
+  }
+  Error(Syntax(pos))
+}
+
+@noalloc
+// Adapted serde_json src/de.rs parse_ident,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+fn json_keyword(data: Bytes, mut pos: u64, word: String) -> Result[(), JsonError] uses {} {
+  let bytes = core@1/string.as_bytes(word)
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(bytes) {
+    if pos == core@1/bytes.len(data) || data[pos] != bytes[i] {
+      return Error(Syntax(pos))
+    }
+    pos += 1
+    i += 1
+  }
+  Ok(())
+}
+
+// Adapted serde_json src/de.rs deserialize_any/SeqAccess/MapAccess at
+// 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8; Zig lib/std/json/dynamic.zig
+// handleCompleteValue at bff490a23889750de7096d9057c0a432efc929a8 supplies
+// ordered-object duplicate rejection. Ordinary owned locals clean up on every ?.
+fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] uses {} {
+  json_whitespace(data, mut pos)
+  let c = json_peek(data, pos)
+  if c == 110 {
+    json_keyword(data, mut pos, "null")?
+    return Ok(Null())
+  }
+  if c == 116 {
+    json_keyword(data, mut pos, "true")?
+    return Ok(Bool(true))
+  }
+  if c == 102 {
+    json_keyword(data, mut pos, "false")?
+    return Ok(Bool(false))
+  }
+  if c == 34 {
+    return Ok(Text(json_quoted(data, mut pos)?))
+  }
+  if c == 45 || json_digit(c) {
+    let start = pos
+    json_number_end(data, mut pos)?
+    return Ok(Number(json_owned_text(data, start, pos)))
+  }
+  if c != 91 && c != 123 {
+    return Error(Syntax(pos))
+  }
+  if depth == MAX_NESTING {
+    return Error(Nesting(pos))
+  }
+  pos += 1
+  json_whitespace(data, mut pos)
+  if c == 91 {
+    let mut items: List[box Value] = []
+    if json_peek(data, pos) == 93 {
+      pos += 1
+      let array_value: Value = Array(take items)
+      return Ok(take array_value)
+    }
+    while true {
+      let child = json_node(data, mut pos, depth + 1)?
+      core@1/list.push(mut items, box take child)
+      json_whitespace(data, mut pos)
+      let next = json_peek(data, pos)
+      if next == 93 {
+        pos += 1
+        break
+      }
+      if next != 44 {
+        return Error(Syntax(pos))
+      }
+      pos += 1
+    }
+    let array_value: Value = Array(take items)
+    return Ok(take array_value)
+  }
+  let mut entries: Map[String, box Value] = core@1/map.empty()
+  if json_peek(data, pos) == 125 {
+    pos += 1
+    return Ok(Object(take entries))
+  }
+  while true {
+    json_whitespace(data, mut pos)
+    let key_pos = pos
+    let key = json_quoted(data, mut pos)?
+    match core@1/map.get(entries, key) {
+      Some(_) => return Error(DuplicateKey(key_pos)),
+      None() => (),
+    }
+    json_whitespace(data, mut pos)
+    if json_peek(data, pos) != 58 {
+      return Error(Syntax(pos))
+    }
+    pos += 1
+    let child = json_node(data, mut pos, depth + 1)?
+    core@1/map.insert(mut entries, take key, box take child)
+    json_whitespace(data, mut pos)
+    let next = json_peek(data, pos)
+    if next == 125 {
+      pos += 1
+      break
+    }
+    if next != 44 {
+      return Error(Syntax(pos))
+    }
+    pos += 1
+  }
+  Ok(Object(take entries))
+}
+
+// Adapted serde_json src/de.rs from_str/end,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+// Hirsel takes the source, returns owned strings and lossless decimal lexemes.
+pub fn parse(take text: String) -> Result[Value, JsonError] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let mut pos: u64 = 0
+  let value = json_node(data, mut pos, 0)?
+  json_whitespace(data, mut pos)
+  if pos != core@1/bytes.len(data) {
+    return Error(Syntax(pos))
+  }
+  Ok(take value)
+}
+
+// Adapted serde_json src/ser.rs format_escaped_str_contents at
+// 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Compact ASCII escape spelling,
+// preserving UTF-8 runs; no escaping of solidus or non-ASCII scalars.
+fn json_write_text(text: String, mut builder: List[u8]) -> () uses {} {
+  core@1/list.push(mut builder, 34)
+  let data = core@1/string.as_bytes(text)
+  let hex: Bytes = b"0123456789abcdef"
+  let mut at: u64 = 0
+  while at < core@1/bytes.len(data) {
+    let c = data[at]
+    at += 1
+    if c == 34 || c == 92 {
+      core@1/list.push(mut builder, 92)
+      core@1/list.push(mut builder, c)
+    } else if c < 32 {
+      let short: u8 = if c == 8 {
+        98
+      } else if c == 9 {
+        116
+      } else if c == 10 {
+        110
+      } else if c == 12 {
+        102
+      } else if c == 13 {
+        114
+      } else {
+        0
+      }
+      core@1/list.push(mut builder, 92)
+      if short != 0 {
+        core@1/list.push(mut builder, short)
+      } else {
+        core@1/list.push(mut builder, 117)
+        core@1/list.push(mut builder, 48)
+        core@1/list.push(mut builder, 48)
+        core@1/list.push(mut builder, hex[core@1/int.widen(c >> 4)])
+        core@1/list.push(mut builder, hex[core@1/int.widen(c & 15)])
+      }
+    } else {
+      core@1/list.push(mut builder, c)
+    }
+  }
+  core@1/list.push(mut builder, 34)
+}
+
+// Adapted serde_json src/ser.rs NumberStrEmitter/write_number_str,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8; validate public Number strings.
+fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let mut pos: u64 = 0
+  match json_number_end(data, mut pos) {
+    Ok(_) => (),
+    Error(_) => return Error(InvalidNumber()),
+  }
+  if pos != core@1/bytes.len(data) {
+    return Error(InvalidNumber())
+  }
+  std@1/text.append(mut builder, text)
+  Ok(())
+}
+
+// Adapted serde_json src/ser.rs compact Serializer sequence/map dispatch,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+// #98: matching a box uses implicit payload projections and borrows the DOM.
+fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result[
+  (),
+  JsonError
+] uses {} {
+  match value {
+    Null() => {
+      std@1/text.append(mut builder, "null")
+      Ok(())
+    },
+    Bool(b) => {
+      std@1/text.append(
+        mut builder,
+        if b {
+          "true"
+        } else {
+          "false"
+        }
+      )
+      Ok(())
+    },
+    Number(n) => json_write_number(n, mut builder),
+    Text(s) => {
+      json_write_text(s, mut builder)
+      Ok(())
+    },
+    Array(xs) => {
+      if depth == MAX_NESTING {
+        return Error(Nesting(depth))
+      }
+      core@1/list.push(mut builder, 91)
+      let mut first: bool = true
+      for item in xs {
+        if !first {
+          core@1/list.push(mut builder, 44)
+        }
+        first = false
+        json_write_box(item, mut builder, depth + 1)?
+      }
+      core@1/list.push(mut builder, 93)
+      Ok(())
+    },
+    Object(xs) => {
+      if depth == MAX_NESTING {
+        return Error(Nesting(depth))
+      }
+      core@1/list.push(mut builder, 123)
+      let mut first: bool = true
+      for (key, child) in xs {
+        if !first {
+          core@1/list.push(mut builder, 44)
+        }
+        first = false
+        json_write_text(key, mut builder)
+        core@1/list.push(mut builder, 58)
+        json_write_box(child, mut builder, depth + 1)?
+      }
+      core@1/list.push(mut builder, 125)
+      Ok(())
+    },
+  }
+}
+
+// Adapted serde_json src/ser.rs compact Serializer dispatch and sequence/map
+// emission, commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
+// Borrow input, append to the caller's counted builder, retain prefixes on error.
+pub fn write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
+  json_write_box(box copy value, mut builder, 0)
+}
+
+// Adapted serde_json src/ser.rs to_string,
+// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: one writer path.
+pub fn stringify(value: Value) -> Result[String, JsonError] uses {} {
+  let mut builder: List[u8] = []
+  write(value, mut builder)?
+  match std@1/text.finish(take builder) {
+    Ok(s) => Ok(s),
+    Error(_) => Error(InvalidNumber()),
+  }
+}

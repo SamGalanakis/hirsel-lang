@@ -1,0 +1,36 @@
+// rule: CT-2
+// expect: run
+// stdout: ok
+const BASE: u8 = 2u8
+
+fn helper(x: u8) -> u8
+  requires x > 0u8 {
+  x + 1u8
+}
+
+fn choose(x: u8) -> u8
+  requires x > 0u8
+  ensures result == 3u8 {
+  comptime 3u8
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let expected = comptime helper(BASE)
+  let value = choose(9u8)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if value == expected {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

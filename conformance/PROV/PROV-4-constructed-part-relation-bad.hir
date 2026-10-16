@@ -1,0 +1,13 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 12
+// A constructed record holds its parts' loans (§04), so a record built from a
+// binding whose blocks live in `a` lives in `a` too, and it cannot be kept in
+// an unplaced result (#79).
+type Ast {
+  s: String,
+}
+
+fn f(a: Arena) -> Ast {
+  let x: String in {a, x} = "x"
+  Ast(s: x)
+}

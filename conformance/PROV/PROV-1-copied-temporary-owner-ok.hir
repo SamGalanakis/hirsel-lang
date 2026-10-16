@@ -1,0 +1,23 @@
+// rule: PROV-1
+// expect: accept
+// "A copy of p keeps p's identity." A copy of a computed value has no place
+// to share an identity with, so the binding that holds it is a new owner.
+type R {
+  n: u64,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn probe(take x: R) -> () {
+  let r = copy fn() {
+    x
+  }()
+  let p = make(r)
+  inspect(r, p)
+}

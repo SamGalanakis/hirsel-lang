@@ -1,0 +1,12 @@
+pub opaque type Pure: plain + sendable uses {Stdout} {
+  s: Stdout,
+}
+
+pub fn make(s: Stdout) -> Pure {
+  Pure(s: s)
+}
+
+pub fn compute(p: Pure, x: u64) -> u64 {
+  let _ = out.print(p.s, "library effect under client uses {}\n")
+  x + 1
+}

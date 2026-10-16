@@ -1,0 +1,8 @@
+// rule: GEN-1
+// expect: accept
+fn outer[T: data](x: T) -> () {
+  fn inner[U](take y: U) -> () {
+    let compared = x == x
+  }
+  ()
+}

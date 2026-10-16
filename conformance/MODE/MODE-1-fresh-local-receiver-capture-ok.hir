@@ -1,0 +1,40 @@
+// rule: MODE-1
+// expect: accept
+// A local receiver that now holds a fresh global value is read as global
+// through a closure that borrows it, as it is read directly.
+type Holder {
+  value: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn hold(x: Holder) -> Holder in x {
+  copy x
+}
+
+fn called(x: Bytes) -> Bytes {
+  let mut slot = view(x)
+  slot = b"new"
+  fn() {
+    copy slot
+  }()
+}
+
+fn bound(x: Bytes) -> Bytes {
+  let mut slot = view(x)
+  slot = b"new"
+  let read = fn() {
+    copy slot
+  }
+  read()
+}
+
+fn field(x: Holder) -> Bytes {
+  let mut slot = hold(x)
+  slot = Holder(value: b"new")
+  fn() {
+    slot.value
+  }()
+}

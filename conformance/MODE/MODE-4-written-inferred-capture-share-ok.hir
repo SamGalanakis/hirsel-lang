@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: accept
+fn sink(x: sendable Bytes) {}
+
+fn probe() {
+  let x: Bytes = b"a"
+  let f = fn() {
+    sink(x)
+  }
+  f()
+}

@@ -1,0 +1,10 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 9
+// "Anything else derived from x is local to x."
+type Rec {
+  items: Bytes,
+}
+
+fn example(r: Rec) -> () {
+  r.items = b"new"
+}

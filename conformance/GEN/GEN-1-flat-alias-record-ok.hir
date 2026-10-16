@@ -1,0 +1,14 @@
+// rule: GEN-1
+// expect: accept
+// MEM-12 keeps flat storage opt-in; compatible fields do not grant root Flatness.
+flat type Text {
+  value: String,
+}
+
+type Alias = Text
+
+fn use_flat[T: flat](x: T) {}
+
+fn example(x: Alias) {
+  use_flat(x)
+}

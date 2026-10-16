@@ -1,0 +1,12 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 7
+// A written callable type keeps its declared environment promises. Its `mut`
+// Iter parameter lends any iterator, so a function value that requires a
+// sendable one is another type.
+fn build() {
+  let step: fn(mut it: Iter[u64]) -> Option[u64] = fn(mut it: sendable Iter[u64]) -> Option[
+    u64
+  ] {
+    iter.next(mut it)
+  }
+}

@@ -1,0 +1,43 @@
+// rule: LANG-2
+// expect: accept
+resource type Sized[n: size] {
+  payload: Inline[u32, n],
+}
+
+fn make[n: size](xs: Inline[u32, n]) -> Sized[n] {
+  Sized(payload: xs)
+}
+
+fn identity[T: plain](value: T) -> T {
+  value
+}
+
+fn empty[T]() -> List[T] {
+  []
+}
+
+fn empty_sizes[n: size]() -> List[Inline[u32, n]] {
+  []
+}
+
+fn mixed[n: size, T: plain](xs: Inline[T, n]) -> Inline[T, n] {
+  xs
+}
+
+fn paired[n: size](a: Inline[u32, n], b: Inline[u8, n]) {}
+
+fn nested[n: size](xs: box Inline[u32, n]) {}
+
+fn probe(boxed: box Inline[u32, 3]) {
+  let a: Inline[u32, 3] = [1, 2, 3]
+  let size_from_argument = make(a)
+  let size_from_context: List[Inline[u32, 3]] = empty_sizes()
+  let size_from_both: Sized[3] = make(a)
+  let type_from_argument = identity(3u32)
+  let type_from_context: List[u32] = empty()
+  let type_from_both: u32 = identity(3u32)
+  let both_parameters = mixed(a)
+  let b: Inline[u8, 3] = [1, 2, 3]
+  paired(a, b)
+  nested(boxed)
+}

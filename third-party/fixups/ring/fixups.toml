@@ -1,0 +1,73 @@
+# ring 0.17.14 build.rs RING_SRCS and ASM_TARGETS, using the published
+# pregenerated ELF assembly and symbol-prefix headers (no Perl/build script).
+buildscript.run = false
+
+[['cfg(target_arch = "x86_64")'.cxx_library]]
+name = "ring-core-x86_64"
+srcs = [
+  "crypto/cpu_intel.c",
+  "crypto/crypto.c",
+  "crypto/curve25519/curve25519.c",
+  "crypto/curve25519/curve25519_64_adx.c",
+  "crypto/fipsmodule/aes/aes_nohw.c",
+  "crypto/fipsmodule/bn/montgomery.c",
+  "crypto/fipsmodule/bn/montgomery_inv.c",
+  "crypto/fipsmodule/ec/ecp_nistz.c",
+  "crypto/fipsmodule/ec/gfp_p256.c",
+  "crypto/fipsmodule/ec/gfp_p384.c",
+  "crypto/fipsmodule/ec/p256-nistz.c",
+  "crypto/fipsmodule/ec/p256.c",
+  "crypto/limbs/limbs.c",
+  "crypto/mem.c",
+  "crypto/poly1305/poly1305.c",
+  "pregenerated/aes-gcm-avx2-x86_64-elf.S",
+  "pregenerated/aesni-gcm-x86_64-elf.S",
+  "pregenerated/aesni-x86_64-elf.S",
+  "pregenerated/chacha-x86_64-elf.S",
+  "pregenerated/chacha20_poly1305_x86_64-elf.S",
+  "pregenerated/ghash-x86_64-elf.S",
+  "pregenerated/p256-x86_64-asm-elf.S",
+  "pregenerated/sha256-x86_64-elf.S",
+  "pregenerated/sha512-x86_64-elf.S",
+  "pregenerated/vpaes-x86_64-elf.S",
+  "pregenerated/x86_64-mont-elf.S",
+  "pregenerated/x86_64-mont5-elf.S",
+  "third_party/fiat/asm/fiat_curve25519_adx_mul.S",
+  "third_party/fiat/asm/fiat_curve25519_adx_square.S"
+]
+headers = ["include/**/*.h", "crypto/**/*.h", "third_party/fiat/**/*.h", "pregenerated/**/*.h"]
+include_paths = ["include", "pregenerated"]
+compiler_flags = ["-O3", "-std=c11", "-fvisibility=hidden", "-DNDEBUG"]
+
+[['cfg(target_arch = "aarch64")'.cxx_library]]
+name = "ring-core-aarch64"
+srcs = [
+  "crypto/curve25519/curve25519.c",
+  "crypto/fipsmodule/aes/aes_nohw.c",
+  "crypto/fipsmodule/bn/montgomery.c",
+  "crypto/fipsmodule/bn/montgomery_inv.c",
+  "crypto/fipsmodule/ec/ecp_nistz.c",
+  "crypto/fipsmodule/ec/gfp_p256.c",
+  "crypto/fipsmodule/ec/gfp_p384.c",
+  "crypto/fipsmodule/ec/p256-nistz.c",
+  "crypto/fipsmodule/ec/p256.c",
+  "crypto/limbs/limbs.c",
+  "crypto/mem.c",
+  "crypto/poly1305/poly1305.c",
+  "pregenerated/aesv8-armx-linux64.S",
+  "pregenerated/aesv8-gcm-armv8-linux64.S",
+  "pregenerated/armv8-mont-linux64.S",
+  "pregenerated/chacha-armv8-linux64.S",
+  "pregenerated/chacha20_poly1305_armv8-linux64.S",
+  "pregenerated/ghash-neon-armv8-linux64.S",
+  "pregenerated/ghashv8-armx-linux64.S",
+  "pregenerated/p256-armv8-asm-linux64.S",
+  "pregenerated/sha256-armv8-linux64.S",
+  "pregenerated/sha512-armv8-linux64.S",
+  "pregenerated/vpaes-armv8-linux64.S"
+]
+headers = ["include/**/*.h", "crypto/**/*.h", "third_party/fiat/**/*.h", "pregenerated/**/*.h"]
+include_paths = ["include", "pregenerated"]
+# ring build.rs configure_cc: clang-only mode without a target sysroot.
+# Its crypto/internal.h uses portable memory routines; clang supplies stdint.
+compiler_flags = ["--target=aarch64-unknown-linux-gnu", "-nostdlibinc", "-DRING_CORE_NOSTDLIBINC=1", "-O3", "-std=c11", "-fvisibility=hidden", "-DNDEBUG"]

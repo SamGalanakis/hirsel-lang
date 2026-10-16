@@ -1,0 +1,13 @@
+// rule: FACT-1
+// expect: reject FACT-1 at line 8
+fn eat(take xs: List[u8]) -> bool {
+  true
+}
+
+fn probe(take xs: List[u8]) -> u64
+  requires {
+    let alias = xs
+    eat(take alias)
+  } {
+  list.len(xs)
+}

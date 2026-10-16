@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 15
+// "An ... Iter is sendable exactly when everything it captures is."
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(take state: Bytes) -> () {
+  let it: Iter[u64] = iter.from(
+    take state,
+    fn(mut st: Bytes) -> Option[u64] {
+      None
+    }
+  )
+  cross(take it)
+}

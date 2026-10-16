@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: accept
+// "A brand ends when p ... leaves scope."
+fn inspect(s: Slots[u64], id: SlotId[u64] of s) -> () {
+  let _ = slots.get(s, id)
+}
+
+fn example() -> () {
+  let mut outer: Slots[u64] = slots.empty()
+  let id = {
+    let item: u64 = 1
+    slots.insert(mut outer, take item)
+  }
+  inspect(outer, id)
+}

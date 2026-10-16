@@ -1,0 +1,9 @@
+// rule: MODE-4
+// expect: accept
+fn probe(take x: sendable Bytes) {
+  let f = fn() {
+    let _ = x
+  }
+  let alias = copy x
+  f()
+}

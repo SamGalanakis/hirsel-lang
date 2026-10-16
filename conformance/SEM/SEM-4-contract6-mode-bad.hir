@@ -1,0 +1,30 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 3
+@loop_source(open, next)
+type View {
+  source: String,
+}
+
+type Cursor {
+  source: String,
+  position: u64,
+}
+
+@noalloc
+fn view(s: String) -> View in s {
+  View(source: copy s)
+}
+
+@noalloc
+fn open(v: View) -> Cursor in v {
+  Cursor(source: copy v.source, position: 0)
+}
+
+@noalloc
+fn next(it: Cursor) -> Option[String] in it {
+  if it.position == 0 {
+    Some(copy it.source)
+  } else {
+    None
+  }
+}

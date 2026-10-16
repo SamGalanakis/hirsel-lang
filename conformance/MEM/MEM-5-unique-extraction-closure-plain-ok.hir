@@ -1,0 +1,7 @@
+// rule: MEM-5
+// expect: accept
+fn probe() {
+  let f: @noalloc fn(x: u64) -> unique u64 uses {} = fn(x: u64) -> unique u64 {
+    unique x
+  }
+}

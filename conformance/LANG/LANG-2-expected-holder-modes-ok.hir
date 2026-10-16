@@ -1,0 +1,34 @@
+// rule: LANG-2
+// expect: accept
+// The expected type decides a type argument only where the parameter occurs
+// as a type. The locality of the expected value is what its receiver asks of
+// the result, and a global result meets it. `identity` is instantiated at
+// Token, not at a local Token its global argument could not be.
+resource type Token {
+  n: u32,
+}
+drop(x) {
+  ()
+}
+
+fn identity[T](take x: T) -> T {
+  x
+}
+
+fn same[T](take x: T) -> T in x {
+  x
+}
+
+fn acquired(take token: Token) -> Token in token {
+  identity(take token)
+}
+
+fn named(take token: Token) -> Token in token {
+  same(take token)
+}
+
+fn bound(x: String) -> u64 {
+  let text: String in text = copy_to(heap, "heap")
+  let other: String in x = copy_to(heap, "heap")
+  string.byte_len(text) + string.byte_len(other)
+}

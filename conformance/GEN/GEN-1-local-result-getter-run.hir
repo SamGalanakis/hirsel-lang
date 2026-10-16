@@ -1,0 +1,18 @@
+// rule: GEN-1
+// expect: run
+// stdout: word
+fn at[T](xs: Array[T], i: u64) -> T in xs {
+  xs[i]
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let words: Array[String] = ["word\n"]
+  let numbers: Array[u64] = [7u64]
+  let word = at(words, 0u64)
+  let number = at(numbers, 0u64)
+  if number == 7u64 {
+    let _ = out.print(stdout, word)
+  }
+  Ok(())
+}

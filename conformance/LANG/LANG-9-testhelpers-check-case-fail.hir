@@ -1,0 +1,8 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 6
+// stdout: test failure: seed=0 case=18446744073709551615
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  core@1/test.check_case(t, false, 18446744073709551615)
+  Ok(())
+}

@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: accept
+// Regression from the unrestricted written-sendability agreement campaign.
+type Chain {
+  next: Option[box Chain],
+  f: fn() -> (),
+}
+
+fn probe(take f: (sendable fn() -> ()) in f, again: bool) {
+  let mut n: Chain = Chain(next: None, f: copy f)
+  while again {
+    n = Chain(next: Some(box copy n), f: copy f)
+  }
+  n.f()
+}

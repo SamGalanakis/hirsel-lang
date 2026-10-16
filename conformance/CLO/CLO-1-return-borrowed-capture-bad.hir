@@ -1,0 +1,19 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 14
+// "Captures are borrows."
+// Over a borrowed r the environment-local result stays local and cannot be taken.
+type Rec {
+  items: Bytes,
+}
+
+fn consume(take r: Rec) -> () {
+  ()
+}
+
+fn example(r: Rec) -> () {
+  consume(
+    fn() {
+      r
+    }()
+  )
+}

@@ -1,0 +1,6 @@
+// rule: CAP-4
+// expect: accept
+// Atomics are "created and operated through Tasks" (CONC-7/CAP-4).
+fn make(tasks: Tasks) -> () {
+  let a: Atomic[u32] = atomic.create(tasks, 1)
+}

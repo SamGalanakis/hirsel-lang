@@ -1,0 +1,25 @@
+// rule: OWN-4
+// expect: run
+// stdout: bad
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut m: Set[u8] = set.empty()
+  set.insert(mut m, 2)
+  let n = copy m
+  set.insert(mut m, 1)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if m == n {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

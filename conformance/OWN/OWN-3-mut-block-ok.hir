@@ -1,0 +1,11 @@
+// rule: OWN-3
+// expect: accept
+// "A mut borrow is exclusive."
+// The place itself is lent exclusively.
+fn first(mut a: Array[u64]) -> () {
+  a[0] = 5
+}
+
+fn example(mut xs: Array[u64]) -> () {
+  first(mut xs)
+}

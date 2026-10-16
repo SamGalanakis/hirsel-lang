@@ -1,0 +1,7 @@
+// rule: PROV-4
+// expect: accept
+// Declaring the result in the arena keeps the extracted value where it lives.
+fn probe(a: Arena, x: List[Bytes] in a) -> unique List[Bytes] in a {
+  let y = unique x
+  y
+}

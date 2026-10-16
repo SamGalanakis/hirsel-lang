@@ -1,0 +1,8 @@
+// rule: CAP-3
+// expect: reject CAP-3 at line 5
+fn probe(dir: Dir) {
+  let f = fn() uses {} {
+    let _ = dir
+  }
+  let _ = f()
+}

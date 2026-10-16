@@ -1,0 +1,14 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 12
+// "e ? C maps the error through C, a path naming a one-argument variant or function".
+// The propagated error is a temporary, so a mapper cannot receive it as a mut place.
+type Failure = Wrapped(u8)
+
+fn wrap(mut code: u8) -> Failure {
+  Wrapped(code)
+}
+
+fn example(r: Result[(), u8]) -> Result[(), Failure] {
+  r ? wrap
+  Ok(())
+}

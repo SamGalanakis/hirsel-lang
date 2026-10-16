@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: accept
+// "Local values cannot be ... returned as global."
+fn get(x: Bytes) -> Bytes in x {
+  x
+}

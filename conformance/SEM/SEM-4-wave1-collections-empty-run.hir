@@ -1,0 +1,63 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+@noalloc
+fn compare(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1i32
+  } else if a > b {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+@noalloc
+fn impossible(n: u64) -> bool uses {} {
+  failure.check(false, Bounds())
+  n == 0
+}
+
+fn mapper(n: u64) -> u64 uses {} {
+  failure.check(false, Bounds())
+  n
+}
+
+fn folder(take total: u64, n: u64) -> u64 uses {} {
+  failure.check(false, Bounds())
+  total + n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut empty: unique List[u64] = unique []
+  std@1/list.sort(mut empty, compare)
+  std@1/list.reverse(mut empty)
+  std@1/list.rotate(mut empty, 18446744073709551615u64)
+  failure.check(std@1/list.binary_search(empty, 1, compare) == None(), Bounds())
+  failure.check(std@1/list.find(empty, impossible) == None(), Bounds())
+  let mapped: List[u64] = std@1/list.map(empty, mapper)
+  failure.check(list.len(mapped) == 0, Bounds())
+  failure.check(std@1/list.fold(empty, 9u64, folder) == 9, Bounds())
+  failure.check(
+    std@1/list.all(empty, impossible) && !std@1/list.any(empty, impossible),
+    Bounds()
+  )
+  let filtered = std@1/list.filter(copy empty, impossible)
+  let (yes, no) = std@1/list.partition(copy empty, impossible)
+  failure.check(
+    list.len(filtered) == 0 && list.len(yes) == 0 && list.len(no) == 0,
+    Bounds()
+  )
+  let joined = std@1/list.concat(copy empty, copy empty)
+  let deduplicated = std@1/list.dedup(copy empty)
+  failure.check(list.len(joined) == 0 && list.len(deduplicated) == 0, Bounds())
+  let mut one: unique List[u64] = unique [7]
+  std@1/list.sort(mut one, compare)
+  std@1/list.reverse(mut one)
+  std@1/list.rotate(mut one, 10)
+  failure.check(one == [7], Bounds())
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

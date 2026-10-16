@@ -1,0 +1,10 @@
+// rule: CT-2
+// expect: reject CT-2 at line 10
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+const VALUE: Map[u8, Trace] = map.empty()

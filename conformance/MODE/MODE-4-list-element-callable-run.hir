@@ -1,0 +1,24 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// The twin of MODE-4-list-element-callable-bad.
+fn probe(take f: sendable fn() -> u64) -> u64 {
+  let jobs: List[sendable fn() -> u64] = [f]
+  jobs[0]()
+}
+
+fn seven() -> u64 {
+  7
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

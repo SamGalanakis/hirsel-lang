@@ -1,0 +1,19 @@
+// rule: MEM-12
+// expect: accept
+flat type Entry {
+  text: String,
+  number: u64,
+}
+
+flat type Entries {
+  items: List[Entry],
+}
+
+fn count(xs: Entries) -> u64 {
+  let mut total: u64 = 0
+  for entry in xs.items {
+    total += entry.number
+    continue
+  }
+  total
+}

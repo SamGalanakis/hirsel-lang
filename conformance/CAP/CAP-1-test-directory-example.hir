@@ -1,0 +1,22 @@
+// rule: CAP-1
+// expect: accept
+// "Dir is a directory capability"; test.dir supplies an explicit test grant.
+pub fn normalize_tree(dir: Dir) -> Result[u64, FileError] {
+  let mut changed: u64 = 0
+  let walk = file.walk(dir)?
+  for step in take walk {
+    let path = step?
+    let old = file.read_bytes(dir, path)?
+    let new = std@1/bytes.replace(old, b"\r\n", b"\n")
+    if new != old {
+      file.write_bytes(dir, path, take new)?
+      changed += 1
+    }
+  }
+  Ok(changed)
+}
+
+pub fn test_normalize(t: Test) -> () {
+  let dir = test.dir(t, [(path.of("a.txt"), b"x\r\ny")])
+  test.check(t, normalize_tree(dir) == Ok(1))
+}

@@ -1,0 +1,6 @@
+// rule: PROV-3
+// expect: reject PROV-1 at line 5
+// "Task[R] of s."
+fn example(a: Scope, b: Scope, take h: Task[u64] of a) -> u64 {
+  task.await(b, take h)
+}

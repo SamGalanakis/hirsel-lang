@@ -1,0 +1,13 @@
+// rule: LANG-5
+// expect: accept
+// Shows "A value changes only through a visible name"
+type Rec {
+  n: u32,
+}
+
+@noalloc
+fn example() -> u32 {
+  let mut r = Rec(n: 0)
+  r.n = 1
+  r.n
+}

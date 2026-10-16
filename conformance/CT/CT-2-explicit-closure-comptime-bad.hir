@@ -1,0 +1,8 @@
+// rule: CT-2
+// expect: reject CT-2 at line 4
+fn probe() -> u8 {
+  let f: fn() -> u8 = comptime fn() {
+    1u8
+  }
+  f()
+}

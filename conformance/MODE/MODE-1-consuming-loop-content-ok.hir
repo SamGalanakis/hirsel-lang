@@ -1,0 +1,29 @@
+// rule: MODE-1
+// expect: accept
+// The local elements of a consumed collection of views are read inside the
+// loop and nothing outlives it.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn size(x: Bytes) -> u64 {
+  1
+}
+
+fn total(p: Bytes) -> u64 {
+  let xs: List[Bytes] = [view(p)]
+  let mut sum: u64 = 0
+  for x in take xs {
+    sum += size(x)
+  }
+  sum
+}
+
+fn pairs(p: Bytes) -> u64 {
+  let xs: List[(u64, Bytes)] = [(1, view(p))]
+  let mut sum: u64 = 0
+  for (n, v) in take xs {
+    sum += n + size(v)
+  }
+  sum
+}

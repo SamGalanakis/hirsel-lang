@@ -1,0 +1,16 @@
+[package]
+name = "hirsel-validate"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-intern = { path = "../hirsel-intern" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-types = { path = "../hirsel-types" }
+
+[dev-dependencies]
+hirsel-diag = { path = "../hirsel-diag" }
+hirsel-span = { path = "../hirsel-span" }

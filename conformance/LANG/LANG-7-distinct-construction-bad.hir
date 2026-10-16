@@ -1,0 +1,9 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 8
+// Shows "No overloading, type classes, implicit conversions (including between error types), macros, exceptions, any or casts."
+distinct type Percent(v: u8)
+
+@noalloc
+fn example(v: u8) -> Percent {
+  v
+}

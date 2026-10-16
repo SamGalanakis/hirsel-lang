@@ -1,0 +1,7 @@
+rc-trace v1
+max 16
+# In-place mutation requires uniqueness: a shared block must be copied instead.
+alloc r1 1
+alloc r2 0
+dup r1 r3
+write r1 0 r2

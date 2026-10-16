@@ -1,0 +1,6 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 6
+// spec: #61
+// "A value in a cannot outlive a." A taken arena ends with the call, so the
+// caller's list cannot be declared to live in it.
+fn push[T](take a: Arena, mut xs: unique List[T] in a, take x: T in a) -> () {}

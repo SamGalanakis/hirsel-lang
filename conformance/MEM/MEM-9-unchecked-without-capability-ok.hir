@@ -1,0 +1,8 @@
+// rule: MEM-9
+// expect: accept
+// "unchecked arithmetic ... only with the Unsafe capability, under a written aliasing contract".
+// Aliasing contract — scalar operands hold no memory aliases.
+@noalloc
+fn add(permit: Unsafe, a: u8, b: u8) -> u8 {
+  int.unchecked_add(permit, a, b)
+}

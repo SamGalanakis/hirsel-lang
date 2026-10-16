@@ -1,0 +1,13 @@
+// rule: OWN-8
+// expect: accept
+fn observe(x: String) -> () {
+  ()
+}
+
+fn probe(mut xs: List[String]) -> () {
+  for x in mut xs {
+    let old = x
+    x = "new"
+    observe(old)
+  }
+}

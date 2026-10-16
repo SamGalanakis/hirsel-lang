@@ -1,0 +1,15 @@
+// rule: CAP-2
+// expect: accept
+// "inert means the summary is empty"; summaries join held authority.
+type Holder {
+  dir: u32,
+}
+
+@noalloc
+fn inert_only[T: inert](x: T) -> () {
+  ()
+}
+
+fn check(cap: u32) -> () {
+  inert_only(Holder(dir: cap))
+}

@@ -1,0 +1,15 @@
+// rule: OWN-2
+// expect: accept
+type R {
+  n: Bytes,
+}
+
+fn f(take x: R, take z: R, flag: bool) {
+  let mut c = flag
+  let mut r = copy x
+  while c {
+    r = copy z
+    let _ = take r
+    c = false
+  }
+}

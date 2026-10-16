@@ -1,0 +1,17 @@
+// rule: GEN-1
+// expect: accept
+// spec: #43
+// `local(x)` relates a result to the arguments of its own call. It is not
+// part of the type an enclosing generic function forwards. `same` is
+// instantiated at U, and its result is as local as `relay`'s own argument.
+fn same[T](x: T) -> T in x {
+  x
+}
+
+fn relay[U: copyable](take x: U) -> U in x {
+  same(x)
+}
+
+fn borrowed[U: copyable](x: U) -> U in x {
+  same(x)
+}

@@ -1,0 +1,9 @@
+// rule: SEM-1
+// expect: reject SEM-1 at line 7
+fn probe(b: bool) {
+  let x = if b {
+    1u8
+  } else {
+    300
+  }
+}

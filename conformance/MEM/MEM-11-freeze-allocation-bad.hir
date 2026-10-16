@@ -1,0 +1,7 @@
+// rule: MEM-11
+// expect: reject MEM-5 at line 6
+// "Freeze and thaw each walk the value and are allocation sites".
+@noalloc
+fn operation(take x: unique String) -> Shared[String] {
+  shared.freeze(take x)
+}

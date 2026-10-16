@@ -1,0 +1,6 @@
+// rule: SEM-1
+// expect: fail SEM-1 at line 4
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let n = 1i8 << -1i8
+  Ok(())
+}

@@ -1,0 +1,5 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 3
+type Wrapped: data {
+  items: SortedMap[u32, u8],
+}

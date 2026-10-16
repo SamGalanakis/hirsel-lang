@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 7
+// A box payload placed in an arena is a part of the captured tuple at depth two.
+fn probe(a: Arena) -> fn() -> u64 {
+  let x: String in a = "x"
+  let held = (box x, 2u8)
+  fn() {
+    let (b, n) = held
+    1
+  }
+}

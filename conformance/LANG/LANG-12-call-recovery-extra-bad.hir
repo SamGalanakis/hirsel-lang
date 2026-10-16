@@ -1,0 +1,7 @@
+// rule: LANG-12
+// expect: reject LANG-12 at line 6
+fn f(x: u8) {}
+
+fn probe() {
+  f(1, 2)
+}

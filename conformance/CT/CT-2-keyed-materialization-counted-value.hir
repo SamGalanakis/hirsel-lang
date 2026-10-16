@@ -1,0 +1,20 @@
+// rule: CT-2
+// expect: run
+// stdout: 2two1one
+fn build() -> Map[u64, String] {
+  let mut m: Map[u64, String] = map.empty()
+  map.insert(mut m, 2, "two")
+  map.insert(mut m, 1, "one")
+  take m
+}
+
+const M: Map[u64, String] = build()
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  for (k, v) in M {
+    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(k))
+    let _ = out.print(io.stdout(rt)?, v)
+  }
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

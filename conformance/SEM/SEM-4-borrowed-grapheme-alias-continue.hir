@@ -1,0 +1,10 @@
+// rule: SEM-4
+// expect: accept
+fn inspect(xs: std@1/unicode.GraphemeView) {
+  for x in xs {
+    let alias = x
+    let _ = alias
+    continue
+  }
+  let _ = xs
+}

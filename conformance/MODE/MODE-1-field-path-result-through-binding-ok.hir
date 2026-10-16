@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: accept
+// v22 #77. A binding read from p.a keeps that part and stays within the
+// relation.
+type Pair {
+  a: Bytes,
+  b: Bytes,
+}
+
+fn get(p: Pair) -> Bytes in p.a {
+  let q = p.a
+  q
+}

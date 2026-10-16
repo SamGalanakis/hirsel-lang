@@ -1,0 +1,12 @@
+// rule: MEM-14
+// expect: accept
+// A binding's written callable type states its guarantees, and a function
+// value that promises them initializes it.
+@advance_only(it)
+fn advance(mut it: Iter[u64]) -> Option[u64] {
+  iter.next(mut it)
+}
+
+fn build() {
+  let step: @advance_only(it) fn(mut it: Iter[u64]) -> Option[u64] = advance
+}

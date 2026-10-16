@@ -1,0 +1,15 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 14
+// "Unique values whose contents are sendable (moved)."
+type Rec {
+  handle: Receiver[u64],
+  items: Bytes,
+}
+
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(take x: unique Rec) -> () {
+  cross(take x)
+}

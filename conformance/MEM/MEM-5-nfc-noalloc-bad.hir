@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 5
+@noalloc
+fn normalized(s: String) -> String uses {} {
+  std@1/unicode.normalize_nfc(s)
+}

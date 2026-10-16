@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 4
+fn example(value: Bytes) -> Bytes in value {
+  string.as_bytes(value)
+}

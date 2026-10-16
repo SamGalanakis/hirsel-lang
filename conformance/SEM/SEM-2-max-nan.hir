@@ -1,0 +1,25 @@
+// rule: SEM-2
+// expect: run
+// stdout: ok
+// "min/max are IEEE 754-2019 minimum/maximum (NaN propagates, −0 < +0)".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let zero: f64 = 0.0
+  let nan = zero / zero
+  let value = float.max(nan, 1.0)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if value != value {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

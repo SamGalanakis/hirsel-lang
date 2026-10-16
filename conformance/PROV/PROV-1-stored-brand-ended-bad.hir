@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 14
+// spec: #60
+// "A brand ends when p is reassigned." The assignment replaces the storage
+// the stored value's brand names, so the value it keeps has no owner.
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn dup(mut a: Trace, take b: Trace of a) -> () {
+  a = take b
+}

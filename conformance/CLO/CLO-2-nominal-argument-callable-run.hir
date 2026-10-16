@@ -1,0 +1,36 @@
+// rule: CLO-2
+// expect: run
+// stdout: ok
+// The twin of CLO-2-nominal-argument-callable-bad. The binding's written
+// type states the callable as the parameter does, so the argument is
+// received.
+fn takes(q: Option[fn() -> ()]) -> u64 {
+  match q {
+    Some(f) => {
+      f()
+      1
+    },
+    None => 0,
+  }
+}
+
+fn probe() -> u64 {
+  let p: Option[fn() -> ()] = Some(
+    fn() {
+      ()
+    }
+  )
+  takes(p)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe() == 1 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

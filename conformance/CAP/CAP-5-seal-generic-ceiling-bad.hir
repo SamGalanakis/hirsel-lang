@@ -1,0 +1,6 @@
+// rule: CAP-5
+// expect: reject LANG-4 at line 3
+@capability(global)
+pub opaque type Seal[T: plain]: () uses {U} {
+  value: T,
+}

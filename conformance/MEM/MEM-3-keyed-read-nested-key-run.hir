@@ -1,0 +1,42 @@
+// rule: MEM-3
+// expect: run
+// stdout: 7 yes
+// A nested key within the depth limit is hashed and compared in full.
+fn output_error[E](take e: E) -> () {}
+
+type Chain = End | Link(next: box Chain)
+
+fn chain(depth: u64) -> Chain {
+  let mut c: Chain = End
+  for i in 0..depth {
+    c = Link(next: box take c)
+  }
+  take c
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant_error
+  let mut m: Map[Chain, u64] = map.empty()
+  map.insert(mut m, chain(500), 7)
+  map.insert(mut m, chain(499), 8)
+  let mut s: Set[Chain] = set.empty()
+  set.insert(mut s, chain(500))
+  match map.get(m, chain(500)) {
+    Some(v) => out.print(out, std@1/u64.to_string(v)) ? output_error,
+    None => out.print(out, "none") ? output_error,
+  }
+  out.print(
+    out,
+    if set.contains(s, chain(500)) {
+      " yes\n"
+    } else {
+      " no\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

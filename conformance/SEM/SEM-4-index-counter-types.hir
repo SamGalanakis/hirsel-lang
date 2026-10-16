@@ -1,0 +1,48 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+fn values() -> List[u64] {
+  [1, 2]
+}
+
+fn array_values() -> Array[u64] {
+  [3, 4]
+}
+
+fn identity(n: u64) -> u64 {
+  n
+}
+
+fn inspect(mut total: u64) {
+  for n in values() {
+    total += identity(n)
+  }
+  for n in array_values() {
+    total += identity(n)
+  }
+  let inline: Inline[u64, 2] = [5, 6]
+  for n in inline {
+    total += identity(n)
+  }
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut total: u64 = 0
+  inspect(mut total)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if total == 21 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

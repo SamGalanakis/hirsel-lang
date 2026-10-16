@@ -1,0 +1,27 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+// "for x in take xs consumes".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: List[u8] = [1, 2, 3]
+  let mut sum: u8 = 0
+  for x in take xs {
+    sum += x
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if sum == 6 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

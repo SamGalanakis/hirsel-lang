@@ -1,0 +1,15 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 13
+// v22 R3. A let relation naming a binding's field path is within what the
+// binding holds. Both of z's fields are in a, so y, placed in b, is not
+// within z.p.
+type Two {
+  p: Bytes,
+  q: Bytes,
+}
+
+fn bad(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> u64 {
+  let z = Two(p: x, q: x)
+  let v: Bytes in z.p = y
+  0
+}

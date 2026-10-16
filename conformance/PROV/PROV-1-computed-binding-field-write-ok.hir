@@ -1,0 +1,40 @@
+// rule: PROV-1
+// expect: accept
+// A binding that received a computed value whole is its only owner. A field
+// written afterwards is named by the binding, and the fields left alone keep
+// the names they had.
+type R {
+  n: u64,
+  other: u64,
+}
+
+fn id(x: R) -> R {
+  copy x
+}
+
+fn make_n(r: R) -> Option[u8 of r.n] {
+  None
+}
+
+fn make_other(r: R) -> Option[u8 of r.other] {
+  None
+}
+
+fn inspect_n(r: R, p: Option[u8 of r.n]) -> () {}
+
+fn inspect_other(r: R, p: Option[u8 of r.other]) -> () {}
+
+fn written(x: R) -> () {
+  let mut r = id(x)
+  r.n = 3
+  let q = make_n(r)
+  r.other = 4
+  inspect_n(r, q)
+}
+
+fn sibling(x: R) -> () {
+  let mut r = id(x)
+  let q = make_other(r)
+  r.n = 4
+  inspect_other(r, q)
+}

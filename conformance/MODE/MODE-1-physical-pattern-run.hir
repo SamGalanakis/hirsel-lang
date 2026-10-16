@@ -1,0 +1,37 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut x: Bytes = b"x"
+  let y: Bytes = b"y"
+  let slot = Pair(left: view(x), right: view(y))
+  let mut Pair(left: a, right: b) = take slot
+  a = b"fresh"
+  x = b"changed"
+  let good = a == b"fresh" && b == b"y" && x == b"changed"
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if good {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

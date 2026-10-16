@@ -1,0 +1,24 @@
+fn error(take e: FileError) -> () {}
+
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of(".")) ? error
+  let p = path.of("sample")
+  file.write_bytes(d, p, b"data") ? error
+  file.remove(d, p) ? error
+  match file.open(d, p) {
+    Error(_) => (),
+    Ok(f) => {
+      let _ = take f
+      require(false)
+    },
+  }
+  Ok(())
+}

@@ -1,0 +1,11 @@
+// rule: GEN-1
+// expect: reject OWN-1 at line 5
+fn probe(take text: String) -> once fn() -> u64 {
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    string.byte_len(take text) + n
+  }
+  fn() {
+    let xs: Inline[u8, 1] = [1u8]
+    length(xs)
+  }
+}

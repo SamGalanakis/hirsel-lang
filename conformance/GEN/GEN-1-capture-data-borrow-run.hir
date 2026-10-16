@@ -1,0 +1,45 @@
+// rule: GEN-1
+// expect: run
+// stdout: ok
+fn outer(xs: Inline[u8, 3], text: String) -> u64 {
+  fn get[n: size](ys: Inline[u8, n]) -> ScalarView in text {
+    string.scalars(text)
+  }
+  let f = fn() {
+    get(xs)
+  }
+  let view = f()
+  let mut count: u64 = 0
+  for scalar in view {
+    count += 1
+  }
+  count
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  let builder: List[u8] = [97u8, 240u8, 159u8, 152u8, 128u8, 195u8, 169u8]
+  let finite = match string.from_bytes(bytes.from_list(take builder)) {
+    Ok(text) => outer(xs, text) == 3,
+    Error(bytes) => {
+      let discarded = take bytes
+      false
+    },
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(xs, "a😀é") == 3 && finite {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

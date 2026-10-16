@@ -1,0 +1,8 @@
+rc-trace v1
+max 16
+# A token is consumed exactly once.
+alloc r1 0
+reset r1 t1
+drain
+dispose t1
+dispose t1

@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+@noalloc
+// Adapted from unicode-segmentation tests/test.rs::test_graphemes,
+// ff47b3187adddb14813e6fb2cfc1a079f58cfddc. MIT; third-party/NOTICES.md.
+fn verify(text: String, expected: Array[String]) -> bool {
+  let mut i: u64 = 0
+  for piece in std@1/unicode.graphemes(text) {
+    if i >= array.len(expected) {
+      return false
+    }
+    if piece != expected[i] {
+      return false
+    }
+    i += 1
+  }
+  i == array.len(expected)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GraphemeRunError] {
+  let valid = verify(" \u{600}\u{600} ", [" ", "\u{600}\u{600} "]) && verify(
+    "\u{600}  ",
+    ["\u{600} ", " "]
+  ) && verify("👨\u{200d}👧\u{200d}👦", ["👨\u{200d}👧\u{200d}👦"]) && verify("🤸🏾🏾", ["🤸🏾🏾"]) && verify(
+    "a\u{310}e\u{301}o\u{308}\u{332}\r\n",
+    ["a\u{310}", "e\u{301}", "o\u{308}\u{332}", "\r\n"]
+  ) && verify("\n\r\n\r", ["\n", "\r\n", "\r"])
+  out.print(
+    io.stdout(rt) ? Grant,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? Output
+  Ok(())
+}
+
+pub type GraphemeRunError = Grant(GrantError) | Output(OutputError)

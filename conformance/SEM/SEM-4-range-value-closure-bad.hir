@@ -1,0 +1,7 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 5
+fn probe() {
+  let f = fn() {
+    0u8..2u8
+  }
+}

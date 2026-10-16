@@ -1,0 +1,4 @@
+// rule: FACT-2
+// expect: reject FACT-2 at line 4
+// "where is allowed only on a distinct type over a scalar or other plain base".
+distinct type Sized(v: String) where v == "x"

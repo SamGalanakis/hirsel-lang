@@ -1,0 +1,25 @@
+// rule: PROV-1
+// expect: accept
+// Each iteration refreshes the handle and scopes its borrowed callable.
+type Rec {
+  n: u64,
+  name: String,
+}
+
+fn make(r: Rec) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: Rec, p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn probe(r: Rec) -> () {
+  for i in 0u8..2u8 {
+    let p = make(r)
+    let action = fn() {
+      inspect(r, p)
+    }
+    action()
+  }
+}

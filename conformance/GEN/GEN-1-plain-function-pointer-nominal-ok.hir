@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: accept
+type W[T: plain] {
+  x: T,
+}
+
+fn wrap(take x: FnPtr[fn() -> u8]) -> W[FnPtr[fn() -> u8]] {
+  W(x: x)
+}

@@ -1,0 +1,5 @@
+// rule: MODE-2
+// expect: accept
+fn probe(take xs: unique List[Bytes]) {
+  let built = box copy xs
+}

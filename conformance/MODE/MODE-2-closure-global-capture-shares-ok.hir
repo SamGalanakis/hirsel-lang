@@ -1,0 +1,20 @@
+// rule: MODE-2
+// expect: accept
+// The record stays unique until the closure call shares its part, so a
+// unique update before that call is accepted (#80).
+type Rec {
+  items: List[String],
+}
+
+fn bump(mut x: unique Rec) -> () {
+  x.items[0] = "new"
+}
+
+fn probe() -> u64 {
+  let mut r: unique Rec = Rec(items: ["old"])
+  bump(mut r)
+  let old = fn() {
+    r.items
+  }()
+  1
+}

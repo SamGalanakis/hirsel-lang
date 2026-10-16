@@ -1,0 +1,8 @@
+// A failing index in a `let` fails at the index expression (6:11), not at the
+// statement (6:3): the interpreter used to report the statement.
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 1] = [7u8]
+  let i: u64 = 1
+  let x = xs[i]
+  Ok(())
+}

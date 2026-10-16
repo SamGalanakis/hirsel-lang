@@ -1,0 +1,9 @@
+// rule: MODE-6
+// expect: accept
+// "It cannot leave the call that created it."
+fn example(t: Test) -> () {
+  let action = fn() {
+    test.check(t, true)
+  }
+  action()
+}

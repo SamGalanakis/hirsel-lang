@@ -1,0 +1,9 @@
+// rule: CAP-5
+// expect: run
+// stdout: alive
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let w = Writer(out: io.stdout(rt)?)
+  discard(take w)
+  let _ = out.print(io.stdout(rt)?, "alive\n")
+  Ok(())
+}

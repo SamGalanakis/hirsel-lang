@@ -1,0 +1,57 @@
+// rule: SEM-4
+// expect: run
+// stdout: ok
+fn values() -> List[u64] {
+  [1, 2]
+}
+
+fn array_values() -> Array[u64] {
+  [3, 4]
+}
+
+fn identity(n: u64) -> u64 {
+  n
+}
+
+fn generic_values[T: plain](x: T) -> List[T] {
+  [x]
+}
+
+fn probe() -> u64 {
+  let mut sum: u64 = 0
+  for n in values() {
+    sum += identity(n)
+  }
+  for n in array_values() {
+    sum += identity(n)
+  }
+  for n in generic_values(5u64) {
+    sum += identity(n)
+  }
+  let source = fn() -> List[u64] {
+    [6]
+  }
+  for n in source() {
+    sum += identity(n)
+  }
+  sum
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if probe() == 21 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

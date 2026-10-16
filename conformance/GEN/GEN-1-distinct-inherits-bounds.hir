@@ -1,0 +1,14 @@
+// rule: GEN-1
+// expect: accept
+// Shows "Structural, computed from the type, no user instances."
+distinct type Percent(v: u8) where v <= 100
+
+@noalloc
+fn bound[T: key](x: T) -> bool {
+  x == x
+}
+
+@noalloc
+fn example(p: Percent) -> bool {
+  bound(p)
+}

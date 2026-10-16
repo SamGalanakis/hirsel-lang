@@ -1,0 +1,40 @@
+// rule: MODE-2
+// expect: run
+// stdout: kept
+// stdout: failed
+// `?` on a unique Result takes it and moves out its resource payload with
+// retained uniqueness, as a match arm does; the projected payload keeps the
+// Result's declared part type (agree --full, annotation/mode).
+resource type R: noalloc_drop {
+  data: u8,
+}
+@noalloc drop(self) {}
+
+fn make(ok: bool) -> unique Result[R, GrantError] {
+  if ok {
+    Ok(R(data: 0))
+  } else {
+    Error(NotGranted())
+  }
+}
+
+fn keep(take r: unique R) {}
+
+fn build(ok: bool) -> Result[(), GrantError] {
+  let r = make(ok)?
+  keep(take r)
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  build(true)?
+  let _ = out.print(stdout, "kept\n")
+  match build(false) {
+    Error(_) => {
+      let _ = out.print(stdout, "failed\n")
+    },
+    Ok(_) => {},
+  }
+  Ok(())
+}

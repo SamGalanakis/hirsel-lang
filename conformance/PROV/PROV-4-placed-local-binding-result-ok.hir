@@ -1,0 +1,8 @@
+// rule: PROV-4
+// expect: accept
+// "A value in a cannot outlive a." A result that declares the arena's
+// placement and lifetime may return the placed binding.
+fn text(a: Arena) -> String in a {
+  let x: String in a = "x"
+  x
+}

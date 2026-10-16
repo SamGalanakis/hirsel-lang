@@ -1,0 +1,503 @@
+// Scalar response/header/chunk parsers ported from httparse src/lib.rs,
+// a0fa552e4e0fa9a5914a736ef3a556748fef709b (MIT; third-party/NOTICES.md).
+// Offset records replace borrowed slices; callers retain the input and Inline storage.
+pub type RawHeader {
+  name_start: u64,
+  name_end: u64,
+  value_start: u64,
+  value_end: u64,
+}
+
+pub type ParseStatus = Complete(u64) | Partial
+
+pub type StatusLine {
+  version: u8,
+  code: u16,
+  reason_start: u64,
+  reason_end: u64,
+}
+
+pub type HeadError = HeaderName | HeaderValue | NewLine | Status | Token | TooManyHeaders | Version | ContentLength | TransferEncoding | Continuation
+
+pub type ChunkSize = Complete(u64, u64) | Partial
+
+pub type ChunkError = InvalidChunkSize()
+
+pub type Framing {
+  content_length: Option[u64],
+  chunked: bool,
+  keep_alive: bool,
+}
+
+// httparse TOKEN_MAP and HEADER_VALUE_MAP, expressed as scalar predicates.
+@noalloc
+fn name_token(b: u8) -> bool uses {} {
+  b >= 65 && b <= 90 || b >= 97 && b <= 122 || b >= 48 && b <= 57 || b == 33 || b == 35 || b == 36 || b == 37 || b == 38 || b == 39 || b == 42 || b == 43 || b == 45 || b == 46 || b == 94 || b == 95 || b == 96 || b == 124 || b == 126
+}
+
+@noalloc
+fn value_token(b: u8) -> bool uses {} {
+  b == 9 || b >= 32 && b != 127
+}
+
+@noalloc
+fn whitespace(b: u8) -> bool uses {} {
+  b == 32 || b == 9
+}
+
+// httparse parse_headers_iter_uninit (strict config). Count is the initialized
+// prefix, even on Partial or Error. Complete names the absolute end in buf.
+@noalloc
+pub fn parse_headers[k: size](
+  buf: Bytes,
+  start: u64,
+  mut headers: Inline[RawHeader, k],
+  mut count: u64
+) -> Result[ParseStatus, HeadError] uses {} {
+  count = 0
+  let len = core@1/bytes.len(buf)
+  let mut i = start
+  while i < len {
+    if buf[i] == 13 {
+      i += 1
+      if i == len {
+        return Ok(Partial())
+      }
+      if buf[i] != 10 {
+        return Error(NewLine())
+      }
+      return Ok(Complete(i + 1))
+    }
+    if buf[i] == 10 {
+      return Ok(Complete(i + 1))
+    }
+    // Zig Head.parse distinguishes unsupported continuations from invalid names.
+    if whitespace(buf[i]) {
+      return Error(Continuation())
+    }
+    if !name_token(buf[i]) {
+      return Error(HeaderName())
+    }
+    let name_start = i
+    while i < len && name_token(buf[i]) {
+      i += 1
+    }
+    if i == len {
+      return Ok(Partial())
+    }
+    if buf[i] != 58 {
+      return Error(HeaderName())
+    }
+    let name_end = i
+    i += 1
+    while i < len && whitespace(buf[i]) {
+      i += 1
+    }
+    let value_start = i
+    while i < len && value_token(buf[i]) {
+      i += 1
+    }
+    if i == len {
+      return Ok(Partial())
+    }
+    let mut value_end = i
+    if buf[i] == 13 {
+      i += 1
+      if i == len {
+        return Ok(Partial())
+      }
+      if buf[i] != 10 {
+        return Error(HeaderValue())
+      }
+    } else if buf[i] != 10 {
+      return Error(HeaderValue())
+    }
+    i += 1
+    while value_end > value_start && whitespace(buf[value_end - 1]) {
+      value_end -= 1
+    }
+    // As in httparse, syntax validation precedes the capacity error.
+    if count == k {
+      return Error(TooManyHeaders())
+    }
+    headers[count] = RawHeader(
+      name_start: name_start,
+      name_end: name_end,
+      value_start: value_start,
+      value_end: value_end
+    )
+    count += 1
+  }
+  Ok(Partial())
+}
+
+// httparse Response::parse, skip_empty_lines, parse_version/code/reason.
+// Updates each status field when parsed. Obsolete-text reasons use httparse's
+// empty fallback; header values remain opaque bytes.
+@noalloc
+pub fn parse_response[k: size](
+  buf: Bytes,
+  mut line: StatusLine,
+  mut headers: Inline[RawHeader, k],
+  mut count: u64
+) -> Result[ParseStatus, HeadError] uses {} {
+  count = 0
+  let len = core@1/bytes.len(buf)
+  let mut i: u64 = 0
+  while i < len && (buf[i] == 13 || buf[i] == 10) {
+    if buf[i] == 13 {
+      i += 1
+      if i == len {
+        return Ok(Partial())
+      }
+      if buf[i] != 10 {
+        return Error(NewLine())
+      }
+    }
+    i += 1
+  }
+  let version_prefix: Bytes = b"HTTP/1."
+  let mut j: u64 = 0
+  while j < 7 {
+    if i == len {
+      return Ok(Partial())
+    }
+    if buf[i] != version_prefix[j] {
+      return Error(Version())
+    }
+    i += 1
+    j += 1
+  }
+  if i == len {
+    return Ok(Partial())
+  }
+  if buf[i] != 48 && buf[i] != 49 {
+    return Error(Version())
+  }
+  line.version = buf[i] - 48
+  i += 1
+  if i == len {
+    return Ok(Partial())
+  }
+  if buf[i] != 32 {
+    return Error(Version())
+  }
+  i += 1
+  let mut code: u16 = 0
+  j = 0
+  while j < 3 {
+    if i == len {
+      return Ok(Partial())
+    }
+    if buf[i] < 48 || buf[i] > 57 {
+      return Error(Status())
+    }
+    let digit: u16 = core@1/int.widen(buf[i] - 48)
+    code = code * 10 + digit
+    i += 1
+    j += 1
+  }
+  line.code = code
+  if i == len {
+    return Ok(Partial())
+  }
+  let mut reason_start = i
+  let mut reason_end = i
+  let mut obsolete: bool = false
+  if buf[i] == 32 {
+    i += 1
+    reason_start = i
+    while i < len && value_token(buf[i]) {
+      if buf[i] >= 128 {
+        obsolete = true
+      }
+      i += 1
+    }
+    reason_end = i
+    if i == len {
+      return Ok(Partial())
+    }
+  }
+  if buf[i] == 13 {
+    i += 1
+    if i == len {
+      return Ok(Partial())
+    }
+    if buf[i] != 10 {
+      return Error(Status())
+    }
+  } else if buf[i] != 10 {
+    return Error(Status())
+  }
+  i += 1
+  line.reason_start = reason_start
+  line.reason_end = if obsolete {
+    reason_start
+  } else {
+    reason_end
+  }
+  parse_headers(buf, i, mut headers, mut count)
+}
+
+// httparse parse_chunk_size: <=16 hex digits, implied LWS before ';', opaque
+// extensions and CRLF. Complete's consumed count is relative to start.
+@noalloc
+pub fn parse_chunk_size(buf: Bytes, start: u64) -> Result[ChunkSize, ChunkError] uses {} {
+  let len = core@1/bytes.len(buf)
+  let mut i = start
+  let mut size: u64 = 0
+  let mut digits: u64 = 0
+  let mut in_size: bool = true
+  let mut in_ext: bool = false
+  while i < len {
+    let b = buf[i]
+    i += 1
+    if b == 13 {
+      if i == len {
+        return Ok(Partial())
+      }
+      if buf[i] != 10 {
+        return Error(InvalidChunkSize())
+      }
+      return Ok(Complete(i + 1 - start, size))
+    }
+    let mut digit: u8 = 255
+    if b >= 48 && b <= 57 {
+      digit = b - 48
+    }
+    if b >= 65 && b <= 70 {
+      digit = b - 65 + 10
+    }
+    if b >= 97 && b <= 102 {
+      digit = b - 97 + 10
+    }
+    if in_size && digit != 255 {
+      if digits == 16 {
+        return Error(InvalidChunkSize())
+      }
+      digits += 1
+      let wide: u64 = core@1/int.widen(digit)
+      size = size * 16 + wide
+    } else if b == 59 && !in_ext {
+      in_ext = true
+      in_size = false
+    } else if whitespace(b) && !in_ext {
+      in_size = false
+    } else if !in_ext {
+      return Error(InvalidChunkSize())
+    }
+  }
+  Ok(Partial())
+}
+
+@noalloc
+fn ascii_lower_wire_byte(b: u8) -> u8 uses {} {
+  if b >= 65 && b <= 90 {
+    b + 32
+  } else {
+    b
+  }
+}
+
+@noalloc
+fn equal_name(buf: Bytes, start: u64, end: u64, name: Bytes) -> bool uses {} {
+  if start > end || end > core@1/bytes.len(buf) {
+    return false
+  }
+  if end - start != core@1/bytes.len(name) {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < end - start {
+    if ascii_lower_wire_byte(buf[start + i]) != ascii_lower_wire_byte(name[i]) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+// Case-insensitive lookup over httparse's validated header offsets. Location
+// and Content-Type use this instead of adding slices/relations to Framing.
+@noalloc
+pub fn find_header[k: size](
+  buf: Bytes,
+  headers: Inline[RawHeader, k],
+  count: u64,
+  name: Bytes
+) -> Option[RawHeader] uses {} {
+  let mut i: u64 = 0
+  while i < count && i < k {
+    let h = headers[i]
+    if equal_name(buf, h.name_start, h.name_end, name) {
+      return Some(h)
+    }
+    i += 1
+  }
+  None()
+}
+
+// Zig lib/std/http/Client.zig Response.Head.parse, bff490a2 (MIT).
+// Frozen §6.2 deviations: reject CL+TE and every coding except chunked.
+@noalloc
+pub fn framing[k: size](
+  buf: Bytes,
+  version: u8,
+  headers: Inline[RawHeader, k],
+  count: u64
+) -> Result[Framing, HeadError] uses {} {
+  if version > 1 {
+    return Error(Version())
+  }
+  if count > k {
+    return Error(TooManyHeaders())
+  }
+  let mut length: Option[u64] = None()
+  let mut chunked: bool = false
+  let mut keep_alive = version == 1
+  let mut i: u64 = 0
+  while i < count {
+    let h = headers[i]
+    if h.name_start >= h.name_end || h.name_end > core@1/bytes.len(buf) {
+      return Error(HeaderName())
+    }
+    if h.value_start > h.value_end || h.value_end > core@1/bytes.len(buf) {
+      return Error(HeaderValue())
+    }
+    if equal_name(buf, h.name_start, h.name_end, b"connection") {
+      keep_alive = !equal_name(buf, h.value_start, h.value_end, b"close")
+    } else if equal_name(buf, h.name_start, h.name_end, b"transfer-encoding") {
+      if chunked || !equal_name(buf, h.value_start, h.value_end, b"chunked") {
+        return Error(TransferEncoding())
+      }
+      chunked = true
+    } else if equal_name(buf, h.name_start, h.name_end, b"content-length") {
+      if h.value_start == h.value_end {
+        return Error(ContentLength())
+      }
+      // HTTP decimal digits only; Zig parseInt also admits non-wire signs/underscores.
+      let mut n: u64 = 0
+      let mut j = h.value_start
+      while j < h.value_end {
+        let b = buf[j]
+        if b < 48 || b > 57 {
+          return Error(ContentLength())
+        }
+        let digit: u64 = core@1/int.widen(b - 48)
+        if n > 1844674407370955161 || n == 1844674407370955161 && digit > 5 {
+          return Error(ContentLength())
+        }
+        n = n * 10 + digit
+        j += 1
+      }
+      match length {
+        Some(previous) => if previous != n {
+          return Error(ContentLength())
+        },
+        None() => (),
+      }
+      length = Some(n)
+    }
+    i += 1
+  }
+  if chunked {
+    match length {
+      Some(_) => return Error(TransferEncoding()),
+      None() => (),
+    }
+  }
+  Ok(Framing(content_length: length, chunked: chunked, keep_alive: keep_alive))
+}
+
+// Zig lib/std/http/HeaderIterator.zig init/next and test next, bff490a2.
+// Unlike Zig's prevalidated slices, arbitrary offsets/partial buffers stop safely.
+pub type HeaderIterator {
+  index: u64,
+  is_trailer: bool,
+  done: bool,
+}
+
+@noalloc
+pub fn header_iterator(buf: Bytes) -> HeaderIterator uses {} {
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(buf) {
+    if buf[i] == 10 {
+      return HeaderIterator(index: i + 1, is_trailer: false, done: false)
+    }
+    i += 1
+  }
+  HeaderIterator(index: i, is_trailer: false, done: true)
+}
+
+@noalloc
+pub fn next_header(buf: Bytes, mut it: HeaderIterator) -> Option[RawHeader] uses {} {
+  if it.done {
+    return None()
+  }
+  let len = core@1/bytes.len(buf)
+  let mut start: u64 = copy it.index
+  if start >= len {
+    it.done = true
+    return None()
+  }
+  let mut end = start
+  while end < len && buf[end] != 10 {
+    end += 1
+  }
+  if end == len {
+    it.done = true
+    return None()
+  }
+  let mut next_index = end + 1
+  if end > start && buf[end - 1] == 13 {
+    end -= 1
+  }
+  if end == start {
+    if it.is_trailer {
+      it.done = true
+      return None()
+    }
+    start = next_index
+    end = start
+    while end < len && buf[end] != 10 {
+      end += 1
+    }
+    if end == len {
+      it.done = true
+      return None()
+    }
+    next_index = end + 1
+    if end > start && buf[end - 1] == 13 {
+      end -= 1
+    }
+    it.is_trailer = true
+  }
+  it.index = next_index
+  let mut colon = start
+  while colon < end && buf[colon] != 58 {
+    colon += 1
+  }
+  if colon == start {
+    it.done = true
+    return None()
+  }
+  let mut value_start = if colon < end {
+    colon + 1
+  } else {
+    end
+  }
+  while value_start < end && whitespace(buf[value_start]) {
+    value_start += 1
+  }
+  while end > value_start && whitespace(buf[end - 1]) {
+    end -= 1
+  }
+  Some(
+    RawHeader(
+      name_start: start,
+      name_end: colon,
+      value_start: value_start,
+      value_end: end
+    )
+  )
+}

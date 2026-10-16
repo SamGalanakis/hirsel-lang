@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// A binding that viewed a local temporary is bounded by it for the rest of
+// its scope, also after another value replaces the view.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn probe(x: Bytes, y: Bytes) -> Bytes in {x, y} {
+  let mut slot = view(copy x)
+  slot = view(y)
+  slot
+}

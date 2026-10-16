@@ -1,0 +1,25 @@
+// rule: MEM-1
+// expect: run
+// stdout: ok
+// "uncounted projection is never reused or mutated in place".
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a: Array[String] = ["old"]
+  let b = copy a
+  a[0] = "new"
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if b[0] == "old" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

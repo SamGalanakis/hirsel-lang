@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: accept
+// A named function's local result names its sources; a closure's bare local
+// result is local to the closure.
+fn same(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn invoke(f: fn() -> Bytes in env uses {}) -> Bytes in f uses {} {
+  f()
+}

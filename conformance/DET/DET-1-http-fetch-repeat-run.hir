@@ -1,0 +1,39 @@
+// rule: DET-1
+// expect: run
+// entry: exercise
+// Zig http/Client.zig fetch/receiveHead flow; two runs have independent scripts.
+pub fn exercise(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n"
+              )
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let response = std@1/http.fetch(
+    n,
+    std@1/http.default_config(),
+    Get(),
+    "http://example.com/",
+    [],
+    None()
+  )?
+  test.check(t, response.status == 200 && response.body == b"ok")
+  Ok(())
+}

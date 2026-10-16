@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// A result local to a taken parameter is bounded by that argument and by
+// nothing else. A view of another local value cannot be returned as local to
+// the parameter.
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn keep(take x: Bytes, y: Bytes) -> Bytes in x {
+  let other: Bytes in other = copy y
+  view(other)
+}

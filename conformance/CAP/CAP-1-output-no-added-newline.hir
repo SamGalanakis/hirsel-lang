@@ -1,0 +1,12 @@
+// rule: CAP-1
+// expect: run
+// stdout: ab
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  out.print(io.stdout(rt) ? Grant, "a") ? Output
+  out.print(io.stdout(rt) ? Grant, "b\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

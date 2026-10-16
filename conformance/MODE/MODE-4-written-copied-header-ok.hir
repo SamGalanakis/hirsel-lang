@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+fn dup[T: copyable](take x: T) -> T {
+  copy x
+}
+
+fn probe(take g: fn(take x: sendable Bytes), take x: sendable Bytes) {
+  let h = dup(take g)
+  h(take x)
+}

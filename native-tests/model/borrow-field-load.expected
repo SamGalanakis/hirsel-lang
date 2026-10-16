@@ -1,0 +1,13 @@
+rc-trace v1 max 16
+ok after 11 steps
+heap
+  @0 free gen 1
+  @1 live gen 1 count fin 1 heap arity 0
+credits
+  r3 -> @1#1
+borrows
+locals
+tokens
+work
+regions
+events

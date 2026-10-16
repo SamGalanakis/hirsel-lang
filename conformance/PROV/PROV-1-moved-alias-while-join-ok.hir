@@ -1,0 +1,23 @@
+// rule: PROV-1
+// expect: accept
+type R {
+  n: Bytes,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) {}
+
+fn probe(take x: R, take z: R, flag: bool) {
+  let mut c = flag
+  let mut r = copy x
+  let p = make(r)
+  while c {
+    r = copy z
+    let _ = take r
+    break
+  }
+  inspect(x, p)
+}

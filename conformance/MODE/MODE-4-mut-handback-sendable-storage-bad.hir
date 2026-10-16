@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 15
+// A `mut` argument is written back through its parameter. Storage written
+// `sendable fn` lent to a parameter that is not could come back holding a
+// function that crosses no task, still typed as one that does, so the
+// crossing mode of a `mut` hand-back is exact, as its callable promise is.
+fn replace(mut p: fn() -> u64, take q: fn() -> u64) -> () {
+  p = q
+}
+
+fn probe(take q: fn() -> u64) -> u64 {
+  let mut f: sendable fn() -> u64 = fn() {
+    1
+  }
+  replace(mut f, take q)
+  f()
+}

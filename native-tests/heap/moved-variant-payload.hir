@@ -1,0 +1,11 @@
+fn check(take r: Result[String, Bytes]) -> bool {
+  match take r {
+    Ok(s) => s == "ok"
+    Error(bytes) => bytes == b"\xff"
+  }
+}
+
+pub fn main() -> u64 {
+  let valid = check(Ok("ok")) && check(Error(b"\xff"))
+  1u64 / if valid { 1u64 } else { 0u64 }
+}

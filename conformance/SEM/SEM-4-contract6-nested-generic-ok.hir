@@ -1,0 +1,16 @@
+// rule: SEM-4
+// expect: accept
+@loop_source(open, next)
+type View[T] {
+  source: String,
+  payload: T,
+}
+
+type Cursor[T] {
+  source: String,
+  callback: fn() -> T,
+}
+
+fn open[T](v: View[T]) -> Cursor[fn() -> T] in v
+
+fn next[T](mut c: Cursor[fn() -> T]) -> Option[T] in c

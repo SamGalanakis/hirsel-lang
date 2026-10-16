@@ -1,0 +1,11 @@
+// rule: OWN-1
+// expect: accept
+// "Caller keeps it."
+fn inspect(x: Bytes) -> () {
+  ()
+}
+
+fn example(take x: Bytes) -> Bytes {
+  inspect(x)
+  take x
+}

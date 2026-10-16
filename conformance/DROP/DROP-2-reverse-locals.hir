@@ -1,0 +1,19 @@
+// rule: DROP-2
+// expect: run
+// stdout: b
+// stdout: a
+// "end of the scope ... reverse declaration order".
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let a = Trace(stdout: stdout, text: "a\n")
+  let b = Trace(stdout: stdout, text: "b\n")
+  Ok(())
+}

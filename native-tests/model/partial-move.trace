@@ -1,0 +1,14 @@
+rc-trace v1
+max 16
+# T06 moves a field out of a unique block; releasing the parent then releases only the
+# fields that are still initialized.
+alloc r1 2
+alloc r2 0
+alloc r3 0
+write r1 0 r2
+write r1 1 r3
+take r1 0 r4
+drop r1
+drain
+drain
+drain

@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 4
+fn inspect(s: Bytes) {
+  let view = std@1/unicode.graphemes(s)
+}

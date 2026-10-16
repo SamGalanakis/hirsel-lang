@@ -1,0 +1,10 @@
+// rule: MODE-4
+// expect: accept
+// "counted values that are not unique."
+fn cross[T: sendable](take x: T) -> () {
+  ()
+}
+
+fn example(take x: unique List[u64]) -> () {
+  cross(take x)
+}

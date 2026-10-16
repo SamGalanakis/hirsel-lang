@@ -1,0 +1,42 @@
+// rule: SEM-3
+// expect: run
+// stdout: ok
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut builder: List[u8] = []
+  std@1/text.append(mut builder, "")
+  failure.check(std@1/text.finish(take builder) == Ok(""), TextInvariant())
+  failure.check(
+    std@1/text.finish([255u8, 192u8, 175u8]) == Error(b"\xff\xc0\xaf"),
+    TextInvariant()
+  )
+  failure.check(std@1/string.split("", "::") == [""], TextInvariant())
+  failure.check(
+    std@1/string.split("::a::::", "::") == ["", "a", "", ""],
+    TextInvariant()
+  )
+  failure.check(std@1/string.split("aaaaa", "aa") == ["", "", "a"], TextInvariant())
+  failure.check(std@1/string.split("é😀é", "é") == ["", "😀", ""], TextInvariant())
+  let bytes = string.as_bytes("")
+  failure.check(
+    bytes.len(bytes) == 0 && bytes.slice(bytes, 0, 0) == b"",
+    TextInvariant()
+  )
+  let text: String = "é😀"
+  failure.check(
+    string.position(text, 1) == None() && string.position(text, 7) == None(),
+    TextInvariant()
+  )
+  match string.position(text, 0) {
+    Some(p) => failure.check(string.byte_offset(text, p) == 0, TextInvariant()),
+    None() => failure.check(false, TextInvariant()),
+  }
+  match string.position(text, 6) {
+    Some(p) => failure.check(string.byte_offset(text, p) == 6, TextInvariant()),
+    None() => failure.check(false, TextInvariant()),
+  }
+  failure.check(path.text(path.of("")) == "", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

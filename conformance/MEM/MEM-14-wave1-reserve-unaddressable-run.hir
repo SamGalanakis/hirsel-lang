@@ -1,0 +1,61 @@
+// rule: MEM-14
+// expect: run
+// stdout: ok
+// exit: 0
+// "list.reserve ensures total capacity is at least capacity ... Capacity is
+// unobservable except through allocation." A reservation no host could address
+// reserves nothing. The list keeps its elements and order and grows as usual,
+// unique, shared or empty, of fixed or Packed elements.
+fn output_error[E](take e: E) -> () {}
+
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn fixed() -> bool {
+  let mut xs: List[u64] = [1, 2]
+  list.reserve(mut xs, 18446744073709551615u64)
+  list.push(mut xs, 3)
+  let shared = copy xs
+  list.reserve(mut xs, 9223372036854775808u64)
+  list.push(mut xs, 4)
+  let mut empty: List[u64] = []
+  list.reserve(mut empty, 18446744073709551615u64)
+  list.push(mut empty, 5)
+  list.len(xs) == 4u64 && xs[2u64] == 3u64 && xs[3u64] == 4u64 && list.len(shared) == 3u64 && list.len(
+    empty
+  ) == 1u64 && empty[0u64] == 5u64
+}
+
+fn packed() -> bool {
+  let mut xs: List[Packed[Choice]] = []
+  list.push(mut xs, Large(value: 7u64, extra: 2u64))
+  list.reserve(mut xs, 18446744073709551615u64)
+  list.push(mut xs, Small(value: 1u64))
+  let mut sum = 0u64
+  let mut k = 0u64
+  for x in xs {
+    if k == 0u64 {
+      sum = sum + x.Large.value * x.Large.extra
+    } else {
+      sum = sum + x.Small.value
+    }
+    k = k + 1u64
+  }
+  list.len(xs) == 2u64 && sum == 15u64
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if fixed() && packed() {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: accept
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+fn probe(mut x: Bytes) {
+  while false {
+    let pair = Pair(left: view(copy x), right: view(x))
+    ()
+  }
+  ()
+}

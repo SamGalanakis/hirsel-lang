@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 11
+// A callable's crossing mode is part of its type and is read in the
+// direction of each edge. A function that requires a sendable argument
+// cannot stand where callers may hand it any function.
+fn apply(take h: fn(take g: fn() -> u64) -> u64, take g: fn() -> u64) -> u64 {
+  h(take g)
+}
+
+fn probe(take q: fn() -> u64) -> u64 {
+  apply(
+    fn(take g: sendable fn() -> u64) {
+      g()
+    },
+    take q
+  )
+}

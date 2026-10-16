@@ -1,0 +1,17 @@
+// rule: CLO-1
+// expect: accept
+// The body reads a part of its borrowed view of r, local to the environment;
+// the environment binds a global arena value, so the result is a global share in
+// the arena and r may be written afterwards (copy on write, OWN-7).
+type Rec {
+  items: Array[u64],
+}
+
+fn probe(a: Arena) -> u64 {
+  let mut r: unique Rec in a = Rec(items: [1, 2])
+  let old = fn() {
+    r.items
+  }()
+  r.items[0] = 9
+  old[0]
+}

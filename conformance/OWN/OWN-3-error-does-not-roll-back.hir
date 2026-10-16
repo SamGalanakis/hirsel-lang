@@ -1,0 +1,25 @@
+// rule: OWN-3
+// expect: run
+// stdout: ok
+// "Caller keeps it; no rollback."
+type Problem = Stop()
+
+fn change(mut x: u64) -> Result[(), Problem] {
+  x = 7
+  Error(Stop)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let mut x: u64 = 0
+  let outcome = change(mut x)
+  if (outcome, x) == (Error(Stop), 7) {
+    out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  } else {
+    out.print(io.stdout(rt) ? Grant, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

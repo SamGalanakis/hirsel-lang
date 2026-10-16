@@ -1,0 +1,7 @@
+// rule: LANG-7
+// expect: accept
+// Sizes compare by equality only; a value of type Inline[u8, n] has the
+// abstract length `n`, and a literal beside it has its constant length.
+fn fill[n: size](xs: Inline[u8, n]) -> (Inline[u8, n], Inline[u8, 2]) {
+  (xs, [1u8, 2u8])
+}

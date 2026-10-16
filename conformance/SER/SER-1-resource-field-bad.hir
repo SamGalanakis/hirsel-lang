@@ -1,0 +1,10 @@
+// rule: SER-1
+// expect: reject SER-1 at line 7
+resource type Token {
+  n: u64,
+}
+
+@serializable
+type Row {
+  value: Token,
+}

@@ -1,0 +1,15 @@
+// rule: OWN-2
+// expect: accept
+fn predicate(x: u64) -> bool uses {} {
+  true
+}
+
+fn keep(take s: String, n: u64) -> String uses {} {
+  take s
+}
+
+fn example() -> () {
+  let xs: List[u64] = [1]
+  std@1/list.concat(copy xs, [2u64])
+  list.len(xs);
+}

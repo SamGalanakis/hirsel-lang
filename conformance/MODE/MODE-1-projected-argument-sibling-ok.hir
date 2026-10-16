@@ -1,0 +1,24 @@
+// rule: MODE-1
+// expect: accept
+// Under v22 §04, a borrowed argument q.p lends the place q.p, so a field of q
+// outside it stays writable while a result related to the argument lives.
+type Pair {
+  a: String,
+  b: String,
+}
+
+type Outer {
+  p: Pair,
+  n: u64,
+}
+
+fn view(p: Pair) -> String in p {
+  p.b
+}
+
+fn caller(x: String) -> u64 {
+  let mut q = Outer(p: Pair(a: x, b: x), n: 0u64)
+  let r = view(q.p)
+  q.n = 1u64
+  string.byte_len(r)
+}

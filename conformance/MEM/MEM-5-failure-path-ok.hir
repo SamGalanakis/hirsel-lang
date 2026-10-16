@@ -1,0 +1,10 @@
+// rule: MEM-5
+// expect: accept
+// "every path ... failure paths and contracts included".
+fn check_path(flag: u8) -> Result[(), String] {
+  if flag == 0 {
+    Error("failure")
+  } else {
+    Ok(())
+  }
+}

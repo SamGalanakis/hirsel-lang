@@ -1,0 +1,13 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 6
+// A brand cannot name a taken parameter. The declaration is diagnosed also
+// when the body holds a loop, which is then never checked. The accepted twin
+// is PROV-1-taken-brand-owner-loop-ok.
+fn total(take xs: List[u64], seed: Bytes of xs) -> u64 {
+  let ys: List[u64] = [1, 2]
+  let mut sum: u64 = 0
+  for y in take ys {
+    sum += y
+  }
+  sum
+}

@@ -1,0 +1,26 @@
+// rule: MEM-5
+// expect: run
+// stdout: 0
+// "unique x when x is not provably unique" deep-copies x under a read loan on
+// it. Inside a loop with a conditional return, the loan ends on the copy's
+// success and failure edges alike (net-t7's reproducer).
+fn convert(b: List[u8]) -> u64 {
+  while true {
+    let data = unique b
+    if core@1/list.len(data) == 0 {
+      return 0
+    }
+  }
+  0
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let b: List[u8] = []
+  let line: String = if convert(b) == 0u64 {
+    "0\n"
+  } else {
+    "other\n"
+  }
+  let _ = out.print(io.stdout(rt)?, line)
+  Ok(())
+}

@@ -1,0 +1,43 @@
+// rule: CT-2
+// expect: run
+// stdout: 22111021
+fn build_map() -> Map[u64, u64] {
+  let mut m: Map[u64, u64] = map.empty()
+  map.insert(mut m, 2, 20)
+  map.insert(mut m, 1, 10)
+  map.insert(mut m, 2, 21)
+  take m
+}
+
+fn build_set(reverse: bool) -> Set[u64] {
+  let mut s: Set[u64] = set.empty()
+  if reverse {
+    set.insert(mut s, 1)
+    set.insert(mut s, 2)
+  } else {
+    set.insert(mut s, 2)
+    set.insert(mut s, 1)
+  }
+  set.insert(mut s, 2)
+  take s
+}
+
+fn materialized_map() -> Map[u64, u64] {
+  comptime build_map()
+}
+
+fn materialized_set() -> Set[u64] {
+  comptime build_set(false)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  for (k, v) in materialized_map() {
+    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(k))
+    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(v))
+  }
+  for n in materialized_set() {
+    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+  }
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

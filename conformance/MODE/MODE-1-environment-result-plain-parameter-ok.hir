@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: accept
+// A Plain parameter lends nothing, so `in env` alone covers it (#72).
+fn apply(f: fn(n: u64) -> Bytes in env) -> () {
+  ()
+}

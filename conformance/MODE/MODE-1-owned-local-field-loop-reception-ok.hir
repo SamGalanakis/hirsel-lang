@@ -1,0 +1,33 @@
+// rule: MODE-1
+// expect: accept
+type Pair {
+  left: Bytes,
+  right: Bytes,
+}
+
+type Nest {
+  pair: Pair,
+  other: Bytes,
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut x: Bytes, mut y: Bytes) {
+  let mut slot = Nest(pair: Pair(left: view(x), right: view(y)), other: b"other")
+  let mut n: u32 = 0u32
+  while n < 3u32 {
+    slot.pair.left = view(x)
+    n += 1u32
+  }
+  slot.pair.left = b"fresh"
+  bump(mut x)
+  slot.pair.right = b"new"
+  bump(mut y)
+  ()
+}

@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: accept
+type Inner {
+  xs: unique List[Bytes],
+}
+
+type Outer {
+  inner: Inner,
+}
+
+fn probe(take o: Outer) {
+  let Outer(inner: i) = o
+  let built = box i.xs
+}

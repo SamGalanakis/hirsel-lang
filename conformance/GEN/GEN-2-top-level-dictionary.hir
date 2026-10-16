@@ -1,0 +1,12 @@
+// rule: GEN-2
+// expect: accept
+// Shows "Order[T], Hasher[T], Eq[T], user records of functions."
+@noalloc
+fn dictionary(by: Order[u32]) -> () {
+  ()
+}
+
+@noalloc
+fn example() -> () {
+  dictionary(u32.order)
+}

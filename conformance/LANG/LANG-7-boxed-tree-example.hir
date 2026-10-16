@@ -1,0 +1,4 @@
+// rule: LANG-7
+// expect: accept
+// Shows "No overloading, type classes, implicit conversions (including between error types), macros, exceptions, any or casts."
+type Tree = Leaf | Node(left: box Tree, key: u64, right: box Tree)

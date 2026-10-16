@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: accept
+fn need[T: noalloc_drop](take x: T) -> () {}
+
+fn probe[T: noalloc_drop](take x: T) {
+  need(take x)
+}

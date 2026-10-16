@@ -1,0 +1,5 @@
+// rule: PROV-1
+// expect: accept
+pub fn probe(a: Net, b: Net, mut s: Stream of a, mut buf: List[u8]) {
+  let _ = net.read(a, mut s, mut buf, 1u64)
+}

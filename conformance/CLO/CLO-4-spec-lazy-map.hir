@@ -1,0 +1,6 @@
+// rule: CLO-4
+// expect: accept
+// "Taken function parameters ... are global" (the spec’s lazy_map signature).
+pub fn lazy_map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f} {
+  iter.map(take it, take f)
+}

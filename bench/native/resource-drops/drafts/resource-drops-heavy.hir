@@ -1,0 +1,46 @@
+// Supplemental row B: real resource drops on normal and fail-stop exits.
+// task.isolate is an M2 runtime dependency; no simulated cleanup replaces it.
+resource type Trace { stdout: Stdout, text: String, trace: bool }
+drop(x) { if x.trace { let _ = out.print(x.stdout, x.text) } }
+fn event(h: u64, e: u64) -> u64 {
+  let wide: u128 = int.widen(h) * 131u128 + int.widen(e)
+  int.truncate(wide)
+}
+fn destination_digest(data: Inline[u8, 16]) -> u64 {
+  let mut h: u64 = 14695981039346656037u64
+  for j in 0u64..16u64 {
+    let wide: u128 = int.widen(h ^ int.widen(data[j])) * 1099511628211u128
+    h = int.truncate(wide)
+  }
+  h
+}
+fn attempt(stdout: Stdout, i: u64, trace: bool) -> Inline[u8, 16] {
+  let a = Trace(stdout: stdout, text: "8", trace: trace)
+  let b = Trace(stdout: stdout, text: "7", trace: trace)
+  let mut source: Inline[u8, 16] = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]
+  for j in 0u64..16u64 { source[j] = int.narrow(i % 127u64 + j) }
+  let mut transaction = copy source
+  for j in 0u64..16u64 { transaction[j] += 1u8 }
+  failure.check(i % 2u64 != 0u64, Bounds())
+  transaction
+}
+fn workload(data: Bytes, rt: Io, trace: bool) -> Bytes {
+  let mut pos: u64 = 0
+  let n = decimal(data, mut pos)
+  failure.check(n > 0u64 && n <= 1000000u64, Bounds())
+  let tasks = io.tasks(rt)
+  let stdout = io.stdout(rt)
+  let mut total: u64 = 0
+  for i in 0u64..n {
+    let status: Result[Inline[u8, 16], Failure] = task.isolate(tasks, fn() -> Inline[u8, 16] { attempt(stdout, i, trace) })
+    let failed: bool = match status { Ok(_) => false, Error(_) => true }
+    failure.check(failed == (i % 2u64 == 0u64), Bounds())
+    let destination: Inline[u8, 16] = match take status { Ok(value) => take value, Error(_) => [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8] }
+    let mut h = i
+    h = event(event(event(event(h, 1u64), 2u64), 3u64), 4u64)
+    h = event(h, if failed { 6u64 } else { 5u64 })
+    h = event(event(h, 7u64), 8u64)
+    total = int.wrapping_add(total, h ^ destination_digest(destination))
+  }
+  number(total)
+}

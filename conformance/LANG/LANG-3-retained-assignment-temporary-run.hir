@@ -1,0 +1,30 @@
+// rule: LANG-3
+// expect: run
+// stdout: ok
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn probe(mut x: Bytes) {
+  let mut slot = view(
+    fn() {
+      x
+    }()
+  )
+  slot = view(copy x)
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut x: Bytes = b"kept"
+  probe(mut x)
+  let _ = out.print(
+    io.stdout(rt)?,
+    if x == b"kept" {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

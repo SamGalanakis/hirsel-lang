@@ -1,0 +1,11 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 9
+fn use_pos(s: Dir, p: i64 of s) -> () {
+  ()
+}
+
+fn probe(s: Dir, p: i64 of s) -> () {
+  let mut q: i64 of s = p
+  q = -p
+  ()
+}

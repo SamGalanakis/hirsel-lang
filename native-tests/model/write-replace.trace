@@ -1,0 +1,9 @@
+rc-trace v1
+max 16
+# Overwriting an initialized field releases the displaced child.
+alloc r1 1
+alloc r2 0
+alloc r3 0
+write r1 0 r2
+write r1 0 r3
+drain

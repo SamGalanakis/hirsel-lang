@@ -1,0 +1,15 @@
+// rule: OWN-8
+// expect: reject OWN-8 at line 13
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn probe(mut xs: List[Trace]) -> () {
+  for x in mut xs {
+    let old = x
+  }
+}

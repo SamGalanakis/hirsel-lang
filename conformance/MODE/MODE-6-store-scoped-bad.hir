@@ -1,0 +1,10 @@
+// rule: MODE-6
+// expect: reject MODE-6 at line 9
+// "A scoped capability ... cannot be ... stored."
+type Boxed {
+  cap: Test,
+}
+
+fn example(take cap: Test) -> Boxed {
+  Boxed(cap: take cap)
+}

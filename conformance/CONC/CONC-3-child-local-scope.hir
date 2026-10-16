@@ -1,0 +1,21 @@
+// rule: CONC-3
+// expect: accept
+fn example(tasks: Tasks) -> () {
+  task.scope(
+    tasks,
+    fn(parent: Scope) {
+      let h = task.async(
+        parent,
+        fn() -> Result[(), CancelError] {
+          task.scope(
+            tasks,
+            fn(child: Scope) {
+              task.check_canceled(child)
+            }
+          )
+        }
+      )
+      let outcome = task.await(parent, take h)
+    }
+  )
+}

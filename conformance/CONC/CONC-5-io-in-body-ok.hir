@@ -1,0 +1,12 @@
+// rule: CONC-5
+// expect: accept
+// The lock body "holds no authority" and cannot "do I/O, take another lock or use a channel".
+fn locked(tasks: Tasks, m: Mutex[u32], dir: Dir, p: Path, n: u32) -> () {
+  mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u32) {
+      let _ = n
+    }
+  )
+}

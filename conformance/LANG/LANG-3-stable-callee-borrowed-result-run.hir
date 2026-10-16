@@ -1,0 +1,23 @@
+// rule: LANG-3
+// expect: run
+// entry: test_view
+fn make() -> fn(n: u64) -> List[u64] in env uses {} {
+  let payload: List[u64] = [7u64]
+  fn(n: u64) -> List[u64] in env uses {} {
+    payload
+  }
+}
+
+fn inspect(f: fn(n: u64) -> List[u64] in env uses {}) -> u64 {
+  let view = f(0u64)
+  view[0u64]
+}
+
+pub fn test_view(t: Test) -> Result[(), ()] {
+  let f = make()
+  let view = f(0u64)
+  test.check(t, view[0u64] == 7u64)
+  let second = make()
+  test.check(t, inspect(second) == 7u64)
+  Ok(())
+}

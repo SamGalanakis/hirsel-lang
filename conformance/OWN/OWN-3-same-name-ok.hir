@@ -1,0 +1,11 @@
+// rule: OWN-3
+// expect: accept
+// "No storage passed twice."
+fn both(mut a: u64, mut b: u64) -> () {
+  a = 1
+  b = 2
+}
+
+fn example(mut x: u64, mut y: u64) -> () {
+  both(mut x, mut y)
+}

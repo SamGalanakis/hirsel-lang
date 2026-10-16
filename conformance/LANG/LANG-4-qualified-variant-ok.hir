@@ -1,0 +1,9 @@
+// rule: LANG-4
+// expect: accept
+// Shows "Variants are written bare ... and resolved through the expected type."
+type Choice = First | Last
+
+@noalloc
+fn example() -> Choice {
+  First
+}

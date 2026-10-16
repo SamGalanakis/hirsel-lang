@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: accept
+const DATA: unique u64 = 7
+
+fn need(take number: unique u64) {}
+
+fn example() {
+  need(DATA)
+  need(DATA)
+}

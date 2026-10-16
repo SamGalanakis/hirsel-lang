@@ -1,0 +1,83 @@
+// rule: MEM-12
+// expect: run
+// stdout: 21
+flat type Item {
+  text: String,
+  n: u64,
+}
+
+flat type Items {
+  items: List[Item],
+}
+
+flat type Batch {
+  prefix: String,
+  records: Items,
+  suffix: u64,
+}
+
+flat type Scalar {
+  small: u8,
+  n: u64,
+}
+
+flat type Scalars {
+  items: List[Scalar],
+}
+
+const DATA: Items = comptime Items(
+  items: [Item(text: "", n: 3), Item(text: "a", n: 5), Item(text: "hello", n: 7)]
+)
+
+fn checksum(xs: Items) -> u64 {
+  let mut sum: u64 = 0
+  for x in xs.items {
+    sum += x.n + string.byte_len(x.text)
+  }
+  sum
+}
+
+fn fixed(x: Scalar) -> u64 {
+  x.n
+}
+
+fn scalar_sum(xs: Scalars) -> u64 {
+  let mut sum: u64 = 0
+  for x in xs.items {
+    sum += x.n
+  }
+  sum
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs = Items(
+    items: [Item(text: "", n: 3), Item(text: "a", n: 5), Item(text: "hello", n: 7)]
+  )
+  let copied = copy xs
+  let batch = Batch(prefix: "header", records: copy xs, suffix: 99)
+  let statics = DATA
+  let empty = Items(items: [])
+  let scalars = Scalars(items: [Scalar(small: 1, n: 8), Scalar(small: 2, n: 13)])
+  let scalar = Scalar(small: 3, n: 21)
+  let valid = checksum(xs) == 21 && checksum(copied) == 21 && checksum(statics) == 21 && list.len(
+    batch.records.items
+  ) == 3 && batch.suffix == 99 && list.len(empty.items) == 0 && scalar_sum(scalars) == 21 && fixed(
+    scalar
+  ) == 21
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "21\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

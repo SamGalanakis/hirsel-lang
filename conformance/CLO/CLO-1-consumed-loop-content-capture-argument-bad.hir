@@ -1,0 +1,29 @@
+// rule: CLO-1
+// expect: reject MODE-1 at line 26
+// A closure over consumed loop content that views a borrowed parameter
+// returns local content. Its rows say so where it is bound and called, but a
+// parameter of function type promises a global result, so the closure cannot
+// be passed there. The accepted twin calls it in place.
+fn view(x: Bytes) -> Bytes in x {
+  x
+}
+
+fn size(x: Bytes) -> u64 {
+  1
+}
+
+fn call(g: fn() -> Bytes) -> u64 {
+  size(g())
+}
+
+fn pairs(p: Bytes) -> u64 {
+  let xs: List[(u64, Bytes)] = [(1, view(p))]
+  let mut sum: u64 = 0
+  for (n, v) in take xs {
+    let f = fn() {
+      v
+    }
+    sum += call(f)
+  }
+  sum
+}

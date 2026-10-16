@@ -1,0 +1,9 @@
+// rule: CLO-4
+// expect: accept
+// Relaying the exact concrete incoming pair keeps the caller's own receipt.
+@captures(state, next)
+fn build(take state: unique List[u64], take next: fn(mut List[u64]) -> Option[u64]) -> Iter[
+  u64
+] {
+  iter.from(take state, take next)
+}

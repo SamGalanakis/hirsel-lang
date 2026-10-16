@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: accept
+// A copy of an arena value is a new value in a temporary of this function,
+// but its blocks stay in the arena. The read loan on the temporary ends at
+// return and the result keeps only the arena bound (v22 P2).
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn relay(a: Arena, b: Arena, take x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  choose(a, b, copy x, y)
+}

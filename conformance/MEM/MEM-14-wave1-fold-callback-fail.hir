@@ -1,0 +1,13 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 5
+@noalloc
+fn callback(take acc: u64, x: u64) -> u64 uses {} {
+  failure.check(false, Bounds())
+  acc + x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut xs: unique List[u64] = [1, 2, 3]
+  std@1/list.fold(xs, 0u64, callback)
+  Ok(())
+}

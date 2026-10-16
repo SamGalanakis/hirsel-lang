@@ -1,0 +1,38 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// Storage related to a frame may still be written `sendable`; the crossing
+// mode of a callable is evidence of what it holds, kept through a write and
+// a `mut` loan, while where it may live is MODE-1's.
+fn reset(mut g: sendable fn() -> u64) -> () {
+  g = seven
+}
+
+fn needs(take g: sendable fn() -> u64) -> u64 {
+  g()
+}
+
+fn seven() -> u64 {
+  7
+}
+
+fn probe(take q: sendable fn() -> u64) -> u64 {
+  let mut held: (sendable fn() -> u64) in q = fn() {
+    1
+  }
+  held = q
+  reset(mut held)
+  needs(take held)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

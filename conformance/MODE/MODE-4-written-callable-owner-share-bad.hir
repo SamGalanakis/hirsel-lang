@@ -1,0 +1,13 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 12
+fn whole(take jobs: sendable List[sendable fn() -> u64]) {}
+
+fn bad() {
+  let jobs: List[sendable fn() -> u64] = [
+    fn() {
+      1
+    }
+  ]
+  let shared = copy jobs
+  whole(take jobs)
+}

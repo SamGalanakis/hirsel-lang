@@ -1,0 +1,19 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 18
+// "Written unrestricted parameters do not meet restricted uses." v22 states
+// no variance for a nominal type's arguments, so a callable inside one is
+// exact (spec #92). `Option` may use its argument in either direction, so an
+// `Option` of a `uses {}` callable is not received as an `Option` of a
+// callable with unknown authority.
+fn takes(q: Option[fn() -> ()]) -> () {
+  ()
+}
+
+fn probe() -> () {
+  let p: Option[fn() -> () uses {}] = Some(
+    fn() {
+      ()
+    }
+  )
+  takes(p)
+}

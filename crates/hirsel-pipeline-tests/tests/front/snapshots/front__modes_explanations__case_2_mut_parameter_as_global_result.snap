@@ -1,0 +1,18 @@
+---
+source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
+expression: "rendered(\"MODE/MODE-1-mut-result-bad.hir\")"
+---
+error[MODE-1]: this operation requires a global value: `x` is the caller's storage, but the result must be global
+ --> ../../conformance/MODE/MODE-1-mut-result-bad.hir:5:3
+   5 |   x
+     |   ^ 
+ --> ../../conformance/MODE/MODE-1-mut-result-bad.hir:4:15
+   4 | fn get(mut x: Bytes) -> Bytes {
+     |               ^^^^^ provided: `x` is a `mut` parameter, local to the caller
+ --> ../../conformance/MODE/MODE-1-mut-result-bad.hir:4:25
+   4 | fn get(mut x: Bytes) -> Bytes {
+     |                         ^^^^^ required: the result names no `in ..` source, so it is global (MODE-7)
+  = help: 1. declare the result `in x` (no cost; signature)
+  = help: 2. `unique x` (deep copy: allocates, costs O(size), and is not allowed under `@noalloc`)
+  = help: 3. declare the parameter `take x` (changes meaning: the caller loses `x`)
+  = note: `copy x` does not help: a copy shares the blocks of `x`, which stay local

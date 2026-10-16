@@ -1,0 +1,6 @@
+// rule: SER-1
+// expect: reject SER-1 at line 3
+@serializable
+type Row {
+  value: fn() -> u64 uses {},
+}

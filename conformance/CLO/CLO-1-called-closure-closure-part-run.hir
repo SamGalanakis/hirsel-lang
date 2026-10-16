@@ -1,0 +1,61 @@
+// rule: CLO-1
+// expect: run
+// stdout: ok
+// "A scoped closure cannot be stored or returned" unless it borrows nothing.
+// A closure literal that captures nothing, built inside a called closure and
+// returned as a tuple part, holds only global content. It may be returned,
+// held in a list element and bound under a written tuple type.
+fn made() -> (fn() -> u64 uses {}, u64) {
+  fn() {
+    (
+      fn() {
+        3u64
+      },
+      8u64
+    )
+  }()
+}
+
+fn listed() -> u64 {
+  let l: List[((fn() -> u64 uses {}, u64), u64)] = [
+    (
+      fn() {
+        (
+          fn() {
+            5u64
+          },
+          8u64
+        )
+      }(),
+      0u64
+    )
+  ]
+  let ((f, _), _) = l[0]
+  f()
+}
+
+fn bound() -> u64 {
+  let pair: (fn(k: u64) -> u64, u64) = fn() {
+    (
+      fn(k: u64) {
+        k
+      },
+      1u64
+    )
+  }()
+  let (f, n) = pair
+  f(n)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let (f, _) = made()
+  let _ = out.print(
+    io.stdout(rt)?,
+    if f() + listed() + bound() == 9 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

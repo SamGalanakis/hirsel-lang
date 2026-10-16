@@ -1,0 +1,4 @@
+// rule: CT-4
+// expect: accept
+// "Compile-time evaluations depend on each other acyclically".
+const VALUE: u32 = comptime 1

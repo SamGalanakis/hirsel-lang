@@ -1,0 +1,19 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 17
+// v22 #77, a copied argument. The result still reads within p.a, so writing
+// p.a while it lives conflicts with that loan.
+type Pair {
+  a: String,
+  b: String,
+}
+
+fn get(p: Pair) -> String in p.a {
+  p.a
+}
+
+fn caller(x: String, y: String) -> u64 {
+  let mut p = Pair(a: x, b: x)
+  let r = get(copy p)
+  p.a = y
+  string.byte_len(r)
+}

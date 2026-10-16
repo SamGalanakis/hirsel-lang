@@ -1,0 +1,12 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 11
+// Shows "Structural, computed from the type, no user instances."
+@noalloc
+fn bound[T: key](x: T) -> () {
+  ()
+}
+
+@noalloc
+fn example(x: (u32, f32)) -> () {
+  bound(x)
+}

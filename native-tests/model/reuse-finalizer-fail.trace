@@ -1,0 +1,9 @@
+rc-trace v1
+max 16
+# A failing finalizer on a reset donor disposes its storage: the token becomes none and
+# the block retires to free storage.
+alloc r1 0 fin
+reset r1 t1
+finalize fail
+drain
+reuse t1 r2 0

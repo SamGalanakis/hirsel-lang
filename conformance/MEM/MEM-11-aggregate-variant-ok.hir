@@ -1,0 +1,8 @@
+// rule: MEM-11
+// expect: accept
+type Choice = A(List[u64]) | B
+
+fn probe() {
+  let built: Choice = A([1, 2])
+  let frozen: Shared[Choice] = shared.freeze(take built)
+}

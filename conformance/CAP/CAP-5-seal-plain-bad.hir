@@ -1,0 +1,6 @@
+// rule: CAP-5
+// expect: reject GEN-1 at line 3
+@capability(global)
+pub opaque type Facet: plain uses {} {
+  key: String,
+}

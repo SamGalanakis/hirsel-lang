@@ -1,0 +1,6 @@
+// rule: MEM-5
+// expect: accept
+// "no block may be constructed whose destination may be the counted heap"; "no ... deep copy not proven unnecessary".
+fn make() -> Array[u8] {
+  [1, 2]
+}

@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn main() -> () {
+  core@1/f64.bits(1f64);
+}

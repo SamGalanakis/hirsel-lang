@@ -1,0 +1,10 @@
+// rule: OWN-1
+// expect: accept
+// "Local and read-only for the call."
+fn change(mut x: Bytes) -> () {
+  x = b"new"
+}
+
+fn example(mut x: Bytes) -> () {
+  change(mut x)
+}

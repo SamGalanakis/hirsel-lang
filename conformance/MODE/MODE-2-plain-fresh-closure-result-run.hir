@@ -1,0 +1,32 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// exit: 0
+// "A value is unique or aliased."
+// Plain bits own no blocks, so a freshly built plain value has the same type as
+// any other value of its type and passes through a closure result unchanged.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 2] = [7u8, 9u8]
+  let first = fn() {
+    xs
+  }()[1]
+  let ys = fn() {
+    unique xs
+  }()
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if first == 9 && ys[0] == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

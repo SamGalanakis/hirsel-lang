@@ -1,0 +1,11 @@
+// rule: PROV-4
+// expect: accept
+// A local result naming its source is bounded by that source, and a placed
+// local result names the arena.
+fn read(a: Arena, x: Bytes in a) -> Bytes in x {
+  x
+}
+
+fn placed(a: Arena, x: Bytes in a) -> Bytes in {a, x} {
+  x
+}

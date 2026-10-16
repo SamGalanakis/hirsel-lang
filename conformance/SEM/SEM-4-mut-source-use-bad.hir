@@ -1,0 +1,8 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 5
+// "the source may not be used in the body".
+fn inspect(mut xs: Array[u8]) -> () {
+  for x in mut xs {
+    let y = xs[0]
+  }
+}

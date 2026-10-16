@@ -1,0 +1,19 @@
+// rule: MODE-3
+// expect: accept
+// "Closures that take captures ... are once."
+resource type Token {
+  n: u64,
+}
+drop(t) {
+  ()
+}
+
+fn sink(take token: Token) -> () {
+  ()
+}
+
+fn example(take token: Token) -> once fn() -> () uses {} {
+  fn() {
+    sink(take token)
+  }
+}

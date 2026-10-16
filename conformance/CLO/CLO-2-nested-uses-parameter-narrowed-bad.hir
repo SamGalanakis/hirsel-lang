@@ -1,0 +1,25 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 24
+// "Written unrestricted parameters do not meet restricted uses" (#58). `run`
+// hands its function a callback with open `uses`; `inner` requires a
+// `uses {}` callback and forwards it to `sandbox`, so passing `inner` to
+// `run` would let a callback that prints reach `sandbox`.
+fn sandbox(g: fn() -> () uses {}) -> () {
+  g()
+}
+
+fn inner(g: fn() -> () uses {}) -> () {
+  sandbox(g)
+}
+
+fn run(h: fn(g: fn() -> ()) -> (), rt: Stdout) -> () {
+  h(
+    fn() {
+      let _ = out.print(rt, "x")
+    }
+  )
+}
+
+fn probe(rt: Stdout) -> () {
+  run(inner, rt)
+}

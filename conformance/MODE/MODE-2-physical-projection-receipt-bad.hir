@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+type R {
+  xs: unique List[Bytes],
+}
+
+fn need(take xs: unique List[Bytes]) {}
+
+fn probe(take r: R) {
+  let xs = r.xs
+  need(take xs)
+}

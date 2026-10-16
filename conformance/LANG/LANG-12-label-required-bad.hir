@@ -1,0 +1,12 @@
+// rule: LANG-12
+// expect: reject LANG-12 at line 11
+// Shows "must be labelled at every call; an unlabelled parameter cannot be."
+@noalloc
+fn rename(from src: Path, to dst: Path) -> () {
+  ()
+}
+
+@noalloc
+fn example(a: Path, b: Path) -> () {
+  rename(a, to: b)
+}

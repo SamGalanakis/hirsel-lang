@@ -1,0 +1,11 @@
+// rule: PROV-5
+// expect: accept
+// "Must be of the expression supplied for f in the same constructor."
+type Log {
+  dir: Dir,
+  file: File of .dir,
+}
+
+fn example(d: Dir, other: Dir, take value: File of d) -> Log {
+  Log(dir: d, file: take value)
+}

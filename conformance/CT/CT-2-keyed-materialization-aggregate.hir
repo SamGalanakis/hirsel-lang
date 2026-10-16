@@ -1,0 +1,43 @@
+// rule: CT-2
+// expect: run
+// stdout: 22111021
+fn build_map() -> Map[u64, u64] {
+  let mut m: Map[u64, u64] = map.empty()
+  map.insert(mut m, 2, 20)
+  map.insert(mut m, 1, 10)
+  map.insert(mut m, 2, 21)
+  take m
+}
+
+fn build_set(reverse: bool) -> Set[u64] {
+  let mut s: Set[u64] = set.empty()
+  if reverse {
+    set.insert(mut s, 1)
+    set.insert(mut s, 2)
+  } else {
+    set.insert(mut s, 2)
+    set.insert(mut s, 1)
+  }
+  set.insert(mut s, 2)
+  take s
+}
+
+type Both {
+  m: Map[u64, u64],
+  s: Set[u64],
+}
+
+const B: Both = Both(m: build_map(), s: build_set(false))
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let both = copy B
+  for (k, v) in both.m {
+    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(k))
+    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(v))
+  }
+  for n in both.s {
+    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+  }
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

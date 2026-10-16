@@ -1,0 +1,7 @@
+// rule: CAP-5
+// expect: accept
+@capability(global)
+pub opaque resource type Facet: noalloc_drop uses {Dir} {
+  d: Dir,
+}
+@noalloc drop(self) {}

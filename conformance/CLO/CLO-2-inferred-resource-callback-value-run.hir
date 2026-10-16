@@ -1,0 +1,26 @@
+// rule: CLO-2
+// expect: run
+// stdout: 14
+resource type Token {
+  n: u64,
+}
+drop(t) {}
+
+fn inspect(t: Token) -> u64 {
+  t.n
+}
+
+fn repeat(f: fn() -> u64 uses {}) -> u64 {
+  f() + f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let t = Token(n: 7u64)
+  let f = fn() {
+    inspect(t)
+  }
+  let n = repeat(f)
+  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

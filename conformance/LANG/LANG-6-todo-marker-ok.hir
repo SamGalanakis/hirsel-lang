@@ -1,0 +1,6 @@
+// rule: LANG-6
+// expect: accept
+@incomplete
+fn unfinished() -> u32 {
+  todo
+}

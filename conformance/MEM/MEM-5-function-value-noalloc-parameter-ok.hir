@@ -1,0 +1,17 @@
+// rule: MEM-5
+// expect: accept
+// The accepted twin, where the function handed to the `@noalloc` parameter is
+// declared `@noalloc`.
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+@noalloc
+fn seven() -> u64 {
+  7
+}
+
+fn probe() -> u64 {
+  invoke(seven)
+}

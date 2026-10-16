@@ -1,0 +1,1502 @@
+//! Definition-path dispatch; unknown ordinary definitions leave context unchanged.
+use super::{
+    Simulation, SimulationConfig, collection, float, integer,
+    simulation::{self, Fault, Grant},
+    string,
+};
+use crate::{
+    Error, Failure, Integer, OperationCall, OperationContext, OperationResult, Operations, Value,
+    invalid,
+};
+use hirsel_diag::RuleId;
+use hirsel_run_config::Access;
+use hirsel_tir::RunConfiguration;
+use hirsel_types::{BuiltinType, GenericArgument, Primitive, TypeKind};
+
+pub struct Library {
+    pub simulation: Simulation,
+    pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
+    pub(super) next_callback: u64,
+}
+impl Library {
+    pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
+        Ok(Self {
+            simulation: Simulation::new(run, config)?,
+            callbacks: Default::default(),
+            next_callback: 0,
+        })
+    }
+    fn capability(
+        &mut self,
+        name: &str,
+        call: &OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let a = call.arguments;
+        let op = name.split_once('.').unwrap().1;
+        let value = match name {
+            "io.stdout" | "io.random" | "io.net" | "io.tasks" => {
+                self.simulation.id(arg(a, 0)?, "Io")?;
+                let kind = match op {
+                    "stdout" => "Stdout",
+                    "random" => "Random",
+                    "net" => "Net",
+                    _ => "Tasks",
+                };
+                if op == "clock" {
+                    self.simulation.handle(kind, Grant::Root(kind.into()))
+                } else if self.simulation.config.projections.contains(op) {
+                    ok(if kind == "Net" {
+                        self.simulation.net_root()
+                    } else {
+                        self.simulation.handle(kind, Grant::Root(kind.into()))
+                    })
+                } else {
+                    error(variant(0, vec![]))
+                }
+            }
+            "io.monotonic_clock" | "io.wall_clock" => {
+                self.simulation.id(arg(a, 0)?, "Io")?;
+                let kind = if op == "monotonic_clock" {
+                    "MonotonicClock"
+                } else {
+                    "WallClock"
+                };
+                if self.simulation.config.grants.contains(kind) {
+                    ok(self.simulation.handle(kind, Grant::Root(kind.into())))
+                } else {
+                    error(variant(0, vec![]))
+                }
+            }
+            "clock.monotonic" | "clock.wall" => {
+                let kind = if op == "monotonic" {
+                    "MonotonicClock"
+                } else {
+                    "WallClock"
+                };
+                self.simulation.id(arg(a, 0)?, kind)?;
+                match self
+                    .simulation
+                    .config
+                    .faults
+                    .get(name)
+                    .and_then(|queue| queue.front())
+                    .cloned()
+                {
+                    Some(Fault::Fault { code, partial: 0 }) if code <= 1 => {
+                        error(variant(code, vec![]))
+                    }
+                    Some(_) => return Err(invalid("invalid nonblocking clock error")),
+                    None if op == "monotonic" => {
+                        let ticks = self.simulation.config.monotonic;
+                        if self
+                            .simulation
+                            .last_monotonic
+                            .is_some_and(|last| ticks < last)
+                        {
+                            return Err(invalid("regressing monotonic input"));
+                        }
+                        ok(Value::Handle {
+                            kind: "Instant".into(),
+                            id: ticks,
+                        })
+                    }
+                    None => ok(Value::Integer(
+                        Integer::new(Primitive::I64, self.simulation.config.wall as u64 as u128)
+                            .unwrap(),
+                    )),
+                }
+            }
+            "io.dir" | "dir.narrow" => {
+                let requested = path_text(arg(a, 1)?)?;
+                let selected = if name == "io.dir" {
+                    self.simulation.id(arg(a, 0)?, "Io")?;
+                    if self.simulation.config.projections.contains("dir") {
+                        self.simulation
+                            .config
+                            .mounts
+                            .iter()
+                            .find_map(|(selector, access)| {
+                                let local = if selector.is_empty() {
+                                    Some(requested)
+                                } else if requested == selector {
+                                    Some("")
+                                } else {
+                                    requested.strip_prefix(selector)?.strip_prefix('/')
+                                }?;
+                                Some((0, selector.clone(), 0, *access, local.to_owned()))
+                            })
+                    } else {
+                        None
+                    }
+                } else {
+                    let (tree, root, directory) = self.simulation.directory(arg(a, 0)?)?;
+                    let Some(Grant::Dir { access, .. }) = self.simulation.grants.get(&directory)
+                    else {
+                        unreachable!()
+                    };
+                    Some((tree, root, directory, *access, requested.to_owned()))
+                };
+                if let Some((tree, root, directory, access, local)) = selected {
+                    match self.simulation.fault(name) {
+                        Some(f) => fault_result(f),
+                        None => {
+                            let resolved = if name == "io.dir" {
+                                self.simulation.resolve_mount(&root, &local)
+                            } else {
+                                self.simulation
+                                    .resolve_in(tree, directory, &root, &local, true)
+                            };
+                            match resolved {
+                                Ok(physical)
+                                    if self.simulation.trees[&tree].0.contains(&physical) =>
+                                {
+                                    let logical = simulation::relative(&root, &local).unwrap();
+                                    let handle = self.simulation.handle(
+                                        "Dir",
+                                        Grant::Dir {
+                                            tree,
+                                            root: logical,
+                                            access,
+                                        },
+                                    );
+                                    let Value::Handle { id, .. } = &handle else {
+                                        unreachable!()
+                                    };
+                                    self.simulation.resolved_directories.insert(*id, physical);
+                                    ok(handle)
+                                }
+                                _ => file_fault(self.simulation.config.invalid_path_code),
+                            }
+                        }
+                    }
+                } else {
+                    error(variant(2, vec![]))
+                }
+            }
+            "arg.path" => {
+                self.simulation.id(arg(a, 0)?, "Args")?;
+                let i = index(arg(a, 1)?)?;
+                self.simulation
+                    .config
+                    .args
+                    .get(i)
+                    .map(|s| ok(path(s)))
+                    .unwrap_or_else(|| error(variant(0, vec![])))
+            }
+            "out.print" => {
+                self.simulation.id(arg(a, 0)?, "Stdout")?;
+                let text = text(arg(a, 1)?)?;
+                match self.simulation.fault(name) {
+                    Some(Fault::Canceled(cause)) => error(variant(1, vec![variant(cause, vec![])])),
+                    Some(Fault::Fault { code, partial }) => {
+                        context
+                            .stdout
+                            .extend_from_slice(&text.as_bytes()[..partial.min(text.len())]);
+                        error(variant(0, vec![u32_value(code)]))
+                    }
+                    None => {
+                        context.stdout.extend_from_slice(text.as_bytes());
+                        ok(Value::Unit)
+                    }
+                }
+            }
+            "test.check" | "test.check_case" => {
+                self.simulation.id(arg(a, 0)?, "Test")?;
+                let Value::Bool(condition) = arg(a, 1)? else {
+                    return Err(invalid("test.check expects bool"));
+                };
+                if !condition {
+                    if name == "test.check_case" {
+                        let case = int(arg(a, 2)?)?;
+                        if case.kind() != Primitive::U64 {
+                            return Err(invalid("test.check_case expects u64"));
+                        }
+                        let case = case.bits() as u64;
+                        let seed = self.simulation.config.test_seed;
+                        context.stdout.extend_from_slice(
+                            format!("test failure: seed={seed} case={case}\n").as_bytes(),
+                        );
+                    }
+                    let failure = fail(call, context, "LANG-9", "test.check(false)");
+                    self.simulation.record(
+                        "Test",
+                        name,
+                        encode_arguments(a),
+                        b"failure:LANG-9".to_vec(),
+                        context,
+                    )?;
+                    return Ok(Some(OperationResult::Failed(failure)));
+                }
+                Value::Unit
+            }
+            // Record the failure, then end the test along the
+            // call's failure edge. It never completes (TIR v3 diverging call).
+            "test.fail" => {
+                self.simulation.id(arg(a, 0)?, "Test")?;
+                let failure = fail(call, context, "LANG-9", "test.fail");
+                self.simulation.record(
+                    "Test",
+                    name,
+                    encode_arguments(a),
+                    b"failure:LANG-9".to_vec(),
+                    context,
+                )?;
+                return Ok(Some(OperationResult::Failed(failure)));
+            }
+            "test.dir" => {
+                self.simulation.id(arg(a, 0)?, "Test")?;
+                let entries = collection::elements(arg(a, 1)?, BuiltinType::List)?;
+                let mut files = std::collections::BTreeMap::new();
+                let mut dirs = std::collections::BTreeSet::from([String::new()]);
+                for entry in entries {
+                    let Value::Tuple(pair) = entry else {
+                        return Err(invalid("invalid test.dir entry"));
+                    };
+                    if pair.len() != 2 {
+                        return Err(invalid("invalid test.dir pair"));
+                    }
+                    let p = path_text(pair[0].as_ref().ok_or_else(|| invalid("dead path"))?)?;
+                    let p = simulation::relative("", p)
+                        .ok_or_else(|| invalid("test.dir entry escapes root"))?;
+                    let data =
+                        bytes(pair[1].as_ref().ok_or_else(|| invalid("dead bytes"))?)?.to_vec();
+                    simulation::parents(&p, &mut dirs);
+                    files.insert(p, data);
+                }
+                if files.keys().any(|p| dirs.contains(p)) {
+                    return Err(invalid("test.dir file/directory collision"));
+                }
+                let tree = self.simulation.trees.keys().next_back().unwrap() + 1;
+                self.simulation.trees.insert(tree, (dirs, files));
+                self.simulation.identify_tree(tree);
+                self.simulation.handle(
+                    "Dir",
+                    Grant::Dir {
+                        tree,
+                        root: String::new(),
+                        access: Access::ReadWrite,
+                    },
+                )
+            }
+            n if n.starts_with("file.") => self.file(name, call)?,
+            _ => return Ok(None),
+        };
+        let cap = if name.starts_with("io.") {
+            "Io"
+        } else if name == "clock.monotonic" {
+            "MonotonicClock"
+        } else if name == "clock.wall" {
+            "WallClock"
+        } else if name.starts_with("arg.") {
+            "Args"
+        } else if name.starts_with("test.") {
+            "Test"
+        } else if name.starts_with("out.") {
+            "Stdout"
+        } else {
+            "Dir"
+        };
+        let record = self.simulation.record(
+            cap,
+            name,
+            encode_arguments(a),
+            encode_value(&value),
+            context,
+        );
+        if let Err(error) = record {
+            if matches!(name, "io.monotonic_clock" | "io.wall_clock")
+                && let Value::Variant { variant: 0, fields } = &value
+                && let Some(Some(Value::Handle { id, .. })) = fields.first()
+            {
+                self.simulation.grants.remove(id);
+                self.simulation.next_id = *id;
+            }
+            return Err(error);
+        }
+        if matches!(name, "clock.monotonic" | "clock.wall") {
+            self.simulation.fault(name);
+        }
+        if name == "clock.monotonic"
+            && let Value::Variant { variant: 0, .. } = &value
+        {
+            self.simulation.last_monotonic = Some(self.simulation.config.monotonic);
+        }
+        let result = OperationResult::returned(value);
+        Ok(Some(if matches!(name, "file.narrow" | "file.commit") {
+            result.transferring([1])
+        } else {
+            result
+        }))
+    }
+    fn file(&mut self, name: &str, call: &OperationCall<'_>) -> Result<Value, Error> {
+        let a = call.arguments;
+        let (tree, root, dir) = self.simulation.directory(arg(a, 0)?)?;
+        if !self.simulation.writable(dir)
+            && matches!(
+                name,
+                "file.write_bytes"
+                    | "file.remove"
+                    | "file.create_atomic"
+                    | "file.write_all"
+                    | "file.commit"
+            )
+        {
+            return Ok(error(variant(2, vec![])));
+        }
+        if let Some(f) = self.simulation.fault(name) {
+            // Cancellation has no effects. Other faults may commit a prefix.
+            if let Fault::Fault { partial, .. } = &f
+                && *partial > 0
+            {
+                match name {
+                    "file.write_bytes" => {
+                        if let Ok(p) = self.simulation.resolve_in(
+                            tree,
+                            dir,
+                            &root,
+                            path_text(arg(a, 1)?)?,
+                            false,
+                        ) && self.simulation.trees[&tree].0.contains(parent(&p))
+                            && !self.simulation.trees[&tree].0.contains(&p)
+                        {
+                            let b = bytes(arg(a, 2)?)?;
+                            if b.is_empty() {
+                                return Ok(fault_result(f));
+                            }
+                            if tree == 0 {
+                                self.simulation.config.links.remove(&p);
+                            }
+                            self.simulation
+                                .trees
+                                .get_mut(&tree)
+                                .unwrap()
+                                .1
+                                .insert(p.clone(), b[..(*partial).min(b.len())].to_vec());
+                            self.simulation.replace_identity(tree, &p);
+                        }
+                    }
+                    "file.write_all" => {
+                        let id = self.simulation.id(arg(a, 1)?, "AtomicFile")?;
+                        let Some(Grant::Atomic {
+                            temp,
+                            dir: d,
+                            tree: t,
+                            ..
+                        }) = self.simulation.grants.get(&id)
+                        else {
+                            return Err(invalid("wrong atomic grant"));
+                        };
+                        if *d != dir || *t != tree {
+                            return Err(invalid("wrong atomic directory"));
+                        }
+                        let temp = self
+                            .simulation
+                            .resolve_stored(tree, dir, temp, false)
+                            .map_err(|_| invalid("invalid atomic path"))?;
+                        let b = bytes(arg(a, 2)?)?;
+                        self.simulation
+                            .trees
+                            .get_mut(&tree)
+                            .unwrap()
+                            .1
+                            .get_mut(&temp)
+                            .unwrap()
+                            .extend_from_slice(&b[..(*partial).min(b.len())]);
+                    }
+                    _ => {}
+                }
+            }
+            // Commit consumes its taken handle on every Result, even canceled.
+            if name == "file.commit" {
+                let id = self.simulation.id(arg(a, 1)?, "AtomicFile")?;
+                if let Some(Grant::Atomic { temp, tree, .. }) = self.simulation.grants.remove(&id) {
+                    let temp = self
+                        .simulation
+                        .resolve_stored(tree, dir, &temp, false)
+                        .map_err(|_| invalid("invalid atomic path"))?;
+                    self.simulation
+                        .trees
+                        .get_mut(&tree)
+                        .unwrap()
+                        .1
+                        .remove(&temp);
+                    self.simulation.unlink_identity(tree, &temp);
+                }
+            }
+            if name == "file.narrow" {
+                let id = self.simulation.id(arg(a, 1)?, "File")?;
+                self.simulation.grants.remove(&id);
+                return Ok(none());
+            }
+            return Ok(fault_result(f));
+        }
+        if name == "file.walk" {
+            return Ok(match self.simulation.walk_paths(tree, dir, &root) {
+                Ok(paths) => ok(collection::sequence(
+                    BuiltinType::Iter,
+                    paths.into_iter().map(|p| ok(path(&p))).collect::<Vec<_>>(),
+                )),
+                Err(code) => file_fault(code),
+            });
+        }
+        if name == "file.narrow" {
+            let id = self.simulation.id(arg(a, 1)?, "File")?;
+            let Some(Grant::File {
+                tree: t,
+                path: p,
+                identity,
+                ..
+            }) = self.simulation.grants.remove(&id)
+            else {
+                return Err(invalid("wrong file grant"));
+            };
+            let fits = t == tree
+                && (root.is_empty() || p.starts_with(&format!("{root}/")))
+                && self
+                    .simulation
+                    .resolve_stored(tree, dir, &p, true)
+                    .ok()
+                    .and_then(|p| self.simulation.file_identity(tree, &p))
+                    == Some(identity);
+            return Ok(if fits {
+                some(self.simulation.handle(
+                    "File",
+                    Grant::File {
+                        tree,
+                        path: p,
+                        dir,
+                        identity,
+                    },
+                ))
+            } else {
+                none()
+            });
+        }
+        if matches!(name, "file.write_all" | "file.commit") {
+            let id = self.simulation.id(arg(a, 1)?, "AtomicFile")?;
+            let Some(Grant::Atomic {
+                tree: t,
+                temp,
+                dst,
+                dir: d,
+                identity,
+            }) = self.simulation.grants.get(&id).cloned()
+            else {
+                return Err(invalid("wrong atomic grant"));
+            };
+            if t != tree || d != dir {
+                return Err(invalid("wrong atomic directory"));
+            }
+            let local = |p: &str| -> String {
+                if root.is_empty() {
+                    p.into()
+                } else {
+                    p.strip_prefix(&format!("{root}/")).unwrap().into()
+                }
+            };
+            let temp = match self
+                .simulation
+                .resolve_in(tree, dir, &root, &local(&temp), false)
+            {
+                Ok(p) => p,
+                Err(code) => return Ok(file_fault(code)),
+            };
+            let dst = match self
+                .simulation
+                .resolve_in(tree, dir, &root, &local(&dst), false)
+            {
+                Ok(p) => p,
+                Err(code) => return Ok(file_fault(code)),
+            };
+            if name == "file.commit" && self.simulation.file_identity(tree, &temp) != Some(identity)
+            {
+                self.simulation.grants.remove(&id);
+                self.simulation
+                    .trees
+                    .get_mut(&tree)
+                    .unwrap()
+                    .1
+                    .remove(&temp);
+                self.simulation.unlink_identity(tree, &temp);
+                if tree == 0 {
+                    self.simulation.config.links.remove(&temp);
+                }
+                return Ok(file_fault(self.simulation.config.invalid_path_code));
+            }
+            if name == "file.commit" && tree == 0 {
+                self.simulation.config.links.remove(&dst);
+            }
+            let files = &mut self.simulation.trees.get_mut(&tree).unwrap().1;
+            if name == "file.write_all" {
+                let data = bytes(arg(a, 2)?)?;
+                files
+                    .get_mut(&temp)
+                    .ok_or_else(|| invalid("dead atomic temporary"))?
+                    .extend_from_slice(data);
+            } else {
+                let data = files
+                    .remove(&temp)
+                    .ok_or_else(|| invalid("dead atomic temporary"))?;
+                files.insert(dst.clone(), data);
+                self.simulation.publish_identity(tree, &temp, &dst);
+                self.simulation.grants.remove(&id);
+            }
+            return Ok(ok(Value::Unit));
+        }
+        let p = path_text(arg(a, 1)?)?;
+        let Some(logical) = simulation::relative(&root, p) else {
+            return Ok(file_fault(self.simulation.config.invalid_path_code));
+        };
+        let follow = !matches!(name, "file.write_bytes" | "file.remove");
+        let p = match self.simulation.resolve_in(tree, dir, &root, p, follow) {
+            Ok(p) => p,
+            Err(code) => return Ok(file_fault(code)),
+        };
+        match name {
+            "file.open" => {
+                if self.simulation.trees[&tree].1.contains_key(&p) {
+                    Ok(ok(self.simulation.handle(
+                        "File",
+                        Grant::File {
+                            tree,
+                            path: logical,
+                            dir,
+                            identity: self
+                                .simulation
+                                .file_identity(tree, &p)
+                                .expect("opened identity"),
+                        },
+                    )))
+                } else {
+                    Ok(file_fault(self.simulation.config.missing_path_code))
+                }
+            }
+            "file.size" => Ok(self.simulation.trees[&tree]
+                .1
+                .get(&p)
+                .map(|b| ok(u64_value(b.len() as u64)))
+                .unwrap_or_else(|| file_fault(self.simulation.config.missing_path_code))),
+            "file.read_bytes" => Ok(self.simulation.trees[&tree]
+                .1
+                .get(&p)
+                .map(|b| ok(Value::Bytes(b.clone())))
+                .unwrap_or_else(|| file_fault(self.simulation.config.missing_path_code))),
+            "file.write_bytes" => {
+                if !self.simulation.trees[&tree].0.contains(parent(&p))
+                    || self.simulation.trees[&tree].0.contains(&p)
+                {
+                    return Ok(file_fault(self.simulation.config.missing_path_code));
+                }
+                let data = bytes(arg(a, 2)?)?.to_vec();
+                if tree == 0 {
+                    self.simulation.config.links.remove(&p);
+                }
+                self.simulation
+                    .trees
+                    .get_mut(&tree)
+                    .unwrap()
+                    .1
+                    .insert(p.clone(), data);
+                self.simulation.replace_identity(tree, &p);
+                Ok(ok(Value::Unit))
+            }
+            "file.remove" if tree == 0 && self.simulation.config.links.remove(&p).is_some() => {
+                Ok(ok(Value::Unit))
+            }
+            "file.remove" => Ok(
+                if self
+                    .simulation
+                    .trees
+                    .get_mut(&tree)
+                    .unwrap()
+                    .1
+                    .remove(&p)
+                    .is_some()
+                {
+                    self.simulation.unlink_identity(tree, &p);
+                    ok(Value::Unit)
+                } else {
+                    file_fault(self.simulation.config.missing_path_code)
+                },
+            ),
+            "file.create_atomic" => {
+                if !self.simulation.trees[&tree].0.contains(parent(&p))
+                    || self.simulation.trees[&tree].0.contains(&p)
+                {
+                    return Ok(file_fault(self.simulation.config.missing_path_code));
+                }
+                let mut serial = self.simulation.next_id;
+                let temp = loop {
+                    let candidate = format!("{}.hirsel-tmp-{serial}", p);
+                    if !self.simulation.trees[&tree].1.contains_key(&candidate)
+                        && !(tree == 0 && self.simulation.config.links.contains_key(&candidate))
+                    {
+                        break candidate;
+                    }
+                    serial += 1;
+                };
+                self.simulation
+                    .trees
+                    .get_mut(&tree)
+                    .unwrap()
+                    .1
+                    .insert(temp.clone(), vec![]);
+                self.simulation.replace_identity(tree, &temp);
+                Ok(ok(self.simulation.handle(
+                    "AtomicFile",
+                    Grant::Atomic {
+                        tree,
+                        temp: format!("{logical}.hirsel-tmp-{serial}"),
+                        dst: logical,
+                        dir,
+                        identity: self
+                            .simulation
+                            .file_identity(tree, &temp)
+                            .expect("atomic identity"),
+                    },
+                )))
+            }
+            _ => Err(Error::Unavailable(format!("unimplemented {name}"))),
+        }
+    }
+}
+impl Operations for Library {
+    fn resume(
+        &mut self,
+        token: u64,
+        result: OperationResult,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        self.resume_callback(token, result, context)
+    }
+    fn drop_handle(
+        &mut self,
+        kind: &str,
+        id: u64,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        if kind == "Stream" {
+            if self.simulation.net_streams.contains_key(&id) {
+                self.simulation.record(
+                    "Net",
+                    "net.close",
+                    id.to_le_bytes().to_vec(),
+                    vec![],
+                    context,
+                )?;
+                self.simulation.net_streams.remove(&id);
+                self.simulation.grants.remove(&id);
+            }
+            return Ok(());
+        }
+        if !matches!(kind, "File" | "AtomicFile") {
+            return Ok(());
+        }
+        // Taken commit/narrow handles have already been consumed.
+        let Some(grant) = self.simulation.grants.get(&id).cloned() else {
+            return Ok(());
+        };
+        self.simulation.record(
+            "Dir",
+            if kind == "File" {
+                "file.close"
+            } else {
+                "file.abort"
+            },
+            id.to_le_bytes().to_vec(),
+            vec![],
+            context,
+        )?;
+        self.simulation.grants.remove(&id);
+        if let Grant::Atomic {
+            tree, temp, dir, ..
+        } = grant
+        {
+            let temp = self
+                .simulation
+                .resolve_stored(tree, dir, &temp, false)
+                .map_err(|_| invalid("invalid atomic path"))?;
+            self.simulation
+                .trees
+                .get_mut(&tree)
+                .unwrap()
+                .1
+                .remove(&temp);
+            self.simulation.unlink_identity(tree, &temp);
+        }
+        Ok(())
+    }
+    fn call(
+        &mut self,
+        call: OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        if call.path.0.package.name != "core" || call.path.0.package.version != "1" {
+            return Ok(None);
+        }
+        let name = call
+            .path
+            .0
+            .modules
+            .iter()
+            .chain(std::iter::once(&call.path.0.name))
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(".");
+        if let Some(result) = super::dictionaries::call(&name, call.arguments)? {
+            return Ok(Some(result));
+        }
+        if let Some(result) = super::cursors::call(&name, call.arguments)? {
+            return Ok(Some(result));
+        }
+        self.dispatch_primary(call, context, &name)
+    }
+}
+// The dispatch arms and exported path set are emitted from one declaration.
+macro_rules! primary_operations {
+    ($library:ident, $call:ident, $context:ident, $name:ident, $args:ident, $value:ident;
+     $( $kind:ident: $( $path:literal )|+ => $handler:expr, )*
+     ; finish $finish:expr) => {
+        pub(super) const PRIMARY_OPERATIONS: &[(&str, super::OperationDisposition)] = &[
+            $( $( ($path, super::OperationDisposition::$kind), )+ )*
+        ];
+        impl Library {
+            fn dispatch_primary(&mut $library, $call: OperationCall<'_>,
+                $context: &mut OperationContext<'_>, $name: &str)
+                -> Result<Option<OperationResult>, Error> {
+                let $args = $call.arguments;
+                let $value = match $name {
+                    $( $( $path )|+ => $handler, )*
+                    _ => return Ok(None),
+                };
+                $finish
+            }
+        }
+    };
+}
+
+primary_operations! { self, call, context, name, a, value;
+    Primitive: "$intrinsic.heap" => {
+        if !a.is_empty() { return Err(invalid("heap operation arity")); }
+        Value::Handle { kind: "$Heap".into(), id: 0 }
+    },
+    Capability: "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+            // A rejected replay never publishes effects or consumes grants/faults.
+            if !context.configuration.inputs.is_empty() {
+                let saved = self.simulation.clone();
+                let out_len = context.stdout.len();
+                let trace_len = context.trace.len();
+                let result = self.capability(name, &call, context);
+                if result.is_err() {
+                    self.simulation = saved;
+                    context.stdout.truncate(out_len);
+                    context.trace.truncate(trace_len);
+                }
+                return result;
+            }
+            return self.capability(name, &call, context);
+            },
+    Unavailable: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" | "mutex.create" | "mutex.with" | "channel.open" | "channel.send" | "channel.receive" | "atomic.create" | "atomic.load" | "atomic.store" | "sender.dup" | "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" => {
+        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+        let result = self.simulation.net_call(name, &call, context).map(Some);
+        if result.is_err() && !matches!(&result, Err(Error::Blocked(_)))
+            && let Some(saved) = saved { self.simulation = saved; }
+        return result;
+    },
+    Unavailable: "net.listen" | "net.accept" | "net.local_addr" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
+    Unavailable: "reservations.insert" | "stock.get" | "stock.put" | "store.transact" => { return Err(Error::Unavailable(format!("{name} is a signature-only application fixture"))); },
+    Primitive: "path.of" => path(text(arg(a, 0)?)?),
+    Primitive: "instant.ticks" => {
+        match arg(a, 0)? {
+            Value::Handle { kind, id } if kind == "Instant" => u64_value(*id),
+            _ => return Err(invalid("invalid Instant representation")),
+        }
+    },
+    Primitive: "int.widen" | "int.try_narrow" | "int.narrow" | "int.truncate" => {
+                let dest = destination(&call)?;
+                let operation = call.path.0.name.as_str();
+                match integer::convert(operation, int(arg(a, 0)?)?, dest) {
+                    Ok(v) => {
+                        if operation == "try_narrow" {
+                            v.map(|i| some(Value::Integer(i))).unwrap_or_else(none)
+                        } else {
+                            Value::Integer(v.unwrap())
+                        }
+                    }
+                    Err(crate::scalar::ScalarError::InvalidOperation) => {
+                        return Err(invalid("invalid integer conversion schema"));
+                    }
+                    Err(_) => {
+                        return Ok(Some(OperationResult::Failed(fail(
+                            &call,
+                            context,
+                            "SEM-1",
+                            "unrepresentable conversion",
+                        ))));
+                    }
+                }
+            },
+    Primitive: "int.wrapping_add" | "int.saturating_add" | "int.checked_add" | "int.unchecked_add" => {
+                let offset = usize::from(name == "int.unchecked_add");
+                if offset == 1 {
+                    self.simulation.id(arg(a, 0)?, "Unsafe")?;
+                    self.simulation.record(
+                        "Unsafe",
+                        &name,
+                        encode_arguments(a),
+                        vec![],
+                        context,
+                    )?;
+                }
+                let v = integer::add(
+                    &call.path.0.name,
+                    int(arg(a, offset)?)?,
+                    int(arg(a, offset + 1)?)?,
+                );
+                let v = match v {
+                    Err(crate::scalar::ScalarError::Overflow) if name == "int.unchecked_add" => {
+                        return Ok(Some(OperationResult::UndefinedBehavior(crate::UndefinedBehavior {
+                            kind: "undefined behaviour detected".into(),
+                            operation: call.path.clone(), site: call.site,
+                            line: context.sources.location(call.site).map(|site| site.line).unwrap_or(0),
+                            contract: "mathematical sum must fit the destination integer type".into(),
+                        })));
+                    }
+                    Err(_) => return Err(invalid("invalid integer schema")),
+                    Ok(value) => value,
+                };
+                if name == "int.checked_add" {
+                    v.map(|i| some(Value::Integer(i))).unwrap_or_else(none)
+                } else {
+                    Value::Integer(v.unwrap())
+                }
+            },
+    Primitive: "int.div_floor" | "int.mod" | "int.div_exact" => {
+                match integer::divide(&call.path.0.name, int(arg(a, 0)?)?, int(arg(a, 1)?)?) {
+                    Ok(i) => Value::Integer(i),
+                    Err(_) => {
+                        return Ok(Some(OperationResult::Failed(fail(
+                            &call,
+                            context,
+                            "SEM-1",
+                            "invalid integer division",
+                        ))));
+                    }
+                }
+            },
+    Primitive: "f32.bits" | "f64.bits" => {
+        float::bits(arg(a, 0)?).ok_or_else(|| invalid("expected float"))?
+    },
+    Primitive: "f32.from_bits" | "f64.from_bits" => {
+        float::from_bits(int(arg(a, 0)?)?).ok_or_else(|| invalid("expected u32 or u64"))?
+    },
+    Primitive: "float.min" | "float.max" | "float.min_number" | "float.max_number" => {
+                float::minmax(&call.path.0.name, arg(a, 0)?.clone(), arg(a, 1)?.clone())
+                    .ok_or_else(|| invalid("float type mismatch"))?
+            },
+    Primitive: "float.total_order" => i32_value(
+                float::total_order(arg(a, 0)?.clone(), arg(a, 1)?.clone())
+                    .ok_or_else(|| invalid("float type mismatch"))?,
+            ),
+    Primitive: "float.mul_add" => {
+                float::mul_add(arg(a, 0)?.clone(), arg(a, 1)?.clone(), arg(a, 2)?.clone())
+                    .ok_or_else(|| invalid("float type mismatch"))?
+            },
+    Primitive: "float.from_int" => {
+        float::from_int(int(arg(a, 0)?)?, destination(&call)?)
+            .ok_or_else(|| invalid("expected float destination"))?
+    },
+    Primitive: "float.to_i32" => {
+                match float::to_i32(arg(a, 0)?).ok_or_else(|| invalid("expected float"))? {
+                    Ok(n) => ok(i32_value(n)),
+                    Err(e) => error(variant(e, vec![])),
+                }
+            },
+    Primitive: "string.byte_len" => u64_value(text(arg(a, 0)?)?.len() as u64),
+    Primitive: "string.scalars" => collection::sequence(
+                BuiltinType::Array,
+                string::scalars(text(arg(a, 0)?)?).map(u32_value),
+            ),
+    Primitive: "string.positions" => {
+                let s = text(arg(a, 0)?)?;
+                collection::sequence(
+                    BuiltinType::Array,
+                    string::positions(s).map(|i| Value::Record {
+                        definition: simulation::core_path("StrPos"),
+                        fields: vec![Some(Value::String(s.into())), Some(u64_value(i as u64))],
+                    }),
+                )
+            },
+    Primitive: "string.slice" => {
+                let s = text(arg(a, 0)?)?;
+                let start = position(arg(a, 1)?, s)?;
+                let end = position(arg(a, 2)?, s)?;
+                if let Some(v) = string::slice(s, start, end) {
+                    Value::String(v.into())
+                } else {
+                    return Ok(Some(OperationResult::Failed(fail(
+                        &call,
+                        context,
+                        "SEM-3",
+                        "reversed or invalid string positions",
+                    ))));
+                }
+            },
+    Primitive: "string.from_bytes" => match String::from_utf8(bytes(arg(a, 0)?)?.to_vec()) {
+                Ok(s) => ok(Value::String(s)),
+                Err(e) => error(Value::Bytes(e.into_bytes())),
+            },
+    Primitive: "list.len" | "array.len" => u64_value(collection::len(arg(a, 0)?)?),
+    Primitive: "list.pop" | "list.remove" | "list.swap" | "list.reserve" => {
+        let mut list = arg(a, 0)?.clone();
+        let Value::Sequence { kind: BuiltinType::List, elements } = &mut list else {
+            return Err(invalid("list primitive requires List"));
+        };
+        let len = elements.len();
+        let value = match name {
+            "list.pop" => elements.pop().flatten().map_or_else(none, some),
+            "list.remove" => {
+                let i = index(arg(a, 1)?)?;
+                if i >= len {
+                    return Ok(Some(OperationResult::Failed(fail(&call, context, "MEM-14", "list index out of bounds"))));
+                }
+                elements.remove(i).ok_or_else(|| invalid("dead list element"))?
+            }
+            "list.swap" => {
+                let i = index(arg(a, 1)?)?;
+                let j = index(arg(a, 2)?)?;
+                if i >= len || j >= len {
+                    return Ok(Some(OperationResult::Failed(fail(&call, context, "MEM-14", "list index out of bounds"))));
+                }
+                elements.swap(i, j);
+                Value::Unit
+            }
+            // Reference values have no observable capacity; do not allocate host
+            // storage based on an unbounded language capacity request.
+            "list.reserve" => { index(arg(a, 1)?)?; Value::Unit }
+            _ => unreachable!(),
+        };
+        return Ok(Some(OperationResult::Complete { value, arguments: vec![(0, list)], consumed: vec![], released: vec![] }));
+    },
+    Primitive: "failure.check" => {
+        let Value::Variant { variant, fields } = arg(a, 1)? else { return Err(invalid("CheckRule variant")); };
+        if !fields.is_empty() || *variant > 2 { return Err(invalid("CheckRule ordinal")); }
+        let Value::Bool(condition) = arg(a, 0)? else { return Err(invalid("check condition")); };
+        if !condition {
+            let rule = ["SEM-1", "SEM-3", "MEM-14"][*variant as usize];
+            return Ok(Some(OperationResult::Failed(fail(&call, context, rule, "failed check"))));
+        }
+        Value::Unit
+    },
+    Primitive: "string.as_bytes" => Value::Bytes(text(arg(a, 0)?)?.as_bytes().to_vec()),
+    Primitive: "bytes.len" => u64_value(bytes(arg(a, 0)?)?.len() as u64),
+    Primitive: "bytes.from_list" => {
+        let values = collection::elements(arg(a, 0)?, BuiltinType::List)?;
+        let mut result = Vec::with_capacity(values.len());
+        for v in values {
+            let Value::Integer(i) = v else { return Err(invalid("byte list element")); };
+            if i.kind() != Primitive::U8 { return Err(invalid("byte list element kind")); }
+            result.push(i.bits() as u8);
+        }
+        return Ok(Some(OperationResult::Complete { value: Value::Bytes(result), arguments: vec![], consumed: vec![0], released: vec![] }));
+    },
+    Primitive: "bytes.slice" => {
+        let src = bytes(arg(a, 0)?)?;
+        let start = index(arg(a, 1)?)?;
+        let end = index(arg(a, 2)?)?;
+        if start > end || end > src.len() {
+            return Ok(Some(OperationResult::Failed(fail(&call, context, "SEM-3", "invalid byte interval"))));
+        }
+        Value::Bytes(src[start..end].to_vec())
+    },
+    Primitive: "string.position" => {
+        let s = text(arg(a, 0)?)?;
+        let offset = index(arg(a, 1)?)?;
+        if s.is_char_boundary(offset) {
+            some(Value::Record { definition: simulation::core_path("StrPos"), fields: vec![Some(Value::String(s.into())), Some(u64_value(offset as u64))] })
+        } else { none() }
+    },
+    Primitive: "string.byte_offset" => u64_value(position(arg(a, 1)?, text(arg(a, 0)?)?)? as u64),
+    Primitive: "path.text" => Value::String(path_text(arg(a, 0)?)?.to_owned()),
+    Primitive: "list.push" => {
+                return Ok(Some(
+                    collection::push(arg(a, 0)?.clone(), arg(a, 1)?.clone())?
+                        .into_result(0, vec![1]),
+                ));
+            },
+    Primitive: "map.empty" => collection::sequence(BuiltinType::Map, []),
+    Primitive: "set.empty" => collection::sequence(BuiltinType::Set, []),
+    Primitive: "map.insert" => {
+                return Ok(Some(keyed(
+                    collection::insert(arg(a, 0)?.clone(), arg(a, 1)?.clone(), arg(a, 2)?.clone())
+                        .map(|m| m.into_result(0, vec![2])),
+                    &call,
+                    context,
+                )?));
+            },
+    Primitive: "set.insert" => {
+                return Ok(Some(keyed(
+                    collection::set_insert(arg(a, 0)?.clone(), arg(a, 1)?.clone())
+                        .map(|m| m.into_result(0, vec![1])),
+                    &call,
+                    context,
+                )?));
+            },
+    Primitive: "map.get" => {
+                return Ok(Some(keyed(
+                    collection::get(arg(a, 0)?, arg(a, 1)?)
+                        .map(|v| OperationResult::returned(v.map_or_else(none, some))),
+                    &call,
+                    context,
+                )?));
+            },
+    Primitive: "set.contains" => {
+                return Ok(Some(keyed(
+                    collection::contains(arg(a, 0)?, arg(a, 1)?)
+                        .map(|b| OperationResult::returned(Value::Bool(b))),
+                    &call,
+                    context,
+                )?));
+            },
+    Primitive: "iter.from" => {
+                return Ok(Some(
+                    OperationResult::returned(super::callbacks::iterator(
+                        arg(a, 0)?.clone(),
+                        arg(a, 1)?.clone(),
+                    ))
+                    .transferring([0, 1]),
+                ));
+            },
+    Primitive: "iter.map" => {
+                return Ok(Some(
+                    OperationResult::returned(super::callbacks::mapped(
+                        arg(a, 0)?.clone(),
+                        arg(a, 1)?.clone(),
+                    ))
+                    .transferring([0, 1]),
+                ));
+            },
+    Primitive: "iter.next" => return self.next_iterator(arg(a, 0)?.clone()).map(Some),
+    Primitive: "simd.splat" => {
+                let n = call
+                    .generics
+                    .iter()
+                    .find_map(|g| {
+                        if let GenericArgument::Size(hirsel_types::Size::Constant(n)) = g {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| invalid("missing SIMD width"))?;
+                if n == 0 {
+                    return Err(invalid("SIMD width must be positive"));
+                }
+                let n = usize::try_from(n).map_err(|_| invalid("SIMD width"))?;
+                if !matches!(
+                    arg(a, 0)?,
+                    Value::Bool(_) | Value::Integer(_) | Value::F32(_) | Value::F64(_)
+                ) {
+                    return Err(invalid("SIMD splat requires scalar"));
+                }
+                collection::sequence(BuiltinType::Simd, vec![arg(a, 0)?.clone(); n])
+            },
+    Primitive: "simd.add" => {
+                let (x, y) = (
+                    collection::elements(arg(a, 0)?, BuiltinType::Simd)?,
+                    collection::elements(arg(a, 1)?, BuiltinType::Simd)?,
+                );
+                if x.len() != y.len() || x.is_empty() {
+                    return Err(invalid("SIMD lane mismatch"));
+                }
+                let mut out = vec![];
+                for (a, b) in x.into_iter().zip(y) {
+                    int(&a)?;
+                    int(&b)?;
+                    match crate::scalar::binary(hirsel_syntax::BinaryOp::Add, a, b) {
+                        Ok(v) => out.push(v),
+                        Err(_) => {
+                            return Ok(Some(OperationResult::Failed(fail(
+                                &call,
+                                context,
+                                "SEM-1",
+                                "SIMD lane overflow",
+                            ))));
+                        }
+                    }
+                }
+                collection::sequence(BuiltinType::Simd, out)
+            },
+    Primitive: "sorted_map.empty" => super::callbacks::sorted(arg(a, 0)?.clone(), vec![]),
+    Primitive: "sorted_map.insert" => return self.sorted_insert(a).map(Some),
+    ; finish Ok(Some(OperationResult::returned(value)))
+}
+
+fn parent(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(p, _)| p)
+}
+pub(super) fn arg(a: &[Value], i: usize) -> Result<&Value, Error> {
+    a.get(i).ok_or_else(|| invalid("missing builtin argument"))
+}
+pub(super) fn text(v: &Value) -> Result<&str, Error> {
+    if let Value::String(s) = v {
+        Ok(s)
+    } else {
+        Err(invalid("expected String"))
+    }
+}
+pub(super) fn bytes(v: &Value) -> Result<&[u8], Error> {
+    if let Value::Bytes(s) = v {
+        Ok(s)
+    } else {
+        Err(invalid("expected Bytes"))
+    }
+}
+fn int(v: &Value) -> Result<Integer, Error> {
+    if let Value::Integer(n) = v {
+        Ok(*n)
+    } else {
+        Err(invalid("expected integer"))
+    }
+}
+pub(super) fn index(v: &Value) -> Result<usize, Error> {
+    let n = int(v)?;
+    if n.kind() != Primitive::U64 {
+        return Err(invalid("index requires u64"));
+    }
+    usize::try_from(n.bits()).map_err(|_| invalid("index too wide"))
+}
+pub fn path(s: &str) -> Value {
+    Value::Record {
+        definition: simulation::core_path("Path"),
+        fields: vec![Some(Value::String(s.into()))],
+    }
+}
+fn path_text(v: &Value) -> Result<&str, Error> {
+    if let Value::Record { definition, fields } = v
+        && *definition == simulation::core_path("Path")
+        && fields.len() == 1
+    {
+        text(fields[0].as_ref().ok_or_else(|| invalid("dead Path"))?)
+    } else {
+        Err(invalid("expected nominal Path"))
+    }
+}
+fn position(v: &Value, s: &str) -> Result<usize, Error> {
+    if let Value::Record { definition, fields } = v
+        && *definition == simulation::core_path("StrPos")
+        && fields.len() == 2
+        && fields[0].as_ref() == Some(&Value::String(s.into()))
+    {
+        index(fields[1].as_ref().ok_or_else(|| invalid("dead StrPos"))?)
+    } else {
+        Err(invalid("StrPos source mismatch"))
+    }
+}
+fn destination(call: &OperationCall<'_>) -> Result<Primitive, Error> {
+    let mut t = call
+        .types
+        .get(call.result_type)
+        .ok_or_else(|| invalid("missing result type"))?;
+    if let TypeKind::Named {
+        definition,
+        arguments,
+    } = &t.kind
+        && definition.0.name == "Option"
+        && *definition == simulation::core_path("Option")
+    {
+        if let GenericArgument::Type(id) = arguments[0] {
+            t = call
+                .types
+                .get(id)
+                .ok_or_else(|| invalid("missing conversion destination"))?;
+        }
+    }
+    if let TypeKind::Primitive(p) = t.kind {
+        Ok(p)
+    } else {
+        Err(invalid("result must be primitive"))
+    }
+}
+pub fn variant(variant: u32, fields: Vec<Value>) -> Value {
+    Value::Variant {
+        variant,
+        fields: fields.into_iter().map(Some).collect(),
+    }
+}
+pub fn ok(v: Value) -> Value {
+    variant(0, vec![v])
+}
+pub fn error(v: Value) -> Value {
+    variant(1, vec![v])
+}
+pub fn some(v: Value) -> Value {
+    variant(1, vec![v])
+}
+pub fn none() -> Value {
+    variant(0, vec![])
+}
+pub fn u64_value(n: u64) -> Value {
+    Value::Integer(Integer::new(Primitive::U64, n as u128).unwrap())
+}
+pub fn u32_value(n: u32) -> Value {
+    Value::Integer(Integer::new(Primitive::U32, n as u128).unwrap())
+}
+pub fn i32_value(n: i32) -> Value {
+    Value::Integer(Integer::new(Primitive::I32, n as u32 as u128).unwrap())
+}
+fn file_fault(code: u32) -> Value {
+    error(variant(0, vec![u32_value(code)]))
+}
+fn fault_result(f: Fault) -> Value {
+    match f {
+        Fault::Canceled(c) => error(variant(1, vec![variant(c, vec![])])),
+        Fault::Fault { code, .. } => file_fault(code),
+    }
+}
+/// A key past the structural depth limit fails the keyed operation (MEM-3).
+fn keyed(
+    result: Result<OperationResult, collection::KeyedError>,
+    call: &OperationCall<'_>,
+    context: &OperationContext<'_>,
+) -> Result<OperationResult, Error> {
+    match result {
+        Ok(result) => Ok(result),
+        Err(collection::KeyedError::Depth) => Ok(OperationResult::Failed(fail(
+            call, context, "MEM-3", "Depth",
+        ))),
+        Err(collection::KeyedError::Invalid(error)) => Err(error),
+    }
+}
+pub(super) fn fail(
+    call: &OperationCall<'_>,
+    context: &OperationContext<'_>,
+    rule: &str,
+    kind: &str,
+) -> Failure {
+    Failure {
+        rule: RuleId::new(rule).unwrap(),
+        line: context.sources.location(call.site).map_or(0, |p| p.line),
+        site: call.site,
+        kind: kind.into(),
+    }
+}
+pub(super) fn encode_arguments(arguments: &[Value]) -> Vec<u8> {
+    let mut out = vec![];
+    for arg in arguments {
+        let bytes = encode_value(arg);
+        out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(&bytes);
+    }
+    out
+}
+pub(super) fn encode_value(value: &Value) -> Vec<u8> {
+    fn atom(out: &mut Vec<u8>, bytes: &[u8]) {
+        out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(bytes);
+    }
+    fn path(out: &mut Vec<u8>, definition: &hirsel_syntax::DefPath) {
+        atom(out, definition.0.package.name.as_bytes());
+        atom(out, definition.0.package.version.as_bytes());
+        out.extend_from_slice(&(definition.0.modules.len() as u64).to_le_bytes());
+        for module in &definition.0.modules {
+            atom(out, module.as_bytes());
+        }
+        atom(out, definition.0.name.as_bytes());
+    }
+    fn fields<'a>(out: &mut Vec<u8>, work: &mut Vec<&'a Value>, items: &'a [Option<Value>]) {
+        out.extend_from_slice(&(items.len() as u64).to_le_bytes());
+        out.extend(items.iter().map(|v| u8::from(v.is_some())));
+        work.extend(items.iter().rev().flatten());
+    }
+    fn kind_tag(kind: BuiltinType) -> u8 {
+        use BuiltinType::*;
+        match kind {
+            Array => 0,
+            List => 1,
+            Map => 2,
+            Set => 3,
+            SortedMap => 4,
+            Inline => 5,
+            Simd => 6,
+            Packed => 7,
+            Shared => 8,
+            Slots => 9,
+            SlotId => 10,
+            Region => 11,
+            Iter => 12,
+            Task => 13,
+            Sender => 14,
+            Receiver => 15,
+            Mutex => 16,
+            Atomic => 17,
+            Ptr => 18,
+            FnPtr => 19,
+            Shape => 20,
+        }
+    }
+    fn size_bindings(out: &mut Vec<u8>, sizes: &[Option<u64>]) {
+        out.extend_from_slice(&(sizes.len() as u64).to_le_bytes());
+        for size in sizes {
+            out.push(u8::from(size.is_some()));
+            if let Some(size) = size {
+                out.extend_from_slice(&size.to_le_bytes());
+            }
+        }
+    }
+    let mut out = vec![];
+    let mut work = vec![value];
+    while let Some(value) = work.pop() {
+        match value {
+            Value::Unit => out.push(0),
+            Value::Bool(b) => out.extend_from_slice(&[1, u8::from(*b)]),
+            Value::Integer(n) => {
+                out.push(2);
+                out.extend_from_slice(&[n.width() as u8, u8::from(n.is_signed())]);
+                out.extend_from_slice(&n.bits().to_le_bytes());
+            }
+            Value::String(s) => {
+                out.push(3);
+                atom(&mut out, s.as_bytes());
+            }
+            Value::Bytes(b) => {
+                out.push(4);
+                atom(&mut out, b);
+            }
+            Value::Handle { kind, id } => {
+                out.push(5);
+                atom(&mut out, kind.as_bytes());
+                out.extend_from_slice(&id.to_le_bytes());
+            }
+            Value::Variant {
+                variant,
+                fields: items,
+            } => {
+                out.push(6);
+                out.extend_from_slice(&variant.to_le_bytes());
+                fields(&mut out, &mut work, items);
+            }
+            Value::Record {
+                definition,
+                fields: items,
+            } => {
+                out.push(7);
+                path(&mut out, definition);
+                fields(&mut out, &mut work, items);
+            }
+            Value::Sequence { kind, elements } => {
+                out.extend_from_slice(&[8, kind_tag(*kind)]);
+                fields(&mut out, &mut work, elements);
+            }
+            Value::Map(items) | Value::Set(items) => {
+                out.push(if matches!(value, Value::Map(_)) {
+                    16
+                } else {
+                    17
+                });
+                fields(&mut out, &mut work, items);
+            }
+            Value::ResourceVariant {
+                sizes,
+                definition,
+                variant,
+                fields: items,
+            } => {
+                out.push(18);
+                size_bindings(&mut out, sizes);
+                path(&mut out, definition);
+                out.extend_from_slice(&variant.to_le_bytes());
+                fields(&mut out, &mut work, items);
+            }
+            Value::Tuple(items) => {
+                out.push(9);
+                fields(&mut out, &mut work, items);
+            }
+            Value::F32(b) => {
+                out.push(10);
+                out.extend_from_slice(&b.to_le_bytes());
+            }
+            Value::F64(b) => {
+                out.push(11);
+                out.extend_from_slice(&b.to_le_bytes());
+            }
+            Value::Box(items) => {
+                out.push(12);
+                fields(&mut out, &mut work, items);
+            }
+            Value::Distinct {
+                definition,
+                fields: items,
+            } => {
+                out.push(13);
+                path(&mut out, definition);
+                fields(&mut out, &mut work, items);
+            }
+            Value::Resource {
+                sizes,
+                definition,
+                fields: items,
+            } => {
+                out.push(14);
+                size_bindings(&mut out, sizes);
+                path(&mut out, definition);
+                fields(&mut out, &mut work, items);
+            }
+            Value::FunctionReference(reference) => {
+                out.push(19);
+                path(&mut out, &reference.definition);
+                out.extend_from_slice(&(reference.arguments.len() as u64).to_le_bytes());
+                for argument in &reference.arguments {
+                    match hirsel_types::encoding::canonical_argument_encoding(
+                        &reference.types,
+                        argument,
+                    ) {
+                        Ok(bytes) => {
+                            out.push(1);
+                            atom(&mut out, &bytes);
+                        }
+                        Err(_) => out.push(0), // Same explicit non-comparable class as observations.
+                    }
+                }
+            }
+            Value::Closure {
+                definition,
+                body,
+                captures,
+                owned_captures,
+                sizes,
+            } => {
+                out.push(15);
+                path(&mut out, definition);
+                out.extend_from_slice(&body.0.to_le_bytes());
+                out.extend_from_slice(&(sizes.len() as u64).to_le_bytes());
+                for ((scope, parameter), size) in sizes {
+                    use hirsel_types::NameSite;
+                    let (tag, ordinal): (u8, u32) = match scope {
+                        NameSite::Expression(id) => (0, id.0),
+                        NameSite::Pattern(id) => (1, id.0),
+                        NameSite::Type(id) => (2, id.0),
+                        NameSite::Statement(id) => (3, id.0),
+                        NameSite::Item(id) => (4, id.0),
+                    };
+                    out.push(tag);
+                    out.extend_from_slice(&ordinal.to_le_bytes());
+                    out.extend_from_slice(&parameter.0.to_le_bytes());
+                    out.extend_from_slice(&size.to_le_bytes());
+                }
+                atom(
+                    &mut out,
+                    &owned_captures
+                        .iter()
+                        .map(|b| u8::from(*b))
+                        .collect::<Vec<_>>(),
+                );
+                fields(&mut out, &mut work, captures);
+            }
+        }
+    }
+    out
+}

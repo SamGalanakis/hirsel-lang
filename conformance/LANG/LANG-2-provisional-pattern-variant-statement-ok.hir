@@ -1,0 +1,15 @@
+// rule: LANG-2
+// expect: accept
+// A bare use of a name the checked scrutinee selected as a nullary variant is
+// that variant, a value. A written type gives a discarded one its expected type.
+fn pick(o: Option[u64]) -> Option[u64] {
+  match fn() {
+    o
+  }() {
+    Some(x) => Some(x),
+    None => {
+      let _: Option[u64] = None
+      None
+    },
+  }
+}

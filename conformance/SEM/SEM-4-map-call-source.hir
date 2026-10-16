@@ -1,0 +1,11 @@
+// rule: SEM-4
+// expect: accept
+fn values() -> Map[u64, u64] {
+  map.empty()
+}
+
+fn probe() {
+  for (key, value) in values() {
+    let _ = key
+  }
+}

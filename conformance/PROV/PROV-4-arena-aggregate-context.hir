@@ -1,0 +1,37 @@
+// rule: PROV-4
+// expect: accept
+type Ast {
+  bytes: Bytes,
+}
+
+fn literal(a: Arena) -> Ast in a {
+  Ast(bytes: b"parsed")
+}
+
+fn heap_field(a: Arena, take x: Bytes in heap) -> Ast in a {
+  Ast(bytes: take x)
+}
+
+fn read(a: Arena, x: Ast in a) -> Bytes in x {
+  x.bytes
+}
+
+fn tuple(a: Arena) -> (Bytes, u32) in a {
+  (b"parsed", 3u32)
+}
+
+fn list(a: Arena) -> List[Bytes] in a {
+  [b"parsed"]
+}
+
+type Boxed[T] {
+  value: T,
+}
+
+fn plain_field(a: Arena) -> Boxed[u32] in a {
+  Boxed(value: 1u32)
+}
+
+fn block_field(a: Arena) -> Boxed[Bytes] in a {
+  Boxed(value: b"parsed")
+}

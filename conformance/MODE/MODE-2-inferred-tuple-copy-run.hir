@@ -1,0 +1,35 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+type R {
+  xs: unique List[Bytes],
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut r = R(xs: [b"a"])
+  let built = (
+    {
+      r
+    }.xs,
+    1u8
+  )
+  let (old, tag) = take built
+  r.xs[0u64] = b"changed"
+  let good = old[0u64] == b"a" && r.xs[0u64] == b"changed" && tag == 1u8
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if good {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

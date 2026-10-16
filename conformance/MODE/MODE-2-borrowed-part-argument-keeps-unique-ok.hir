@@ -1,0 +1,20 @@
+// rule: MODE-2
+// expect: accept
+// A part passed to a borrowed parameter is a view, with no count, so the owner
+// stays unique (MODE-2, OWN-8, #76 Option 2). Twin is MODE-2-sharing-counted-part-bad.
+type Rec {
+  items: Bytes,
+}
+
+fn look(x: Bytes) -> u64 {
+  0
+}
+
+fn require_unique(mut r: unique Rec) -> () {
+  ()
+}
+
+fn example(mut r: unique Rec) -> () {
+  let n = look(r.items)
+  require_unique(mut r)
+}

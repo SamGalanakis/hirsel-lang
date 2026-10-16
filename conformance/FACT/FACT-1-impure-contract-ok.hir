@@ -1,0 +1,7 @@
+// rule: FACT-1
+// expect: accept
+// Contracts must be "pure boolean expression[s]".
+fn observe(tasks: Tasks, a: Atomic[u32], n: u32) -> u32
+  requires n > 0 {
+  atomic.load(tasks, a)
+}

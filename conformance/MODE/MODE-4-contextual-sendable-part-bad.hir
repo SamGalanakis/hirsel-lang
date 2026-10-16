@@ -1,0 +1,11 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 5
+// A copied aliased counted capture is not sendable evidence.
+fn probe(take s: String) -> () {
+  let jobs: List[sendable fn() -> u64] = [
+    fn() {
+      string.byte_len(s)
+    }
+  ]
+  let _ = jobs[0]()
+}

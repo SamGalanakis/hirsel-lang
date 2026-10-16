@@ -1,0 +1,9 @@
+// rule: DET-2
+// expect: fail SEM-1 at line 6
+// Reordering preserves "the first failure, its site and every effect before it".
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let x: u32 = 1
+  let _ = x / 0
+  let _ = x + 4294967295
+  Ok(())
+}

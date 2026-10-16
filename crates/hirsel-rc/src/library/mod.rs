@@ -1,0 +1,435 @@
+//! The native core library in LIR.
+//!
+//! A generic registry operation is realised in one of two ways here. An
+//! *inline lowering* replaces the call by instructions while its caller is
+//! imported (`INLINE`); no call remains. A *library body* is one monomorphic
+//! `LirUnit<Value>` per operation and complete type and size actuals
+//! (`BODIES`), built with `builder` and then placed, counted, reused and
+//! lowered to Ready exactly like a unit imported from TIR; its call is
+//! `Callee::Direct`. Non-generic leaves stay runtime primitives and never
+//! come through this module.
+//!
+//! Each family owns one module beside this file and one line in each list
+//! below. No family edits another's module.
+pub mod arena;
+pub mod builder;
+pub mod bytes;
+pub mod collection;
+pub mod failure;
+pub mod iter;
+pub mod length;
+pub mod list;
+pub mod map;
+pub mod net;
+pub mod owners;
+pub mod sorted;
+pub mod views;
+
+use crate::import::{ImportCx, ImportError};
+use crate::instance::{
+    Actuals, InstanceError, InstanceId, InstanceRole, Instances, Program, instantiate_function,
+};
+use hirsel_lir::abi_types::CallableShape;
+use hirsel_lir::ir::{InstanceKey, InstanceView, LirUnit};
+use hirsel_lir::layout::{LayoutBuilder, LayoutError};
+use hirsel_lir::layout_types::LayoutId;
+use hirsel_lir::stage::Value;
+use hirsel_syntax::{ContentHash, DefPath, ItemId, ItemPath, PackageId};
+use hirsel_tir as tir;
+use hirsel_types::{GenericArgument, NameSite, SignatureKind, Type, TypeId, TypeKind};
+
+pub use builder::Cx;
+pub use owners::{LibraryOwners, owners};
+
+/// One library body: its operation path, how to build it, and what else
+/// it requires.
+pub struct LibraryBody {
+    /// `core@1/...` operation path, or a `core@1/$native.<name>` path for a
+    /// helper or finalizer no registry row names.
+    pub path: fn() -> DefPath,
+    /// Build the Value-stage unit for these actuals. `Cx` gives the layout
+    /// table, the call's `FnAbi`, type and size actuals and symbol interning.
+    pub build: fn(&mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError>,
+}
+
+/// Every registered body. A family adds its rows in its own module and
+/// one line here.
+pub const BODIES: &[&LibraryBody] = &[
+    &arena::WITH,
+    &failure::CHECK,
+    &collection::POP,
+    &collection::REMOVE,
+    &collection::SWAP,
+    &collection::RESERVE,
+    &list::PUSH,
+    &list::PUSH_SPARE,
+    &list::GROW,
+    &list::LIST_OPEN,
+    &list::ARRAY_OPEN,
+    &list::INLINE_OPEN,
+    &list::LIST_NEXT,
+    &list::ARRAY_NEXT,
+    &list::INLINE_NEXT,
+    &list::CURSOR_DROP,
+    &map::GET,
+    &map::CONTAINS,
+    &map::INSERT_MAP,
+    &map::INSERT_SET,
+    &map::MAP_PROBE,
+    &map::SET_PROBE,
+    &map::SET_OPEN,
+    &map::SET_NEXT,
+    &map::MAP_OPEN,
+    &map::MAP_NEXT,
+    &map::MAP_DROP,
+    &map::MAP_INDEX,
+    &map::SET_INDEX,
+    // sorted (lib-sorted): sorted_map.insert, its cursor, the integer comparators.
+    &sorted::INSERT,
+    &sorted::OPEN,
+    &sorted::NEXT,
+    &sorted::CURSOR_DROP,
+    &sorted::U8,
+    &sorted::U16,
+    &sorted::U32,
+    &sorted::U64,
+    &sorted::U128,
+    &sorted::I8,
+    &sorted::I16,
+    &sorted::I32,
+    &sorted::I64,
+    &sorted::I128,
+    &iter::FROM_STEP,
+    &iter::MAP_STEP,
+    // net (net-t2): net.read_into over its fixed runtime entry.
+    &net::READ_INTO,
+    // views (lib-views): none; its cursor protocols are runtime primitives.
+];
+
+/// Operation calls a family lowers inline at import. Called before the
+/// generic operation-call path; returns false to decline.
+pub struct InlineLowering {
+    pub path: fn() -> DefPath,
+    pub lower: fn(&mut ImportCx<'_>, &CallShape<'_>) -> R<bool>,
+}
+
+pub const INLINE: &[&InlineLowering] = &[
+    &bytes::FROM_LIST,
+    &list::FORGET,
+    &map::EMPTY_MAP,
+    &map::EMPTY_SET,
+    &map::MAP_LEN,
+    // sorted (lib-sorted): sorted_map.empty, SortedMapOrder_len.
+    &sorted::EMPTY,
+    &sorted::LEN,
+    &iter::FROM,
+    &iter::MAP,
+    &iter::NEXT,
+    &views::SCALARS,
+    &views::POSITIONS,
+    // core (lib-core): list.len, array.len, string.byte_len.
+    &length::BYTES_LEN,
+    &length::LIST_LEN,
+    &length::ARRAY_LEN,
+    &length::STRING_BYTE_LEN,
+];
+
+/// The result of an import hook.
+pub type R<T> = Result<T, ImportError>;
+
+/// The operation call an inline lowering is asked to replace: the callee,
+/// its generic actuals as rows of the importing definition's store, the TIR
+/// arguments in source order, and where the result goes.
+pub struct CallShape<'a> {
+    pub path: &'a DefPath,
+    pub generics: &'a [GenericArgument],
+    pub arguments: &'a [tir::CallArgument],
+    pub destination: tir::PlaceId,
+    /// The TIR block the call continues in.
+    pub next: tir::BlockId,
+}
+
+#[derive(Clone, Debug)]
+pub enum LibraryError {
+    Instance(InstanceError),
+    Layout(DefPath, LayoutError),
+    /// A shape of actuals the body does not build yet, named.
+    Unsupported(String),
+    /// Actuals or layouts that contradict the body's own declaration.
+    Malformed(String),
+}
+
+impl From<InstanceError> for LibraryError {
+    fn from(e: InstanceError) -> Self {
+        Self::Instance(e)
+    }
+}
+
+/// `core@1/<module>.<name>`, the registry's stable identity (spec #36).
+pub fn core_path(name: &str) -> DefPath {
+    let mut parts: Vec<_> = name.split('.').map(str::to_owned).collect();
+    let name = parts.pop().expect("core name");
+    DefPath(ItemPath {
+        package: PackageId {
+            name: "core".into(),
+            version: "1".into(),
+        },
+        modules: parts,
+        name,
+    })
+}
+
+/// `core@1/$native.<name>`: a helper or finalizer no registry row names.
+/// `$` cannot occur in a source identifier.
+pub fn native_path(name: &str) -> DefPath {
+    core_path(&format!("$native.{name}"))
+}
+
+/// The `BODIES` row of `path`.
+pub fn body_index(path: &DefPath) -> Option<usize> {
+    BODIES.iter().position(|b| (b.path)() == *path)
+}
+
+/// The `INLINE` row of `path`.
+pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
+    INLINE.iter().copied().find(|l| (l.path)() == *path)
+}
+
+/// Bumped by any change to a body's generated code, so every artifact keyed
+/// by an instance of it is invalidated.
+pub const REVISION: u32 = 8;
+
+/// The implementation revision of the library body at `path`.
+pub fn revision(path: &DefPath) -> ContentHash {
+    ContentHash::of_parts(
+        "hirsel.library-body.v1",
+        [REVISION.to_le_bytes().as_slice(), &path.fingerprint().0],
+    )
+}
+
+/// The binder of a library body's generic parameters. A registry operation
+/// has no lexical item; the instance key also names the path, so one site
+/// serves every body.
+pub const BINDER: NameSite = NameSite::Item(ItemId(0));
+
+/// One required library instance: the body, its complete actuals and its
+/// callable type (a `Function` row of `actuals.store`).
+#[derive(Clone, Debug)]
+pub struct Request {
+    pub body: usize,
+    pub path: DefPath,
+    pub actuals: Actuals,
+    pub callable: TypeId,
+    pub shape: CallableShape,
+    /// A step thunk's environment layout.
+    pub environment: Option<LayoutId>,
+    pub finalizer: bool,
+}
+
+impl Request {
+    /// The instance of a registry operation: its callable type is the
+    /// registry signature under `arguments`, exactly the type whose `FnAbi`
+    /// the call site computed. `arguments` are rows of `store`.
+    pub fn operation(
+        program: &Program,
+        body: usize,
+        path: &DefPath,
+        store: hirsel_types::TypeStore,
+        arguments: Vec<GenericArgument>,
+    ) -> Result<Self, InstanceError> {
+        let signature = program
+            .signatures
+            .get(path)
+            .ok_or_else(|| InstanceError::MissingSignature(path.clone()))?
+            .clone();
+        let SignatureKind::Function(function) = &signature.kind else {
+            return Err(InstanceError::Malformed(format!(
+                "{path:?} is called but is not a function"
+            )));
+        };
+        let mut actuals = Actuals {
+            binder: (!arguments.is_empty()).then_some(BINDER),
+            store,
+            arguments,
+            outer: Vec::new(),
+        };
+        let callable = instantiate_function(
+            &signature,
+            function,
+            hirsel_types::Modes::global(),
+            &mut actuals,
+        )
+        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
+        Ok(Self {
+            body,
+            path: path.clone(),
+            actuals,
+            callable,
+            shape: CallableShape::Definition,
+            environment: None,
+            finalizer: false,
+        })
+    }
+
+    /// The instance of a helper no registry row names: `callable` is a
+    /// `Function` row of `store` that the requiring body states.
+    pub fn native(
+        body: usize,
+        path: &DefPath,
+        store: hirsel_types::TypeStore,
+        arguments: Vec<GenericArgument>,
+        callable: TypeId,
+    ) -> Self {
+        Self {
+            body,
+            path: path.clone(),
+            actuals: Actuals {
+                binder: (!arguments.is_empty()).then_some(BINDER),
+                store,
+                arguments,
+                outer: Vec::new(),
+            },
+            callable,
+            shape: CallableShape::Definition,
+            environment: None,
+            finalizer: false,
+        }
+    }
+
+    /// The drop body of the library resource `nominal` under its actuals:
+    /// it takes the resource mut and returns unit; source drop bodies stay borrowed.
+    pub fn finalizer(body: usize, path: &DefPath, nominal: &DefPath, actuals: &Actuals) -> Self {
+        let mut store = actuals.store.clone();
+        let this = store.push(Type {
+            sendability_requirement: hirsel_types::SendabilityRequirement::None,
+            allocation_target: None,
+            drop_allocation: hirsel_types::DropAllocation::NoAlloc,
+            kind: TypeKind::Named {
+                definition: nominal.clone(),
+                arguments: actuals.arguments.clone().into(),
+            },
+            modes: hirsel_types::Modes::global(),
+            erased_captures: None,
+            brand: Default::default(),
+        });
+        let unit = store.push(Type::unit());
+        let callable = store.push(Type {
+            sendability_requirement: hirsel_types::SendabilityRequirement::None,
+            allocation_target: None,
+            drop_allocation: hirsel_types::DropAllocation::NoAlloc,
+            kind: TypeKind::Function(hirsel_types::FunctionType {
+                state_promises: Default::default(),
+                generics: Vec::new().into(),
+                parameters: vec![hirsel_types::Parameter {
+                    name: None,
+                    label: None,
+                    passing: hirsel_syntax::PassingMode::Mut,
+                    ty: this,
+                }]
+                .into(),
+                result: unit,
+                error: None,
+                allocation: hirsel_types::Allocation::NoAlloc,
+                authority: hirsel_types::AuthoritySummary::Unknown,
+                uses: hirsel_types::Uses::Unrestricted,
+                contracts: Vec::new().into(),
+                incomplete: false,
+                foreign: None,
+            }),
+            modes: hirsel_types::Modes::global(),
+            erased_captures: None,
+            brand: Default::default(),
+        });
+        Self {
+            finalizer: true,
+            ..Self::native(body, path, store, actuals.arguments.clone(), callable)
+        }
+    }
+
+    /// The canonical key: the path and the complete actuals, with relations,
+    /// brands, uniqueness and sendability erased.
+    pub fn key(&self, layouts: &dyn builder::Layouts) -> Result<InstanceKey, InstanceError> {
+        let convention = match self.shape {
+            CallableShape::Definition => None,
+            _ => crate::instance::convention(&self.actuals.store, self.callable),
+        };
+        let environment = self
+            .environment
+            .and_then(|e| layouts.table().record_digest(e));
+        InstanceKey::new(
+            &self.path,
+            0,
+            &self.actuals.key_binders(),
+            &self.actuals.store,
+            convention.as_ref(),
+            environment,
+        )
+        .map_err(|e| InstanceError::Key(self.path.clone(), e))
+    }
+}
+
+/// The view's definition of a library instance: a declaration with no TIR
+/// body. Nothing reads a body through it; `Cx` builds the unit.
+fn declaration(path: &DefPath) -> tir::DefinitionRef {
+    std::sync::Arc::new(tir::Definition {
+        protocol_associations: vec![],
+        types: Default::default(),
+        path: path.clone(),
+        signature_hash: revision(path),
+        bodies: Vec::new(),
+        entry: tir::BodyId(0),
+        contracts: Vec::new(),
+    })
+}
+
+/// Register the instance a request names, or find it.
+pub fn instantiate(
+    layouts: &mut dyn builder::Layouts,
+    instances: &mut Instances,
+    request: Request,
+) -> Result<InstanceId, InstanceError> {
+    let key = request.key(layouts)?;
+    if let Some(id) = instances.get(&key) {
+        return Ok(id);
+    }
+    let view = InstanceView {
+        key,
+        definition: declaration(&request.path),
+        body: tir::BodyId(0),
+        owner: request.shape,
+        substitution: request.actuals.substitution(&request.path)?,
+        parameters: crate::instance::parameter_views(&request.actuals.store, request.callable),
+        captures: Vec::new(),
+        caller_destination: false,
+    };
+    let (id, _) = instances.push(
+        layouts,
+        view,
+        InstanceRole::Library {
+            body: request.body,
+            finalizer: request.finalizer,
+        },
+        request.callable,
+        request.actuals,
+        request.shape,
+        request.environment,
+    )?;
+    Ok(id)
+}
+
+/// Build the unit of library instance `id`. Instances its builder requires
+/// are appended to `instances`.
+pub fn build(
+    program: &Program,
+    layouts: &mut LayoutBuilder<'_>,
+    instances: &mut Instances,
+    id: InstanceId,
+) -> Result<LirUnit<Value>, LibraryError> {
+    let InstanceRole::Library { body, .. } = instances.roles[id.index()] else {
+        return Err(LibraryError::Malformed(format!(
+            "{id:?} is not a library instance"
+        )));
+    };
+    let mut cx = Cx::new(program, layouts, instances, id);
+    (BODIES[body].build)(&mut cx)
+}

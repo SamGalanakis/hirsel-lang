@@ -1,0 +1,10 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 9
+// entry: trial
+resource type Value {
+  n: u8,
+}
+
+fn trial(t: Test, v: Value) {
+  std@1/test.equal(t, v, v)
+}

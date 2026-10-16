@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 12
+// A binding related only to an arena has a global lifetime, since `in a` names
+// where its blocks live and bounds nothing. A borrowed parameter's value is
+// local to its own root, so storing it there exceeds the contract.
+type Ast {
+  s: String,
+}
+
+fn f(a: Arena, x: String) -> () {
+  let mut g: Ast in a = Ast(s: "y")
+  g.s = x
+}

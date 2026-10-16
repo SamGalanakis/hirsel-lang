@@ -1,0 +1,13 @@
+// rule: MEM-2
+// expect: reject LANG-10 at line 10
+// "closures cannot capture themselves"; LANG-10 forbids a local self call.
+@noalloc
+fn capture() -> u8 {
+  let earlier = fn() -> u8 {
+    1
+  }
+  let f = fn() -> u8 {
+    f()
+  }
+  f()
+}

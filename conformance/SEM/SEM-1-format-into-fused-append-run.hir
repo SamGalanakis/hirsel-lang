@@ -1,0 +1,139 @@
+// rule: SEM-1
+// expect: run
+// stdout: 0
+// stdout: 7
+// stdout: 4096
+// stdout: 18446744073709551615
+// stdout: alpha	3
+// stdout: beta	12
+// stdout: -9223372036854775808,42,
+// stdout: [9]9
+// stdout: #17
+// stdout: (5)(6)
+// stdout: 1
+// stdout: 0
+// A result built only to be copied onto a list may be appended to that list
+// where it is built. The cases are the frozen benchmarks' number, emit and
+// append shapes, a std to_string copied through as_bytes, and the twins that
+// must stay calls (the result read again, the list written or read first, a
+// builder that could fail after its first append). Every line is the same
+// bytes either way.
+fn output_error[E](take e: E) -> () {}
+
+type Node {
+  value: u64,
+  next: Option[box Node],
+}
+
+fn number(n: u64) -> Bytes {
+  let mut out: List[u8] = []
+  let s = std@1/u64.to_string(n)
+  let b = string.as_bytes(s)
+  for i in 0u64..bytes.len(b) {
+    list.push(mut out, b[i])
+  }
+  list.push(mut out, 10u8)
+  bytes.from_list(take out)
+}
+
+fn append(mut out: List[u8], data: Bytes) {
+  for i in 0u64..bytes.len(data) {
+    list.push(mut out, data[i])
+  }
+}
+
+fn emit(values: Option[box Node], mut output: List[u8]) {
+  match values {
+    None() => {},
+    Some(node) => {
+      let line = number(node.value)
+      for j in 0u64..bytes.len(line) {
+        list.push(mut output, line[j])
+      }
+      emit(node.next, mut output)
+    },
+  }
+}
+
+fn bracketed(n: u64) -> Bytes {
+  let mut out: List[u8] = []
+  list.push(mut out, 40u8)
+  failure.check(n < 1000u64, Arithmetic())
+  let s = std@1/u64.to_string(n)
+  let b = string.as_bytes(s)
+  for i in 0u64..bytes.len(b) {
+    list.push(mut out, b[i])
+  }
+  list.push(mut out, 41u8)
+  bytes.from_list(take out)
+}
+
+fn text(take out: List[u8]) -> String {
+  match string.from_bytes(bytes.from_list(take out)) {
+    Ok(s) => take s,
+    Error(_) => "invalid\n",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut output: List[u8] = []
+  list.reserve(mut output, 256u64)
+  let mut root: Option[box Node] = None()
+  root = Some(box Node(value: 18446744073709551615u64, next: take root))
+  root = Some(box Node(value: 4096u64, next: take root))
+  root = Some(box Node(value: 7u64, next: take root))
+  root = Some(box Node(value: 0u64, next: take root))
+  emit(root, mut output)
+  let words: Bytes = b"alpha"
+  append(mut output, words)
+  list.push(mut output, 9u8)
+  append(mut output, number(3u64))
+  let other: Bytes = b"beta"
+  append(mut output, other)
+  list.push(mut output, 9u8)
+  append(mut output, number(12u64))
+  let signed: Array[i64] = [-9223372036854775808i64, 42i64]
+  for v in signed {
+    let s = std@1/i64.to_string(v)
+    let b = string.as_bytes(s)
+    for i in 0u64..bytes.len(b) {
+      list.push(mut output, b[i])
+    }
+    list.push(mut output, 44u8)
+  }
+  list.push(mut output, 10u8)
+  let read = number(9u64)
+  list.push(mut output, 91u8)
+  for j in 0u64..bytes.len(read) - 1u64 {
+    list.push(mut output, read[j])
+  }
+  list.push(mut output, 93u8)
+  list.push(mut output, read[0])
+  list.push(mut output, 10u8)
+  let written = number(17u64)
+  list.push(mut output, 35u8)
+  for j in 0u64..bytes.len(written) {
+    list.push(mut output, written[j])
+  }
+  for v in 5u64..7u64 {
+    let line = bracketed(v)
+    for j in 0u64..bytes.len(line) {
+      list.push(mut output, line[j])
+    }
+  }
+  list.push(mut output, 10u8)
+  let measured = number(1u64)
+  let count = list.len(output) % 3u64
+  for j in 0u64..bytes.len(measured) {
+    list.push(mut output, measured[j])
+  }
+  list.push(mut output, int.narrow(48u64 + count))
+  list.push(mut output, 10u8)
+  out.print(io.stdout(rt) ? grant_error, text(take output)) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

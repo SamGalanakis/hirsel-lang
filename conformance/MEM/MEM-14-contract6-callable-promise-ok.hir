@@ -1,0 +1,13 @@
+// rule: MEM-14
+// expect: accept
+// A function value promising the guarantee may be received.
+@advance_only(it)
+fn advance(mut it: Iter[u64]) -> Option[u64] {
+  iter.next(mut it)
+}
+
+fn use_it(take g: @advance_only(it) fn(mut it: Iter[u64]) -> Option[u64]) {}
+
+fn build() {
+  use_it(advance)
+}

@@ -1,0 +1,203 @@
+CAP/CAP-1-clock-grants-denied-run.hir # dependency-owned D/fixture M: LANG-4 line 8
+CAP/CAP-1-net-connect-parameter-bad.hir # dependency-owned D/fixture M: LANG-4 line 4
+CAP/CAP-1-net-connect-parameter-ok.hir # dependency-owned D/fixture M: LANG-4 line 4
+CAP/CAP-1-net-connect-tls-rule-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-expect-mismatch-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-name-rule-not-address-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-narrow-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-peer-values-run.hir # dependency-owned D/fixture M: LANG-4 line 5
+CAP/CAP-1-net-read-chunks-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-refused-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-script-roundtrip-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-timeout-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-tls-name-mismatch-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-tls-peer-fails-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-tls-truncate-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-1-net-ungranted-host-run.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-2-net-stream-operation-authority-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-2-net-stream-operation-authority-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-2-opaque-conservative-ok.hir # dependency-owned H: LANG-7 line 8: opaque type cannot be constructed here
+CAP/CAP-2-opaque-dir-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("CAP-2"), severity: Error, message: "opaque authority summary omits representation authority", primary: Span { file: FileId(0), start: 49, end: 116 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
+CAP/CAP-2-opaque-dir-ok.hir # dependency-owned H: LANG-7 line 14: opaque type cannot be constructed here
+CAP/CAP-2-opaque-lock-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-2-opaque-lock-ok.hir # dependency-owned H: LANG-7 line 12: field is unavailable on this type
+CAP/CAP-2-opaque-package-bad.hir # dependency-owned D/fixture M: LANG-4 line 8
+CAP/CAP-2-opaque-package-effect-ok.hir # dependency-owned D/fixture M: LANG-4 line 8
+CAP/CAP-2-opaque-package-pure-ok.hir # dependency-owned D/fixture M: LANG-4 line 8
+CAP/CAP-2-opaque-stdout-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("CAP-2"), severity: Error, message: "opaque authority summary omits representation authority", primary: Span { file: FileId(0), start: 49, end: 119 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
+CAP/CAP-2-opaque-stdout-ok.hir # dependency-owned H: LANG-7 line 14: opaque type cannot be constructed here
+CAP/CAP-2-testhelpers-for-all-accept.hir # dependency-owned D/fixture M: LANG-4 line 11
+CAP/CAP-3-net-restricted-body-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
+CAP/CAP-3-transaction-example.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-4-atomic-create-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+CAP/CAP-4-atomic-create-ok.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+CAP/CAP-5-seal-ceiling-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-client-alias-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-client-alias-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-5-seal-client-construct-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-client-construct-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-5-seal-client-project-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-client-project-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-5-seal-drop-order-run.hir # dependency-owned H: LANG-7 line 10: field is unavailable on this type
+CAP/CAP-5-seal-forget-module-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-forget-module-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-5-seal-forget-run.hir # dependency-owned D/fixture M: LANG-4 line 5
+CAP/CAP-5-seal-generic-ceiling-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-generic-scope-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("MODE-6"), severity: Error, message: "a global capability representation cannot retain scoped content", primary: Span { file: FileId(0), start: 50, end: 129 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
+CAP/CAP-5-seal-global-scope-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("MODE-6"), severity: Error, message: "a global capability representation cannot retain scoped content", primary: Span { file: FileId(0), start: 50, end: 124 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
+CAP/CAP-5-seal-inert-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("CAP-2"), severity: Error, message: "declared bound is not structural", primary: Span { file: FileId(0), start: 49, end: 119 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
+CAP/CAP-5-seal-local-closure-bad.hir # dependency-owned H: LANG-7 line 9: opaque type cannot be constructed here
+CAP/CAP-5-seal-local-nested-ok.hir # dependency-owned H: LANG-7 line 13: opaque type cannot be constructed here
+CAP/CAP-5-seal-noalloc-drop-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-owner-alias-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-5-seal-owner-sibling-ok.hir # dependency-owned D/fixture M: LANG-4 line 4
+CAP/CAP-5-seal-owner-version-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-owner-version-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-5-seal-plain-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-read-run.hir # dependency-owned H: LANG-7 line 10: opaque type cannot be constructed here
+CAP/CAP-5-seal-resource-copy-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-resource-destructure-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CAP/CAP-5-seal-resource-destructure-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+CAP/CAP-5-seal-sendable-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("MODE-4"), severity: Error, message: "declared bound is not structural", primary: Span { file: FileId(0), start: 50, end: 141 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
+CAP/CAP-5-seal-serializable-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-called-closure-capturing-part-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-captured-local-field-content-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-captured-local-record-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-captured-part-read-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-captured-replaced-field-content-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-consumed-loop-content-capture-argument-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-consumed-loop-content-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-consumed-loop-content-capture-nested-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-contract6-readonly-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-local-result-still-scoped-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-nested-local-call-result-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-outer-mutation-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-return-borrowed-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-return-local-capture-unique-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-return-scoped-parameter-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-store-scoped-parameter-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-1-written-recursive-retention-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-2-allocation-join-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CLO/CLO-4-borrowed-counted-capture-bad.hir # not done J: missing CLO-4 line 5
+CLO/CLO-4-borrowed-resource-global-bad.hir # not done J: missing CLO-4 line 15
+CLO/CLO-4-contract6-adapters-run.hir # dependency-owned D/fixture M: LANG-4 line 120
+CLO/CLO-4-contract6-callback-copy-bad.hir # not done J: missing CLO-4 line 9
+CLO/CLO-4-contract6-closure-creation-bad.hir # not done J: expected CLO-4 line 18; got MODE-4 line 21: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
+CLO/CLO-4-contract6-closure-creation-ok.hir # not done J: unexpected MODE-4 line 21: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
+CLO/CLO-4-contract6-closure-creation-run.hir # dependency-owned D/fixture M: LANG-4 line 30
+CLO/CLO-4-contract6-concrete-relay-bad.hir # not done J: missing CLO-4 line 10
+CLO/CLO-4-contract6-creation-run.hir # dependency-owned D/fixture M: LANG-4 line 26
+CLO/CLO-4-contract6-creation-third-bad.hir # not done J: missing CLO-4 line 16
+CLO/CLO-4-contract6-field-callee-bad.hir # not done J: missing CLO-4 line 16
+CLO/CLO-4-contract6-field-sibling-bad.hir # not done J: missing CLO-4 line 11
+CLO/CLO-4-contract6-fresh-callback-bad.hir # not done J: missing CLO-4 line 14
+CLO/CLO-4-contract6-preserve-error-bad.hir # not done J: missing CLO-4 line 7
+CLO/CLO-4-contract6-preserve-error-ok.hir # not done J: unexpected CLO-2 line 7: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
+CLO/CLO-4-contract6-preserve-failure-bad.hir # dependency-owned D/fixture M: LANG-4 line 6
+CLO/CLO-4-contract6-preserve-failure-ok.hir # dependency-owned D/fixture M: LANG-4 line 6
+CLO/CLO-4-contract6-preserve-loop-bad.hir # not done J: missing CLO-4 line 6
+CLO/CLO-4-contract6-preserve-loop-ok.hir # not done J: unexpected CLO-2 line 6: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
+CLO/CLO-4-contract6-preserve-normal-bad.hir # not done J: missing CLO-4 line 5
+CLO/CLO-4-contract6-preserve-normal-ok.hir # not done J: unexpected CLO-2 line 5: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
+CLO/CLO-4-contract6-preserves_captures-pending.hir # not done J: unexpected CLO-2 line 5: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
+CLO/CLO-4-outer-let-mut-capture-bad.hir # not done J: missing CLO-4 line 6
+CLO/CLO-4-stored-borrowed-capture-bad.hir # not done J: missing CLO-4 line 10
+CLO/CLO-4-taken-function-needs-global-bad.hir # not done J: missing CLO-4 line 10
+CONC/CONC-4-sequential-atomic-order.hir # dependency-owned H: LANG-2 line 12: literal needs an expected type or numeric suffix
+CONC/CONC-5-channel-in-body-bad.hir # dependency-owned H: LANG-2 line 9: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-5-inert-capture-and-update.hir # dependency-owned H: LANG-2 line 13: literal needs an expected type or numeric suffix
+CONC/CONC-6-all-duplicated-senders-drop.hir # dependency-owned H: LANG-2 line 16: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-6-buffer-drains.hir # dependency-owned H: LANG-2 line 15: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-6-last-receiver-closes-send.hir # dependency-owned H: LANG-2 line 16: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-6-last-sender-closes-receive.hir # dependency-owned H: LANG-2 line 16: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-6-open-receiver-payload-bad.hir # dependency-owned H: LANG-2 line 5: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-6-open-receiver-payload-ok.hir # dependency-owned H: LANG-2 line 5: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-6-receiver-child-capture.hir # dependency-owned H: LANG-2 line 15: generic call arguments cannot be inferred from its prefix and expected type
+CONC/CONC-6-receiver-copy-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CONC/CONC-6-sender-duplicate-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+CONC/CONC-7-boolean-scalar.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+CONC/CONC-7-float-scalar.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+CONC/CONC-7-integer-scalar.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+CONC/CONC-7-record-annotation-bad.hir # not done J: missing CONC-7 line 8
+CONC/CONC-7-record-payload-ok.hir # dependency-owned H: LANG-2 line 10: literal needs an expected type or numeric suffix
+CONC/CONC-7-sequence-payload-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+CONC/CONC-7-sequence-payload-ok.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+MODE/MODE-4-error-mapper-occurrence-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
+MODE/MODE-4-error-mapper-occurrence-ok.hir # dependency-owned D/fixture M: LANG-4 line 5
+MODE/MODE-4-iter-mut-handback-sendable-run.hir # not done J: unexpected MODE-4 line 9: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
+MODE/MODE-4-written-agreement-30-aggregate-sequence-shared-ok.hir # dependency-owned H: LANG-7 line 5: expression does not have the expected type
+MODE/MODE-4-written-agreement-third-mut-closure-element-share-bad.hir # not done J: missing MODE-4 line 15
+MODE/MODE-4-written-agreement-third-mut-projected-content-bad.hir # not done J: missing MODE-4 line 13
+MODE/MODE-4-written-box-bad.hir # not done J: missing MODE-4 line 4
+MODE/MODE-4-written-byte-share-forward-bad.hir # dependency-owned D/fixture M: LANG-4 line 6
+MODE/MODE-4-written-byte-share-forward-ok.hir # dependency-owned D/fixture M: LANG-4 line 7
+MODE/MODE-4-written-forwarded-capture-bad.hir # not done J: missing MODE-4 line 15
+MODE/MODE-4-written-generic-box-bad.hir # not done J: missing MODE-4 line 4
+MODE/MODE-4-written-inferred-capture-share-bad.hir # not done J: missing MODE-4 line 11
+MODE/MODE-4-written-iter-contract-ok.hir # not done J: unexpected MODE-4 line 8: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
+MODE/MODE-4-written-iter-parameter-ok.hir # not done J: unexpected MODE-4 line 9: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
+MODE/MODE-4-written-later-argument-share-bad.hir # not done J: missing MODE-4 line 7
+MODE/MODE-4-written-local-flat-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+MODE/MODE-4-written-local-flat-borrow-bad.hir # not done J: missing MODE-4 line 14
+MODE/MODE-4-written-local-getter-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+MODE/MODE-4-written-mut-failure-handback-bad.hir # dependency-owned D/fixture M: LANG-4 line 4
+MODE/MODE-4-written-mut-failure-handback-ok.hir # dependency-owned D/fixture M: LANG-4 line 6
+MODE/MODE-4-written-mut-iteration-replacement-bad.hir # not done J: missing MODE-4 line 7
+MODE/MODE-4-written-mut-list-element-share-bad.hir # not done J: missing MODE-4 line 12
+MODE/MODE-4-written-nested-bound-capture-bad.hir # not done J: missing MODE-4 line 10
+MODE/MODE-4-written-nested-bound-share-bad.hir # not done J: missing MODE-4 line 9
+MODE/MODE-4-written-nested-capture-remap-bad.hir # not done J: missing MODE-4 line 11
+MODE/MODE-4-written-owned-field-share-bad.hir # not done J: missing MODE-4 line 11
+MODE/MODE-4-written-parent-share-bad.hir # not done J: missing MODE-4 line 11
+MODE/MODE-4-written-partial-refill-bad.hir # not done J: missing MODE-4 line 12
+MODE/MODE-4-written-qualified-capture-share-bad.hir # not done J: missing MODE-4 line 11
+MODE/MODE-4-written-returned-capture-bad.hir # not done J: missing MODE-4 line 16
+MODE/MODE-4-written-shared-list-insertion-bad.hir # not done J: missing MODE-4 line 6
+MODE/MODE-4-written-slots-instantiated-result-bad.hir # dependency-owned H: LANG-2 line 7: generic call arguments cannot be inferred from its prefix and expected type
+MODE/MODE-4-written-slots-instantiated-result-ok.hir # dependency-owned H: LANG-2 line 7: generic call arguments cannot be inferred from its prefix and expected type
+MODE/MODE-4-written-transport-growth-run.hir # not done J: unexpected MODE-4 line 61: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
+MODE/MODE-5-local-capture-bad.hir # not done J: missing CLO-4 line 5
+MODE/MODE-5-once-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+MODE/MODE-6-net-global-capture-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+MODE/MODE-6-net-test-capture-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
+MODE/MODE-6-spec-reserve.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-1-borrowed-directory-narrow-run.hir # dependency-owned D/fixture M: PROG-2 line 8
+PROV/PROV-1-mut-parameter-field-replace-run.hir # dependency-owned D/fixture M: LANG-4 line 17
+PROV/PROV-1-mut-parameter-net-field-replace-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-1-mut-parameter-net-field-replace-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-1-net-stream-other-net-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-1-net-stream-other-net-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-1-owned-replacement-other-bad.hir # dependency-owned H: LANG-2 line 4: generic call arguments cannot be inferred from its prefix and expected type
+PROV/PROV-1-owned-replacement-self-bad.hir # dependency-owned H: LANG-2 line 4: generic call arguments cannot be inferred from its prefix and expected type
+PROV/PROV-1-owner-leaves-scope-bad.hir # dependency-owned H: LANG-2 line 9: generic call arguments cannot be inferred from its prefix and expected type
+PROV/PROV-1-owner-leaves-scope-ok.hir # dependency-owned H: LANG-2 line 9: generic call arguments cannot be inferred from its prefix and expected type
+PROV/PROV-1-record-held-owner-take-bad.hir # dependency-owned D/fixture M: LANG-4 line 14
+PROV/PROV-1-record-held-owner-take-run.hir # dependency-owned D/fixture M: LANG-4 line 14
+PROV/PROV-1-taken-directory-narrow-bad.hir # dependency-owned D/fixture M: PROG-2 line 8
+PROV/PROV-1-wave1-byte_offset-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
+PROV/PROV-1-wave1-byte_offset-ok.hir # dependency-owned D/fixture M: LANG-4 line 5
+PROV/PROV-1-wave1-position-payload-bad.hir # dependency-owned D/fixture M: LANG-4 line 4
+PROV/PROV-1-wave1-position-payload-ok.hir # dependency-owned D/fixture M: LANG-4 line 4
+PROV/PROV-1-wave2-find-accept.hir # dependency-owned D/fixture M: LANG-4 line 4
+PROV/PROV-1-wave2-find-reject.hir # dependency-owned D/fixture M: LANG-4 line 4
+PROV/PROV-1-wave2-find-take-accept.hir # dependency-owned D/fixture M: LANG-4 line 4
+PROV/PROV-1-wave2-find-take-reject.hir # dependency-owned D/fixture M: LANG-4 line 4
+PROV/PROV-2-instant-compare-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-2-instant-constructor-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+PROV/PROV-2-instant-copy-clock-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-2-instant-equality-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+PROV/PROV-2-instant-replace-clock-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-2-instant-same-clock-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-2-instant-sample-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-2-instant-wrong-clock-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-2-narrow-current-test-run.hir # dependency-owned D/fixture M: PROG-2 line 54
+PROV/PROV-2-wave1-empty-position-ok.hir # dependency-owned D/fixture M: LANG-4 line 7
+PROV/PROV-2-wave1-position-join-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
+PROV/PROV-2-wave1-position-join-ok.hir # dependency-owned D/fixture M: LANG-4 line 5
+PROV/PROV-2-wave1-user-variant-bad.hir # dependency-owned D/fixture M: LANG-4 line 15
+PROV/PROV-2-wave1-user-variant-ok.hir # dependency-owned D/fixture M: LANG-4 line 20
+PROV/PROV-4-mixed-source-take-second-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
+PROV/PROV-5-field-read-record-take-bad.hir # dependency-owned D/fixture M: LANG-4 line 12
+PROV/PROV-5-field-read-record-take-run.hir # dependency-owned D/fixture M: LANG-4 line 15
+PROV/PROV-5-net-conn-sibling-brand-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
+PROV/PROV-5-net-conn-sibling-brand-ok.hir # dependency-owned E/v20 follow-up: NotImplemented

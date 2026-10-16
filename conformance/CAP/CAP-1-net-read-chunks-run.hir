@@ -1,0 +1,29 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+fn scripted(t: Test, connections: List[NetConnection], tls: PeerTls) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: tls,
+        connections: connections
+      )
+    ]
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = scripted(t, [Open([Send(b"abc"), Send(b"de")])], Plain())
+  let mut s = net.connect(n, "example.com", 80u16, Unbounded())?
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut s, mut buf, 2u64)? == 2u64)
+  test.check(t, net.read(n, mut s, mut buf, 20u64)? == 1u64)
+  test.check(t, net.read(n, mut s, mut buf, 20u64)? == 2u64)
+  test.check(t, net.read(n, mut s, mut buf, 20u64)? == 0u64)
+  test.check(t, bytes.from_list(take buf) == b"abcde")
+  Ok(())
+}

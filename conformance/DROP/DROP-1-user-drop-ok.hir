@@ -1,0 +1,7 @@
+// rule: DROP-1
+// expect: accept
+// "Copyable values have no user-visible destruction".
+resource type Value {
+  n: u8,
+}
+drop(x) {}

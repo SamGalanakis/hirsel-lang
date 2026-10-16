@@ -1,0 +1,6 @@
+// rule: PROV-4
+// expect: accept
+fn probe() -> bool {
+  let text: String = copy_to(heap, "value")
+  text == "value"
+}

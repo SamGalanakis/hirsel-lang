@@ -1,0 +1,11 @@
+// rule: MEM-5
+// expect: accept
+const DATA: String in heap = "saved"
+
+fn example() {
+  let read: @noalloc fn() -> String in heap uses {} = fn() -> String in heap {
+    DATA
+  }
+  read()
+  ()
+}

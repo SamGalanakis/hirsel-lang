@@ -1,0 +1,6 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 5
+fn bad(take old: Bytes) {
+  let mut x: sendable Bytes = b"a"
+  x = take old
+}

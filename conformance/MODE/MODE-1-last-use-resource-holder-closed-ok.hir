@@ -1,0 +1,26 @@
+// rule: MODE-1
+// expect: accept
+// A resource consumed before the `mut` holds nothing afterwards (§04).
+resource type Guard {
+  data: Bytes,
+}
+drop(g) {}
+
+fn guard(x: Bytes) -> Guard in x {
+  Guard(data: copy x)
+}
+
+fn close(take g: Guard in g) {
+  ()
+}
+
+fn bump(mut x: Bytes) {
+  ()
+}
+
+fn probe(mut b: Bytes) {
+  let g = guard(b)
+  close(take g)
+  bump(mut b)
+  ()
+}

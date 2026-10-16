@@ -1,0 +1,7 @@
+// rule: OWN-2
+// expect: accept
+fn probe(take value: std@1/json.Value, mut builder: List[u8]) -> () uses {} {
+  std@1/json.write(value, mut builder)
+  std@1/json.stringify(value)
+  ()
+}

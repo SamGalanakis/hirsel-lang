@@ -1,0 +1,9 @@
+rc-trace v1
+max 16
+# A released holder holds nothing: using it again is rejected. The freed address comes
+# back with the next generation, so a stale reference cannot match it.
+alloc r1 0
+drop r1
+drain
+alloc r2 0
+dup r1 r3

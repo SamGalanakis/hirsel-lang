@@ -1,0 +1,209 @@
+// Slash-only lexical policy. No host authority.
+pub type PathError = Invalid(u64)
+
+fn owned_piece(text: String, begin: u64, end: u64) -> String uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let mut builder: List[u8] = []
+  let mut i = begin
+  while i < end {
+    core@1/list.push(mut builder, bytes[i])
+    i += 1
+  }
+  match std@1/text.finish(take builder) {
+    Ok(value) => take value,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+// Adapted from Zig lib/std/fs/path.zig mem.tokenizeScalar used by resolveAppendPosix.
+// Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
+pub fn components(p: Path) -> List[String] uses {} {
+  let text = core@1/path.text(p)
+  let bytes = core@1/string.as_bytes(text)
+  let len = core@1/bytes.len(bytes)
+  let mut parts: List[String] = []
+  let mut i: u64 = 0
+  while i < len {
+    while i < len && bytes[i] == 47 {
+      i += 1
+    }
+    let begin = i
+    while i < len && bytes[i] != 47 {
+      i += 1
+    }
+    if begin < i {
+      core@1/list.push(mut parts, owned_piece(text, begin, i))
+    }
+  }
+  take parts
+}
+
+fn invalid_byte(text: String) -> Option[u64] uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(bytes) {
+    if bytes[i] == 0 || bytes[i] == 92 {
+      return Some(i)
+    }
+    i += 1
+  }
+  None()
+}
+
+// Adapted from Zig lib/std/fs/path.zig resolveAppendPosix (active prefix instead of raw buffer truncation).
+// Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
+pub fn normalize(p: Path) -> Result[Path, PathError] uses {} {
+  let text = core@1/path.text(p)
+  match invalid_byte(text) {
+    Some(i) => return Error(Invalid(i)),
+    None() => (),
+  }
+  let absolute = std@1/string.starts_with(text, "/")
+  let bytes = core@1/string.as_bytes(text)
+  let len = core@1/bytes.len(bytes)
+  // Keep an active stack prefix; dormant entries are replaced or released on exit.
+  let mut parts: List[String] = []
+  let mut depth: u64 = 0
+  let mut i: u64 = 0
+  while i < len {
+    while i < len && bytes[i] == 47 {
+      i += 1
+    }
+    let begin = i
+    while i < len && bytes[i] != 47 {
+      i += 1
+    }
+    if begin < i {
+      let part = owned_piece(text, begin, i)
+      if part == ".." && depth != 0 && parts[depth - 1] != ".." {
+        depth -= 1
+      } else if part != "." {
+        if part == ".." && absolute {
+          return Error(Invalid(begin))
+        }
+        if depth < core@1/list.len(parts) {
+          parts[depth] = take part
+        } else {
+          core@1/list.push(mut parts, take part)
+        }
+        depth += 1
+      }
+    }
+  }
+  let mut builder: List[u8] = []
+  let mut j: u64 = 0
+  while j < depth {
+    if j != 0 {
+      core@1/list.push(mut builder, 47)
+    }
+    std@1/text.append(mut builder, parts[j])
+    j += 1
+  }
+  let joined = match std@1/text.finish(take builder) {
+    Ok(value) => take value,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+  Ok(
+    core@1/path.of(
+      if absolute {
+        std@1/string.concat("/", joined)
+      } else if joined == "" {
+        "."
+      } else {
+        take joined
+      }
+    )
+  )
+}
+
+// Adapted from Zig lib/std/fs/path.zig joinSepMaybeZ/resolveAppendPosix (relative child contract).
+// Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
+pub fn join(base: Path, child: Path) -> Result[Path, PathError] uses {} {
+  let left = core@1/path.text(base)
+  let right = core@1/path.text(child)
+  match invalid_byte(left) {
+    Some(i) => return Error(Invalid(i)),
+    None() => (),
+  }
+  match invalid_byte(right) {
+    Some(i) => return Error(Invalid(i)),
+    None() => (),
+  }
+  if std@1/string.starts_with(right, "/") {
+    return Error(Invalid(0))
+  }
+  if left == "" {
+    normalize(child)
+  } else {
+    normalize(core@1/path.of(std@1/string.join([left, right], "/")))
+  }
+}
+
+// Adapted from Zig lib/std/fs/path.zig dirnameInner (raw component prefix; singleton parent is dot).
+// Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
+pub fn parent(p: Path) -> Option[Path] uses {} {
+  let text = core@1/path.text(p)
+  let parts = components(p)
+  let count = core@1/list.len(parts)
+  if count == 0 {
+    return None()
+  }
+  let absolute = std@1/string.starts_with(text, "/")
+  let mut prefix: List[String] = []
+  let mut i: u64 = 0
+  while i + 1 < count {
+    core@1/list.push(mut prefix, copy parts[i])
+    i += 1
+  }
+  let joined = std@1/string.join(prefix, "/")
+  Some(
+    core@1/path.of(
+      if absolute {
+        std@1/string.concat("/", joined)
+      } else if joined == "" {
+        "."
+      } else {
+        take joined
+      }
+    )
+  )
+}
+
+// Adapted from Zig lib/std/fs/path.zig basenameInner (last component; owned UTF-8 result).
+// Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
+pub fn filename(p: Path) -> String uses {} {
+  let text = core@1/path.text(p)
+  let bytes = core@1/string.as_bytes(text)
+  let mut end = core@1/bytes.len(bytes)
+  while end != 0 && bytes[end - 1] == 47 {
+    end -= 1
+  }
+  let mut begin = end
+  while begin != 0 && bytes[begin - 1] != 47 {
+    begin -= 1
+  }
+  owned_piece(text, begin, end)
+}
+
+// Empty means both absent extension and an empty suffix ("a.").
+// Adapted from Zig lib/std/fs/path.zig extension (suffix excludes dot per Hirsel contract).
+// Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
+pub fn extension(p: Path) -> String uses {} {
+  let name = filename(p)
+  let bytes = core@1/string.as_bytes(name)
+  let len = core@1/bytes.len(bytes)
+  let mut i = len
+  while i > 1 {
+    i -= 1
+    if bytes[i] == 46 {
+      return owned_piece(name, i + 1, len)
+    }
+  }
+  ""
+}

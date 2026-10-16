@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: accept
+// "Bidi control characters in source must be escaped".
+fn value() -> String {
+  "a\u{202e}b"
+}

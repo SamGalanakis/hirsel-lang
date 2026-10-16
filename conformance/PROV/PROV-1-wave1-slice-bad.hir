@@ -1,0 +1,7 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 5
+fn example(a: String, b: String) -> () {
+  for position in string.positions(a) {
+    string.slice(b, position, position);
+  }
+}

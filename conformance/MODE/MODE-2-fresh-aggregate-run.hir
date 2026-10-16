@@ -1,0 +1,36 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+type R {
+  items: List[u8],
+}
+
+fn need(take r: unique R) -> u8 {
+  r.items[0]
+}
+
+fn tuple(take r: unique (Bytes, u8)) -> u8 {
+  let (_, n) = take r
+  n
+}
+
+fn output_error[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let n = need(R(items: [7]))
+  let m = tuple((b"x", 7))
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if n == m {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

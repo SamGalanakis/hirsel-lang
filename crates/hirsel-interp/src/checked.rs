@@ -1,0 +1,1188 @@
+//! Checked execution: the memory model enforced at run time.
+//!
+//! Every value carries a bound, the set of lifetime instances it is local to
+//! (MODE-1, MEM-10, PROV-4). Instances are scope entries, parameters, closure
+//! environments and arenas; each is poisoned when it ends, and any later access
+//! to a value bounded by it traps. Bounds live in a shadow beside every slot.
+//! Only TIR, run-time values and declared signatures are consulted.
+use crate::{Error, Value};
+use hirsel_span::Span;
+use hirsel_syntax::DefPath;
+use hirsel_tir::{Body, LocalId, ScopeId, Storage};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
+
+/// Declared facts the driver supplies for checked execution only.
+#[derive(Clone, Debug, Default)]
+pub struct CheckedRuntime {
+    /// Definitions and library operations whose signature is `@noalloc` (MEM-5).
+    pub noalloc: BTreeSet<DefPath>,
+    /// Declared callable headers and nominal protocol associations, including Source.
+    pub operations: BTreeMap<DefPath, hirsel_types::SignatureRef>,
+    /// Nominal destruction signatures explicitly promising no allocation.
+    pub noalloc_drop: BTreeSet<DefPath>,
+    /// `arena.with`, executed by the checker with a fresh poisonable arena (MEM-4).
+    pub arena_with: Option<DefPath>,
+}
+
+/// The memory-model rule a checked execution found broken.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum TrapRule {
+    RegionUseAfterScopeExit,
+    ArenaUseAfterEnd,
+    FinalizerCount,
+    FinalizerOrder,
+    AllocationInNoalloc,
+    AllocatingCallInNoalloc,
+}
+impl TrapRule {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RegionUseAfterScopeExit => "region use after scope exit",
+            Self::ArenaUseAfterEnd => "arena use after arena end",
+            Self::FinalizerCount => "resource not finalised exactly once",
+            Self::FinalizerOrder => "finaliser order not reverse declaration",
+            Self::AllocationInNoalloc => "allocation inside @noalloc",
+            Self::AllocatingCallInNoalloc => "allocating call inside @noalloc",
+        }
+    }
+    /// The spec rules whose run-time consequence this trap witnesses.
+    pub fn spec(self) -> &'static str {
+        match self {
+            Self::RegionUseAfterScopeExit => "MODE-1/MEM-10",
+            Self::ArenaUseAfterEnd => "PROV-4/MEM-4",
+            Self::FinalizerCount | Self::FinalizerOrder => "DROP-2",
+            Self::AllocationInNoalloc | Self::AllocatingCallInNoalloc => "MEM-5",
+        }
+    }
+}
+impl std::fmt::Display for TrapRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A checked execution stopped at a memory-model violation. Like undefined
+/// behaviour, no further cleanup runs and no semantic observation exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Trap {
+    pub rule: TrapRule,
+    pub definition: DefPath,
+    pub site: Span,
+    pub line: u32,
+    pub detail: String,
+}
+impl std::fmt::Display for Trap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let path = self
+            .definition
+            .0
+            .modules
+            .iter()
+            .chain(std::iter::once(&self.definition.0.name))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(".");
+        write!(
+            f,
+            "checked trap: {} ({}) in {path} at line {}: {}",
+            self.rule,
+            self.rule.spec(),
+            self.line,
+            self.detail
+        )
+    }
+}
+
+/// Sorted, deduplicated lifetime instances.
+pub(crate) type Bound = Vec<u32>;
+fn union(into: &mut Bound, other: &[u32]) {
+    if other.is_empty() {
+        return;
+    }
+    into.extend_from_slice(other);
+    into.sort_unstable();
+    into.dedup();
+}
+
+/// Bounds per value node: one per field of an inline aggregate, one for a block.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Shadow {
+    Uniform(Bound),
+    /// A run-time deep ownership witness. Semantic copies invalidate every
+    /// surviving shadow sharing this cell; administrative Take preserves it.
+    Ownership {
+        content: Box<Shadow>,
+        shared: Rc<Cell<bool>>,
+    },
+    Parts(Vec<Shadow>),
+    /// Content reached through storage bounded by `home`: a borrowed capture
+    /// (the captured value's bound and the captured slot's home), or a closure
+    /// whose environment is region-placed. A call over a global value is
+    /// global; the view itself is not.
+    View {
+        content: Box<Shadow>,
+        home: Bound,
+    },
+}
+impl Default for Shadow {
+    fn default() -> Self {
+        Self::Uniform(vec![])
+    }
+}
+impl Shadow {
+    pub fn of(bound: Bound) -> Self {
+        Self::Uniform(bound)
+    }
+    pub fn total(&self) -> Bound {
+        let mut out = vec![];
+        let mut work = vec![self];
+        while let Some(s) = work.pop() {
+            match s {
+                Self::Uniform(b) => union(&mut out, b),
+                Self::Parts(p) => work.extend(p),
+                Self::Ownership { content, .. } => work.push(content),
+                Self::View { content, home } => {
+                    union(&mut out, home);
+                    work.push(content);
+                }
+            }
+        }
+        out
+    }
+    fn instances(&self) -> impl Iterator<Item = u32> + '_ {
+        let mut work = vec![self];
+        let mut current: &[u32] = &[];
+        std::iter::from_fn(move || {
+            loop {
+                if let Some((first, rest)) = current.split_first() {
+                    current = rest;
+                    return Some(*first);
+                }
+                match work.pop()? {
+                    Self::Uniform(b) => current = b,
+                    Self::Parts(p) => work.extend(p),
+                    Self::Ownership { content, .. } => work.push(content),
+                    Self::View { content, home } => {
+                        current = home;
+                        work.push(content);
+                    }
+                }
+            }
+        })
+    }
+    /// Bounds of the owned content, excluding borrowed-view access homes.
+    /// Copying an item out of a native cursor retains its source storage, but
+    /// does not borrow the cursor's temporary access binding (OWN-4).
+    pub fn content_bound(&self) -> Bound {
+        match self {
+            Self::Uniform(bound) => bound.clone(),
+            Self::Parts(parts) => {
+                let mut bound = vec![];
+                for part in parts {
+                    union(&mut bound, &part.content_bound());
+                }
+                bound
+            }
+            Self::View { content, .. } | Self::Ownership { content, .. } => content.content_bound(),
+        }
+    }
+    /// A borrowed protocol transports the source value, excluding the outer
+    /// access chain. Nested capture/view homes remain real content bounds.
+    pub(crate) fn source_bound(&self) -> Bound {
+        let mut content = self;
+        while let Self::View { content: inner, .. } | Self::Ownership { content: inner, .. } =
+            content
+        {
+            content = inner;
+        }
+        content.total()
+    }
+    pub fn add_bound(&mut self, bound: &[u32]) {
+        match self {
+            Self::Uniform(b) => union(b, bound),
+            Self::Parts(parts) => {
+                for part in parts {
+                    part.add_bound(bound);
+                }
+            }
+            Self::View { content, .. } | Self::Ownership { content, .. } => {
+                content.add_bound(bound)
+            }
+        }
+    }
+    /// Add one instance to every node (`x: T in a` places all of x's blocks in a).
+    pub fn add_all(&mut self, instance: u32) {
+        let mut work = vec![self];
+        while let Some(s) = work.pop() {
+            match s {
+                Self::Uniform(b) => union(b, &[instance]),
+                Self::Parts(p) => work.extend(p.iter_mut()),
+                Self::View { content, .. } | Self::Ownership { content, .. } => work.push(content),
+            }
+        }
+    }
+    /// The subtree for one field of an inline aggregate.
+    pub fn part(&self, index: usize) -> Shadow {
+        match self {
+            Self::Uniform(_) => Self::Uniform(self.total()),
+            Self::Ownership { content, .. } => {
+                let mut part = content.part(index);
+                part.add_bound(&self.total());
+                part
+            }
+            Self::View { content, home } => Self::View {
+                content: Box::new(content.part(index)),
+                home: home.clone(),
+            },
+            Self::Parts(p) => p.get(index).cloned().unwrap_or_default(),
+        }
+    }
+    /// Invocation consumes the callable access view before reading captures.
+    /// The capture fields retain their own storage bounds and borrowed homes.
+    pub fn capture(&self, index: usize) -> Self {
+        match self {
+            Self::View { content, .. } | Self::Ownership { content, .. } => content.capture(index),
+            other => other.part(index),
+        }
+    }
+    /// Replace instances by bounds; others are kept.
+    pub fn substitute(&mut self, map: &[(u32, Bound)]) {
+        if map.is_empty() {
+            return;
+        }
+        let mut work = vec![self];
+        while let Some(s) = work.pop() {
+            match s {
+                Self::Uniform(b) => {
+                    if b.iter().any(|i| map.iter().any(|(k, _)| k == i)) {
+                        let mut out = vec![];
+                        for i in b.iter() {
+                            match map.iter().find(|(k, _)| k == i) {
+                                Some((_, to)) => union(&mut out, to),
+                                None => union(&mut out, &[*i]),
+                            }
+                        }
+                        *b = out;
+                    }
+                }
+                Self::Parts(p) => work.extend(p.iter_mut()),
+                Self::Ownership { content, .. } => work.push(content),
+                Self::View { content, home } => {
+                    let mut mapped = Shadow::Uniform(std::mem::take(home));
+                    mapped.substitute(map);
+                    *home = mapped.total();
+                    work.push(content);
+                }
+            }
+        }
+    }
+    /// The lifetime a call or capture over this value lends: empty for a
+    /// global value, otherwise its bound plus the home of a borrowed view.
+    pub fn lifetime(&self) -> Bound {
+        match self {
+            Self::Ownership { content, .. } => content.lifetime(),
+            Self::View { content, home } => {
+                let mut bound = content.total();
+                if !bound.is_empty() {
+                    union(&mut bound, home);
+                }
+                bound
+            }
+            other => other.total(),
+        }
+    }
+    pub fn ownership(self, value: &Value, unique: bool) -> Self {
+        if !holds_storage(value) {
+            return Self::default();
+        }
+        if matches!(self, Self::Ownership { .. }) {
+            return self;
+        }
+        if let Self::View { content, home } = self {
+            return Self::View {
+                content: Box::new(content.ownership(value, unique)),
+                home,
+            };
+        }
+        if inline_fields(value).is_some() {
+            return Self::Parts(
+                value
+                    .fields()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, field)| {
+                        field
+                            .as_ref()
+                            .map(|value| self.part(i).ownership(value, unique))
+                            .unwrap_or_default()
+                    })
+                    .collect(),
+            );
+        }
+        Self::Ownership {
+            content: Box::new(self),
+            shared: Rc::new(Cell::new(!unique)),
+        }
+    }
+    pub fn share(&self) {
+        match self {
+            Self::Ownership { content, shared } => {
+                shared.set(true);
+                content.share();
+            }
+            Self::Parts(parts) => {
+                for part in parts {
+                    part.share();
+                }
+            }
+            Self::View { content, .. } => content.share(),
+            Self::Uniform(_) => (),
+        }
+    }
+    pub fn is_unique(&self) -> bool {
+        match self {
+            Self::Ownership { shared, .. } => !shared.get(),
+            Self::Parts(parts) => parts.iter().all(Self::is_unique),
+            Self::View { content, .. } => content.is_unique(),
+            Self::Uniform(_) => true,
+        }
+    }
+    /// Replace the local lifetime inside a callee without discarding the
+    /// actual incoming sharing witness, including a forged Unique row.
+    pub fn rebound(&self, bound: &Bound) -> Self {
+        match self {
+            Self::Ownership { content, shared } => Self::Ownership {
+                content: Box::new(content.rebound(bound)),
+                shared: shared.clone(),
+            },
+            Self::Parts(parts) => Self::Parts(parts.iter().map(|p| p.rebound(bound)).collect()),
+            _ => Self::of(bound.clone()),
+        }
+    }
+    /// Borrowing a callable keeps its environment fields: invoking it reads
+    /// those fields, rather than content stored in the borrowed callable slot.
+    /// Its access view still expires with the parameter or capture instance.
+    pub fn rebound_value(&self, value: &Value, bound: &Bound) -> Self {
+        if matches!(value, Value::Closure { .. }) {
+            let content = match self {
+                Self::View { content, .. } => (**content).clone(),
+                _ => self.clone(),
+            };
+            Self::View {
+                content: Box::new(content),
+                home: bound.clone(),
+            }
+        } else {
+            self.rebound(bound)
+        }
+    }
+    /// MODE-7: deep copying removes binding/own-root loans, retaining only
+    /// the regions and arenas in which the source content lives.
+    pub fn fresh_copy(&self, state: &State) -> Self {
+        match self {
+            Self::Ownership { content, .. } => Self::Ownership {
+                content: Box::new(content.fresh_copy(state)),
+                shared: Rc::new(Cell::new(false)),
+            },
+            Self::Parts(parts) => {
+                Self::Parts(parts.iter().map(|part| part.fresh_copy(state)).collect())
+            }
+            Self::View { content, home } => Self::View {
+                content: Box::new(content.fresh_copy(state)),
+                home: state.deep_bound(home),
+            },
+            Self::Uniform(bound) => Self::of(state.deep_bound(bound)),
+        }
+    }
+    /// Plain values are never local (MODE-1): their bound is dropped.
+    pub fn for_value(self, value: &Value) -> Shadow {
+        if holds_storage(value) {
+            self
+        } else {
+            Shadow::default()
+        }
+    }
+}
+
+/// True when the value can hold region, arena or heap storage.
+pub(crate) fn holds_storage(value: &Value) -> bool {
+    let mut work = vec![value];
+    while let Some(v) = work.pop() {
+        match v {
+            Value::String(_) | Value::Bytes(_) | Value::Map(_) | Value::Set(_) | Value::Box(_) => {
+                return true;
+            }
+            Value::Handle { kind, .. } => {
+                if kind == ARENA_HANDLE {
+                    return true;
+                }
+            }
+            Value::Sequence { kind, elements } => {
+                if !matches!(
+                    kind,
+                    hirsel_types::BuiltinType::Inline | hirsel_types::BuiltinType::Simd
+                ) {
+                    return true;
+                }
+                work.extend(elements.iter().filter_map(Option::as_ref));
+            }
+            Value::Closure { captures, .. } => {
+                if !captures.is_empty() {
+                    return true;
+                }
+            }
+            Value::Record { definition, .. }
+                if crate::library::simulation::plain_evidence(definition) => {}
+            Value::Tuple(f)
+            | Value::Record { fields: f, .. }
+            | Value::Distinct { fields: f, .. }
+            | Value::Variant { fields: f, .. }
+            | Value::Resource { fields: f, .. }
+            | Value::ResourceVariant { fields: f, .. } => {
+                work.extend(f.iter().filter_map(Option::as_ref))
+            }
+            Value::Unit
+            | Value::Bool(_)
+            | Value::Integer(_)
+            | Value::F32(_)
+            | Value::F64(_)
+            | Value::FunctionReference(_) => (),
+        }
+    }
+    false
+}
+/// Inline aggregates keep a shadow per field; everything else is one block.
+pub(crate) fn inline_fields(value: &Value) -> Option<usize> {
+    match value {
+        Value::Tuple(f)
+        | Value::Record { fields: f, .. }
+        | Value::Distinct { fields: f, .. }
+        | Value::Variant { fields: f, .. }
+        | Value::Resource { fields: f, .. }
+        | Value::ResourceVariant { fields: f, .. }
+        | Value::Closure { captures: f, .. } => Some(f.len()),
+        Value::Sequence {
+            kind: hirsel_types::BuiltinType::Inline | hirsel_types::BuiltinType::Simd,
+            elements,
+        } => Some(elements.len()),
+        _ => None,
+    }
+}
+pub(crate) fn resources_in(value: &Value) -> u64 {
+    let mut count = 0;
+    let mut work = vec![value];
+    while let Some(v) = work.pop() {
+        if matches!(v, Value::Resource { .. } | Value::ResourceVariant { .. }) {
+            count += 1;
+        }
+        if let Some(fields) = v.fields() {
+            work.extend(fields.iter().filter_map(Option::as_ref));
+        }
+    }
+    count
+}
+
+pub(crate) const ARENA_HANDLE: &str = "Arena";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Kind {
+    /// A binding/own root, with the actual content's deep placement bounds.
+    /// Ordinary reads retain this instance; deep unique extracts these bounds.
+    Root(Bound),
+    Region,
+    Arena,
+}
+/// Execution-wide checker state, shared by every frame.
+pub(crate) struct State {
+    pub config: CheckedRuntime,
+    open: Vec<bool>,
+    kinds: Vec<Kind>,
+    pub site: Span,
+    pub definition: Option<DefPath>,
+    pub constructed: u64,
+    pub released: u64,
+    pub forgotten: u64,
+}
+pub(crate) type Shared = Rc<RefCell<State>>;
+pub(crate) fn state(config: CheckedRuntime) -> Shared {
+    Rc::new(RefCell::new(State {
+        config,
+        open: vec![],
+        kinds: vec![],
+        site: Span {
+            file: hirsel_span::FileId(0),
+            start: 0,
+            end: 0,
+        },
+        definition: None,
+        constructed: 0,
+        released: 0,
+        forgotten: 0,
+    }))
+}
+impl State {
+    fn instance(&mut self, kind: Kind) -> u32 {
+        self.open.push(true);
+        self.kinds.push(kind);
+        (self.open.len() - 1) as u32
+    }
+    fn root(&mut self, content: &Shadow) -> u32 {
+        self.instance(Kind::Root(self.deep_bound(&content.total())))
+    }
+    fn deep_bound(&self, bound: &[u32]) -> Bound {
+        let mut out = vec![];
+        for instance in bound {
+            match &self.kinds[*instance as usize] {
+                Kind::Root(content) => union(&mut out, content),
+                Kind::Region | Kind::Arena => union(&mut out, &[*instance]),
+            }
+        }
+        out
+    }
+    pub fn arena(&mut self) -> u32 {
+        self.instance(Kind::Arena)
+    }
+    pub fn close(&mut self, instance: u32) {
+        if let Some(open) = self.open.get_mut(instance as usize) {
+            *open = false;
+        }
+    }
+    pub fn trap(&self, rule: TrapRule, detail: impl Into<String>) -> Error {
+        Error::Trapped(Box::new(Trap {
+            rule,
+            definition: self
+                .definition
+                .clone()
+                .unwrap_or_else(|| crate::library::simulation::core_path("checked.execution")),
+            site: self.site,
+            line: 0,
+            detail: detail.into(),
+        }))
+    }
+    /// Trap if any instance in the shadow has ended.
+    pub fn access(&self, shadow: &Shadow, what: &str) -> Result<(), Error> {
+        for instance in shadow.instances() {
+            if !self.open.get(instance as usize).copied().unwrap_or(true) {
+                let rule = match self.kinds[instance as usize] {
+                    Kind::Root(_) | Kind::Region => TrapRule::RegionUseAfterScopeExit,
+                    Kind::Arena => TrapRule::ArenaUseAfterEnd,
+                };
+                return Err(self.trap(rule, format!("{what} reaches ended instance {instance}")));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Lifetime transport at an opaque native boundary. Only declarations and
+/// incoming run-time shadows contribute; callbacks publish their actual returns.
+#[derive(Clone, Debug)]
+pub(crate) struct OperationCheck {
+    pub result: Shadow,
+    pub updates: Vec<(usize, Shadow)>,
+    pub inputs: Vec<Argument>,
+    pub callbacks: Bound,
+}
+impl OperationCheck {
+    pub fn input_bound(&self) -> Bound {
+        let mut bound = self.callbacks.clone();
+        for input in &self.inputs {
+            union(&mut bound, &input.shadow.total());
+        }
+        bound
+    }
+    pub fn returned_shadow(&self, value: &Value, arguments: &[Value]) -> Shadow {
+        if let Value::Closure {
+            captures,
+            owned_captures,
+            ..
+        } = value
+        {
+            let bound = self.result.total();
+            Shadow::Parts(
+                captures
+                    .iter()
+                    .zip(owned_captures)
+                    .map(|(v, owned)| {
+                        let Some(v) = v else {
+                            return Shadow::default();
+                        };
+                        if *owned {
+                            self.result.clone().for_value(v)
+                        } else {
+                            let content = native_shadow(v, arguments, self).for_value(v);
+                            Shadow::View {
+                                content: Box::new(content),
+                                home: bound.clone(),
+                            }
+                        }
+                    })
+                    .collect(),
+            )
+        } else {
+            self.result.clone().for_value(value)
+        }
+    }
+    pub fn accept_callback(&mut self, returned: &Shadow, written: &[Shadow]) {
+        union(&mut self.callbacks, &returned.total());
+        for shadow in written {
+            union(&mut self.callbacks, &shadow.total());
+        }
+        // Native continuations may retain the callback return in their state.
+        // Its bounds persist through subsequent resumes and mutable writebacks.
+        self.result.add_bound(&self.callbacks);
+        for (_, update) in &mut self.updates {
+            update.add_bound(&self.callbacks);
+        }
+    }
+}
+/// Derive every result position from the declared type, preserving inline
+/// partitions. Type arguments of blocks share one lifetime; callback headers
+/// describe future invocations and are never result payloads.
+pub(crate) fn operation_result(
+    types: &hirsel_types::TypeStore,
+    root: hirsel_types::TypeId,
+    inputs: &[Argument],
+    inherited: &Bound,
+) -> Shadow {
+    use hirsel_types::{BinderRef, TypeKind};
+    fn walk(
+        types: &hirsel_types::TypeStore,
+        ty: hirsel_types::TypeId,
+        inputs: &[Argument],
+        inherited: &Bound,
+        active: &mut BTreeSet<hirsel_types::TypeId>,
+    ) -> Shadow {
+        let mut bound = inherited.clone();
+        let Some(row) = types.get(ty) else {
+            return Shadow::of(bound);
+        };
+        if let Some(listed) = row.modes.relation.named_parameters() {
+            for source in listed.iter() {
+                if let BinderRef::Bound {
+                    depth: 0,
+                    parameter,
+                } = source
+                {
+                    if let Some(input) = inputs.get(parameter.0 as usize) {
+                        union(&mut bound, &input.lifetime);
+                    }
+                }
+            }
+        }
+        if !active.insert(ty) {
+            return Shadow::of(bound);
+        }
+        let parts = match &row.kind {
+            TypeKind::Tuple(parts) => Some(parts.iter().copied().collect::<Vec<_>>()),
+            TypeKind::Record(fields) => Some(fields.iter().map(|f| f.ty).collect()),
+            _ => None,
+        };
+        let shadow = if let Some(parts) = parts {
+            Shadow::Parts(
+                parts
+                    .into_iter()
+                    .map(|part| walk(types, part, inputs, &bound, active))
+                    .collect(),
+            )
+        } else {
+            // A container stores all its elements in the same lifetime.
+            if !matches!(row.kind, TypeKind::Function(_)) {
+                for edge in row.kind.graph_edges() {
+                    union(
+                        &mut bound,
+                        &walk(types, edge.ty, inputs, &vec![], active).total(),
+                    );
+                }
+            }
+            Shadow::of(bound)
+        };
+        active.remove(&ty);
+        shadow
+    }
+    walk(types, root, inputs, inherited, &mut BTreeSet::new())
+}
+/// Recover the shadow of an argument/callee selected from native saved state.
+/// Operations can unwrap containers, but cannot create caller lifetime facts.
+pub(crate) fn native_shadow(target: &Value, values: &[Value], check: &OperationCheck) -> Shadow {
+    let mut bound = vec![];
+    let mut found: Option<Shadow> = None;
+    let mut work: Vec<_> = values
+        .iter()
+        .zip(&check.inputs)
+        .map(|(v, c)| (v, c.shadow.clone()))
+        .collect();
+    while let Some((value, shadow)) = work.pop() {
+        if value == target {
+            union(&mut bound, &shadow.total());
+            if found.is_none() {
+                found = Some(shadow.clone());
+            }
+        }
+        if let Some(fields) = value.fields() {
+            for (i, field) in fields.iter().enumerate() {
+                if let Some(field) = field {
+                    work.push((field, shadow.part(i)));
+                }
+            }
+        }
+    }
+    if let Some(mut shadow) = found {
+        shadow.add_bound(&bound);
+        shadow
+    } else {
+        Shadow::of(check.input_bound())
+    }
+}
+
+/// A frame's lifetimes: what each slot's storage is bounded by, and what its
+/// own instances mean to its caller.
+pub(crate) struct FrameCheck {
+    pub state: Shared,
+    pub shadows: Vec<Shadow>,
+    scopes: Vec<Option<u32>>,
+    /// `P_i` per parameter ordinal.
+    parameters: Vec<u32>,
+    /// `K_c` per borrowed capture, `F` for owned captures, by capture ordinal.
+    captures: Vec<u32>,
+    environment: u32,
+    /// The frame's own region: `@noalloc` places its inferred blocks here.
+    pub region: u32,
+    owned: Vec<u32>,
+    /// The caller's view of each instance this frame may return.
+    lifetimes: Vec<(u32, Bound)>,
+    /// `mut` write-backs map `P_j` to the argument's original bound.
+    originals: Vec<(u32, Bound)>,
+    pub returned: Option<Shadow>,
+    pub noalloc: bool,
+    pub closes_arena: Option<u32>,
+}
+/// What a caller knows about one argument.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Argument {
+    pub shadow: Shadow,
+    /// Empty for a global value; otherwise its bound plus the borrowed slot's home.
+    pub lifetime: Bound,
+}
+/// What a caller knows about a closure callee.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Callee {
+    pub captures: Vec<Shadow>,
+    pub owned: Vec<bool>,
+    pub lifetime: Bound,
+}
+
+impl FrameCheck {
+    /// Bind a new frame: local parameters and borrowed captures are bounded by
+    /// their own instances, which a declared local result maps back at return.
+    pub fn enter(
+        state: Shared,
+        body: &Body,
+        types: &hirsel_types::TypeStore,
+        slots: &[Option<Value>],
+        arguments: Vec<Argument>,
+        callee: Option<Callee>,
+        noalloc: bool,
+    ) -> Self {
+        let mut shadows = vec![Shadow::default(); body.locals.len()];
+        let mut owned = vec![];
+        let mut lifetimes = vec![];
+        let mut originals = vec![];
+        let mut s = state.borrow_mut();
+        let environment = s.root(&Shadow::default());
+        let region = s.instance(Kind::Region);
+        owned.extend([environment, region]);
+        let mut parameters = vec![];
+        for (ordinal, local) in body.parameters.iter().enumerate() {
+            let mut argument = arguments.get(ordinal).cloned().unwrap_or_default();
+            let instance = s.root(&argument.shadow);
+            owned.push(instance);
+            parameters.push(instance);
+            if let Some(value) = slots.get(local.0 as usize).and_then(Option::as_ref) {
+                let unique = types
+                    .get(body.locals[local.0 as usize].ty)
+                    .is_some_and(|r| r.modes.uniqueness == hirsel_types::Uniqueness::Unique);
+                argument.shadow = argument.shadow.ownership(value, unique);
+            }
+            // Borrowed, `mut` and local-taken parameters are local (MODE-1).
+            let row_local = body.locals.get(local.0 as usize).is_some_and(|l| {
+                types.get(l.ty).is_some_and(|r| {
+                    // An arena place sets placement; it is not a lifetime.
+                    r.modes.relation.reaches().iter().any(|reach| {
+                        !matches!(reach, hirsel_types::Reach::Place(o)
+                            if crate::frame::arena_of(body, slots, o).is_some())
+                    })
+                })
+            });
+            let value = slots.get(local.0 as usize).and_then(Option::as_ref);
+            shadows[local.0 as usize] = match value.filter(|v| row_local && holds_storage(v)) {
+                Some(value) => argument.shadow.rebound_value(value, &vec![instance]),
+                None => argument.shadow.clone(),
+            };
+            lifetimes.push((instance, argument.lifetime));
+            originals.push((instance, argument.shadow.total()));
+        }
+        let mut captures = vec![];
+        let callee = callee.unwrap_or_default();
+        for (ordinal, (index, _)) in body
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.storage == Storage::Capture)
+            .enumerate()
+        {
+            let shadow = callee.captures.get(ordinal).cloned().unwrap_or_default();
+            if callee.owned.get(ordinal).copied().unwrap_or(true) {
+                captures.push(environment);
+                shadows[index] = shadow;
+            } else {
+                let instance = s.root(&shadow);
+                owned.push(instance);
+                captures.push(instance);
+                let value = slots.get(index).and_then(Option::as_ref);
+                lifetimes.push((instance, shadow.lifetime()));
+                shadows[index] = match value.filter(|v| holds_storage(v)) {
+                    Some(value) => shadow.rebound_value(value, &vec![instance]),
+                    None => Shadow::default(),
+                };
+            }
+        }
+        lifetimes.push((environment, callee.lifetime));
+        drop(s);
+        Self {
+            state,
+            shadows,
+            scopes: vec![None; body.scopes.len()],
+            parameters,
+            captures,
+            environment,
+            region,
+            owned,
+            lifetimes,
+            originals,
+            returned: None,
+            noalloc,
+            closes_arena: None,
+        }
+    }
+    /// The instance bounding a slot's storage.
+    pub fn home(&mut self, body: &Body, local: LocalId) -> Bound {
+        let Some(declared) = body.locals.get(local.0 as usize) else {
+            return vec![];
+        };
+        match declared.storage {
+            Storage::Parameter => body
+                .parameters
+                .iter()
+                .position(|p| *p == local)
+                .and_then(|i| self.parameters.get(i))
+                .map_or_else(Vec::new, |i| vec![*i]),
+            Storage::Capture => body
+                .locals
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.storage == Storage::Capture)
+                .position(|(i, _)| i == local.0 as usize)
+                .and_then(|c| self.captures.get(c))
+                .map_or_else(Vec::new, |i| vec![*i]),
+            _ => vec![self.scope(declared.scope)],
+        }
+    }
+    fn scope(&mut self, scope: ScopeId) -> u32 {
+        if let Some(Some(instance)) = self.scopes.get(scope.0 as usize) {
+            return *instance;
+        }
+        let instance = self.state.borrow_mut().root(&Shadow::default());
+        self.owned.push(instance);
+        if let Some(slot) = self.scopes.get_mut(scope.0 as usize) {
+            *slot = Some(instance);
+        }
+        instance
+    }
+    /// `EndScope`: poison this scope's current instance and its descendants'.
+    pub fn end_scope(&mut self, body: &Body, scope: ScopeId) {
+        let mut state = self.state.borrow_mut();
+        for (index, instance) in self.scopes.iter_mut().enumerate() {
+            let mut current = Some(ScopeId(index as u32));
+            while let Some(id) = current {
+                if id == scope {
+                    if let Some(instance) = instance.take() {
+                        state.close(instance);
+                    }
+                    break;
+                }
+                current = body.scopes.get(id.0 as usize).and_then(|s| s.parent);
+            }
+        }
+    }
+    pub fn storage_live(&mut self, local: LocalId) {
+        if let Some(s) = self.shadows.get_mut(local.0 as usize) {
+            *s = Shadow::default();
+        }
+    }
+    /// Map the returned shadow into the caller's terms, by the body's declared result.
+    pub fn returned_to_caller(&self, body: &Body, types: &hirsel_types::TypeStore) -> Shadow {
+        let mut shadow = self.returned.clone().unwrap_or_default();
+        let relation = types.get(body.result).map(|t| &t.modes.relation);
+        let map: Vec<(u32, Bound)> = match relation.and_then(|r| r.named_parameters()) {
+            Some(listed) => listed
+                .iter()
+                .filter_map(|p| match p {
+                    hirsel_types::ParameterRef::Body { scope, parameter }
+                        if *scope == body.parameter_scope =>
+                    {
+                        self.parameters.get(parameter.0 as usize)
+                    }
+                    _ => None,
+                })
+                .filter_map(|i| self.lifetimes.iter().find(|(k, _)| k == i).cloned())
+                .collect(),
+            None if relation.is_some_and(|r| {
+                r.has_environment()
+                    || r.reaches()
+                        .iter()
+                        .any(|r| matches!(r, hirsel_types::Reach::Region(_)))
+            }) =>
+            {
+                self.lifetimes.clone()
+            }
+            None => vec![],
+        };
+        shadow.substitute(&map);
+        shadow
+    }
+    /// A `mut` write-back keeps its own argument's original bound.
+    pub fn written_back(&self, parameter: usize, local: LocalId) -> Shadow {
+        let mut shadow = self
+            .shadows
+            .get(local.0 as usize)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(entry) = self
+            .parameters
+            .get(parameter)
+            .and_then(|i| self.originals.iter().find(|(k, _)| k == i))
+        {
+            shadow.substitute(std::slice::from_ref(entry));
+        }
+        shadow
+    }
+    /// A self-tail restart substitutes surviving parameter contracts, then
+    /// poisons every old invocation instance, including its lexical scopes.
+    pub fn inherit(&mut self, mut old: FrameCheck) -> Result<(), Error> {
+        let remap = |bound: &mut Bound, map: &[(u32, Bound)]| {
+            let mut shadow = Shadow::of(std::mem::take(bound));
+            shadow.substitute(map);
+            *bound = shadow.total();
+        };
+        let environment = old
+            .lifetimes
+            .iter()
+            .find(|(k, _)| *k == old.environment)
+            .map(|(_, b)| b.clone())
+            .unwrap_or_default();
+        for (instance, bound) in &mut self.lifetimes {
+            if *instance == self.environment {
+                *bound = environment.clone();
+            } else {
+                remap(bound, &old.lifetimes);
+            }
+        }
+        for (_, bound) in &mut self.originals {
+            remap(bound, &old.originals);
+        }
+        self.closes_arena = old.closes_arena.take();
+        // Parameter storage can survive only through the declared call contract.
+        // Old scope bounds deliberately remain in the arguments and trap now.
+        for shadow in &mut self.shadows {
+            shadow.substitute(&old.lifetimes);
+        }
+        old.exit();
+        for (_, lifetime) in &self.lifetimes {
+            self.state
+                .borrow()
+                .access(&Shadow::of(lifetime.clone()), "tail restart argument")?;
+        }
+        Ok(())
+    }
+    /// The frame exits: every instance it owns ends, and so does its arena.
+    pub fn exit(&mut self) {
+        let mut state = self.state.borrow_mut();
+        for instance in self.owned.drain(..) {
+            state.close(instance);
+        }
+        if let Some(arena) = self.closes_arena.take() {
+            state.close(arena);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn substitution_maps_instances_per_node_and_keeps_others() {
+        let mut shadow = Shadow::Parts(vec![
+            Shadow::of(vec![1, 7]),
+            Shadow::View {
+                content: Box::new(Shadow::of(vec![1])),
+                home: vec![2],
+            },
+        ]);
+        shadow.substitute(&[(1, vec![4, 5]), (2, vec![])]);
+        assert_eq!(shadow.part(0), Shadow::of(vec![4, 5, 7]));
+        assert_eq!(shadow.total(), vec![4, 5, 7]);
+    }
+    #[test]
+    fn a_view_of_a_global_value_lends_no_lifetime() {
+        let global = Shadow::View {
+            content: Box::new(Shadow::default()),
+            home: vec![3],
+        };
+        assert_eq!(global.lifetime(), Vec::<u32>::new());
+        assert_eq!(global.total(), vec![3]);
+        let local = Shadow::View {
+            content: Box::new(Shadow::of(vec![1])),
+            home: vec![3],
+        };
+        assert_eq!(local.lifetime(), vec![1, 3]);
+    }
+    #[test]
+    fn plain_values_are_never_local() {
+        assert_eq!(
+            Shadow::of(vec![1]).for_value(&Value::Tuple(vec![Some(Value::Unit)])),
+            Shadow::default()
+        );
+        let string = Value::String("s".into());
+        assert_eq!(Shadow::of(vec![1]).for_value(&string), Shadow::of(vec![1]));
+        // A core StrPos or Path keeps its evidence as a string; a record of
+        // any other definition holding one owns that storage.
+        let record = |definition: DefPath| Value::Record {
+            definition,
+            fields: vec![Some(string.clone()), Some(Value::Unit)],
+        };
+        let core = crate::library::simulation::core_path;
+        for plain in ["StrPos", "Path"] {
+            assert_eq!(
+                Shadow::of(vec![1]).for_value(&record(core(plain))),
+                Shadow::default()
+            );
+        }
+        let mut user = core("StrPos");
+        user.0.package.name = "app".into();
+        for counted in [core("Instant"), core("string.StrPos"), user] {
+            assert_eq!(
+                Shadow::of(vec![1]).for_value(&record(counted)),
+                Shadow::of(vec![1])
+            );
+        }
+    }
+    #[test]
+    fn deep_unique_removes_roots_but_keeps_placement_through_borrowed_roots() {
+        let shared = state(CheckedRuntime::default());
+        let mut state = shared.borrow_mut();
+        let binding = state.root(&Shadow::default());
+        let region = state.instance(Kind::Region);
+        let arena = state.arena();
+        // Two borrowed calls obscure the placement behind their own roots.
+        let first = state.root(&Shadow::of(vec![binding, region, arena]));
+        let second = state.root(&Shadow::of(vec![first]));
+        let source = Shadow::Parts(vec![
+            Shadow::of(vec![binding]),
+            Shadow::View {
+                content: Box::new(Shadow::of(vec![second])),
+                home: vec![binding],
+            },
+        ]);
+        let copied = source.fresh_copy(&state);
+        assert_eq!(copied.part(0).total(), Vec::<u32>::new());
+        assert_eq!(copied.part(1).total(), vec![region, arena]);
+        assert_eq!(source.total(), vec![binding, second]);
+        state.close(binding);
+        state.close(first);
+        state.close(second);
+        assert!(state.access(&copied, "unique result").is_ok());
+        assert!(state.access(&source, "original borrow").is_err());
+        state.close(arena);
+        let Err(Error::Trapped(trap)) = state.access(&copied, "unique result") else {
+            panic!("deep unique must retain arena placement")
+        };
+        assert_eq!(trap.rule, TrapRule::ArenaUseAfterEnd);
+        state.close(region);
+        let Err(Error::Trapped(trap)) = state.access(&copied, "unique result") else {
+            panic!("deep unique must retain region placement")
+        };
+        assert_eq!(trap.rule, TrapRule::RegionUseAfterScopeExit);
+    }
+
+    #[test]
+    fn an_ended_instance_traps_by_its_kind() {
+        let state = state(CheckedRuntime::default());
+        let (region, arena) = {
+            let mut s = state.borrow_mut();
+            (s.instance(Kind::Region), s.arena())
+        };
+        let s = state.borrow();
+        assert!(s.access(&Shadow::of(vec![region, arena]), "read").is_ok());
+        drop(s);
+        state.borrow_mut().close(arena);
+        let Err(Error::Trapped(trap)) = state.borrow().access(&Shadow::of(vec![arena]), "read")
+        else {
+            panic!("expected a trap")
+        };
+        assert_eq!(trap.rule, TrapRule::ArenaUseAfterEnd);
+        state.borrow_mut().close(region);
+        let Err(Error::Trapped(trap)) = state.borrow().access(&Shadow::of(vec![region]), "read")
+        else {
+            panic!("expected a trap")
+        };
+        assert_eq!(trap.rule, TrapRule::RegionUseAfterScopeExit);
+    }
+}
+
+/// The immutable nominal header grants this exact implicit call pair. A raw
+/// caller flag cannot change checked lifetime transfer; stale receipts use the
+/// ordinary conservative call path.
+pub(crate) fn protocol_call(
+    definition: &hirsel_tir::Definition,
+    body_id: hirsel_tir::BodyId,
+    block_id: hirsel_tir::BlockId,
+    runtime: &CheckedRuntime,
+) -> bool {
+    use hirsel_tir::{CallReturn, Callee, Terminator};
+    use hirsel_types::{GenericArgument, ParamId, ParameterRef, SignatureKind, TypeKind, UseKind};
+    definition.protocol_associations.iter().any(|receipt| {
+        let valid = (|| {
+            if receipt.body != body_id || !(receipt.open == block_id || receipt.next == block_id) { return None }
+            let source = runtime.operations.get(&receipt.association.source)?;
+            if source.fingerprint != receipt.association.fingerprint { return None }
+            let SignatureKind::Type(nominal) = &source.kind else { return None };
+            let association = nominal.loop_source.as_ref()?;
+            let open = runtime.operations.get(&association.open)?;
+            let next = runtime.operations.get(&association.next)?;
+            let (SignatureKind::Function(open_f), SignatureKind::Function(next_f)) = (&open.kind,&next.kind) else { return None };
+            let ([open_parameter],[next_parameter]) = (open_f.parameters.as_slice(),next_f.parameters.as_slice()) else { return None };
+            if open_parameter.passing != hirsel_syntax::PassingMode::Borrow || next_parameter.passing != hirsel_syntax::PassingMode::Mut { return None }
+            if !matches!(&open.types.get(open_parameter.ty)?.kind,TypeKind::Named {definition:owner,..} if owner == &receipt.association.source) { return None }
+            if !open.types.get(open_f.result)?.modes.relation.parameter_roots().contains(&ParameterRef::bound(ParamId(0))) { return None }
+            if !matches!(&next.types.get(next_f.result)?.kind,TypeKind::Named {definition:option,arguments} if option == &association.option && matches!(arguments.as_slice(),[GenericArgument::Type(_)])) { return None }
+            let body = definition.bodies.get(body_id.0 as usize)?;
+            let Terminator::Call {callee:Callee::Definition {path:open_path,..},arguments:open_args,returns: Some(CallReturn { destination, .. }),..} = &body.blocks.get(receipt.open.0 as usize)?.terminator else { return None };
+            let Terminator::Call {callee:Callee::Definition {path:next_path,..},arguments:next_args,..} = &body.blocks.get(receipt.next.0 as usize)?.terminator else { return None };
+            if open_path != &association.open || next_path != &association.next { return None }
+            let ([receiver],[cursor]) = (open_args.as_slice(),next_args.as_slice()) else { return None };
+            if receiver.value.usage != UseKind::Borrow || cursor.value.usage != UseKind::Mut { return None }
+            let receiver = body.places.get(receiver.value.place.0 as usize)?;
+            if !matches!(&definition.types.get(receiver.ty)?.kind,TypeKind::Named {definition:owner,..} if owner == &receipt.association.source) { return None }
+            let cursor = body.places.get(cursor.value.place.0 as usize)?;
+            let destination = body.places.get(destination.0 as usize)?;
+            (cursor.root == destination.root && cursor.projection == destination.projection).then_some(())
+        })();
+        valid.is_some()
+    })
+}

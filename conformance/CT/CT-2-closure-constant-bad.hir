@@ -1,0 +1,5 @@
+// rule: CT-2
+// expect: reject CT-2 at line 3
+const VALUE: fn() -> u8 = fn() {
+  1u8
+}

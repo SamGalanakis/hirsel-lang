@@ -1,0 +1,52 @@
+// rule: MEM-12
+// expect: run
+// stdout: ok
+flat type Message {
+  text: String,
+  bytes: Bytes,
+  id: u64,
+}
+
+flat type Messages {
+  items: List[Message],
+}
+
+fn output_error[E](take e: E) -> () {}
+
+fn changed_sum(messages: Messages) -> u64 {
+  let mut sum = 0u64
+  for message in messages.items {
+    let mut changed = copy message
+    changed.id ^= 291u64
+    sum += changed.id + string.byte_len(changed.text) + bytes.len(changed.bytes)
+  }
+  sum
+}
+
+fn original_sum(messages: Messages) -> u64 {
+  let mut sum = 0u64
+  for message in messages.items {
+    sum += message.id
+  }
+  sum
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let messages = Messages(
+    items: [
+      Message(text: "", bytes: b"", id: 1),
+      Message(text: "hello", bytes: b"abc", id: 7)
+    ]
+  )
+  let valid = changed_sum(messages) == 590 && original_sum(messages) == 8
+  let stdout = io.stdout(rt) ? output_error
+  out.print(
+    stdout,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

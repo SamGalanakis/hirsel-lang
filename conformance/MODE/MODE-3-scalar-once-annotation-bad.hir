@@ -1,0 +1,5 @@
+// rule: MODE-3
+// expect: reject MODE-3 at line 3
+fn identity(take x: once u64) -> u64 {
+  x
+}

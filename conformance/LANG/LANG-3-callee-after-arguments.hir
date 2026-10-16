@@ -1,0 +1,25 @@
+// rule: LANG-3
+// expect: run
+// stdout: a
+// stdout: b
+// stdout: call
+// Shows "arguments, tuple and constructor fields, operands, then the call."
+fn stamp(rt: Stdout, text: String, value: u64) -> u64 {
+  let _ = out.print(rt, text)
+  value
+}
+
+fn finish(rt: Stdout, a: u64, b: u64) -> u64 {
+  let _ = out.print(rt, "call\n")
+  a + b
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let grant_stdout = io.stdout(rt)?
+  let _ = finish(
+    grant_stdout,
+    stamp(grant_stdout, "a\n", 1),
+    stamp(grant_stdout, "b\n", 2)
+  )
+  Ok(())
+}

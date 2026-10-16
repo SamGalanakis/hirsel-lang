@@ -1,0 +1,27 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// The twin of MODE-4-tuple-part-callable-bad; the part is filled with a
+// function value whose type states `sendable`.
+fn probe(take f: sendable fn() -> u64) -> u64 {
+  let n = 0u64
+  let pair: (sendable fn() -> u64, u64) = (f, n)
+  let (g, k) = pair
+  g() + k
+}
+
+fn seven() -> u64 {
+  7
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

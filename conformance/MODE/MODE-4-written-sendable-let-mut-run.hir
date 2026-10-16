@@ -1,0 +1,33 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// A `let mut` binding written `sendable fn` holds that promise, whatever
+// its initializer proves, so it may be handed to a parameter requiring it
+// after a write of another sendable function.
+fn needs(take g: sendable fn() -> u64) -> u64 {
+  g()
+}
+
+fn probe(take q: sendable fn() -> u64) -> u64 {
+  let mut f: sendable fn() -> u64 = fn() {
+    1
+  }
+  f = q
+  needs(take f)
+}
+
+fn seven() -> u64 {
+  7
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if probe(take seven) == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

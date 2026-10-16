@@ -1,0 +1,21 @@
+// rule: PROV-1
+// expect: accept
+type R {
+  n: u64,
+}
+
+fn make(r: List[R]) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: List[R], p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn probe(take r0: List[R]) -> () {
+  let mut r = r0
+  let p = make(r)
+  r[0].n = 3u64
+  let fresh = make(r)
+  inspect(r, fresh)
+}

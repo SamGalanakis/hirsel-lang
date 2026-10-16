@@ -1,0 +1,20 @@
+// rule: CLO-2
+// expect: reject CLO-4 at line 17
+// A written function type is preserved exactly (#58) at every depth of a
+// binding annotation. The tuple part is written `uses {}`; the part `pair`
+// returns holds `Stdout`.
+fn loud(rt: Stdout) -> fn() -> () {
+  fn() {
+    let _ = out.print(rt, "x")
+  }
+}
+
+fn pair(rt: Stdout) -> (fn() -> (), u64) {
+  (loud(rt), 0u64)
+}
+
+fn probe(rt: Stdout) -> u64 {
+  let t: (fn() -> () uses {}, u64) = pair(rt)
+  let (_, n) = t
+  n
+}

@@ -1,0 +1,6 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 5
+// Without a copy the borrowed root itself is returned, and it is local.
+fn root(s: Shared[Bytes]) -> Shared[Bytes] {
+  s
+}

@@ -1,0 +1,42 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+fn failing(t: Test, failure: TlsFailure) -> Result[bool, NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 443u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Fails(failure),
+        connections: [Open([Send(b"unread")]), Open([])]
+      )
+    ]
+  )
+  let s = net.connect(n, "example.com", 443u16, Unbounded())?
+  let failed = match tls.connect(n, take s, "example.com", WebPki()) {
+    Error(Tls(f)) => f == failure,
+    _ => false,
+  }
+  // A failing peer is a TLS endpoint: test.net derives its ConnectTls rule.
+  let mut plain = net.connect(n, "example.com", 443u16, Unbounded())?
+  let denied = net.write_all(n, mut plain, b"secret") == Error(NotGranted())
+  Ok(failed && denied)
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  test.check(t, failing(t, UnknownIssuer())?)
+  test.check(t, failing(t, Expired())?)
+  test.check(t, failing(t, NotYetValid())?)
+  test.check(t, failing(t, NameMismatch())?)
+  test.check(t, failing(t, Revoked())?)
+  test.check(t, failing(t, BadCertificate())?)
+  test.check(t, failing(t, AlertReceived(0u8))?)
+  test.check(t, failing(t, AlertReceived(40u8))?)
+  test.check(t, failing(t, AlertReceived(255u8))?)
+  test.check(t, failing(t, HandshakeFailure())?)
+  test.check(t, failing(t, PeerMisbehaved())?)
+  test.check(t, failing(t, Truncated())?)
+  Ok(())
+}

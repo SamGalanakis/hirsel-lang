@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+fn need(mut s: unique Shared[Bytes]) {}
+
+fn probe(take s: unique Shared[Bytes]) {
+  let mut a = copy s
+  let b = copy a
+  need(mut a)
+}

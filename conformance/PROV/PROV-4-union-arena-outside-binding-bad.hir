@@ -1,0 +1,16 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 15
+// v22 R3. selected may hold a bound loan on either arena. A view related
+// only to a cannot hold content placed in b.
+type View {
+  bytes: Bytes,
+}
+
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn bad(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) {
+  let selected = choose(a, b, x, y)
+  let _: View in a = View(bytes: selected)
+}

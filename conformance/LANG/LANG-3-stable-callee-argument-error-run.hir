@@ -1,0 +1,41 @@
+// rule: LANG-3
+// expect: run
+// entry: test_error
+type Stage {
+  call: fn(u64) -> u64 uses {},
+}
+
+fn make(base: u64) -> fn(u64) -> u64 uses {} {
+  let payload: List[u64] = [base]
+  fn(x: u64) -> u64 uses {} {
+    payload[0u64] + x
+  }
+}
+
+fn stop() -> Result[u64, ()] {
+  Error(())
+}
+
+fn probe() -> Result[u64, ()] {
+  let f = make(7u64)
+  Ok(f(stop()?))
+}
+
+fn indexed_probe() -> Result[u64, ()] {
+  let stages: List[Stage] = [Stage(call: make(7u64))]
+  Ok(stages[0u64].call(stop()?))
+}
+
+pub fn test_error(t: Test) -> Result[(), ()] {
+  let failed: bool = match probe() {
+    Ok(_) => false,
+    Error(_) => true,
+  }
+  test.check(t, failed)
+  let indexed_failed: bool = match indexed_probe() {
+    Ok(_) => false,
+    Error(_) => true,
+  }
+  test.check(t, indexed_failed)
+  Ok(())
+}

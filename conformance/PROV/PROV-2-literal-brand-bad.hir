@@ -1,0 +1,7 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 6
+// "A brand names the binding its value came from." A sequence literal is a
+// new value, so the declared result brand cannot be satisfied by it.
+fn list(a: Arena) -> List[Bytes] of a {
+  [b"parsed"]
+}

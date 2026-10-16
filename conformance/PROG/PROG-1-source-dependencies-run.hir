@@ -1,0 +1,8 @@
+// rule: PROG-1
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, vendor.value() == std.identity(42))
+  test.check(t, helper.answer() == 42)
+  test.check(t, other.indirect() == 84)
+  Ok(())
+}

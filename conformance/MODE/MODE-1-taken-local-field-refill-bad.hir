@@ -1,0 +1,14 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 13
+// A taken Local argument bounds the content it brings. Refilling one field
+// leaves the other field's content, so the result must name that argument.
+type Holder {
+  value: String,
+  other: String,
+}
+
+fn refill(take dst: Holder in dst, x: String) -> Holder in x {
+  let mut owned = take dst
+  owned.value = copy x
+  take owned
+}

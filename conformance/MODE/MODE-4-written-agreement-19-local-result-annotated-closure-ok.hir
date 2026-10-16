@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: accept
+// Regression from annotation/relation; TIR/TypeMismatch/closure parameter.
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn pick(take x: Trace) -> () {
+  let f = fn(take y: Trace in x) -> Trace in y {
+    y
+  }
+  ()
+}

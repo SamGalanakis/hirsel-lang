@@ -1,0 +1,47 @@
+// rule: GEN-1
+// expect: run
+// stdout: ok
+fn outer(xs: Inline[u8, 3]) -> u64 {
+  let bias: u64 = 2
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n + bias
+  }
+  fn() {
+    fn() {
+      length(xs)
+    }()
+  }()
+}
+
+fn relay(xs: Inline[u8, 3]) -> u64 {
+  let bias: u64 = 2
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n + bias
+  }
+  fn forward[m: size](ys: Inline[u8, m]) -> u64 {
+    length(ys) + m
+  }
+  fn() {
+    forward(xs)
+  }()
+}
+
+fn ignore[E](take e: E) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outer(xs) == 5 && relay(xs) == 8 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

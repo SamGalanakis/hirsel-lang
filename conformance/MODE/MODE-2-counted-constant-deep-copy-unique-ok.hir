@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: accept
+const DATA: unique String = "saved"
+
+fn need(take text: unique String) {}
+
+fn example() {
+  need(unique DATA)
+  need(unique DATA)
+}

@@ -1,0 +1,12 @@
+[package]
+name = "hirsel-tir"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-span = { path = "../hirsel-span" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-types = { path = "../hirsel-types" }
+hirsel-diag = { path = "../hirsel-diag" }

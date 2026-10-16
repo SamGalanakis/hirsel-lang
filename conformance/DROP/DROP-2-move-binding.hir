@@ -1,0 +1,20 @@
+// rule: DROP-2
+// expect: run
+// stdout: after move
+// stdout: owned
+// "Taking a resource moves it; it does not drop it".
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let original = Trace(stdout: stdout, text: "owned\n")
+  let moved = take original
+  let _ = out.print(stdout, "after move\n")
+  Ok(())
+}

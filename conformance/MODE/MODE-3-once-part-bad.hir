@@ -1,0 +1,11 @@
+// rule: MODE-3
+// expect: reject MODE-3 at line 10
+// A part's declared multiplicity is a contract of the aggregate, and a once
+// function cannot fill a part that may be called many times.
+type Holder {
+  action: fn() -> () uses {},
+}
+
+fn example(take action: once fn() -> () uses {}) -> Holder {
+  Holder(action: take action)
+}

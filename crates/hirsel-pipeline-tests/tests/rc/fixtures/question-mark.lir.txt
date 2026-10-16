@@ -1,0 +1,397 @@
+fn half(n: u64) -> Result[u64, u64] { if n == 0u64 { Error(1u64) } else { Ok(n) } }
+fn twice(n: u64) -> Result[u64, u64] { let s = std@1/u64.to_string(n); let h = half(n)?; Ok(h + string.byte_len(s)) }
+fn main() -> u64 { match twice(2u64) { Ok(v) => v, Error(e) => e } }
+
+unit half params (v0)
+  slot s0: Parameter(0) scope 0 ty t0
+  slot s1: Temporary scope 1 ty t0
+  slot s2: Temporary scope 1 ty t0
+  slot s3: Temporary scope 1 ty t0
+  slot s4: Temporary scope 1 ty t1
+  slot s5: Temporary scope 1 ty t2
+  slot s6: Temporary scope 2 ty t0
+  slot s7: Temporary scope 2 ty t0
+  slot s8: Temporary scope 2 ty t2
+  slot s9: Temporary scope 1 ty t2
+  slot s10: Temporary scope 3 ty t0
+  slot s11: Temporary scope 3 ty t2
+  slot s12: Temporary scope 1 ty t2
+  slot s13: Temporary scope 0 ty t2
+  addr a0: Slot(SlotId(0))[]
+  addr a1: Slot(SlotId(1))[]
+  addr a2: Slot(SlotId(2))[]
+  addr a3: Slot(SlotId(3))[]
+  addr a4: Slot(SlotId(4))[]
+  addr a5: Slot(SlotId(10))[]
+  addr a6: Slot(SlotId(11))[]
+  addr a7: Slot(SlotId(12))[]
+  addr a8: Slot(SlotId(5))[]
+  addr a9: Slot(SlotId(6))[]
+  addr a10: Slot(SlotId(7))[]
+  addr a11: Slot(SlotId(8))[]
+  addr a12: Slot(SlotId(9))[]
+  addr a13: Slot(SlotId(13))[]
+  b0 Body:
+    prepare a0 fail -> b6
+    prepare a1 fail -> b6
+    prepare a2 fail -> b6
+    prepare a3 fail -> b6
+    prepare a4 fail -> b6
+    prepare a5 fail -> b6
+    prepare a6 fail -> b6
+    prepare a7 fail -> b6
+    prepare a8 fail -> b6
+    prepare a9 fail -> b6
+    prepare a10 fail -> b6
+    prepare a11 fail -> b6
+    prepare a12 fail -> b6
+    prepare a13 fail -> b6
+    jump b5
+  b1 Body:
+    StorageLive { slot: SlotId(1) }
+    v1 = read Bits a0 @v0
+    a1 := v1 as v2
+    StorageLive { slot: SlotId(2) }
+    v3 = const Integer(0)
+    a2 := v3 as v4
+    BindOrigin { source: AddressId(2), place: AddressId(2), kind: Fresh }
+    StorageLive { slot: SlotId(3) }
+    v5 = read Take a2 @v4
+    a3 := v5 as v6
+    StorageLive { slot: SlotId(4) }
+    v7 = read Take a1 @v2
+    v8 = read Take a3 @v6
+    v9 = Eq v7 v8 fail -> b7
+    a4 := v9 as v10
+    BindOrigin { source: AddressId(4), place: AddressId(4), kind: Fresh }
+    StorageLive { slot: SlotId(5) }
+    v11 = read Take a4 @v10
+    branch v11 b3 b2
+  b2 Body:
+    StorageLive { slot: SlotId(10) }
+    v12 = read Bits a0 @v0
+    a5 := v12 as v13
+    StorageLive { slot: SlotId(11) }
+    v14 = read Take a5 @v13
+    Construct { result: ValueId(15), construct: ConstructId(0), failure: FailureId(7) }
+    a6 := v15 as v16
+    BindOrigin { source: AddressId(6), place: AddressId(6), kind: Fresh }
+    StorageLive { slot: SlotId(12) }
+    v17 = read Take a6 @v16
+    a7 := v17 as v18
+    EndScope { scope: ScopeId(3) }
+    BindOrigin { source: AddressId(7), place: AddressId(7), kind: Fresh }
+    v19 = read Take a7 @v18
+    a8 := v19 as v20
+    jump b4(v20)
+  b3 Body:
+    StorageLive { slot: SlotId(6) }
+    v21 = const Integer(1)
+    a9 := v21 as v22
+    BindOrigin { source: AddressId(9), place: AddressId(9), kind: Fresh }
+    StorageLive { slot: SlotId(7) }
+    v23 = read Bits a9 @v22
+    a10 := v23 as v24
+    StorageLive { slot: SlotId(8) }
+    v25 = read Take a10 @v24
+    Construct { result: ValueId(26), construct: ConstructId(1), failure: FailureId(13) }
+    a11 := v26 as v27
+    BindOrigin { source: AddressId(11), place: AddressId(11), kind: Fresh }
+    StorageLive { slot: SlotId(9) }
+    v28 = read Take a11 @v27
+    a12 := v28 as v29
+    EndScope { scope: ScopeId(2) }
+    BindOrigin { source: AddressId(12), place: AddressId(12), kind: Fresh }
+    v30 = read Take a12 @v29
+    a8 := v30 as v31
+    jump b4(v31)
+  b4 Body(v32):
+    BindOrigin { source: AddressId(8), place: AddressId(8), kind: Fresh }
+    StorageLive { slot: SlotId(13) }
+    v33 = read Take a8 @v32
+    a13 := v33 as v34
+    EndScope { scope: ScopeId(1) }
+    BindOrigin { source: AddressId(13), place: AddressId(13), kind: Fresh }
+    v35 = read Take a13 @v34
+    return v35
+  b5 Body:
+    jump b1
+  b6 FailureCleanup:
+    propagate
+  b7 FailureCleanup:
+    propagate
+
+unit main params 
+  slot s0: Temporary scope 1 ty t0
+  slot s1: Temporary scope 1 ty t0
+  slot s2: Temporary scope 1 ty t1
+  slot s3: Temporary scope 1 ty t1
+  slot s4: Temporary scope 1 ty t0
+  slot s5: Local scope 2 ty t0
+  slot s6: Local scope 3 ty t0
+  slot s7: Temporary scope 0 ty t0
+  addr a0: Slot(SlotId(0))[]
+  addr a1: Slot(SlotId(1))[]
+  addr a2: Slot(SlotId(2))[]
+  addr a3: Slot(SlotId(3))[]
+  addr a4: Slot(SlotId(3))[VariantField { variant: 1, field: 0 }]
+  addr a5: Slot(SlotId(6))[]
+  addr a6: Slot(SlotId(4))[]
+  addr a7: Slot(SlotId(3))[VariantField { variant: 0, field: 0 }]
+  addr a8: Slot(SlotId(5))[]
+  addr a9: Slot(SlotId(7))[]
+  b0 Body:
+    prepare a0 fail -> b7
+    prepare a1 fail -> b7
+    prepare a2 fail -> b7
+    prepare a3 fail -> b7
+    prepare a5 fail -> b7
+    prepare a6 fail -> b7
+    prepare a8 fail -> b7
+    prepare a9 fail -> b7
+    jump b6
+  b1 Body:
+    StorageLive { slot: SlotId(0) }
+    v0 = const Integer(2)
+    a0 := v0 as v1
+    BindOrigin { source: AddressId(0), place: AddressId(0), kind: Fresh }
+    StorageLive { slot: SlotId(1) }
+    v2 = read Bits a0 @v1
+    a1 := v2 as v3
+    StorageLive { slot: SlotId(2) }
+    v4 = read Bits a1 @v3
+    v5 = call twice(p0=Borrow v4) -> b9 fail -> b8
+  b2 Body:
+    BindOrigin { source: AddressId(2), place: AddressId(2), kind: Fresh }
+    StorageLive { slot: SlotId(3) }
+    v7 = read Take a2 @v6
+    a3 := v7 as v8
+    StorageLive { slot: SlotId(4) }
+    v9 = read Bits a3 @v8
+    switch v9 [0 => b11, 1 => b10] else b12
+  b3 Body:
+    prepare a4 fail MEM-13 -> b8
+    BindFields { source: AddressId(3), fields: 0..+1 }
+    StorageLive { slot: SlotId(6) }
+    v10 = read Take a4 @v8
+    a5 := v10 as v11
+    BindOrigin { source: AddressId(5), place: AddressId(5), kind: Alias }
+    v12 = read Bits a5 @v11
+    a6 := v12 as v13
+    EndScope { scope: ScopeId(3) }
+    jump b5(v1, v3, v8, v13)
+  b4 Body:
+    prepare a7 fail MEM-13 -> b8
+    BindFields { source: AddressId(3), fields: 1..+1 }
+    StorageLive { slot: SlotId(5) }
+    v14 = read Take a7 @v8
+    a8 := v14 as v15
+    BindOrigin { source: AddressId(8), place: AddressId(8), kind: Alias }
+    v16 = read Bits a8 @v15
+    a6 := v16 as v17
+    EndScope { scope: ScopeId(2) }
+    jump b5(v1, v3, v8, v17)
+  b5 Body(v18, v19, v20, v21):
+    BindOrigin { source: AddressId(6), place: AddressId(6), kind: Fresh }
+    StorageLive { slot: SlotId(7) }
+    v22 = read Take a6 @v21
+    a9 := v22 as v23
+    EndScope { scope: ScopeId(1) }
+    BindOrigin { source: AddressId(9), place: AddressId(9), kind: Fresh }
+    v24 = read Take a9 @v23
+    return v24
+  b6 Body:
+    jump b1
+  b7 FailureCleanup:
+    propagate
+  b8 FailureCleanup:
+    propagate
+  b9 Body:
+    a2 := v5 as v6
+    jump b2
+  b10 Body:
+    jump b3
+  b11 Body:
+    jump b4
+  b12 Body:
+    unreachable
+
+unit twice params (v0)
+  slot s0: Parameter(0) scope 0 ty t0
+  slot s1: Temporary scope 1 ty t0
+  slot s2: Temporary scope 1 ty t1
+  slot s3: Temporary scope 1 ty t1
+  slot s4: Local scope 1 ty t1
+  slot s5: Temporary scope 1 ty t0
+  slot s6: Temporary scope 1 ty t2
+  slot s7: Temporary scope 1 ty t2
+  slot s8: Temporary scope 1 ty t2
+  slot s9: Temporary scope 1 ty t0
+  slot s10: Temporary scope 1 ty t0
+  slot s11: Local scope 1 ty t0
+  slot s12: Temporary scope 1 ty t0
+  slot s13: Temporary scope 1 ty t0
+  slot s14: Temporary scope 1 ty t0
+  slot s15: Temporary scope 1 ty t0
+  slot s16: Temporary scope 1 ty t0
+  slot s17: Temporary scope 1 ty t2
+  slot s18: Temporary scope 0 ty t2
+  addr a0: Slot(SlotId(7))[]
+  addr a1: Slot(SlotId(4))[]
+  addr a2: Slot(SlotId(0))[]
+  addr a3: Slot(SlotId(1))[]
+  addr a4: Slot(SlotId(2))[]
+  addr a5: Slot(SlotId(3))[]
+  addr a6: Slot(SlotId(5))[]
+  addr a7: Slot(SlotId(6))[]
+  addr a8: Slot(SlotId(7))[VariantField { variant: 1, field: 0 }]
+  addr a9: Slot(SlotId(8))[]
+  addr a10: Slot(SlotId(7))[VariantField { variant: 0, field: 0 }]
+  addr a11: Slot(SlotId(9))[]
+  addr a12: Slot(SlotId(10))[]
+  addr a13: Slot(SlotId(11))[]
+  addr a14: Slot(SlotId(12))[]
+  addr a15: Slot(SlotId(13))[]
+  addr a16: Slot(SlotId(14))[]
+  addr a17: Slot(SlotId(15))[]
+  addr a18: Slot(SlotId(16))[]
+  addr a19: Slot(SlotId(17))[]
+  addr a20: Slot(SlotId(18))[]
+  b0 Body:
+    prepare a0 fail -> b1
+    prepare a1 fail -> b1
+    prepare a2 fail -> b1
+    prepare a3 fail -> b1
+    prepare a4 fail -> b1
+    prepare a5 fail -> b1
+    prepare a6 fail -> b1
+    prepare a7 fail -> b1
+    prepare a9 fail -> b1
+    prepare a11 fail -> b1
+    prepare a12 fail -> b1
+    prepare a13 fail -> b1
+    prepare a14 fail -> b1
+    prepare a15 fail -> b1
+    prepare a16 fail -> b1
+    prepare a17 fail -> b1
+    prepare a18 fail -> b1
+    prepare a19 fail -> b1
+    prepare a20 fail -> b1
+    jump b9
+  b1 FailureCleanup:
+    propagate
+  b2 Body:
+    StorageLive { slot: SlotId(1) }
+    v1 = read Bits a2 @v0
+    a3 := v1 as v2
+    StorageLive { slot: SlotId(2) }
+    v3 = read Bits a3 @v2
+    v4 = call to_string(p0=Borrow v3) -> b11 fail -> b10
+  b3 Body:
+    BindOrigin { source: AddressId(4), place: AddressId(4), kind: Fresh }
+    StorageLive { slot: SlotId(3) }
+    v6 = read Take a4 @v5
+    a5 := v6 as v7
+    StorageLive { slot: SlotId(4) }
+    v8 = read Take a5 @v7
+    a1 := v8 as v9
+    BindOrigin { source: AddressId(1), place: AddressId(1), kind: Alias }
+    StorageDead { slot: SlotId(1), if_live: false }
+    StorageLive { slot: SlotId(5) }
+    v10 = read Bits a2 @v0
+    a6 := v10 as v11
+    StorageLive { slot: SlotId(6) }
+    v12 = read Bits a6 @v11
+    v13 = call half(p0=Borrow v12) -> b13 fail -> b12
+  b4 Body:
+    BindOrigin { source: AddressId(7), place: AddressId(7), kind: Fresh }
+    StorageLive { slot: SlotId(7) }
+    v15 = read Take a7 @v14
+    a0 := v15 as v16
+    BeginLoan { loan: LoanId(0), address: AddressId(0), mutable: false, if_inactive: false }
+    v17 = read Borrow a0 @v16
+    switch v17 [0 => b7, 1 => b6] else b5
+  b5 Body:
+    unreachable
+  b6 Body:
+    EndLoan { loan: LoanId(0), if_active: false }
+    StorageLive { slot: SlotId(8) }
+    prepare a8 fail MEM-13 -> b12
+    v18 = read Take a8 @v16
+    Construct { result: ValueId(19), construct: ConstructId(0), failure: FailureId(12) }
+    a9 := v19 as v20
+    v21 = read Take a9 @v20
+    jump b14
+  b7 Body:
+    EndLoan { loan: LoanId(0), if_active: false }
+    StorageLive { slot: SlotId(9) }
+    prepare a10 fail MEM-13 -> b12
+    v22 = read Take a10 @v16
+    a11 := v22 as v23
+    BindOrigin { source: AddressId(11), place: AddressId(11), kind: Fresh }
+    StorageLive { slot: SlotId(10) }
+    v24 = read Take a11 @v23
+    a12 := v24 as v25
+    StorageLive { slot: SlotId(11) }
+    v26 = read Take a12 @v25
+    a13 := v26 as v27
+    BindOrigin { source: AddressId(13), place: AddressId(13), kind: Alias }
+    StorageDead { slot: SlotId(5), if_live: false }
+    StorageDead { slot: SlotId(7), if_live: false }
+    StorageLive { slot: SlotId(12) }
+    v28 = read Bits a13 @v27
+    a14 := v28 as v29
+    BeginLoan { loan: LoanId(1), address: AddressId(1), mutable: false, if_inactive: false }
+    StorageLive { slot: SlotId(13) }
+    v30 = read Borrow a1 @v9
+    SeqLen { result: ValueId(31), value: ValueId(30) }
+    a15 := v31 as v32
+    jump b8
+  b8 Body:
+    EndLoan { loan: LoanId(1), if_active: false }
+    BindOrigin { source: AddressId(15), place: AddressId(15), kind: Fresh }
+    StorageLive { slot: SlotId(14) }
+    v33 = read Take a15 @v32
+    a16 := v33 as v34
+    StorageLive { slot: SlotId(15) }
+    v35 = read Take a14 @v29
+    v36 = read Take a16 @v34
+    v37 = Add v35 v36 fail SEM-1 -> b12
+    a17 := v37 as v38
+    BindOrigin { source: AddressId(17), place: AddressId(17), kind: Fresh }
+    StorageLive { slot: SlotId(16) }
+    v39 = read Bits a17 @v38
+    a18 := v39 as v40
+    StorageLive { slot: SlotId(17) }
+    v41 = read Take a18 @v40
+    Construct { result: ValueId(42), construct: ConstructId(1), failure: FailureId(25) }
+    a19 := v42 as v43
+    BindOrigin { source: AddressId(19), place: AddressId(19), kind: Fresh }
+    StorageLive { slot: SlotId(18) }
+    v44 = read Take a19 @v43
+    a20 := v44 as v45
+    jump b15
+  b9 Body:
+    jump b2
+  b10 FailureCleanup:
+    propagate
+  b11 Body:
+    a4 := v4 as v5
+    jump b3
+  b12 FailureCleanup:
+    drop a1 fail -> b10
+    jump b10
+  b13 Body:
+    a7 := v13 as v14
+    jump b4
+  b14 Cleanup:
+    drop a1 fail -> b10
+    return v21
+  b15 Cleanup:
+    drop a1 fail -> b10
+    jump b16
+  b16 Body:
+    EndScope { scope: ScopeId(1) }
+    BindOrigin { source: AddressId(20), place: AddressId(20), kind: Fresh }
+    v46 = read Take a20 @v45
+    return v46

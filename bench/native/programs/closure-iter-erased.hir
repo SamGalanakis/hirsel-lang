@@ -1,0 +1,14 @@
+type Stage { call: fn(u64, u64) -> u64 uses {}, environment: u64 }
+fn stage_add(value: u64, environment: u64) -> u64 { value + environment }
+fn stage_multiply(value: u64, environment: u64) -> u64 { value * environment }
+fn workload(data: Bytes) -> Bytes {
+  let mut position: u64 = 0
+  let n = decimal(data, mut position)
+  let stages: List[Stage] = [Stage(call: stage_add, environment: 3u64), Stage(call: stage_multiply, environment: 2u64)]
+  let mut total: u64 = 0
+  for i in 0u64..n {
+    let value = stages[0u64].call(i, stages[0u64].environment)
+    if value % 2u64 == 0u64 { total += stages[1u64].call(value, stages[1u64].environment) }
+  }
+  number(total)
+}

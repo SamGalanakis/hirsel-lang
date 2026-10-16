@@ -1,0 +1,31 @@
+// rule: SEM-5
+// expect: run
+// stdout: ok
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let by = u32.order
+  let mut m: SortedMap[u32, u8] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 2, 20)
+  sorted_map.insert(by, mut m, 1, 10)
+  let mut initial_order: u32 = 0
+  for (k, v) in m {
+    initial_order = initial_order * 10 + k
+  }
+  for (k, v) in mut m {
+    v += 1
+  }
+  let mut final_order: u32 = 0
+  let mut sum: u8 = 0
+  for (k, v) in take m {
+    final_order = final_order * 10 + k
+    sum += v
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if initial_order == 12 && final_order == 12 && sum == 32 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

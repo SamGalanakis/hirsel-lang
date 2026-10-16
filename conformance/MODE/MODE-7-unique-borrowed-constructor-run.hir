@@ -1,0 +1,18 @@
+// rule: MODE-7
+// expect: run
+// stdout: x
+type Wrapped {
+  text: String,
+}
+
+fn wrap(text: String) -> Wrapped {
+  Wrapped(text: unique text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s: String = "x"
+  let w = wrap(s)
+  let _ = out.print(io.stdout(rt)?, w.text)
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

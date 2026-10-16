@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 6
+fn receive(parents: Array[(String, String)]) {
+  let names: Array[(String, String)] in parents = copy parents
+  for (input, expected) in names {
+    let held: String in heap = copy input
+    let _ = held == expected
+  }
+}

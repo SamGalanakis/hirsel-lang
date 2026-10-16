@@ -1,0 +1,22 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 12
+// A written function type in a binding annotation is preserved exactly at
+// every depth (#58). The tuple part promises `@noalloc`, and the part the
+// called closure returns, whose literal may allocate, does not.
+fn seven() -> u64 {
+  let l: List[u64] = [7]
+  l[0]
+}
+
+fn bound() -> u64 {
+  let pair: (@noalloc fn() -> u64 uses {}, u64) = fn() {
+    (
+      fn() {
+        seven()
+      },
+      1u64
+    )
+  }()
+  let (f, n) = pair
+  f() + n
+}

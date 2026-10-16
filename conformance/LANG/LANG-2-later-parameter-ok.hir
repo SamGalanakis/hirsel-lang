@@ -1,0 +1,7 @@
+// rule: LANG-2
+// expect: accept
+// Shows "Parameters are in scope only after their declaration."
+@noalloc
+fn example(d: Dir, value: File of d) -> () {
+  ()
+}

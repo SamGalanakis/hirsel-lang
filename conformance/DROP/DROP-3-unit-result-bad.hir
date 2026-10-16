@@ -1,0 +1,8 @@
+// rule: DROP-3
+// expect: reject DROP-3 at line 6
+resource type Token {
+  n: u32,
+}
+drop(x) {
+  x.n
+}

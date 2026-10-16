@@ -1,0 +1,17 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 16
+// "Use-after-move is a compile error" even when the callee returns Error.
+type Problem = Stop()
+
+fn consume(take x: Bytes) -> Result[(), Problem] {
+  Error(Stop)
+}
+
+fn inspect(x: Bytes) -> () {
+  ()
+}
+
+fn example(take x: Bytes) -> () {
+  let _ = consume(take x)
+  inspect(x)
+}

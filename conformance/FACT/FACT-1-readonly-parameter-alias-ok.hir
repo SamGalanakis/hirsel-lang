@@ -1,0 +1,13 @@
+// rule: FACT-1
+// expect: accept
+fn eat(take xs: List[u8]) -> bool {
+  true
+}
+
+fn probe(take xs: List[u8]) -> u64
+  requires {
+    let owned = unique xs
+    eat(take owned)
+  } {
+  list.len(xs)
+}

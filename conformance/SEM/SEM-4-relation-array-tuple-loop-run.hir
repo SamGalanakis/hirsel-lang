@@ -1,0 +1,10 @@
+// rule: SEM-4
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let parents: Array[(String, String)] = [("a", "a")]
+  let names: Array[(String, String)] in parents = [("a", "a"), ("b", "b")]
+  for (input, expected) in names {
+    failure.check(input == expected, TextInvariant())
+  }
+  Ok(())
+}

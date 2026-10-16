@@ -1,0 +1,37 @@
+// rule: CONC-2
+// expect: run
+// stdout: child
+// stdout: after
+// "detaching discards the result but never lets the child outlive its scope".
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let stdout = io.stdout(rt) ? Grant
+  task.scope(
+    io.tasks(rt) ? Grant,
+    fn(s: Scope) -> Result[(), CliError] {
+      let h = task.async(
+        s,
+        fn() -> Result[(), CliError] {
+          out.print(stdout, "child\n") ? Output
+          Ok(())
+        }
+      )
+      task.detach(s, take h)
+      Ok(())
+    }
+  ) ? cli_error
+  out.print(stdout, "after\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)
+
+@noalloc
+fn cli_error(error: CliError) -> LaunchError uses {} {
+  match error {
+    Usage(value) => Usage(value),
+    Files(value) => Files(value),
+    Output(value) => Output(value),
+  }
+}

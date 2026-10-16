@@ -1,0 +1,13 @@
+// rule: FACT-1
+// expect: fail SEM-1 at line 6
+// "before(e) evaluates e on entry"; evaluation failures cite their own rule.
+@noalloc
+fn id(x: u32) -> u32
+  ensures result == before(x / 0) {
+  x
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let _ = id(1)
+  Ok(())
+}

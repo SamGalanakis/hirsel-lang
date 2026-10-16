@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Fixed fixtures and independent byte oracles. No evaluation-time randomness."""
+import json
+import struct
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+MASK = (1 << 64) - 1
+SEED = 0x4D3142
+
+def digest(b):
+    h = 14695981039346656037
+    for x in b:
+        h = ((h ^ x) * 1099511628211) & MASK
+    return h
+
+def expr(depth, seed):
+    if depth == 0:
+        return 'x' if seed % 7 == 0 else str(seed % 9 + 1)
+    return '(' + expr(depth-1, seed*2+1) + ('+' if depth%2 == 0 else '*') + expr(depth-1, seed*2+2) + ')'
+
+def num(v):
+    return (str(v) + '\n').encode()
+
+def oracle(case, raw):
+    if case == 'expr-compiler':
+        return num(sum(eval(e, {'__builtins__': {}}, {'x': 3}) for e in raw.decode().splitlines()))
+    if case == 'json-roundtrip':
+        # Canonical fixture spelling, with escaped UTF-16 surrogate pairs and
+        # all JSON escapes. Validate semantic roundtrip independently.
+        v = json.loads(raw)
+        assert json.dumps(v, ensure_ascii=True, separators=(',', ':')).encode() == raw
+        return raw
+    if case == 'wordfreq':
+        words = raw.decode().split()
+        counts = {}
+        for w in words:
+            counts[w] = counts.get(w, 0) + 1
+        return ''.join(f'{w}\t{n}\n' for w, n in counts.items()).encode()
+    vals = list(map(int, raw.replace(b',', b' ').split()))
+    n = vals[0]
+    if case == 'binarytrees':
+        d = n
+        total = (1 << (d+2))-1 + (1 << (d+1))-1
+        for k in range(4, d+1, 2):
+            total += (1 << (d-k)) * ((1 << (k+1))-1)
+        return num(total)
+    if case == 'batch-validation':
+        total = 0
+        for i in range(n):
+            code, amount = i%31, (i*17+SEED*13)%1009
+            total += amount*(code+1) if code < 25 and amount <= 900 else 10000+code
+        return num(total)
+    if case == 'records-messages/scalar':
+        rows = [[i, i%7, i%13, 1] for i in range(n)]
+        for _ in range(16):
+            for row in rows:
+                row[0] += row[3]; row[1] += 2; row[2] += row[0]%11
+        return num(sum(sum(r) for r in rows))
+    if case == 'records-messages/flat':
+        total = 0
+        for i in range(n):
+            b = bytes(97+(i+j*7)%26 for j in range(24+i%104))
+            total = (total + (i ^ (i%7) ^ digest(b))) & MASK
+            if i%16 == 0:
+                total = (total + ((i ^ 0x123) ^ (i%7) ^ digest(b))) & MASK
+        return num(total)
+    if case.startswith('persistent-list-map/'):
+        # Map (+1), reverse, update head (+7); retained shared root unchanged.
+        result = num(n+7)+b''.join(num(i) for i in range(n-1,0,-1))
+        if case.endswith('shared'):
+            result += b'---\n'+b''.join(num(i) for i in range(n))
+        return result
+    if case.startswith('saxpy-checked/'):
+        if case.endswith('integer'):
+            total = 0
+            # First checked u32 overflow in source traversal order, encoded with
+            # its index. Later values must not be evaluated after this failure.
+            for i in range(n):
+                x = 0xFFFFFFFF if i == n//2 else i%1000
+                v = x*3
+                if v > 0xFFFFFFFF or v+i%97 > 0xFFFFFFFF:
+                    return num(total + 1000000000+i)
+                total += v+i%97
+            return num(total)
+        total = 0
+        for i in range(n):
+            # Binary fractions eliminate formatting ambiguity; still run real
+            # f32/f64 multiply followed by add, with contraction disabled.
+            v = 1.5*(i%127*0.25) + i%31*0.125
+            bits = struct.unpack('<I' if case.endswith('f32') else '<Q', struct.pack('<f' if case.endswith('f32') else '<d', v))[0]
+            total = (total+bits)&MASK
+        return num(total)
+    if case.startswith('closure-iter/'):
+        return num(sum((i+3)*2 for i in range(n) if (i+3)%2 == 0))
+    if case.startswith('resource-failure/'):
+        total = 0
+        modulus = 2 if case.endswith('heavy') else 17
+        # Open input, open transaction, read/write; commit fails deterministically.
+        # Transaction finalizes before input. Encode operation/cleanup order.
+        for i in range(n):
+            events = [1,2,3,4,6 if i%modulus == 0 else 5,7,8]
+            h = i
+            for event in events:
+                h = (h*131+event)&MASK
+            destination = bytes(16) if i%modulus==0 else bytes(i%127+j+1 for j in range(16))
+            total = (total+(h^digest(destination)))&MASK
+        return num(total)
+    if case == 'slots-churn':
+        # Narrow 8-bit generation model, max generation retires before wrap.
+        total = 0
+        for i in range(n):
+            h = i
+            for index, generation, value in [(0,1,10),(1,1,20),(2+i//255,1+i%255,i+1)]:
+                h = (((h*131+index)*131+generation)*131+value)&MASK
+            total = (total+h+1+(1 if i%255==254 else 0))&MASK
+        return num(total)
+    raise ValueError(case)
+
+CASES = ['binarytrees','expr-compiler','json-roundtrip','wordfreq',
+         'records-messages/scalar','records-messages/flat','batch-validation',
+         'persistent-list-map/unique','persistent-list-map/shared',
+         'saxpy-checked/f32','saxpy-checked/f64','saxpy-checked/integer',
+         'slots-churn','closure-iter/scoped','closure-iter/erased',
+         'resource-failure/throughput','resource-failure/heavy']
+
+def fixtures():
+    result = []
+    for case in CASES:
+        for size, n in [('small',64),('medium',512),('large',4096)]:
+            name = case.replace('/', '-')+'-'+size
+            if case == 'binarytrees':
+                raw = num({'small':8,'medium':12,'large':16}[size])
+            elif case == 'expr-compiler':
+                raw = ('\n'.join(expr(4, SEED+i) for i in range(n))+'\n').encode()
+            elif case == 'json-roundtrip':
+                raw = json.dumps([{'id':i,'name':f'user{i%101}\\\"\n\r\t\b\f/é😀','values':[i%97,(i*3)%97,None,True,False,{'nested':[-7,1.25]}]} for i in range(n)], ensure_ascii=True, separators=(',', ':')).encode()
+            elif case == 'wordfreq':
+                vocab = ['agent','hirsel','école','東京','café','naïve','λ','tree']
+                raw = (' '.join(vocab[(i*17+i//13)%len(vocab)] for i in range(n))+'\n').encode()
+            elif case == 'batch-validation':
+                raw = num(n)+b''.join(f'{i%31},{(i*17+SEED*13)%1009}\n'.encode() for i in range(n))
+            else:
+                raw = num(n)
+            path = 'inputs/'+name+'.input'
+            expected = oracle(case, raw)
+            (ROOT/path).write_bytes(raw)
+            (ROOT/('inputs/'+name+'.expected')).write_bytes(expected)
+            result.append({'id':name,'program':case.split('/')[0],'case':case,'size':size,'input':path,'oracle':'inputs/'+name+'.expected','seed':SEED,'input_sha256':__import__('hashlib').sha256(raw).hexdigest(),'oracle_sha256':__import__('hashlib').sha256(expected).hexdigest(),'checksum':f'{digest(expected):016x}'})
+    return result
+
+if __name__ == '__main__':
+    manifest = json.loads((ROOT/'manifest.json').read_text()) if (ROOT/'manifest.json').exists() else {}
+    manifest['cases'] = fixtures()
+    (ROOT/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')

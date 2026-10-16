@@ -1,0 +1,6 @@
+// rule: PROV-3
+// expect: reject PROV-1 at line 5
+// "StrPos of s" requires the same string at a slicing use.
+fn example(a: String, b: String, p: StrPos of a) -> String in {a, b} {
+  string.slice(b, p, p)
+}

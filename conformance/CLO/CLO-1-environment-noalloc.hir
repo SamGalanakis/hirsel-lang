@@ -1,0 +1,16 @@
+// rule: CLO-1
+// expect: accept
+// "Its environment lives in the caller’s region and never allocates."
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+@noalloc
+fn example(n: u64) -> u64 {
+  invoke(
+    fn() {
+      n
+    }
+  )
+}

@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "PROG-1-source-dependencies-run.hir",
+      "module": []
+    },
+    {
+      "path": "../../packages/fixtures/helper.hir",
+      "module": [
+        "helper"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/fixtures/probe@1/hirsel.json",
+      "package": {
+        "name": "probe",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "vendor",
+          "module": [
+            "api"
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "std",
+          "module": [
+            "probe"
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": "../../packages/fixtures/wrapper@1/hirsel.json",
+      "package": {
+        "name": "wrapper",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "other",
+          "module": []
+        }
+      ]
+    }
+  ]
+}

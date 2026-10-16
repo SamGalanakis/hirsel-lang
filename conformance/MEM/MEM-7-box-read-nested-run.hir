@@ -1,0 +1,44 @@
+// rule: MEM-7
+// expect: run
+// stdout: nested
+type Cell {
+  text: String,
+}
+
+fn output_error[E](take e: E) -> () {}
+
+fn inspect(x: box box Cell) -> bool {
+  (x).text == "old"
+}
+
+fn inspect_pair(x: box (box bool, box bool)) -> bool {
+  match x {
+    (true, false) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a = box box Cell(text: "old")
+  let old = copy a
+  let shared = a.text
+  (a).text = "new"
+  failure.check(inspect(old) && shared == "old" && (a).text == "new", TextInvariant())
+  failure.check(inspect_pair(box (box true, box false)), TextInvariant())
+  let (first, second) = box (1u64, 2u64)
+  failure.check(first + second == 3, TextInvariant())
+  let flag: box bool = box true
+  let yes: bool = match flag {
+    true if true => true,
+    true => false,
+    false => false,
+  }
+  failure.check(yes, TextInvariant())
+  out.print(io.stdout(rt) ? grant_error, "nested\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 11
+// Each element a consuming loop binds is as local as the collection it came
+// from. An element of a local collection cannot be kept in global storage.
+type Keep {
+  last: String,
+}
+
+fn keep_last(take xs: List[String] in xs, mut keep: Keep) -> () {
+  for x in take xs {
+    keep.last = x
+  }
+}

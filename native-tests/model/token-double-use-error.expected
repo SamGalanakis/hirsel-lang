@@ -1,0 +1,11 @@
+rc-trace v1 max 16
+error at step 5 (line 8): T14 dispose: token t1 does not exist
+heap
+  @0 free gen 1
+credits
+borrows
+locals
+tokens
+work
+regions
+events

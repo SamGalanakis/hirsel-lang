@@ -1,0 +1,13 @@
+// rule: CONC-5
+// expect: accept
+const DATA: Bytes = b"payload"
+
+fn example(tasks: Tasks, m: Mutex[u32]) -> () {
+  let _ = mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique u32) uses {} {
+      unique DATA
+    }
+  )
+}

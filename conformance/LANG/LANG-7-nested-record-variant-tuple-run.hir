@@ -1,0 +1,32 @@
+// rule: LANG-7
+// expect: run
+// stdout: ok
+type Wrap {
+  pair: (Option[(bool, u8)], bool),
+}
+
+fn classify(w: Wrap) -> u8 {
+  match w {
+    Wrap(pair: (Some((true, n)), _)) => n,
+    Wrap(pair: (Some((false, _)), true)) => 2,
+    Wrap(pair: (Some((false, _)), false)) => 3,
+    Wrap(pair: (None, _)) => 4,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let ok = classify(Wrap(pair: (Some((true, 1)), false))) == 1 && classify(
+    Wrap(pair: (Some((false, 9)), true))
+  ) == 2 && classify(Wrap(pair: (Some((false, 9)), false))) == 3 && classify(
+    Wrap(pair: (None, false))
+  ) == 4
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

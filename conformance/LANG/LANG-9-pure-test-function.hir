@@ -1,0 +1,7 @@
+// rule: LANG-9
+// expect: accept
+// Shows "Tests are ordinary functions, pure or taking the Test capability"
+@noalloc
+pub fn test_identity(x: u32) -> bool {
+  x == x
+}

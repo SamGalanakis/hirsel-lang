@@ -1,0 +1,28 @@
+fn require(value: bool) {
+  let _ = 1u64 / if value {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let z = path.of("z")
+  let a = path.of("a")
+  require(path.of("a") == a)
+  require(path.of("b") != a)
+  let mut left: Set[Path] = set.empty()
+  set.insert(mut left, z)
+  set.insert(mut left, a)
+  let mut right: Set[Path] = set.empty()
+  set.insert(mut right, a)
+  set.insert(mut right, z)
+  require(left == right)
+  let mut lower: Set[Path] = set.empty()
+  set.insert(mut lower, a)
+  let mut upper: Set[Path] = set.empty()
+  set.insert(mut upper, z)
+  require(lower != upper)
+  require(set.contains(left, a))
+  Ok(())
+}

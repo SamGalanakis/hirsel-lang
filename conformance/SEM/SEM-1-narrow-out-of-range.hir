@@ -1,0 +1,8 @@
+// rule: SEM-1
+// expect: fail SEM-1 at line 6
+// "narrow (fails)".
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let x: u16 = 256
+  let value: u8 = int.narrow(x)
+  Ok(())
+}

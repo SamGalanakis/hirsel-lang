@@ -1,0 +1,36 @@
+// rule: PROV-1
+// expect: accept
+type Rec {
+  n: u64,
+  name: String,
+}
+
+fn make(r: Rec) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: Rec, p: Option[u8 of r]) -> () {
+  ()
+}
+
+fn touch(mut r: Rec) -> () {
+  r.n = 2u64
+}
+
+fn bump(mut n: u64) -> () {
+  n = 3u64
+}
+
+fn fresh() -> Rec {
+  Rec(n: 1u64, name: "f")
+}
+
+fn probe(take r0: Rec) -> () {
+  let mut r = r0
+  let p = make(r)
+  for i in 0u8..2u8 {
+    inspect(r, p)
+    bump(mut r.n)
+    break
+  }
+}

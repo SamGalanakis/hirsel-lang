@@ -1,0 +1,9 @@
+// rule: CLO-4
+// expect: accept
+// "Never ... let mut names."
+fn example() -> fn() -> u64 uses {} {
+  let n: u64 = 1
+  fn() {
+    n
+  }
+}

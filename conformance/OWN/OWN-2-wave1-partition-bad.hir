@@ -1,0 +1,15 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 14
+fn predicate(x: u64) -> bool uses {} {
+  true
+}
+
+fn keep(take s: String, n: u64) -> String uses {} {
+  take s
+}
+
+fn example() -> () {
+  let xs: List[u64] = [1]
+  std@1/list.partition(take xs, predicate)
+  list.len(xs);
+}

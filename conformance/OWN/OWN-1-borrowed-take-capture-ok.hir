@@ -1,0 +1,27 @@
+// rule: OWN-1
+// expect: accept
+// An owned parameter may be taken into a task closure, directly or through
+// the owning callback of a task scope.
+fn direct(tasks: Tasks, take x: unique Bytes) -> () {
+  let _ = task.isolate(
+    tasks,
+    fn() {
+      let _ = take x
+    }
+  )
+}
+
+fn scoped(tasks: Tasks, take r: Receiver[u64]) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          let _ = take r
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}

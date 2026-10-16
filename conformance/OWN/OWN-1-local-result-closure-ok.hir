@@ -1,0 +1,16 @@
+// rule: OWN-1
+// expect: accept
+resource type Trace {
+  n: u8,
+}
+drop(x) {
+  ()
+}
+
+fn pick(x: Trace) -> () {
+  let f = fn() {
+    x.n
+  }
+  let v = f()
+  ()
+}

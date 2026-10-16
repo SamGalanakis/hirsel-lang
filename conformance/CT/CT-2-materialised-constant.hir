@@ -1,0 +1,15 @@
+// rule: CT-2
+// expect: run
+// What comptime produces "becomes an ordinary, readable body or constant".
+pub const VALUE: u32 = comptime (2 + 3)
+
+@noalloc
+fn checked(x: u32) -> ()
+  requires x == 5 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  checked(VALUE)
+  Ok(())
+}

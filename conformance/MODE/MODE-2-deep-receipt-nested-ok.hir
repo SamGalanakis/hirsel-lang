@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: accept
+type Mid {
+  leaf: unique Bytes,
+}
+
+type Top {
+  mid: Mid,
+}
+
+fn need(take x: unique Bytes) {}
+
+fn probe(take t: unique Top) {
+  let Top(mid: Mid(leaf: leaf)) = take t
+  need(take leaf)
+}
+
+fn split(take t: unique Top) {
+  let Top(mid: mid) = take t
+  let Mid(leaf: leaf) = take mid
+  need(take leaf)
+}

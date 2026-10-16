@@ -1,0 +1,26 @@
+// rule: OWN-6
+// expect: accept
+// "Except the root of a Shared[T] ... counted atomically."
+fn example(tasks: Tasks, take value: Shared[Bytes]) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let a = task.async(
+        s,
+        fn() {
+          let root = copy value
+          let _ = root
+        }
+      )
+      let b = task.async(
+        s,
+        fn() {
+          let root = copy value
+          let _ = root
+        }
+      )
+      task.await(s, take a)
+      task.await(s, take b)
+    }
+  )
+}

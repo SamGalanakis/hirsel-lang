@@ -1,0 +1,20 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 12
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut m: Map[u8, Trace] = map.empty()
+  for (k, v) in mut m {
+    v = Trace(
+      stdout: fn() {
+        k
+      }(),
+      text: "new\n"
+    )
+  }
+  Ok(())
+}

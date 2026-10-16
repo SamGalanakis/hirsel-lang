@@ -1,0 +1,12 @@
+rc-trace v1
+max 16
+# Regions close innermost first; an outer region's block may be allocated after an inner
+# region opened.
+region-open g1
+region-open g2
+region-alloc g1 l1 0
+region-alloc g2 l2 0
+local-drop l2
+region-close g2
+local-drop l1
+region-close g1

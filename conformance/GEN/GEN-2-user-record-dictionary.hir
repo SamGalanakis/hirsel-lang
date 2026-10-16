@@ -1,0 +1,14 @@
+// rule: GEN-2
+// expect: accept
+// Shows "Order[T], Hasher[T], Eq[T], user records of functions."
+type Dictionary[T] {
+  equals: fn(T, T) -> bool uses {},
+}
+
+fn example() -> Dictionary[u32] {
+  Dictionary(
+    equals: fn(a: u32, b: u32) -> bool {
+      a == b
+    }
+  )
+}

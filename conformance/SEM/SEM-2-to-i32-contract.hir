@@ -1,0 +1,15 @@
+// rule: SEM-2
+// expect: run
+@noalloc
+fn check(n: bool) -> ()
+  requires n {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let x: f64 = -3.9
+  check(float.to_i32(x) == Ok(-3))
+  let big: f64 = 2147483648.0
+  check(float.to_i32(big) == Error(OutOfRange))
+  Ok(())
+}

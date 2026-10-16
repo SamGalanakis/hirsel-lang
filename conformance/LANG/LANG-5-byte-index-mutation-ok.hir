@@ -1,0 +1,6 @@
+// rule: LANG-5
+// expect: accept
+fn edit(mut bytes: Bytes) -> () {
+  let byte = bytes[0]
+  bytes = b"x"
+}

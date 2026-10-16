@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+fn need(take x: unique String) {}
+
+fn example() {
+  let a: String = "shared"
+  let b = copy a
+  let f = fn() {
+    need(unique a)
+  }
+  f()
+}

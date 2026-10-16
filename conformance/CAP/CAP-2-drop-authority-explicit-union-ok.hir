@@ -1,0 +1,16 @@
+// rule: CAP-2
+// expect: accept
+resource type Holder uses {} {
+  cap: u32,
+}
+drop(x) {
+  ()
+}
+
+fn inert_only[T: inert](value: T) -> () {
+  ()
+}
+
+fn example(value: Holder) -> () {
+  inert_only(value)
+}

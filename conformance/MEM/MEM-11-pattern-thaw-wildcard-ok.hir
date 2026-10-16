@@ -1,0 +1,8 @@
+// rule: MEM-11
+// expect: accept
+fn probe(take s: Shared[String]) {
+  match shared.thaw(take s) {
+    Ok(_) => (),
+    Error(_) => (),
+  }
+}

@@ -1,0 +1,29 @@
+// rule: OWN-7
+// expect: run
+// stdout: ok
+// "Arena blocks ... are never mutated"; MEM-4 permits a unique builder root.
+type Rec {
+  items: Array[u64],
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let grant_stdout = io.stdout(rt) ? Grant
+  let kept = arena.with(
+    fn(a: Arena) {
+      let mut r: unique Rec in a = Rec(items: [1, 2])
+      let old = r.items
+      r.items[0] = 9
+      (old[0], r.items[0]) == (1, 9)
+    }
+  )
+  if kept {
+    out.print(grant_stdout, "ok\n") ? Output
+  } else {
+    out.print(grant_stdout, "wrong\n") ? Output
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError) | Usage(ArgError) | Files(
+  FileError
+)

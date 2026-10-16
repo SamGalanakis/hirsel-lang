@@ -1,0 +1,19 @@
+// rule: MODE-1
+// expect: accept
+// The result views the taken parameter itself, which it names, and a moved
+// arena value keeps only its arena bound (v22 P2).
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn relay(y: Bytes, take x: Bytes in y) -> Bytes in {x, y} {
+  view(x)
+}
+
+fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  x
+}
+
+fn moved(a: Arena, b: Arena, take x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
+  choose(a, b, take x, y)
+}
