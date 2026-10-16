@@ -5774,8 +5774,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5783,6 +5781,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5801,8 +5800,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5810,6 +5807,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5828,8 +5826,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5837,6 +5833,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5855,8 +5852,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5864,6 +5859,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5882,8 +5878,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5891,6 +5885,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5909,8 +5904,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5918,6 +5911,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5936,8 +5930,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5945,6 +5937,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5963,8 +5956,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5972,6 +5963,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -5990,8 +5982,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -5999,6 +5989,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6017,8 +6008,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -6026,6 +6015,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6044,8 +6034,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -6053,6 +6041,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6071,8 +6060,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -6080,6 +6067,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6098,8 +6086,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -6107,6 +6093,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6125,8 +6112,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -6134,6 +6119,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6152,8 +6138,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -6161,6 +6145,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6179,8 +6164,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-agree",
     args = [
-        "--seed",
-        "1",
         "--native",
         "full",
         "--shard",
@@ -6188,6 +6171,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6208,6 +6192,7 @@ hirsel_command_test(
     args = ["--full"],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6232,6 +6217,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6256,6 +6242,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6280,6 +6267,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6304,6 +6292,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6328,6 +6317,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6352,6 +6342,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6376,6 +6367,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",
@@ -6400,6 +6392,7 @@ hirsel_command_test(
     ],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",

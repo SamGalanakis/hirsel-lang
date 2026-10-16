@@ -255,14 +255,14 @@ GATE_TESTS = [
            args=["--shard", f"{index}/{AGREE_FULL_SHARDS}"], release=True, **GATE)
       for index in range(1, AGREE_FULL_SHARDS + 1)),
     *(dict(name=f"gate-agree-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
-           args=["--seed", "1", "--native", "full", "--shard", f"{index}/{AGREE_NATIVE_FULL_SHARDS}"],
-           release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE)
+           args=["--native", "full", "--shard", f"{index}/{AGREE_NATIVE_FULL_SHARDS}"],
+           release=True, runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
       for index in range(1, AGREE_NATIVE_FULL_SHARDS + 1)),
     dict(name="gate-native-full", full=True, binary="//:hirsel-conformance-bin-native", args=["--full"], release=True,
-         runtime_archives=RUNTIME_ARCHIVES, **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE),
     *(dict(name=f"gate-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
            args=["--full", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
-           runtime_archives=RUNTIME_ARCHIVES, **GATE)
+           runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
       for index in range(1, NATIVE_FULL_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
