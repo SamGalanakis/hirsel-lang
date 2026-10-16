@@ -230,7 +230,15 @@ optimized x86-64 executables under `full`), except under a configuration its
 program has an exclusion row for. A mismatch, a heap violation and a stage
 validator's refusal are discrepancies; their kinds must be exactly those of
 `native-tests/regressions/agree-known.txt`. The default campaign in
-`tools/gate` is unchanged and still requires zero flagged variants.
+`tools/gate` is unchanged and still requires zero flagged variants. Every
+campaign prints each cluster's first variant to stderr as it finds it
+(`agree: cluster {json}`), so a run stopped before its report still names the
+kinds it saw. `--shard I/N` takes the same stable-rank stripe of the catalogue
+under `--native` as without it; a shard fails on a new kind, and only the merge
+of every shard judges a listed kind that no longer occurs. `tools/gate --full`
+runs `tools/buck2/agree.py --native-full`: `AGREE_NATIVE_FULL_SHARDS` (16)
+shards, each under `AGREE_NATIVE_FULL_TIMEOUT` (3600 s), merged from their
+reports, or their streamed clusters for a shard that stopped.
 
 An optional `// entry: name` header selects an ordinary public function instead
 of `main` in the compiler, agreement and native runners. Test controls use a

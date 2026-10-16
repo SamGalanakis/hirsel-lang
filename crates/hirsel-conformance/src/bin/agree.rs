@@ -74,8 +74,8 @@ fn main_on_compiler_thread() -> ExitCode {
             _ => unreachable!(),
         }
     }
-    if shard.is_some() && (native.is_some() || program.is_some()) {
-        eprintln!("--shard cannot be combined with --native or --program");
+    if shard.is_some() && program.is_some() {
+        eprintln!("--shard cannot be combined with --program");
         return ExitCode::from(2);
     }
     // The runtime extension: valid executed variants also run on the heap
@@ -171,7 +171,9 @@ fn main_on_compiler_thread() -> ExitCode {
             }
             // Native discrepancies are held to the named kinds in
             // native-tests/regressions/agree-known.txt: a new kind fails, and
-            // so does a listed kind the whole catalogue no longer shows.
+            // so does a listed kind the whole catalogue no longer shows. A
+            // shard sees part of the catalogue, so only the merge of every
+            // shard (tools/buck2/agree.py --native-full) judges the latter.
             let mut ok = true;
             if native.is_some() {
                 let listed = match std::fs::read_to_string(root.join(KNOWN)) {
@@ -194,7 +196,7 @@ fn main_on_compiler_thread() -> ExitCode {
                     eprintln!("agree: new discrepancy kind: {kind}");
                     ok = false;
                 }
-                if limit == usize::MAX && only.is_empty() {
+                if limit == usize::MAX && only.is_empty() && shard.is_none() {
                     for kind in listed.difference(&found) {
                         eprintln!("agree: {kind} no longer occurs; delete it from {KNOWN}");
                         ok = false;

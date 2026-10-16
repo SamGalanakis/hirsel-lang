@@ -44,6 +44,7 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 test //:gate-native-smoke          # one corpus campaign of tools/gate
 python3 tools/buck2/conformance.py                # conformance shards and summed counts
 python3 tools/buck2/agree.py                      # AGREE_LIMIT variants over AGREE_SHARDS shards, summed JSON
+python3 tools/buck2/agree.py --native-full        # the native campaign's shards, merged against agree-known.txt
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-native
 python3 tools/buck2/sync.py                       # after metadata or action-sizes.json changes
 tools/gate                                           # the per-push gate (tools/land lands)
@@ -116,6 +117,7 @@ Target names follow Cargo's targets, all in the root package:
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
 | an agreement shard (`AGREE_SHARDS`) | `//:gate-agree-shard-<i>` |
 | an unrestricted agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
+| an unrestricted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, `--full` only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
 | a full native matrix shard (`NATIVE_FULL_SHARDS`, `--full` only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
 
 ## Blessing expectations

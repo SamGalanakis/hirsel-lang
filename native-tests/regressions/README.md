@@ -18,7 +18,8 @@ The native differential gate's checked-in state.
   `native --full --bless`, run by `tools/bless.sh exclusions`.
 - `agree-known.txt`: the kinds of discrepancy the `agree --native full`
   campaign finds in valid variants of supported programs. A new kind fails the
-  gate, and so does a listed kind that no longer occurs.
+  gate, and so does a listed kind that no longer occurs in a complete run of
+  every shard (`tools/buck2/agree.py --native-full`).
 - `smoke.txt`: the cases `tools/gate` runs per push (heap executor with
   fault injection and an optimized x86-64 executable on the diagnostic and on
   the shipped runtime archive), with eight generated successes and eight
@@ -45,3 +46,6 @@ archives="$(.buck2/bin/buck2 build //:hirsel-rt-archives --show-full-simple-outp
 agree="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-agree --show-full-simple-output)"
 HIRSEL_RUNTIME_ARCHIVES="$archives" "$agree" --native full
 ```
+
+The scheduled gate runs it in shards (`python3 tools/buck2/agree.py
+--native-full`).

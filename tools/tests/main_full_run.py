@@ -299,10 +299,10 @@ printf '%s\\n' "$*" >> "$COMMANDS"
         commands = self.commands.read_text().splitlines()
         full = 'test -c hirsel.full=true -c hirsel.test_seed=7 '
         for command in ['prepare.py', 'sync.py --check', 'clippy.py', 'fmt.py --check', 'conformance.py', 'agree.py --full',
+                        'agree.py --native-full',
                         'build -c hirsel.full=true -c hirsel.test_seed=7 //: --materializations none', 'native gate',
                         full + 'root//:a-unittest root//:b-test-it root//:doclib -- --timeout 1800',
                         full + '--target-platforms //tools/buck2:release root//:a-unittest root//:b-test-it root//:doclib -- --timeout 1800',
-                        full + '//:gate-agree-native-full -- --timeout 14400',
                         full + ' '.join(f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1)) + ' -- --timeout 14400',
                         full + '//:gate-native-smoke -- --timeout 1800',
                         full + '//:gate-conformance-hash-seed -- --timeout 14400',
@@ -445,6 +445,63 @@ class AgreementShards(unittest.TestCase):
         self.report |= dict(generated=5)
         with self.assertRaisesRegex(ValueError, 'did not cover'):
             self.agree.summarize(self.outputs(), 2, self.agree.UNLIMITED)
+
+
+class NativeAgreementShards(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(RUNNER.parent / 'buck2'))
+        import agree
+        self.agree = agree
+        self.known = {'native/heap/a', 'native/llvm/b'}
+
+    def report(self, index, *kinds):
+        clusters = [dict(kind=kind, edit='mode', count=1, path=f'{kind}.hir', source='reduced', detail='')
+                    for kind in kinds]
+        return '---- STDOUT ----\n' + json.dumps(dict(
+            seed=1, limit=self.agree.UNLIMITED, hash_seed=0, checked=3, valid=2, executed=2,
+            native_agreed=4, clusters=clusters, shard=dict(index=index, count=2)), indent=2)
+
+    def streamed(self, *kinds):
+        lines = ['---- STDERR ----', 'agree: variants: x.hir mode 1..2 running for 30 s']
+        lines += ['agree: cluster ' + json.dumps(dict(kind=kind, edit='mode', path=f'{kind}.hir',
+                                                      source='unreduced', detail='')) for kind in kinds]
+        return '\n'.join(lines)
+
+    def test_unions_complete_shards_and_judges_the_listed_kinds(self):
+        merged, errors = self.agree.merge_native(
+            {'shard-1': self.report(1, 'native/heap/a'), 'shard-2': self.report(2, 'native/llvm/b')},
+            2, self.known)
+        self.assertEqual(errors, [])
+        self.assertEqual([c['kind'] for c in merged['clusters']], ['native/heap/a', 'native/llvm/b'])
+        self.assertEqual((merged['checked'], merged['complete'], merged['known_kinds']), (6, 2, 2))
+
+    def test_a_new_kind_and_a_kind_no_longer_seen_fail(self):
+        _, errors = self.agree.merge_native(
+            {'shard-1': self.report(1, 'native/heap/a', 'native/heap/new'), 'shard-2': self.report(2)},
+            2, self.known)
+        self.assertEqual(errors, ['new discrepancy kind: native/heap/new',
+                                  'native/llvm/b no longer occurs; delete it from '
+                                  'native-tests/regressions/agree-known.txt'])
+
+    def test_a_stopped_shard_keeps_its_streamed_clusters_but_judges_no_absence(self):
+        merged, errors = self.agree.merge_native(
+            {'shard-1': self.report(1), 'shard-2': self.streamed('native/heap/a', 'native/heap/new')},
+            2, self.known)
+        self.assertEqual([c['source'] for c in merged['clusters']], ['unreduced', 'unreduced'])
+        self.assertEqual(errors, ['shard-2 stopped before its report; its streamed clusters are kept',
+                                  '1 of 2 native agreement shards reported; missing [2]',
+                                  'new discrepancy kind: native/heap/new'])
+
+    def test_refuses_a_duplicate_shard_and_other_parameters(self):
+        _, errors = self.agree.merge_native(
+            {'shard-1': self.report(1), 'shard-2': self.report(1)}, 2, set())
+        self.assertIn("shard-2: duplicate or invalid native agreement shard: {'index': 1, 'count': 2}", errors)
+        limited = self.report(2).replace(str(self.agree.UNLIMITED), '5000')
+        _, errors = self.agree.merge_native({'shard-1': self.report(1), 'shard-2': limited}, 2, set())
+        self.assertIn('shard-2: agreement parameters differ from the gate', errors)
+
+    def test_known_kinds_skip_comments_and_blank_lines(self):
+        self.assertEqual(self.agree.known_kinds('# header\n\nnative/heap/a\n'), {'native/heap/a'})
 
 
 class ActionSizing(unittest.TestCase):

@@ -373,8 +373,10 @@ def full_gate():
     from sync import NATIVE_FULL_SHARDS
     native_shards = [f'//:gate-native-full-shard-{i}' for i in range(1, NATIVE_FULL_SHARDS + 1)]
     stages.run('native matrix: both targets and named exclusions', [*buck2, 'test', *config, *native_shards, '--', *long])
+    # The same catalogue on heap and native code in shards, merged against
+    # agree-known.txt (AGREE_NATIVE_FULL_TIMEOUT each).
     stages.run('agreement campaign on heap and native code (unrestricted)',
-               [*buck2, 'test', *config, '//:gate-agree-native-full', '--', *long])
+               [PY, 'tools/buck2/agree.py', '--native-full'])
     stages.run('interpreter passing corpus with independent second hash seed',
                [*buck2, 'test', *config, '//:gate-conformance-hash-seed', '--', *long])
     stages.run('native passing corpus with independent second hash seed',

@@ -1634,6 +1634,14 @@ fn watched<T: Sync, R: Send>(
     }
     results
 }
+/// The stderr line that streams a cluster's first variant: `agree: cluster `
+/// and one line of JSON with the report's cluster fields, the source unreduced.
+pub fn streamed_cluster(kind: &str, edit: &str, path: &str, source: &str, detail: &str) -> String {
+    let cluster = serde_json::json!({
+        "kind": kind, "edit": edit, "path": path, "source": source, "detail": detail
+    });
+    format!("agree: cluster {cluster}")
+}
 /// Partition by the existing stable variant rank, after global sampling.
 fn in_sample_shard(rank: u64, shard: Option<crate::Shard>) -> bool {
     shard.is_none_or(|shard| rank % shard.count == shard.index - 1)
@@ -1749,6 +1757,9 @@ pub fn run_native_with_hash_seed(
     let sampled = variants.len();
     variants.retain(|v| accepted.contains(&v.1));
     report.skipped = sampled - variants.len();
+    // Each cluster's first variant goes to stderr as soon as it is found, so a
+    // run stopped before its report still names every kind it saw.
+    let streamed = Mutex::new(BTreeSet::<(String, &'static str)>::new());
     let outcomes = watched(
         "variants",
         &variants,
@@ -1761,13 +1772,23 @@ pub fn run_native_with_hash_seed(
         |(_, program, edit)| {
             let program = &programs[*program];
             let matrix = native.map(|n| n.for_program(&program.path));
-            classify_package_native(
-                &edit.apply(&program.source),
+            let source = edit.apply(&program.source);
+            let outcome = classify_package_native(
+                &source,
                 program.run,
                 native.zip(matrix.as_deref()),
                 program.package_path.as_deref(),
                 hash_seed,
-            )
+            );
+            if let Classification::Bug { kind, detail } = &outcome
+                && streamed.lock().unwrap().insert((kind.clone(), edit.kind))
+            {
+                eprintln!(
+                    "{}",
+                    streamed_cluster(kind, edit.kind, &program.path, &source, detail)
+                );
+            }
+            outcome
         },
     );
     for ((_, program, edit), outcome) in variants.into_iter().zip(outcomes) {
@@ -1807,6 +1828,24 @@ pub fn run_native_with_hash_seed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_streamed_cluster_is_one_line_of_the_report_fields() {
+        let line = streamed_cluster(
+            "native/heap/k",
+            "statement/swap",
+            "a.hir",
+            "fn f() {\n}\n",
+            "d",
+        );
+        let json = line.strip_prefix("agree: cluster ").expect("prefixed");
+        assert!(!json.contains('\n'));
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(value["kind"], "native/heap/k");
+        assert_eq!(value["edit"], "statement/swap");
+        assert_eq!(value["path"], "a.hir");
+        assert_eq!(value["source"], "fn f() {\n}\n");
+        assert_eq!(value["detail"], "d");
+    }
     #[test]
     fn shards_partition_the_global_sample_once_including_empty_shards() {
         for (selected, shards) in [(20_000, 32), (19, 4), (3, 8), (0, 8)] {

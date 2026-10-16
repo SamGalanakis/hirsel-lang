@@ -226,6 +226,15 @@ AGREE_LIMIT = 5000
 # or non-terminating variant fails fast and names its shard.
 AGREE_FULL_SHARDS = 96
 AGREE_FULL_TIMEOUT = 1800
+# The unrestricted native agreement campaign (tools/gate --full) runs as
+# shards of the same catalogue by stable variant rank. On 2026-10-14 the whole
+# campaign took 4909 s for 1987 programs, and on 2026-10-16 2416 programs did
+# not finish in 14400 s on a loaded host; sixteen shards keep each near a
+# twentieth of that, well under an hour. Each streams its clusters as it finds
+# them, and agree.py --native-full runs them together, merges them and judges
+# agree-known.txt.
+AGREE_NATIVE_FULL_SHARDS = 16
+AGREE_NATIVE_FULL_TIMEOUT = 3600
 # The full native matrix (tools/gate --full) runs as shards of the baseline by
 # path hash, each case under every configuration, so each shard stays well
 # under its Buck2 timeout; gate-native-full stays whole for --bless and for a
@@ -245,8 +254,10 @@ GATE_TESTS = [
     *(dict(name=f"gate-agree-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
            args=["--seed", "1", "--shard", f"{index}/{AGREE_FULL_SHARDS}"], release=True, **GATE)
       for index in range(1, AGREE_FULL_SHARDS + 1)),
-    dict(name="gate-agree-native-full", full=True, binary="//:hirsel-conformance-bin-agree", args=["--seed", "1", "--native", "full"],
-         release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE),
+    *(dict(name=f"gate-agree-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
+           args=["--seed", "1", "--native", "full", "--shard", f"{index}/{AGREE_NATIVE_FULL_SHARDS}"],
+           release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE)
+      for index in range(1, AGREE_NATIVE_FULL_SHARDS + 1)),
     dict(name="gate-native-full", full=True, binary="//:hirsel-conformance-bin-native", args=["--full"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     *(dict(name=f"gate-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",

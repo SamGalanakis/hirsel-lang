@@ -358,6 +358,8 @@ AGREE_SHARDS = 16
 AGREE_LIMIT = 5000
 AGREE_FULL_SHARDS = 96
 AGREE_FULL_TIMEOUT = 1800
+AGREE_NATIVE_FULL_SHARDS = 16
+AGREE_NATIVE_FULL_TIMEOUT = 3600
 if __name__ == "__main__":
     with open(os.environ["COMMANDS"], "a") as log:
         print(" ".join(["{name}", *sys.argv[1:]]), file=log)

@@ -14,12 +14,16 @@ import sys
 import tempfile
 
 from conformance import BUCK2, CONFIG, ROOT, shard_outputs
-from sync import AGREE_FULL_SHARDS, AGREE_FULL_TIMEOUT, AGREE_LIMIT, AGREE_SHARDS
+from sync import (AGREE_FULL_SHARDS, AGREE_FULL_TIMEOUT, AGREE_LIMIT, AGREE_NATIVE_FULL_SHARDS,
+                  AGREE_NATIVE_FULL_TIMEOUT, AGREE_SHARDS)
 
 COUNTS = ('checked', 'skipped', 'rejected', 'valid', 'unavailable', 'runtime_limits', 'executed')
 GLOBAL = ('seed', 'limit', 'hash_seed', 'programs', 'generated')
 # The limit an unrestricted report carries (agree's default, usize::MAX).
 UNLIMITED = 2**64 - 1
+KNOWN = ROOT / 'native-tests/regressions/agree-known.txt'
+# A cluster's first variant, streamed to stderr as a shard finds it (agree.rs).
+STREAMED = re.compile(r'(?m)^(?:\[[^\]]*\] )?agree: cluster (\{.*\})$')
 
 
 def report_from_output(output):
@@ -75,7 +79,81 @@ def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
     return total
 
 
+def known_kinds(text):
+    return {line for line in text.splitlines() if line and not line.startswith('#')}
+
+
+def merge_native(outputs, shards, listed):
+    """The union of the native shards' clusters, judged against the listed kinds.
+
+    A shard that printed its report contributes its reduced clusters; one that
+    stopped first (a timeout) contributes the clusters it streamed, and the
+    merge then cannot tell which listed kinds no longer occur. Returns the
+    merged report and the errors that fail the stage.
+    """
+    errors = []
+    clusters = {}
+    complete = set()
+    totals = {key: 0 for key in ('checked', 'valid', 'executed', 'native_agreed')}
+    for name, output in sorted(outputs.items()):
+        try:
+            report = report_from_output(output)
+        except ValueError:
+            report = None
+        if report is not None:
+            shard = report.get('shard', {})
+            index = shard.get('index')
+            if shard.get('count') != shards or index not in range(1, shards + 1) or index in complete:
+                errors.append(f'{name}: duplicate or invalid native agreement shard: {shard}')
+                continue
+            if report.get('seed') != 1 or report.get('limit') != UNLIMITED or report.get('hash_seed') != 0:
+                errors.append(f'{name}: agreement parameters differ from the gate')
+                continue
+            complete.add(index)
+            for key in totals:
+                totals[key] += report.get(key, 0)
+            found = report['clusters']
+        else:
+            errors.append(f'{name} stopped before its report; its streamed clusters are kept')
+            found = [json.loads(match[1]) for match in STREAMED.finditer(output)]
+        for cluster in found:
+            key = (cluster['kind'], cluster['edit'])
+            if key not in clusters or report is not None:
+                clusters[key] = cluster
+    if len(complete) != shards:
+        missing = sorted(set(range(1, shards + 1)) - complete)
+        errors.append(f'{shards - len(missing)} of {shards} native agreement shards reported; '
+                      f'missing {missing}')
+    kinds = {kind for kind, _ in clusters}
+    for kind in sorted(kinds - listed):
+        errors.append(f'new discrepancy kind: {kind}')
+    if len(complete) == shards:
+        for kind in sorted(listed - kinds):
+            errors.append(f'{kind} no longer occurs; delete it from {KNOWN.relative_to(ROOT)}')
+    merged = dict(totals, shards=shards, complete=len(complete), known_kinds=len(listed),
+                  clusters=[clusters[key] for key in sorted(clusters)])
+    return merged, errors
+
+
+def native_full():
+    """The native shards in one Buck2 run; a shard that failed or stopped still
+    contributes what its output holds."""
+    targets = [f'//:gate-agree-native-full-shard-{index}' for index in range(1, AGREE_NATIVE_FULL_SHARDS + 1)]
+    with tempfile.TemporaryDirectory() as scratch:
+        event_log = Path(scratch) / 'events.pb.zst'
+        status = subprocess.call([str(BUCK2), 'test', *CONFIG, '--event-log', str(event_log), *targets,
+                                  '--', '--timeout', str(AGREE_NATIVE_FULL_TIMEOUT)], cwd=ROOT)
+        outputs = shard_outputs(event_log) if event_log.exists() else {}
+    merged, errors = merge_native(outputs, AGREE_NATIVE_FULL_SHARDS, known_kinds(KNOWN.read_text()))
+    print(json.dumps(merged, indent=2, sort_keys=True))
+    for error in errors:
+        print(f'agree: {error}', file=sys.stderr)
+    return 1 if errors or status else 0
+
+
 def main():
+    if sys.argv[1:] == ['--native-full']:
+        return native_full()
     if sys.argv[1:] == ['--full']:
         name, shards, limit, timeout = 'gate-agree-full-shard', AGREE_FULL_SHARDS, UNLIMITED, AGREE_FULL_TIMEOUT
     elif sys.argv[1:]:
