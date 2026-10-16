@@ -320,9 +320,19 @@ def failed_cases(details):
     return list(dict.fromkeys(cases))
 
 
+def pool_error(details):
+    """The remote execution error of a test the pool never ran (for example one
+    that queued past its timeout), or None."""
+    match = re.search(r'^(?:Remote Execution Error.*|Error: \(.*(?:remote execution|returned on the stream by RE).*)$',
+                      details, re.M | re.I)
+    return match[0] if match else None
+
+
 def rerun(target, details) -> list[str]:
     """What failed in one test target, and the commands that rerun it alone."""
     buck = '.buck2/bin/buck2 test'
+    if error := pool_error(details):
+        return [f'the pool never ran it: {error[:300]}', f'{buck} //:{target}']
     if target.startswith('gate-conformance-shard-'):
         lines = re.findall(r'^(conformance/\S+\.hir: .*)$', details, re.M)
         return lines + [f'{buck} //:{target}']

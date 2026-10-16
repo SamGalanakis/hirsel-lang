@@ -183,6 +183,13 @@ class Summary(unittest.TestCase):
                          '.buck2/bin/buck2 test //:hirsel-lexer-unittest -- --test-arg=x --test-arg=--exact')
         self.assertEqual(gating.rerun('hirsel-lir', 'doctest failed'), ['.buck2/bin/buck2 test //:hirsel-lir'])
 
+    def test_a_test_the_pool_never_ran_says_so(self):
+        details = ('---- STDOUT ----\n\n---- STDERR ----\nRemote Execution Error on Execute with digest 02:146\n'
+                   "Error: (Error was returned on the stream by RE: Command 'x' timed out after 6 seconds)\n")
+        lines = gating.rerun('gate-conformance-shard-1', details)
+        self.assertTrue(lines[0].startswith('the pool never ran it: Remote Execution Error'), lines)
+        self.assertEqual(lines[1], '.buck2/bin/buck2 test //:gate-conformance-shard-1')
+
     def test_campaign_failures_name_their_programs(self):
         conformance = ('---- STDERR ----\nconformance/MODE/MODE-7-run.hir: corpus source is not '
                        'formatter-canonical; run corpus-fmt with the release hirsel\n')
