@@ -401,6 +401,7 @@ hirsel_test(
         "crates/hirsel-conformance/Cargo.toml",
     ]) + glob(["crates/hirsel-conformance/tests/it/**"], exclude = ["crates/hirsel-conformance/tests/it/**/*.rs"]),
     runtime_archives = "//:hirsel-rt-archives",
+    skips = ["native_gate::stored_configuration_retains_independent_seeds_and_baseline_names"],
     crate = "it",
     crate_root = "crates/hirsel-conformance/tests/it/main.rs",
     srcs = glob(["crates/hirsel-conformance/tests/it/**"]) + [
@@ -811,6 +812,7 @@ hirsel_test(
         "crates/hirsel-driver/Cargo.toml",
     ]) + glob(["crates/hirsel-driver/tests/it/**"], exclude = ["crates/hirsel-driver/tests/it/**/*.rs"]),
     runtime_archives = "//:hirsel-rt-archives",
+    skips = ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry"],
     crate = "it",
     crate_root = "crates/hirsel-driver/tests/it/main.rs",
     srcs = glob([

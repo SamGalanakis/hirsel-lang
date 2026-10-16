@@ -35,7 +35,7 @@ BIN_EXE_DIR = "buck-out/tmp/cargo-bin-exe"
 TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
 # The seed of every randomly seeded test (PROPTEST_RNG_SEED). It is part of the
 # test's environment, so of its cached verdict: a pass is reused only under the
-# same seed, and the full gate draws a new one each run (tools/check.sh).
+# same seed, and the full gate draws a new one each run (`tools/gate --full`).
 TEST_SEED = read_root_config("hirsel", "test_seed", "1")
 
 def _test_platform(host, binary):
@@ -169,7 +169,7 @@ def hirsel_binary(name, bin_name, crate, crate_root, srcs, features, deps, manif
         visibility = ["PUBLIC"],
     )
 
-def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, host = False, shards = 1, costs = None, host_cases = [], opt_level = None, seeded = False):
+def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, host = False, shards = 1, costs = None, host_cases = [], opt_level = None, seeded = False, skips = []):
     """A libtest harness (`rustc --test`) and the test that runs it.
 
     `bin_exes` are the package's binaries, as Cargo's CARGO_BIN_EXE_<name>.
@@ -181,7 +181,8 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
     `host_cases` are substring patterns over full test names. The caller's
     libtest selection is intersected with this partition: matching cases run
     by `<name>-host`, and all others run on the pool. `seeded` binaries draw
-    random cases, and run under `TEST_SEED`.
+    random cases, and run under `TEST_SEED`. `skips` are exact case names every
+    run skips except the full gate's (`-c hirsel.full=true`).
     """
     harness = name + "-harness"
     bin_exe_dir = "{}/{}".format(BIN_EXE_DIR, harness)
@@ -211,6 +212,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         host_cases = host_cases,
         test_binary = name,
         seed = TEST_SEED if seeded else "",
+        args = [] if FULL_GATE else [argument for case in skips for argument in ("--skip", case)],
         visibility = ["PUBLIC"],
     )
     if host_cases:
@@ -319,7 +321,7 @@ _rust_test = rule(
 )
 
 # The full gate's campaigns are test targets only under `-c hirsel.full=true`
-# (tools/check.sh --full), so `buck2 test //...` never starts one.
+# (`tools/gate --full`), so `buck2 test //...` never starts one.
 FULL_GATE = read_root_config("hirsel", "full", "false") == "true"
 
 def _stage(name):

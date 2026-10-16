@@ -155,6 +155,14 @@ HOST_CASES = {
     "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry"],
 }
 
+# Cases that call full_matrix (44 configurations) for toolchain or configuration
+# discovery: every run outside the full gate skips them by name, and
+# `-c hirsel.full=true` runs them (tools/buck2/defs.bzl).
+FULL_GATE_SKIPS = {
+    "hirsel-driver-test-it": ["native::generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry"],
+    "hirsel-conformance-test-it": ["native_gate::stored_configuration_retains_independent_seeds_and_baseline_names"],
+}
+
 # Full-gate tests often call a module-local helper rather than naming their
 # toolchain in the test body. Route all full-gate siblings in such a module
 # conservatively, including x86-only controls. Filters are function names,
@@ -557,7 +565,7 @@ def first_party(meta: dict) -> str:
 
         def test_attrs(binary: str, src: pathlib.Path) -> dict:
             return dict(data=test_data(binary, name, package_dir, src), runtime_archives=runtime_archives,
-                        seeded=seeded(target_dir(package_dir, src), src) or None)
+                        seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
 
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)
         build = next((t for t in package["targets"] if t["kind"] == ["custom-build"]), None)
@@ -676,10 +684,11 @@ def check_classes(buck: str) -> None:
 
 
 def check_test_data(buck: str) -> None:
-    """Every TEST_DATA row names a test binary: a renamed one must not lose its data."""
-    for binary in TEST_DATA:
+    """Every TEST_DATA and FULL_GATE_SKIPS row names a test binary: a renamed one
+    must not lose its data or start running its full-gate cases."""
+    for binary in [*TEST_DATA, *FULL_GATE_SKIPS]:
         if f'    name = "{binary}",\n' not in buck:
-            raise SystemExit(f"TEST_DATA names no test binary: {binary} (tools/buck2/sync.py)")
+            raise SystemExit(f"TEST_DATA or FULL_GATE_SKIPS names no test binary: {binary} (tools/buck2/sync.py)")
 
 
 def generate(out_root: pathlib.Path) -> None:
