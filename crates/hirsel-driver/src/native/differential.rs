@@ -44,6 +44,10 @@ pub enum Runtime {
     /// The system-allocator archive: each fixed-size block is one libc
     /// allocation, so memcheck sees its use after free.
     System,
+    /// The shipped size-class allocator built with Valgrind client requests:
+    /// memcheck sees slab blocks, region reservations and arena blocks, and
+    /// every allocation, free and arena bump reaches the runtime.
+    Memcheck,
 }
 
 impl Runtime {
@@ -52,6 +56,7 @@ impl Runtime {
             Self::Diagnostic => "diagnostic",
             Self::Default => "default",
             Self::System => "system",
+            Self::Memcheck => "memcheck",
         }
     }
 
@@ -60,6 +65,7 @@ impl Runtime {
             diagnostic: self == Self::Diagnostic,
             system_allocator: self == Self::System,
             measurement: false,
+            memcheck: self == Self::Memcheck,
         }
     }
 }

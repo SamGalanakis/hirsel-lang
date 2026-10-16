@@ -49,7 +49,8 @@ Invariants and boundary:
   and the idle slab count exact; a null page, an empty list, a page's first deferred free, a
   saturated count and a large block take the runtime entry. Diagnostic mode, measurement
   archives and the system allocator keep the bound and flag zero and the pages null, so every
-  operation reaches its entry there.
+  operation reaches its entry there; the memcheck archive keeps the bound but zeroes the flag
+  and nulls the pages, so every allocation and free does.
 - Counts are non-atomic; a dup past the configured finite maximum makes the block immortal,
   which is sticky and never tests unique. Ordinary uncounted storage has no header.
   Compiler-emitted flat values in regions carry a region-kind immortal header:
@@ -153,7 +154,8 @@ idle standard segment of the pool, when one exists, so the first block is an inl
 Compiled arena allocations bump `Region.cursor` inline up to `Region.end` at the
 C header's asserted offsets; every reservation ends on a word, so the cursor needs no
 alignment step. Diagnostic regions keep that limit null, so every
-allocation registers its owner and poisons its payload through the runtime;
+allocation registers its owner and poisons its payload through the runtime (the memcheck
+archive keeps it null too, so every reservation is described to Valgrind);
 runtime reservations and builders derive the actual bound from the segment.
 
 Checks: `cargo test -p hirsel-rt` and `harness/run.sh` (ASan/UBSan C harness, AArch64 under
@@ -342,6 +344,17 @@ Cargo features are independent link-time choices, all off by default:
   leak audit. Launch-time `CONFIG_DIAGNOSTIC` still selects poisoning separately.
   Correctness tests and native matrix tools select this archive, including their
   poisoning-off configurations. C Stats consumers define `HIRSEL_RT_ENABLE_STATS`.
+- `memcheck`: Valgrind memcheck client requests (`src/memcheck.rs`, transcribed from the
+  vendored `third-party/valgrind` headers) for the runtime's own blocks, for the
+  `native --sanitize` campaign; production archives contain none. Each slab is a mempool of
+  its live class blocks, with a 16-byte redzone after every slot, and each lent region segment
+  a mempool of its reservations, with a 16-byte redzone after each: free slots, redzones, a
+  reset token's payload until its reuse, a relocated builder's old storage, unreserved region
+  tails and the segments of an exited region or arena are unaddressable. Compiled small
+  allocation, free and arena bumps all take their runtime entries (null pages, a zero
+  inline-free flag, a null region limit), so emitted code carries no requests and is the
+  object production links; inline dups stay. A slab or segment returned with blocks still
+  live drops them with its pool.
 - `measurement`: builds Stats/auditing plus the counters below. Direct launch
   reads `HIRSEL_RT_MEASUREMENT` once to open its report before entry; this is a
   measurement-tool output and is outside semantic RunConfig and recorded tapes.
@@ -356,7 +369,7 @@ Stats and exit-scan code, and bytes for absence of the measurement environment
 name/report header. Runtime Rust tests enable `diagnostic` only as a dev feature.
 
 The driver selects archives with `RuntimeBuild { diagnostic, system_allocator,
-measurement }` and includes that choice in the content key. Linking a measurement
+measurement, memcheck }` and includes that choice in the content key. Linking a measurement
 archive also sets LLVM's `EmitInputs.measurement`: every inline count edge gets
 its hook once, including shared/immortal edges, and a spent glue budget lets the
 runtime record the dying edge. A measurement archive keeps the compiled fast

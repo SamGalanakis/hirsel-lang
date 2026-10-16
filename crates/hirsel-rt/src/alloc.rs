@@ -35,6 +35,9 @@ use std::alloc::{Layout as HostLayout, alloc as host_alloc, dealloc as host_deal
 use std::ptr;
 
 use crate::context::RunCtx;
+#[cfg(feature = "memcheck")]
+use crate::memcheck;
+use crate::memcheck::SLAB_REDZONE;
 use crate::release::check_layout;
 use crate::{STATUS_OK, environmental, fault};
 
@@ -446,7 +449,8 @@ pub(crate) struct Heap {
 
 #[inline]
 fn block_size(pool: usize) -> usize {
-    (HEADER_SIZE + CLASS_SIZES[pool % CLASS_COUNT] as usize).next_multiple_of(pool_align(pool))
+    (HEADER_SIZE + CLASS_SIZES[pool % CLASS_COUNT] as usize + SLAB_REDZONE)
+        .next_multiple_of(pool_align(pool))
 }
 fn pool_align(pool: usize) -> usize {
     if pool < CLASS_COUNT { 8 } else { 16 }
@@ -462,13 +466,24 @@ unsafe fn slot_of(slab: *mut Slab, block: *mut Header) -> usize {
             >> 32) as usize
     }
 }
+/// A free block's link overlays its header. Memcheck keeps free blocks unaddressable, so the
+/// runtime opens the link word for exactly its own read or write.
 #[inline(always)]
 unsafe fn free_next(block: *mut Header) -> *mut Header {
-    unsafe { block.cast::<*mut Header>().read() }
+    #[cfg(feature = "memcheck")]
+    memcheck::defined(block.cast(), size_of::<*mut Header>());
+    let next = unsafe { block.cast::<*mut Header>().read() };
+    #[cfg(feature = "memcheck")]
+    memcheck::noaccess(block.cast(), size_of::<*mut Header>());
+    next
 }
 #[inline(always)]
 unsafe fn write_free(block: *mut Header, next: *mut Header) {
-    unsafe { block.cast::<*mut Header>().write(next) }
+    #[cfg(feature = "memcheck")]
+    memcheck::undefined(block.cast(), size_of::<*mut Header>());
+    unsafe { block.cast::<*mut Header>().write(next) };
+    #[cfg(feature = "memcheck")]
+    memcheck::noaccess(block.cast(), size_of::<*mut Header>());
 }
 
 #[inline]
@@ -604,10 +619,14 @@ impl Heap {
     }
 
     /// Whether compiled code may allocate and free small blocks inline: never in diagnostic
-    /// mode, in measurement builds (which count every class allocation and free) or with the
-    /// system allocator (which has no pages).
+    /// mode, in measurement builds (which count every class allocation and free), with the
+    /// system allocator (which has no pages) or in the memcheck archive (whose allocation and
+    /// free tell Valgrind about the block).
     fn inline(diagnostic: bool) -> bool {
-        !diagnostic && !cfg!(feature = "measurement") && !cfg!(feature = "system-allocator")
+        !diagnostic
+            && !cfg!(feature = "measurement")
+            && !cfg!(feature = "system-allocator")
+            && !cfg!(feature = "memcheck")
     }
 
     /// Make `slab` (or none) the current allocation page of `class`, for the runtime's own
@@ -817,6 +836,16 @@ impl Heap {
             } else {
                 self.allocate_large(extent, align)
             };
+            #[cfg(feature = "memcheck")]
+            if small {
+                let bytes =
+                    HEADER_SIZE + CLASS_SIZES[pool_of(extent, align) % CLASS_COUNT] as usize;
+                memcheck::pool_alloc(slab_of(block).cast(), block.cast(), bytes);
+                // Diagnostic allocation checks the free poison the slab still holds.
+                if self.diagnostic {
+                    memcheck::defined(block.cast(), bytes);
+                }
+            }
             // `link` is meaningful only once dead or free; `push` and `free` set it.
             (*block).count = 1;
             (*block).descriptor = index
@@ -915,6 +944,12 @@ impl Heap {
         let first = (SLAB_HEADER + HEADER_SIZE).next_multiple_of(align) - HEADER_SIZE;
         let slots = (SLAB_SIZE - first) / (stride + 4);
         let end = base.wrapping_add(first + slots * stride);
+        // Every slot and its redzone is unaddressable until allocated.
+        #[cfg(feature = "memcheck")]
+        {
+            memcheck::noaccess(base.wrapping_add(first), slots * stride);
+            memcheck::create_pool(base);
+        }
         let states = if self.diagnostic {
             let data = unsafe { host_alloc(HostLayout::from_size_align_unchecked(slots, 1)) };
             if data.is_null() {
@@ -1061,6 +1096,9 @@ impl Heap {
             if self.state(block) == STATE_FREE || (*block).domain() != DOMAIN_HEAP {
                 fault("a block is freed twice or is not a heap block");
             }
+            // A raw token's payload is unaddressable until its reuse or dispose.
+            #[cfg(feature = "memcheck")]
+            memcheck::undefined(payload(block), self.capacity(block) as usize);
             ptr::write_bytes(payload(block), FREE_POISON, self.capacity(block) as usize);
             self.write_state(block, STATE_FREE);
         }
@@ -1099,6 +1137,8 @@ impl Heap {
             #[cfg(feature = "measurement")]
             self.measurement.free((*block).capacity());
             let slab = slab_of(block);
+            #[cfg(feature = "memcheck")]
+            memcheck::pool_free(slab.cast(), block.cast());
             let head = (*slab).local_free;
             write_free(block, head);
             (*slab).local_free = block;
@@ -1345,6 +1385,8 @@ unsafe fn page_pop(slab: *mut Slab) -> *mut Header {
 }
 
 unsafe fn release_slab(slab: *mut Slab) {
+    #[cfg(feature = "memcheck")]
+    memcheck::destroy_pool(slab.cast());
     unsafe {
         if !(*slab).states.is_null() {
             host_dealloc(
@@ -1410,6 +1452,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_alloc(
         // The unsafe ABI guarantees a linked descriptor index. Production allocation only
         // installs that index; resolution and full validation belong to the cold path/drain.
         if cfg!(feature = "system-allocator")
+            || cfg!(feature = "memcheck")
             || heap.diagnostic
             || extent > SMALL_MAX
             || align.wrapping_sub(1) >= SMALL_ALIGN_MAX
@@ -1539,6 +1582,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
     let (capacity, physical_align) = (request_capacity(extent, align), align.max(8));
     // SAFETY: caller contract.
     unsafe {
+        // The payload keeps the donor's bytes (`Reuse.kept` below), whose definedness the reset
+        // forgot.
+        #[cfg(feature = "memcheck")]
+        memcheck::defined(payload(token), ctx.heap.capacity(token) as usize);
         if ctx.heap.diagnostic {
             check_layout(layout);
             if ctx.heap.state(token) != STATE_RAW {

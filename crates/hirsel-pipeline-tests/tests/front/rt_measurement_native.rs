@@ -48,6 +48,7 @@ fn variants(dir: &Path, target: &TargetSpec, diagnostic: bool) -> Vec<Toolchain>
                         diagnostic,
                         system_allocator,
                         measurement,
+                        memcheck: false,
                     },
                 )
                 .unwrap(),
@@ -443,6 +444,7 @@ fn system_bare_blocks_are_counted_returned_at_exit_and_moved_by_a_dynamic_reuse(
                 diagnostic: true,
                 system_allocator,
                 measurement,
+                memcheck: false,
             },
         )
         .unwrap();

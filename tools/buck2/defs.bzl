@@ -429,8 +429,11 @@ def hirsel_build_script(name, crate_root, srcs, deps, inputs, features, manifest
     )
 
 # The runtime archive variants `RuntimeBuild::variant` names
-# (crates/hirsel-driver/src/native/link.rs), in its feature order.
+# (crates/hirsel-driver/src/native/link.rs), in its feature order: every subset
+# of RUNTIME_FEATURES for every target, and each RUNTIME_SOLO_VARIANTS feature
+# alone for the targets it lists (memcheck runs only x86-64 executables).
 RUNTIME_FEATURES = ["diagnostic", "system-allocator", "measurement"]
+RUNTIME_SOLO_VARIANTS = {"memcheck": ["x86_64-unknown-linux-gnu"]}
 RUNTIME_TARGETS = {
     "aarch64-unknown-linux-gnu": "root//tools/buck2:runtime-aarch64",
     "x86_64-unknown-linux-gnu": "root//tools/buck2:runtime-x86_64",
@@ -440,13 +443,17 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
     """Every runtime archive the native pipeline links, as Cargo builds them.
 
     `cargo build --release -p hirsel-rt --lib [--features ...]` with aborting
-    panics, for each target triple: one staticlib per feature subset, laid out
+    panics: one staticlib per feature subset for each target triple, and per
+    solo variant for its listed triples, laid out
     as `<triple>/<features or default>/libhirsel_rt.a`, the directory native
     tests and tools read from HIRSEL_RUNTIME_ARCHIVES.
     """
     archives = {}
-    for mask in range(1 << len(RUNTIME_FEATURES)):
-        chosen = [f for i, f in enumerate(RUNTIME_FEATURES) if mask & (1 << i)]
+    variants = [
+        ([f for i, f in enumerate(RUNTIME_FEATURES) if mask & (1 << i)], RUNTIME_TARGETS.keys())
+        for mask in range(1 << len(RUNTIME_FEATURES))
+    ] + [([feature], triples) for feature, triples in RUNTIME_SOLO_VARIANTS.items()]
+    for chosen, triples in variants:
         variant = "+".join(chosen) or "default"
         library = "{}-{}".format(name, variant.replace("+", "-"))
         extra = [dep for feature in chosen for dep in feature_deps.get(feature, [])]
@@ -463,9 +470,9 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
             rustc_flags = _flags(manifest_dir, target = library),
             exec_compatible_with = _compile_constraints(library),
         )
-        for triple, platform in RUNTIME_TARGETS.items():
+        for triple in triples:
             configured = "{}-{}".format(library, triple.split("-")[0])
-            native.configured_alias(name = configured, actual = ":" + library, platform = platform)
+            native.configured_alias(name = configured, actual = ":" + library, platform = RUNTIME_TARGETS[triple])
             archives["{}/{}".format(triple, variant)] = ":" + configured
     _runtime_archives(name = name, archives = archives, visibility = ["PUBLIC"])
 

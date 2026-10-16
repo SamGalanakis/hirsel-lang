@@ -77,7 +77,8 @@ extern "C" {
  *          *(void **)header = head; page->local_free = header; page->live -= 1, and if that
  *          leaves it 0 the idle slab count gains one.
  * A zero dup bound, a zero free flag and null pages (diagnostic mode, measurement builds, the
- * system allocator) send every operation to its entry. */
+ * system allocator) send every operation to its entry. The memcheck archive keeps the dup bound
+ * but zeroes the free flag and nulls the pages, so every allocation and free reaches its entry. */
 #define HIRSEL_RT_V2_CTX_DUP_MAX_OFFSET 0
 #define HIRSEL_RT_V2_CTX_FREE_INLINE_OFFSET 4
 #define HIRSEL_RT_V2_CTX_IDLE_SLABS_OFFSET 8

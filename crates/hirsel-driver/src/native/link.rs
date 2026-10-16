@@ -41,12 +41,15 @@ pub struct Toolchain {
 pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Independent link-time runtime choices. The default archive has neither measurement
-/// hooks nor a system allocator override.
+/// hooks nor a system allocator override nor Valgrind client requests.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RuntimeBuild {
     pub diagnostic: bool,
     pub system_allocator: bool,
     pub measurement: bool,
+    /// Valgrind memcheck client requests for the runtime's own blocks, with every
+    /// allocation, free and arena bump kept in the runtime.
+    pub memcheck: bool,
 }
 impl RuntimeBuild {
     pub(crate) fn features(self) -> String {
@@ -54,6 +57,7 @@ impl RuntimeBuild {
             self.diagnostic.then_some("diagnostic"),
             self.system_allocator.then_some("system-allocator"),
             self.measurement.then_some("measurement"),
+            self.memcheck.then_some("memcheck"),
         ]
         .into_iter()
         .flatten()

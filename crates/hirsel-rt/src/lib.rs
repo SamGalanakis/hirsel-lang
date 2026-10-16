@@ -38,6 +38,7 @@ pub mod failure;
 pub mod finalize;
 #[cfg(feature = "measurement")]
 pub mod measurement;
+mod memcheck;
 pub mod region;
 pub mod release;
 

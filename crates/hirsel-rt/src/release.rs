@@ -1181,6 +1181,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
         }
         let drained = drain(ctx, base, block, live_mask, true, anchor);
         if drained.kept_root {
+            // The donor is gone: its payload is unaddressable until a reuse installs a value.
+            #[cfg(feature = "memcheck")]
+            crate::memcheck::noaccess(
+                crate::alloc::payload(block),
+                ctx.heap.capacity(block) as usize,
+            );
             out_token.write(block);
         }
         drained.status

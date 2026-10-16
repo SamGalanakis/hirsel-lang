@@ -17,6 +17,9 @@ use std::ptr;
 use crate::alloc::{FREE_POISON, Header, check_request};
 use crate::context::RunCtx;
 use crate::finalize::{Cleanup, finalize_item};
+#[cfg(feature = "memcheck")]
+use crate::memcheck;
+use crate::memcheck::REGION_REDZONE;
 use crate::release::{LAYOUT_NO_EXTENT, drain, push, release_block};
 use crate::{STATUS_OK, environmental, fault};
 
@@ -349,6 +352,14 @@ impl RegionPool {
             {
                 self.active_bytes += (*found).size;
             }
+            // A lent segment is a pool of its reservations; the rest of its data is
+            // unaddressable.
+            #[cfg(feature = "memcheck")]
+            {
+                let data = found.cast::<u8>().add(SEGMENT_HEADER);
+                memcheck::noaccess(data, (*found).size as usize - SEGMENT_HEADER);
+                memcheck::create_pool(found.cast());
+            }
         }
     }
 
@@ -371,6 +382,12 @@ impl RegionPool {
             self.idle_bytes += (*segment).size;
             (*segment).prev = self.idle;
             self.idle = segment;
+            #[cfg(feature = "memcheck")]
+            {
+                memcheck::destroy_pool(segment.cast());
+                let data = segment.cast::<u8>().add(SEGMENT_HEADER);
+                memcheck::noaccess(data, (*segment).size as usize - SEGMENT_HEADER);
+            }
         }
     }
 
@@ -400,6 +417,8 @@ impl RegionPool {
                 {
                     self.active_bytes -= (*segment).size;
                 }
+                #[cfg(feature = "memcheck")]
+                memcheck::destroy_pool(segment.cast());
                 host_dealloc(segment.cast(), segment_layout((*segment).size));
                 segment = next;
             }
@@ -431,9 +450,30 @@ unsafe fn segment_end(region: &Region) -> *mut u8 {
 }
 
 /// The cursor after `bytes` reserved at `start`: every reservation ends on a word, so the
-/// cursor stays eight-byte aligned and compiled arena bumps need no alignment step.
+/// cursor stays eight-byte aligned and compiled arena bumps need no alignment step. The
+/// memcheck archive leaves an unaddressable redzone after each reservation, so the cursor may
+/// pass the segment's end; it is only compared, never dereferenced, there.
 fn advance(start: *mut u8, bytes: u64) -> *mut u8 {
-    start.wrapping_add(bytes.next_multiple_of(8) as usize)
+    start.wrapping_add((bytes.next_multiple_of(8) + REGION_REDZONE) as usize)
+}
+
+/// The lent segment of `region` holding the reservation at `data`.
+#[cfg(feature = "memcheck")]
+unsafe fn segment_of(region: &Region, data: *mut u8) -> *mut Segment {
+    let mut segment = region.segment.cast::<Segment>();
+    // SAFETY: a region's segments chain through `prev` to null.
+    unsafe {
+        while !segment.is_null()
+            && !(segment.addr() < data.addr()
+                && data.addr() <= segment.addr() + (*segment).size as usize)
+        {
+            segment = (*segment).prev;
+        }
+    }
+    if segment.is_null() {
+        fault("a reservation lies outside its region's segments");
+    }
+    segment
 }
 
 /// Bump-allocate `extent` bytes aligned to `align` in `region`.
@@ -465,6 +505,8 @@ unsafe fn reserve_in(
             if (start as usize) <= end as usize && (end as usize - start as usize) as u64 >= extent
             {
                 region.cursor = advance(start, extent);
+                #[cfg(feature = "memcheck")]
+                memcheck::pool_alloc(region.segment, start, extent as usize);
                 return start;
             }
         }
@@ -480,13 +522,15 @@ unsafe fn reserve_in(
         let cursor = install(ctx, region, segment);
         let start = cursor.wrapping_add(cursor.align_offset(align as usize));
         region.cursor = advance(start, extent);
+        #[cfg(feature = "memcheck")]
+        memcheck::pool_alloc(region.segment, start, extent as usize);
         start
     }
 }
 
 /// Make the lent `segment` `region`'s newest: its limit is the segment's end (null in
-/// diagnostic mode, which keeps every allocation in the runtime). Returns the segment's first
-/// data byte, which is word aligned.
+/// diagnostic mode and the memcheck archive, which keep every allocation in the runtime).
+/// Returns the segment's first data byte, which is word aligned.
 unsafe fn install(ctx: &mut RunCtx, region: &mut Region, segment: *mut Segment) -> *mut u8 {
     #[cfg(feature = "measurement")]
     {
@@ -501,7 +545,7 @@ unsafe fn install(ctx: &mut RunCtx, region: &mut Region, segment: *mut Segment) 
         (*segment).prev = region.segment.cast();
         region.segment = segment.cast();
         let base = segment.cast::<u8>();
-        region.end = if ctx.heap.diagnostic {
+        region.end = if ctx.heap.diagnostic || cfg!(feature = "memcheck") {
             ptr::null_mut()
         } else {
             base.wrapping_add((*segment).size as usize)
@@ -688,6 +732,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
             let prev = (*segment).prev;
             if ctx.heap.diagnostic {
                 let data = segment.cast::<u8>().add(SEGMENT_HEADER);
+                #[cfg(feature = "memcheck")]
+                memcheck::undefined(data, (*segment).size as usize - SEGMENT_HEADER);
                 ptr::write_bytes(data, FREE_POISON, (*segment).size as usize - SEGMENT_HEADER);
             }
             ctx.regions.give_back(segment);
@@ -770,6 +816,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_builder_grow(
         let end = segment_end(region);
         if tail == region.cursor && (end as usize - builder.data as usize) as u64 >= capacity {
             region.cursor = advance(builder.data, capacity);
+            #[cfg(feature = "memcheck")]
+            {
+                let grown = builder.data.add(builder.capacity as usize);
+                memcheck::undefined(grown, (capacity - builder.capacity) as usize);
+                memcheck::pool_resize(region.segment, builder.data, capacity as usize);
+            }
             builder.capacity = capacity;
             return STATUS_OK;
         }
@@ -778,6 +830,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_builder_grow(
         if ctx.heap.diagnostic {
             ptr::write_bytes(builder.data, FREE_POISON, builder.capacity as usize);
         }
+        // Nothing has observed the old storage (MEM-10): it is unaddressable once moved.
+        #[cfg(feature = "memcheck")]
+        memcheck::pool_free(
+            segment_of(&*builder.region, builder.data).cast(),
+            builder.data,
+        );
         builder.data = data;
         builder.capacity = capacity;
     }
@@ -805,6 +863,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_builder_publish(
         let region = &mut *builder.region;
         if advance(builder.data, builder.capacity) == region.cursor {
             region.cursor = advance(builder.data, used);
+        }
+        // The published value is its first `used` bytes; the rest is a region tail.
+        #[cfg(feature = "memcheck")]
+        {
+            let segment = segment_of(region, builder.data);
+            memcheck::noaccess(
+                builder.data.add(used as usize),
+                (builder.capacity - used) as usize,
+            );
+            memcheck::pool_resize(segment.cast(), builder.data, used as usize);
         }
         builder.capacity = used;
         builder.published = 1;

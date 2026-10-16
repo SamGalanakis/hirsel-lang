@@ -13,6 +13,8 @@ default = []
 diagnostic = []
 # Independent link-time choices; timing archives never enable measurement.
 system-allocator = []
+# Valgrind memcheck client requests for the memcheck campaign; no inline fast paths.
+memcheck = []
 measurement = ["dep:serde_json"]
 
 [dependencies]
