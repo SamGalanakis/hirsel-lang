@@ -316,7 +316,9 @@ dependency-site validation needs a wider header/observation revision.
 The full native campaign defaults to the derived `native-selection` Buck2
 artifact. It records LIR opcodes and operand representations, runtime calls in
 emitted LLVM IR, layout shapes and successful validation stages for every
-executable input. Greedy coverage selection followed by deletion is
+executable input. Coverage keys retain their campaign: exact regression inputs
+can cover agreement features, while full native needs a passing corpus witness.
+Greedy coverage selection followed by deletion is
 inclusion-minimal after historical pins, not globally optimal. Programs whose
 features cannot be collected remain pinned. The corpus and front-end gate keep
 every source. Individual C-validator and H-checker check kinds remain

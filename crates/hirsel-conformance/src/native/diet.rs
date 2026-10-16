@@ -180,6 +180,13 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
         .into_iter()
         .map(|c| (c.id.clone(), c))
         .collect();
+    let baseline_paths: BTreeSet<_> = cases.keys().cloned().collect();
+    let mut agreement_paths = BTreeSet::new();
+    let mut fixtures = Vec::new();
+    discover(&root.join("native-tests/regressions"), &mut fixtures)?;
+    for path in fixtures {
+        agreement_paths.insert(path.strip_prefix(root).unwrap().display().to_string());
+    }
     let mut pinned = protected(root)?;
     let mut costs = BTreeMap::new();
     for program in inventory["programs"].as_array().unwrap() {
@@ -188,6 +195,9 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
             path.to_string(),
             program["variants"].as_u64().unwrap() as usize,
         );
+        if program["run"] == true {
+            agreement_paths.insert(path.to_string());
+        }
         if program["run"] == true && !cases.contains_key(path) {
             cases.insert(
                 path.to_string(),
@@ -236,8 +246,23 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
         if !failures.is_empty() {
             pinned.insert(path.clone());
         }
+        // A feature must have a witness in each campaign that exercised it.
+        // Exact regression fixtures run in agreement, while only the passing
+        // corpus runs in full native; neither may replace the other's witness.
+        let campaigns: Vec<_> = [
+            ("native-full", baseline_paths.contains(path)),
+            ("agreement-native", agreement_paths.contains(path)),
+        ]
+        .into_iter()
+        .filter_map(|(name, active)| active.then_some(name))
+        .collect();
         let indices = seen
             .into_iter()
+            .flat_map(|feature| {
+                campaigns
+                    .iter()
+                    .map(move |campaign| format!("{campaign}/{feature}"))
+            })
             .map(|feature| {
                 let next = dictionary.len();
                 *dictionary.entry(feature).or_insert(next)
