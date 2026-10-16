@@ -4,7 +4,10 @@ import importlib.util
 from pathlib import Path
 import shutil
 import tempfile
+import sys
 import unittest
+
+sys.dont_write_bytecode = True
 
 SPEC = importlib.util.spec_from_file_location('unpack_native', Path(__file__).resolve().parents[1] / 'buck2/native-toolchain/unpack.py')
 unpack = importlib.util.module_from_spec(SPEC)
