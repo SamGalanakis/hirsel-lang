@@ -464,6 +464,71 @@ mod tests {
     }
 
     #[test]
+    fn an_agreement_fixture_cannot_replace_a_full_native_witness() {
+        let root = std::env::temp_dir().join(format!(
+            "hirsel-native-cover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for directory in [
+            "conformance/LANG",
+            "docs/spec",
+            "native-tests/regressions",
+            "native-tests/topology",
+        ] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        let corpus = "conformance/LANG/LANG-7-witness.hir";
+        let fixture = "native-tests/regressions/exact.hir";
+        let source = "// rule: LANG-7\n// expect: run\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] { Ok(()) }\n";
+        for path in [corpus, fixture] {
+            std::fs::write(root.join(path), source).unwrap();
+        }
+        std::fs::write(root.join("conformance/passing.txt"), format!("{corpus}\n")).unwrap();
+        std::fs::write(root.join("docs/spec/language.md"), "### LANG-7: Types\n").unwrap();
+        for path in [
+            "native-tests/regressions/history.tsv",
+            "native-tests/regressions/exclusions.tsv",
+            "native-tests/regressions/smoke.txt",
+            "native-tests/regressions/memcheck.txt",
+            "native-tests/topology/cases.txt",
+        ] {
+            std::fs::write(root.join(path), "").unwrap();
+        }
+        let value = hirsel_engine::with_compiler_stack(|| derive(&root)).unwrap();
+        assert!(
+            value["programs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["errors"].as_array().unwrap().is_empty()),
+            "{value:#}"
+        );
+        let selected: BTreeSet<_> = value["selected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        assert!(selected.contains(fixture));
+        assert!(
+            selected.contains(corpus),
+            "a fixture runs only in agreement"
+        );
+        assert!(
+            value["features"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f.as_str().unwrap().starts_with("native-full/"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn excluded_cells_stay_in_a_cover_under_nonzero_launch_inputs() {
         let mut matrix = hirsel_driver::native::full_matrix();
         for c in &mut matrix {
