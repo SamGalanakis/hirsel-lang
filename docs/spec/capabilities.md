@@ -59,7 +59,10 @@ an operation with another domain's capability fails CAP-2 before any effect.
 
 Every type has a value-authority summary. A capability contributes its own nominal type;
 aggregates join their parts, resources include the authority their declared destruction
-requires, and closures include their captures. An ordinary opaque type exports an explicit
+requires, and closures include their captures. A builtin handle holds the authority of the
+capability that governs it: a `Task` holds its `Scope`, and a `Sender`, `Receiver`, `Mutex`
+or `Atomic` holds `Tasks`, so none of them is inert. Held authority never stands in for the
+capability operand an operation requires. An ordinary opaque type exports an explicit
 summary checked against its representation in its opacity owner. An explicit summary
 cannot erase field or destruction authority, except by the nominal sealing of CAP-5, and
 sealing never produces an empty summary. `inert` means the summary is empty. A function

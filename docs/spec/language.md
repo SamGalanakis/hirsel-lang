@@ -191,6 +191,14 @@ bare nonempty record type name instead needs labelled construction
 ([LANG-2](#lang-2-prefix-law)). A duplicate top-level definition path is LANG-7 at the
 later name. Type incompatibility with no narrower owner is LANG-7.
 
+`Never` is the type with no values. A call whose instantiated result is `Never` diverges:
+it never completes normally, so it fits any expected type in any value position (a match
+arm, a `let` initializer, an argument), and its only exit is a language failure, which
+cleans up the values already evaluated as any failure does. A body declared `-> Never` must
+itself have type `Never`, so it ends in such a call; any other value is LANG-7. A self tail
+call of a `Never` function is a loop like any other self tail call
+([LANG-10](#lang-10-recursion)).
+
 ### LANG-8: Errors
 
 Expected failures use `Result` and `?`. `e ? C` maps the error through `C`, a path naming

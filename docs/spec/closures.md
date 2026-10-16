@@ -42,6 +42,11 @@ dependencies, and a receiving or capture slot that promises a global result reje
 authority and environment sendability. A closure call whose counted result may share a
 borrowed counted capture ends that capture's uniqueness, as a direct share would.
 
+A call of a closure bounds its result by the loans its captured content holds, not by the
+slot it is invoked through: in `let g = fn() { let h = fn() { w }; h() }`, `h()` returns
+content bounded by `w`'s sources, so it may leave `g`'s body, and `g()` stays bounded by
+those sources ([MODE-1](ownership.md#mode-1-locality)).
+
 ### CLO-2: Transparent
 
 A scoped closure uses whatever capabilities its context holds. The call's kind, authority
@@ -109,6 +114,38 @@ the same guarantee for the same selector before they preserve incoming evidence.
 stronger declaration satisfies a weaker receiving contract; mutable hand-back stays exact.
 A claimed promise that cannot be proved is rejected: MEM-14 for `@advance_only`, CLO-4 for
 `@preserves_captures` and `@captures`.
+
+The proof follows the selected state, a parameter of this callable with its field path,
+through every reachable operation on every exit. A place meets the selection when one field
+path is a prefix of the other; an element, index or variant step counts as meeting, while
+another binding or a disjoint sibling field does not, and a value that views the binding
+meets it whole. Then:
+
+- a borrowed read, and a read-only capture, is always allowed;
+- a copy of a meeting place is allowed only when its type is `plain`, or when the copy stays
+  inert and sendable once shared; any other copy changes the state's ownership evidence;
+- a write, move, `take`, store or `unique` extraction of a meeting place is allowed only at
+  or inside the selection (strictly inside it for `@advance_only`) and only when the place's
+  type is closed: no type parameter, callable, `Iter` or erased environment anywhere in it,
+  no brand, global, many and inert, so every value of the type has the same envelope.
+  Replacing the record that holds a selected field replaces the field;
+- invoking a many callable stored in the selection borrows it; a once callable is consumed;
+- a `mut` argument meeting the selection needs a write these rules allow, or a callee that
+  declares the same promise (`@advance_only` for an advance-only selection) on that
+  argument or on a field path leading into the selection;
+- a mutable, taking or copying capture of the selected content is a violation.
+
+A closure literal receives the state promises and the `@captures` selection of its expected
+callable type, as it receives a contextual `@noalloc`, and its body must prove them; a
+binding or slot whose written callable type states a promise accepts only a function value
+that declares it. Inside a callable whose result carries `@captures`, a closure literal
+written directly as the callback of a creation call whose result retains both the callback
+and its state receives a preservation promise on that state, so it cannot install an
+environment the selection never saw. For each state and callback pair a creation call
+retains, one of these holds: the state is independently inert and the callback hands it
+back sendable; the exact incoming state and callback pair is relayed; the callback's actual
+type promises to preserve the whole state; or the state's type is closed and the callback
+hands it back sendable.
 
 ### CLO-3: Task closures
 

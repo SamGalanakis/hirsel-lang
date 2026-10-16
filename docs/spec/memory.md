@@ -31,6 +31,10 @@ headers, so it uses constant native stack and never allocates; children are visi
 that resource drops run in DROP-2's order. Read-only structural operations (`==`, hash,
 order) past a fixed recursion depth continue on a per-task scratch stack limited to a fixed
 number of levels; exhausting it is the failure `Depth`, with ordinary cleanup.
+`map.insert`, `set.insert`, `map.get` and `set.contains` hash their key before they look at
+the container, so a key nested past the limit fails `Depth` at the call whatever the
+container holds, an empty one included. A stored key passed the limit when it was
+inserted, so comparing it with a probe key that passed cannot fail.
 
 **Unspecified:** the normative depth and scratch-level table. The reference interpreter
 permits 64 native plus 1,024 scratch edges for structural reads (1,088 in all, the root at
