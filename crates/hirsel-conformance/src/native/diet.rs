@@ -281,11 +281,39 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
         .filter_map(|p| costs.get(p))
         .map(|n| (*n).min(budget))
         .sum();
+    let generated = native::generate::cases(64);
+    let generated_plans: Vec<_> = generated
+        .iter()
+        .map(|case| hirsel_driver::native::pairwise_matrix(&matrix, &case.id, 1))
+        .collect();
+    let generated_attempts: usize = generated_plans.iter().map(Vec::len).sum();
+    let generated_llvm: usize = generated_plans
+        .iter()
+        .flatten()
+        .filter(|c| matches!(c.engine, hirsel_driver::native::Engine::Native { .. }))
+        .count();
+    let topology_attempts = inventory["topology_programs"].as_u64().unwrap() as usize * 22;
+    let run_variants: usize = inventory["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["run"] == true && selected.contains(p["path"].as_str().unwrap()))
+        .map(|p| (p["variants"].as_u64().unwrap() as usize).min(budget))
+        .sum();
+    let mut fixtures = Vec::new();
+    discover(&root.join("native-tests/regressions"), &mut fixtures)?;
+    let exact = fixtures.len();
     Ok(
         json!({ "version": 1, "selected": selected, "protected": pinned, "features": names, "programs": programs,
         "counts": {"baseline_before": baseline.len(), "baseline_after": baseline_selected.len(), "seed": 1,
             "baseline_configurations_before": baseline.len() * matrix.len(), "baseline_configurations_after": slim_attempts,
             "baseline_llvm_before": baseline.len() * matrix.iter().filter(|c| matches!(c.engine, hirsel_driver::native::Engine::Native { .. })).count(), "baseline_llvm_after": slim_llvm,
+            "native_full_configurations_after": slim_attempts + generated_attempts + topology_attempts,
+            "native_full_llvm_after": slim_llvm + generated_llvm + topology_attempts,
+            "agreement_exact_historical_inputs": exact,
+            "agreement_run_variants_after": run_variants,
+            "agreement_llvm_attempt_upper_bound_after": (run_variants + exact) * 2,
+            "agreement_total_eligible_after": after_selection + exact,
             "agreement_variants_before": before_budget, "agreement_after_budget": after_budget, "agreement_after_selection": after_selection},
         "inventory": inventory }),
     )

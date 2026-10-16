@@ -29,5 +29,5 @@ def hirsel_native_selection(name, collector, data):
         return
     native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:release")
     _selection(name = name, collector = ":" + name + "-collector", data = data,
-               exec_compatible_with = [budget_constraint(pool_budget_name(1, 2097152))],
+               exec_compatible_with = [budget_constraint(pool_budget_name(1, 1048576))],
                visibility = ["PUBLIC"])
