@@ -2,6 +2,7 @@
 """Unpack verified Buck2 downloads, resolving symlinks before they enter the CAS."""
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,29 @@ def normalize_links(tree):
                 source.symlink_to(os.path.relpath(tree / str(target).lstrip("/"), source.parent))
             if not source.resolve().is_relative_to(tree):
                 raise ValueError(f"archive link escapes its root: {source}")
+
+
+def place_runtime_debug(output):
+    # Valgrind searches the ELF's adjacent .debug/ directory by .gnu_debuglink.
+    # A global extra-debuginfo prefix cannot locate a relocated object's symbols.
+    for library in (output / "lib/x86_64-linux-gnu").glob("*.so*"):
+        if not library.is_file():
+            continue
+        notes = subprocess.check_output(["readelf", "-n", library], text=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        identity = re.search(r"Build ID: ([0-9a-f]+)", notes)
+        if not identity:
+            continue
+        build_id = identity[1]
+        debug = output / "lib/debug/.build-id" / build_id[:2] / (build_id[2:] + ".debug")
+        if not debug.is_file():
+            continue
+        section = subprocess.check_output(["readelf", "--string-dump=.gnu_debuglink", library], text=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+        link = re.search(r"\[\s*0\]\s+(\S+)", section)
+        if not link:
+            raise ValueError(f"no debuglink for {library}")
+        adjacent = library.parent / ".debug" / link[1]
+        adjacent.parent.mkdir(exist_ok=True)
+        shutil.copyfile(debug, adjacent)
 
 
 def unpack(kind, output, archives):
@@ -55,6 +79,7 @@ def unpack(kind, output, archives):
             shutil.copy2(tree / "usr/bin/qemu-aarch64-static", output / "qemu-aarch64")
         elif kind == "valgrind":
             copy_tree(tree / "usr", output)
+            place_runtime_debug(output)
         else:
             raise ValueError(kind)
 

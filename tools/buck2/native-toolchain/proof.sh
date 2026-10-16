@@ -17,5 +17,5 @@ printf '#include <stdlib.h>\nint main(void) { void *p = malloc(32); if (!p) retu
 "$build/tiny"
 "$arm/bin/aarch64-none-linux-gnu-gcc" -static "$build/tiny.c" -o "$build/arm"
 "$qemu/qemu-aarch64" "$build/arm"
-"$valgrind/bin/valgrind" --extra-debuginfo-path="$valgrind/lib/debug" --error-exitcode=97 --leak-check=full "$build/tiny"
+"$valgrind/bin/valgrind" --error-exitcode=97 --leak-check=full "$build/tiny"
 echo 'native toolchain proof: 4 tools passed'

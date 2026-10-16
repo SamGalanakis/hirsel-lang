@@ -46,6 +46,7 @@ change cannot land without exercising the tools on a worker.
 
 Valgrind's declared libc/debug dependency is included in its input tree.
 The proof's C executable selects that loader and library directory, and
-Valgrind receives `--extra-debuginfo-path` for the matching symbols. Absolute
+Valgrind finds the matching symbols beside each ELF in its standard `.debug/`
+directory, by the original debuglink and build ID. Absolute
 Debian usrmerge links are resolved inside the archive namespace before copying;
 the unpack host's loader can never satisfy one of those links.
