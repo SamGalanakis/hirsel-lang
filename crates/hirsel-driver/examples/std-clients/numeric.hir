@@ -1,3 +1,0 @@
-pub fn main() {
-  let s = std@1/u64.to_string(42u64)
-}

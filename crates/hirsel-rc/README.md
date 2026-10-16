@@ -27,7 +27,7 @@ Invariants:
   points: never clone a dense per-slot vector per instruction, edge or block,
   and never scan every slot at a site (`lacking` lists the slots that hold
   something). `hirsel-pipeline-tests/tests/rc/rc_scaling.rs` gates the whole pipeline at eight times the
-  statements; `bench/compile/rc-scaling` prints each stage's time by size.
+  statements.
 
 ## Append fusion (`append_into`)
 

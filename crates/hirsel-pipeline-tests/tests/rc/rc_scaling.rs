@@ -4,9 +4,7 @@
 //! from import to Ready, and C after each, on a function of two shapes and
 //! on one eight times its size (20 and 160 straight-line statements).
 //! `failure_cleanups_grow_linearly_with_live_counted_values` gates the size
-//! of shared failure cleanups and the time they cost. `stages` (ignored)
-//! prints the time of each stage at each size (`STATS=1`: each unit's size
-//! at Value, Rc and Ready); `bench/compile/rc-scaling` runs it optimized.
+//! of shared failure cleanups and the time they cost.
 use crate::rc_support as support;
 
 use hirsel_lir::ir::LirUnit;
@@ -40,26 +38,6 @@ fn value() -> u64 {
         s += &format!("  bad = bad + check(wa({i}i32, 1i32) == {}i32)\n", i + 1);
     }
     s + "  bad\n}\npub fn main() -> Result[(), u64] {\n  Error(value())\n}\n"
-}
-
-/// `n` terms of one `&&` chain: a branch per term.
-fn chain(n: usize) -> String {
-    let terms: Vec<String> = (0..n)
-        .map(|i| format!("wa({i}i32, 1i32) == {}i32", i + 1))
-        .collect();
-    format!(
-        "fn wa(a: i32, b: i32) -> i32 {{
-  int.wrapping_add(a, b)
-}}
-fn value() -> bool {{
-  {}
-}}
-pub fn main() -> Result[(), bool] {{
-  Error(value())
-}}
-",
-        terms.join(" && ")
-    )
 }
 
 /// `n` counted lists, all live to the end, read in a loop whose body nests
@@ -135,26 +113,6 @@ fn nested(n: usize) -> String {
     s + "    i = i + 1\n  }\n  total + ys[1]\n}\npub fn main() -> Result[(), u64] {\n  Error(value(3))\n}\n"
 }
 
-/// `n` plain locals live across `n` nested merges: about `n * n` values.
-fn locals(n: usize) -> String {
-    let mut s = String::from("fn value(k: u64) -> u64 {\n");
-    for i in 0..n {
-        s += &format!("  let a{i}: u64 = k + {i}\n");
-    }
-    s += "  let mut total: u64 = 0\n  let mut i: u64 = 0\n  while i < k {\n";
-    for i in 0..n {
-        s += &format!("    if a{i} > i {{\n      total = total + a{i}\n");
-    }
-    for _ in 0..n {
-        s += "    }\n";
-    }
-    s += "    i = i + 1\n  }\n";
-    for i in 0..n {
-        s += &format!("  total = total + a{i}\n");
-    }
-    s + "  total\n}\npub fn main() -> Result[(), u64] {\n  Error(value(3))\n}\n"
-}
-
 const STAGES: [&str; 14] = [
     "front end",
     "import",
@@ -181,37 +139,6 @@ fn checked<S: Stage>(units: &[LirUnit<S>], inputs: &Inputs<'_>) -> Duration {
     t.elapsed()
 }
 
-/// With `STATS` set, the size of each unit of a stage.
-fn stats<S: Stage>(stage: &str, units: &[LirUnit<S>]) {
-    if std::env::var("STATS").is_err() {
-        return;
-    }
-    for u in units {
-        let mut preds = vec![0usize; u.blocks.len()];
-        for e in &u.tables.edges {
-            preds[e.target.index()] += 1;
-        }
-        eprintln!(
-            "{stage} {}: slots {} values {} blocks {} insts {} edges {} failures {} loans {} addresses {} max preds {}",
-            u.header.definition.0.name,
-            u.slots.len(),
-            u.values.len(),
-            u.blocks.len(),
-            u.instructions.len(),
-            u.tables.edges.len(),
-            u.tables.failures.len(),
-            u.tables.loans.len(),
-            u.addresses.len(),
-            preds.iter().max().unwrap()
-        );
-        let mut kinds = std::collections::BTreeMap::new();
-        for b in &u.blocks {
-            *kinds.entry(format!("{:?}", b.kind)).or_insert(0usize) += 1;
-        }
-        eprintln!("  {kinds:?}");
-    }
-}
-
 /// The time of each stage of `STAGES` over every unit of a checked program, the
 /// last being everything after the front end; the front end's entry stays
 /// zero. Also the number of blocks of the Ready units.
@@ -230,7 +157,6 @@ fn middle_end(program: &hirsel_rc::instance::Program) -> ([Duration; 14], usize)
         manifest: &manifest,
     };
     out[2] = checked(&lowered.units, &inputs);
-    stats("value", &lowered.units);
     let ids = || (0..lowered.units.len()).map(|i| InstanceId(i as u32));
     let t = Clock::now();
     let placed: Vec<_> = ids()
@@ -257,7 +183,6 @@ fn middle_end(program: &hirsel_rc::instance::Program) -> ([Duration; 14], usize)
         .collect();
     out[6] = t.elapsed();
     out[7] = checked(&rc, &inputs);
-    stats("rc", &rc);
     let t = Clock::now();
     let reuse: Vec<_> = rc
         .into_iter()
@@ -279,18 +204,9 @@ fn middle_end(program: &hirsel_rc::instance::Program) -> ([Duration; 14], usize)
         .collect();
     out[11] = t.elapsed();
     out[12] = checked(&ready, &inputs);
-    stats("ready", &ready);
     out[13] = out[1..13].iter().sum();
     (out, ready.iter().map(|u| u.blocks.len()).sum())
 }
-
-const SHAPES: [(&str, fn(usize) -> String); 5] = [
-    ("straight", straight),
-    ("chain", chain),
-    ("nested", nested),
-    ("locals", locals),
-    ("deep", deep),
-];
 
 /// Eight times the statements may take at most 32 times as long. Linear is 8
 /// and `n log n` about 14; quadratic is 64, and before the states shared
@@ -301,7 +217,9 @@ const SHAPES: [(&str, fn(usize) -> String); 5] = [
 fn pipeline_time_is_near_linear_in_function_size() {
     // The nested shape at half the size: the front end takes over a minute
     // on 160 nested conditionals unoptimized.
-    for ((name, shape), n) in [(SHAPES[0], 20), (SHAPES[2], 10)] {
+    let shapes: [(&str, fn(usize) -> String, usize); 2] =
+        [("straight", straight, 20), ("nested", nested, 10)];
+    for (name, shape, n) in shapes {
         let (small, large) = (compile(&shape(n)), compile(&shape(8 * n)));
         let ratio = || {
             let total = |p| middle_end(p).0[STAGES.len() - 1].as_secs_f64();

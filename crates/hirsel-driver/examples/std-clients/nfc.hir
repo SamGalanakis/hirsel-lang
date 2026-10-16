@@ -1,3 +1,0 @@
-pub fn main() {
-  let s = std@1/unicode.normalize_nfc("e\u{301}")
-}

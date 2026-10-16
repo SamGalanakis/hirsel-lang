@@ -20,12 +20,3 @@ these files, decodes the files and runs the decoded programs. Regenerate with
 | borrowed-store | a borrowed parameter is stored into a new block without a credit | BorrowedStore |
 | region-escape | a heap block keeps a reference into a region past its exit | RegionEscape |
 | view-after-detach | a view of `p.a` is used after a sibling write detached `p` | ViewDetached |
-
-`holder-measure.rs` is the incremental holder audit's standalone
-conformance/driver measurement harness.
-
-`holder-campaign-sample.rs` compares complete replay/fork campaigns through the
-driver; `holder-campaign-sample.tsv` records its150 configurations and2,177 sites.
-`holder-campaign-scan.rs` times every remaining baseline campaign without removing
-any site. These are measurement harness sources, copied temporarily into
-conformance's bin directory for execution.
