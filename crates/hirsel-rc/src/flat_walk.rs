@@ -447,6 +447,8 @@ fn prove_with(
                 | Inst::SeqSetLen { address, .. }
                 | Inst::SeqAppend { address, .. }
                 | Inst::FlatAppend { address, .. }
+                | Inst::FlatField { address, .. }
+                | Inst::FlatClose { address, .. }
                 | Inst::BeginLoan {
                     address,
                     mutable: true,

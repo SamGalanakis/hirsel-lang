@@ -8,6 +8,7 @@ use crate::effect::Opcode;
 use crate::ir::{
     AddressBase, AddressId, ArgumentValue, ArithMode, BinaryOp, BlockId, BlockKind, CallSite,
     Callee, CaptureUse, ConstantValue, ConstructId, ConstructorKind, ConvertMode, DestinationClass,
+    FlatFieldOp,
     EdgeId, FailureId, Holding, Inst, LirType, LoanId, MaskRef, Placement, ProjectionStep,
     ReadMode, RegionInstanceId, ScopeId, SlotId, SlotKind, StorageOwner, SymbolKind, TaskDomainId,
     Terminator, UnitOrigin, ValueId, ValueRepr,
@@ -240,7 +241,9 @@ pub(super) fn inst_defs(inst: &Inst) -> Vec<ValueId> {
         | Inst::SeqReserve { version, .. }
         | Inst::SeqSetLen { version, .. }
         | Inst::SeqAppend { version, .. }
-        | Inst::FlatAppend { version, .. } => vec![version],
+        | Inst::FlatAppend { version, .. }
+        | Inst::FlatField { version, .. }
+        | Inst::FlatClose { version, .. } => vec![version],
         Inst::Replace {
             version,
             displaced_version,
@@ -1132,6 +1135,23 @@ impl<S: Stage> Checker<'_, '_, S> {
         }
     }
 
+    /// The content record of the flat list builder at `address`: a block of a
+    /// sequential sequence of prefixed variable flat records (LIR schema
+    /// revision 22).
+    fn builder_content(&self, facts: &Facts, address: AddressId) -> Option<LayoutId> {
+        let layouts = self.cx.layouts;
+        let element = self
+            .address_layout(facts, address)
+            .and_then(|l| layouts.payload(l))
+            .and_then(|p| layouts.get(p))
+            .and_then(|r| match r.kind {
+                LayoutKind::Sequential { element } => Some(element),
+                _ => None,
+            })?;
+        let (offset, content) = layouts.flat_prefixed(element)?;
+        (offset == 8 && layouts.fixed_size(content).is_none()).then_some(content)
+    }
+
     /// Whether `address` lies inside a dynamic-size part of a flat value.
     fn flat_variable(&self, facts: &Facts, address: AddressId) -> bool {
         facts.addresses[address.index()]
@@ -1814,19 +1834,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 version,
             } => {
                 let c = &unit.tables.constructs[construct.index()];
-                let element = self
-                    .address_layout(facts, address)
-                    .and_then(|l| layouts.payload(l))
-                    .and_then(|p| layouts.get(p))
-                    .and_then(|r| match r.kind {
-                        LayoutKind::Sequential { element } => Some(element),
-                        _ => None,
-                    });
-                let encoded = element.and_then(|e| layouts.flat_prefixed(e)).is_some_and(
-                    |(offset, content)| {
-                        offset == 8 && content == c.layout && layouts.fixed_size(content).is_none()
-                    },
-                );
+                let encoded = self.builder_content(facts, address) == Some(c.layout);
                 let record = matches!(
                     c.constructor,
                     ConstructorKind::Record(_) | ConstructorKind::Tuple
@@ -1836,7 +1844,67 @@ impl<S: Stage> Checker<'_, '_, S> {
                 if !encoded || !record {
                     self.add(site, K::Type("flat append"));
                 }
-                self.constructed_fields(site, construct, facts);
+                self.constructed_fields(site, construct, facts, None);
+                self.placement(site, (&c.destination, c.placement), None);
+                if let Some(slot) = self.slot_root(site, facts, address) {
+                    self.version_type(site, slot, version, "store version");
+                }
+                if self.flat_variable(facts, address) {
+                    self.add(site, K::Type("write into a variable part of a flat value"));
+                }
+            }
+            // A write of a builder's open element (LIR schema revision 24):
+            // the open field is a byte sequence of the builder's content
+            // record after only fixed fields; a reservation counts bytes and
+            // a push appends one. Which element is open is `flat_open`'s.
+            Inst::FlatField {
+                address,
+                field,
+                op,
+                version,
+            } => {
+                let content = self.builder_content(facts, address);
+                let ok = content.and_then(|c| layouts.open_field(c, field)).is_some()
+                    && match op {
+                        FlatFieldOp::Open => true,
+                        FlatFieldOp::Reserve { capacity } => {
+                            self.scalar(capacity) == Some(ScalarKind::U64)
+                        }
+                        FlatFieldOp::Push { value, .. } => {
+                            self.scalar(value) == Some(ScalarKind::U8)
+                        }
+                    };
+                if !ok {
+                    self.add(site, K::Type("flat field"));
+                }
+                if let Some(slot) = self.slot_root(site, facts, address) {
+                    self.version_type(site, slot, version, "store version");
+                }
+                if self.flat_variable(facts, address) {
+                    self.add(site, K::Type("write into a variable part of a flat value"));
+                }
+            }
+            // The open element completed: a flat construction of exactly the
+            // builder's content record, given every field but the open one,
+            // whose bytes are in place (LIR schema revision 24).
+            Inst::FlatClose {
+                address,
+                construct,
+                field,
+                version,
+            } => {
+                let c = &unit.tables.constructs[construct.index()];
+                let record = matches!(
+                    c.constructor,
+                    ConstructorKind::Record(_) | ConstructorKind::Tuple
+                );
+                if !record
+                    || self.builder_content(facts, address) != Some(c.layout)
+                    || layouts.open_field(c.layout, field).is_none()
+                {
+                    self.add(site, K::Type("flat close"));
+                }
+                self.constructed_fields(site, construct, facts, Some(field));
                 self.placement(site, (&c.destination, c.placement), None);
                 if let Some(slot) = self.slot_root(site, facts, address) {
                     self.version_type(site, slot, version, "store version");
@@ -2434,7 +2502,7 @@ impl<S: Stage> Checker<'_, '_, S> {
         if layouts.get(c.layout).is_none() {
             return;
         }
-        self.constructed_fields(site, construct, facts);
+        self.constructed_fields(site, construct, facts, None);
         let result_layout = self.layout_of(result);
         let ok = match self.ty(result).repr {
             ValueRepr::Block | ValueRepr::Uncounted => {
@@ -2450,7 +2518,14 @@ impl<S: Stage> Checker<'_, '_, S> {
 
     /// A construction's field values against its constructor's declared
     /// fields; a flat record's variable field takes a source it encodes.
-    fn constructed_fields(&mut self, site: Site, construct: ConstructId, facts: &Facts) {
+    /// `open` names a flat record's field built in place, which has no value.
+    fn constructed_fields(
+        &mut self,
+        site: Site,
+        construct: ConstructId,
+        facts: &Facts,
+        open: Option<u32>,
+    ) {
         let unit = self.cx.unit;
         let layouts = self.cx.layouts;
         let c = &unit.tables.constructs[construct.index()];
@@ -2509,6 +2584,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                     .collect();
                 given.sort();
                 let mut declared = declared;
+                declared.retain(|&(f, _)| Some(f) != open);
                 declared.sort();
                 let matches = given.len() == declared.len()
                     && given.iter().zip(&declared).all(|(&(gf, g), &(df, d))| {
@@ -2906,6 +2982,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                     address, version, ..
                 }
                 | Inst::FlatAppend {
+                    address, version, ..
+                }
+                | Inst::FlatField {
+                    address, version, ..
+                }
+                | Inst::FlatClose {
                     address, version, ..
                 }
                 | Inst::Replace {
@@ -3925,9 +4007,15 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
         | Inst::RegionPublish { value }
         | Inst::Forget { value } => out.push(op(value)),
         Inst::UpdateMask { mask, .. } => out.push(op(mask)),
-        Inst::Construct { construct, .. } | Inst::FlatAppend { construct, .. } => {
-            out.extend(construct_values(cx, construct).map(op))
-        }
+        Inst::Construct { construct, .. }
+        | Inst::FlatAppend { construct, .. }
+        | Inst::FlatClose { construct, .. } => out.extend(construct_values(cx, construct).map(op)),
+        Inst::FlatField { op: field, .. } => match field {
+            FlatFieldOp::Open => {}
+            FlatFieldOp::Reserve { capacity: value } | FlatFieldOp::Push { value, .. } => {
+                out.push(op(value))
+            }
+        },
         Inst::Reuse {
             token, construct, ..
         } => {
@@ -4063,6 +4151,8 @@ pub(super) fn inst_addresses<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<AddressId> {
         | Inst::SeqSetLen { address, .. }
         | Inst::SeqAppend { address, .. }
         | Inst::FlatAppend { address, .. }
+        | Inst::FlatField { address, .. }
+        | Inst::FlatClose { address, .. }
         | Inst::Store { address, .. }
         | Inst::Replace { address, .. }
         | Inst::BeginLoan { address, .. }

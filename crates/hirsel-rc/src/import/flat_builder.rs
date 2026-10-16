@@ -30,6 +30,8 @@ use std::collections::HashSet;
 pub(super) struct Builders {
     /// Each local of a web, and its builder layout.
     pub(super) locals: HashMap<tir::LocalId, LayoutId>,
+    /// Each local of a web, and its web's list local.
+    pub(super) lists: HashMap<tir::LocalId, tir::LocalId>,
     /// Each element temporary a construction initializes, and its list's whole place.
     pub(super) heads: HashMap<tir::LocalId, tir::PlaceId>,
     /// Element temporaries: never stored, as their construction appends.
@@ -486,6 +488,7 @@ impl Importer<'_, '_> {
             for (l, x) in web_of.iter().enumerate() {
                 if *x == Some(w) {
                     out.locals.insert(tir::LocalId(l as u32), builder);
+                    out.lists.insert(tir::LocalId(l as u32), list);
                 }
             }
             for h in heads {
@@ -501,8 +504,15 @@ impl Importer<'_, '_> {
     }
 
     /// An element construction of a builder web: its encoding appended to the
-    /// list at `list`, its encoded sources only read.
-    pub(super) fn flat_append(&mut self, list: tir::PlaceId, value: tir::RvalueId) -> R<()> {
+    /// list at `list`, its encoded sources only read. With `open`, the
+    /// construction completes the open element whose field it names, which
+    /// has no source (LIR schema revision 24).
+    pub(super) fn flat_append(
+        &mut self,
+        list: tir::PlaceId,
+        value: tir::RvalueId,
+        open: Option<u32>,
+    ) -> R<()> {
         let tir::Rvalue::Construct {
             constructor,
             fields,
@@ -531,7 +541,12 @@ impl Importer<'_, '_> {
             .filter(|d| !flat_fixed(self.layouts, d.layout))
             .map(|d| d.ordinal)
             .collect();
-        let (values, loans, taken) = self.construct_fields(&encoded, fields)?;
+        let given: Vec<tir::ConstructField> = fields
+            .iter()
+            .filter(|f| Some(f.field) != open)
+            .cloned()
+            .collect();
+        let (values, loans, taken) = self.construct_fields(&encoded, &given)?;
         let constructor = match constructor {
             tir::Constructor::Record(path) => {
                 ConstructorKind::Record(self.symbol(SymbolKind::Type, path, None))
@@ -558,10 +573,18 @@ impl Importer<'_, '_> {
             let address = this.address(&place)?;
             let ty = this.out.slots[place.slot.index()].ty;
             let version = this.value(ty, Holding::Plain);
-            this.push(Inst::FlatAppend {
-                address,
-                construct,
-                version,
+            this.push(match open {
+                Some(field) => Inst::FlatClose {
+                    address,
+                    construct,
+                    field,
+                    version,
+                },
+                None => Inst::FlatAppend {
+                    address,
+                    construct,
+                    version,
+                },
             });
             this.state.write(place.slot, &place.steps);
             this.versions[place.slot.index()] = Some(version);

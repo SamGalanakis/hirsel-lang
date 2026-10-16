@@ -996,6 +996,28 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         construct: ConstructId(0),
         version: v(59),
     });
+    // LIR schema revision 24.
+    for op in [
+        FlatFieldOp::Open,
+        FlatFieldOp::Reserve { capacity: v(1) },
+        FlatFieldOp::Push {
+            value: v(1),
+            spare: true,
+        },
+    ] {
+        insts.push(Inst::FlatField {
+            address: a(0),
+            field: 2,
+            op,
+            version: v(59),
+        });
+    }
+    insts.push(Inst::FlatClose {
+        address: a(0),
+        construct: ConstructId(0),
+        field: 2,
+        version: v(59),
+    });
     insts.push(Inst::Hash {
         result: v(60),
         value: v(2),

@@ -26,7 +26,7 @@ use crate::import::STATE_RELEASE;
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::{
     AddressBase, AddressId, AddressInfo, ArgumentValue, Block, BlockId, BlockKind, CaptureUse,
-    CleanupAnchor, CleanupAnchorId, Edge, EdgeId, FailureEdge, FailureId, Holding, Inst, LirTypeId,
+    CleanupAnchor, CleanupAnchorId, Edge, EdgeId, FailureEdge, FailureId, FlatFieldOp, Holding, Inst, LirTypeId,
     LirUnit, LoanId, MaskRef, PoolRange, ProjectionStep, ReadMode, RegionInstanceId, ScopeId,
     SlotId, SlotKind, SourceAnchorId, Terminator, ValueId, ValueInfo, ValueRepr,
 };
@@ -543,6 +543,12 @@ impl Facts {
                     }
                     | Inst::FlatAppend {
                         address, version, ..
+                    }
+                    | Inst::FlatField {
+                        address, version, ..
+                    }
+                    | Inst::FlatClose {
+                        address, version, ..
                     } => {
                         if let Some(s) = slot_root(address) {
                             version_of[version.index()] = Some(s);
@@ -758,7 +764,9 @@ fn consumed<S>(unit: &LirUnit<S>, lay: Lay<'_>, inst: &Inst) -> Vec<ValueId> {
             .collect::<Vec<_>>()
     };
     match *inst {
-        Inst::Construct { construct, .. } | Inst::FlatAppend { construct, .. } => fields(construct),
+        Inst::Construct { construct, .. }
+        | Inst::FlatAppend { construct, .. }
+        | Inst::FlatClose { construct, .. } => fields(construct),
         Inst::Reuse {
             token, construct, ..
         } => {
@@ -1896,6 +1904,11 @@ impl<S: Stage> Flow<'_, S> {
             }
             | Inst::SeqSetLen {
                 address, version, ..
+            }
+            // So does a write of a builder's open element, whose operand is
+            // plain (LIR schema revision 24).
+            | Inst::FlatField {
+                address, version, ..
             } => {
                 if let Some((slot, _)) = self.place(address) {
                     st.slots[slot.index()].versions = Versions::One(version);
@@ -1915,6 +1928,9 @@ impl<S: Stage> Flow<'_, S> {
             // An element built in place consumes its fixed fields (LIR schema
             // revision 22).
             Inst::FlatAppend {
+                address, version, ..
+            }
+            | Inst::FlatClose {
                 address, version, ..
             } => {
                 for v in consumed(unit, self.lay, inst) {
@@ -3335,7 +3351,24 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *value = map(*value);
                 *version = map(*version);
             }
-            Inst::FlatAppend { version, .. } => *version = map(*version),
+            Inst::FlatAppend { version, .. } | Inst::FlatClose { version, .. } => {
+                *version = map(*version)
+            }
+            Inst::FlatField {
+                op: FlatFieldOp::Open,
+                version,
+                ..
+            } => *version = map(*version),
+            Inst::FlatField {
+                op:
+                    FlatFieldOp::Reserve { capacity: value }
+                    | FlatFieldOp::Push { value, .. },
+                version,
+                ..
+            } => {
+                *value = map(*value);
+                *version = map(*version);
+            }
             Inst::FlatNext { result, .. } => *result = map(*result),
             Inst::Check { condition, .. } => *condition = map(*condition),
             Inst::Read {
@@ -3822,7 +3855,9 @@ pub(crate) fn copy_on_write(
             Inst::SeqReserve { address, .. }
             | Inst::SeqSetLen { address, .. }
             | Inst::SeqAppend { address, .. }
-            | Inst::FlatAppend { address, .. } => {
+            | Inst::FlatAppend { address, .. }
+            | Inst::FlatField { address, .. }
+            | Inst::FlatClose { address, .. } => {
                 written.insert(address);
                 if !relocated.contains(&address) {
                     holding.insert(address);
@@ -4105,6 +4140,8 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
                     | Inst::SeqSetLen { address, .. }
                     | Inst::SeqAppend { address, .. }
                     | Inst::FlatAppend { address, .. }
+                    | Inst::FlatField { address, .. }
+                    | Inst::FlatClose { address, .. }
                     | Inst::Read {
                         address,
                         mode: ReadMode::Take,

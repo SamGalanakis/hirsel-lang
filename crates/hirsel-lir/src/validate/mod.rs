@@ -41,6 +41,7 @@
 //!   it needs no credit, and it is never a reuse donor.
 mod arena;
 pub use arena::check_calls as check_result_arena_calls;
+mod flat_open;
 mod flat_walk;
 mod flow;
 mod ownership;
@@ -501,6 +502,22 @@ impl<'a> Layouts<'a> {
             (16, element) => Some(element),
             (_, element) => self.fixed_size(element).map(|_| element),
         }
+    }
+    /// The offset in the flat record `record` of its field `field` when an
+    /// open element can build it in place (LIR schema revision 24): a byte
+    /// sequence encoding after only fixed fields, so at a static offset.
+    pub fn open_field(&self, record: LayoutId, field: u32) -> Option<u64> {
+        let r = self.get(record)?;
+        if r.kind != LayoutKind::Flat {
+            return None;
+        }
+        let f = r.fields.iter().find(|f| f.ordinal == field)?;
+        let earlier_fixed = r
+            .fields
+            .iter()
+            .filter(|e| e.ordinal < field)
+            .all(|e| self.fixed_size(e.layout).is_some());
+        (earlier_fixed && self.flat_bytes(f.layout)).then_some(f.offset)
     }
     /// The FlatFormatV0 encoding of String and Bytes: a byte sequence.
     pub fn flat_bytes(&self, id: LayoutId) -> bool {

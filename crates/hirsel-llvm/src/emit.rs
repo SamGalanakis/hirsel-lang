@@ -892,6 +892,9 @@ enum FlatPart<'m> {
         data: Value<'m>,
         first: u64,
     },
+    /// A byte field an open element built in place (LIR schema revision 24):
+    /// its length word and `length` bytes are already written.
+    InPlace { length: Value<'m> },
 }
 
 /// An LLVM parameter of a Hirsel ABI v1 entry.
@@ -1887,7 +1890,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 | Inst::SeqReserve { version, .. }
                 | Inst::SeqSetLen { version, .. }
                 | Inst::SeqAppend { version, .. }
-                | Inst::FlatAppend { version, .. } => {
+                | Inst::FlatAppend { version, .. }
+                | Inst::FlatField { version, .. }
+                | Inst::FlatClose { version, .. } => {
                     self.versions.insert(version);
                 }
                 Inst::Replace {
@@ -4038,6 +4043,92 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.sequential_grew(data, used, bytes);
                 Ok(())
             }
+            // The open element's writes past the used bytes, whose field's length
+            // word lies at `word` in the element (LIR schema revision 24). Growth
+            // keeps the bytes written so far.
+            Inst::FlatField {
+                address, field, op, ..
+            } => {
+                let (place, payload, element) = self.sequential_place(address)?;
+                let first = self.sequential_offset(element)?;
+                let word = first + self.open_word(element, field)?;
+                let (old, data, used) = self.sequential_used(place, payload)?;
+                let at = self.builder.binary(BinOp::Add, used, self.const_u64(word));
+                if op == FlatFieldOp::Open {
+                    let need = self.builder.binary(BinOp::Add, at, self.const_u64(8));
+                    let keep = self.builder.binary(BinOp::Add, used, self.const_u64(first));
+                    let data = self.sequential_grow(place, payload, old, keep, need)?;
+                    self.builder
+                        .store(self.const_u64(0), self.builder.offset(data, at), 1);
+                    return Ok(());
+                }
+                let length = self.load_u64(self.builder.offset(data, at));
+                let past = self.builder.binary(BinOp::Add, at, self.const_u64(8));
+                let keep = self.builder.binary(BinOp::Add, past, length);
+                match op {
+                    FlatFieldOp::Open => unreachable!("opened above"),
+                    FlatFieldOp::Reserve { capacity } => {
+                        let (need, _) = scalar::int_arith(
+                            &self.builder,
+                            BinaryOp::Add,
+                            ArithMode::Saturating,
+                            ScalarKind::U64,
+                            keep,
+                            self.get(capacity)?,
+                        )
+                        .or_else(|e| self.invalid(e))?;
+                        self.sequential_grow(place, payload, old, keep, need)?;
+                    }
+                    FlatFieldOp::Push { value, spare } => {
+                        let data = if spare {
+                            data
+                        } else {
+                            let need = self.builder.binary(BinOp::Add, keep, self.const_u64(1));
+                            self.sequential_grow(place, payload, old, keep, need)?
+                        };
+                        self.builder
+                            .store(self.get(value)?, self.builder.offset(data, keep), 1);
+                        let longer = self.builder.binary(BinOp::Add, length, self.const_u64(1));
+                        self.builder.store(longer, self.builder.offset(data, at), 1);
+                    }
+                }
+                Ok(())
+            }
+            // The open element completed: its prefix and the construction's other
+            // fields written around the bytes in place, as `FlatAppend` writes an
+            // element. Only fields after the open one need more room.
+            Inst::FlatClose {
+                address,
+                construct,
+                field,
+                ..
+            } => {
+                let (place, payload, element) = self.sequential_place(address)?;
+                let first = self.sequential_offset(element)?;
+                let word = self.open_word(element, field)?;
+                let (old, data, used) = self.sequential_used(place, payload)?;
+                let start = self.builder.binary(BinOp::Add, used, self.const_u64(first));
+                let at = self.builder.binary(BinOp::Add, start, self.const_u64(word));
+                let length = self.load_u64(self.builder.offset(data, at));
+                let site = self.construct_site(construct)?;
+                let parts = self.flat_parts_around(site, Some((field, length)))?;
+                let content = self.flat_extent(&parts)?;
+                let bytes = self.flat_add(content, self.const_u64(8))?;
+                let trailing = !matches!(parts.last(), Some(FlatPart::InPlace { .. }));
+                let data = if trailing {
+                    let past = self.builder.binary(BinOp::Add, at, self.const_u64(8));
+                    let keep = self.builder.binary(BinOp::Add, past, length);
+                    let need = self.builder.binary(BinOp::Add, start, bytes);
+                    self.sequential_grow(place, payload, old, keep, need)?
+                } else {
+                    data
+                };
+                let at = self.builder.offset(data, start);
+                self.builder.store(content, at, 1);
+                self.write_flat(self.builder.offset(at, self.const_u64(8)), &parts)?;
+                self.sequential_grew(data, used, bytes);
+                Ok(())
+            }
             Inst::SeqSetLen { address, len, .. } => {
                 let place = self.place(address)?;
                 let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
@@ -5713,13 +5804,38 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         first: u64,
         bytes: Value<'m>,
     ) -> Emitted<(Value<'m>, Value<'m>)> {
-        let align = u64::from(self.layout(payload)?.align);
-        let ptr_ty = self.module.ptr_type();
+        let (old, _, used) = self.sequential_used(place, payload)?;
+        let keep = self.builder.binary(BinOp::Add, used, self.const_u64(first));
+        let need = self.builder.binary(BinOp::Add, keep, bytes);
+        let data = self.sequential_grow(place, payload, old, keep, need)?;
+        Ok((data, used))
+    }
+
+    /// The block the sequential place holds, its payload address and its used bytes.
+    fn sequential_used(
+        &self,
+        place: Place<'m>,
+        payload: LayoutId,
+    ) -> Emitted<(Value<'m>, Value<'m>, Value<'m>)> {
         let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
         let data = self.payload_of(old, payload)?.ptr;
         let used = self.load_u64(self.builder.offset(data, self.const_u64(8)));
-        let keep = self.builder.binary(BinOp::Add, used, self.const_u64(first));
-        let need = self.builder.binary(BinOp::Add, keep, bytes);
+        Ok((old, data, used))
+    }
+
+    /// Room for `need` bytes from the payload's start of the sequential block
+    /// `old` at `place`, growing it geometrically when it is full and keeping
+    /// its first `keep` bytes: the payload address.
+    fn sequential_grow(
+        &mut self,
+        place: Place<'m>,
+        payload: LayoutId,
+        old: Value<'m>,
+        keep: Value<'m>,
+        need: Value<'m>,
+    ) -> Emitted<Value<'m>> {
+        let align = u64::from(self.layout(payload)?.align);
+        let ptr_ty = self.module.ptr_type();
         let usable = crate::runtime::capacity(&self.builder, self.function, old);
         let full = self.builder.icmp(IntPredicate::Ugt, need, usable);
         let here = self.builder.current();
@@ -5744,7 +5860,28 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.add_incoming(block, old, here);
         self.builder.add_incoming(block, grown, grew);
         self.store(Shape::Scalar(ScalarKind::Pointer), block, place);
-        Ok((self.payload_of(block, payload)?.ptr, used))
+        Ok(self.payload_of(block, payload)?.ptr)
+    }
+
+    /// Where the length word of the open element's field `field` lies in a
+    /// builder's element of layout `element` (LIR schema revision 24): past
+    /// the prefix and the fixed fields before it.
+    fn open_word(&self, element: LayoutId, field: u32) -> Emitted<u64> {
+        let record = self.layout(element)?;
+        let content = match record.fields.as_slice() {
+            [only] if record.kind == LayoutKind::Flat && only.offset == 8 => only.layout,
+            _ => return self.invalid("an open element of an unprefixed builder"),
+        };
+        let content = self.layout(content)?;
+        let Some(at) = content.fields.iter().find(|f| f.ordinal == field) else {
+            return self.invalid("an open element of a missing field");
+        };
+        for earlier in content.fields.iter().filter(|f| f.ordinal < field) {
+            if !matches!(self.layout(earlier.layout)?.size, SizeSpec::Fixed(_)) {
+                return self.invalid("an open field after a variable one");
+            }
+        }
+        Ok(8 + at.offset)
     }
 
     /// One more element of `bytes` in the sequential payload at `data`.
@@ -5761,15 +5898,31 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// or an encoded source's bytes (a String or Bytes slice, or a variable flat record's
     /// block payload) behind its u64 length prefix. Encoded sources are only read.
     fn flat_parts(&mut self, site: &'a ConstructSite) -> Emitted<Vec<FlatPart<'m>>> {
+        self.flat_parts_around(site, None)
+    }
+
+    /// `flat_parts` of a construction completing an open element: `open` is
+    /// the field built in place and its length (LIR schema revision 24).
+    fn flat_parts_around(
+        &mut self,
+        site: &'a ConstructSite,
+        open: Option<(u32, Value<'m>)>,
+    ) -> Emitted<Vec<FlatPart<'m>>> {
         let record = self.layout(site.layout)?;
         let values = self.pool(site.fields, &self.unit.pools.fields)?;
         let mut declared: Vec<&FieldLayout> = record.fields.iter().collect();
         declared.sort_by_key(|f| f.ordinal);
-        if declared.len() != values.len() {
+        if declared.len() != values.len() + usize::from(open.is_some()) {
             return self.invalid("a flat construction without a value for every field");
         }
         let mut parts = Vec::new();
         for field in declared {
+            if let Some((ordinal, length)) = open
+                && field.ordinal == ordinal
+            {
+                parts.push(FlatPart::InPlace { length });
+                continue;
+            }
             let Some(value) = values.iter().find(|v| v.field == field.ordinal) else {
                 return self.invalid("a flat construction without a value for its field");
             };
@@ -5837,6 +5990,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     let used = self.load_u64(self.builder.offset(data, self.const_u64(8)));
                     self.flat_add(used, self.const_u64(16))?
                 }
+                FlatPart::InPlace { length } => self.flat_add(length, self.const_u64(8))?,
             };
             total = self.flat_add(total, size)?;
         }
@@ -5880,6 +6034,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     let from = self.builder.offset(data, self.const_u64(first));
                     self.builder.memcpy(to, 1, from, 1, used);
                     cursor = self.builder.offset(to, used);
+                }
+                FlatPart::InPlace { length } => {
+                    let data = self.builder.offset(cursor, self.const_u64(8));
+                    cursor = self.builder.offset(data, length);
                 }
             }
         }

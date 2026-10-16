@@ -10,7 +10,7 @@
 use super::structure::{Def, Facts, Root, Step, construct_values, propagate};
 use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::{
-    ArgumentValue, BlockId, CaptureValue, ConstructorKind, Inst, MaskRef, Placement, ReadMode,
+    ArgumentValue, BlockId, CaptureValue, ConstructorKind, FlatFieldOp, Inst, MaskRef, Placement, ReadMode,
     StorageOwner, TaskDomainId, Terminator, ValueId, ValueRepr,
 };
 use crate::layout_types::LayoutId;
@@ -432,7 +432,14 @@ fn token_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<ValueId> {
     match *inst {
         Inst::Reuse { construct, .. }
         | Inst::Construct { construct, .. }
-        | Inst::FlatAppend { construct, .. } => construct_values(cx, construct).collect(),
+        | Inst::FlatAppend { construct, .. }
+        | Inst::FlatClose { construct, .. } => construct_values(cx, construct).collect(),
+        Inst::FlatField { op, .. } => match op {
+            FlatFieldOp::Open => Vec::new(),
+            FlatFieldOp::Reserve { capacity: value } | FlatFieldOp::Push { value, .. } => {
+                vec![value]
+            }
+        },
         Inst::Closure { closure, .. } => unit.tables.closures[closure.index()]
             .captures
             .get(&unit.pools.captures)

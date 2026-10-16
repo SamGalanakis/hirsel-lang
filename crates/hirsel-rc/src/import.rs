@@ -80,6 +80,7 @@ impl From<InstanceError> for ImportError {
 }
 
 mod flat_builder;
+mod flat_field;
 mod flat_views;
 mod materialize;
 
@@ -172,6 +173,8 @@ pub fn lower_with_options(
         let proven = crate::spare_push::prove(&unit, &|l| layouts.record(l).kind.clone());
         crate::spare_push::commit(&mut unit, &proven, &mut required, &layouts)
             .map_err(LowerError::Instance)?;
+        let fields = crate::spare_push::prove_fields(&unit);
+        crate::spare_push::commit_fields(&mut unit, &fields);
         plans.push(plan);
         units.push(unit);
         for request in required.drain(..) {
@@ -1285,6 +1288,7 @@ pub fn import(
             })
             .collect(),
         builders: flat_builder::Builders::default(),
+        fields: flat_field::Fields::default(),
         tir_block: Vec::new(),
         call_block: tir::BlockId(0),
         versioned: Vec::new(),
@@ -1320,6 +1324,9 @@ pub fn import(
     };
     im.builders = im.builder_webs()?;
     let loans: Vec<_> = im.builders.loans.iter().copied().collect();
+    im.elided_loans.extend(loans);
+    im.fields = im.field_webs()?;
+    let loans: Vec<_> = im.fields.loans.iter().copied().collect();
     im.elided_loans.extend(loans);
     im.cfg()?;
     let mut entry: Vec<Option<State>> = vec![None; body.blocks.len()];
@@ -1391,6 +1398,8 @@ struct Importer<'a, 'o> {
     elided_loans: std::collections::HashSet<tir::LoanId>,
     /// Lists built in their flat encoding (LIR schema revision 22).
     builders: flat_builder::Builders,
+    /// Byte lists built in place in a builder's element (revision 24).
+    fields: flat_field::Fields,
     tir_block: Vec<Option<BlockId>>,
     /// The TIR block whose call terminator is being lowered.
     call_block: tir::BlockId,
@@ -2371,6 +2380,7 @@ impl Importer<'_, '_> {
                 .get(&self.id)
                 .is_some_and(|locals| locals.contains(&tir::LocalId(i as u32)))
                 || self.builders.elements.contains(&tir::LocalId(i as u32))
+                || self.fields.locals.contains(&tir::LocalId(i as u32))
             {
                 self.local_slot.push(None);
                 continue;
@@ -2795,6 +2805,7 @@ impl Importer<'_, '_> {
             .get(&self.id)
             .is_some_and(|locals| locals.contains(&root))
             || self.builders.elements.contains(&root)
+            || self.fields.locals.contains(&root)
     }
 
     fn elided_loan(&self, loan: tir::LoanId) -> bool {
@@ -4467,13 +4478,15 @@ impl Importer<'_, '_> {
 
     fn instruction(&mut self, kind: &tir::InstructionKind) -> R<()> {
         use tir::InstructionKind as K;
-        if let K::Assign { destination, value } = kind
-            && let Some(&list) = self
-                .builders
-                .heads
-                .get(&self.body.places[destination.0 as usize].root)
-        {
-            return self.flat_append(list, *value);
+        if let K::Assign { destination, value } = kind {
+            let root = self.body.places[destination.0 as usize].root;
+            if let Some(&(list, field)) = self.fields.opens.get(&root) {
+                return self.field_open(list, field);
+            }
+            if let Some(&list) = self.builders.heads.get(&root) {
+                let open = self.fields.closes.get(&root).copied();
+                return self.flat_append(list, *value, open);
+            }
         }
         let elided = match kind {
             K::StorageLive(local) => self.local_slot[local.0 as usize].is_none(),
@@ -5683,6 +5696,12 @@ impl Importer<'_, '_> {
                 }
                 if self.builders.reserves.contains(&t) {
                     return self.builder_reserve(arguments, *returns);
+                }
+                if let Some(&write) = self.fields.writes.get(&t) {
+                    return self.field_write(write, arguments, *returns);
+                }
+                if self.fields.freezes.contains(&t) {
+                    return self.field_freeze(*returns);
                 }
                 if let Some(site) = self.plan.and_then(|p| p.site(t)).cloned() {
                     return self.back_edge(&site, arguments);

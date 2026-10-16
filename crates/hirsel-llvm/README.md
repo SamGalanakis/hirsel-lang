@@ -62,7 +62,11 @@ Invariants:
   a builder it borrows, then takes and releases with nothing between, takes over a unique
   builder's block (its two header words become `8 + used` and the count, its descriptor index the
   record's) and skips that release, a builder's `SeqReserve` grows it once for `capacity` of its
-  least element, a `Slot` step is an unchecked element address, `FlatAt`
+  least element, an open element's `FlatField` (revision 24) grows the same way past the used
+  bytes and the element's length word, stores the word and each pushed byte there (a `spare`
+  push without the growth test), and `FlatClose` sizes the other parts around the field's
+  bytes in place, grows only when fields follow it and writes the rest,
+  a `Slot` step is an unchecked element address, `FlatAt`
   checks its index against the flat or sequential count (MEM-14) and offsets from the elements' start
   (a sequential Packed sequence's first element, MEM-13),
   `FlatNext` is the element's end less that start, and `Recast` emits nothing. `Hash`

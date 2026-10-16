@@ -63,7 +63,7 @@ fn appends(lowered: &Lowered) -> usize {
 }
 
 /// Every stage to Ready; C accepts every unit at every stage.
-fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program<Ready> {
+pub(crate) fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program<Ready> {
     let program = compile(source);
     let table = lowered.table.clone();
     let manifest = manifest(&program);
@@ -107,7 +107,7 @@ fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program<Ready> {
 }
 
 /// H's `value()`, auditing every injected failure site, or the violation.
-fn heap(program: &hirsel_heapcheck::Program<Ready>) -> Result<u64, String> {
+pub(crate) fn heap(program: &hirsel_heapcheck::Program<Ready>) -> Result<u64, String> {
     let campaign = hirsel_heapcheck::fault_campaign(
         program,
         &path("main"),
@@ -138,7 +138,7 @@ fn heap(program: &hirsel_heapcheck::Program<Ready>) -> Result<u64, String> {
 }
 
 /// The interpreter's `value()`.
-fn reference(source: &str) -> u64 {
+pub(crate) fn reference(source: &str) -> u64 {
     let source = source.to_string();
     with_compiler_stack(move || {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
@@ -291,7 +291,7 @@ fn lists_read_as_lists_or_given_other_elements_stay_ordinary() {
 }
 
 /// The C violations of every unit of a Ready program.
-fn violations(source: &str, program: &hirsel_heapcheck::Program<Ready>) -> Vec<ViolationKind> {
+pub(crate) fn violations(source: &str, program: &hirsel_heapcheck::Program<Ready>) -> Vec<ViolationKind> {
     let compiled = compile(source);
     let manifest = manifest(&compiled);
     let operations = compiled.operation_registry();

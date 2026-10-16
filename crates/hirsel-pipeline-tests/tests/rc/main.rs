@@ -11,6 +11,7 @@ mod rc_cleanup_variant;
 mod rc_closure_calls;
 mod rc_drop_specialization;
 mod rc_flat_builder;
+mod rc_flat_field;
 mod rc_flat_native;
 mod rc_flat_walk;
 mod rc_import;

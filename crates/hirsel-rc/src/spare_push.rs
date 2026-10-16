@@ -19,6 +19,11 @@
 //! count before the push is at most `j < m <= capacity`. A detach preserves
 //! capacity, so sharing the list elsewhere cannot invalidate the bound.
 //! Discovery and proof are read-only; only a complete proof edits a unit.
+//!
+//! A byte field built in place (LIR schema revision 24) is proved the same
+//! way: its opening is the empty list, its `FlatField` reservation leaves
+//! room for `m` bytes past its length word, and a push of the loop marks
+//! itself `spare`.
 use crate::flat_walk::{Graph, Values, code, definitions, integer, scalar_source};
 use crate::liveness::inst_defs;
 use hirsel_lir::ir::*;
@@ -70,6 +75,55 @@ pub fn prove(u: &LirUnit<Value>, layout: &dyn Fn(LayoutId) -> LayoutKind) -> Vec
         .filter(|&(block, call)| cx.spare(block, call, layout).is_some())
         .map(|(block, call)| Proven { block, call })
         .collect()
+}
+
+/// Every open field push of `u` proven to write into its reservation: the
+/// instruction's index in `u.instructions`.
+pub fn prove_fields(u: &LirUnit<Value>) -> Vec<usize> {
+    let mut pushes = Vec::new();
+    for (b, block) in u.blocks.iter().enumerate() {
+        for (i, inst) in code(u, b).iter().enumerate() {
+            if let Inst::FlatField {
+                op: FlatFieldOp::Push { spare: false, .. },
+                ..
+            } = inst
+            {
+                pushes.push((b, i, block.instructions.start as usize + i));
+            }
+        }
+    }
+    if pushes.is_empty() {
+        return Vec::new();
+    }
+    let g = Graph::new(u);
+    let forward = forwards(u, &g);
+    let cx = Proof {
+        u,
+        g,
+        defs: definitions(u),
+        def_block: def_blocks(u),
+        forward,
+        reserve: crate::library::core_path("list.reserve"),
+        empty: crate::import::empty_sequence(),
+    };
+    pushes
+        .into_iter()
+        .filter(|&(b, i, _)| cx.field_spare(b, i).is_some())
+        .map(|(_, _, at)| at)
+        .collect()
+}
+
+/// Mark each proven open field push of `u` spare.
+pub fn commit_fields(u: &mut LirUnit<Value>, proven: &[usize]) {
+    for &at in proven {
+        if let Inst::FlatField {
+            op: FlatFieldOp::Push { spare, .. },
+            ..
+        } = &mut u.instructions[at]
+        {
+            *spare = true;
+        }
+    }
 }
 
 fn callee_is(u: &LirUnit<Value>, call: CallId, path: &hirsel_syntax::DefPath) -> bool {
@@ -162,6 +216,14 @@ fn forwards(u: &LirUnit<Value>, g: &Graph) -> Vec<ValueId> {
     rep
 }
 
+/// The push a proof is about: a library call, or the open field push at an
+/// index of its block.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Push {
+    Call(CallId),
+    Field(usize),
+}
+
 struct Proof<'u> {
     u: &'u LirUnit<Value>,
     g: Graph,
@@ -242,14 +304,42 @@ impl Proof<'_> {
         if !matches!(layout(payload), LayoutKind::Sequence { .. }) {
             return None;
         }
+        self.counted(block, list, Push::Call(call), |v| self.reserve_of(v, list))
+    }
+
+    /// The open field push at instruction `at` of block `block`.
+    fn field_spare(&self, block: usize, at: usize) -> Option<()> {
+        let Inst::FlatField { address, field, .. } = code(self.u, block)[at] else {
+            return None;
+        };
+        if !self.whole(address) {
+            return None;
+        }
+        let list = self.root(address)?;
+        self.counted(block, list, Push::Field(at), |v| {
+            self.field_reserve_of(v, list, field)
+        })
+    }
+
+    /// Whether the push in `block` runs at most once per iteration of a
+    /// counted loop `j < m` over the list's reserved version, `reserve_of`
+    /// naming the reservation's `m` and block.
+    fn counted(
+        &self,
+        block: usize,
+        list: SlotId,
+        push: Push,
+        reserve_of: impl Fn(ValueId) -> Option<(ValueId, usize)>,
+    ) -> Option<()> {
+        let u = self.u;
         let (header, members) = self.innermost(block)?;
         if self.inner_cycle(block, header, &members) {
             return None;
         }
         // The push is the loop's only reference to the list.
         for &b in &members {
-            for inst in code(u, b) {
-                if self.references(inst, list) {
+            for (i, inst) in code(u, b).iter().enumerate() {
+                if self.references(inst, list) && !(b == block && push == Push::Field(i)) {
                     return None;
                 }
             }
@@ -258,7 +348,7 @@ impl Proof<'_> {
                 for a in site.arguments.get(&u.pools.call_arguments).unwrap_or(&[]) {
                     if let ArgumentValue::Address { address, .. } = a.value
                         && self.root(address) == Some(list)
-                        && other != call
+                        && push != Push::Call(other)
                     {
                         return None;
                     }
@@ -294,7 +384,7 @@ impl Proof<'_> {
             let [version] = resolved.into_iter().collect::<Vec<_>>()[..] else {
                 continue;
             };
-            if let Some(found) = self.reserve_of(version, list) {
+            if let Some(found) = reserve_of(version) {
                 if reserved.replace((ordinal, found)).is_some() {
                     return None;
                 }
@@ -344,6 +434,39 @@ impl Proof<'_> {
             }
         }
         Some(())
+    }
+
+    /// When `version` is the list's version produced by a `FlatField`
+    /// reservation of `field` whose reaching version is that field's
+    /// opening: the reserved capacity and the reservation's block.
+    fn field_reserve_of(
+        &self,
+        version: ValueId,
+        list: SlotId,
+        field: u32,
+    ) -> Option<(ValueId, usize)> {
+        let b = self.def_block[version.index()]?;
+        let (at, capacity) = code(self.u, b).iter().enumerate().find_map(|(i, inst)| match *inst {
+            Inst::FlatField {
+                address,
+                field: f,
+                op: FlatFieldOp::Reserve { capacity },
+                version: v,
+            } if v == version && f == field && self.whole(address) && self.root(address) == Some(list) => {
+                Some((i, capacity))
+            }
+            _ => None,
+        })?;
+        let before = self.reaching(b, at, list)?;
+        match self.defs.inst[before.index()]? {
+            Inst::FlatField {
+                field: f,
+                op: FlatFieldOp::Open,
+                version: v,
+                ..
+            } if v == before && f == field => Some((capacity, b)),
+            _ => None,
+        }
     }
 
     /// A version through block parameters that only forward one value.
@@ -412,6 +535,9 @@ impl Proof<'_> {
                     }
                     | Inst::Replace {
                         address, version, ..
+                    }
+                    | Inst::FlatField {
+                        address, version, ..
                     } => (self.root(address) == Some(slot)).then_some(version),
                     _ => None,
                 };
@@ -451,7 +577,9 @@ impl Proof<'_> {
 
     fn whole_write(&self, inst: &Inst) -> bool {
         match *inst {
-            Inst::Store { address, .. } | Inst::Replace { address, .. } => self.whole(address),
+            Inst::Store { address, .. }
+            | Inst::Replace { address, .. }
+            | Inst::FlatField { address, .. } => self.whole(address),
             _ => false,
         }
     }
@@ -482,6 +610,9 @@ impl Proof<'_> {
                 address, version, ..
             }) if version == v => self.root(address),
             Some(Inst::Replace {
+                address, version, ..
+            }) if version == v => self.root(address),
+            Some(Inst::FlatField {
                 address, version, ..
             }) if version == v => self.root(address),
             Some(_) => None,

@@ -22,6 +22,29 @@ impl<S: Stage> Machine<'_, S> {
         })
     }
 
+    /// Where the field `field` of the flat record `record` lies when an open
+    /// element builds it in place (LIR schema revision 24): a byte sequence
+    /// after only fixed fields, at its static offset.
+    pub(super) fn open_field(&self, record: LayoutId, field: u32) -> Checked<u64> {
+        let r = self.record(record)?;
+        let Some(f) = r.fields.iter().find(|f| f.ordinal == field) else {
+            return fail(V::TypeConfusion, "an open element of a missing field");
+        };
+        for e in r.fields.iter().filter(|e| e.ordinal < field) {
+            if !matches!(self.record(e.layout)?.size, SizeSpec::Fixed(_)) {
+                return fail(V::TypeConfusion, "an open field after a variable one");
+            }
+        }
+        let bytes = match self.flat_sequence(f.layout)? {
+            Some(element) => self.record(element)?.kind == LayoutKind::Scalar(ScalarKind::U8),
+            None => false,
+        };
+        if r.kind != LayoutKind::Flat || !bytes {
+            return fail(V::TypeConfusion, "an open field that is not a byte sequence");
+        }
+        Ok(f.offset)
+    }
+
     /// The element of a flat sequence encoding (List, Array, String, Bytes).
     pub(super) fn flat_sequence(&self, layout: LayoutId) -> Checked<Option<LayoutId>> {
         Ok(match self.flat_prefixed(layout)? {
@@ -561,7 +584,7 @@ impl<S: Stage> Machine<'_, S> {
         fields: &[FieldValue],
         block: bool,
     ) -> Checked<Val> {
-        let bytes = self.flat_content(f, site, fields)?;
+        let bytes = self.flat_content(f, site, fields, None)?;
         let size = bytes.len() as u64;
         let target = if block {
             self.place_sized(f, site.placement, site.layout, size)?
@@ -588,20 +611,32 @@ impl<S: Stage> Machine<'_, S> {
 
     /// The FlatFormatV0 bytes of the flat construction `site`: its fields'
     /// encodings in declaration order, checked against its size program.
+    /// `open` is a field built in place and its encoding (LIR schema
+    /// revision 24), for which the site has no value.
     pub(super) fn flat_content(
         &mut self,
         f: &mut Frame,
         site: &ConstructSite,
         fields: &[FieldValue],
+        open: Option<(u32, Vec<u8>)>,
     ) -> Checked<Vec<u8>> {
         let record = self.record(site.layout)?;
         let mut declared: Vec<_> = record.fields.iter().collect();
         declared.sort_by_key(|fl| fl.ordinal);
-        if declared.len() != fields.len() {
+        if declared.len() != fields.len() + usize::from(open.is_some()) {
             return fail(V::Malformed, "a flat construction misses a field");
         }
         let mut bytes = Vec::new();
         for fl in declared {
+            if let Some((field, encoded)) = &open
+                && fl.ordinal == *field
+            {
+                if fields.iter().any(|fv| fv.field == *field) {
+                    return fail(V::Malformed, "a value for a field built in place");
+                }
+                bytes.extend_from_slice(encoded);
+                continue;
+            }
             let fv = fields
                 .iter()
                 .find(|fv| fv.field == fl.ordinal)

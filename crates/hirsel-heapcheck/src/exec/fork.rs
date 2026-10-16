@@ -31,6 +31,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             resolving: self.resolving,
             holders: self.holders.clone(),
             arena_no_drop: self.arena_no_drop.clone(),
+            open_elements: self.open_elements.clone(),
             full_recount_due: self.full_recount_due,
         }
     }

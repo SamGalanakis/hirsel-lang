@@ -60,6 +60,12 @@ pub(super) fn slots<S>(unit: &LirUnit<S>) -> Vec<Option<SlotId>> {
             }
             | Inst::FlatAppend {
                 address, version, ..
+            }
+            | Inst::FlatField {
+                address, version, ..
+            }
+            | Inst::FlatClose {
+                address, version, ..
             } => {
                 if let Some(slot) = root(address) {
                     declare(version, slot);

@@ -240,6 +240,9 @@ pub(crate) struct Machine<'p, S> {
     holders: holders::Holders,
     full_recount_due: bool,
     arena_no_drop: std::collections::BTreeSet<AllocId>,
+    /// Each flat list builder with an open element, and the field its bytes
+    /// are built in (LIR schema revision 24).
+    open_elements: BTreeMap<AllocId, u32>,
 }
 
 /// What a resolved address names.
@@ -332,6 +335,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             resolving: 0,
             holders: Default::default(),
             arena_no_drop: Default::default(),
+            open_elements: BTreeMap::new(),
             full_recount_due: false,
         }
     }
@@ -1234,6 +1238,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             self.ledger.get_mut(grown.alloc).extent.place(0, moved);
             self.ledger.get_mut(block.alloc).count = None;
             self.ledger.free(block.alloc)?;
+            if let Some(field) = self.open_elements.remove(&block.alloc) {
+                self.open_elements.insert(grown.alloc, field);
+            }
             let word = self.word;
             self.ledger.get_mut(r.ptr.alloc).extent.put_cell(
                 r.ptr.offset,
@@ -1259,6 +1266,47 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             _ => false,
         })
+    }
+
+    /// A builder with no open element, which only an open element's own
+    /// writes may write (LIR schema revision 24).
+    fn closed_builder(&self, block: Ptr) -> Checked<()> {
+        if self.open_elements.contains_key(&block.alloc) {
+            return fail(V::Malformed, "a write into a builder with an open element");
+        }
+        Ok(())
+    }
+
+    /// The element of the builder at `address` open at `field`: its place,
+    /// block and content record, the field, where its length word lies from
+    /// the payload's start and the bytes in it so far.
+    fn open_element(
+        &mut self,
+        f: &Frame,
+        address: AddressId,
+        field: u32,
+    ) -> Checked<(Resolved, Ptr, LayoutId, u32, u64, u64)> {
+        let (r, block, element) = self.sequence_write(f, address, true)?;
+        let Some((8, content)) = self.flat_prefixed(element)? else {
+            return fail(V::TypeConfusion, "an open element of an unprefixed builder");
+        };
+        match self.open_elements.get(&block.alloc) {
+            Some(&open) if open == field => {}
+            Some(_) => return fail(V::Malformed, "a write of another open field"),
+            None => {
+                return fail(V::Malformed, "a write of a builder's open element when none is open");
+            }
+        }
+        let used = u64::try_from(self.read_scalar(block.at(8), 8)?)
+            .map_err(|_| err(V::Malformed, "a used byte count beyond u64"))?;
+        let word = self.sequential_start(element)? + used + 8 + self.open_field(content, field)?;
+        let a = self.ledger.check(block)?;
+        if !a.extent.all_init(block.offset + word, 8) {
+            return fail(V::UninitializedRead, "an open element's length word");
+        }
+        let len = u64::try_from(self.read_scalar(block.at(word), 8)?)
+            .map_err(|_| err(V::Malformed, "an open field length beyond u64"))?;
+        Ok((r, block, content, field, word, len))
     }
 
     fn sequential_start(&self, element: LayoutId) -> Checked<u64> {
@@ -3445,6 +3493,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 // A flat builder's reservation: room for `capacity` of its least
                 // element in all, its unique block kept (LIR schema revision 22).
                 let (r, block, element) = self.sequence_write(f, address, true)?;
+                self.closed_builder(block)?;
                 let least = match self.flat_prefixed(element)? {
                     Some((prefix, content)) => prefix.saturating_add(
                         hirsel_lir::layout::least_size(&self.record(content)?.size),
@@ -3567,6 +3616,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 version,
             } => {
                 let (r, block, element) = self.sequence_write(f, address, true)?;
+                self.closed_builder(block)?;
                 let m = self.take_value(f, value)?;
                 let Val::Image(image) = &m.val else {
                     return fail(V::TypeConfusion, "an appended element is no image");
@@ -3609,8 +3659,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                 if site.layout != content {
                     return fail(V::TypeConfusion, "a flat append of another record");
                 }
+                self.closed_builder(block)?;
                 let fields = self.pool(site.fields, &self.unit(f.unit).pools.fields)?;
-                let mut bytes = self.flat_content(f, site, fields)?;
+                let mut bytes = self.flat_content(f, site, fields, None)?;
                 let mut encoded = (bytes.len() as u64).to_le_bytes().to_vec();
                 encoded.append(&mut bytes);
                 let count = u64::try_from(self.read_scalar(block, 8)?)
@@ -3622,6 +3673,122 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let block = self.sequential_room(&r, block, keep, need)?;
                 let extent = &mut self.ledger.get_mut(block.alloc).extent;
                 extent.write_bytes(block.offset + keep, &encoded);
+                extent.write_bytes(block.offset, &(count + 1).to_le_bytes());
+                extent.write_bytes(
+                    block.offset + 8,
+                    &(used + encoded.len() as u64).to_le_bytes(),
+                );
+                if let Some(s) = r.root_slot {
+                    f.versions[s.index()] = Some(version);
+                }
+                self.define_version(f, version)?;
+            }
+            // An open element's writes past the used bytes (LIR schema
+            // revision 24): the count and the used bytes are kept, and growth
+            // keeps the open element's bytes.
+            Inst::FlatField {
+                address,
+                field,
+                op: FlatFieldOp::Open,
+                version,
+            } => {
+                let (r, block, element) = self.sequence_write(f, address, true)?;
+                let Some((8, content)) = self.flat_prefixed(element)? else {
+                    return fail(V::TypeConfusion, "an open element of an unprefixed builder");
+                };
+                if self.open_elements.contains_key(&block.alloc) {
+                    return fail(V::Malformed, "an element opened in a builder with one open");
+                }
+                let used = u64::try_from(self.read_scalar(block.at(8), 8)?)
+                    .map_err(|_| err(V::Malformed, "a used byte count beyond u64"))?;
+                let keep = self.sequential_start(element)? + used;
+                let word = keep + 8 + self.open_field(content, field)?;
+                let block = self.sequential_room(&r, block, keep, word + 8)?;
+                self.ledger
+                    .get_mut(block.alloc)
+                    .extent
+                    .write_bytes(block.offset + word, &0u64.to_le_bytes());
+                self.open_elements.insert(block.alloc, field);
+                if let Some(s) = r.root_slot {
+                    f.versions[s.index()] = Some(version);
+                }
+                self.define_version(f, version)?;
+            }
+            Inst::FlatField {
+                address,
+                field,
+                op: FlatFieldOp::Reserve { capacity },
+                version,
+            } => {
+                let (r, block, _, _, word, len) = self.open_element(f, address, field)?;
+                let Val::Bits { bits, .. } = self.read_use(f, capacity)? else {
+                    return fail(V::TypeConfusion, "a capacity that is not an integer");
+                };
+                let keep = word + 8 + len;
+                let need = u64::try_from(bits).unwrap_or(u64::MAX).saturating_add(keep);
+                self.sequential_room(&r, block, keep, need)?;
+                if let Some(s) = r.root_slot {
+                    f.versions[s.index()] = Some(version);
+                }
+                self.define_version(f, version)?;
+            }
+            Inst::FlatField {
+                address,
+                field,
+                op: FlatFieldOp::Push { value, spare },
+                version,
+            } => {
+                let (r, block, _, _, word, len) = self.open_element(f, address, field)?;
+                let Val::Bits { bits, .. } = self.read_use(f, value)? else {
+                    return fail(V::TypeConfusion, "a pushed byte that is not an integer");
+                };
+                let keep = word + 8 + len;
+                // A spare push writes where its proof says room is (FACT-3).
+                if spare && keep + 1 > self.ledger.get(block.alloc).extent.len() {
+                    return fail(V::OutOfExtent, "a spare push past the builder's capacity");
+                }
+                let block = self.sequential_room(&r, block, keep, keep + 1)?;
+                let extent = &mut self.ledger.get_mut(block.alloc).extent;
+                extent.write_bytes(block.offset + keep, &[bits as u8]);
+                extent.write_bytes(block.offset + word, &(len + 1).to_le_bytes());
+                if let Some(s) = r.root_slot {
+                    f.versions[s.index()] = Some(version);
+                }
+                self.define_version(f, version)?;
+            }
+            // The open element completed: the construction's other fields
+            // written around the bytes in place, as `FlatAppend` writes an
+            // element (LIR schema revision 24).
+            Inst::FlatClose {
+                address,
+                construct,
+                field,
+                version,
+            } => {
+                let (r, block, content, _, word, len) = self.open_element(f, address, field)?;
+                let site = self.construct_site(unit, construct)?;
+                if site.layout != content {
+                    return fail(V::TypeConfusion, "a flat close of another record");
+                }
+                let a = self.ledger.check(block)?;
+                if !a.extent.all_init(block.offset + word, 8 + len) {
+                    return fail(V::UninitializedRead, "an open field's bytes");
+                }
+                let in_place = a.extent.read_bytes(block.offset + word, 8 + len).to_vec();
+                let fields = self.pool(site.fields, &self.unit(f.unit).pools.fields)?;
+                let mut bytes = self.flat_content(f, site, fields, Some((field, in_place)))?;
+                let mut encoded = (bytes.len() as u64).to_le_bytes().to_vec();
+                encoded.append(&mut bytes);
+                let count = u64::try_from(self.read_scalar(block, 8)?)
+                    .map_err(|_| err(V::Malformed, "a sequence count beyond u64"))?;
+                let used = u64::try_from(self.read_scalar(block.at(8), 8)?)
+                    .map_err(|_| err(V::Malformed, "a used byte count beyond u64"))?;
+                let element = word - 8 - self.open_field(content, field)?;
+                let need = element + encoded.len() as u64;
+                let block = self.sequential_room(&r, block, word + 8 + len, need)?;
+                self.open_elements.remove(&block.alloc);
+                let extent = &mut self.ledger.get_mut(block.alloc).extent;
+                extent.write_bytes(block.offset + element, &encoded);
                 extent.write_bytes(block.offset, &(count + 1).to_le_bytes());
                 extent.write_bytes(
                     block.offset + 8,

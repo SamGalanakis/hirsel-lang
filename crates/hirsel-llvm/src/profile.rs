@@ -15,7 +15,8 @@ pub(crate) fn instruction_site(unit: &LirUnit<Ready>, block: BlockId, inst: &Ins
     match *inst {
         Inst::Construct { construct, .. }
         | Inst::Reuse { construct, .. }
-        | Inst::FlatAppend { construct, .. } => {
+        | Inst::FlatAppend { construct, .. }
+        | Inst::FlatClose { construct, .. } => {
             source(unit.tables.constructs[construct.index()].anchor)
         }
         Inst::Closure { closure, .. } => source(unit.tables.closures[closure.index()].anchor),

@@ -99,6 +99,8 @@ impl StageKind {
             | Opcode::SeqSetLen
             | Opcode::SeqAppend
             | Opcode::FlatAppend
+            | Opcode::FlatField
+            | Opcode::FlatClose
             | Opcode::Hash
             | Opcode::Recast
             | Opcode::UniqueCopy

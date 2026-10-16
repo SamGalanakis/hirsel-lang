@@ -19,7 +19,7 @@ use super::tokens;
 use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::{
     AddressId, ArgumentValue, BlockId, BlockKind, CaptureUse, CleanupAnchorId, EdgeId, FailureId,
-    Holding, Inst, LoanId, Placement, ScopeId, ScopeInfo, SlotId, SlotKind, StorageOwner,
+    FlatFieldOp, Holding, Inst, LoanId, Placement, ScopeId, ScopeInfo, SlotId, SlotKind, StorageOwner,
     Terminator, ValueId, ValueRepr,
 };
 use crate::persistent::{Element, PVec};
@@ -448,6 +448,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         report: None,
         discharged: BTreeSet::new(),
         flat_reaching: BTreeMap::new(),
+        open_reaching: BTreeMap::new(),
     };
     let ins = flow::solve(
         &facts.cfg,
@@ -471,6 +472,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         report: Some(report),
         discharged: BTreeSet::new(),
         flat_reaching: BTreeMap::new(),
+        open_reaching: BTreeMap::new(),
     };
     let mut credits_in: Vec<Option<Credits>> = vec![None; unit.blocks.len()];
     credits_in[unit.entry.index()] = Some(
@@ -510,6 +512,12 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         cx,
         facts,
         &walker.flat_reaching,
+        walker.report.as_deref_mut().unwrap(),
+    );
+    super::flat_open::check(
+        cx,
+        facts,
+        &walker.open_reaching,
         walker.report.as_deref_mut().unwrap(),
     );
     for (a, _) in unit.tables.cleanup_anchors.iter().enumerate() {
@@ -568,6 +576,8 @@ struct Walker<'w, 'a, S> {
     report: Option<&'w mut Report>,
     discharged: BTreeSet<CleanupAnchorId>,
     flat_reaching: BTreeMap<Site, Option<ValueId>>,
+    /// The version reaching each write of an open element (`flat_open`).
+    open_reaching: BTreeMap<Site, Option<ValueId>>,
 }
 
 type Outs = Vec<(EdgeId, State, Credits)>;
@@ -1875,6 +1885,19 @@ impl<S: Stage> Walker<'_, '_, S> {
                 };
                 self.flat_reaching.insert(site, version);
             }
+            if let Inst::FlatField { address, .. } | Inst::FlatClose { address, .. } = *inst {
+                let version = match self.facts.addresses[address.index()]
+                    .as_ref()
+                    .map(|a| a.root)
+                {
+                    Some(Root::Slot(slot)) => match st.slots[slot.index()].versions {
+                        Versions::One(v) => Some(v),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                self.open_reaching.insert(site, version);
+            }
         }
 
         // A preparation locates its place afresh from the root, running its
@@ -2007,12 +2030,43 @@ impl<S: Stage> Walker<'_, '_, S> {
                 }
                 self.write_block(site, st, address, version);
             }
+            // A write of a builder's open element reads its operand (LIR
+            // schema revision 24).
+            Inst::FlatField {
+                address,
+                op,
+                version,
+                ..
+            } => {
+                match op {
+                    FlatFieldOp::Open => {}
+                    FlatFieldOp::Reserve { capacity: value }
+                    | FlatFieldOp::Push { value, .. } => self.borrow(site, st, cr, value),
+                }
+                let Some((Root::Slot(slot), path)) = self.place(address) else {
+                    return;
+                };
+                self.borrowed_storage(site, slot);
+                self.require(site, st, slot, &path, false);
+                let mut inside = path;
+                inside.push(Step::Slot);
+                self.invalidate(st, slot, &inside);
+                st.slots[slot.index()].owned_empty = false;
+                st.slots[slot.index()].versions = Versions::One(version);
+            }
             // An element built in place reads the values it encodes and
-            // consumes the others (LIR schema revision 22).
+            // consumes the others (LIR schema revision 22); an open element
+            // is completed so (revision 24).
             Inst::FlatAppend {
                 address,
                 construct,
                 version,
+            }
+            | Inst::FlatClose {
+                address,
+                construct,
+                version,
+                ..
             } => {
                 for v in structure::encoded_values(self.cx, construct) {
                     self.borrow(site, st, cr, v);

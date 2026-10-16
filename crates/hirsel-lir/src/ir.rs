@@ -657,6 +657,39 @@ pub enum Inst {
         construct: ConstructId,
         version: ValueId,
     },
+    /// A write of the open element of the flat list builder at `address`
+    /// (LIR schema revision 24): one element under construction past the
+    /// used bytes whose byte field `field` is built in place, so a byte list
+    /// frozen into it is never a separate block. `field` is a String or
+    /// Bytes field of the builder's content record after only fixed fields,
+    /// so it lies at a fixed offset. The element's prefix, the
+    /// fields before that field and the field's length word lie where the
+    /// element will, and the field's bytes follow the word; the count and
+    /// the used bytes exclude them until `FlatClose` completes the element.
+    /// Storage grows keeping them. The block must be unique. A write:
+    /// `version` is the root's new reaching value. Allocates; it cannot fail.
+    FlatField {
+        address: AddressId,
+        field: u32,
+        op: FlatFieldOp,
+        version: ValueId,
+    },
+    /// Complete the open element of the builder at `address` (LIR schema
+    /// revision 24): `construct` is a flat construction of the builder's
+    /// content record with a value for every field but `field`, the open
+    /// field, whose bytes are already in place. Its fixed fields are
+    /// consumed and its encoded fields only read, as for `FlatAppend`; the
+    /// content's length prefix and the other fields are written around the
+    /// open field, then the count and the used bytes grow by the element.
+    /// The site's destination and placement name no storage. Storage grows
+    /// keeping the open element. The block must be unique. A write.
+    /// Allocates; it cannot fail.
+    FlatClose {
+        address: AddressId,
+        construct: ConstructId,
+        field: u32,
+        version: ValueId,
+    },
     /// A hash of `value` at the non-scalar or scalar `layout`, keyed by the
     /// run context's seed: a Plain u64. Equal values (by `Compare Eq`) hash
     /// equal. A value nested past `COMPARE_MAX_DEPTH` (counted as `Compare`
@@ -1003,6 +1036,23 @@ pub struct FieldValue {
     /// Declaration ordinal of the field.
     pub field: u32,
     pub value: ValueId,
+}
+
+/// What a `FlatField` write does to its builder's open element (LIR schema
+/// revision 24).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum FlatFieldOp {
+    /// Begin the open element: room is made for the element's prefix, the
+    /// fields before the open field and its length word, which is set to
+    /// zero. The builder must have no open element.
+    Open,
+    /// Room for `capacity` (a u64) more bytes of the open field, the size
+    /// saturating.
+    Reserve { capacity: ValueId },
+    /// Append the u8 `value` to the open field, growing storage
+    /// geometrically when it is full. `spare` states that the room is
+    /// already there (FACT-3): no capacity is read and nothing grows.
+    Push { value: ValueId, spare: bool },
 }
 
 /// A construction: layout, fields in source evaluation order, destination
@@ -1638,6 +1688,30 @@ impl Inst {
             Self::FlatAppend {
                 address,
                 construct,
+                version,
+            } => {
+                f(R::Address(address));
+                f(R::Construct(construct));
+                f(R::Value(version));
+            }
+            Self::FlatField {
+                address,
+                field: _,
+                op,
+                version,
+            } => {
+                f(R::Address(address));
+                match op {
+                    FlatFieldOp::Open => {}
+                    FlatFieldOp::Reserve { capacity: value }
+                    | FlatFieldOp::Push { value, .. } => f(R::Value(value)),
+                }
+                f(R::Value(version));
+            }
+            Self::FlatClose {
+                address,
+                construct,
+                field: _,
                 version,
             } => {
                 f(R::Address(address));
@@ -2902,6 +2976,11 @@ snapshot_enum!(UnavailableFeature {
     JoinTasks,
     Shape,
 });
+snapshot_enum!(FlatFieldOp {
+    Open,
+    Reserve { capacity },
+    Push { value, spare }
+});
 snapshot_enum!(Inst {
     Const { result, constant },
     FunctionRef { result, symbol },
@@ -2929,6 +3008,8 @@ snapshot_enum!(Inst {
     SeqSetLen { address, len, version },
     SeqAppend { address, value, version },
     FlatAppend { address, construct, version },
+    FlatField { address, field, op, version },
+    FlatClose { address, construct, field, version },
     Hash { result, value, layout, failure },
     Recast { result, value },
     UniqueCopy { result, value, construct, deep, failure },

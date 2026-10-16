@@ -153,6 +153,27 @@ Invariants:
   the bytes saturating; it keeps the count and used bytes.
   `hirsel-pipeline-tests/tests/it/rc_flat_builder.rs` forges an append of
   another record and a builder of another element; C and H reject both.
+  A builder holds at most one open element (revision 24): `FlatField
+  { address, field, op, version }` with `Open` begins one past the used
+  bytes whose field `field` of the builder's content record, a byte sequence
+  after only fixed fields (`Layouts::open_field`), is written in place; its
+  length word lies at the element's start plus 8 plus the field's offset
+  and the bytes follow it. `Reserve { capacity }` makes room for that many
+  more bytes and `Push { value, spare }` appends one u8, `spare` when a
+  proof (FACT-3) shows the room is held. `FlatClose { address, construct,
+  field, version }` completes the element from a construction site of the
+  content record lacking exactly that field, then counts it; until then the
+  count and used bytes exclude it. C types the operands (`Type("flat
+  field")`, `Type("flat close")`) and replays open elements over slot
+  versions (`validate/flat_open.rs`): a reservation, a push and a close
+  need the version reaching them open at their field, an opening one open
+  at none, and every other write of the slot defines a version open at
+  none (`Type("flat field of no open element")`, `Type("flat field opened
+  twice")`). So a write between the opening and the close that could move
+  or overwrite the element's bytes leaves the close without its element.
+  `hirsel-pipeline-tests/tests/rc/rc_flat_field.rs` forges such a write, a
+  close of another field and one of another record, a second opening, a
+  pushed u64 and an unproven spare push.
   Inline of a dynamic Packed stays unavailable; a fixed-size Packed keeps the
   ordinary stride.
 - Validators. `validate::validate::<S>(unit, &Inputs { target, layouts, manifest, operations })`

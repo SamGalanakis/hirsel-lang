@@ -217,7 +217,13 @@ producer that differs changes this crate or the producer):
   encodes as its count and used bytes once each element's prefix matches its
   content's extent and the elements fill the used bytes exactly (`Malformed`);
   a builder's `SeqReserve` grows its unique block for `capacity` of its least
-  element, keeping the count and used bytes;
+  element, keeping the count and used bytes; a builder records its open
+  element (revision 24): `FlatField` opens one past the used bytes, grows
+  for reservations and pushes keeping its bytes, and a `spare` push past
+  the allocation fails (`OutOfExtent`); `FlatClose` builds the element
+  around the field's bytes and counts it; any other write of a builder with
+  an open element, a second opening and a write of another field fail
+  (`Malformed`);
   `FlatAt` checks its offset against the element's cursor (`Malformed`);
   `Recast` back from the opaque source names the layout the block was built
   at (`TypeConfusion`); `Hash` hashes structurally with the same depth bound

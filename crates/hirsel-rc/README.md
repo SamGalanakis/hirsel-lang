@@ -428,6 +428,23 @@ use (a read, a copy, a named or joined element, another call) leaves the
 list ordinary. `hirsel-pipeline-tests/tests/it/rc_flat_builder.rs` holds
 accepted and declined shapes to the interpreter under H's fault campaign.
 
+A byte list frozen into a builder's element is written there
+(`import/flat_field.rs`, revision 24). A local `List[u8]`, with the
+temporaries and the `Bytes` it moves and freezes into, is built in place
+when it is initialized once to `[]`, otherwise only `list.reserve`d and
+`list.push`ed, frozen whole by `bytes.from_list(take ...)` and the Bytes
+taken into one field of an element construction of a builder web, that
+field a byte sequence after only fixed fields, and every path from the
+initialization reaches that construction without another write of the
+builder, another initialization of a list for it, a return or a tail
+site. The initialization becomes `FlatField Open`, the reservation and the
+pushes `FlatField Reserve`/`Push` (their calls removed), the freeze a jump,
+and the construction `FlatClose` lacking that field. The list has no slot,
+block, copy or release. `spare_push::prove_fields` marks a push `spare` under
+the same counted-loop proof, the opening standing for the empty list and
+the field reservation for `list.reserve`. `hirsel-pipeline-tests/tests/rc/rc_flat_field.rs`
+holds accepted and declined shapes to the interpreter under H's fault campaign.
+
 `spare_push` removes capacity tests it proves cannot fail (FACT-3). Right after a
 source unit is imported, before the layout table is sealed, it retargets a
 `list.push` to `$native.list_push_spare`, the append without the capacity read

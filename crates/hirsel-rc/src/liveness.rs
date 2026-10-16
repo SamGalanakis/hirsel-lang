@@ -253,7 +253,9 @@ pub fn inst_defs(inst: &Inst) -> Vec<ValueId> {
         | Inst::SeqReserve { version, .. }
         | Inst::SeqSetLen { version, .. }
         | Inst::SeqAppend { version, .. }
-        | Inst::FlatAppend { version, .. } => vec![version],
+        | Inst::FlatAppend { version, .. }
+        | Inst::FlatField { version, .. }
+        | Inst::FlatClose { version, .. } => vec![version],
         Inst::Replace {
             version,
             displaced_version,
@@ -295,7 +297,8 @@ pub fn inst_uses<S: Stage>(unit: &LirUnit<S>, inst: &Inst) -> Vec<ValueId> {
         Inst::Construct { construct, .. }
         | Inst::Reuse { construct, .. }
         | Inst::UniqueCopy { construct, .. }
-        | Inst::FlatAppend { construct, .. } => {
+        | Inst::FlatAppend { construct, .. }
+        | Inst::FlatClose { construct, .. } => {
             let site = &unit.tables.constructs[construct.index()];
             out.extend(
                 site.fields

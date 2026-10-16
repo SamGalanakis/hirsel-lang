@@ -339,7 +339,7 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                 }
                 // An element built in place copies its fields' bytes; its
                 // sources are treated as escaping, conservatively.
-                Inst::FlatAppend { construct, .. } => {
+                Inst::FlatAppend { construct, .. } | Inst::FlatClose { construct, .. } => {
                     let site = &unit.tables.constructs[construct.index()];
                     for f in site.fields.get(&unit.pools.fields).unwrap_or(&[]) {
                         escaped.insert(Node::Value(f.value));

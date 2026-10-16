@@ -126,6 +126,8 @@ opcodes!(
     SeqSetLen,
     SeqAppend,
     FlatAppend,
+    FlatField,
+    FlatClose,
     Hash,
     Recast,
     UniqueCopy,
@@ -218,6 +220,8 @@ impl Inst {
             Self::SeqSetLen { .. } => Opcode::SeqSetLen,
             Self::SeqAppend { .. } => Opcode::SeqAppend,
             Self::FlatAppend { .. } => Opcode::FlatAppend,
+            Self::FlatField { .. } => Opcode::FlatField,
+            Self::FlatClose { .. } => Opcode::FlatClose,
             Self::Hash { .. } => Opcode::Hash,
             Self::Recast { .. } => Opcode::Recast,
             Self::UniqueCopy { .. } => Opcode::UniqueCopy,
@@ -316,6 +320,11 @@ pub const fn opcode_effects(op: Opcode) -> Effects {
         // Reads the encoded fields, consumes the fixed ones, writes past the
         // used bytes and may reallocate.
         Opcode::FlatAppend => R.union(W).union(O).union(A).union(E),
+        // Reads and writes the open element past the used bytes and may
+        // reallocate.
+        Opcode::FlatField => R.union(W).union(A).union(E),
+        // Completes the open element as `FlatAppend` writes one.
+        Opcode::FlatClose => R.union(W).union(O).union(A).union(E),
         Opcode::Copy | Opcode::FlatCopy | Opcode::UniqueCopy => R.union(O).union(A),
         Opcode::Store => W.union(O),
         // Replace commit is a barrier; preparation may allocate and fail.
