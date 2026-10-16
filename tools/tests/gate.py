@@ -380,6 +380,7 @@ class Scripts(unittest.TestCase):
             files[f'tools/buck2/{name}.py'] = (TOOLS / 'buck2' / f'{name}.py').read_text()
         for name in ('sync', 'prepare', 'fmt'):
             files[f'tools/buck2/{name}.py'] = FAKE_SCRIPT.replace('{name}', f'{name}.py').replace('{upper}', name.upper())
+        files['tools/tests/ignored_tests.py'] = FAKE_SCRIPT.replace('{name}', 'ignored_tests.py').replace('{upper}', 'IGNORED')
         commit(self.root, files, 'Base')
         for name in ('gate', 'land'):
             (self.root / 'tools' / name).chmod(0o755)
@@ -400,10 +401,10 @@ class Scripts(unittest.TestCase):
         git(self.sibling, 'config', 'user.email', 'test@example.invalid')
         git(self.sibling, 'config', 'user.name', 'Sibling')
 
-    def run_tool(self, *command):
+    def run_tool(self, *command, env=None):
         self.commands.unlink(missing_ok=True)
         result = subprocess.run([str(self.root / 'tools' / command[0]), *command[1:]], cwd=self.root,
-                                env=self.env, capture_output=True, text=True)
+                                env=self.env | (env or {}), capture_output=True, text=True)
         logged = self.commands.read_text().splitlines() if self.commands.exists() else []
         return result, logged
 
@@ -465,6 +466,13 @@ class Scripts(unittest.TestCase):
         self.assertIn('conflicts in: README.md', result.stdout)
         self.assertEqual(git(self.root, 'rev-parse', 'HEAD'), head)
         self.assertEqual(git(self.root, 'status', '--porcelain'), '')
+
+    def test_a_crate_edit_checks_that_every_ignored_test_runs_in_a_gate(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\n#[ignore]\nfn tool() {}\n'}, 'Test')
+        result, logged = self.run_tool('gate', env={'FAIL_IGNORED': '1'})
+        self.assertIn('ignored_tests.py', logged)
+        self.assertIn('FAIL  tools/tests/ignored_tests.py', result.stdout)
+        self.assertIn('pass  tools/tests/ignored_tests.py', self.run_tool('gate')[0].stdout)
 
     def test_a_gated_change_rebased_cleanly_only_builds_and_checks_formatting(self):
         commit(self.root, {'docs/grammar.md': 'grammar, revised\n'}, 'Grammar')

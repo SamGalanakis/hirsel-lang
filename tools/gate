@@ -9,9 +9,11 @@ Per push, the changed paths select the work (tools/buck2/impact.py):
 documentation alone gets a link and whitespace check; the gate's own tooling
 its tests; everything else the Buck2 tests that read a changed file, directly
 or through a dependency, and the corpus campaigns (conformance, agreement,
-native smoke) the change can affect. The workspace build, Clippy and every
-selected test and campaign run as one Buck2 invocation, so the pool runs them
-concurrently, while formatting and the build-file check run beside it here.
+native smoke) the change can affect, and for a crate edit the check that
+every ignored test runs in a gate (tools/tests/ignored_tests.py). The
+workspace build, Clippy and every selected test and campaign run as one Buck2
+invocation, so the pool runs them concurrently, while formatting and the
+build-file check run beside it here.
 
 A passing change is remembered by its identity (gating.change_identity: the
 patch-id of the lane's own diff, and the crates it touches). When main moves
@@ -234,6 +236,9 @@ def push_gate(base_ref):
     if c.tools or c.everything:
         for name, command in gating.tool_tests():
             local.start(name, command)
+    elif c.owned:
+        # A crate edit can add an ignored test that no gate runs.
+        local.start('tools/tests/ignored_tests.py', [PY, str(ROOT / 'tools/tests/ignored_tests.py')])
     if c.tools or needs_buck2:
         local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
     if needs_buck2:
