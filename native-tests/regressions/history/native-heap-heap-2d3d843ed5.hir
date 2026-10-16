@@ -1,0 +1,19 @@
+// Historical native finding: native/heap/heap: UninitializedRead: length N covers uninitialized element slot N
+// Mutation: expression/closure-call
+// Original: conformance/SEM/SEM-5-set-equality.hir
+fn output_error[E](take e: E) -> () {}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut a: Set[u8] = set.empty()
+  let mut b: Set[u8] = set.empty()
+  set.insert(mut b, 2)
+  set.insert(mut (fn() { b })(), 1)
+  out.print(
+    io.stdout(rt),
+    if a == b {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

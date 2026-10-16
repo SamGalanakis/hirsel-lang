@@ -5,16 +5,19 @@
 //!
 //! A native failure is a tool outcome (`NativeError`), never a source verdict.
 mod adapt;
+mod coverage;
 mod differential;
 mod emit;
 mod heap;
 mod link;
 mod observe;
+mod pairwise;
 mod runtime_cache;
 mod stages;
 mod tool;
 
 pub use adapt::{input_identity, manifest, program};
+pub use coverage::backend_features;
 pub use differential::{
     Configuration, Engine, MATRIX_VERSION, Outcome, Runtime, differential, full_matrix,
     real_io_replay, real_io_replay_with_config, runtime_builds, smoke_matrix, topology_matrix,
@@ -29,6 +32,7 @@ pub use link::{
     launch, launch_with, link, link_objects, link_profile, observe, partition_objects,
 };
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
+pub use pairwise::pairwise_matrix;
 pub use stages::{NativeError, Options, ReadyProgram, StageName, build, build_program};
 pub use tool::run_path_native;
 

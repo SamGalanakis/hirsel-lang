@@ -1,0 +1,28 @@
+// Historical native finding: native/heap/import: Import(InstanceId(N), Instance(MissingDefinition
+// Mutation: expression/closure-call
+// Original: conformance/LANG/LANG-2-branch-prefix-run.hir
+fn output_error[E](take e: E) {}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let a = if 1u8 == 1 {
+    3u8
+  } else {
+    4
+  }
+  let b = match a {
+    3 => 5u8,
+    _ => 6,
+  }
+  let valid = match b {
+    5 => b == 5,
+    _ => false,
+  }
+  (fn() { out.print })()(
+    io.stdout(rt),
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}

@@ -10,6 +10,7 @@
 //! A disagreement without a row, a row whose reason changed and a row whose
 //! configuration now agrees all fail the gate, so support only grows.
 pub mod artifact;
+pub mod diet;
 pub mod generate;
 pub mod scratch;
 
@@ -31,6 +32,20 @@ pub struct Case {
     pub id: String,
     pub source: String,
     pub path: Option<PathBuf>,
+}
+
+impl Case {
+    /// Run this case with its package graph under a case-specific plan.
+    pub fn run(&self, matrix: &[Configuration], toolchain: &Toolchain, dir: &Path) -> CaseResult {
+        run_source_path(
+            &self.id,
+            &self.source,
+            self.path.as_deref(),
+            matrix,
+            toolchain,
+            dir,
+        )
+    }
 }
 
 /// The executable cases the ratchet lists as passing: B of the set rule.
@@ -474,14 +489,7 @@ pub fn run_cases(
     jobs: usize,
 ) -> Vec<CaseResult> {
     run_cases_with(cases, scratch, jobs, |case, dir| {
-        run_source_path(
-            &case.id,
-            &case.source,
-            case.path.as_deref(),
-            matrix,
-            toolchain,
-            dir,
-        )
+        case.run(matrix, toolchain, dir)
     })
 }
 

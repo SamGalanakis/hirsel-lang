@@ -1,0 +1,12 @@
+// Historical native finding: native/heap/import: validator: CleanupOrder
+// Mutation: expression/closure-call
+// Original: conformance/MODE/MODE-1-local-comparison-run.hir
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+fn same(take b: Bytes, c: Bytes) -> bool {
+  view(b) == view((fn() { c })())
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

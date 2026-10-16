@@ -1,0 +1,13 @@
+// Historical native finding: native/heap/heap: IneligibleDonor: reset of a non-block value
+// Mutation: holder/closure-result
+// Original: conformance/DROP/DROP-2-sorted-map-retained-key.hir
+fn equivalent(a: u32, b: u32) -> i32 uses {} {
+  0
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let agree_held_187: List[(Order[u32], u64)] = [(fn() { (Order(compare: equivalent), 0u64) })()]
+let (by, _) = agree_held_187[0]
+  let mut m: SortedMap[u32, u8] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 2, 7)
+  Ok(())
+}

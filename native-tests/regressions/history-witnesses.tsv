@@ -1,0 +1,27 @@
+# Exact reduced witnesses from complete campaign at 7dd85479962708872fb2d0f6f4ce89d131bb18c5.
+# path	kind	edit	original
+native-tests/regressions/history/native-heap-heap-d5b654ae43.hir	native/heap/heap: BorrowExpired: borrow of LoanId(N) used while the loan is not active	statement/discard	conformance/LANG/LANG-11-block-value-borrow-run.hir
+native-tests/regressions/history/native-heap-heap-a691deb521.hir	native/heap/heap: IneligibleDonor: reset of a non-block value	expression/closure-call	conformance/SEM/SEM-4-set-borrow.hir
+native-tests/regressions/history/native-heap-heap-07638917dc.hir	native/heap/heap: IneligibleDonor: reset of a non-block value	holder/closure-result	conformance/DROP/DROP-2-sorted-map-retained-key.hir
+native-tests/regressions/history/native-heap-heap-3c8e14f294.hir	native/heap/heap: IneligibleDonor: reset of a non-block value	holder/closure-value	conformance/DROP/DROP-2-sorted-map-retained-key.hir
+native-tests/regressions/history/native-heap-heap-2d3d843ed5.hir	native/heap/heap: UninitializedRead: length N covers uninitialized element slot N	expression/closure-call	conformance/SEM/SEM-5-set-equality.hir
+native-tests/regressions/history/native-heap-heap-2ba0a1063c.hir	native/heap/heap: UninitializedRead: length N covers uninitialized element slot N	statement/swap	conformance/SEM/SEM-5-equality-same-order.hir
+native-tests/regressions/history/native-heap-heap-40823521fa.hir	native/heap/heap: UninitializedRead: length N covers uninitialized element slot N	store/mut	conformance/SEM/SEM-5-same-entries.hir
+native-tests/regressions/history/native-heap-heap-d15facecd1.hir	native/heap/heap: UninitializedRead: read of uninitialized LayoutId(N)	expression/closure-call	conformance/SEM/SEM-5-sorted-map-projected-and-consuming-run.hir
+native-tests/regressions/history/native-heap-heap-f8828f97aa.hir	native/heap/heap: UninitializedRead: replace of uninitialized storage	store/mut	conformance/SEM/SEM-5-equality-order-sensitive.hir
+native-tests/regressions/history/native-heap-import-303b6c800a.hir	native/heap/import: Import(InstanceId(N), Instance(MissingDefinition	expression/closure-call	conformance/LANG/LANG-2-branch-prefix-run.hir
+native-tests/regressions/history/native-heap-import-86cf04f179.hir	native/heap/import: Import(InstanceId(N), Layout(main, Unavailable { issue: None, what: "a dynamic-extent value (Packed or variabl	holder/sequence-element	conformance/MEM/MEM-13-payload-tag-ok.hir
+native-tests/regressions/history/native-heap-import-72cd4a986b.hir	native/heap/import: Instance(Layout(main, Unavailable { issue: None, what: "a dynamic-extent value (Packed or variable flat) inlin	last-use/view-dead	conformance/MEM/MEM-13-payload-tag-ok.hir
+native-tests/regressions/history/native-heap-import-6e03bbeb0a.hir	native/heap/import: Instance(Layout(main, Unavailable { issue: None, what: "a dynamic-extent value (Packed or variable flat) inlin	last-use/view-live	conformance/MEM/MEM-13-payload-tag-ok.hir
+native-tests/regressions/history/native-heap-import-2b6cc7ac20.hir	native/heap/import: Instance(Malformed("?: a call with generic arguments of a value that is not a nested function of this body (sp	expression/closure-call	conformance/LANG/LANG-2-nested-call-size-run.hir
+native-tests/regressions/history/native-heap-import-ac3bd8c348.hir	native/heap/import: validator: CleanupOrder	argument/passing	conformance/SEM/SEM-3-wave1-text-empty-run.hir
+native-tests/regressions/history/native-heap-import-40828ccbb9.hir	native/heap/import: validator: CleanupOrder	binding/twice	conformance/LANG/LANG-3-retained-assignment-temporary-run.hir
+native-tests/regressions/history/native-heap-import-d6e4613971.hir	native/heap/import: validator: CleanupOrder	expression/closure-call	conformance/MODE/MODE-1-local-comparison-run.hir
+native-tests/regressions/history/native-heap-import-f9eb7b36b7.hir	native/heap/import: validator: Type	annotation/mode	conformance/MEM/MEM-5-mut-handback-cleanup-summary-run.hir
+native-tests/regressions/history/native-heap-launch-5ce878b9b2.hir	native/heap/launch: no typed launch kind	parameter/passing	conformance/DROP/DROP-2-destructure-empty-run.hir
+native-tests/regressions/history/native-heap-perceus-37107e58ff.hir	native/heap/perceus: validator: StaleVersion	expression/closure-call	conformance/SEM/SEM-4-map-resource-mut-run.hir
+native-tests/regressions/history/native-heap-placement-e57b854011.hir	native/heap/placement: HeapInNoalloc("construction N of ? escapes the frame")	expression/closure-call	conformance/MEM/MEM-5-closure-local-element-read-run.hir
+native-tests/regressions/history/native-heap-placement-b22e2d78ad.hir	native/heap/placement: HeapInNoalloc("construction N of ? escapes the frame")	holder/sequence-element	conformance/MEM/MEM-5-closure-local-element-read-run.hir
+native-tests/regressions/history/native-heap-placement-8312a49849.hir	native/heap/placement: validator: JoinCredits	holder/tail-element	conformance/MODE/MODE-1-local-comparison-run.hir
+native-tests/regressions/history/native-heap-ready-8fd1d3014c.hir	native/heap/ready: validator: LeakedStorage	expression/closure-call	conformance/DROP/DROP-2-destructure-zero-siblings-run.hir
+native-tests/regressions/history/native-llvm-mismatch-9e65e382ad.hir	native/llvm/mismatch	statement/swap	conformance/PROV/PROV-2-runtime-handle-narrow.hir

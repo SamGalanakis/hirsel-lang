@@ -1,0 +1,11 @@
+// Historical native finding: native/heap/heap: IneligibleDonor: reset of a non-block value
+// Mutation: expression/closure-call
+// Original: conformance/SEM/SEM-4-set-borrow.hir
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut s: Set[u64] = set.empty()
+  set.insert(mut s, (fn() { 1u64 })())
+  let empty: Set[u64] = set.empty()
+  for x in empty {
+  }
+  Ok(())
+}

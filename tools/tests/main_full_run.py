@@ -403,7 +403,7 @@ class AgreementShards(unittest.TestCase):
         sys.path.insert(0, str(RUNNER.parent / 'buck2'))
         import agree
         self.agree = agree
-        self.report = dict(seed=1, limit=4, hash_seed=0, programs=3, generated=9,
+        self.report = dict(seed=1, limit=4, hash_seed=0, programs=3, generated=9, eligible=9, variants_per_program=96,
                            checked=2, skipped=0, rejected=1, valid=1, unavailable=0,
                            runtime_limits=0, executed=1, edits={'mode': 2}, clusters=[])
 
@@ -420,7 +420,7 @@ class AgreementShards(unittest.TestCase):
         for changed in [
                 {'shard': dict(index=1, count=2)},
                 {'shard': dict(index=2, count=3)},
-                {'generated': 10}, {'checked': 1}, {'edits': {}},
+                {'generated': 10}, {'eligible': 10}, {'variants_per_program': 64}, {'checked': 1}, {'edits': {}},
                 {'clusters': [dict(kind='bug', path='reproducer.hir')]}]:
             with self.subTest(changed=changed):
                 outputs = self.outputs()
@@ -437,12 +437,12 @@ class AgreementShards(unittest.TestCase):
 
 
     def test_the_unrestricted_campaign_covers_the_whole_catalogue(self):
-        self.report |= dict(limit=self.agree.UNLIMITED, generated=4)
+        self.report |= dict(limit=self.agree.UNLIMITED, generated=4, eligible=4)
         result = self.agree.summarize(self.outputs(), 2, self.agree.UNLIMITED)
         self.assertEqual(result['checked'], 4)
         with self.assertRaisesRegex(ValueError, 'sample parameters'):
             self.agree.summarize(self.outputs(), 2, 4)
-        self.report |= dict(generated=5)
+        self.report |= dict(generated=5, eligible=5)
         with self.assertRaisesRegex(ValueError, 'did not cover'):
             self.agree.summarize(self.outputs(), 2, self.agree.UNLIMITED)
 

@@ -96,6 +96,8 @@ pub struct Native {
     pub exclusions: crate::native::Exclusions,
     pub stats: std::sync::Mutex<NativeStats>,
     next: std::sync::atomic::AtomicUsize,
+    pub selection: Option<crate::native::diet::Selection>,
+    seed: u64,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -120,7 +122,14 @@ impl Native {
             exclusions,
             stats: Default::default(),
             next: Default::default(),
+            selection: None,
+            seed: 0,
         }
+    }
+    pub fn with_selection(mut self, selection: crate::native::diet::Selection, seed: u64) -> Self {
+        self.selection = Some(selection);
+        self.seed = seed;
+        self
     }
     /// The configurations `path`'s variants run under: those the baseline
     /// lists no exclusion of `path` for, by the configuration's seedless name.
@@ -132,7 +141,12 @@ impl Native {
         if listed(crate::native::SNAPSHOT.into()) {
             return Vec::new();
         }
-        self.matrix
+        let matrix = if self.selection.is_some() {
+            hirsel_driver::native::pairwise_matrix(&self.matrix, path, self.seed)
+        } else {
+            self.matrix.clone()
+        };
+        matrix
             .iter()
             .filter(|c| {
                 let mut baseline = (*c).clone();
@@ -394,7 +408,7 @@ struct Binding {
 struct Catalogue<'a> {
     file: &'a SyntaxFile,
     source: &'a str,
-    edits: BTreeSet<Edit>,
+    edits: &'a mut dyn FnMut(Edit),
     /// The enclosing function returns unit, so `return ()` is an early exit.
     unit_result: bool,
 }
@@ -417,7 +431,7 @@ impl Catalogue<'_> {
     }
     fn add(&mut self, kind: &'static str, span: Span, replacement: String) {
         if self.text(span) != replacement {
-            self.edits.insert(Edit {
+            (self.edits)(Edit {
                 kind,
                 start: span.start as usize,
                 end: span.end as usize,
@@ -1337,10 +1351,17 @@ impl Catalogue<'_> {
 /// Edits address AST node spans, preserving all bytes outside the edited syntax.
 /// No formatter, phase internals, type inference or random token corruption.
 pub fn catalogue(file: &SyntaxFile, source: &str) -> Vec<Edit> {
+    let mut edits = BTreeSet::new();
+    enumerate(file, source, &mut |edit| {
+        edits.insert(edit);
+    });
+    edits.into_iter().collect()
+}
+fn enumerate(file: &SyntaxFile, source: &str, edits: &mut dyn FnMut(Edit)) {
     let mut c = Catalogue {
         file,
         source,
-        edits: BTreeSet::new(),
+        edits,
         unit_result: false,
     };
     for item in &file.tree.items {
@@ -1367,7 +1388,6 @@ pub fn catalogue(file: &SyntaxFile, source: &str) -> Vec<Edit> {
             _ => {}
         }
     }
-    c.edits.into_iter().collect()
 }
 fn parse(source: &str) -> Result<SyntaxFile, String> {
     let mut engine = engine();
@@ -1382,6 +1402,21 @@ fn parse(source: &str) -> Result<SyntaxFile, String> {
         return Err("syntax errors".into());
     }
     Ok(parsed.value)
+}
+/// Count syntax mutations without checking, interpreting or compiling them.
+pub fn catalogue_count(source: &str) -> Result<usize, String> {
+    Ok(catalogue_counts(source)?.values().sum())
+}
+/// Inventory edit families without classifying or executing mutations.
+pub fn catalogue_counts(source: &str) -> Result<BTreeMap<&'static str, usize>, String> {
+    let mut counts = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    enumerate(&parse(source)?, source, &mut |edit| {
+        if seen.insert(edit_identity(&edit)) {
+            *counts.entry(edit.kind).or_default() += 1;
+        }
+    });
+    Ok(counts)
 }
 /// Greedy syntax reduction reaches a deletion fixed point for definitions and
 /// statements. Preserve the same first bug kind, not just any failing outcome.
@@ -1452,6 +1487,9 @@ pub struct Report {
     pub programs: usize,
     /// Catalogue size over all of them.
     pub generated: usize,
+    /// Catalogue size after the per-program budget, before limit and sharding.
+    pub eligible: usize,
+    pub variants_per_program: Option<usize>,
     /// Sampled variants whose original program is not accepted today.
     pub skipped: usize,
     pub checked: usize,
@@ -1493,6 +1531,7 @@ impl Report {
     }
     pub fn json(&self) -> serde_json::Value {
         serde_json::json!({ "hash_seed": self.hash_seed, "programs": self.programs, "generated": self.generated,
+            "eligible": self.eligible, "variants_per_program": self.variants_per_program,
             "skipped": self.skipped, "checked": self.checked, "rejected": self.rejected,
             "valid": self.valid, "unavailable": self.unavailable,
             "runtime_limits": self.runtime_limits, "executed": self.executed,
@@ -1652,6 +1691,84 @@ struct Program {
     run: bool,
     package_path: Option<std::path::PathBuf>,
 }
+
+/// Independent bounds: a per-program rotating window, then a global rank limit.
+#[derive(Clone, Copy)]
+pub struct Sample {
+    pub limit: usize,
+    pub per_program: Option<usize>,
+}
+
+/// Full campaigns stay below 200,000 variants on the current corpus. The
+/// exhaustive catalogue is still available explicitly, without a budget.
+pub const DEFAULT_VARIANTS_PER_PROGRAM: usize = 96;
+
+fn edit_identity(edit: &Edit) -> hirsel_syntax::ContentHash {
+    hirsel_syntax::ContentHash::of_parts(
+        "hirsel.agree.edit.v1",
+        [
+            edit.kind.as_bytes(),
+            &edit.start.to_le_bytes(),
+            &edit.end.to_le_bytes(),
+            edit.replacement.as_bytes(),
+        ],
+    )
+}
+
+fn window(
+    keys: &BTreeSet<hirsel_syntax::ContentHash>,
+    seed: u64,
+    budget: usize,
+) -> BTreeSet<hirsel_syntax::ContentHash> {
+    if keys.is_empty() {
+        return BTreeSet::new();
+    }
+    let start = ((u128::from(seed) * budget as u128) % keys.len() as u128) as usize;
+    keys.iter()
+        .cycle()
+        .skip(start)
+        .take(budget.min(keys.len()))
+        .copied()
+        .collect()
+}
+
+fn sampled_catalogue(
+    file: &SyntaxFile,
+    source: &str,
+    seed: u64,
+    budget: Option<usize>,
+) -> (usize, Vec<Edit>) {
+    let Some(budget) = budget else {
+        let edits = catalogue(file, source);
+        return (edits.len(), edits);
+    };
+    // Keep identities, not millions of replacement strings. Most programs fit
+    // in the budget and need one traversal. Larger ones need a second traversal
+    // to materialise only the chosen window in fixed SHA-256 order.
+    let mut keys = BTreeSet::new();
+    let mut small = BTreeSet::new();
+    enumerate(file, source, &mut |edit| {
+        if keys.insert(edit_identity(&edit)) {
+            if keys.len() <= budget {
+                small.insert(edit);
+            } else {
+                small.clear();
+            }
+        }
+    });
+    let generated = keys.len();
+    if generated <= budget {
+        return (generated, small.into_iter().collect());
+    }
+    let chosen = window(&keys, seed, budget);
+    drop(keys);
+    enumerate(file, source, &mut |edit| {
+        if chosen.contains(&edit_identity(&edit)) {
+            small.insert(edit);
+        }
+    });
+    (generated, small.into_iter().collect())
+}
 /// Check the `limit` lowest-ranked variants of the whole corpus under `seed`.
 /// Without a limit every seed checks the entire catalogue.
 pub fn run(root: &Path, seed: u64, limit: usize) -> Result<Report, String> {
@@ -1665,7 +1782,18 @@ pub fn run_native(
     limit: usize,
     native: Option<&Native>,
 ) -> Result<Report, String> {
-    run_native_with_hash_seed(root, seed, limit, native, 0, &[], None)
+    run_native_with_hash_seed(
+        root,
+        seed,
+        Sample {
+            limit,
+            per_program: None,
+        },
+        native,
+        0,
+        &[],
+        None,
+    )
 }
 /// `run_native` with a hash seed, over the corpus files whose root-relative
 /// path starts with one of `only` (every file when it is empty). A variant's
@@ -1676,7 +1804,7 @@ pub fn run_native(
 pub fn run_native_with_hash_seed(
     root: &Path,
     seed: u64,
-    limit: usize,
+    sample: Sample,
     native: Option<&Native>,
     hash_seed: u64,
     only: &[String],
@@ -1685,17 +1813,23 @@ pub fn run_native_with_hash_seed(
     let mut paths = vec![];
     crate::discover(&root.join("conformance"), &mut paths)?;
     paths.retain(|path| {
-        only.is_empty()
-            || path.strip_prefix(root).is_ok_and(|relative| {
-                let relative = relative.display().to_string();
+        path.strip_prefix(root).is_ok_and(|relative| {
+            let relative = relative.display().to_string();
+            if only.is_empty() {
+                native
+                    .and_then(|n| n.selection.as_ref())
+                    .is_none_or(|s| s.selected.contains(&relative))
+            } else {
                 only.iter()
                     .any(|prefix| relative.starts_with(prefix.as_str()))
-            })
+            }
+        })
     });
     paths.sort();
     let rules = crate::spec_rules(root)?;
     let mut report = Report {
         hash_seed,
+        variants_per_program: sample.per_program,
         ..Default::default()
     };
     let mut programs = vec![];
@@ -1713,7 +1847,9 @@ pub fn run_native_with_hash_seed(
             .exists()
             .then_some(path.clone());
         let path = relative.display().to_string();
-        for edit in catalogue(&parsed, &source) {
+        let (generated, edits) = sampled_catalogue(&parsed, &source, seed, sample.per_program);
+        report.generated += generated;
+        for edit in edits {
             variants.push((rank(seed, &path, &edit), programs.len(), edit));
         }
         programs.push(Program {
@@ -1724,9 +1860,9 @@ pub fn run_native_with_hash_seed(
         });
     }
     report.programs = programs.len();
-    report.generated = variants.len();
+    report.eligible = variants.len();
     variants.sort();
-    variants.truncate(limit);
+    variants.truncate(sample.limit);
     variants.retain(|(rank, _, _)| in_sample_shard(*rank, shard));
     // Current acceptance decides the input set, not the expectation or ratchet.
     let sampled: Vec<usize> = variants
@@ -1847,6 +1983,42 @@ mod tests {
         assert_eq!(value["detail"], "d");
     }
     #[test]
+    fn per_program_windows_cover_the_catalogue_and_preserve_stable_ranks() {
+        let keys: BTreeSet<_> = (0u32..251)
+            .map(|i| hirsel_syntax::ContentHash::of_bytes(&i.to_le_bytes()))
+            .collect();
+        let mut visited = BTreeSet::new();
+        for seed in 0..3 {
+            let selected = window(&keys, seed, 96);
+            assert_eq!(selected.len(), 96);
+            assert_eq!(selected, window(&keys, seed, 96));
+            visited.extend(selected);
+        }
+        assert_eq!(visited, keys);
+        assert_eq!(window(&keys, u64::MAX, 999), keys);
+        assert!(window(&keys, 42, 0).is_empty());
+        let source = "fn f(x: u64) -> u64 { let mut a: u64 = x; let b: u64 = a; a = b; a }";
+        let parsed = parse(source).unwrap();
+        let full = catalogue(&parsed, source);
+        let keys: BTreeSet<_> = full.iter().map(edit_identity).collect();
+        for seed in 0..5 {
+            let (generated, edits) = sampled_catalogue(&parsed, source, seed, Some(7));
+            assert_eq!(generated, full.len());
+            assert_eq!(
+                edits.iter().map(edit_identity).collect::<BTreeSet<_>>(),
+                window(&keys, seed, 7)
+            );
+        }
+        assert_eq!(
+            sampled_catalogue(&parsed, source, 4, None),
+            (full.len(), full.clone())
+        );
+        assert_eq!(
+            sampled_catalogue(&parsed, source, 4, Some(full.len())),
+            (full.len(), full)
+        );
+    }
+    #[test]
     fn shards_partition_the_global_sample_once_including_empty_shards() {
         for (selected, shards) in [(20_000, 32), (19, 4), (3, 8), (0, 8)] {
             let mut catalogue: Vec<_> = (0..selected + 50).map(mix).collect();
@@ -1921,7 +2093,10 @@ mod tests {
             let part = run_native_with_hash_seed(
                 &root,
                 1,
-                32,
+                Sample {
+                    limit: 32,
+                    per_program: None,
+                },
                 None,
                 0,
                 &[],

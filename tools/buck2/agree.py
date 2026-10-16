@@ -18,7 +18,7 @@ from sync import (AGREE_FULL_SHARDS, AGREE_FULL_TIMEOUT, AGREE_LIMIT, AGREE_NATI
                   AGREE_NATIVE_FULL_TIMEOUT, AGREE_SHARDS)
 
 COUNTS = ('checked', 'skipped', 'rejected', 'valid', 'unavailable', 'runtime_limits', 'executed')
-GLOBAL = ('seed', 'limit', 'hash_seed', 'programs', 'generated')
+GLOBAL = ('seed', 'limit', 'hash_seed', 'programs', 'generated', 'eligible', 'variants_per_program')
 # The limit an unrestricted report carries (agree's default, usize::MAX).
 UNLIMITED = 2**64 - 1
 KNOWN = ROOT / 'native-tests/regressions/agree-known.txt'
@@ -47,7 +47,7 @@ def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
     reports = [report_from_output(output) for output in outputs.values()]
     first = reports[0]
     total = {key: first[key] for key in GLOBAL}
-    if total['seed'] != 1 or total['limit'] != limit or total['hash_seed'] != 0:
+    if (limit != UNLIMITED and total['seed'] != 1) or total['limit'] != limit or total['hash_seed'] != 0:
         raise ValueError('agreement sample parameters differ from the gate')
     total.update({key: 0 for key in COUNTS})
     total.update(edits={}, clusters=[])
@@ -68,7 +68,7 @@ def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
         for edit, count in report['edits'].items():
             total['edits'][edit] = total['edits'].get(edit, 0) + count
         total['clusters'].extend(report['clusters'])
-    if total['checked'] + total['skipped'] != min(limit, total['generated']):
+    if total['checked'] + total['skipped'] != min(limit, total['eligible']):
         raise ValueError('agreement shards did not cover the global sample')
     if total['clusters']:
         raise ValueError('agreement shards flagged discrepancies: ' + json.dumps(total['clusters']))

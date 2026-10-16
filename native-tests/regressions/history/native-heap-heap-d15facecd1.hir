@@ -1,0 +1,12 @@
+// Historical native finding: native/heap/heap: UninitializedRead: read of uninitialized LayoutId(N)
+// Mutation: expression/closure-call
+// Original: conformance/SEM/SEM-5-sorted-map-projected-and-consuming-run.hir
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let by = u32.order
+  let mut m: SortedMap[u32, u8] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 2, 20)
+  sorted_map.insert(by, mut (fn() { m })(), 1, 10)
+  for (k, v) in mut m {
+  }
+  Ok(())
+}

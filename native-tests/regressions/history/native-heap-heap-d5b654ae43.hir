@@ -1,0 +1,36 @@
+// Historical native finding: native/heap/heap: BorrowExpired: borrow of LoanId(N) used while the loan is not active
+// Mutation: statement/discard
+// Original: conformance/LANG/LANG-11-block-value-borrow-run.hir
+fn width(s: String, n: u64) -> u64 {
+  string.byte_len(
+    if n == 0 {
+      s
+    } else {
+      "other"
+    }
+  )
+}
+fn arm(s: String, n: u64) -> u64 {
+  string.byte_len(
+    match n {
+      0 => s,
+      1 => "four",
+      _ => "x",
+    }
+  )
+string.byte_len(
+    match n {
+      0 => s,
+      1 => "four",
+      _ => "x",
+    }
+  )
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let s: String = "ab"
+  let joins = width(s, 0) == 2 && width(s, 1) == 5 && arm(s, 0) == 2 && arm(s, 1) == 4 && arm(
+    s,
+    2
+  ) == 1
+  Ok(())
+}

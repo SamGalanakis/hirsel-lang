@@ -1,0 +1,8 @@
+// Historical native finding: native/heap/import: validator: CleanupOrder
+// Mutation: argument/passing
+// Original: conformance/SEM/SEM-3-wave1-text-empty-run.hir
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let mut builder: List[u8] = []
+  failure.check(std@1/text.finish(take builder) == Ok(copy ""), TextInvariant())
+  out.print(io.stdout(rt), "ok\n")
+}

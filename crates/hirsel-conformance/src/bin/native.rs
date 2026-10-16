@@ -9,7 +9,7 @@ use hirsel_driver::native::{
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
+const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
                      options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
 
 fn main() -> ExitCode {
@@ -106,6 +106,11 @@ fn run() -> Result<bool, String> {
     let mut out = None;
     let mut filter = Filter::default();
     let mut bless = false;
+    let mut exhaustive = false;
+    let mut seed = std::env::var("PROPTEST_RNG_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let mut engine = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -116,6 +121,8 @@ fn run() -> Result<bool, String> {
             }
             "--replay" | "--reduce" => mode = Some((arg.clone(), value()?.into())),
             "--bless" => bless = true,
+            "--exhaustive" => exhaustive = true,
+            "--seed" => seed = value()?.parse().map_err(|_| "invalid --seed")?,
             "--root" => root = value()?.into(),
             "--out" => out = Some(PathBuf::from(value()?)),
             "--filter" => filter.0.push(value()?),
@@ -234,7 +241,19 @@ fn run() -> Result<bool, String> {
             );
             Ok(ok)
         }
-        "--full" => full(&root, jobs, out, &filter, bless, hash_seed, engine),
+        "--full" => full(
+            &root,
+            jobs,
+            out,
+            &filter,
+            bless,
+            Coverage {
+                hash_seed,
+                seed,
+                exhaustive,
+            },
+            engine,
+        ),
         "--hash-sweep" => hash_sweep(&root, jobs, &filter, hash_seed),
         "--replay" | "--reduce" => {
             let stored = artifact::read(&dir)?;
@@ -284,15 +303,29 @@ impl Selected {
     }
 }
 
+struct Coverage {
+    hash_seed: u64,
+    seed: u64,
+    exhaustive: bool,
+}
+
 fn full(
     root: &Path,
     jobs: usize,
     out: Option<PathBuf>,
     filter: &Filter,
     bless: bool,
-    hash_seed: u64,
+    coverage: Coverage,
     engine: Option<Selected>,
 ) -> Result<bool, String> {
+    let Coverage {
+        hash_seed,
+        seed,
+        exhaustive,
+    } = coverage;
+    if bless && !exhaustive {
+        return Err("--bless requires --exhaustive".into());
+    }
     if bless && hash_seed != 0 {
         return Err("--bless requires the baseline hash seed".into());
     }
@@ -311,13 +344,30 @@ fn full(
         .filter(|c| engine.is_none_or(|e| e.keeps(c)))
         .collect();
     let toolchain = toolchain(&matrix)?;
+    let selection = if exhaustive {
+        None
+    } else {
+        Some(native::diet::Selection::load(root)?)
+    };
+    let exclusions = native::read_exclusions(root)?;
     let mut cases = native::baseline(root)?;
+    let baseline_before = cases.len();
     let complete = filter.is_empty() && engine.is_none();
     // Only the whole run must find every campaign non-empty; a shard may hold
     // no topology or generated case.
     let whole = complete && filter.1.is_none();
-    cases.retain(|c| filter.keeps(&c.id));
-    let results = native::run_cases(&cases, &matrix, &toolchain, &native::scratch("full")?, jobs);
+    cases.retain(|c| {
+        filter.keeps(&c.id)
+            && (!filter.is_empty()
+                || selection
+                    .as_ref()
+                    .is_none_or(|s| s.selected.contains(&c.id)))
+    });
+    let results = native::run_cases_with(&cases, &native::scratch("full")?, jobs, |case, dir| {
+        let selected =
+            native::diet::configurations(&matrix, &case.id, seed, exhaustive, &exclusions);
+        case.run(&selected, &toolchain, dir)
+    });
     let write = |name: &str, text: &str| {
         std::fs::write(out.join(name), text).map_err(|e| format!("{name}: {e}"))
     };
@@ -338,7 +388,7 @@ fn full(
     }
     // A shard judges the rows of its own cases, including rows naming a case
     // or configuration no longer in the matrix.
-    let mut exclusions = native::read_exclusions(root)?;
+    let mut exclusions = exclusions;
     exclusions.retain(|(id, _), _| filter.keeps(id));
     let classes: Vec<_> = engine.map_or_else(|| vec![Class::Heap, Class::Llvm], |e| vec![e.class]);
     let report = native::judge_classes(&results, &exclusions, matrix.len(), complete, &classes);
@@ -459,12 +509,20 @@ fn full(
     // configuration of the matrix.
     let mut generated = native::generate::cases(64);
     generated.retain(|c| filter.keeps(&c.id));
-    let generated_results = native::run_cases(
+    let generated_results = native::run_cases_with(
         &generated,
-        &matrix,
-        &toolchain,
         &native::scratch("generated")?,
         jobs,
+        |case, dir| {
+            let selected = native::diet::configurations(
+                &matrix,
+                &case.id,
+                seed,
+                exhaustive,
+                &native::Exclusions::new(),
+            );
+            case.run(&selected, &toolchain, dir)
+        },
     );
     write(
         "generated-matrix.tsv",
@@ -475,7 +533,7 @@ fn full(
     }
     // A restriction may empty a campaign, but not the whole run; the
     // unrestricted run checks every campaign (all_agree refuses an empty one).
-    if matrix.is_empty() || complete && cases.is_empty() {
+    if matrix.is_empty() || whole && cases.is_empty() {
         eprintln!("native: the matrix selected no cases or no configurations");
         ok = false;
     }
@@ -484,6 +542,16 @@ fn full(
         ok = false;
     }
     let mut json = report.json();
+    json["seed"] = seed.into();
+    json["exhaustive"] = exhaustive.into();
+    json["baseline_before_selection"] = baseline_before.into();
+    json["configuration_attempts"] = results
+        .iter()
+        .chain(&generated_results)
+        .chain(&topology_results)
+        .map(|r| r.outcomes.len())
+        .sum::<usize>()
+        .into();
     json["generated_cases"] = generated_results.len().into();
     json["mismatch_artifacts_replayed"] = replayed.into();
     json["mismatching_cases_reduced"] = reduced.into();

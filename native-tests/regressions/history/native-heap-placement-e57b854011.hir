@@ -1,0 +1,19 @@
+// Historical native finding: native/heap/placement: HeapInNoalloc("construction N of ? escapes the frame")
+// Mutation: expression/closure-call
+// Original: conformance/MEM/MEM-5-closure-local-element-read-run.hir
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+@noalloc
+fn example() -> u64 {
+  invoke(
+    fn() {
+      let n: List[u64] = [7]
+      (fn() { n[0] })()
+    }
+  )
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

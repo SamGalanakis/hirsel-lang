@@ -1,0 +1,17 @@
+// Historical native finding: native/llvm/mismatch
+// Mutation: statement/swap
+// Original: conformance/PROV/PROV-2-runtime-handle-narrow.hir
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let dir = io.dir(rt, path.of(".")) ? Files
+  let path = path.of("hirsel-prov-narrow.txt")
+  file.write_bytes(dir, path, b"data") ? Files
+  let handle = file.open(dir, path) ? Files
+  let _ = file.remove(dir, path)
+match file.narrow(dir, take handle) {
+    Some(narrowed) => {
+      out.print(io.stdout(rt), "ok\n") ? Output
+    },
+    None => out.print(io.stdout(rt), "wrong\n") ? Output,
+  }
+  Ok(())
+}

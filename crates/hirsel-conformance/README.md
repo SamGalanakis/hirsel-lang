@@ -76,7 +76,15 @@ type, a type argument included, so a narrower callable meets an exact edge.
 Each edit replaces one node's source span.
 
 `--seed` ranks the variants and `--limit` keeps the lowest-ranked M (default:
-all, which makes the seed irrelevant). A variant's rank depends only on the
+all). The CLI first applies `--variants-per-program N` (default 96) separately
+to each program. Its catalogue is ordered by a fixed pseudorandom rank and the
+seed chooses consecutive windows of N edits, wrapping at the end. Every edit
+is reached within `ceil(catalogue_size / N)` consecutive seeds. This budget is
+independent of the later global `--limit` and shard partition. `--exhaustive`
+disables the per-program budget for an explicit exhaustive campaign.
+The JSON `generated` is the complete catalogue; `eligible` is its size after
+budgeting and before the global limit. Every shard reports both global counts.
+A variant's rank depends only on the
 seed, its file path and its edit, so the same arguments select the same
 variants and adding a corpus file leaves the rest of a sample in place.
 `--shard I/N` partitions that globally selected sample by stable variant rank,
@@ -170,6 +178,14 @@ the raw token remains in the evidence and AST equality protects the projection.
 The migration never updates `passing.txt` or excludes a semantic difference.
 
 ## Native differential gate (`src/native/`, `--bin native`)
+
+`native-select --root REPO` reports the static campaign inventory without
+checking or executing mutations. It lists every program's mutation count,
+the baseline and generated program counts, and the exhaustive configurations.
+The baseline contains passing `run` and `fail` cases; `accept` cases are never
+executed by this campaign. Agreement executes only `run` mutations that remain
+valid and within the interpreter budget. Its reported native count is therefore
+an upper bound; an exact launch count requires running the campaign.
 
 `native --smoke` (in `tools/gate`) runs the cases of
 `native-tests/regressions/smoke.txt` and eight generated successes and eight

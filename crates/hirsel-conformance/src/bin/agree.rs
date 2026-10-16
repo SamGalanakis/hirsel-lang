@@ -4,7 +4,12 @@ fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(main_on_compiler_thread)
 }
 fn main_on_compiler_thread() -> ExitCode {
-    let mut seed = 0;
+    let mut seed = std::env::var("PROPTEST_RNG_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let mut budget = Some(hirsel_conformance::agree::DEFAULT_VARIANTS_PER_PROGRAM);
+    let mut exhaustive = false;
     let mut hash_seed = 0;
     let mut limit = usize::MAX;
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -15,14 +20,25 @@ fn main_on_compiler_thread() -> ExitCode {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let value = match arg.as_str() {
+            "--exhaustive" => {
+                exhaustive = true;
+                continue;
+            }
             "--help" | "-h" => {
                 println!(
-                    "usage: agree [--seed N] [--hash-seed N] [--limit M] [--root PATH] [--native heap|full] [--program PATH] [--path PREFIX]... [--shard I/N]"
+                    "usage: agree [--seed N] [--hash-seed N] [--limit M] [--root PATH] [--native heap|full] [--program PATH] [--path PREFIX]... [--shard I/N] [--variants-per-program N | --exhaustive]"
                 );
                 return ExitCode::SUCCESS;
             }
-            "--seed" | "--hash-seed" | "--limit" | "--root" | "--native" | "--program"
-            | "--path" | "--shard" => match args.next() {
+            "--seed"
+            | "--hash-seed"
+            | "--limit"
+            | "--root"
+            | "--native"
+            | "--program"
+            | "--path"
+            | "--shard"
+            | "--variants-per-program" => match args.next() {
                 Some(v) => v,
                 None => {
                     eprintln!("{arg} needs a value");
@@ -35,6 +51,13 @@ fn main_on_compiler_thread() -> ExitCode {
             }
         };
         match arg.as_str() {
+            "--variants-per-program" => match value.parse::<usize>() {
+                Ok(n) if n > 0 => budget = Some(n),
+                _ => {
+                    eprintln!("--variants-per-program needs a positive integer");
+                    return ExitCode::from(2);
+                }
+            },
             "--shard" => match hirsel_conformance::Shard::parse(&value) {
                 Some(value) => shard = Some(value),
                 None => {
@@ -111,6 +134,18 @@ fn main_on_compiler_thread() -> ExitCode {
             }
         }
     };
+    let native = match native {
+        Some(native) if !exhaustive && program.is_none() => {
+            match hirsel_conformance::native::diet::Selection::load(&root) {
+                Ok(selection) => Some(native.with_selection(selection, seed)),
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        native => native,
+    };
     if let Some(path) = program {
         use hirsel_conformance::agree::Classification;
         let result = match hirsel_conformance::agree::replay_program_with_hash_seed(
@@ -150,7 +185,10 @@ fn main_on_compiler_thread() -> ExitCode {
     match hirsel_conformance::agree::run_native_with_hash_seed(
         &root,
         seed,
-        limit,
+        hirsel_conformance::agree::Sample {
+            limit,
+            per_program: if exhaustive { None } else { budget },
+        },
         native.as_ref(),
         hash_seed,
         &only,

@@ -1,0 +1,12 @@
+// Historical native finding: native/heap/import: Instance(Malformed("?: a call with generic arguments of a value that is not a nested function of this body (sp
+// Mutation: expression/closure-call
+// Original: conformance/LANG/LANG-2-nested-call-size-run.hir
+fn outer(xs: Inline[u8, 3]) -> u64 {
+  fn length[n: size](ys: Inline[u8, n]) -> u64 {
+    n
+  }
+  (fn() { length(xs) })()
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

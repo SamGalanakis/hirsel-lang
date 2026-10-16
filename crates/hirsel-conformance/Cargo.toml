@@ -36,3 +36,8 @@ test = false
 name = "profile"
 path = "src/bin/profile.rs"
 test = false
+
+[[bin]]
+name = "native-select"
+path = "src/bin/native-select.rs"
+test = false

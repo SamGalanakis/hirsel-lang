@@ -1,0 +1,9 @@
+// Historical native finding: native/heap/import: Instance(Layout(main, Unavailable { issue: None, what: "a dynamic-extent value (Packed or variable flat) inlin
+// Mutation: last-use/view-dead
+// Original: conformance/MEM/MEM-13-payload-tag-ok.hir
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+  let mut x: Packed[Choice] = Small(value: 1)
+let last_use_view = fn() { copy x };
+  Ok(())
+}

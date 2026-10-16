@@ -252,7 +252,7 @@ GATE_TESTS = [
     # `tools/gate --full` (`-c hirsel.full=true` declares them). Native stages
     # carry their cross toolchain, qemu and Valgrind as pool action inputs.
     *(dict(name=f"gate-agree-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
-           args=["--seed", "1", "--shard", f"{index}/{AGREE_FULL_SHARDS}"], release=True, **GATE)
+           args=["--shard", f"{index}/{AGREE_FULL_SHARDS}"], release=True, **GATE)
       for index in range(1, AGREE_FULL_SHARDS + 1)),
     *(dict(name=f"gate-agree-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
            args=["--seed", "1", "--native", "full", "--shard", f"{index}/{AGREE_NATIVE_FULL_SHARDS}"],
@@ -520,6 +520,7 @@ def first_party(meta: dict) -> str:
     out = [
         HEADER,
         'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_test")\n',
+        'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
     def label(package_id: str) -> str:
@@ -616,6 +617,7 @@ def first_party(meta: dict) -> str:
                 out.append("\n" + call("hirsel_test", **profile, name=f"{name}-test-{target['name']}", deps=own + test_deps, bin_exes=binaries,
                                          shards=count if count > 1 else None, costs=costs,
                                          **test_attrs(f"{name}-test-{target['name']}", src), **attrs))
+    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(CORPUS, 4)})")))
     for gate in GATE_TESTS:
         out.append("\n" + call("hirsel_command_test", **gate, data=Raw(f"glob({starlark(CORPUS, 4)})")))
     for name, script, data, archives in (

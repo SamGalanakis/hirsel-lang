@@ -1,0 +1,16 @@
+// Historical native finding: native/heap/ready: validator: LeakedStorage
+// Mutation: expression/closure-call
+// Original: conformance/DROP/DROP-2-destructure-zero-siblings-run.hir
+resource type Child {}
+drop(x) {
+}
+resource type Parent {
+  first: Child,
+  second: Child,
+}
+drop(x) {
+}
+pub fn main(t: Test) -> Result[(), ()] {
+  let Parent(first: first, second: second) = (fn() { Parent(first: Child(), second: Child()) })()
+  Ok(())
+}

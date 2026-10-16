@@ -11,6 +11,20 @@ This crate exports only that wiring. Callers import queries, sessions and their
 data from hirsel-engine directly, so each caller's dependency on the backends
 and front phases is explicit.
 
+`native::backend_features` inventories LIR opcodes with operand representations,
+arithmetic and conversion modes, projections, layout shapes, validation stage
+outcomes and runtime calls in emitted O0 LLVM IR across both targets and all
+lowering choices. It never links or executes the source. A stage failure is
+returned separately; it is not evidence that the failed stage was covered.
+Individual LIR-validator and heap-checker check kinds are not instrumented.
+
+`native::pairwise_matrix` covers every feasible pair of dimension values in
+its input matrix, including the matrix's constraints on runtime archives and
+pass choices. A per-program rotating anchor visits every input configuration
+within one matrix-length cycle of consecutive seeds. Pair coverage is not a
+proof of equivalent bug-finding power: higher-order interactions are covered
+only by rotation over time and the explicit exhaustive campaign.
+
 Native callable-target specializations retain their original instance's signature
 and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include
 known callable bodies and their transitive specializations in each calling

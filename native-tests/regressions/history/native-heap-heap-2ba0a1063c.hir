@@ -1,0 +1,19 @@
+// Historical native finding: native/heap/heap: UninitializedRead: length N covers uninitialized element slot N
+// Mutation: statement/swap
+// Original: conformance/SEM/SEM-5-equality-same-order.hir
+fn output_error[E](take e: E) -> () {}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut m: Map[u8, u8] = map.empty()
+  map.insert(mut m, 2, 20)
+  let n = copy m
+map.insert(mut m, 1, 10)
+  out.print(
+    io.stdout(rt),
+    if m == n {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
