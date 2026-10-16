@@ -894,7 +894,9 @@ enum FlatPart<'m> {
     },
     /// A byte field an open element built in place (LIR schema revision 24):
     /// its length word and `length` bytes are already written.
-    InPlace { length: Value<'m> },
+    InPlace {
+        length: Value<'m>,
+    },
 }
 
 /// An LLVM parameter of a Hirsel ABI v1 entry.

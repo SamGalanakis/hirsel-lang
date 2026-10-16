@@ -8,10 +8,9 @@ use crate::effect::Opcode;
 use crate::ir::{
     AddressBase, AddressId, ArgumentValue, ArithMode, BinaryOp, BlockId, BlockKind, CallSite,
     Callee, CaptureUse, ConstantValue, ConstructId, ConstructorKind, ConvertMode, DestinationClass,
-    FlatFieldOp,
-    EdgeId, FailureId, Holding, Inst, LirType, LoanId, MaskRef, Placement, ProjectionStep,
-    ReadMode, RegionInstanceId, ScopeId, SlotId, SlotKind, StorageOwner, SymbolKind, TaskDomainId,
-    Terminator, UnitOrigin, ValueId, ValueRepr,
+    EdgeId, FailureId, FlatFieldOp, Holding, Inst, LirType, LoanId, MaskRef, Placement,
+    ProjectionStep, ReadMode, RegionInstanceId, ScopeId, SlotId, SlotKind, StorageOwner,
+    SymbolKind, TaskDomainId, Terminator, UnitOrigin, ValueId, ValueRepr,
 };
 use crate::layout_types::{
     CopyRecipe, LayoutId, LayoutKind, LayoutRecord, ScalarKind, SizeSpec, StorageKind,

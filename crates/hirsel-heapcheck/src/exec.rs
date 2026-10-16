@@ -1294,7 +1294,10 @@ impl<'p, S: Stage> Machine<'p, S> {
             Some(&open) if open == field => {}
             Some(_) => return fail(V::Malformed, "a write of another open field"),
             None => {
-                return fail(V::Malformed, "a write of a builder's open element when none is open");
+                return fail(
+                    V::Malformed,
+                    "a write of a builder's open element when none is open",
+                );
             }
         }
         let used = u64::try_from(self.read_scalar(block.at(8), 8)?)

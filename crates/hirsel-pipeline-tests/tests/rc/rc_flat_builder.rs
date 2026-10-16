@@ -291,7 +291,10 @@ fn lists_read_as_lists_or_given_other_elements_stay_ordinary() {
 }
 
 /// The C violations of every unit of a Ready program.
-pub(crate) fn violations(source: &str, program: &hirsel_heapcheck::Program<Ready>) -> Vec<ViolationKind> {
+pub(crate) fn violations(
+    source: &str,
+    program: &hirsel_heapcheck::Program<Ready>,
+) -> Vec<ViolationKind> {
     let compiled = compile(source);
     let manifest = manifest(&compiled);
     let operations = compiled.operation_registry();

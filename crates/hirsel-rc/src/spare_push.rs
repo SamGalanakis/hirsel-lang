@@ -446,17 +446,25 @@ impl Proof<'_> {
         field: u32,
     ) -> Option<(ValueId, usize)> {
         let b = self.def_block[version.index()]?;
-        let (at, capacity) = code(self.u, b).iter().enumerate().find_map(|(i, inst)| match *inst {
-            Inst::FlatField {
-                address,
-                field: f,
-                op: FlatFieldOp::Reserve { capacity },
-                version: v,
-            } if v == version && f == field && self.whole(address) && self.root(address) == Some(list) => {
-                Some((i, capacity))
-            }
-            _ => None,
-        })?;
+        let (at, capacity) =
+            code(self.u, b)
+                .iter()
+                .enumerate()
+                .find_map(|(i, inst)| match *inst {
+                    Inst::FlatField {
+                        address,
+                        field: f,
+                        op: FlatFieldOp::Reserve { capacity },
+                        version: v,
+                    } if v == version
+                        && f == field
+                        && self.whole(address)
+                        && self.root(address) == Some(list) =>
+                    {
+                        Some((i, capacity))
+                    }
+                    _ => None,
+                })?;
         let before = self.reaching(b, at, list)?;
         match self.defs.inst[before.index()]? {
             Inst::FlatField {

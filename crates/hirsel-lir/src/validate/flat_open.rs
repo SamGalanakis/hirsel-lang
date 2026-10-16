@@ -118,7 +118,15 @@ pub(super) fn check<S: Stage>(
             }
             _ => true,
         };
-        if !ok && matches!(inst(b, i), Some(Inst::FlatField { op: FlatFieldOp::Open, .. })) {
+        if !ok
+            && matches!(
+                inst(b, i),
+                Some(Inst::FlatField {
+                    op: FlatFieldOp::Open,
+                    ..
+                })
+            )
+        {
             report.add(site, K::Type("flat field opened twice"));
         } else if !ok {
             report.add(site, K::Type("flat field of no open element"));

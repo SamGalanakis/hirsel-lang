@@ -19,8 +19,8 @@ use super::tokens;
 use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::{
     AddressId, ArgumentValue, BlockId, BlockKind, CaptureUse, CleanupAnchorId, EdgeId, FailureId,
-    FlatFieldOp, Holding, Inst, LoanId, Placement, ScopeId, ScopeInfo, SlotId, SlotKind, StorageOwner,
-    Terminator, ValueId, ValueRepr,
+    FlatFieldOp, Holding, Inst, LoanId, Placement, ScopeId, ScopeInfo, SlotId, SlotKind,
+    StorageOwner, Terminator, ValueId, ValueRepr,
 };
 use crate::persistent::{Element, PVec};
 use crate::stage::{Stage, StageKind};
@@ -2040,8 +2040,9 @@ impl<S: Stage> Walker<'_, '_, S> {
             } => {
                 match op {
                     FlatFieldOp::Open => {}
-                    FlatFieldOp::Reserve { capacity: value }
-                    | FlatFieldOp::Push { value, .. } => self.borrow(site, st, cr, value),
+                    FlatFieldOp::Reserve { capacity: value } | FlatFieldOp::Push { value, .. } => {
+                        self.borrow(site, st, cr, value)
+                    }
                 }
                 let Some((Root::Slot(slot), path)) = self.place(address) else {
                     return;

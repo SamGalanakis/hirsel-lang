@@ -40,7 +40,10 @@ impl<S: Stage> Machine<'_, S> {
             None => false,
         };
         if r.kind != LayoutKind::Flat || !bytes {
-            return fail(V::TypeConfusion, "an open field that is not a byte sequence");
+            return fail(
+                V::TypeConfusion,
+                "an open field that is not a byte sequence",
+            );
         }
         Ok(f.offset)
     }

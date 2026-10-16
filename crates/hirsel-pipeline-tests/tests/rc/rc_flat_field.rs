@@ -314,7 +314,11 @@ fn forged(
     let u = program
         .units
         .iter_mut()
-        .find(|u| u.instructions.iter().any(|i| matches!(i, Inst::FlatClose { .. })))
+        .find(|u| {
+            u.instructions
+                .iter()
+                .any(|i| matches!(i, Inst::FlatClose { .. }))
+        })
         .expect("a close");
     let at = u
         .instructions
@@ -351,7 +355,10 @@ fn a_foreign_builder_write_inside_an_open_element_fails_c_and_h() {
         "{found:?}"
     );
     let h = heap(&program).expect_err("H writes no builder with an open element");
-    assert!(h.contains("a write into a builder with an open element"), "{h}");
+    assert!(
+        h.contains("a write into a builder with an open element"),
+        "{h}"
+    );
 }
 
 /// A close naming another field than the open one: C finds no element open
@@ -412,7 +419,11 @@ fn a_close_of_another_record_fails_c_and_h() {
     let u = program
         .units
         .iter_mut()
-        .find(|u| u.instructions.iter().any(|i| matches!(i, Inst::FlatClose { .. })))
+        .find(|u| {
+            u.instructions
+                .iter()
+                .any(|i| matches!(i, Inst::FlatClose { .. }))
+        })
         .expect("a close");
     let closes: Vec<usize> = (0..u.instructions.len())
         .filter(|&i| matches!(u.instructions[i], Inst::FlatClose { .. }))
@@ -458,7 +469,10 @@ fn an_element_opened_twice_fails_c_and_h() {
         "{found:?}"
     );
     let h = heap(&program).expect_err("H opens no element twice");
-    assert!(h.contains("an element opened in a builder with one open"), "{h}");
+    assert!(
+        h.contains("an element opened in a builder with one open"),
+        "{h}"
+    );
 }
 
 /// A push of the reservation's u64 length instead of a byte: C's typing of
@@ -471,7 +485,11 @@ fn a_push_of_a_wider_value_fails_c() {
     let u = program
         .units
         .iter_mut()
-        .find(|u| u.instructions.iter().any(|i| matches!(i, Inst::FlatClose { .. })))
+        .find(|u| {
+            u.instructions
+                .iter()
+                .any(|i| matches!(i, Inst::FlatClose { .. }))
+        })
         .expect("a close");
     let length = u
         .instructions
@@ -524,7 +542,11 @@ fn a_spare_push_past_the_room_fails_in_h() {
             Inst::FlatField {
                 address,
                 field,
-                op: FlatFieldOp::Push { value, spare: false },
+                op:
+                    FlatFieldOp::Push {
+                        value,
+                        spare: false,
+                    },
                 version,
             } => Some(Inst::FlatField {
                 address,
@@ -537,5 +559,8 @@ fn a_spare_push_past_the_room_fails_in_h() {
     );
     assert!(violations(&source, &program).is_empty());
     let h = heap(&program).expect_err("H fails a spare push past the room");
-    assert!(h.contains("a spare push past the builder's capacity"), "{h}");
+    assert!(
+        h.contains("a spare push past the builder's capacity"),
+        "{h}"
+    );
 }

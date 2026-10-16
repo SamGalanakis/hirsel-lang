@@ -529,6 +529,86 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     }
 }
 
+/// A byte list frozen into a Bytes field of a built element is written where
+/// the element will lie (`Inst::FlatField`, LIR schema revision 24):
+/// records-messages/flat's message loop allocates, grows and frees no payload
+/// block, and its byte loop under the field's reservation (a spare push,
+/// FACT-3) calls nothing. Causal control: reading the payload's length before
+/// its freeze keeps it an ordinary list, whose block is allocated and freed
+/// per message again.
+#[test]
+fn a_byte_list_frozen_into_a_built_element_allocates_nothing_per_element() {
+    let source = "flat type Message { id: u64, kind: u64, payload: Bytes }
+flat type Messages { items: List[Message] }
+fn build(n: u64) -> Messages {
+  let mut items: List[Message] = []
+  list.reserve(mut items, n)
+  for i in 0u64..n {
+    let mut payload: List[u8] = []
+    let length = 24u64 + i % 104u64
+    list.reserve(mut payload, length)
+    for j in 0u64..length { list.push(mut payload, int.narrow(97u64 + (i + j * 7u64) % 26u64)) }
+    list.push(mut items, Message(id: i, kind: i % 7u64, payload: bytes.from_list(take payload)))
+  }
+  Messages(items: take items)
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let messages = build(64)
+  failure.check(list.len(messages.items) == 64u64, TextInvariant())
+  Ok(())
+}
+";
+    let ordinary = source.replace(
+        "    list.push(mut items, Message(",
+        "    failure.check(list.len(payload) == length, TextInvariant())\n    list.push(mut items, Message(",
+    );
+    let blockwise = |l: &str| {
+        callee(l).is_some_and(|c| {
+            ALLOCATING.contains(&c) || c == "hirsel_rt_v2_free" || c == "hirsel_rt_v2_release"
+        })
+    };
+    for target in targets() {
+        for (source, built) in [(source.to_owned(), true), (ordinary.clone(), false)] {
+            let ir = module_ir(&source, target.clone());
+            let functions = functions(&ir);
+            let (_, build) = functions
+                .iter()
+                .find(|(name, _)| name.contains("5buildI"))
+                .expect("build is defined");
+            let text = format!("define\n{}", build.join("\n"));
+            let graph = blocks(&text);
+            let looped: Vec<&String> = graph
+                .iter()
+                .filter(|(name, _)| cycle(&graph, name).is_some())
+                .flat_map(|(_, b)| b.lines.iter())
+                .filter(|l| l.contains("call ") && !l.contains("@llvm."))
+                .collect();
+            if built {
+                assert!(
+                    !looped.iter().any(|l| blockwise(l)),
+                    "{looped:#?}\n{}",
+                    build.join("\n")
+                );
+                // The byte loop: the cheapest cycle through a byte store.
+                let (_, path) = graph
+                    .iter()
+                    .filter(|(_, b)| b.lines.iter().any(|l| l.starts_with("store i8 ")))
+                    .filter_map(|(name, _)| cycle(&graph, name))
+                    .min_by_key(|(cost, _)| *cost)
+                    .expect("a loop stores a byte");
+                let calls: usize = path.iter().map(|n| graph[n].calls()).sum();
+                assert_eq!(calls, 0, "byte loop {path:?}\n{}", build.join("\n"));
+            } else {
+                assert!(
+                    looped.iter().filter(|l| blockwise(l)).count() >= 2,
+                    "{looped:#?}\n{}",
+                    build.join("\n")
+                );
+            }
+        }
+    }
+}
+
 /// A heap record whose one field is a dying builder's list takes the
 /// builder's block when it is unique: its two header words become the list's
 /// length prefix and count and its descriptor the record's, so no second

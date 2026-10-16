@@ -10,8 +10,8 @@
 use super::structure::{Def, Facts, Root, Step, construct_values, propagate};
 use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::{
-    ArgumentValue, BlockId, CaptureValue, ConstructorKind, FlatFieldOp, Inst, MaskRef, Placement, ReadMode,
-    StorageOwner, TaskDomainId, Terminator, ValueId, ValueRepr,
+    ArgumentValue, BlockId, CaptureValue, ConstructorKind, FlatFieldOp, Inst, MaskRef, Placement,
+    ReadMode, StorageOwner, TaskDomainId, Terminator, ValueId, ValueRepr,
 };
 use crate::layout_types::LayoutId;
 use crate::runtime_abi::{SizeClass, size_class};

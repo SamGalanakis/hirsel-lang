@@ -1703,8 +1703,9 @@ impl Inst {
                 f(R::Address(address));
                 match op {
                     FlatFieldOp::Open => {}
-                    FlatFieldOp::Reserve { capacity: value }
-                    | FlatFieldOp::Push { value, .. } => f(R::Value(value)),
+                    FlatFieldOp::Reserve { capacity: value } | FlatFieldOp::Push { value, .. } => {
+                        f(R::Value(value))
+                    }
                 }
                 f(R::Value(version));
             }

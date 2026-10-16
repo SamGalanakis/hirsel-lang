@@ -26,9 +26,10 @@ use crate::import::STATE_RELEASE;
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::{
     AddressBase, AddressId, AddressInfo, ArgumentValue, Block, BlockId, BlockKind, CaptureUse,
-    CleanupAnchor, CleanupAnchorId, Edge, EdgeId, FailureEdge, FailureId, FlatFieldOp, Holding, Inst, LirTypeId,
-    LirUnit, LoanId, MaskRef, PoolRange, ProjectionStep, ReadMode, RegionInstanceId, ScopeId,
-    SlotId, SlotKind, SourceAnchorId, Terminator, ValueId, ValueInfo, ValueRepr,
+    CleanupAnchor, CleanupAnchorId, Edge, EdgeId, FailureEdge, FailureId, FlatFieldOp, Holding,
+    Inst, LirTypeId, LirUnit, LoanId, MaskRef, PoolRange, ProjectionStep, ReadMode,
+    RegionInstanceId, ScopeId, SlotId, SlotKind, SourceAnchorId, Terminator, ValueId, ValueInfo,
+    ValueRepr,
 };
 use hirsel_lir::layout_types::{
     DropStep, LayoutId, LayoutKind, LayoutRecord, LayoutTable, SizeSpec,
@@ -3360,9 +3361,7 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 ..
             } => *version = map(*version),
             Inst::FlatField {
-                op:
-                    FlatFieldOp::Reserve { capacity: value }
-                    | FlatFieldOp::Push { value, .. },
+                op: FlatFieldOp::Reserve { capacity: value } | FlatFieldOp::Push { value, .. },
                 version,
                 ..
             } => {

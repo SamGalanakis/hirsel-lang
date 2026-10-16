@@ -63,7 +63,9 @@ fn instruction_places(body: &tir::Body, kind: &tir::InstructionKind) -> Vec<tir:
     use tir::InstructionKind as K;
     let mut out = Vec::new();
     match kind {
-        K::Defuse { place } | K::EndOrigin(place) | K::StorageDead { place, .. } => out.push(*place),
+        K::Defuse { place } | K::EndOrigin(place) | K::StorageDead { place, .. } => {
+            out.push(*place)
+        }
         K::Drop { place, .. } => out.push(*place),
         K::BindOrigin { source, place, .. } => out.extend([*source, *place]),
         K::BindFields { source, fields } => {
@@ -119,7 +121,9 @@ fn terminator_places(body: &tir::Body, terminator: &tir::Terminator) -> Vec<tir:
             out.extend(returns.iter().map(|r| r.destination));
             out
         }
-        T::Branch { condition: v, .. } | T::Switch { value: v, .. } | T::Return { value: v, .. } => {
+        T::Branch { condition: v, .. }
+        | T::Switch { value: v, .. }
+        | T::Return { value: v, .. } => {
             vec![v.place]
         }
         T::Match { table, .. } => {
@@ -368,7 +372,9 @@ impl Importer<'_, '_> {
                     .filter(|a| a.value.usage == UseKind::Mut && returns.is_some())
                     .and_then(|a| on(a.value.place));
                 let frozen = match (arguments.as_slice(), returns) {
-                    ([a], Some(r)) if path.as_ref() == Some(&freeze) && a.value.usage == UseKind::Take => {
+                    ([a], Some(r))
+                        if path.as_ref() == Some(&freeze) && a.value.usage == UseKind::Take =>
+                    {
                         on(a.value.place).filter(|&w| on(r.destination) == Some(w))
                     }
                     _ => None,
@@ -377,7 +383,8 @@ impl Importer<'_, '_> {
                     (Some(w), Some(v), _)
                         if arguments.len() == 2
                             && on(v.value.place).is_none()
-                            && (path.as_ref() == Some(&push) || path.as_ref() == Some(&reserve)) =>
+                            && (path.as_ref() == Some(&push)
+                                || path.as_ref() == Some(&reserve)) =>
                     {
                         let web = webs.get_mut(&w).expect("web");
                         if path.as_ref() == Some(&push) {
@@ -429,7 +436,9 @@ impl Importer<'_, '_> {
                 continue;
             };
             let members: Vec<usize> = (0..n).filter(|&l| web_of[l] == Some(w)).collect();
-            if web.bad || members.iter().any(|&l| definitions[l] != 1) || taken.contains(&consumer.2)
+            if web.bad
+                || members.iter().any(|&l| definitions[l] != 1)
+                || taken.contains(&consumer.2)
             {
                 continue;
             }
@@ -448,13 +457,17 @@ impl Importer<'_, '_> {
             let foreign = |b: usize, i: usize| -> bool {
                 let kind = &body.blocks[b].instructions[i].kind;
                 if let K::Assign { destination, .. } = kind
-                    && let Some(other) = self.builders.heads.get(&body.places[destination.0 as usize].root)
+                    && let Some(other) = self
+                        .builders
+                        .heads
+                        .get(&body.places[destination.0 as usize].root)
                     && list_of(*other).copied() == builder
                 {
                     return true;
                 }
                 if let K::Assign { destination, .. } = kind
-                    && let Some((other, _)) = out.opens.get(&body.places[destination.0 as usize].root)
+                    && let Some((other, _)) =
+                        out.opens.get(&body.places[destination.0 as usize].root)
                     && list_of(*other).copied() == builder
                 {
                     return true;
@@ -482,7 +495,9 @@ impl Importer<'_, '_> {
                         break 'walk;
                     }
                 }
-                if self.plan.is_some_and(|plan| plan.site(tir::BlockId(b as u32)).is_some())
+                if self
+                    .plan
+                    .is_some_and(|plan| plan.site(tir::BlockId(b as u32)).is_some())
                     || matches!(block.terminator, tir::Terminator::Return { .. })
                     || terminator_places(body, &block.terminator)
                         .into_iter()
@@ -501,7 +516,12 @@ impl Importer<'_, '_> {
             let inside = |b: &usize| region.contains(b);
             if !ok
                 || !closed
-                || !web.pushes.iter().chain(&web.reserves).chain(&web.freezes).all(inside)
+                || !web
+                    .pushes
+                    .iter()
+                    .chain(&web.reserves)
+                    .chain(&web.freezes)
+                    .all(inside)
             {
                 continue;
             }
@@ -510,10 +530,12 @@ impl Importer<'_, '_> {
                 .extend(members.iter().map(|&l| tir::LocalId(l as u32)));
             out.opens.insert(init.2, (list, field));
             for &b in &web.pushes {
-                out.writes.insert(tir::BlockId(b as u32), (list, field, true));
+                out.writes
+                    .insert(tir::BlockId(b as u32), (list, field, true));
             }
             for &b in &web.reserves {
-                out.writes.insert(tir::BlockId(b as u32), (list, field, false));
+                out.writes
+                    .insert(tir::BlockId(b as u32), (list, field, false));
             }
             out.freezes
                 .extend(web.freezes.iter().map(|&b| tir::BlockId(b as u32)));
