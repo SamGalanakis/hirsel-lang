@@ -83,15 +83,16 @@ fn source_parser_rounds_midpoints_and_unbounded_decimal_suffixes_like_rust() {
     });
 }
 
-#[test]
-fn source_exact_sum_matches_all_256_independent_rational_vectors_in_both_orders() {
+/// Rows `first .. first + 32` of the 256 independent rational vectors, each summed in both
+/// orders; eight cases cover them all, so shards run them in parallel.
+fn source_exact_sum_matches_rational_vectors_in_both_orders(first: usize) {
     with_compiler_stack(|| {
         let rows: Vec<_> = include_str!("../../../../native-tests/library/exact-sums.txt")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect();
         assert_eq!(rows.len(), 256);
-        for batch in rows.chunks(16) {
+        for batch in rows[first..first + 32].chunks(16) {
             let mut source = String::from(
                 "pub fn main(t: Test) -> Result[(), ()] {\nlet cases: Array[(Array[f64], u64)] = [\n",
             );
@@ -112,6 +113,46 @@ fn source_exact_sum_matches_all_256_independent_rational_vectors_in_both_orders(
             execute(&source);
         }
     });
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_000_to_031_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(0);
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_032_to_063_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(32);
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_064_to_095_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(64);
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_096_to_127_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(96);
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_128_to_159_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(128);
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_160_to_191_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(160);
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_192_to_223_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(192);
+}
+
+#[test]
+fn source_exact_sum_matches_rational_vectors_224_to_255_in_both_orders() {
+    source_exact_sum_matches_rational_vectors_in_both_orders(224);
 }
 
 #[test]
