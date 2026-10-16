@@ -77,4 +77,4 @@ host_transition(
     visibility = ["PUBLIC"],
 )
 
-export_file(name = "workspace-metadata.json", visibility = ["PUBLIC"])
+export_file(name = "workspace-metadata.json", mode = "reference", visibility = ["PUBLIC"])
