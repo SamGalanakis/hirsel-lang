@@ -12,7 +12,7 @@ names the crate from any package directory, locally or on the pool, and so do
 CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 """
 
-load(":platforms.bzl", "CLIPPY_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "pool_budget_name", "test_budget_name")
+load(":platforms.bzl", "CLIPPY_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "pool_budget_name", "test_budget_name", "test_executor", "test_request")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
 load(":profile.bzl", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
@@ -38,6 +38,9 @@ TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
 # test's environment, so of its cached verdict: a pass is reused only under the
 # same seed, and the full gate draws a new one each run (`tools/gate --full`).
 TEST_SEED = read_root_config("hirsel", "test_seed", "1")
+
+def _request(binary):
+    return [str(field) for field in test_request(binary)]
 
 def _test_platform(host, binary):
     """The invoking host, or the pool request measured for `binary` (its shards share it)."""
@@ -212,6 +215,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         cwd = manifest_dir,
         host_cases = host_cases,
         test_binary = name,
+        request = _request(name),
         seed = TEST_SEED if seeded else "",
         args = [] if FULL_GATE else [argument for case in skips for argument in ("--skip", case)],
         visibility = ["PUBLIC"],
@@ -292,6 +296,7 @@ def _rust_test_impl(ctx):
             # environment and inputs), so a rerun on unchanged inputs does not
             # execute; a failure is never cached. The host platform has no cache.
             supports_test_execution_caching = ctx.attrs.pool,
+            default_executor = test_executor(int(ctx.attrs.request[0]), int(ctx.attrs.request[1]), ctx.attrs.request[2]) if ctx.attrs.pool else None,
         ),
     ]
 
@@ -311,6 +316,8 @@ _rust_test = rule(
         "llvm": attrs.dep(),
         "pool": attrs.bool(default = False),
         "relocate": attrs.bool(default = False),
+        # A pool run's `[cpu, memory_kb, cpu_class]`, for its executor (platforms.bzl).
+        "request": attrs.list(attrs.string(), default = []),
         "runtime_archives": attrs.option(attrs.dep(), default = None),
         "seed": attrs.string(default = ""),
         "shard_index": attrs.int(default = 0),
@@ -356,6 +363,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         labels = ["gate"] + (["host"] if host else []),
         exec_compatible_with = _test_platform(host, _stage(name)),
         pool = not (host or TESTS_ON_HOST),
+        request = _request(_stage(name)),
         relocate = True,
         visibility = ["PUBLIC"],
     )

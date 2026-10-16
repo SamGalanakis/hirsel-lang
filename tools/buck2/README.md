@@ -58,8 +58,8 @@ private isolation dir is only for inspecting the graph beside a running
 command, or for escaping a stuck daemon; anything it builds starts cold.
 
 `-c hirsel.tests=focus` is for running one test or a few by name: each test
-run books one CPU, with its binary's measured memory, and queues at the
-compiles' priority instead of the binary's whole-shard request. The pool
+run books one CPU, with its binary's measured memory, instead of the binary's
+whole-shard request. The pool
 reserves nothing for a multi-CPU action, so a four-CPU run of one case waited
 for one worker to free four CPUs at once: over twelve alternated edits its
 queue had a median of 43 s and a maximum of 353 s, against 0.4 s and 6 s in
@@ -246,10 +246,13 @@ them into a shared directory.
   twins and measured test requests (below), carrying the pool's platform
   properties. Only the critical-path compiles named in `CPU_CLASSES`
   (`action_sizes_from_log.py`) and the conformance shards ask for
-  `cpu_class=fast`; other tests and gate shards run on any worker. Compile platforms queue at priority 100 and test
-  platforms at 0, so an edit's compiles
-  overtake campaign shards; the priority is not part of an action key. The
-  platforms also include plus the invoking host for tests labelled `host`: cases that run
+  `cpu_class=fast`; other tests and gate shards run on any worker. Compiles
+  and test runs queue at priority 100, the pool's class for lane and CI work;
+  only the test runs of the on-demand full run (`-c hirsel.full=true`) queue at
+  0, its warming class, which gets no reserved worker. A test run carries its
+  own executor (`test_executor` in `platforms.bzl`): Buck2 runs tests with it,
+  not with their platform's. The priority is not part of an action key. The
+  platforms also include the invoking host for tests labelled `host`: cases that run
   Cargo, and the stages that need qemu-user, the AArch64 cross toolchain or
   Valgrind, which the pool image lacks (`-c hirsel.tests=host` runs every test
   there).

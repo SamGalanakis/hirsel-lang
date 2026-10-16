@@ -11,17 +11,20 @@ CPU_CLASSES (tools/buck2/action_sizes_from_log.py) and the conformance shards
 (TEST_REQUESTS) ask for `cpu_class=fast`; every other compile, test run and gate
 shard runs on any worker.
 
-A pool that serves its queue highest priority first without preempting
-(NativeLink) runs an edit's compiles, queued at 100, before test runs and
-campaign shards, which queue at 0.
-The priority is not a platform property, so it is not part of an action key.
+The pool serves lane and CI work at priority 100; 0 is its warming class,
+which never gets a reserved worker. Compiles and test runs ask for 100, and only
+the test runs of the on-demand full run (`-c hirsel.full=true`) for 0. The
+scheduler reads the REAPI execution policy's priority, which Buck2 sends from a
+`CommandExecutorConfig`: a platform's for its actions, and a test's own
+`default_executor` (`test_executor`) for its run. The priority is not a platform
+property, so it is not part of an action key.
 """
 
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS", "POOL_BUDGETS")
 load(":test_sizes.bzl", "TEST_REQUESTS")
 
-COMPILE_PRIORITY = 100
-TEST_PRIORITY = 0
+PRIORITY = 100
+TEST_PRIORITY = 0 if read_root_config("hirsel", "full", "false") == "true" else PRIORITY
 
 # A pool test binary's request, `[cpu, memory_kb, cpu_class]`, is measured
 # from the workers' usage logs (TEST_REQUESTS, test_sizes_from_usage.py): one
@@ -31,8 +34,7 @@ TEST_PRIORITY = 0
 DEFAULT_TEST_REQUEST = [1, 2097152, ""]
 
 # `-c hirsel.tests=focus` is for running one test or a few by name: every pool
-# test run books one CPU (with its binary's measured memory) and queues with the
-# compiles. The pool's scheduler reserves nothing for a multi-CPU action, so
+# test run books one CPU (with its binary's measured memory). The pool's scheduler reserves nothing for a multi-CPU action, so
 # behind a stream of one-CPU actions a four-CPU run of a single case waited up
 # to minutes for one worker to free four CPUs at once, then ran for a second.
 FOCUS = read_root_config("hirsel", "tests", "pool") == "focus"
@@ -45,6 +47,20 @@ def _test_request(cpu, memory_kb, cpu_class):
 
 def test_budget_name(binary):
     return _test_request(*TEST_REQUESTS.get(binary, DEFAULT_TEST_REQUEST))[0]
+
+def test_request(binary):
+    """A test binary's effective pool request `[cpu, memory_kb, cpu_class]`."""
+    return _test_request(*TEST_REQUESTS.get(binary, DEFAULT_TEST_REQUEST))[1]
+
+def test_executor(cpu, memory_kb, cpu_class):
+    """A pool test run's executor: Buck2 runs a test with its own executor, not its platform's."""
+    return CommandExecutorConfig(
+        local_enabled = LOCAL,
+        remote_enabled = not LOCAL,
+        priority = TEST_PRIORITY,
+        remote_execution_properties = pool_properties(cpu, memory_kb, cpu_class),
+        remote_execution_use_case = "hirsel",
+    )
 
 # The request of a compile no measurement sized.
 DEFAULT_REQUEST = [1, 1048576]
@@ -116,7 +132,7 @@ def _platforms(ctx):
             executor_config = CommandExecutorConfig(
                 local_enabled = LOCAL,
                 remote_enabled = not LOCAL,
-                priority = TEST_PRIORITY if name.startswith("pool_test_") else COMPILE_PRIORITY,
+                priority = TEST_PRIORITY if name.startswith("pool_test_") or name.startswith("pool_focus_") else PRIORITY,
                 remote_execution_properties = pool_properties(cpu, memory_kb, cpu_class),
                 remote_execution_use_case = "hirsel",
                 remote_output_paths = "output_paths",
