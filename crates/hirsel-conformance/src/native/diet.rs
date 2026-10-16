@@ -82,8 +82,8 @@ pub fn configurations(
 
 /// Deterministic greedy set cover, followed by reverse deletion to a fixed
 /// point. Inclusion-minimal after pins; no global-optimality claim is made.
-fn cover(
-    programs: &BTreeMap<String, BTreeSet<String>>,
+fn cover<T: Ord + Clone>(
+    programs: &BTreeMap<String, BTreeSet<T>>,
     pinned: &BTreeSet<String>,
     costs: &BTreeMap<String, usize>,
 ) -> BTreeSet<String> {
@@ -109,29 +109,26 @@ fn cover(
         uncovered.retain(|f| !next.1.contains(f));
         selected.insert(next.0.clone());
     }
-    // Removing one redundant row cannot make another redundant, but loop to
-    // make the fixed-point condition explicit and independently checkable.
-    loop {
-        let mut removed = false;
-        for path in selected
-            .clone()
-            .iter()
-            .rev()
-            .filter(|p| !pinned.contains(*p))
-        {
-            let others: BTreeSet<_> = selected
-                .iter()
-                .filter(|p| *p != path)
-                .filter_map(|p| programs.get(p))
-                .flatten()
-                .collect();
-            if programs[path].iter().all(|f| others.contains(f)) {
-                selected.remove(path);
-                removed = true;
-            }
+    // Count witnesses once rather than repeatedly rebuilding the union of
+    // every other program. Deletion only decreases counts, so a single pass
+    // reaches the same fixed point.
+    let mut uses = BTreeMap::<&T, usize>::new();
+    for path in &selected {
+        for feature in programs.get(path).into_iter().flatten() {
+            *uses.entry(feature).or_default() += 1;
         }
-        if !removed {
-            break;
+    }
+    for path in selected
+        .clone()
+        .iter()
+        .rev()
+        .filter(|p| !pinned.contains(*p))
+    {
+        if programs[path].iter().all(|f| uses[f] > 1) {
+            for feature in &programs[path] {
+                *uses.get_mut(feature).unwrap() -= 1;
+            }
+            selected.remove(path);
         }
     }
     selected
@@ -215,6 +212,7 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
             );
         }
     }
+    let mut dictionary = BTreeMap::<String, usize>::new();
     let mut features = BTreeMap::new();
     let mut errors = BTreeMap::new();
     for (index, (path, case)) in cases.iter().enumerate() {
@@ -238,20 +236,23 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
         if !failures.is_empty() {
             pinned.insert(path.clone());
         }
-        features.insert(path.clone(), seen);
+        let indices = seen
+            .into_iter()
+            .map(|feature| {
+                let next = dictionary.len();
+                *dictionary.entry(feature).or_insert(next)
+            })
+            .collect::<BTreeSet<_>>();
+        features.insert(path.clone(), indices);
         errors.insert(path.clone(), failures);
     }
     let selected = cover(&features, &pinned, &costs);
-    let dictionary: Vec<_> = features
-        .values()
-        .flatten()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let indices: BTreeMap<_, _> = dictionary.iter().enumerate().map(|(i, f)| (f, i)).collect();
+    let mut names = vec![String::new(); dictionary.len()];
+    for (feature, index) in dictionary {
+        names[index] = feature;
+    }
     let programs: Vec<_> = features.iter().map(|(path, seen)| json!({
-        "path": path, "features": seen.iter().map(|f| indices[f]).collect::<Vec<_>>(), "errors": errors[path], "variants": costs.get(path).copied().unwrap_or(0)
+        "path": path, "features": seen, "errors": errors[path], "variants": costs.get(path).copied().unwrap_or(0)
     })).collect();
     let matrix = hirsel_driver::native::full_matrix();
     let baseline = native::baseline(root)?;
@@ -281,7 +282,7 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
         .map(|n| (*n).min(budget))
         .sum();
     Ok(
-        json!({ "version": 1, "selected": selected, "protected": pinned, "features": dictionary, "programs": programs,
+        json!({ "version": 1, "selected": selected, "protected": pinned, "features": names, "programs": programs,
         "counts": {"baseline_before": baseline.len(), "baseline_after": baseline_selected.len(), "seed": 1,
             "baseline_configurations_before": baseline.len() * matrix.len(), "baseline_configurations_after": slim_attempts,
             "baseline_llvm_before": baseline.len() * matrix.iter().filter(|c| matches!(c.engine, hirsel_driver::native::Engine::Native { .. })).count(), "baseline_llvm_after": slim_llvm,
@@ -339,7 +340,12 @@ pub fn replay_history(
     };
     let mut lost = Vec::new();
     let mut classifications = Vec::new();
+    let mut unreplayable = Vec::new();
     for result in &results {
+        if result.snapshot.is_some() {
+            unreplayable.push(json!({"path": result.id, "reason": result.snapshot}));
+            continue;
+        }
         let full = findings(result);
         // Every historical source remains pinned. Here we test the only other
         // reduction, the legal configuration cover, for a complete seed cycle.
@@ -361,7 +367,7 @@ pub fn replay_history(
         );
     }
     Ok(
-        json!({"programs": results.len(), "seeds_per_program": matrix.len(), "configuration_attempts": results.iter().map(|r| r.outcomes.len()).sum::<usize>(), "lost": lost, "classifications": classifications}),
+        json!({"programs": results.len(), "seeds_per_program": matrix.len(), "configuration_attempts": results.iter().map(|r| r.outcomes.len()).sum::<usize>(), "lost": lost, "unreplayable": unreplayable, "classifications": classifications}),
     )
 }
 

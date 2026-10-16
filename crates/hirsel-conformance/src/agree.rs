@@ -1769,6 +1769,32 @@ fn sampled_catalogue(
     });
     (generated, small.into_iter().collect())
 }
+
+/// A finite global rank limit never needs more than that many candidates from
+/// one program. Preserve the exact exhaustive ranks while bounding strings in
+/// library clients that request a small global sample without a local budget.
+fn ranked_catalogue(
+    file: &SyntaxFile,
+    source: &str,
+    path: &str,
+    seed: u64,
+    limit: usize,
+) -> (usize, Vec<Edit>) {
+    let mut identities = BTreeSet::new();
+    let mut candidates = BTreeSet::new();
+    enumerate(file, source, &mut |edit| {
+        if identities.insert(edit_identity(&edit)) && limit > 0 {
+            candidates.insert((rank(seed, path, &edit), edit));
+            if candidates.len() > limit {
+                candidates.pop_last();
+            }
+        }
+    });
+    (
+        identities.len(),
+        candidates.into_iter().map(|(_, edit)| edit).collect(),
+    )
+}
 /// Check the `limit` lowest-ranked variants of the whole corpus under `seed`.
 /// Without a limit every seed checks the entire catalogue.
 pub fn run(root: &Path, seed: u64, limit: usize) -> Result<Report, String> {
@@ -1847,8 +1873,13 @@ pub fn run_native_with_hash_seed(
             .exists()
             .then_some(path.clone());
         let path = relative.display().to_string();
-        let (generated, edits) = sampled_catalogue(&parsed, &source, seed, sample.per_program);
+        let (generated, edits) = if sample.per_program.is_none() && sample.limit != usize::MAX {
+            ranked_catalogue(&parsed, &source, &path, seed, sample.limit)
+        } else {
+            sampled_catalogue(&parsed, &source, seed, sample.per_program)
+        };
         report.generated += generated;
+        report.eligible += sample.per_program.map_or(generated, |n| generated.min(n));
         for edit in edits {
             variants.push((rank(seed, &path, &edit), programs.len(), edit));
         }
@@ -1859,8 +1890,45 @@ pub fn run_native_with_hash_seed(
             run: matches!(header.expect, crate::Expect::Run { .. }),
         });
     }
+    if native.is_some() {
+        // Historical reduced programs are exact inputs, not sampled mutation
+        // catalogues. Pinning a path in the cover alone would never execute a
+        // fixture outside conformance/. Give it one identity edit so it uses
+        // the same classification, clustering and stable shard partition.
+        let mut fixtures = Vec::new();
+        crate::discover(&root.join("native-tests/regressions"), &mut fixtures)?;
+        fixtures.sort();
+        for fixture in fixtures {
+            let path = fixture
+                .strip_prefix(root)
+                .map_err(|e| e.to_string())?
+                .display()
+                .to_string();
+            if !only.is_empty() && !only.iter().any(|p| path.starts_with(p)) {
+                continue;
+            }
+            let source = std::fs::read_to_string(&fixture).map_err(|e| e.to_string())?;
+            let edit = Edit {
+                kind: "historical/exact",
+                start: 0,
+                end: source.len(),
+                replacement: source.clone(),
+            };
+            variants.push((rank(seed, &path, &edit), programs.len(), edit));
+            report.generated += 1;
+            report.eligible += 1;
+            programs.push(Program {
+                path,
+                source,
+                run: true,
+                package_path: fixture
+                    .with_extension("hir.json")
+                    .exists()
+                    .then_some(fixture),
+            });
+        }
+    }
     report.programs = programs.len();
-    report.eligible = variants.len();
     variants.sort();
     variants.truncate(sample.limit);
     variants.retain(|(rank, _, _)| in_sample_shard(*rank, shard));
@@ -2000,6 +2068,16 @@ mod tests {
         let source = "fn f(x: u64) -> u64 { let mut a: u64 = x; let b: u64 = a; a = b; a }";
         let parsed = parse(source).unwrap();
         let full = catalogue(&parsed, source);
+        for seed in 0..5 {
+            for limit in [0, 1, 7, full.len(), full.len() + 1] {
+                let (generated, actual) = ranked_catalogue(&parsed, source, "fixture", seed, limit);
+                let mut expected: Vec<_> = full.iter().cloned().collect();
+                expected.sort_by_key(|edit| (rank(seed, "fixture", edit), edit.clone()));
+                expected.truncate(limit);
+                assert_eq!(generated, full.len());
+                assert_eq!(actual, expected);
+            }
+        }
         let keys: BTreeSet<_> = full.iter().map(edit_identity).collect();
         for seed in 0..5 {
             let (generated, edits) = sampled_catalogue(&parsed, source, seed, Some(7));

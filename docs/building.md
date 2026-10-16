@@ -155,8 +155,8 @@ Cases that call `full_matrix` only for discovery are skipped by name outside
 the full suite (`FULL_GATE_SKIPS` in `tools/buck2/sync.py`).
 
 `tools/gate --full` is the full suite, run on demand (nothing schedules it):
-every test, the unrestricted source/IR and native agreement, release tests,
-the `full_gate_` tests in both debug and release, the full native matrix and
+every test, budgeted source/IR and native agreement, release tests,
+the `full_gate_` tests in both debug and release, the derived native program and pairwise configuration covers and
 every `tools/check-native.sh` runtime, sanitizer, toolchain and Lean check. It
 and `tools/check-native.sh` run every stage even after one fails and fail at
 the end. `tools/main-full-run.sh` runs it on a fresh detached worktree of

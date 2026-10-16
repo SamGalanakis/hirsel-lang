@@ -114,8 +114,7 @@ definitions and statements while the classification holds. The exit status is
 1 when any cluster exists.
 
 The crate's tests sample the live corpus with seed 1 and a limit of 64, and
-fail on any cluster. The workspace gate also checks the full seed-1 campaign
-in release mode, sharded (`python3 tools/buck2/agree.py --full`).
+fail on any cluster. The full gate checks the budgeted campaign in release mode, sharded (`python3 tools/buck2/agree.py --full`).
 
 Each run prints to stderr, per stage (`originals`, the acceptance check of each
 sampled program, then `variants`), its wall time, its five slowest items and
@@ -202,11 +201,12 @@ archive `hirsel run --native` ships, with the inlined fast paths) or `system`
 `LAUNCH_TIMEOUT` (120 s, ten times that under memcheck) and that configuration
 of that case fails by name.
 
-`native --full` (in `tools/gate --full`) runs every executable case of
-`conformance/passing.txt` under the driver's full matrix on both targets and
+`native --full` (in `tools/gate --full`) runs a derived cover of the executable
+cases of `conformance/passing.txt` under a per-program pairwise cover of the
+driver's legal matrix on both targets and
 writes `native-matrix.tsv` (one row per case and configuration, headed by the
 matrix and observation versions) and `case-walls.tsv` (each case's wall time,
-every configuration included). Every disagreeing case and configuration must
+every selected configuration included). Every disagreeing case and configuration must
 be exactly one row of `native-tests/regressions/exclusions.tsv`, keyed by the
 configuration's full name (see that directory's README);
 `--bless` rewrites the file. Every mismatch leaves an artifact that is moved,
@@ -229,9 +229,8 @@ size-class allocator whose client requests describe its slab blocks, region
 reservations and arena blocks, with regions;
 `--filter TEXT` runs the matching baseline cases instead. Under every mode
 `--filter` may repeat; a case is selected when its ID contains any given text.
-`native --full --shard I/N` runs the cases the conformance runner's path-hash
-shard I of N holds (topology and generated cases included) under the whole
-matrix, and judges the exclusion rows of exactly those cases; the scheduled
+`native --full --shard I/N` runs the selected cases the conformance runner's
+path-hash shard I of N holds (topology and generated cases included), and judges the exclusion rows of exactly those cases; the scheduled
 full gate runs `NATIVE_FULL_SHARDS` of them, and `--bless` refuses a shard. `--replay DIR` and `--reduce DIR` act on one artifact.
 
 `native --full --engine heap|llvm` retains only that engine's named configurations
@@ -312,3 +311,56 @@ therefore may exceed the primary fixture's EOF. Static Reject lines remain bound
 by that fixture; every line must be positive. Execution still compares the actual
 rule and line exactly. The current header cannot name the source file; explicit
 dependency-site validation needs a wider header/observation revision.
+
+
+The full native campaign defaults to the derived `native-selection` Buck2
+artifact. It records LIR opcodes and operand representations, runtime calls in
+emitted LLVM IR, layout shapes and successful validation stages for every
+executable input. Greedy coverage selection followed by deletion is
+inclusion-minimal after historical pins, not globally optimal. Programs whose
+features cannot be collected remain pinned. The corpus and front-end gate keep
+every source. Individual C-validator and H-checker check kinds remain
+uninstrumented; successful stages do not claim coverage of their individual
+conditions.
+
+`native-tests/regressions/history.tsv` is derived from all recorded exclusion
+tables by `python3 tools/native-history.py`. Regression sources, smoke and
+memcheck lists, current exclusions, and exact reduced agreement witnesses in
+`native-tests/regressions/history/` are also pinned. Historical mutations are
+replayed as exact programs, independently of the rotating per-program budget.
+
+`native --full --seed N` rotates legal pairwise configuration covers; each
+selected program visits every legal matrix row within 50 consecutive seeds.
+Explicit `--filter` and agreement `--path` requests retain their requested
+programs even if minimisation would omit them. Every current exclusion cell is
+retained so its exact-row ratchet can detect a stale or changed exclusion.
+`native --full --exhaustive` restores every baseline program and legal
+configuration; `agree --native full --exhaustive` restores every mutation and
+removes program and configuration thinning. These are the explicit release
+checks. `--bless` requires `--exhaustive`.
+
+Generate the cached coverage artifact without executing programs:
+
+```sh
+.buck2/bin/buck2 build -c hirsel.full=true //:native-selection --show-full-simple-output
+```
+
+A direct native CLI invocation without `HIRSEL_NATIVE_SELECTION` derives its
+cover in its own scratch directory. Buck2 campaigns receive the generated
+artifact as an input. Its action key includes the compiler and all corpus,
+package and library sources, so changing them regenerates the cover.
+
+`native-select --replay-history` executes every reconstructable historical
+source under the exhaustive matrix once and checks that all findings survive
+every rotating slim configuration cover. It reports source snapshots it could
+not execute. `--filter TEXT` bounds this replay. Run it under the shared native
+campaign lock. `tools/native-plants.py --selection FILE --output DIR` starts
+from a clean worktree and a frozen healthy selection, checks healthy controls,
+then temporarily plants real AArch64 add lowering, system-allocator dup-count
+and regions-off release omissions. It restores each source byte-for-byte and
+requires identical full/slim finding sets for each plant.
+
+Feature coverage, pairwise coverage and historical/mutation replay are
+finite evidence, not a guarantee of identical findings for arbitrary bugs.
+Higher-order interactions are covered only by seed rotation over time and
+by the explicit exhaustive run.

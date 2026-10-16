@@ -1,7 +1,7 @@
 //! Static back-end coverage used by corpus minimisation. No executable runs.
 use super::{OptLevel, Options, ReadyProgram, TargetSpec, build, emit_ir};
 use hirsel_engine::ValidatedNativeInput;
-use hirsel_lir::ir::{Inst, LirUnit, Ref};
+use hirsel_lir::ir::{ArgumentValue, Inst, LirUnit, Ref};
 use hirsel_lir::stage::Ready;
 use std::collections::BTreeSet;
 
@@ -28,7 +28,122 @@ fn vocabulary(text: &str) -> String {
     out
 }
 
-fn operand(unit: &LirUnit<Ready>, reference: Ref) -> String {
+fn abi_shape(program: &ReadyProgram, id: hirsel_lir::abi_types::FnAbiId) -> String {
+    let abi = &program.table.fn_abis[id.0 as usize];
+    // Keys contain callable identities; coverage depends on the physical ABI.
+    let parameters: Vec<_> = abi
+        .parameters
+        .iter()
+        .map(|p| {
+            format!(
+                "{:?}/{:?}/{:?}/{:?}/{:?}",
+                p.convention,
+                p.passing,
+                p.slots,
+                p.extension,
+                program.table.layout(p.layout).unwrap().kind
+            )
+        })
+        .collect();
+    let result = abi.result.as_ref().map(|r| {
+        format!(
+            "{:?}/{:?}/{:?}",
+            r.slots,
+            r.borrowed_parameters,
+            program.table.layout(r.layout).unwrap().kind
+        )
+    });
+    vocabulary(&format!(
+        "{:?}/{:?}/{}/{}/{}/{}/{:?}/{}->{result:?}",
+        abi.shape,
+        abi.multiplicity,
+        abi.context,
+        abi.environment,
+        abi.destination,
+        abi.diverges,
+        abi.result_arena,
+        parameters.join(",")
+    ))
+}
+
+fn operand(program: &ReadyProgram, unit: &LirUnit<Ready>, reference: Ref) -> String {
+    match reference {
+        Ref::Call(id) => {
+            let call = &unit.tables.calls[id.index()];
+            let callee = format!("{:?}", call.callee)
+                .split(['(', ' '])
+                .next()
+                .unwrap()
+                .to_string();
+            let arguments: Vec<_> = call
+                .arguments
+                .get(&unit.pools.call_arguments)
+                .unwrap()
+                .iter()
+                .map(|arg| {
+                    let value = match arg.value {
+                        ArgumentValue::Value(value) => Ref::Value(value),
+                        ArgumentValue::Address { address, .. } => Ref::Address(address),
+                    };
+                    format!("{:?}/{}", arg.passing, operand(program, unit, value))
+                })
+                .collect();
+            let result = call.result.map(|v| operand(program, unit, Ref::Value(v)));
+            return format!(
+                "Call/{callee}/[{}]->{result:?}/{}",
+                arguments.join(","),
+                abi_shape(program, call.abi)
+            );
+        }
+        Ref::Construct(id) => {
+            let site = &unit.tables.constructs[id.index()];
+            let fields: Vec<_> = site
+                .fields
+                .get(&unit.pools.fields)
+                .unwrap()
+                .iter()
+                .map(|field| operand(program, unit, Ref::Value(field.value)))
+                .collect();
+            return format!(
+                "Construct/{:?}/{:?}/{}/[{}]",
+                site.constructor,
+                site.destination,
+                site.arena_no_drop,
+                fields.join(",")
+            );
+        }
+        Ref::Closure(id) => {
+            let site = &unit.tables.closures[id.index()];
+            let captures: Vec<_> = site
+                .captures
+                .get(&unit.pools.captures)
+                .unwrap()
+                .iter()
+                .map(|capture| {
+                    format!(
+                        "{:?}/{}",
+                        capture.usage,
+                        operand(program, unit, Ref::Value(capture.value))
+                    )
+                })
+                .collect();
+            return format!("Closure/{:?}/[{}]", site.destination, captures.join(","));
+        }
+        Ref::Values(range) => {
+            return format!(
+                "Values/[{}]",
+                range
+                    .get(&unit.pools.values)
+                    .unwrap()
+                    .iter()
+                    .map(|v| operand(program, unit, Ref::Value(*v)))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
+        Ref::Abi(id) => return format!("Abi/{}", abi_shape(program, id)),
+        _ => {}
+    }
     let ty = match reference {
         Ref::Value(id) => Some(unit.values[id.index()].ty),
         Ref::Slot(id) => Some(unit.slots[id.index()].ty),
@@ -51,7 +166,7 @@ fn ready_features(program: &ReadyProgram, features: &mut BTreeSet<String>) {
         let unit = unit.unit();
         for inst in &unit.instructions {
             let mut operands = Vec::new();
-            inst.visit(&mut |reference| operands.push(operand(unit, reference)));
+            inst.visit(&mut |reference| operands.push(operand(program, unit, reference)));
             // The opcode alone would merge signed/unsigned widths, arithmetic
             // operators, read modes and conversion modes into one feature.
             let detail = match inst {
@@ -71,9 +186,14 @@ fn ready_features(program: &ReadyProgram, features: &mut BTreeSet<String>) {
         }
         for term in &unit.terminators {
             let mut operands = Vec::new();
-            term.visit(&mut |reference| operands.push(operand(unit, reference)));
+            term.visit(&mut |reference| operands.push(operand(program, unit, reference)));
             features.insert(format!("lir/{:?}/{}", term.opcode(), operands.join(",")));
         }
+        features.insert(format!(
+            "abi/{}/{}",
+            program.target.triple,
+            abi_shape(program, unit.header.abi)
+        ));
         for address in &unit.addresses {
             for projection in address.projection.get(&unit.pools.projections).unwrap() {
                 features.insert(format!(
@@ -181,7 +301,7 @@ mod tests {
                 hirsel_engine::default_environment(),
                 crate::compiler_adapters(),
             );
-            let source = "pub fn main(io: Io, args: Args) -> Result[(), GrantError] {\n let x = add(3i32, 4i32);\n let s = io.stdout(io)?;\n let _ = out.print(s, \"hello\");\n Ok(())\n}\nfn add(x: i32, y: i32) -> i32 { x + y }\n";
+            let source = "pub fn main(io: Io, args: Args) -> Result[(), GrantError] {\n let x = add(3i32, 4i32);\n let s = io.stdout(io)?;\n let _ = out.print(s, if x == 7i32 { \"hello\" } else { \"wrong\" });\n Ok(())\n}\nfn add(x: i32, y: i32) -> i32 { x + y }\n";
             let file = engine.sources.add("coverage.hir", source.into()).unwrap();
             let checked =
                 hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
@@ -195,6 +315,12 @@ mod tests {
                 features
                     .iter()
                     .any(|f| f.starts_with("lir/Binary/Add/") && f.contains("Scalar(I32)")),
+                "{features:?}"
+            );
+            assert!(
+                features
+                    .iter()
+                    .any(|f| f.starts_with("lir/Call/") && f.contains("Scalar(I32)")),
                 "{features:?}"
             );
             assert!(

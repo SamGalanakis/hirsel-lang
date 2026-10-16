@@ -116,8 +116,8 @@ Target names follow Cargo's targets, all in the root package:
 | a corpus campaign of `tools/gate` | `//:gate-<stage>` (label `gate`) |
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
 | an agreement shard (`AGREE_SHARDS`) | `//:gate-agree-shard-<i>` |
-| an unrestricted agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
-| an unrestricted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, `--full` only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
+| a budgeted full agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
+| a budgeted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, `--full` only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
 | a full native matrix shard (`NATIVE_FULL_SHARDS`, `--full` only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |
 
 ## Blessing expectations
@@ -405,10 +405,21 @@ in `sync.py`. The sum is the unsharded sample, including
 skipped variants. `agree.py` checks unique shard identities, matching catalogue
 metadata, sample coverage and classification/edit totals, and fails on any
 cluster or absent shard. Each pool action has a 300-second timeout.
-`tools/gate --full` runs `agree.py --full`: the whole seed-1 catalogue over
+`tools/gate --full` runs `agree.py --full`: a rotating sample of at most 96 variants per program over
 `AGREE_FULL_SHARDS` (96) shards by the same stable rank, each under its own
 `AGREE_FULL_TIMEOUT` (1800 s), so a slow or non-terminating variant fails one
 named shard. The campaign has grown past what one 4-CPU action can finish
 (286950 variants on 2026-10-16, about 33000 shard-seconds on the pool); each
 shard prints its stage times, slowest variants and costliest programs to stderr,
 and names any variant still running after 30 s.
+
+
+Full native campaigns consume `//:native-selection`, a cached derived coverage
+artifact built from the collector binary and the complete corpus. It selects
+an inclusion-minimal feature cover after historical pins. Each selected
+baseline/generated program runs a rotating feasible-pair configuration cover;
+topology partitions and named exclusion cells remain present. `--exhaustive`
+on the campaign binary restores the previous exhaustive release check. The
+campaign seed defaults to the full run's `PROPTEST_RNG_SEED`; `--seed N` makes a
+run reproducible. The source/IR full agreement keeps all programs and budgets
+96 mutations each; `--exhaustive` restores its complete catalogue.
