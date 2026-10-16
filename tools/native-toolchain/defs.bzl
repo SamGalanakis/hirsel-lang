@@ -30,5 +30,5 @@ _toolchain_proof = rule(impl = _proof, attrs = {
 
 def toolchain_proof(name, tools, script):
     _toolchain_proof(name = name, tools = tools, script = script,
-        exec_compatible_with = [budget_constraint(test_budget_name("gate-native-smoke"))],
+        exec_compatible_with = [budget_constraint(test_budget_name("native-toolchain-proof"))],
         visibility = ["PUBLIC"])
