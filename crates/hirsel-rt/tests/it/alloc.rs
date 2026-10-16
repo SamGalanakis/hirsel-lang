@@ -443,15 +443,22 @@ fn an_extent_beyond_the_host_terminates_environmentally() {
     );
 }
 
-/// A byte sequence block holding `[1, 2, 3]`: its u64 count, then the bytes.
+/// A byte sequence block holding `[1, 2, 3]` as a construction writes it (runtime ABI 5): its
+/// u64 count, its u64 capacity (the count), then the bytes.
 fn bytes_block(ctx: &Ctx, layout: &Layout) -> *mut Header {
-    let block = alloc(ctx, layout, 11, 8);
+    let block = alloc(ctx, layout, 19, 8);
     unsafe {
         let p = payload(block);
         p.cast::<u64>().write(3);
-        ptr::copy_nonoverlapping([1u8, 2, 3].as_ptr(), p.add(8), 3);
+        p.add(8).cast::<u64>().write(3);
+        ptr::copy_nonoverlapping([1u8, 2, 3].as_ptr(), p.add(16), 3);
     }
     block
+}
+
+/// The capacity word of the sequence block `block`.
+fn capacity_word(block: *mut Header) -> u64 {
+    unsafe { payload(block).add(8).cast::<u64>().read() }
 }
 
 fn reserve(ctx: &Ctx, block: &mut *mut Header, size: u64, align: u64, capacity: u64) {
@@ -462,13 +469,15 @@ fn reserve(ctx: &Ctx, block: &mut *mut Header, size: u64, align: u64, capacity: 
 fn seq_reserve_lands_on_every_class_boundary_and_keeps_the_elements() {
     let ctx = Ctx::diagnostic();
     let empty = leaf(0);
-    for (index, &size) in CLASS_SIZES.iter().enumerate() {
+    // The 16-byte class holds no byte past the count and capacity words.
+    for (index, &size) in CLASS_SIZES.iter().enumerate().skip(1) {
         let size = size as u64;
-        // A byte capacity filling the class exactly after the count, and one byte more.
+        // A byte capacity filling the class exactly after the count and capacity, and one
+        // byte more.
         for (wanted, class_index) in [
-            (size - 8, index as u8),
+            (size - 16, index as u8),
             (
-                size - 7,
+                size - 15,
                 if index + 1 < CLASS_SIZES.len() {
                     index as u8 + 1
                 } else {
@@ -479,11 +488,13 @@ fn seq_reserve_lands_on_every_class_boundary_and_keeps_the_elements() {
             let mut block = bytes_block(&ctx, empty);
             reserve(&ctx, &mut block, 1, 1, wanted);
             assert_eq!(class(block), class_index, "{wanted} bytes");
-            assert!(capacity(block) - 8 >= wanted, "{wanted} bytes");
+            assert!(capacity(block) - 16 >= wanted, "{wanted} bytes");
+            // The capacity word is exact: every slot of the class.
+            assert_eq!(capacity_word(block), capacity(block) - 16, "{wanted} bytes");
             unsafe {
                 let p = payload(block);
                 assert_eq!(p.cast::<u64>().read(), 3);
-                assert_eq!(std::slice::from_raw_parts(p.add(8), 3), [1, 2, 3]);
+                assert_eq!(std::slice::from_raw_parts(p.add(16), 3), [1, 2, 3]);
                 assert_eq!((*block).count, 1);
             }
             release(&ctx, block, empty);
@@ -498,15 +509,20 @@ fn seq_reserve_leaves_a_block_that_already_holds_the_capacity() {
     let empty = leaf(0);
     let mut block = bytes_block(&ctx, empty);
     let before = block;
-    // The 16-byte class holds eight bytes after the count.
-    reserve(&ctx, &mut block, 1, 1, 8);
+    // The 32-byte class holds sixteen bytes after the count and capacity. Leaving the block
+    // alone still makes its capacity word, written as the count, exact.
+    assert_eq!(capacity_word(block), 3);
+    reserve(&ctx, &mut block, 1, 1, 16);
     assert_eq!(block, before);
-    reserve(&ctx, &mut block, 1, 1, 9);
+    assert_eq!(capacity_word(block), 16);
+    reserve(&ctx, &mut block, 1, 1, 17);
     assert_ne!(block, before);
+    assert_eq!(capacity_word(block), capacity(block) - 16);
     // Zero-sized elements hold every capacity.
     let moved = block;
     reserve(&ctx, &mut block, 0, 1, u64::MAX);
     assert_eq!(block, moved);
+    assert_eq!(capacity_word(block), u64::MAX);
     release(&ctx, block, empty);
 }
 
@@ -514,16 +530,18 @@ fn seq_reserve_leaves_a_block_that_already_holds_the_capacity() {
 fn seq_reserve_gives_a_static_or_shared_block_unique_storage_at_the_capacity() {
     let ctx = Ctx::diagnostic();
     let empty = leaf(0);
-    // The static empty sequence an empty list literal reads: extent, immortal header, count.
+    // The static empty sequence an empty list literal reads: extent, immortal header, count
+    // and capacity.
     #[repr(C)]
     struct StaticEmpty {
         extent: hirsel_rt::alloc::Extent,
         header: Header,
         length: u64,
+        capacity: u64,
     }
     let mut source = StaticEmpty {
         extent: hirsel_rt::alloc::Extent {
-            capacity: 8,
+            capacity: 16,
             align: 8,
         },
         header: Header {
@@ -531,11 +549,13 @@ fn seq_reserve_gives_a_static_or_shared_block_unique_storage_at_the_capacity() {
             descriptor: index(ctx.0, empty) | (hirsel_rt::alloc::KIND_STATIC << 29),
         },
         length: 0,
+        capacity: 0,
     };
     let mut block = &raw mut source.header;
     reserve(&ctx, &mut block, 8, 8, 64);
     assert_ne!(block, &raw mut source.header);
-    assert!(capacity(block) - 8 >= 64 * 8);
+    assert!(capacity(block) - 16 >= 64 * 8);
+    assert_eq!(capacity_word(block), (capacity(block) - 16) / 8);
     unsafe {
         assert_eq!(((*block).count, (*block).domain()), (1, DOMAIN_HEAP));
         assert_eq!(payload(block).cast::<u64>().read(), 0);
@@ -551,11 +571,13 @@ fn seq_reserve_gives_a_static_or_shared_block_unique_storage_at_the_capacity() {
     let mut block = shared;
     reserve(&ctx, &mut block, 1, 1, 100);
     assert_ne!(block, shared);
-    assert!(capacity(block) - 8 >= 100);
+    assert!(capacity(block) - 16 >= 100);
+    assert_eq!(capacity_word(block), capacity(block) - 16);
+    assert_eq!(capacity_word(shared), 3);
     unsafe {
         let p = payload(block);
         assert_eq!(p.cast::<u64>().read(), 3);
-        assert_eq!(std::slice::from_raw_parts(p.add(8), 3), [1, 2, 3]);
+        assert_eq!(std::slice::from_raw_parts(p.add(16), 3), [1, 2, 3]);
         assert_eq!(((*block).count, (*shared).count), (1, 1));
     }
     release(&ctx, block, empty);
@@ -586,16 +608,16 @@ fn block_grow_keeps_the_leading_bytes_or_leaves_a_block_that_holds_the_extent() 
     let empty = leaf(0);
     let mut block = bytes_block(&ctx, empty);
     let before = block;
-    // The 16-byte class already holds 16 payload bytes.
-    block = unsafe { hirsel_rt_v2_block_grow(ctx.0, block, 11, 16, 8) };
+    // The 32-byte class already holds 32 payload bytes.
+    block = unsafe { hirsel_rt_v2_block_grow(ctx.0, block, 19, 32, 8) };
     assert_eq!(block, before);
-    block = unsafe { hirsel_rt_v2_block_grow(ctx.0, block, 11, 200, 8) };
+    block = unsafe { hirsel_rt_v2_block_grow(ctx.0, block, 19, 200, 8) };
     assert_ne!(block, before);
     assert!(capacity(block) >= 200);
     unsafe {
         let p = payload(block);
         assert_eq!(p.cast::<u64>().read(), 3);
-        assert_eq!(std::slice::from_raw_parts(p.add(8), 3), [1, 2, 3]);
+        assert_eq!(std::slice::from_raw_parts(p.add(16), 3), [1, 2, 3]);
         assert_eq!((*block).count, 1);
     }
     release(&ctx, block, empty);
@@ -948,8 +970,9 @@ fn the_compiled_extent_bound_is_the_runtimes() {
     );
 }
 
-/// The runtime's first-element offset is the layout's own: past the u64 count, aligned to the
-/// element, for every element alignment.
+/// The runtime's first-element offset, capacity offset and whole-sequence slice start are the
+/// layout's own: past the u64 count and capacity, aligned to the element, for every element
+/// alignment.
 #[test]
 fn sequence_elements_start_where_the_layout_places_them() {
     use hirsel_lir::layout::{LayoutBuilder, Owners};
@@ -969,5 +992,14 @@ fn sequence_elements_start_where_the_layout_places_them() {
             hirsel_lir::layout::sequence_elements_offset(&element).unwrap(),
             "element alignment {align}"
         );
+        assert_eq!(
+            hirsel_rt::alloc::sequence_slice_start(u64::from(align)),
+            hirsel_lir::layout::sequence_slice_start(&element).unwrap(),
+            "element alignment {align}"
+        );
     }
+    assert_eq!(
+        hirsel_rt::alloc::SEQUENCE_CAPACITY_OFFSET,
+        hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET
+    );
 }

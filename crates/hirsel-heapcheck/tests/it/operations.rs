@@ -105,7 +105,7 @@ fn program(kind: ResultKind) -> Program<Ready> {
     let r = &mut layouts.table.layouts[payload.0 as usize];
     r.kind = LayoutKind::Sequence { element: byte };
     r.size = SizeSpec::Dynamic(vec![
-        SizeTerm::Constant(8),
+        SizeTerm::Constant(16),
         SizeTerm::ReadLength {
             offset: 0,
             scalar: ScalarKind::U64,
@@ -545,7 +545,7 @@ fn nested_aggregate_sequence_operands_and_results_stay_under_the_ledger() {
     record.kind = LayoutKind::Sequence { element: item };
     record.align = 8;
     record.size = SizeSpec::Dynamic(vec![
-        SizeTerm::Constant(8),
+        SizeTerm::Constant(16),
         SizeTerm::ReadLength {
             offset: 0,
             scalar: ScalarKind::U64,
@@ -686,7 +686,7 @@ fn scalar_buffer_updates_audit_inline_and_counted_storage_and_require_mut_access
                 r.kind = LayoutKind::Sequence { element: byte };
                 r.align = 8;
                 r.size = SizeSpec::Dynamic(vec![
-                    SizeTerm::Constant(8),
+                    SizeTerm::Constant(16),
                     SizeTerm::ReadLength {
                         offset: 0,
                         scalar: ScalarKind::U64,

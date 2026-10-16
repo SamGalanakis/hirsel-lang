@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 4
+#define HIRSEL_RT_V2_ABI_VERSION 5
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 
@@ -302,14 +302,16 @@ uint8_t hirsel_rt_v2_release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, 
  * count the glue read as COUNT_UNIQUE and whose fields it has released. */
 void hirsel_rt_v2_free(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 
-/* Sequence storage (LIR schema revision 7). Make the sequence block hold at least `capacity`
+/* Sequence storage (LIR schema revision 7; runtime ABI 5). A sequence payload is a u64 count, a
+ * u64 capacity in elements, then the elements from align_up(16, element_align). The capacity word
+ * is never more than the storage's real slots. Make the sequence block hold at least `capacity`
  * elements of `element_size` bytes (the stride) at `element_align`. A unique heap block that
  * already holds them is left alone; otherwise its count and elements move bitwise into storage
  * of the size class that fits, the old storage is freed shallowly and the new block is
  * returned. A block that is not unique (shared, immortal or static) is detached once at the
  * requested capacity: its count and elements are copied, each counted element gains a holder
- * and the caller's credit of it is given back. A dead block and an impossible size are
- * invariant faults. */
+ * and the caller's credit of it is given back. Every path leaves the returned block's capacity
+ * word exact. A dead block and an impossible size are invariant faults. */
 hirsel_rt_v2_header *hirsel_rt_v2_seq_grow(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t element_size,
                               uint64_t element_align, uint64_t capacity);
 /* Block growth (LIR schema revision 19): make the unique heap block hold at least `extent`

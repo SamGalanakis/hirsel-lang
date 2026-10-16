@@ -392,8 +392,9 @@ pub fn table() -> LayoutTable {
     layouts.push(record(&t, LayoutKind::Scalar(ScalarKind::F64), 8, 8));
     layouts.push(record(&t, LayoutKind::Scalar(ScalarKind::I32), 4, 4));
     let mut seq = record(&t, LayoutKind::Sequence { element: l::I64 }, 8, 8);
+    seq.fields = vec![field(0, 0, l::U64), field(1, 8, l::U64)];
     seq.size = SizeSpec::Dynamic(vec![
-        SizeTerm::Constant(8),
+        SizeTerm::Constant(16),
         SizeTerm::ReadLength {
             offset: 0,
             scalar: ScalarKind::U64,

@@ -1162,7 +1162,8 @@ fn an_immortal_sequence_is_consumed_without_allocation_or_detach() {
         *unit = hirsel_rc::insert::Editor::new(unit.clone()).finish();
     }
     let mut program = heap_program(&b);
-    let bytes = [3u64, 1, 2, 3]
+    // Count 3, capacity 3 (runtime ABI 5), then the elements.
+    let bytes = [3u64, 3, 1, 2, 3]
         .into_iter()
         .flat_map(u64::to_le_bytes)
         .collect();

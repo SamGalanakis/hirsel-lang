@@ -18,7 +18,8 @@ use hirsel_lir::abi_types::{
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
-    align_up, payload_offset, sequence_elements_offset, sequential_elements_offset,
+    SEQUENCE_CAPACITY_OFFSET, align_up, payload_offset, sequence_elements_offset,
+    sequence_slice_start, sequential_elements_offset,
 };
 use hirsel_lir::layout_types::{
     DropStep, Endian, FieldLayout, FinalizerRef, LayoutId, LayoutKind, LayoutRecord, LayoutTable,
@@ -795,12 +796,7 @@ fn define_root_adapter<'m>(
                 ),
             );
             let length = builder.load_access(module.int_type(64), data, 8, Access::Length);
-            args.extend([
-                length,
-                module.const_zero(module.int_type(1)),
-                module.const_zero(module.int_type(64)),
-                module.const_zero(module.int_type(1)),
-            ]);
+            args.extend([length, module.const_zero(module.int_type(1))]);
         }
     }
     let returned = builder.call(target, &args);
@@ -850,7 +846,7 @@ const REGION_RECORD_BYTES: u64 = 48;
 /// The name suffix of a library body's private root-value entry. It changes with that
 /// entry's signature, so a `linkonce_odr` body of an older signature never merges
 /// with a caller of this one.
-const ROOTS_SUFFIX: &str = ".roots5";
+const ROOTS_SUFFIX: &str = ".roots6";
 
 /// The private descriptor of the empty environment a function reference carries.
 
@@ -924,10 +920,8 @@ struct Signature<'m, 'a> {
     /// Internal library roots travel by value and return on both status outcomes.
     roots: Vec<usize>,
     sequence_roots: Vec<bool>,
-    /// Private sequence inputs: full length, must-unique, cached capacity and its validity.
+    /// Private sequence inputs: full length and must-unique.
     companions: Vec<Option<u32>>,
-    /// Per root, the returned field holding its exact capacity slots (sequence roots).
-    capacities: Vec<Option<u32>>,
     /// Per root, the returned `i1` field holding its must-unique fact (sequence roots).
     uniques: Vec<Option<u32>>,
     /// The returned field holding the status.
@@ -1174,7 +1168,6 @@ impl<'m, 'a> Signature<'m, 'a> {
             roots: Vec::new(),
             sequence_roots: Vec::new(),
             companions: Vec::new(),
-            capacities: Vec::new(),
             uniques: Vec::new(),
             status_field: if value.is_some() {
                 PairField::Status.index()
@@ -1223,12 +1216,7 @@ impl<'m, 'a> Signature<'m, 'a> {
             .map(|&sequence| {
                 sequence.then(|| {
                     let first = self.types.len() as u32;
-                    self.types.extend([
-                        module.int_type(64),
-                        module.int_type(1),
-                        module.int_type(64),
-                        module.int_type(1),
-                    ]);
+                    self.types.extend([module.int_type(64), module.int_type(1)]);
                     first
                 })
             })
@@ -1238,13 +1226,13 @@ impl<'m, 'a> Signature<'m, 'a> {
             // tagged, so a loop that calls or inlines a root body carries the
             // pointer as itself: no mask or re-tag per iteration. Other roots can
             // be headerless regional payloads and return status in the second
-            // word. A sequence root's second word is its full u64 length; each
-            // then returns its exact capacity slots, so a caller's cache stays a
-            // value, and its must-unique fact in a word of its own. When the first
+            // word. A sequence root's second word is its full u64 length, and its
+            // must-unique fact has a word of its own; its capacity is the block's
+            // own header word (runtime ABI 5), so nothing caches it. When the first
             // root is a sequence, status is a last word of its own: every return
             // site supplies a constant there, so after inlining the caller's
             // status branch threads to the right continuation and the facts it
-            // carries fold. That one-root return takes five words (memory on
+            // carries fold. That one-root return takes four words (memory on
             // x86-64 and AArch64); only uninlined calls pay for it.
             let mut fields = Vec::new();
             for _ in &self.roots {
@@ -1255,10 +1243,6 @@ impl<'m, 'a> Signature<'m, 'a> {
                 fields.len() as u32 - 1
             };
             let sequences = self.sequence_roots.clone();
-            self.capacities = sequences
-                .iter()
-                .map(|&sequence| sequence.then(|| extra(module.int_type(64))))
-                .collect();
             self.uniques = sequences
                 .iter()
                 .map(|&sequence| sequence.then(|| extra(module.int_type(1))))
@@ -1287,16 +1271,6 @@ impl<'m, 'a> Signature<'m, 'a> {
             returned,
             self.uniques[field].expect("a sequence root's must-unique word"),
         )
-    }
-
-    /// A returned sequence root's exact capacity slots, before the maximum with its length.
-    fn root_capacity(
-        &self,
-        builder: &Builder<'m>,
-        returned: Value<'m>,
-        field: usize,
-    ) -> Option<Value<'m>> {
-        self.capacities[field].map(|index| builder.extract(returned, index))
     }
 
     /// The `u8` status a call of this signature returned.
@@ -1486,8 +1460,6 @@ pub(crate) fn load_tag<'m>(
 struct SequenceState<'m> {
     unique: Value<'m>,
     length: Value<'m>,
-    capacity: Value<'m>,
-    capacity_valid: Value<'m>,
 }
 
 /// Emits one Ready unit into its declared function.
@@ -2135,8 +2107,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let state = SequenceState {
                 unique: self.prologue.alloca(self.module.int_type(1), 1),
                 length: self.prologue.alloca(self.module.int_type(64), 8),
-                capacity: self.prologue.alloca(self.module.int_type(64), 8),
-                capacity_valid: self.prologue.alloca(self.module.int_type(1), 1),
             };
             self.prologue.store(
                 self.module.const_zero(self.module.int_type(1)),
@@ -2144,12 +2114,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 1,
             );
             self.prologue.store(self.const_u64(0), state.length, 8);
-            self.prologue.store(self.const_u64(0), state.capacity, 8);
-            self.prologue.store(
-                self.module.const_zero(self.module.int_type(1)),
-                state.capacity_valid,
-                1,
-            );
             if let SlotKind::Parameter(source) = slot.kind {
                 let field = self
                     .signature
@@ -2163,16 +2127,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.builder.store(
                     self.module.parameter(self.function, first + 1),
                     state.unique,
-                    1,
-                );
-                self.builder.store(
-                    self.module.parameter(self.function, first + 2),
-                    state.capacity,
-                    8,
-                );
-                self.builder.store(
-                    self.module.parameter(self.function, first + 3),
-                    state.capacity_valid,
                     1,
                 );
             }
@@ -2220,11 +2174,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             None => self.sequence_length(self.get(value)?, self.value_type(value)?.layout)?,
         };
         self.builder.store(length, state.length, 8);
-        self.builder.store(
-            self.module.const_zero(self.module.int_type(1)),
-            state.capacity_valid,
-            1,
-        );
         // A detach result goes straight into its new owning root; if another use
         // can increase its count, retain the actual test instead of a must fact.
         let fresh = self.fresh_detaches.contains(&value);
@@ -3250,7 +3199,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     }
 
     /// The static block of a String or Bytes literal: a counted `Sequence` payload of `payload`
-    /// (its u64 element count, then the bytes).
+    /// (its u64 element count, its u64 capacity, the count, then the bytes).
     fn literal_block(&mut self, payload: LayoutId, bytes: &[u8]) -> Emitted<Value<'m>> {
         if self.inputs.target.endian != Endian::Little {
             return self.unsupported("a static literal on a big-endian target");
@@ -3266,7 +3215,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Err(_) => return self.invalid("a sequence element offset beyond u64"),
         };
         let mut data = vec![0u8; start];
-        data[..8].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
+        let count = (bytes.len() as u64).to_le_bytes();
+        data[..8].copy_from_slice(&count);
+        let capacity = SEQUENCE_CAPACITY_OFFSET as usize;
+        data[capacity..capacity + 8].copy_from_slice(&count);
         data.extend_from_slice(bytes);
         let descriptor = self.descriptor(payload)?;
         let align = self.layout(payload)?.align;
@@ -3502,11 +3454,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.builder.store(length, state.length, 8);
                     self.builder.store(
                         self.module.const_zero(self.module.int_type(1)),
-                        state.capacity_valid,
-                        1,
-                    );
-                    self.builder.store(
-                        self.module.const_zero(self.module.int_type(1)),
                         state.unique,
                         1,
                     );
@@ -3575,15 +3522,31 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                             return self.define(result, owner);
                         }
                         LayoutKind::Slice { element } => {
+                            // A whole fresh byte sequence: its count, its capacity (the
+                            // count) and the bytes (runtime ABI 5).
                             let Some(payload) = slice_storage(self.inputs.layouts, element) else {
                                 return self.invalid("a flat copy slice without sequence storage");
                             };
-                            let extent = self.builder.binary(BinOp::Add, length, self.const_u64(8));
+                            let (first, whole) = match (
+                                sequence_elements_offset(self.layout(element)?),
+                                sequence_slice_start(self.layout(element)?),
+                            ) {
+                                (Ok(first), Ok(whole)) => (first, whole),
+                                _ => return self.invalid("a byte sequence offset beyond u64"),
+                            };
+                            let extent =
+                                self.builder
+                                    .binary(BinOp::Add, length, self.const_u64(first));
                             let align = self.layout(payload)?.align;
                             let owner = self.alloc_block(payload, extent, align, anchor)?;
                             let to = self.payload_of(owner, payload)?;
                             self.builder.store(length, to.ptr, to.align);
-                            let data = self.builder.offset(to.ptr, self.const_u64(8));
+                            let capacity = self
+                                .builder
+                                .offset(to.ptr, self.const_u64(SEQUENCE_CAPACITY_OFFSET));
+                            self.builder
+                                .store_access(length, capacity, 8, Access::Capacity);
+                            let data = self.builder.offset(to.ptr, self.const_u64(first));
                             self.builder.memcpy(data, 1, from, 1, length);
                             let slice = self.stack(ty.layout)?;
                             for field in &self.layout(ty.layout)?.fields {
@@ -3591,7 +3554,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                                     self.builder.offset(slice.ptr, self.const_u64(field.offset));
                                 let word = match field.ordinal {
                                     0 => owner,
-                                    1 => self.const_u64(0),
+                                    1 => self.const_u64(whole),
                                     2 => length,
                                     _ => {
                                         return self
@@ -3992,11 +3955,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 // Growth either retains the unique input or allocates count-one
                 // storage. It preserves length on both paths.
                 if let Some(state) = self.sequence_state_at(place) {
-                    self.builder.store(
-                        self.module.const_zero(self.module.int_type(1)),
-                        state.capacity_valid,
-                        1,
-                    );
                     self.builder.store(
                         self.module.const_int(self.module.int_type(1), 1),
                         state.unique,
@@ -4427,13 +4385,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     return self.invalid("a slice without its element's sequence layout");
                 };
                 let block = self.literal_block(payload, bytes)?;
+                let whole = match sequence_slice_start(self.layout(element)?) {
+                    Ok(whole) => whole,
+                    Err(error) => return self.invalid(format!("{error:?}")),
+                };
                 let place = self.stack(ty.layout)?;
                 let size = self.fixed_size(ty.layout)?;
                 self.builder.memset(place.ptr, 0, size, place.align);
                 let at = self.field_place(place, owner.offset, owner.layout, false)?;
                 self.store(Shape::Scalar(ScalarKind::Pointer), block, at);
                 let at = self.field_place(place, start.offset, start.layout, false)?;
-                self.store(Shape::Scalar(ScalarKind::U64), self.const_u64(0), at);
+                self.store(Shape::Scalar(ScalarKind::U64), self.const_u64(whole), at);
                 let at = self.field_place(place, length.offset, length.layout, false)?;
                 let length = self.const_u64(bytes.len() as u64);
                 self.store(Shape::Scalar(ScalarKind::U64), length, at);
@@ -5311,10 +5273,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                                 Access::Length,
                             ),
                         };
-                        let offset = match hirsel_lir::layout::align_up(
-                            8,
-                            u64::from(self.layout(element)?.align),
-                        ) {
+                        let offset = match sequence_elements_offset(self.layout(element)?) {
                             Ok(offset) => offset,
                             Err(error) => return self.invalid(format!("{error:?}")),
                         };
@@ -5418,91 +5377,20 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok((self.payload_of(pointer, payload)?.ptr, element))
     }
 
-    /// Elements the block's storage holds: the header's usable payload bytes past the
-    /// count, by the stride, and never less than the count (a static block's header
-    /// records no class). Zero-sized elements report `u64::MAX`.
+    /// Elements the block's storage holds: its capacity word (runtime ABI 5), one load.
+    /// The word is never more than the storage's slots, and never less than the count.
+    /// Zero-sized elements report `u64::MAX`.
     fn sequence_capacity(&mut self, value: ValueId) -> Emitted<Value<'m>> {
         let (data, element) = self.sequence_payload(value)?;
         if self.fixed_size(element)? == 0 {
             return Ok(self.const_u64(u64::MAX));
         }
-        let i64_ty = self.module.int_type(64);
-        let state = self.read_roots[value.index()].and_then(|s| self.sequence_states[s.index()]);
-        let count = if let Some(state) = state {
-            self.builder.load(i64_ty, state.length, 8)
-        } else {
-            self.builder.load_access(i64_ty, data, 8, Access::Length)
-        };
-        let block = self.counted_view(value)?;
-        let slots = self.cached_slots(state, block, element)?;
-        let more = self.builder.icmp(IntPredicate::Ugt, slots, count);
-        Ok(self.builder.select(more, slots, count))
-    }
-
-    /// The metadata-derived slots of the counted sequence `block`, read through and
-    /// refilling `state`'s cache when the root has one.
-    fn cached_slots(
-        &self,
-        state: Option<SequenceState<'m>>,
-        block: Value<'m>,
-        element: LayoutId,
-    ) -> Emitted<Value<'m>> {
-        let i64_ty = self.module.int_type(64);
-        let cache = state.map(|state| {
-            let valid = self
-                .builder
-                .load(self.module.int_type(1), state.capacity_valid, 1);
-            let old = self.builder.load(i64_ty, state.capacity, 8);
-            let here = self.builder.current();
-            let read = self.module.append_block(self.function);
-            let done = self.module.append_block(self.function);
-            self.builder.cond_br(valid, done, read);
-            self.builder.position(read);
-            (state, old, here, done)
-        });
-        let slots = self.metadata_slots(block, element)?;
-        Ok(if let Some((state, old, here, done)) = cache {
-            self.builder.store(slots, state.capacity, 8);
-            self.builder.store(
-                self.module.const_int(self.module.int_type(1), 1),
-                state.capacity_valid,
-                1,
-            );
-            let read = self.builder.current();
-            self.builder.br(done);
-            self.builder.position(done);
-            let cached = self.builder.phi(i64_ty);
-            self.builder.add_incoming(cached, old, here);
-            self.builder.add_incoming(cached, slots, read);
-            cached
-        } else {
-            slots
-        })
-    }
-
-    /// The header's usable payload bytes past the count, by the stride. Zero-sized
-    /// elements report `u64::MAX`; a static block's header records no class, so its
-    /// slots can be fewer than its length.
-    fn metadata_slots(&self, block: Value<'m>, element: LayoutId) -> Emitted<Value<'m>> {
-        let stride = self.fixed_size(element)?;
-        if stride == 0 {
-            return Ok(self.const_u64(u64::MAX));
-        }
-        let start = match sequence_elements_offset(self.layout(element)?) {
-            Ok(start) => start,
-            Err(error) => return self.invalid(format!("{error:?}")),
-        };
-        let usable = crate::runtime::capacity(&self.builder, self.function, block);
-        let room = self
+        let at = self
             .builder
-            .icmp(IntPredicate::Ugt, usable, self.const_u64(start));
-        let bytes = self
-            .builder
-            .binary(BinOp::Sub, usable, self.const_u64(start));
-        let bytes = self.builder.select(room, bytes, self.const_u64(0));
+            .offset(data, self.const_u64(SEQUENCE_CAPACITY_OFFSET));
         Ok(self
             .builder
-            .binary(BinOp::UDiv, bytes, self.const_u64(stride)))
+            .load_access(self.module.int_type(64), at, 8, Access::Capacity))
     }
 
     // FlatFormatV0 (LIR schema revision 4).
@@ -6546,9 +6434,20 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         return Ok(());
                     }
                     LayoutKind::Sequence { element } => {
-                        // The element count, then the elements from their alignment.
+                        // The element count, the capacity (the count: never more than the
+                        // block's slots), then the elements from their alignment (runtime
+                        // ABI 5).
                         let count = self.const_u64(values.len() as u64);
                         self.builder.store(count, place.ptr, place.align.min(8));
+                        let capacity = self
+                            .builder
+                            .offset(place.ptr, self.const_u64(SEQUENCE_CAPACITY_OFFSET));
+                        self.builder.store_access(
+                            count,
+                            capacity,
+                            place.align.min(8),
+                            Access::Capacity,
+                        );
                         match sequence_elements_offset(self.layout(element)?) {
                             Ok(start) => (element, start),
                             Err(_) => return self.invalid("a sequence element offset beyond u64"),
@@ -7200,18 +7099,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     what: "missing returned root slot".into(),
                 })?;
             let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), slot);
-            // A successful private return hands back an exact cache, so the caller's
-            // cache is a value that stays valid across the call. A failed one returns
-            // none: the caller invalidates its cache instead.
-            if let Some(index) = self.signature.capacities[field]
-                && status == 0
-            {
-                let Some(element) = self.sequence_element(slot.layout)? else {
-                    return self.invalid("a returned sequence root without elements");
-                };
-                let slots = self.cached_slots(self.sequence_state_at(slot), pointer, element)?;
-                returned = self.builder.insert(returned, slots, index);
-            }
             let (unique, length) = if let Some(state) = self.sequence_state_at(slot) {
                 (
                     self.builder.load(self.module.int_type(1), state.unique, 1),
@@ -7579,26 +7466,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         for (field, place) in root_places.iter().copied().enumerate() {
             if signature.companions[field].is_some() {
-                let (length, unique, capacity, valid) =
-                    if let Some(state) = self.sequence_state_at(place) {
-                        (
-                            self.builder.load(self.module.int_type(64), state.length, 8),
-                            self.builder.load(self.module.int_type(1), state.unique, 1),
-                            self.builder
-                                .load(self.module.int_type(64), state.capacity, 8),
-                            self.builder
-                                .load(self.module.int_type(1), state.capacity_valid, 1),
-                        )
-                    } else {
-                        let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
-                        (
-                            self.sequence_length(pointer, place.layout)?,
-                            self.module.const_zero(self.module.int_type(1)),
-                            self.const_u64(0),
-                            self.module.const_zero(self.module.int_type(1)),
-                        )
-                    };
-                args.extend([length, unique, capacity, valid]);
+                let (length, unique) = if let Some(state) = self.sequence_state_at(place) {
+                    (
+                        self.builder.load(self.module.int_type(64), state.length, 8),
+                        self.builder.load(self.module.int_type(1), state.unique, 1),
+                    )
+                } else {
+                    let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+                    (
+                        self.sequence_length(pointer, place.layout)?,
+                        self.module.const_zero(self.module.int_type(1)),
+                    )
+                };
+                args.extend([length, unique]);
             }
         }
         // A must-unique fact names a block with one holder, this frame's
@@ -7666,10 +7546,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         signature.root_unique(&self.builder, returned, field)
                     };
                     self.builder.store(unique, state.unique, 1);
-                    if let Some(slots) = signature.root_capacity(&self.builder, returned, field) {
-                        self.builder.store(slots, state.capacity, 8);
-                        self.builder.store(succeeded, state.capacity_valid, 1);
-                    }
                 }
             }
         }
@@ -7768,7 +7644,7 @@ mod tests {
         })
     }
 
-    /// `.roots5`: a returned root's pointer word is the pointer itself, for sequence
+    /// `.roots6`: a returned root's pointer word is the pointer itself, for sequence
     /// roots too, whose must-unique fact has a word of its own. Under `.roots4` the
     /// sequence pointer carried that fact in its low bits, and every loop over a
     /// root call or inlined body masked and re-tagged it (`ptrtoint`, `and -4`,
@@ -7800,12 +7676,10 @@ mod tests {
             signature.roots = vec![0];
             signature.sequence_roots = vec![sequence];
             if sequence {
-                signature.capacities = vec![Some(2)];
-                signature.uniques = vec![Some(3)];
-                signature.status_field = 4;
-                signature.returns = module.struct_type(&[ptr, i64_ty, i64_ty, i1, i64_ty]);
+                signature.uniques = vec![Some(2)];
+                signature.status_field = 3;
+                signature.returns = module.struct_type(&[ptr, i64_ty, i1, i64_ty]);
             } else {
-                signature.capacities = vec![None];
                 signature.uniques = vec![None];
                 signature.returns = module.struct_type(&[ptr, i64_ty]);
             }
@@ -7826,7 +7700,7 @@ mod tests {
                 signature.status_field,
             );
             let unique = if sequence {
-                returned = builder.insert(returned, module.parameter(function, 1), 3);
+                returned = builder.insert(returned, module.parameter(function, 1), 2);
                 signature.root_unique(&builder, returned, 0)
             } else {
                 module.const_zero(i1)

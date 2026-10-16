@@ -14,7 +14,7 @@
 //! (a `@packed` field may hold a comparable value at any offset).
 
 use hirsel_lir::ir::COMPARE_MAX_DEPTH;
-use hirsel_lir::layout::{payload_offset, sequence_elements_offset};
+use hirsel_lir::layout::{payload_offset, sequence_elements_offset, slice_data_offset};
 use hirsel_lir::layout_types::{
     FieldLayout, LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind, ScanStep, SizeSpec,
 };
@@ -524,9 +524,15 @@ impl<'m> Generator<'m, '_> {
         Ok(self.at(pointer, offset))
     }
 
-    /// The first element's offset in a sequence payload: after the u64 count.
+    /// The first element's offset in a sequence payload: after the u64 count and capacity.
     fn element_offset(&self, element: LayoutId) -> Compared<u64> {
         sequence_elements_offset(self.record(element)?)
+            .map_err(|e| CompareError::Invalid(format!("{e:?}")))
+    }
+
+    /// The offset in a slice owner's payload that the slice's start counts from.
+    fn slice_offset(&self, element: LayoutId) -> Compared<u64> {
+        slice_data_offset(self.record(element)?)
             .map_err(|e| CompareError::Invalid(format!("{e:?}")))
     }
 
@@ -558,7 +564,7 @@ impl<'m> Generator<'m, '_> {
         let offset = payload_offset(self.record(payload)?.align)
             .map_err(|e| CompareError::Invalid(format!("{e:?}")))?;
         let data = self.at(block, offset);
-        let data = self.at(data, self.element_offset(element)?);
+        let data = self.at(data, self.slice_offset(element)?);
         let first = self.builder.load(i64_ty, self.at(at, start.offset), 1);
         let data = self.builder.offset(data, first);
         let length = self.builder.load(i64_ty, self.at(at, length.offset), 1);
@@ -1215,9 +1221,10 @@ impl<'m> HashGenerator<'m, '_> {
         let offset = payload_offset(self.record(payload)?.align)
             .map_err(|e| CompareError::Invalid(format!("{e:?}")))?;
         let data = self.at(block, offset);
-        let first_element = sequence_elements_offset(self.record(element)?)
+        // A slice's start counts from the slice data offset, not the first element.
+        let base = slice_data_offset(self.record(element)?)
             .map_err(|e| CompareError::Invalid(format!("{e:?}")))?;
-        let data = self.at(data, first_element);
+        let data = self.at(data, base);
         let first = self.builder.load(i64_ty, self.at(at, start.offset), 1);
         let data = self.builder.offset(data, first);
         let length = self.builder.load(i64_ty, self.at(at, length.offset), 1);

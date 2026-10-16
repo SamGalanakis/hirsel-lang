@@ -121,7 +121,7 @@ fn from_bytes_transfers_the_same_nonzero_slice_on_both_utf8_outcomes() {
                         std::ptr::null_mut(),
                         out.as_mut_ptr(),
                         source.owner,
-                        start,
+                        source.start + start,
                         length
                     ),
                     0
@@ -129,7 +129,7 @@ fn from_bytes_transfers_the_same_nonzero_slice_on_both_utf8_outcomes() {
                 let out = out.assume_init();
                 assert_eq!(
                     (out.tag, out.value.owner, out.value.start, out.value.length),
-                    (tag, source.owner, start, length)
+                    (tag, source.owner, source.start + start, length)
                 );
                 assert_eq!((*source.owner).count, 1);
                 assert_eq!(ctx.stats().live_blocks, 1);
@@ -153,7 +153,7 @@ fn slices_share_once_and_failed_slices_leave_output_and_count_untouched() {
                         std::ptr::null_mut(),
                         out.as_mut_ptr(),
                         source.owner,
-                        6,
+                        source.start + 6,
                         7,
                         &from,
                         &to
@@ -162,7 +162,7 @@ fn slices_share_once_and_failed_slices_leave_output_and_count_untouched() {
                 );
                 let out = out.assume_init();
                 assert_eq!(shown(out), expected.as_bytes());
-                assert_eq!(out.start, 6 + from);
+                assert_eq!(out.start, source.start + 6 + from);
                 assert_eq!(out.owner, source.owner);
                 assert_eq!((*source.owner).count, 2);
                 release(&ctx, out.owner);
@@ -180,7 +180,7 @@ fn slices_share_once_and_failed_slices_leave_output_and_count_untouched() {
                         std::ptr::null_mut(),
                         &mut out,
                         source.owner,
-                        6,
+                        source.start + 6,
                         7,
                         &from,
                         &to
@@ -211,13 +211,16 @@ fn byte_bridges_preserve_nested_intervals_and_publish_only_after_checks() {
                     std::ptr::null_mut(),
                     view.as_mut_ptr(),
                     source.owner,
-                    6,
+                    source.start + 6,
                     7
                 ),
                 0
             );
             let view = view.assume_init();
-            assert_eq!((view.owner, view.start, view.length), (source.owner, 6, 7));
+            assert_eq!(
+                (view.owner, view.start, view.length),
+                (source.owner, source.start + 6, 7)
+            );
             assert_eq!((*source.owner).count, 2);
             let mut slice = std::mem::MaybeUninit::uninit();
             assert_eq!(
@@ -236,7 +239,7 @@ fn byte_bridges_preserve_nested_intervals_and_publish_only_after_checks() {
             let slice = slice.assume_init();
             assert_eq!(
                 (slice.owner, slice.start, slice.length),
-                (source.owner, 8, 4)
+                (source.owner, source.start + 8, 4)
             );
             assert_eq!(shown(slice), "😀".as_bytes());
             for (from, to) in [(7, 2), (0, 8), (u64::MAX, u64::MAX)] {
@@ -291,7 +294,7 @@ fn position_checks_only_the_selected_utf8_interval_and_none_is_initialized() {
                         std::ptr::null_mut(),
                         &mut out,
                         source.owner,
-                        6,
+                        source.start + 6,
                         7,
                         offset
                     ),
@@ -308,7 +311,7 @@ fn position_checks_only_the_selected_utf8_interval_and_none_is_initialized() {
                             ctx.0,
                             &mut back,
                             source.owner,
-                            6,
+                            source.start + 6,
                             7,
                             &out.offset
                         ),

@@ -2,6 +2,8 @@
 use super::{CallShape, InlineLowering, R, core_path};
 use crate::import::ImportCx;
 use hirsel_lir::ir::{ConstantValue, ConstructorKind, Holding, Inst};
+use hirsel_lir::layout::sequence_slice_start;
+use hirsel_lir::layout_types::LayoutKind;
 use hirsel_types::UseKind;
 
 pub static FROM_LIST: InlineLowering = InlineLowering {
@@ -24,12 +26,19 @@ fn from_list(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
         result: length,
         value: owner,
     });
-    let zero = cx.constant(word, ConstantValue::Integer(0));
+    // The whole sequence: its first element past the slice data offset.
+    let element = match cx.record(layout).kind {
+        LayoutKind::Slice { element } => element,
+        _ => return Ok(false),
+    };
+    let start = sequence_slice_start(cx.record(element))
+        .map_err(|e| crate::import::ImportError::Malformed(format!("{e:?}")))?;
+    let start = cx.constant(word, ConstantValue::Integer(u128::from(start)));
     let result = cx.construct(
         layout,
         layout,
         ConstructorKind::Tuple,
-        &[owner, zero, length],
+        &[owner, start, length],
     )?;
     cx.finish(call, result)?;
     Ok(true)

@@ -6,15 +6,18 @@
 //! construction would: scalars little-endian at their size, an aggregate's
 //! and an active variant's fields at their offsets with the variant's tag
 //! form, inline repeats and Simd lanes at the element size, a sequence
-//! payload as its u64 count and then its elements from their alignment. A
-//! block reference becomes a cell naming another static block, and a String
-//! or Bytes slice names a byte sequence block with start 0 and its length.
+//! payload as its u64 count, its u64 capacity (the count) and then its
+//! elements from their alignment (runtime ABI 5). A block reference becomes a
+//! cell naming another static block, and a String or Bytes slice names a whole
+//! byte sequence block (its `sequence_slice_start`) and its length.
 //! Flat data is one pointer-free block, sized from the materialized value.
 //! A value this cannot lay out (a callable, a non-flat Packed extent, a handle) is a `StaticError`, never a guessed image. Only a
 //! library constant holds a function today (`u32.order`'s comparator, an
 //! operation): user constants of function type are not data.
 use hirsel_lir::ir::Symbol;
-use hirsel_lir::layout::{LayoutBuilder, sequence_elements_offset};
+use hirsel_lir::layout::{
+    LayoutBuilder, SEQUENCE_CAPACITY_OFFSET, sequence_elements_offset, sequence_slice_start,
+};
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, ScalarKind, SizeSpec, TagForm};
 use hirsel_lir::statics::{StaticBlock, StaticData, StaticReference};
 use hirsel_tir::{Constant, Constructor, Materialized, ValueKind, ValueNode};
@@ -226,7 +229,9 @@ impl Encoder<'_, '_> {
             }
             (LayoutKind::Sequence { element }, _) => {
                 let (start, stride) = self.elements(*element)?;
-                self.put(block, offset, &sequence_len(node)?.to_le_bytes());
+                let count = sequence_len(node)?.to_le_bytes();
+                self.put(block, offset, &count);
+                self.put(block, offset + SEQUENCE_CAPACITY_OFFSET, &count);
                 match &node.kind {
                     ValueKind::Constant(Constant::String(s)) => {
                         self.put(block, offset + start, s.as_bytes());
@@ -259,10 +264,12 @@ impl Encoder<'_, '_> {
                     return unsupported("a static slice whose sequence layout is not derived");
                 };
                 let target = self.block(owner, node)?;
+                let start = sequence_slice_start(self.layouts.record(*element))
+                    .map_err(|e| StaticError(format!("{e:?}")))?;
                 for field in &record.fields {
                     match field.ordinal {
                         0 => self.reference(block, offset + field.offset, target),
-                        1 => self.put(block, offset + field.offset, &0u64.to_le_bytes()),
+                        1 => self.put(block, offset + field.offset, &start.to_le_bytes()),
                         2 => self.put(block, offset + field.offset, &length.to_le_bytes()),
                         _ => return unsupported("a slice layout with a fourth word"),
                     }

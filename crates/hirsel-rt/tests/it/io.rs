@@ -419,7 +419,7 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
             if let Some(fault) = fault {
                 real.borrow_mut().inject(fault);
             }
-            let owner = byte_block(&ctx, b"prefixabcdefTAIL");
+            let (owner, start) = byte_block(&ctx, b"prefixabcdefTAIL");
             assert_eq!(
                 hirsel_rt_v2_file_write_bytes(
                     ctx.0,
@@ -428,7 +428,7 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
                     &dir,
                     &old,
                     owner,
-                    6,
+                    start + 6,
                     6
                 ),
                 0
@@ -439,7 +439,7 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
         let dst = binding.intern_path("saved");
         hirsel_rt_v2_file_create_atomic(ctx.0, std::ptr::null_mut(), &mut result, &dir, &dst);
         let mut atomic = result.value;
-        let owner = byte_block(&ctx, b"first");
+        let (owner, start) = byte_block(&ctx, b"first");
         assert_eq!(
             hirsel_rt_v2_file_write_all(
                 ctx.0,
@@ -448,7 +448,7 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
                 &dir,
                 &mut atomic,
                 owner,
-                0,
+                start,
                 5
             ),
             0
@@ -501,21 +501,10 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
         sim.stdout(),
     );
 }
-fn byte_block(ctx: &support::Ctx, bytes: &[u8]) -> *mut hirsel_rt::Header {
-    unsafe {
-        let block = hirsel_rt::alloc::hirsel_rt_v2_alloc(
-            ctx.0,
-            0,
-            8 + bytes.len() as u64,
-            8,
-            hirsel_rt::DOMAIN_HEAP,
-            0,
-        );
-        let payload = block.cast::<u8>().add(hirsel_rt::HEADER_SIZE);
-        payload.cast::<u64>().write(bytes.len() as u64);
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), payload.add(8), bytes.len());
-        block
-    }
+fn byte_block(ctx: &support::Ctx, bytes: &[u8]) -> (*mut hirsel_rt::Header, u64) {
+    // A whole slice of fresh byte storage: its owner and start.
+    let slice = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, bytes) };
+    (slice.owner, slice.start)
 }
 
 #[test]

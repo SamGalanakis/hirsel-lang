@@ -1324,7 +1324,28 @@ impl<'p, S: Stage> Machine<'p, S> {
         Ok((start, self.size(element)?))
     }
 
-    /// How many elements the storage of the sequence payload at `at` holds.
+    /// A whole byte sequence payload of `element` holding `bytes` as constructions lay it out
+    /// (runtime ABI 5): its u64 count, its u64 capacity (the count), then the bytes from their
+    /// alignment; and the start of a slice over all of it.
+    fn byte_sequence(&self, element: LayoutId, bytes: &[u8]) -> Checked<(Vec<u8>, u64)> {
+        let record = self.record(element)?;
+        let (Ok(first), Ok(whole)) = (
+            hirsel_lir::layout::sequence_elements_offset(record),
+            hirsel_lir::layout::sequence_slice_start(record),
+        ) else {
+            return fail(V::Malformed, "a byte sequence element offset");
+        };
+        let count = (bytes.len() as u64).to_le_bytes();
+        let capacity = hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET as usize;
+        let mut stored = vec![0u8; first as usize];
+        stored[..8].copy_from_slice(&count);
+        stored[capacity..capacity + 8].copy_from_slice(&count);
+        stored.extend_from_slice(bytes);
+        Ok((stored, whole))
+    }
+
+    /// How many elements the storage of the sequence payload at `at` holds: every real
+    /// slot, which its capacity word never exceeds.
     fn sequence_capacity(&self, at: Ptr, element: LayoutId) -> Checked<u64> {
         let (start, stride) = self.sequence_shape(element)?;
         if stride == 0 {
@@ -1332,6 +1353,38 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         let a = self.ledger.check(at)?;
         Ok(a.capacity.max(a.size).saturating_sub(at.offset + start) / stride)
+    }
+
+    /// `SeqCapacity` of the sequence payload at `at`: its capacity word (runtime ABI 5), one
+    /// load, checked against the ledger. A word beyond the storage's real slots would let a
+    /// push write past it.
+    fn sequence_capacity_word(&self, at: Ptr, element: LayoutId) -> Checked<u64> {
+        let (_, stride) = self.sequence_shape(element)?;
+        if stride == 0 {
+            return Ok(u64::MAX);
+        }
+        let word = self.read_scalar(at.at(hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET), 8)?;
+        let word =
+            u64::try_from(word).map_err(|_| err(V::Malformed, "a sequence capacity beyond u64"))?;
+        let slots = self.sequence_capacity(at, element)?;
+        if word > slots {
+            return fail(
+                V::OutOfExtent,
+                format!("a sequence capacity word of {word} over {slots} slots"),
+            );
+        }
+        Ok(word)
+    }
+
+    /// Make the capacity word of the sequence payload at `at` exact: every real slot, as
+    /// `hirsel_rt_v2_seq_grow` leaves it on each path.
+    fn exact_capacity(&mut self, at: Ptr, element: LayoutId) -> Checked<()> {
+        let slots = self.sequence_capacity(at, element)?;
+        self.ledger.get_mut(at.alloc).extent.write_bytes(
+            at.offset + hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET,
+            &slots.to_le_bytes(),
+        );
+        Ok(())
     }
 
     /// The sequence block a `SeqReserve`, `SeqSetLen` or (`sequential`)
@@ -2833,15 +2886,13 @@ impl<'p, S: Stage> Machine<'p, S> {
                             _ => unreachable!("matched above"),
                         };
                         let length = bytes.len() as u64;
-                        let mut payload = length.to_le_bytes().to_vec();
-                        payload.extend_from_slice(bytes);
+                        let LayoutKind::Slice { element } = self.record(ty.layout)?.kind else {
+                            unreachable!()
+                        };
+                        let (payload, whole) = self.byte_sequence(element, bytes)?;
                         let owner = match self.constants.get(&(unit, constant.0)) {
                             Some(p) => *p,
                             None => {
-                                let LayoutKind::Slice { element } = self.record(ty.layout)?.kind
-                                else {
-                                    unreachable!()
-                                };
                                 let bytes_layout = self
                                     .program
                                     .layouts
@@ -2863,7 +2914,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                                 p
                             }
                         };
-                        Val::Image(self.slice_image(ty.layout, owner, 0, length)?)
+                        Val::Image(self.slice_image(ty.layout, owner, whole, length)?)
                     }
                     (value, repr) => {
                         return fail(V::TypeConfusion, format!("constant {value:?} as {repr:?}"));
@@ -3310,14 +3361,24 @@ impl<'p, S: Stage> Machine<'p, S> {
                                 .position(|r| r.kind == LayoutKind::Sequence { element })
                                 .map(|i| LayoutId(i as u32))
                                 .ok_or_else(|| err(V::Malformed, "flat copy slice storage"))?;
-                            let owner =
-                                self.heap_alloc(payload, length + 8, self.record(payload)?.align)?;
-                            self.ledger
-                                .get_mut(owner.alloc)
-                                .extent
-                                .write_bytes(0, &length.to_le_bytes());
-                            self.ledger.get_mut(owner.alloc).extent.place(8, bytes);
-                            let mut image = self.slice_image(ty.layout, owner, 0, length)?;
+                            // A whole fresh byte sequence: its count, its capacity (the
+                            // count), then the bytes (runtime ABI 5).
+                            let (header, whole) = self.byte_sequence(element, &[])?;
+                            let first = header.len() as u64;
+                            let owner = self.heap_alloc(
+                                payload,
+                                length + first,
+                                self.record(payload)?.align,
+                            )?;
+                            let extent = &mut self.ledger.get_mut(owner.alloc).extent;
+                            extent.write_bytes(0, &header);
+                            extent.write_bytes(0, &length.to_le_bytes());
+                            extent.write_bytes(
+                                hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET,
+                                &length.to_le_bytes(),
+                            );
+                            extent.place(first, bytes);
+                            let mut image = self.slice_image(ty.layout, owner, whole, length)?;
                             for cell in image.cells.values_mut() {
                                 if let Cell::Data { counted, .. } = cell {
                                     *counted = true;
@@ -3462,7 +3523,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     (Val::Ptr(p), LayoutKind::Block { payload } | LayoutKind::Box { payload }) => {
                         match &self.record(*payload)?.kind {
                             LayoutKind::Sequence { element } => {
-                                self.sequence_capacity(p, *element)?
+                                self.sequence_capacity_word(p, *element)?
                             }
                             kind => {
                                 return fail(
@@ -3552,6 +3613,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         return fail(V::TypeConfusion, "a sequence place holding a code word");
                     };
                     let grown = self.detach_block(block, size)?;
+                    self.exact_capacity(grown, element)?;
                     let word = self.word;
                     self.ledger.get_mut(r.ptr.alloc).extent.put_cell(
                         r.ptr.offset,
@@ -3592,6 +3654,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                             .take(0, held, FREE_POISON, None);
                     let grown = self.heap_alloc(payload, size, align)?;
                     self.ledger.get_mut(grown.alloc).extent.place(0, moved);
+                    self.exact_capacity(grown, element)?;
                     self.ledger.get_mut(block.alloc).count = None;
                     self.ledger.free(block.alloc)?;
                     let word = self.word;
@@ -3604,6 +3667,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                             borrow: None,
                         },
                     );
+                } else {
+                    // Left alone, its capacity word made exact.
+                    self.exact_capacity(block, element)?;
                 }
                 if let Some(s) = r.root_slot {
                     f.versions[s.index()] = Some(version);
@@ -4737,17 +4803,10 @@ impl<'p, S: Stage> Machine<'p, S> {
             LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
             _ => layout,
         };
-        // A String or Bytes block is a byte sequence payload: its u64 count, then its bytes
-        // from their alignment, as native literals are laid out.
+        // A String or Bytes block is a byte sequence payload: its u64 count and capacity, then
+        // its bytes from their alignment, as native literals are laid out.
         let stored = match self.record(payload)?.kind {
-            LayoutKind::Sequence { element } => {
-                let start = hirsel_lir::layout::sequence_elements_offset(self.record(element)?)
-                    .map_err(|_| err(V::Malformed, "a sequence element offset"))?;
-                let mut stored = vec![0u8; start as usize];
-                stored[..8].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
-                stored.extend_from_slice(bytes);
-                stored
-            }
+            LayoutKind::Sequence { element } => self.byte_sequence(element, bytes)?.0,
             _ => bytes.to_vec(),
         };
         let p = self.static_alloc(payload, &stored, what.to_string())?;
@@ -5056,10 +5115,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                     unreachable!()
                 };
                 let (start, stride) = self.sequence_shape(element)?;
-                self.ledger
-                    .get_mut(target.alloc)
-                    .extent
-                    .write_bytes(target.offset, &(fields.len() as u64).to_le_bytes());
+                // The count, then the capacity: the count, never more than the slots.
+                let count = (fields.len() as u64).to_le_bytes();
+                let extent = &mut self.ledger.get_mut(target.alloc).extent;
+                extent.write_bytes(target.offset, &count);
+                extent.write_bytes(
+                    target.offset + hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET,
+                    &count,
+                );
                 for fv in fields {
                     let m = self.take_value(f, fv.value)?;
                     let at = self.ledger.project(
@@ -6708,6 +6771,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let mut image = Extent::new(size);
                 if block.is_some() {
                     image.write_bytes(0, &count.to_le_bytes());
+                    image.write_bytes(
+                        hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET,
+                        &count.to_le_bytes(),
+                    );
                 }
                 for (index, value) in values.into_iter().enumerate() {
                     let part = self.operation_image(f, element, value, arguments, transferred)?;
@@ -6840,19 +6907,13 @@ impl<'p, S: Stage> Machine<'p, S> {
                         err(V::Malformed, "slice has no byte sequence payload layout")
                     })?;
                 let length = bytes.len() as u64;
-                let size = length
-                    .checked_add(8)
-                    .ok_or_else(|| err(V::OutOfExtent, "byte result extent overflow"))?;
-                let owner = self.heap_alloc(payload, size, 8)?;
+                let (stored, whole) = self.byte_sequence(element, &bytes)?;
+                let owner = self.heap_alloc(payload, stored.len() as u64, 8)?;
                 self.ledger
                     .get_mut(owner.alloc)
                     .extent
-                    .write_bytes(0, &length.to_le_bytes());
-                self.ledger
-                    .get_mut(owner.alloc)
-                    .extent
-                    .write_bytes(8, &bytes);
-                let mut image = self.slice_image(layout, owner, 0, length)?;
+                    .write_bytes(0, &stored);
+                let mut image = self.slice_image(layout, owner, whole, length)?;
                 for cell in image.cells.values_mut() {
                     if let Cell::Data { counted, .. } = cell {
                         *counted = true;

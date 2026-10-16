@@ -1,7 +1,7 @@
-//! Growth loops in optimized LLVM IR: a private growth call hands its capacity
-//! cache back by value, so a push loop over a list it owns carries capacity and
-//! must-unique as SSA values, while shared, escaping and over-reserved lists
-//! keep their tests.
+//! Growth loops in optimized LLVM IR: a private growth call hands its root and
+//! must-unique fact back by value, so a push loop over a list it owns carries
+//! must-unique as an SSA value and loads only its capacity word (runtime ABI 5),
+//! while shared, escaping and over-reserved lists keep their tests.
 use hirsel_driver::compiler_adapters;
 use hirsel_driver::native::{OptLevel, Options, TargetSpec, build, emit_ir};
 use hirsel_engine::{
@@ -27,7 +27,28 @@ fn main_ir(source: &str, target: TargetSpec) -> String {
             .expect("main is defined");
         let lines: Vec<&str> = ir.lines().skip(start).collect();
         let end = lines.iter().position(|l| *l == "}").unwrap();
-        lines[..=end].join("\n")
+        // Name each TBAA access tag by its type's name, so a capacity load is
+        // `!tbaa !"sequence capacity"`.
+        let metadata: BTreeMap<&str, &str> = ir
+            .lines()
+            .filter_map(|l| l.strip_prefix('!')?.split_once(" = "))
+            .collect();
+        let name = |tag: &str| {
+            let first = metadata.get(tag)?.strip_prefix("!{!")?;
+            let base = first.split(',').next()?;
+            metadata.get(base)?.strip_prefix("!{!\"")?.split('"').next()
+        };
+        lines[..=end]
+            .iter()
+            .map(|l| match l.split_once("!tbaa !") {
+                Some((head, tag)) => match name(tag.trim()) {
+                    Some(name) => format!("{head}!tbaa !\"{name}\""),
+                    None => (*l).to_owned(),
+                },
+                None => (*l).to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     })
 }
 
@@ -47,6 +68,10 @@ impl Block {
     }
     fn loads(&self) -> usize {
         self.count(|l| l.contains(" = load "))
+    }
+    /// Loads of a sequence's capacity word.
+    fn capacity_loads(&self) -> usize {
+        self.count(|l| l.contains(" = load ") && l.ends_with("!tbaa !\"sequence capacity\""))
     }
     /// Calls other than intrinsics, which emit no call.
     fn calls(&self) -> usize {
@@ -142,6 +167,9 @@ impl Hot<'_> {
     fn loads(&self) -> usize {
         self.blocks.iter().map(|b| b.loads()).sum()
     }
+    fn capacity_loads(&self) -> usize {
+        self.blocks.iter().map(|b| b.capacity_loads()).sum()
+    }
     fn calls(&self) -> usize {
         self.blocks.iter().map(|b| b.calls()).sum()
     }
@@ -172,11 +200,12 @@ fn targets() -> [TargetSpec; 2] {
     ]
 }
 
-/// The steady iteration of `source`'s loop holds capacity and must-unique in
-/// registers: it loads nothing and calls nothing, and its only tests are the
-/// capacity comparison and the loop's own exit. A body with no element loop
-/// left (LLVM proved the capacity and stored the elements straight-line, as
-/// `.roots5`'s untagged root pointer allows) has no growth call either.
+/// The steady iteration of `source`'s loop holds must-unique in a register: it
+/// loads at most the capacity word (one load, runtime ABI 5) and calls nothing,
+/// and its only tests are the capacity comparison and the loop's own exit. A
+/// body with no element loop left (LLVM proved the capacity and stored the
+/// elements straight-line, as the untagged root pointer allows) has no growth
+/// call either.
 fn assert_promoted(source: &str) {
     for target in targets() {
         let ir = main_ir(source, target);
@@ -186,7 +215,8 @@ fn assert_promoted(source: &str) {
             continue;
         };
         let shown = || format!("hot path {:?}\n{ir}", hot.path);
-        assert_eq!(hot.loads(), 0, "{}", shown());
+        assert_eq!(hot.loads(), hot.capacity_loads(), "{}", shown());
+        assert!(hot.capacity_loads() <= 1, "{}", shown());
         assert_eq!(hot.calls(), 0, "{}", shown());
         assert!(hot.conditional() <= 2, "{}", shown());
     }
@@ -202,12 +232,12 @@ const RESERVED: &str = "pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 ";
 
 #[test]
-fn a_reserved_push_loop_carries_capacity_and_uniqueness_as_values() {
+fn a_reserved_push_loop_carries_uniqueness_as_a_value() {
     assert_promoted(RESERVED);
 }
 
 #[test]
-fn a_push_loop_after_a_growing_push_carries_capacity_and_uniqueness_as_values() {
+fn a_push_loop_after_a_growing_push_carries_uniqueness_as_a_value() {
     assert_promoted(
         "pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let mut rows: List[u64] = []

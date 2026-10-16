@@ -107,11 +107,16 @@ Invariants and boundary:
   and capacity, with one more holder for each counted child it holds (static and immortal
   blocks included, since the caller writes the copy).
 - Sequences (LIR schema revision 7): a sequence payload is
-  a `u64` count at offset 0, then elements at a fixed stride from the first offset aligned for
-  them, and its capacity is the metadata's usable bytes after that offset by the stride.
+  a `u64` count at offset 0, a `u64` capacity in elements at offset 8 (runtime ABI 5), then
+  elements at a fixed stride from `align_up(16, align)`. The capacity word is never more than
+  the slots the storage really holds (the metadata's usable bytes after that offset by the
+  stride), so compiled code reads it with one load; constructions and literals write the count.
+  A slice's data stays at `payload + align_up(8, align)` plus its start, so a slice over a whole
+  sequence starts at `sequence_slice_start` (8 for bytes).
   `hirsel_rt_v2_seq_grow(ctx, block, element_size, element_align, capacity)` leaves a unique
-  heap block that already holds `capacity` elements alone; otherwise the count and the counted
-  elements move bitwise into a block of the class that fits (the new capacity is the class's),
+  heap block that already holds `capacity` elements alone, its capacity word made exact; otherwise
+  the count and the counted elements move bitwise into a block of the class that fits (the new
+  capacity is the class's, written exact),
   the old storage is freed shallowly, never scanned, and the returned reference names the new
   block. A block that is not unique (shared, immortal, or static: an empty list literal is the
   static empty sequence of its layout) is detached once at the requested capacity: count and

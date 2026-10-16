@@ -193,7 +193,7 @@ fn byte_storage(t: &mut Lir<Rc>) {
     let mut storage = t.table.layouts[l::SEQ.0 as usize].clone();
     storage.kind = LayoutKind::Sequence { element: l::U8 };
     storage.size = SizeSpec::Dynamic(vec![
-        SizeTerm::Constant(8),
+        SizeTerm::Constant(16),
         SizeTerm::ReadLength {
             offset: 0,
             scalar: hirsel_lir::layout_types::ScalarKind::U64,

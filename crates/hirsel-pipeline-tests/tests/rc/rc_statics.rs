@@ -63,13 +63,16 @@ fn a_constant_reaches_its_list_and_byte_blocks_through_reference_cells() {
     let list = &data.blocks[1];
     assert!(matches!(kind(1), LayoutKind::Sequence { .. }));
     assert_eq!(list.bytes[..8], 2u64.to_le_bytes());
+    assert_eq!(list.bytes[8..16], 2u64.to_le_bytes());
     let targets: Vec<u32> = list.references.iter().map(|r| r.target).collect();
     assert_eq!(targets, [2, 3]);
     for (block, text) in [(2, b"x".as_slice()), (3, b"yz".as_slice())] {
         let bytes = &data.blocks[block].bytes;
         assert!(matches!(kind(block), LayoutKind::Sequence { .. }));
+        // Its count, its capacity (the count, runtime ABI 5), then its bytes.
         assert_eq!(bytes[..8], (text.len() as u64).to_le_bytes());
-        assert_eq!(&bytes[8..], text);
+        assert_eq!(bytes[8..16], (text.len() as u64).to_le_bytes());
+        assert_eq!(&bytes[16..], text);
     }
 }
 

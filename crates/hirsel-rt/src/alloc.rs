@@ -257,12 +257,89 @@ pub(crate) fn align_up(value: u64, align: u64) -> u64 {
     (value + (align - 1)) & !(align - 1)
 }
 
+/// The offset of a sequence payload's capacity word (runtime ABI 5): the u64 number of
+/// elements its storage holds, after the u64 count. It is never more than the storage's real
+/// slots, and every [`hirsel_rt_v2_seq_grow`] leaves it exact, so compiled code tests a push
+/// against it with one load. The runtime's copy of `hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET`.
+pub const SEQUENCE_CAPACITY_OFFSET: u64 = 8;
+
 /// The offset of a sequence payload's first element of alignment `element_align`: past its
-/// u64 count, aligned to the element. The runtime's copy of
+/// u64 count and u64 capacity, aligned to the element (runtime ABI 5). The runtime's copy of
 /// `hirsel_lir::layout::sequence_elements_offset`, which it cannot depend on;
 /// `tests/it/alloc.rs` checks the two agree.
 pub fn sequence_elements_offset(element_align: u64) -> u64 {
-    align_up(8, element_align)
+    align_up(16, element_align)
+}
+
+/// The start word of a slice over a whole sequence of alignment `element_align`: its first
+/// element's offset past the u64 word a slice's start counts from (the slice data offset,
+/// `align_up(8, element_align)`). The runtime's copy of
+/// `hirsel_lir::layout::sequence_slice_start`.
+pub fn sequence_slice_start(element_align: u64) -> u64 {
+    sequence_elements_offset(element_align) - align_up(8, element_align)
+}
+
+/// The elements of `element_size` bytes the storage of the sequence block `block` holds past
+/// its first element at `elements`: every slot, so the capacity word it sets is exact.
+/// Zero-sized elements need no storage, so every capacity is held.
+///
+/// # Safety
+/// `block` is a live block with its allocator metadata.
+pub(crate) unsafe fn sequence_slots(
+    heap: &Heap,
+    block: *const Header,
+    elements: u64,
+    element_size: u64,
+) -> u64 {
+    if element_size == 0 {
+        return u64::MAX;
+    }
+    // SAFETY: caller contract.
+    unsafe { heap.capacity(block) }.saturating_sub(elements) / element_size
+}
+
+/// Write `slots` as the capacity word of the sequence block `block`.
+///
+/// # Safety
+/// `block` is a live, writable sequence block.
+pub(crate) unsafe fn set_sequence_capacity(block: *mut Header, slots: u64) {
+    // SAFETY: caller contract; the word follows the count.
+    unsafe {
+        payload(block)
+            .add(SEQUENCE_CAPACITY_OFFSET as usize)
+            .cast::<u64>()
+            .write(slots)
+    }
+}
+
+/// A fresh, unique heap sequence block of the descriptor at `index` holding `count` elements
+/// of `element_size` bytes at `element_align` (runtime ABI 5): its count and exact capacity
+/// are written, its elements left for the caller to fill from
+/// [`sequence_elements_offset`]. An extent beyond u64 is an invariant fault; host exhaustion
+/// terminates environmentally.
+///
+/// # Safety
+/// `ctx` is a live run context and `index` names a sequence descriptor of this element.
+pub(crate) unsafe fn allocate_sequence(
+    ctx: *mut RunCtx,
+    index: u32,
+    count: u64,
+    element_size: u64,
+    element_align: u64,
+) -> *mut Header {
+    let elements = sequence_elements_offset(element_align);
+    let extent = count
+        .checked_mul(element_size)
+        .and_then(|bytes| bytes.checked_add(elements))
+        .unwrap_or_else(|| fault("a sequence extent overflows"));
+    // SAFETY: caller contract.
+    unsafe {
+        let block = hirsel_rt_v2_alloc(ctx, index, extent, element_align.max(8), DOMAIN_HEAP, 0);
+        payload(block).cast::<u64>().write(count);
+        let slots = sequence_slots(&(*ctx).heap, block, elements, element_size);
+        set_sequence_capacity(block, slots);
+        block
+    }
 }
 
 /// A layout's bare blocks in the system-allocator archive: the extent a bare request has and
@@ -1624,11 +1701,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
 }
 
 /// Sequence growth (LIR schema revision 7, `Inst::SeqReserve`). Make the sequence block `block`
-/// hold at least `capacity` elements: a u64 count at payload offset 0, then elements
-/// `element_size` bytes apart from the first offset aligned for them. A unique heap block that
-/// already holds them is left alone. Otherwise the count and the counted elements move bitwise
-/// into fresh storage of the class that fits (so the new capacity is the class's), the old
-/// storage is freed shallowly, never scanned, and returns the new block.
+/// hold at least `capacity` elements: a u64 count at payload offset 0, the u64 capacity word at
+/// 8, then elements `element_size` bytes apart from the first offset aligned for them
+/// (runtime ABI 5). A unique heap block that already holds them is left alone. Otherwise the
+/// count and the counted elements move bitwise into fresh storage of the class that fits (so
+/// the new capacity is the class's), the old storage is freed shallowly, never scanned, and
+/// returns the new block. Every path leaves the returned block's capacity word exact: every
+/// slot its storage holds.
 ///
 /// A block that is not unique (shared, immortal, or static such as the empty list's) is
 /// detached once at the requested capacity, so compiled code does not detach it first: its
@@ -1655,10 +1734,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
         }
         unique_heap_block(ctx, block, element_align);
         let elements = sequence_elements_offset(element_align);
+        // A block that already holds them is left alone, its capacity word made exact.
         // Zero-sized elements need no storage: every capacity is already held.
-        if element_size == 0
-            || (*ctx).heap.capacity(block).saturating_sub(elements) / element_size >= capacity
-        {
+        let slots = sequence_slots(&(*ctx).heap, block, elements, element_size);
+        if slots >= capacity {
+            set_sequence_capacity(block, slots);
             return block;
         }
         let Some(extent) = capacity
@@ -1669,7 +1749,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
         };
         let count = payload(block).cast::<u64>().read();
         let used = elements + count * element_size;
-        grow(ctx, block, used, extent, element_align)
+        let grown = grow(ctx, block, used, extent, element_align);
+        set_sequence_capacity(
+            grown,
+            sequence_slots(&(*ctx).heap, grown, elements, element_size),
+        );
+        grown
     }
 }
 
@@ -1740,7 +1825,7 @@ unsafe fn detach_reserved(
         };
         let align = element_align.max(8);
         check_request(extent, align);
-        if count == 0 && (*block).domain() == DOMAIN_STATIC {
+        let detached = if count == 0 && (*block).domain() == DOMAIN_STATIC {
             // An empty list literal's static block has no element, holder or credit to
             // carry: its first reserve is one fresh allocation.
             let fresh = (*ctx).heap.allocate((*block).index(), extent, align);
@@ -1749,9 +1834,15 @@ unsafe fn detach_reserved(
                 ptr::write_bytes(payload(fresh), UNINIT_POISON, capacity as usize);
             }
             payload(fresh).cast::<u64>().write(0);
-            return fresh;
-        }
-        crate::copy::detach_sized(ctx, block, used, extent, align)
+            fresh
+        } else {
+            crate::copy::detach_sized(ctx, block, used, extent, align)
+        };
+        set_sequence_capacity(
+            detached,
+            sequence_slots(&(*ctx).heap, detached, elements, element_size),
+        );
+        detached
     }
 }
 

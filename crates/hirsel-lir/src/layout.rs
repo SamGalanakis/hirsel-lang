@@ -133,11 +133,30 @@ pub fn align_up(offset: u64, align: u64) -> Result<u64, LayoutError> {
         .ok_or(LayoutError::Overflow)
 }
 
+/// The offset of a `Sequence` payload's capacity word (runtime ABI 5): the u64 number of
+/// elements its storage holds, after the u64 count at offset 0. It is never more than the
+/// storage's real slots, and exact after every `SeqReserve`, so a capacity test is one load.
+pub const SEQUENCE_CAPACITY_OFFSET: u64 = 8;
+
 /// The offset of a `Sequence` payload's first element of layout `element`: past
-/// the u64 count at offset 0, aligned to the element. The layout builder and
-/// validator, and any harness reading elements, take it from here.
+/// the u64 count at offset 0 and the u64 capacity at offset 8, aligned to the
+/// element (runtime ABI 5). The layout builder and validator, and any harness
+/// reading elements, take it from here.
 pub fn sequence_elements_offset(element: &LayoutRecord) -> Result<u64, LayoutError> {
+    align_up(16, u64::from(element.align))
+}
+
+/// The offset from a slice owner's payload that the slice's start word counts from: past
+/// one u64 word, aligned to the element. A flat view's start is its encoding's offset,
+/// whose u64 length prefix that word skips.
+pub fn slice_data_offset(element: &LayoutRecord) -> Result<u64, LayoutError> {
     align_up(8, u64::from(element.align))
+}
+
+/// The start word of a slice over a whole `Sequence` of `element`: its first element's
+/// offset past [`slice_data_offset`].
+pub fn sequence_slice_start(element: &LayoutRecord) -> Result<u64, LayoutError> {
+    Ok(sequence_elements_offset(element)? - slice_data_offset(element)?)
 }
 
 /// The offset of a `Sequential` payload's first element of layout `element` (MEM-13):
@@ -1806,12 +1825,20 @@ impl<'o> LayoutBuilder<'o> {
             ]),
             e.align.max(8),
         );
-        record.fields = vec![FieldLayout {
-            ordinal: 0,
-            offset: 0,
-            layout: count,
-            unaligned: false,
-        }];
+        record.fields = vec![
+            FieldLayout {
+                ordinal: 0,
+                offset: 0,
+                layout: count,
+                unaligned: false,
+            },
+            FieldLayout {
+                ordinal: 1,
+                offset: SEQUENCE_CAPACITY_OFFSET,
+                layout: count,
+                unaligned: false,
+            },
+        ];
         if !e.scan.is_empty() {
             record.scan = vec![ScanStep::Sequence {
                 count_offset: 0,

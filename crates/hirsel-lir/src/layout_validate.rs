@@ -9,8 +9,8 @@
 use crate::abi::{extension_of, physical};
 use crate::abi_types::*;
 use crate::layout::{
-    FLAT_PREFIX, align_up, borrowed_scan, evaluate_size, sequence_elements_offset,
-    sequential_elements_offset, shift_drop, shift_scan, soa_data_offset,
+    FLAT_PREFIX, SEQUENCE_CAPACITY_OFFSET, align_up, borrowed_scan, evaluate_size,
+    sequence_elements_offset, sequential_elements_offset, shift_drop, shift_scan, soa_data_offset,
 };
 use crate::layout_types::*;
 use crate::runtime_abi::{HEADER_SIZE, HEADER_V2};
@@ -1107,7 +1107,19 @@ impl<'a> Validator<'a> {
             self.fail(
                 s.clone(),
                 Obligation::Size,
-                "sequence size is the elements after the u64 count",
+                "sequence size is the elements after the u64 count and capacity",
+            );
+        }
+        let words: Vec<(u32, u64)> = r.fields.iter().map(|f| (f.ordinal, f.offset)).collect();
+        if words != [(0, 0), (1, SEQUENCE_CAPACITY_OFFSET)]
+            || r.fields.iter().any(|f| {
+                f.unaligned || self.get(f.layout).kind != LayoutKind::Scalar(ScalarKind::U64)
+            })
+        {
+            self.fail(
+                s.clone(),
+                Obligation::Offset,
+                "a sequence has a u64 count at 0 and a u64 capacity at 8",
             );
         }
         if r.align < e.align.max(8) {

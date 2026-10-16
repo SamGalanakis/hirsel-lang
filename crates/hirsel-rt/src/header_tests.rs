@@ -309,7 +309,7 @@ unsafe extern "C" fn finalizer(ctx: *mut RunCtx, value: *mut u8, anchor: u64) ->
         let id = value.cast::<u64>().read();
         EVENTS.with(|events| events.borrow_mut().push(id));
         // Reentrant allocation/release must restore the outer drain's work identity.
-        let temporary = hirsel_rt_v2_alloc(ctx, 0, 8, 8, DOMAIN_HEAP, 0);
+        let temporary = hirsel_rt_v2_alloc(ctx, 0, 16, 8, DOMAIN_HEAP, 0);
         hirsel_rt_v2_release(ctx, temporary, 0, ptr::null(), anchor);
         if id == 2 {
             failure::hirsel_rt_v2_failure_begin(ctx, 1, 2, anchor)

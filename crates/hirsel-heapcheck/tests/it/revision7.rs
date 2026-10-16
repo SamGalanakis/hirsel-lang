@@ -37,12 +37,13 @@ struct Seq {
 fn layouts() -> (Layouts, Seq) {
     let mut l = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
     let c = common(&mut l);
-    let payload = l.record(&[]);
+    // Its count and capacity words (runtime ABI 5).
+    let payload = l.record(&[c.u64, c.u64]);
     {
         let r = l.get_mut(payload);
         r.kind = LayoutKind::Sequence { element: c.u64 };
         r.size = SizeSpec::Dynamic(vec![
-            SizeTerm::Constant(8),
+            SizeTerm::Constant(16),
             SizeTerm::ReadLength {
                 offset: 0,
                 scalar: ScalarKind::U64,
@@ -181,6 +182,55 @@ impl F<Rc> {
         });
     }
 
+    /// Prints the list's capacity (`SeqCapacity` of a borrowed read).
+    fn print_capacity(&mut self, h: &Held) {
+        let list = h.list;
+        let v = self.b.plain(BLOCK, list);
+        self.inst(Inst::Read {
+            result: v,
+            address: h.at,
+            reaching: h.version,
+            mode: ReadMode::Borrow,
+        });
+        let n = self.b.plain(U64, self.c.u64);
+        self.inst(Inst::SeqCapacity {
+            result: n,
+            value: v,
+        });
+        self.print(n);
+    }
+
+    /// Overwrites the list's capacity word (field 1 of its sequence payload) with `n`.
+    fn write_capacity(&mut self, h: &mut Held, n: u128) {
+        let at = self.b.address(
+            AddressBase::Slot(h.slot),
+            &[ProjectionStep::Field(1)],
+            U64,
+            self.c.u64,
+        );
+        let failure = self.propagates();
+        self.inst(Inst::Address {
+            address: at,
+            failure,
+        });
+        // Taken first: a store writes only uninitialized bytes.
+        let old = self.b.plain(U64, self.c.u64);
+        self.inst(Inst::Read {
+            result: old,
+            address: at,
+            reaching: h.version,
+            mode: ReadMode::Take,
+        });
+        let value = self.int(n);
+        let list = h.list;
+        h.version = self.b.plain(BLOCK, list);
+        self.inst(Inst::Store {
+            address: at,
+            value,
+            version: h.version,
+        });
+    }
+
     /// Prints the count, takes the list out of its slot and releases it.
     fn finish_list(&mut self, h: Held, payload: LayoutId) {
         let list = h.list;
@@ -265,6 +315,46 @@ fn a_length_covers_exactly_the_initialized_slots() {
     );
 }
 
+/// Runtime ABI 5: a construction's capacity word is its count, and every reserve
+/// leaves it exact (all the slots of the class it lands in), as the runtime does.
+#[test]
+fn a_capacity_is_the_count_then_exact_after_each_reserve() {
+    let (l, s) = layouts();
+    let (target, table) = l.finish();
+    let mut f = F::<Rc>::new("main", s.c);
+    let xs = f.list(s.list, &[7, 8]);
+    let mut h = f.hold(s.list, xs);
+    f.print_capacity(&h);
+    // 16 header bytes and four elements fill the 48-byte class exactly.
+    f.reserve(&mut h, 4);
+    f.print_capacity(&h);
+    // Left alone: still exact.
+    f.reserve(&mut h, 3);
+    f.print_capacity(&h);
+    f.finish_list(h, s.payload);
+    f.ret(None);
+    let main = f.finish(&table);
+    assert_eq!(
+        output(&execute(&program(target, table, vec![main]))),
+        "2\n4\n4\n2\n"
+    );
+}
+
+/// `SeqCapacity` checks the capacity word against the storage: a word naming
+/// more elements than the block holds would let a push write past it. The twin
+/// writes a word within the slots.
+#[test]
+fn a_capacity_word_beyond_the_slots_is_out_of_extent() {
+    let forged = |n| {
+        slotted(move |f, h| {
+            f.write_capacity(h, n);
+            f.print_capacity(h);
+        })
+    };
+    assert_eq!(output(&forged(3)), "3\n2\n");
+    assert_eq!(forged(5).violation(), Some(ViolationKind::OutOfExtent));
+}
+
 #[test]
 fn a_reserve_keeps_the_elements_and_frees_the_old_storage() {
     assert_eq!(
@@ -307,7 +397,9 @@ fn shared_write(set_len: bool, shared: bool, static_list: bool) -> Run {
     f.ret(None);
     let main = f.finish(&table);
     let mut p = program(target, table, vec![main]);
+    // Count 2, capacity 2 (runtime ABI 5), then [7, 8].
     let mut bytes = 2u64.to_le_bytes().to_vec();
+    bytes.extend(2u64.to_le_bytes());
     bytes.extend(7u64.to_le_bytes());
     bytes.extend(8u64.to_le_bytes());
     p.statics.push(StaticData::plain(
@@ -740,7 +832,8 @@ fn plain_entry_after_detach(mode: Option<ReadMode>, deep: bool, missing: bool) -
     let (l, s) = layouts();
     let (target, table) = l.finish();
     let mut f = F::<Rc>::new("main", s.c);
-    let original = f.list(s.list, &[7, 8]);
+    // Three elements past the count and capacity leave one spare slot in the class.
+    let original = f.list(s.list, &[7, 8, 9]);
     let construct = f.b.construct(ConstructorKind::Tuple, s.payload, &[], HEAP);
     let detached = f.b.owned(BLOCK, s.list);
     let failure = f.propagates();
@@ -752,7 +845,7 @@ fn plain_entry_after_detach(mode: Option<ReadMode>, deep: bool, missing: bool) -
         failure,
     });
     let mut h = f.hold(s.list, detached);
-    let at = f.element(&h, if missing { 2 } else { 0 });
+    let at = f.element(&h, if missing { 3 } else { 0 });
     let value = f.b.plain(U64, s.c.u64);
     if let Some(mode) = mode {
         f.inst(Inst::Read {
@@ -771,7 +864,7 @@ fn plain_entry_after_detach(mode: Option<ReadMode>, deep: bool, missing: bool) -
         });
     }
     f.print(value);
-    f.set_len(&mut h, 2);
+    f.set_len(&mut h, 3);
     f.read_slot(&h, 0);
     f.finish_list(h, s.payload);
     f.release(original, s.payload);
@@ -786,7 +879,7 @@ fn plain_entry_reads_and_copies_preserve_initialization_after_detach() {
         for mode in [None, Some(ReadMode::Bits), Some(ReadMode::Borrow)] {
             assert_eq!(
                 output(&plain_entry_after_detach(mode, deep, false)),
-                "7\n7\n2\n"
+                "7\n7\n3\n"
             );
             assert_eq!(
                 plain_entry_after_detach(mode, deep, true).violation(),
@@ -796,20 +889,21 @@ fn plain_entry_reads_and_copies_preserve_initialization_after_detach() {
     }
 }
 
-/// Empty sequence construction requests only the count word. The first append
-/// uses spare class capacity without a reserve or a new allocation. Copies must
-/// keep those newly initialized bytes, including in a nested deep copy.
+/// A one-element sequence construction requests its count and capacity words and
+/// that element. The second append uses spare class capacity without a reserve or
+/// a new allocation. Copies must keep those newly initialized bytes, including in
+/// a nested deep copy.
 fn copied_grown_sequence(deep: bool, nested: bool, missing: bool) -> Run {
     let (mut l, s) = layouts();
     let parent = l.record(&[s.list]);
     let parent_block = l.block(parent);
     let (target, table) = l.finish();
     let mut f = F::<Rc>::new("main", s.c);
-    let empty = f.list(s.list, &[]);
-    let mut h = f.hold(s.list, empty);
+    let first = f.list(s.list, &[5]);
+    let mut h = f.hold(s.list, first);
     if !missing {
-        f.write_slot(&mut h, 0, 7);
-        f.set_len(&mut h, 1);
+        f.write_slot(&mut h, 1, 7);
+        f.set_len(&mut h, 2);
     }
     let source = f.b.owned(BLOCK, s.list);
     f.inst(Inst::Read {
@@ -847,7 +941,7 @@ fn copied_grown_sequence(deep: bool, nested: bool, missing: bool) -> Run {
         failure,
     });
     let mut h = f.hold(layout, copy);
-    let index = f.int(0);
+    let index = f.int(1);
     let steps = if nested {
         vec![ProjectionStep::Field(0), ProjectionStep::Slot(index)]
     } else {
@@ -901,8 +995,8 @@ fn copied_grown_sequence(deep: bool, nested: bool, missing: bool) -> Run {
             slot: displaced,
             if_live: false,
         });
-        f.set_len(&mut h, 1);
-        f.read_slot(&h, 0);
+        f.set_len(&mut h, 2);
+        f.read_slot(&h, 1);
     }
     let copied = f.b.owned(BLOCK, layout);
     f.inst(Inst::Read {

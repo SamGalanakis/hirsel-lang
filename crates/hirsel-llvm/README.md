@@ -52,8 +52,12 @@ Invariants:
   128-bit integer-to-float casts to target support routines. `tests/it/scalar_library.rs` holds each to the
   interpreter's kernels and the heap checker at every width and edge, on both targets.
 - The native library's shapes (LIR schema revision 7): `SeqLen` loads a sequence
-  block's count (or a slice's length word), `SeqCapacity` reads slab/prefix/immortal extent metadata inline and subtracts the elements' offset, by the stride, never below the count (zero-sized elements
-  report `u64::MAX`), `SeqReserve` calls `hirsel_rt_v2_seq_grow` by root value (which detaches a block that is not unique at the requested capacity) and writes its returned, unique root into the place,
+  block's count (or a slice's length word), `SeqCapacity` loads the block's capacity word
+  (runtime ABI 5: a sequence payload is its u64 count, its u64 capacity, then the elements
+  from `align_up(16, align)`; the word is never above the real slots or below the count,
+  and zero-sized elements report `u64::MAX`), constructions and literals write the count as
+  the capacity, and a slice over a whole sequence starts at `layout::sequence_slice_start`
+  (slice data stays at `payload + align_up(8, align)`), `SeqReserve` calls `hirsel_rt_v2_seq_grow` by root value (which detaches a block that is not unique at the requested capacity) and writes its returned, unique root into the place,
   `SeqSetLen` stores the count, `SeqAppend` (revision 19) copies its element's active extent
   past the used bytes after `hirsel_rt_v2_block_grow` doubles full storage, `FlatAppend`
   (revision 22) sizes its construction's parts, grows the same way, then writes the content
@@ -115,7 +119,7 @@ Invariants:
   zero-extended by emitted code and never assumed; on failure it is zero. x86-64 returns
   the pair in AL and RDX, AArch64 in W0 and X1: the C struct `{ uint8_t status;
   uint64_t value; }` (or `void *value`). Definitions, function-reference thunks, closure
-  and iterator bodies all follow it, so direct, private (`.roots5`, as one more word after
+  and iterator bodies all follow it, so direct, private (`.roots6`, as one more word after
   the roots) and indirect calls agree and an erased call keeps no result cell. 128-bit and
   aggregate results, and runtime primitives, keep their result pointer. Every return of
   such an entry branches to one return block where status and word meet in scalar phis
@@ -375,37 +379,32 @@ at both the address entry and a direct internal call, on both targets at O0/O3.
 `list.push` and `$native.list_push_spare` (a push `hirsel_rc::spare_push` proved
 to have spare capacity) are always inlined into their callers: spare capacity
 stores the element and length directly, while `$native.list_grow` is cold and noinline. Capacity
-loads use the written allocator metadata offsets in runtime_abi, dispatching on
-the header storage kind before reading any slab/prefix/extent. Zero-sized
+is the block's header word at `SEQUENCE_CAPACITY_OFFSET`, whatever its storage kind. Zero-sized
 elements report u64::MAX and capacity is never below the full u64 length.
-The private single-sequence-root return is five words: the root pointer, typed
-`ptr` and never tagged, the untruncated length, the exact capacity slots, the
-must-unique fact (an `i1`) and the status. A loop over a root call or an inlined
-body therefore carries the pointer itself: no `ptrtoint`, mask or re-tag per
-iteration, so LLVM sees it loop-invariant between growths and can sink the
-length store and vectorize a spare-capacity copy. Status has its own word so that every return site supplies
-a constant: once a caller inlines the body, its status branch threads to the
-right continuation and the root facts that continuation receives fold. AArch64
-returns the words in registers, x86-64 in memory (only uninlined calls, such as
-cold growth, pay for it); required address/function-reference entries decode
-and write back before testing status.
+The private single-sequence-root return is four words: the root pointer, typed
+`ptr` and never tagged, the untruncated length, the must-unique fact (an `i1`) and
+the status. A loop over a root call or an inlined body therefore carries the pointer
+itself: no `ptrtoint`, mask or re-tag per iteration, so LLVM sees it loop-invariant
+between growths and can sink the length store and vectorize a spare-capacity copy.
+Status has its own word so that every return site supplies a constant: once a caller
+inlines the body, its status branch threads to the right continuation and the root
+facts that continuation receives fold. AArch64 returns the words in registers, x86-64
+in memory (only uninlined calls, such as cold growth, pay for it); required
+address/function-reference entries decode and write back before testing status.
 The emitted count edges retain their existing measurement hooks.
-`tests/it/sequence_capacity.rs` checks each metadata kind, small/large classes,
-over-alignment, zero-sized and 16-byte elements, and the full length range.
+`tests/it/sequence_capacity.rs` checks the capacity query is the header word, which
+`hirsel_rt_v2_seq_grow` leaves exact, for word, 16-byte and zero-sized elements over
+small and large classes.
 Other single Block/Box roots use an intact pointer word and a status word,
 so headerless regional payloads need no extra alignment for return transport.
-Private entries use `.roots5`: sequence roots also receive their current full
-length, must-unique bit and the caller's capacity cache by value (slots and a
-validity bit). A capacity cache holds metadata-derived slots separately from
-length; every query still takes the maximum with the current length. Stores,
-detach and growth invalidate it. Every successful return hands back the exact
-slots for the returned root (from a valid cache, else from metadata), so a
-caller's cache is valid after any successful private call; a failed return
-carries none and the caller invalidates. No cache cell's address reaches a call,
-so the caller's cache and must-unique fact are SSA values across loop feedback:
-a push loop over a list its function owns, after `reserve` or a growing push,
-tests only capacity against a register, and the cold growth call refreshes both
-facts. `hirsel-driver`'s `tests/it/growth_ir.rs` checks this in optimized IR on
+Private entries use `.roots6`: sequence roots also receive their current full
+length and must-unique bit by value. Nothing caches a capacity: it is one load of
+the block's own header word (`Access::Capacity` in TBAA, disjoint from lengths and
+elements), so LLVM hoists it out of a push loop between growths. No fact cell's
+address reaches a call, so the caller's must-unique fact is an SSA value across
+loop feedback: a push loop over a list its function owns, after `reserve` or a
+growing push, tests only capacity, and the cold growth call refreshes the facts.
+`hirsel-driver`'s `tests/it/growth_ir.rs` checks this in optimized IR on
 both targets, with shared, escaping and over-reserved negative controls. Private calls preserve unrelated roots'
 uniqueness only for resultless entries with pointer-free, silently destroyed
 nonroot parameters. Any call handed no reference (no environment, no caller

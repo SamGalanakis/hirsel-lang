@@ -136,7 +136,7 @@ fn c_requires_the_maximum_packed_stride_in_sequences() {
             let mut r = t.table.layouts[l::SEQ.0 as usize].clone();
             r.kind = LayoutKind::Sequence { element: child };
             r.size = SizeSpec::Dynamic(vec![
-                SizeTerm::Constant(8),
+                SizeTerm::Constant(16),
                 SizeTerm::ReadLength {
                     offset: 0,
                     scalar: ScalarKind::U64,
@@ -196,7 +196,7 @@ fn c_keeps_direct_dynamic_packed_sequences_unavailable() {
                 } else {
                     r.kind = LayoutKind::Sequence { element: child };
                     r.size = SizeSpec::Dynamic(vec![
-                        SizeTerm::Constant(8),
+                        SizeTerm::Constant(16),
                         SizeTerm::ReadLength {
                             offset: 0,
                             scalar: ScalarKind::U64,

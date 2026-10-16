@@ -11,7 +11,7 @@ fn frozen(mutant: u8) -> Vec<K> {
         let payload = &mut t.table.layouts[l::SEQ.0 as usize];
         payload.kind = LayoutKind::Sequence { element: l::U8 };
         payload.size = SizeSpec::Dynamic(vec![
-            SizeTerm::Constant(8),
+            SizeTerm::Constant(16),
             SizeTerm::ReadLength {
                 offset: 0,
                 scalar: hirsel_lir::layout_types::ScalarKind::U64,
@@ -28,7 +28,9 @@ fn frozen(mutant: u8) -> Vec<K> {
     let constant = ConstantId(t.unit.tables.constants.len() as u32);
     t.unit.tables.constants.push(ConstantData {
         ty,
-        value: ConstantValue::Integer(u128::from(mutant == 2)),
+        // A whole byte sequence's slice starts at its first element, 8 bytes past the
+        // slice data offset (runtime ABI 5); a mutant forges one more.
+        value: ConstantValue::Integer(8 + u128::from(mutant == 2)),
     });
     t.push(
         ENTRY,
@@ -76,7 +78,7 @@ fn frozen(mutant: u8) -> Vec<K> {
 }
 
 #[test]
-fn a_slice_owner_requires_byte_storage_zero_start_and_its_own_length() {
+fn a_slice_owner_requires_byte_storage_its_whole_start_and_its_own_length() {
     for mutation in 1..=3 {
         pair(
             |bad| frozen(if bad { mutation } else { 0 }),

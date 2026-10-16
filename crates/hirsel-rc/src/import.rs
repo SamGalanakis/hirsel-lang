@@ -258,14 +258,10 @@ fn statics(
         .map(|(symbol, payload)| {
             let record = layouts.record(payload);
             // Even an empty sequence contains its complete header and alignment
-            // padding before element zero. Sequential Packed storage also carries
-            // its used-byte count; LLVM and H retain this exact static extent.
-            let prefix = if matches!(record.kind, LayoutKind::Sequential { .. }) {
-                16usize
-            } else {
-                8usize
-            };
-            let extent = prefix.next_multiple_of(record.align as usize);
+            // padding before element zero: a counted sequence's count and capacity
+            // (runtime ABI 5, both zero), Sequential Packed storage's count and
+            // used-byte count. LLVM and H retain this exact static extent.
+            let extent = 16usize.next_multiple_of(record.align as usize);
             Ok(hirsel_lir::statics::StaticData::plain(
                 symbol,
                 payload,

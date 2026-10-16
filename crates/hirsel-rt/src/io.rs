@@ -1722,11 +1722,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_dir(
     let payload = crate::alloc::payload(entries);
     let count = unsafe { payload.cast::<u64>().read() };
     let count = usize::try_from(count).unwrap_or_else(|_| crate::fault("Test entries overflow"));
+    let first = crate::alloc::sequence_elements_offset(8) as usize;
     let mut files = Vec::with_capacity(count);
     for index in 0..count {
         let offset = index
             .checked_mul(32)
-            .and_then(|n| n.checked_add(8))
+            .and_then(|n| n.checked_add(first))
             .unwrap_or_else(|| crate::fault("Test entry offset overflow"));
         let entry = unsafe { payload.add(offset) };
         let path = unsafe { Binding::get(ctx) }.path(unsafe { entry.cast::<u64>().read() });

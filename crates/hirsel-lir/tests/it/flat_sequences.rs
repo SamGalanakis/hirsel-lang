@@ -19,13 +19,13 @@ fn construction(wrong_element: bool, release_source: bool) -> Vec<K> {
     sequence.kind = LayoutKind::Sequence { element };
     sequence.scan = vec![ScanStep::Sequence {
         count_offset: 0,
-        offset: 8,
+        offset: 16,
         stride: 8,
         element,
     }];
     sequence.drop = vec![DropStep::ElementsReverse {
         count_offset: 0,
-        offset: 8,
+        offset: 16,
         stride: 8,
         element,
     }];

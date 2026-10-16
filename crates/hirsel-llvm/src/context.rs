@@ -243,13 +243,14 @@ impl MemoryEffects {
 }
 
 /// Disjoint storage classes, not source scalar types. A sequence header's
-/// length precedes its elements; the count precedes its payload. Validated
-/// scalar accesses within proved payloads cannot name either header. Copies and
-/// arbitrary runtime calls stay unclassified and may alias every class.
+/// length and capacity precede its elements; the count precedes its payload.
+/// Validated scalar accesses within proved payloads cannot name either header.
+/// Copies and arbitrary runtime calls stay unclassified and may alias every class.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Access {
     Count,
     Length,
+    Capacity,
     Value,
 }
 
@@ -258,6 +259,7 @@ impl Access {
         match self {
             Self::Count => "holder count",
             Self::Length => "sequence length",
+            Self::Capacity => "sequence capacity",
             Self::Value => "scalar value",
         }
     }

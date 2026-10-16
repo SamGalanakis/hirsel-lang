@@ -2440,7 +2440,8 @@ impl<S: Stage> Checker<'_, '_, S> {
     }
 
     /// A whole byte-sequence owner can become a Slice owner without changing
-    /// storage. The exact zero/SeqLen operands also prove the slice interval;
+    /// storage. The exact start (`sequence_slice_start`, its first element past
+    /// the slice data offset) and SeqLen operands also prove the slice interval;
     /// accepting payload type alone would admit forged out-of-bounds lengths.
     fn whole_byte_slice_owner(
         &self,
@@ -2488,8 +2489,14 @@ impl<S: Stage> Checker<'_, '_, S> {
                 .get(&self.cx.unit.instructions)?
                 .get(i as usize)
         };
+        let Some(whole) = layouts
+            .get(element)
+            .and_then(|e| crate::layout::sequence_slice_start(e).ok())
+        else {
+            return false;
+        };
         matches!(instruction(start), Some(Inst::Const { constant, .. })
-            if self.cx.unit.tables.constants[constant.index()].value == ConstantValue::Integer(0))
+            if self.cx.unit.tables.constants[constant.index()].value == ConstantValue::Integer(u128::from(whole)))
             && matches!(instruction(length), Some(Inst::SeqLen { value, .. }) if *value == owner)
     }
 

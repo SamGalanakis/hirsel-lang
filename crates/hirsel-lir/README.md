@@ -445,7 +445,8 @@ with identical incoming SSA values. Different incoming content remains distinct.
 forged-offset twin; the changed-sequence controls retain their rejection.
 
 A whole byte-sequence block may supply a Slice constructor's owner field.
-C independently requires a u8 sequence payload, a zero start and the SeqLen
-of that exact owner SSA value as length. This transfers its existing credit
+C independently requires a u8 sequence payload, the whole sequence's start
+(`layout::sequence_slice_start`, 8 under runtime ABI 5) and the SeqLen of that
+exact owner SSA value as length. This transfers its existing credit
 without allocating or inspecting a runtime descriptor. Hand-built controls in
 `tests/it/byte_freeze.rs` reject other payloads and forged intervals.

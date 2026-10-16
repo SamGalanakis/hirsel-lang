@@ -2305,7 +2305,7 @@ fn bounded_packed_values_reserve_their_maximum_inside_ordinary_storage() {
         let LayoutKind::Block { payload } = rec(&table, ids[4]).kind else {
             panic!("list")
         };
-        assert_eq!(extent(&table, payload, &2u64.to_le_bytes()), Ok(72));
+        assert_eq!(extent(&table, payload, &2u64.to_le_bytes()), Ok(80));
         assert_eq!(offsets(rec(&table, env)), [0, 24, 48]);
         assert_eq!(fixed(rec(&table, env)), 56);
         assert_eq!(offsets(rec(&table, movable)), [0, 24, 48, 56]);
@@ -2566,4 +2566,38 @@ fn a_borrow_without_runtime_holders_keeps_its_ordinary_field_copy_recipe() {
     assert_eq!(record.copy, CopyRecipe::NotCopyable);
     assert!(record.drop.is_empty());
     assert!(record.scan.is_empty());
+}
+
+/// Runtime ABI 5: a sequence payload holds its u64 count at 0 and its u64 capacity at 8,
+/// and its elements start past both at their alignment. C rejects a capacity word moved
+/// into the elements or dropped.
+#[test]
+fn a_sequence_payload_holds_its_count_and_capacity_before_its_elements() {
+    let owners = Owners::default();
+    let mut b = LayoutBuilder::new(&x86(), &owners);
+    let mut t = Ty::default();
+    let (byte, wide) = (t.p(Primitive::U8), t.p(Primitive::U128));
+    let (bytes, wides) = (t.list(byte), t.list(wide));
+    let bytes = b.layout(&t.store, bytes).unwrap();
+    let wides = b.layout(&t.store, wides).unwrap();
+    let table = checked(b);
+    let payload = |id| match rec(&table, id).kind {
+        LayoutKind::Block { payload } => payload,
+        ref kind => panic!("a list is a block, not {kind:?}"),
+    };
+    for (list, first) in [(bytes, 16), (wides, 16)] {
+        let r = rec(&table, payload(list));
+        assert_eq!(offsets(r), [0, 8]);
+        let SizeSpec::Dynamic(program) = &r.size else {
+            panic!("a sequence has a dynamic size")
+        };
+        assert_eq!(program[0], SizeTerm::Constant(first));
+    }
+    let p = payload(bytes).0 as usize;
+    let mut m = table.clone();
+    m.layouts[p].fields[1].offset = 16;
+    rejects(&m, Obligation::Offset);
+    let mut m = table.clone();
+    m.layouts[p].fields.pop();
+    rejects(&m, Obligation::Offset);
 }

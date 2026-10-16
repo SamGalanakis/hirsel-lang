@@ -3,7 +3,10 @@ use crate::views::Slice;
 use crate::{
     DOMAIN_HEAP, Header, LAYOUT_DYNAMIC, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, RunCtx,
     STATUS_FAILURE, STATUS_OK,
-    alloc::{hirsel_rt_v2_alloc, payload},
+    alloc::{
+        allocate_sequence, hirsel_rt_v2_alloc, payload, sequence_elements_offset,
+        sequence_slice_start,
+    },
     count::hirsel_rt_v2_dup,
     fault, kernels,
 };
@@ -20,7 +23,7 @@ unsafe impl Sync for BytesDescriptor {}
 pub static hirsel_rt_v2_bytes_descriptor: BytesDescriptor = BytesDescriptor(Layout {
     magic: LAYOUT_MAGIC,
     version: LAYOUT_VERSION,
-    size: 8,
+    size: 16,
     align: 8,
     finalizer: None,
     steps: std::ptr::null(),
@@ -29,22 +32,23 @@ pub static hirsel_rt_v2_bytes_descriptor: BytesDescriptor = BytesDescriptor(Layo
     flags: LAYOUT_DYNAMIC,
 });
 
-/// Allocate the shared runtime byte storage layout, including its u64 count.
+/// Allocate the shared runtime byte storage layout, including its u64 count and capacity,
+/// as a whole slice of it.
 /// # Safety
 /// `ctx` is a live run context.
 pub unsafe fn allocate_bytes(ctx: *mut RunCtx, bytes: &[u8]) -> Slice {
     let length = u64::try_from(bytes.len()).unwrap_or_else(|_| fault("byte length overflow"));
-    let extent = length
-        .checked_add(8)
-        .unwrap_or_else(|| fault("byte extent overflow"));
-    let owner = unsafe { hirsel_rt_v2_alloc(ctx, 0, extent, 8, DOMAIN_HEAP, 0) };
+    let owner = unsafe { allocate_sequence(ctx, 0, length, 1, 1) };
     unsafe {
-        payload(owner).cast::<u64>().write(length);
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), payload(owner).add(8), bytes.len());
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            payload(owner).add(sequence_elements_offset(1) as usize),
+            bytes.len(),
+        );
     }
     Slice {
         owner,
-        start: 0,
+        start: sequence_slice_start(1),
         length,
     }
 }

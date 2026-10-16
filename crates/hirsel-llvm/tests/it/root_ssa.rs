@@ -189,6 +189,17 @@ fn growth_roots_are_handed_back_before_both_status_outcomes() {
             panic!("sequence block")
         };
         let index = registry.index(payload).unwrap();
+        let hirsel_lir::layout_types::LayoutKind::Sequence { element } =
+            program.table.table.layout(payload).unwrap().kind
+        else {
+            panic!("a counted sequence")
+        };
+        // The one element's word, past the count and capacity (runtime ABI 5).
+        let first = hirsel_lir::layout::sequence_elements_offset(
+            program.table.table.layout(element).unwrap(),
+        )
+        .unwrap();
+        let (extent, word) = (first + 8, first / 8);
         let caller = program.c_call("call_reserve_then_fail", "call_caller");
         let c = format!(
             r#"
@@ -201,14 +212,14 @@ int main(void) {{
   assert(hirsel_rt_v2_ctx_create(&config, &ctx) == 0);
   uint8_t (*entries[])(hirsel_rt_v2_ctx *, void *, int64_t) = {{call_caller}};
   for (unsigned i = 0; i < 1; i++) for (unsigned fail = 0; fail < 2; fail++) {{
-    hirsel_rt_v2_header *root = hirsel_rt_v2_alloc(ctx, {index}, 16, 8, HIRSEL_RT_V2_DOMAIN_HEAP, 0);
+    hirsel_rt_v2_header *root = hirsel_rt_v2_alloc(ctx, {index}, {extent}, 8, HIRSEL_RT_V2_DOMAIN_HEAP, 0);
     uint64_t *data = hirsel_rt_v2_payload(root);
-    data[0] = 1; data[1] = 42;
+    data[0] = 1; data[1] = 1; data[{word}] = 42;
     hirsel_rt_v2_header *old = root;
     assert(entries[i](ctx, &root, fail ? INT64_MAX : 0) == fail);
     assert(root != old && hirsel_rt_v2_capacity(root) >= 8200);
     data = hirsel_rt_v2_payload(root);
-    assert(root->count == 1 && data[0] == 1 && data[1] == 42);
+    assert(root->count == 1 && data[0] == 1 && data[{word}] == 42);
     hirsel_rt_v2_failure_clear(ctx);
     assert(hirsel_rt_v2_release(ctx, root, {index}, NULL, 0) == 0);
   }}

@@ -37,7 +37,7 @@ pub const LAYOUT_VERSION: u32 = 3;
 /// Hirsel cross-unit ABI v1.
 pub const ABI_VERSION: u32 = 1;
 /// `hirsel_rt_v2`.
-pub const RUNTIME_ABI_VERSION: u32 = 4;
+pub const RUNTIME_ABI_VERSION: u32 = runtime_abi::ABI_VERSION;
 /// Private FlatFormatV0, separate from the canonical SER-2 codec.
 pub const FLAT_FORMAT_VERSION: u32 = 0;
 pub const VALIDATOR_VERSION: u32 = 7;

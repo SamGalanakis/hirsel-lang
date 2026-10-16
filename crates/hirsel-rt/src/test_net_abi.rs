@@ -16,11 +16,13 @@ unsafe fn list<T>(
     let payload = crate::alloc::payload(owner);
     let count = usize::try_from(unsafe { payload.cast::<u64>().read() })
         .unwrap_or_else(|_| crate::fault("Test peer list overflow"));
+    // Every element here is at most 8-aligned.
+    let first = crate::alloc::sequence_elements_offset(8) as usize;
     let mut values = Vec::with_capacity(count);
     for index in 0..count {
         let offset = index
             .checked_mul(stride)
-            .and_then(|n| n.checked_add(8))
+            .and_then(|n| n.checked_add(first))
             .filter(|n| *n <= isize::MAX as usize)
             .unwrap_or_else(|| crate::fault("Test peer element overflow"));
         values.push(item(unsafe { payload.add(offset) }));

@@ -1,4 +1,4 @@
-//! Capacity loads agree with the runtime across allocation classes and kinds.
+//! A sequence capacity is its header word (runtime ABI 5), which the runtime leaves exact.
 use crate::support;
 
 use hirsel_lir::layout::sequence_elements_offset;
@@ -119,13 +119,14 @@ fn capacity_has_no_runtime_call_on_either_target() {
 
 #[test]
 #[ignore = "native: focused capacity controls on both targets"]
-fn metadata_capacity_matches_runtime_and_full_length_range() {
+fn capacity_is_the_header_word_that_seq_grow_leaves_exact() {
     for target in TargetSpec::executed() {
         let program = program(&target);
         let registry = DescriptorRegistry::new(&program.table.table, &program.finalizers);
         let names = ["word", "wide", "zero"];
         let table = &program.table.table;
-        // Each list's descriptor index, first-element offset and stride, from its layout.
+        // Each list's descriptor index, first-element offset, stride and element alignment,
+        // from its layout.
         let sequences = names.map(|name| {
             let LayoutKind::Block { payload } =
                 table.layout(program.table.layout(name)).unwrap().kind
@@ -143,15 +144,17 @@ fn metadata_capacity_matches_runtime_and_full_length_range() {
                 registry.index(payload).unwrap(),
                 sequence_elements_offset(element).unwrap(),
                 stride,
+                u64::from(element.align),
             )
         });
-        let column = |f: fn(&(u32, u64, u64)) -> String| {
+        let column = |f: fn(&(u32, u64, u64, u64)) -> String| {
             sequences.iter().map(f).collect::<Vec<_>>().join(", ")
         };
-        let (descriptors, starts, strides) = (
+        let (descriptors, starts, strides, aligns) = (
             column(|s| s.0.to_string()),
             column(|s| s.1.to_string()),
             column(|s| s.2.to_string()),
+            column(|s| s.3.to_string()),
         );
         let calls: String = names
             .iter()
@@ -168,38 +171,31 @@ int main(void) {{
   assert(hirsel_rt_v2_ctx_create(&config, &ctx) == 0);
   uint32_t descriptors[] = {{{descriptors}}};
   uint8_t (*queries[])(hirsel_rt_v2_ctx *, void *, void *) = {{call_word, call_wide, call_zero}};
-  uint64_t strides[] = {{{strides}}}, starts[] = {{{starts}}};
+  uint64_t strides[] = {{{strides}}}, starts[] = {{{starts}}}, aligns[] = {{{aligns}}};
   uint64_t extents[] = {{16, 32, 48, 64, 256, 320, 1024, 4096, 4104, 65536}};
   for (unsigned q = 0; q < 3; q++) for (unsigned a = 0; a < 3; a++) for (unsigned n = 0; n < sizeof extents / sizeof *extents; n++) {{
     hirsel_rt_v2_header *root = hirsel_rt_v2_alloc(ctx, descriptors[q], extents[n], 8u << a, HIRSEL_RT_V2_DOMAIN_HEAP, 0);
-    uint64_t bytes = hirsel_rt_v2_capacity(root), length = 1;
-    *(uint64_t *)hirsel_rt_v2_payload(root) = length;
-    uint64_t result = 0;
-    assert(queries[q](ctx, &result, &root) == 0);
+    uint64_t bytes = hirsel_rt_v2_capacity(root);
+    uint64_t *words = hirsel_rt_v2_payload(root);
+    words[0] = 0;
+    /* A reserve the block already holds leaves it alone with its capacity word exact. */
+    assert(hirsel_rt_v2_seq_grow(ctx, root, strides[q], aligns[q], 0) == root);
     uint64_t room = bytes > starts[q] ? bytes - starts[q] : 0;
-    uint64_t expected = strides[q] ? room / strides[q] : UINT64_MAX;
-    if (expected < length) expected = length;
-    assert(result == expected);
-    /* No elements are owned: capacity only observes metadata and the count. */
-    *(uint64_t *)hirsel_rt_v2_payload(root) = 0;
-    assert(hirsel_rt_v2_release(ctx, root, descriptors[q], NULL, 0) == 0);
-  }}
-  for (unsigned kind = 2; kind <= 3; kind++) for (unsigned q = 0; q < 3; q++) {{
-    struct {{ uint64_t capacity, align; hirsel_rt_v2_header header; uint64_t length; }} storage = {{
-      64, 16, {{UINT32_MAX, (kind << 29) | descriptors[q]}}, UINT64_MAX
-    }};
-    hirsel_rt_v2_header *root = &storage.header;
+    uint64_t exact = strides[q] ? room / strides[q] : UINT64_MAX;
     uint64_t result = 0;
-    assert(queries[q](ctx, &result, &root) == 0 && result == UINT64_MAX);
-    storage.length = 2;
-    assert(queries[q](ctx, &result, &root) == 0);
-    assert(result == (strides[q] ? (64 - starts[q]) / strides[q] : UINT64_MAX));
+    assert(queries[q](ctx, &result, &root) == 0 && result == exact);
+    /* The query is the word itself, whatever the metadata holds. */
+    if (strides[q]) {{
+      words[1] = exact / 2;
+      assert(queries[q](ctx, &result, &root) == 0 && result == exact / 2);
+    }}
+    assert(hirsel_rt_v2_release(ctx, root, descriptors[q], NULL, 0) == 0);
   }}
   hirsel_rt_v2_stats stats;
   hirsel_rt_v2_ctx_stats(ctx, &stats);
   assert(stats.live_blocks == 0);
   hirsel_rt_v2_ctx_destroy(ctx);
-  puts("inline capacity ok");
+  puts("header capacity ok");
 }}
 "#
         );
@@ -209,7 +205,7 @@ int main(void) {{
             std::fs::write(&source, &c).unwrap();
             let bytes = object(&program, opt);
             let executable = link(&target, &dir, &[("capacity.o", &bytes)], &[source]);
-            assert_eq!(run(&target, &executable), "inline capacity ok\n");
+            assert_eq!(run(&target, &executable), "header capacity ok\n");
         }
     }
 }

@@ -233,11 +233,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_narrow(
     let payload = crate::alloc::payload(rules);
     let count = unsafe { payload.cast::<u64>().read() };
     let count = usize::try_from(count).unwrap_or_else(|_| crate::fault("rule count overflow"));
+    let first = crate::alloc::sequence_elements_offset(8);
     let mut list = Vec::with_capacity(count);
     for index in 0..count {
-        let offset = index
+        let offset = (index as u64)
             .checked_mul(32)
-            .and_then(|n| n.checked_add(8))
+            .and_then(|n| n.checked_add(first))
+            .and_then(|n| usize::try_from(n).ok())
             .unwrap_or_else(|| crate::fault("rule offset overflow"));
         let entry = unsafe { payload.add(offset) };
         let address = unsafe { entry.cast::<crate::views::Slice>().read() };
@@ -351,18 +353,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_resolve(
 /// `ctx` is a live run context.
 pub unsafe fn address_list(ctx: *mut RunCtx, addresses: &[SocketAddr]) -> *mut Header {
     let size = std::mem::size_of::<SocketAddrAbi>();
-    let extent = (addresses.len() as u64)
-        .checked_mul(size as u64)
-        .and_then(|n| n.checked_add(8))
-        .unwrap_or_else(|| crate::fault("address list extent overflow"));
+    // The pointer-free byte storage descriptor's extent fits any pointer-free list.
     let block =
-        unsafe { crate::alloc::hirsel_rt_v2_alloc(ctx, 0, extent, 8, crate::DOMAIN_HEAP, 0) };
+        unsafe { crate::alloc::allocate_sequence(ctx, 0, addresses.len() as u64, size as u64, 8) };
+    let first = crate::alloc::sequence_elements_offset(8) as usize;
     unsafe {
         let payload = crate::alloc::payload(block);
-        payload.cast::<u64>().write(addresses.len() as u64);
         for (i, address) in addresses.iter().enumerate() {
             payload
-                .add(8 + i * size)
+                .add(first + i * size)
                 .cast::<SocketAddrAbi>()
                 .write_unaligned(SocketAddrAbi::of(*address));
         }
@@ -404,7 +403,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
                 let payload = crate::alloc::payload(block);
                 std::ptr::copy_nonoverlapping(
                     bytes.as_ptr(),
-                    payload.add(8 + count as usize),
+                    payload
+                        .add(crate::alloc::sequence_elements_offset(1) as usize + count as usize),
                     bytes.len(),
                 );
                 payload.cast::<u64>().write(total);
