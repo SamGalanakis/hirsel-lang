@@ -110,15 +110,15 @@ RUNTIME_DATA = {
     "hirsel-lexer": [*CORPUS_DATA],
     "hirsel-lir": ["crates/hirsel-rt/include/**", "native-tests/**"],
     # tools/native-toolchain/check reads Cargo.lock's llvm-sys pin.
-    "hirsel-llvm": ["Cargo.lock", "crates/hirsel-rt/include/**", "stdlib/**", "tools/native-toolchain/**"],
+    "hirsel-llvm": ["Cargo.lock", "crates/hirsel-rt/include/**", "stdlib/**", "tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**"],
     "hirsel-modes": [*CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-driver/tests/fixtures/**"],
     "hirsel-parser": ["docs/spec/**"],
     "hirsel-pipeline-tests": [
         *CORPUS_DATA, "bench/native/programs/**", "crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/harness/**",
-        "crates/hirsel-rt/include/**", "docs/spec/**", "native-tests/**", "tools/native-toolchain/**",
+        "crates/hirsel-rt/include/**", "docs/spec/**", "native-tests/**", "tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**",
     ],
     "hirsel-rc": [*CORPUS_DATA, "crates/hirsel-rt/include/**", "native-tests/**"],
-    "hirsel-rt": [*CORPUS_DATA, "native-tests/**", "tools/native-toolchain/**", "Cargo.lock"],
+    "hirsel-rt": [*CORPUS_DATA, "native-tests/**", "tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**", "Cargo.lock"],
 }
 
 # What a test binary reads at run time from its own crate, beyond the non-Rust
@@ -239,9 +239,8 @@ GATE_TESTS = [
            release=True, **GATE) for index in range(1, AGREE_SHARDS + 1)),
     dict(name="gate-native-smoke", binary="//:hirsel-conformance-bin-native", args=["--smoke"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
-    # `tools/gate --full` (`-c hirsel.full=true` declares them). AArch64 runs under
-    # the host's qemu-user and cross toolchain, and memcheck under its Valgrind,
-    # so those stages run on the host.
+    # `tools/gate --full` (`-c hirsel.full=true` declares them). Native stages
+    # carry their cross toolchain, qemu and Valgrind as pool action inputs.
     *(dict(name=f"gate-agree-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
            args=["--seed", "1", "--shard", f"{index}/{AGREE_FULL_SHARDS}"], release=True, **GATE)
       for index in range(1, AGREE_FULL_SHARDS + 1)),
@@ -610,7 +609,7 @@ def first_party(meta: dict) -> str:
     for name, script, data, archives in (
         ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
         ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),
-        ("gate-native-toolchain-pin", "tools/native-toolchain/check", ["tools/native-toolchain/**", "Cargo.lock"], None),
+        ("gate-native-toolchain-pin", "tools/native-toolchain/check", ["tools/native-toolchain/llvm-21.lock", "tools/native-toolchain/check", "tools/native-toolchain/fixtures/**", "Cargo.lock"], None),
     ):
         out.append("\n" + call("hirsel_script_test", name=name, script=script, data=Raw(f"glob({starlark(data, 4)})"), runtime_archives=archives))
     return "".join(out)

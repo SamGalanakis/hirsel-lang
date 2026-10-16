@@ -66,7 +66,6 @@ if [ -n "${HIRSEL_AARCH64_TOOLCHAIN:-}" ]; then
   export HIRSEL_VALGRIND="$valgrind/bin/valgrind"
   export VALGRIND_LIB="$valgrind/libexec/valgrind"
   export HIRSEL_VALGRIND_RUNTIME="$valgrind/lib/x86_64-linux-gnu"
-  export HIRSEL_VALGRIND_DEBUG="$valgrind/lib/debug"
   unset HIRSEL_AARCH64_TOOLCHAIN HIRSEL_QEMU_TOOLCHAIN HIRSEL_VALGRIND_TOOLCHAIN
 fi
 export PATH="$LLVM_SYS_211_PREFIX/bin:${PATH:-/usr/bin:/bin}"

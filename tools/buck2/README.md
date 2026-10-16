@@ -37,7 +37,7 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 build //:                        # every first-party target, dev profile, on the pool
 .buck2/bin/buck2 test //...                       # every test
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
-  //:hirsel-lir           # one crate, including host cases and doctests
+  //:hirsel-lir           # one crate, including doctests
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-2  # one shard of a sharded test binary
 .buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1   # run tests on this host
@@ -88,8 +88,9 @@ Native tests receive LLVM 21.1.8, Arm GNU 14.3.Rel1 with its Linux sysroot,
 static AArch64 qemu and Valgrind as SHA-pinned Buck2 downloads. No worker
 image changes, PATH lookup or binfmt registration are needed. The launcher
 resolves `LLVM_SYS_211_PREFIX`, `HIRSEL_AARCH64_CC`,
-`HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND` and
-`VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME` and `HIRSEL_VALGRIND_DEBUG` to absolute input paths before changing directory. The driver's
+`HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND`,
+`VALGRIND_LIB` and `HIRSEL_VALGRIND_RUNTIME` to absolute input paths before
+changing directory. The driver's
 clang launcher selects the input lld. Native launches preserve the selected
 Valgrind support directory when clearing the child's environment.
 
@@ -201,7 +202,7 @@ the old copy.
   action's CPU share, at most 4. It also runs one shard of a sharded binary,
   by exact names: cases go longest first to the least loaded shard, weighted
   by the binary's measured cost table. It asks the compiled harness to apply
-  caller filters, then partitions by host declarations and applies sharding.
+  caller filters, then applies sharding.
   The `full_gate_ --ignored` group also emits the unpartitioned compiled case
   inventory. `full_gate_counts.py --run <command...>` streams Buck2's log and
   checks every `(binary, case)` appears exactly once, rejecting missing,

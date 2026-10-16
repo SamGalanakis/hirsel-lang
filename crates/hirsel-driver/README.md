@@ -28,13 +28,14 @@ Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, sig
 
 Native tool paths are explicit absolute inputs: `LLVM_SYS_211_PREFIX`,
 `HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`,
-`HIRSEL_VALGRIND`, `VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME` and
-`HIRSEL_VALGRIND_DEBUG`. The Buck2 test launcher supplies them
+`HIRSEL_VALGRIND`, `VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME`. The Buck2 test
+launcher supplies them
 from the pinned toolchains. Missing or relative paths refuse construction;
 there is no PATH search or system LLVM fallback. The input clang launcher
 selects the input lld, and memcheck launches retain their input library path
 when the child's environment is cleared.
 
 Memcheck executables select the input libc loader and library directory at
-link time and the matching debug-symbol directory at launch, so mandatory
+link time; matching debug symbols sit in each object's adjacent `.debug/`
+directory, so mandatory
 Valgrind redirects do not depend on the worker image's stripped loader.

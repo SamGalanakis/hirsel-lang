@@ -31,7 +31,6 @@ pub struct Toolchain {
     pub valgrind_lib: PathBuf,
     /// Matching libc/loader and debug symbols for memcheck's mandatory redirects.
     pub valgrind_runtime: PathBuf,
-    pub valgrind_debug: PathBuf,
     /// `libhirsel_rt.a` per target triple and archive variant.
     pub runtime: BTreeMap<(String, RuntimeBuild), PathBuf>,
     /// A checking tool an x86-64 executable is launched under (Valgrind
@@ -282,7 +281,6 @@ impl Toolchain {
             valgrind: environment_path("HIRSEL_VALGRIND")?,
             valgrind_lib: environment_path("VALGRIND_LIB")?,
             valgrind_runtime: environment_path("HIRSEL_VALGRIND_RUNTIME")?,
-            valgrind_debug: environment_path("HIRSEL_VALGRIND_DEBUG")?,
             runtime,
             wrapper: Vec::new(),
             launch_timeout: LAUNCH_TIMEOUT,
@@ -1074,10 +1072,6 @@ impl Toolchain {
         ]
         .map(String::from)
         .to_vec();
-        self.wrapper.push(format!(
-            "--extra-debuginfo-path={}",
-            self.valgrind_debug.display()
-        ));
         self
     }
 }
@@ -1126,7 +1120,6 @@ mod tests {
             valgrind: "/bin/sh".into(),
             valgrind_lib: "/inputs/valgrind-support".into(),
             valgrind_runtime: "/unused/libc".into(),
-            valgrind_debug: "/unused/debug".into(),
             runtime: BTreeMap::new(),
             wrapper: vec![
                 "/bin/sh".into(),

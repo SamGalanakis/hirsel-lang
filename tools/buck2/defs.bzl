@@ -385,6 +385,7 @@ def hirsel_script_test(name, script, data, runtime_archives = None):
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives, labels = ["gate"],
         exec_compatible_with = _test_platform(name), pool = not TESTS_ON_HOST,
+        request = _request(name),
         visibility = ["PUBLIC"],
     )
 

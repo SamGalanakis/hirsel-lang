@@ -282,8 +282,7 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
             .find_map(|line| line.strip_prefix(&format!("{key} ")))
             .unwrap()
     };
-    // Same resolution as tools/native-toolchain/check: explicit environment prefix,
-    // otherwise the lock's prefix; never PATH or an unpinned fallback.
+    // The explicit input prefix is shared with tools/native-toolchain/check.
     let prefix =
         PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").expect("LLVM_SYS_211_PREFIX"));
     let config = prefix.join("bin/llvm-config");

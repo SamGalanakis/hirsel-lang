@@ -3,8 +3,8 @@
 #
 #   check [--prefix DIR]
 #
-# DIR is the directory holding bin/llvm-config. It defaults to $LLVM_SYS_211_PREFIX, else to
-# the lock's prefix. There is no search of PATH and no fallback to another LLVM: a wrong
+# DIR is the directory holding bin/llvm-config. It defaults to $LLVM_SYS_211_PREFIX,
+# which must be supplied when --prefix is absent. There is no PATH search or fallback: a wrong
 # version, a static-only install or a missing tool is a failure, never a skip.
 set -euo pipefail
 
@@ -30,7 +30,8 @@ while (( $# > 0 )); do
   esac
 done
 lock_prefix="$(lock_value prefix)"
-prefix="${prefix:-${LLVM_SYS_211_PREFIX:-$lock_prefix}}"
+prefix="${prefix:-${LLVM_SYS_211_PREFIX:-}}"
+[[ -n "$prefix" && "$prefix" == /* ]] || fail "--prefix or LLVM_SYS_211_PREFIX must name an absolute input directory"
 
 version="$(lock_value llvm_version)"
 major="${version%%.*}"
