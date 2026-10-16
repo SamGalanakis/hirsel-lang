@@ -23,9 +23,12 @@ The native differential gate's checked-in state.
   fault injection and an optimized x86-64 executable on the diagnostic and on
   the shipped runtime archive), with eight generated successes and eight
   directed failures.
-- `memcheck.txt`: corpus cases that allocate and free counted heap blocks,
-  which `native --sanitize` runs beside `smoke.txt` under Valgrind memcheck on
-  the system-allocator archive, where each such block is one libc allocation.
+- `memcheck.txt`: corpus cases that allocate and free counted heap blocks or
+  region and arena storage, which `native --sanitize` runs beside `smoke.txt`
+  under Valgrind memcheck on the system-allocator archive, where each fixed-size
+  block is one libc allocation, and on the memcheck archive, whose client
+  requests describe the size-class allocator's slab blocks, region reservations
+  and arena blocks.
 - `*.hir`: programs for defects the gate found, each named in `smoke.txt`.
 - `open/INDEX.tsv`: every open reason of `exclusions.tsv` with its row count and
   shortest corpus case.

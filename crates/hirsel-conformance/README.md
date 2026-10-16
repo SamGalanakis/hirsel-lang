@@ -206,8 +206,11 @@ run removes every root whose owner has exited. Runtime archives built with
 Cargo stay in the shared, locked `native-gate/runtime/cache`.
 `native --sanitize` (in `tools/check.sh --full`) runs the smoke
 cases, the allocating cases of `native-tests/regressions/memcheck.txt` and eight
-generated programs as x86-64 executables on the system-allocator archive, where
-each fixed-size block is one libc allocation, under Valgrind memcheck;
+generated programs as x86-64 executables under Valgrind memcheck, at O0 and O3:
+on the system-allocator archive, where each fixed-size block is one libc
+allocation, with regions and without, and on the memcheck archive, the shipped
+size-class allocator whose client requests describe its slab blocks, region
+reservations and arena blocks, with regions;
 `--filter TEXT` runs the matching baseline cases instead. Under every mode
 `--filter` may repeat; a case is selected when its ID contains any given text.
 `native --full --shard I/N` runs the cases the conformance runner's path-hash

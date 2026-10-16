@@ -199,8 +199,9 @@ fn run() -> Result<bool, String> {
         }
         "--sanitize" => {
             // The smoke and memcheck cases as optimized and unoptimized x86-64
-            // executables on the system-allocator archive under Valgrind
-            // memcheck: emitted code and the runtime together.
+            // executables on the system-allocator archive and on the size-class
+            // archive with client requests under Valgrind memcheck: emitted code
+            // and the runtime together.
             let matrix = sanitize_matrix(hash_seed);
             let cases = if filter.is_empty() {
                 let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
@@ -534,15 +535,22 @@ fn hash_sweep(root: &Path, jobs: usize, filter: &Filter, hash_seed: u64) -> Resu
     Ok(ok)
 }
 
-/// Memcheck's executables: x86-64 (the only target Valgrind runs here) on the
-/// system-allocator archive, where each fixed-size block is its own libc
-/// allocation, so memcheck sees a use after free or a double free of one. The
-/// default passes as one object at O0 and O3, and the same without regions,
-/// whose bump storage memcheck cannot see into.
+/// Memcheck's executables: x86-64 (the only target Valgrind runs here), the
+/// default passes as one object at O0 and O3. On the system-allocator archive,
+/// where each fixed-size block is its own libc allocation, memcheck sees a use
+/// after free, a double free or a leak of one, with regions and without. On the
+/// memcheck archive, the shipped size-class allocator whose client requests
+/// describe its slab blocks, region reservations and arena blocks, it sees a use
+/// of a freed slab slot or a reset token, a read past a reservation and a use
+/// after a region or arena exits, with regions, as `hirsel run --native` ships.
 fn sanitize_matrix(hash_seed: u64) -> Vec<Configuration> {
     use hirsel_driver::native::{Engine, OptLevel, Options, Partition, Runtime};
     let mut matrix = Vec::new();
-    for regions in [true, false] {
+    for (runtime, regions) in [
+        (Runtime::System, true),
+        (Runtime::System, false),
+        (Runtime::Memcheck, true),
+    ] {
         for opt in [OptLevel::None, OptLevel::Speed] {
             matrix.push(Configuration {
                 options: Options {
@@ -552,7 +560,7 @@ fn sanitize_matrix(hash_seed: u64) -> Vec<Configuration> {
                 engine: Engine::Native {
                     opt,
                     partition: Partition::Whole,
-                    runtime: Runtime::System,
+                    runtime,
                 },
             });
         }
@@ -585,16 +593,18 @@ fn hash_sweep_matrix(hash_seed: u64) -> Vec<Configuration> {
 mod tests {
     use super::*;
     #[test]
-    fn memcheck_runs_whole_x86_executables_on_the_system_allocator_archive() {
+    fn memcheck_runs_whole_x86_executables_on_the_system_and_memcheck_archives() {
         use hirsel_driver::native::{Engine, OptLevel, Partition, Runtime};
         let matrix = sanitize_matrix(0);
         let names: Vec<_> = matrix.iter().map(Configuration::name).collect();
-        assert_eq!(names.len(), 4, "{names:?}");
-        for (regions, opt) in [
-            (true, OptLevel::None),
-            (true, OptLevel::Speed),
-            (false, OptLevel::None),
-            (false, OptLevel::Speed),
+        assert_eq!(names.len(), 6, "{names:?}");
+        for (runtime, regions, opt) in [
+            (Runtime::System, true, OptLevel::None),
+            (Runtime::System, true, OptLevel::Speed),
+            (Runtime::System, false, OptLevel::None),
+            (Runtime::System, false, OptLevel::Speed),
+            (Runtime::Memcheck, true, OptLevel::None),
+            (Runtime::Memcheck, true, OptLevel::Speed),
         ] {
             assert!(
                 matrix.iter().any(|c| {
@@ -608,10 +618,10 @@ mod tests {
                             == Engine::Native {
                                 opt,
                                 partition: Partition::Whole,
-                                runtime: Runtime::System,
+                                runtime,
                             }
                 }),
-                "regions {regions} {opt:?} missing from {names:?}"
+                "{runtime:?} regions {regions} {opt:?} missing from {names:?}"
             );
         }
     }
