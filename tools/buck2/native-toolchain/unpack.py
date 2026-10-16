@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unpack verified Buck2 downloads, resolving symlinks before they enter the CAS."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,22 @@ import tempfile
 
 def copy_tree(source, destination):
     shutil.copytree(source, destination, symlinks=False, dirs_exist_ok=True)
+
+
+def normalize_links(tree):
+    # Debian's usr-merged runtime packages can contain absolute /lib links.
+    # Resolve them inside the archive namespace, never against the unpack host.
+    for name in ("lib", "lib64"):
+        if (tree / "usr" / name).is_dir() and not (tree / name).exists():
+            (tree / name).symlink_to("usr/" + name)
+    for source in tree.rglob("*"):
+        if source.is_symlink():
+            target = source.readlink()
+            if target.is_absolute():
+                source.unlink()
+                source.symlink_to(os.path.relpath(tree / str(target).lstrip("/"), source.parent))
+            if not source.resolve().is_relative_to(tree):
+                raise ValueError(f"archive link escapes its root: {source}")
 
 
 def unpack(kind, output, archives):
@@ -22,6 +39,7 @@ def unpack(kind, output, archives):
             return
         for archive in archives:
             subprocess.run(["dpkg-deb", "-x", archive, tree], check=True)
+        normalize_links(tree)
         if kind == "llvm":
             prefix = tree / "usr/lib/llvm-21"
             for name in ("bin", "include"):

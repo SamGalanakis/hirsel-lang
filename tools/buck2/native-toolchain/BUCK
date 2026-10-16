@@ -1,15 +1,17 @@
-load("//tools/native-toolchain:pins.bzl", "LLVM_DEBS", "NATIVE")
+load("//tools/native-toolchain:pins.bzl", "LLVM_DEBS", "NATIVE", "VALGRIND_DEBS")
 load(":defs.bzl", "toolchain_proof", "unpack_toolchain")
 
 [http_file(name = "llvm-deb-{}".format(i), urls = [pin["url"]], sha256 = pin["sha256"], size_bytes = pin["size"]) for i, pin in enumerate(LLVM_DEBS)]
 [http_file(name = name + "-archive", urls = [pin["url"]], sha256 = pin["sha256"], size_bytes = pin["size"]) for name, pin in NATIVE.items()]
+
+[http_file(name = "valgrind-runtime-{}".format(i), urls = [pin["url"]], sha256 = pin["sha256"], size_bytes = pin["size"]) for i, pin in enumerate(VALGRIND_DEBS)]
 
 unpack_toolchain(
     name = "llvm", kind = "llvm",
     archives = [":llvm-deb-{}".format(i) for i in range(len(LLVM_DEBS))],
     exec_compatible_with = ["//tools/buck2:host"], visibility = ["PUBLIC"],
 )
-[unpack_toolchain(name = name, kind = name, archives = [":" + name + "-archive"],
+[unpack_toolchain(name = name, kind = name, archives = [":" + name + "-archive"] + ([":valgrind-runtime-{}".format(i) for i in range(len(VALGRIND_DEBS))] if name == "valgrind" else []),
     exec_compatible_with = ["//tools/buck2:host"], visibility = ["PUBLIC"]) for name in NATIVE]
 
 export_file(name = "unpack.py")

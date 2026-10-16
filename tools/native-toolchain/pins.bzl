@@ -81,6 +81,18 @@ LLVM_DEBS = [
         "size": 10860078
     }
 ]
+VALGRIND_DEBS = [
+    {
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.39-0ubuntu8_amd64.deb",
+        "sha256": "af36c7ac770770fe3d3c10e85d6bc538e76e57570ba7db7d397fb9f654783ef3",
+        "size": 3264806
+    },
+    {
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dbg_2.39-0ubuntu8_amd64.deb",
+        "sha256": "a716efe8d06b0c27af74f098f86f34d9744d55656137d3121c3e3594f42b7802",
+        "size": 7466882
+    }
+]
 NATIVE = {
     "arm": {
         "url": "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz",

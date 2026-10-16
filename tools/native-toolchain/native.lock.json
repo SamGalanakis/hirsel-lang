@@ -14,5 +14,17 @@
     "url": "https://archive.ubuntu.com/ubuntu/pool/main/v/valgrind/valgrind_3.22.0-0ubuntu3_amd64.deb",
     "sha256": "744e081e5cf3d5c598b499dbb7d2250ea3f2869dde4a4d7b231fe6114f347d7d",
     "size": 14911212
-  }
+  },
+  "valgrind_runtime": [
+    {
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.39-0ubuntu8_amd64.deb",
+      "sha256": "af36c7ac770770fe3d3c10e85d6bc538e76e57570ba7db7d397fb9f654783ef3",
+      "size": 3264806
+    },
+    {
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dbg_2.39-0ubuntu8_amd64.deb",
+      "sha256": "a716efe8d06b0c27af74f098f86f34d9744d55656137d3121c3e3594f42b7802",
+      "size": 7466882
+    }
+  ]
 }

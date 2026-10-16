@@ -722,7 +722,10 @@ def native_toolchain_pins() -> str:
     llvm += [{"url": row["urls"][0].replace("http:", "https:"), "sha256": row["sha256"], "size": row["size"]}
              for row in runtime]
     pins = json.loads((directory / "native.lock.json").read_text())
-    return HEADER + "LLVM_DEBS = " + json.dumps(llvm, indent=4) + "\nNATIVE = " + json.dumps({k:v for k,v in pins.items() if k != "schema"}, indent=4) + "\n"
+    valgrind_runtime = pins.pop("valgrind_runtime")
+    return (HEADER + "LLVM_DEBS = " + json.dumps(llvm, indent=4)
+            + "\nVALGRIND_DEBS = " + json.dumps(valgrind_runtime, indent=4)
+            + "\nNATIVE = " + json.dumps({k: v for k, v in pins.items() if k != "schema"}, indent=4) + "\n")
 
 
 GENERATED = ["tools/native-toolchain/pins.bzl","BUCK", "third-party/BUCK", "third-party/Cargo.toml", "third-party/Cargo.lock", "third-party/lib.rs", "tools/buck2/exec_sizes.bzl"]

@@ -26,7 +26,7 @@ The GitHub `LLVM-21.1.8-Linux-X64.tar.xz` is static-only and its `llvm-config
 
 `BUCK` downloads LLVM's locked Debian packages and their runtime libraries,
 Arm GNU 14.3.Rel1 (including its Linux sysroot), Ubuntu's static AArch64 qemu
-and Valgrind 3.22.0. `native.lock.json` pins the additional archives by SHA-256
+and Valgrind 3.22.0 with a matching libc 2.39 loader and debug symbols. `native.lock.json` pins the additional archives by SHA-256
 and byte size. `python3 tools/buck2/sync.py` generates `pins.bzl` from these
 locks; `--check` rejects stale pins. Nothing is installed on the host or in the
 worker image. Only unpacking runs locally, using `dpkg-deb`; it resolves
@@ -43,3 +43,9 @@ builds a static AArch64 executable and runs it directly with the input qemu
 `VALGRIND_LIB`. It fails on any missing tool, link, launch or memcheck error.
 The per-push native smoke stage includes this proof, so a pin or unpacking
 change cannot land without exercising the tools on a worker.
+
+Valgrind's declared libc/debug dependency is included in its input tree.
+The proof's C executable selects that loader and library directory, and
+Valgrind receives `--extra-debuginfo-path` for the matching symbols. Absolute
+Debian usrmerge links are resolved inside the archive namespace before copying;
+the unpack host's loader can never satisfy one of those links.
