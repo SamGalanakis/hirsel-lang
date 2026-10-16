@@ -289,6 +289,7 @@ conformance/CLO/CLO-4-contract6-callback-copy-bad.hir
 conformance/CLO/CLO-4-contract6-callback-copy-ok.hir
 conformance/CLO/CLO-4-contract6-captures-pending.hir
 conformance/CLO/CLO-4-contract6-captures-plain-ok.hir
+conformance/CLO/CLO-4-contract6-captures-sendable-relay-ok.hir
 conformance/CLO/CLO-4-contract6-closure-creation-bad.hir
 conformance/CLO/CLO-4-contract6-closure-creation-ok.hir
 conformance/CLO/CLO-4-contract6-closure-creation-run.hir
@@ -303,6 +304,8 @@ conformance/CLO/CLO-4-contract6-field-sibling-bad.hir
 conformance/CLO/CLO-4-contract6-field-sibling-ok.hir
 conformance/CLO/CLO-4-contract6-fresh-callback-bad.hir
 conformance/CLO/CLO-4-contract6-fresh-callback-ok.hir
+conformance/CLO/CLO-4-contract6-held-selection-bad.hir
+conformance/CLO/CLO-4-contract6-held-selection-ok.hir
 conformance/CLO/CLO-4-contract6-preserve-error-bad.hir
 conformance/CLO/CLO-4-contract6-preserve-error-ok.hir
 conformance/CLO/CLO-4-contract6-preserve-failure-bad.hir
@@ -313,6 +316,7 @@ conformance/CLO/CLO-4-contract6-preserve-normal-bad.hir
 conformance/CLO/CLO-4-contract6-preserve-normal-ok.hir
 conformance/CLO/CLO-4-contract6-preserves_captures-pending.hir
 conformance/CLO/CLO-4-contract6-preserves_captures-plain-ok.hir
+conformance/CLO/CLO-4-contract6-sendable-adapter-ok.hir
 conformance/CLO/CLO-4-contract6-sendable-adapter-relation-ok.hir
 conformance/CLO/CLO-4-contract6-sendable-adapter-sendable-slot-ok.hir
 conformance/CLO/CLO-4-global-function-share-ok.hir
@@ -713,6 +717,10 @@ conformance/GEN/GEN-1-opaque-plain-flat-bad.hir
 conformance/GEN/GEN-1-opaque-plain-flat-ok.hir
 conformance/GEN/GEN-1-opaque-resource-equality-bad.hir
 conformance/GEN/GEN-1-opaque-resource-equality-ok.hir
+conformance/GEN/GEN-1-packed-local-resource-bad.hir
+conformance/GEN/GEN-1-packed-local-resource-ok.hir
+conformance/GEN/GEN-1-packed-local-string-bad.hir
+conformance/GEN/GEN-1-packed-local-string-ok.hir
 conformance/GEN/GEN-1-plain-block-bad.hir
 conformance/GEN/GEN-1-plain-block-ok.hir
 conformance/GEN/GEN-1-plain-function-pointer-nominal-ok.hir
@@ -1009,6 +1017,7 @@ conformance/LANG/LANG-2-nested-call-type-capture-run.hir
 conformance/LANG/LANG-2-nested-call-type-forward-run.hir
 conformance/LANG/LANG-2-nested-call-type-run.hir
 conformance/LANG/LANG-2-operand-context.hir
+conformance/LANG/LANG-2-provisional-pattern-variant-ok.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-bad.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-ok.hir
 conformance/LANG/LANG-2-recursive-shared-checker-bad.hir
@@ -1333,6 +1342,10 @@ conformance/MEM/MEM-13-ordinary-payload-place-bad.hir
 conformance/MEM/MEM-13-ordinary-payload-place-ok.hir
 conformance/MEM/MEM-13-packed-bounded-storage-run.hir
 conformance/MEM/MEM-13-packed-closure-capture-run.hir
+conformance/MEM/MEM-13-packed-closure-field-run.hir
+conformance/MEM/MEM-13-packed-sequence-nested-run.hir
+conformance/MEM/MEM-13-packed-sequence-push-run.hir
+conformance/MEM/MEM-13-packed-sequence-walk-run.hir
 conformance/MEM/MEM-13-packed-tuple-list-run.hir
 conformance/MEM/MEM-13-payload-tag-fail.hir
 conformance/MEM/MEM-13-payload-tag-ok.hir
@@ -1357,6 +1370,8 @@ conformance/MEM/MEM-14-contract6-callable-promise-ok.hir
 conformance/MEM/MEM-14-contract6-field-advance-bad.hir
 conformance/MEM/MEM-14-contract6-field-advance-ok.hir
 conformance/MEM/MEM-14-contract6-field-advance-run.hir
+conformance/MEM/MEM-14-contract6-let-promise-bad.hir
+conformance/MEM/MEM-14-contract6-let-promise-ok.hir
 conformance/MEM/MEM-14-contract6-local-callable-bad.hir
 conformance/MEM/MEM-14-contract6-local-callable-ok.hir
 conformance/MEM/MEM-14-contract6-local-callable-run.hir
@@ -2385,6 +2400,8 @@ conformance/MODE/MODE-4-written-invariant-getter-bad.hir
 conformance/MODE/MODE-4-written-invariant-getter-ok.hir
 conformance/MODE/MODE-4-written-iter-contract-bad.hir
 conformance/MODE/MODE-4-written-iter-contract-ok.hir
+conformance/MODE/MODE-4-written-iter-parameter-bad.hir
+conformance/MODE/MODE-4-written-iter-parameter-ok.hir
 conformance/MODE/MODE-4-written-iterator-state-contract-bad.hir
 conformance/MODE/MODE-4-written-iterator-state-contract-ok.hir
 conformance/MODE/MODE-4-written-join-loss-bad.hir
@@ -3020,6 +3037,8 @@ conformance/PROV/PROV-1-wave2-find-accept.hir
 conformance/PROV/PROV-1-wave2-find-reject.hir
 conformance/PROV/PROV-1-wave2-find-take-accept.hir
 conformance/PROV/PROV-1-wave2-find-take-reject.hir
+conformance/PROV/PROV-1-written-field-taken-owner-bad.hir
+conformance/PROV/PROV-1-written-field-taken-owner-ok.hir
 conformance/PROV/PROV-2-branch-union-bad.hir
 conformance/PROV/PROV-2-branch-union-ok.hir
 conformance/PROV/PROV-2-branded-comparison-bad.hir
