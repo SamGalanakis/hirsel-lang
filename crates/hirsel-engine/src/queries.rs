@@ -805,23 +805,6 @@ impl QueryEngine {
             })
             .ok_or(QueryError::NotImplemented)
     }
-    /// Per-definition view of the lossless tape discovered by parse_file. File discovery
-    /// scans once per source revision; unchanged definitions reuse their owning snapshot.
-    pub fn lex_definition(
-        &mut self,
-        definition: &DefPath,
-    ) -> Result<QueryOutput<Vec<Token>>, QueryError> {
-        self.syntax_view(definition, QueryKind::Lex)?;
-        let snapshot = self.snapshot(definition)?;
-        let range = snapshot.file.tree.items[snapshot.item.0 as usize].owned_tokens;
-        let tokens = snapshot
-            .file
-            .tokens
-            .get(range.start as usize..range.end as usize)
-            .ok_or(QueryError::NotImplemented)?
-            .to_vec();
-        Ok(output(tokens))
-    }
     /// The item remains indexed within the returned immutable owning file; clients
     /// must use this ItemId with this file, never another revision's AST.
     pub fn parse_definition(

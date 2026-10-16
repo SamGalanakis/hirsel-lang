@@ -231,7 +231,7 @@ fn invalid_literal_scalars_and_unterminated_literals() {
 
 #[test]
 fn trivia_doc_comments_nesting_and_physical_newlines() {
-    let (sources, _, output) =
+    let (_, _, output) =
         fixture(" \t\n\r\n// c\n/// d\r\n//// d\n/* a\n/* b */\r\nz */ /**/ /** d */");
     assert!(output.diagnostics.is_empty());
     assert_eq!(
@@ -259,19 +259,6 @@ fn trivia_doc_comments_nesting_and_physical_newlines() {
             TriviaKind::Space,
             TriviaKind::DocBlock
         ]
-    );
-    let newlines: Vec<_> = output
-        .tokens
-        .iter()
-        .flat_map(|t| newline_spans(t, &sources))
-        .collect();
-    assert_eq!(newlines.len(), 7);
-    assert_eq!(
-        newlines
-            .iter()
-            .map(|s| sources.slice(*s).unwrap())
-            .collect::<Vec<_>>(),
-        vec!["\n", "\r\n", "\n", "\r\n", "\n", "\n", "\r\n"]
     );
     single("/", TokenKind::Punct(Punct::Slash));
     error("/* abc", "LANG-1", 0, 6);
@@ -329,8 +316,6 @@ fn errors_continue_to_eof_and_leave_following_statements() {
             .any(|t| t.kind == TokenKind::Keyword(Keyword::Let))
     );
     assert!(output.tokens.iter().any(|t| t.kind == TokenKind::Integer));
-    let (sources, _, output) = fixture("/*\nopen");
-    assert_eq!(newline_spans(&output.tokens[0], &sources).len(), 1);
 }
 
 #[test]
@@ -390,7 +375,7 @@ fn escaped_newline_reports_one_error_and_recovers_through_the_quote() {
     for head in ["\"", "b\""] {
         for newline in ["\n", "\r\n"] {
             let text = format!("{head}a\\{newline}b\"\nfn f() {{}}");
-            let (sources, _, output) = fixture(&text);
+            let (_, _, output) = fixture(&text);
             assert_eq!(
                 output.diagnostics.len(),
                 1,
@@ -405,9 +390,6 @@ fn escaped_newline_reports_one_error_and_recovers_through_the_quote() {
             let token = &output.tokens[0];
             assert_eq!(token.kind, TokenKind::Invalid);
             assert_eq!(token.span.end as usize, text.find("\nfn").unwrap());
-            let lines = newline_spans(token, &sources);
-            assert_eq!(lines.len(), 1);
-            assert_eq!(sources.slice(lines[0]), Some(newline));
         }
     }
 }

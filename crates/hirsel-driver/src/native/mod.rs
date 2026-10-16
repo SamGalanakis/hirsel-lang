@@ -25,9 +25,8 @@ pub use hirsel_lir::layout_types::TargetSpec;
 pub use hirsel_llvm::{OptLevel, ProfileSource, ProfileSources, c_call};
 pub use hirsel_run_config::Inputs as LaunchInputs;
 pub use link::{
-    Launched, MEMCHECK_EXIT, Partition, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape, Toolchain,
-    emit_objects, launch, launch_with, link, link_objects, link_profile, observe,
-    partition_objects,
+    Launched, Partition, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape, Toolchain, emit_objects,
+    launch, launch_with, link, link_objects, link_profile, observe, partition_objects,
 };
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use stages::{NativeError, Options, ReadyProgram, StageName, build, build_program};

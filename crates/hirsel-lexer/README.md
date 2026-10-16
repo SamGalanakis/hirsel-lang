@@ -15,10 +15,8 @@ Public API:
 
 - `lex(file: FileId, sources: &SourceMap, interner: &mut Interner) -> LexOutput`;
   `LexOutput` owns `tokens: Vec<Token>` and `diagnostics: Vec<Diagnostic>`.
-- `newline_spans(token: &Token, sources: &SourceMap) -> Vec<Span>` gives physical
-  LF/CRLF boundaries, including those inside block comments and invalid tokens.
-  Parsers may instead scan the immutable token source range themselves. Neither
-  operation inserts semicolons or decides whether a statement is complete.
+- Lexing never inserts semicolons or decides whether a statement is complete; a
+  parser that needs physical LF/CRLF boundaries scans the token's source range.
 - Every identifier and every emitted keyword spelling is interned. Keywords stay
   `Keyword` even after `.`; the parser can recover a member's `Symbol` from its
   immutable interner snapshot for spellings such as `x.type`. A keyword used as

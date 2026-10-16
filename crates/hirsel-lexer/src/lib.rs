@@ -25,31 +25,6 @@ pub fn lex(file: FileId, sources: &SourceMap, interner: &mut Interner) -> LexOut
     }
 }
 
-/// Physical newline spans in a token, including inside block/doc comments and
-/// invalid tokens. CRLF occupies one span. This does not implement END (#23).
-/// Across a tape this scans each byte once; no parser context is required.
-pub fn newline_spans(token: &Token, sources: &SourceMap) -> Vec<Span> {
-    let Some(text) = sources.slice(token.span) else {
-        return Vec::new();
-    };
-    text.bytes()
-        .enumerate()
-        .filter(|(_, byte)| *byte == b'\n')
-        .map(|(i, _)| {
-            let start = if i > 0 && text.as_bytes()[i - 1] == b'\r' {
-                i - 1
-            } else {
-                i
-            };
-            Span {
-                file: token.span.file,
-                start: token.span.start + start as u32,
-                end: token.span.start + i as u32 + 1,
-            }
-        })
-        .collect()
-}
-
 // The same byte scanner is exercised on arbitrary bytes by fuzz tests. Production
 // rejects invalid UTF-8/oversize files before SourceMap creation (SEM-3, #21).
 fn scan(file: FileId, bytes: &[u8], interner: &mut Interner) -> LexOutput {

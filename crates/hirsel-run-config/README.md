@@ -78,11 +78,6 @@ from the validated grants, with no projections for absent or empty Io. An explic
 Net with empty rules grants the `net` projection while permitting no operations;
 `net_grant` returns its exact validated provider, rules and peers.
 
-`select_run_record` accepts zero tooling arguments or exactly one
-`--hirsel-run <absolute path>`. It binds the result to semantic code, entry and
-launch kind. Zero arguments select denial defaults; tooling argv never becomes
-an Args snapshot.
-
 `encode_net_peers` / `decode_net_peers` transport the ordered peer-data schema for
 scripted network tape requests. They neither admit a RunConfig nor grant network
 authority; the serving adapter validates endpoints and duplicates before minting

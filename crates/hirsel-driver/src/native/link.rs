@@ -1032,9 +1032,6 @@ pub fn observe(
     })
 }
 
-/// The exit code memcheck is told to use for any error it finds.
-pub const MEMCHECK_EXIT: i32 = 97;
-
 impl Toolchain {
     /// This toolchain with x86-64 executables launched under Valgrind
     /// memcheck: an invalid read or write, a use of uninitialised memory in a

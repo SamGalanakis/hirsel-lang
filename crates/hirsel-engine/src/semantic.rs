@@ -8,7 +8,6 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
 #[derive(Clone, Debug)]
 pub struct ResolverSnapshot {
     pub file: Arc<SyntaxFile>,
-    pub item: ItemId,
     pub output: QueryOutput<Resolution>,
 }
 impl std::ops::Deref for ResolverSnapshot {
@@ -243,7 +242,6 @@ impl ResolverPhase for ResolverAdapter {
             item.definition.clone(),
             ResolverSnapshot {
                 file: file.clone(),
-                item: id,
                 output: result.query.clone(),
             },
         );
@@ -355,7 +353,6 @@ impl SignatureAdapter {
                 item.definition.clone(),
                 ResolverSnapshot {
                     file: file.clone(),
-                    item: id,
                     output: resolved.query,
                 },
             );

@@ -577,12 +577,9 @@ fn same_verdict(before: &Status, after: &Status) -> bool {
             | (Status::NotImplemented, Status::NotImplemented)
     )
 }
-/// Format comparisons use the driver's same formatter seam as `hirsel fmt`.
-pub fn check_canonical(root: &Path, report: &mut Report) -> Result<(), String> {
-    check_canonical_shard(root, report, None)
-}
 
-/// `check_canonical` over the files of one corpus shard.
+/// Check that the corpus files of one shard (every file without one) are canonical.
+/// Format comparisons use the driver's same formatter seam as `hirsel fmt`.
 pub fn check_canonical_shard(
     root: &Path,
     report: &mut Report,
@@ -997,7 +994,7 @@ mod tests {
             )
             .unwrap();
             let mut report = Report::default();
-            check_canonical(&root, &mut report).unwrap();
+            check_canonical_shard(&root, &mut report, None).unwrap();
             assert_eq!(report.format_exemptions.len(), 1);
             assert!(report.errors.is_empty());
             for expect in [
@@ -1011,7 +1008,7 @@ mod tests {
                 )
                 .unwrap();
                 let mut report = Report::default();
-                check_canonical(&root, &mut report).unwrap();
+                check_canonical_shard(&root, &mut report, None).unwrap();
                 assert!(report.format_exemptions.is_empty());
                 assert_eq!(report.errors.len(), 1);
             }
@@ -1031,7 +1028,7 @@ mod tests {
             )
             .unwrap();
             let mut report = Report::default();
-            check_canonical(&root, &mut report).unwrap();
+            check_canonical_shard(&root, &mut report, None).unwrap();
             assert_eq!(report.errors.len(), 1);
             assert!(report.errors[0].contains("new.hir"));
             fs::remove_dir_all(root).unwrap();

@@ -85,17 +85,8 @@ impl PinnedDirectory {
             )?,
         })
     }
-    pub fn from_file(file: File) -> std::io::Result<Self> {
-        if !file.metadata()?.is_dir() {
-            return Err(std::io::Error::other("grant is not a directory"));
-        }
-        Ok(Self { file })
-    }
     pub fn descriptor(&self) -> &File {
         &self.file
-    }
-    pub fn into_file(self) -> File {
-        self.file
     }
 }
 

@@ -7,8 +7,6 @@ use std::fmt;
 
 mod program;
 pub use program::{ProgramNode, ProgramRevision, RevisionError};
-mod selection;
-pub use selection::select_run_record;
 mod net;
 pub use net::{
     NetConnection, NetGrant, NetPeer, NetRule, NetStep, PeerTls, TlsFailure,

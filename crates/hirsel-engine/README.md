@@ -97,7 +97,7 @@ Implemented session API:
   Replacing a source path removes deleted names; adding names changes the identity
   revision. Package/module identity is explicit; standalone CLI files use
   `standalone@0` when there is no explicit launch input.
-- `lex_definition` and `parse_definition` return views of the indexed definition's
+- `parse_definition` returns a view of the indexed definition's
   owning token/AST snapshot. File discovery scans the new file once; downstream
   queries reuse unchanged item snapshots. `recompute_count` counts definition
   view/phase computations, rather than file discovery scans.

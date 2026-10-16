@@ -243,9 +243,6 @@ pub fn classify_native(
 
 /// Replay one exact program, including its package sidecar, through agreement.
 /// Explicit reproducers use the requested matrix without corpus exclusions.
-pub fn replay_program(path: &Path, native: Option<&Native>) -> Result<Classification, String> {
-    replay_program_with_hash_seed(path, native, 0)
-}
 pub fn replay_program_with_hash_seed(
     path: &Path,
     native: Option<&Native>,

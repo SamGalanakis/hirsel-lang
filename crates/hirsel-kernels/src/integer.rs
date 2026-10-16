@@ -40,13 +40,6 @@ impl Format {
     pub fn signed_value(self, bits: u128) -> i128 {
         ((bits << (128 - self.width.bits())) as i128) >> (128 - self.width.bits())
     }
-    pub fn widens_to(self, to: Self) -> bool {
-        match (self.signed, to.signed) {
-            (true, false) => false,
-            (false, true) => to.width.bits() > self.width.bits(),
-            _ => to.width.bits() >= self.width.bits(),
-        }
-    }
 }
 pub fn exact(bits: u128, from: Format, to: Format) -> Option<u128> {
     let bits = bits & from.width.mask();
