@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "arm": {
+    "url": "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz",
+    "sha256": "ddeaff1ea60d4135acba271b0143d9f5add02b68ab9e9be39672d1965c12e82f",
+    "size": 152338936
+  },
+  "qemu": {
+    "url": "https://archive.ubuntu.com/ubuntu/pool/universe/q/qemu/qemu-user-static_8.2.2+ds-0ubuntu1.18_amd64.deb",
+    "sha256": "5bb397f66063efa349f6fd5cb3b68cd96f29edd0994e4ba5115cf0859a716bf0",
+    "size": 14709858
+  },
+  "valgrind": {
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/v/valgrind/valgrind_3.22.0-0ubuntu3_amd64.deb",
+    "sha256": "744e081e5cf3d5c598b499dbb7d2250ea3f2869dde4a4d7b231fe6114f347d7d",
+    "size": 14911212
+  }
+}

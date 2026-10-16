@@ -21,3 +21,25 @@ The pinned LLVM for native code.
 
 The GitHub `LLVM-21.1.8-Linux-X64.tar.xz` is static-only and its `llvm-config
 --system-libs` output breaks llvm-sys's build script; `check` rejects it.
+
+## Pool execution inputs
+
+`BUCK` downloads LLVM's locked Debian packages and their runtime libraries,
+Arm GNU 14.3.Rel1 (including its Linux sysroot), Ubuntu's static AArch64 qemu
+and Valgrind 3.22.0. `native.lock.json` pins the additional archives by SHA-256
+and byte size. `python3 tools/buck2/sync.py` generates `pins.bzl` from these
+locks; `--check` rejects stale pins. Nothing is installed on the host or in the
+worker image. Only unpacking runs locally, using `dpkg-deb`; it resolves
+symlinks before Buck2 hashes the output directories. Execution uses read-only
+action inputs inside the pool's networkless sandbox, with its private `/tmp`.
+
+```sh
+.buck2/bin/buck2 test //tools/native-toolchain:proof
+```
+
+The proof runs clang's version command, links and runs C with the pinned lld,
+builds a static AArch64 executable and runs it directly with the input qemu
+(no binfmt), then checks the C executable with the input Valgrind and
+`VALGRIND_LIB`. It fails on any missing tool, link, launch or memcheck error.
+The per-push native smoke stage includes this proof, so a pin or unpacking
+change cannot land without exercising the tools on a worker.

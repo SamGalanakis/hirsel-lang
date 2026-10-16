@@ -705,9 +705,27 @@ def generate(out_root: pathlib.Path) -> None:
     sizes = out_root / "tools/buck2/exec_sizes.bzl"
     sizes.parent.mkdir(parents=True, exist_ok=True)
     sizes.write_text(execution_sizes(), encoding="utf-8")
+    pins = out_root / "tools/native-toolchain/pins.bzl"
+    pins.parent.mkdir(parents=True, exist_ok=True)
+    pins.write_text(native_toolchain_pins(), encoding="utf-8")
 
 
-GENERATED = ["BUCK", "third-party/BUCK", "third-party/Cargo.toml", "third-party/Cargo.lock", "third-party/lib.rs", "tools/buck2/exec_sizes.bzl"]
+def native_toolchain_pins() -> str:
+    directory = ROOT / "tools/native-toolchain"
+    records = [line.split() for line in (directory / "llvm-21.lock").read_text().splitlines()
+               if line and not line.startswith("#")]
+    scalars = {row[0]: " ".join(row[1:]) for row in records if row[0] != "deb"}
+    llvm = [{"url": f"{scalars['apt_pool']}/{name}_{scalars['apt_version'].split(':', 1)[1]}_{arch}.deb",
+             "sha256": sha, "size": int(size)}
+            for key, name, arch, sha, size in (row for row in records if row[0] == "deb")]
+    runtime = json.loads((HERE / "llvm-runtime-lock.json").read_text())["debs"]
+    llvm += [{"url": row["urls"][0].replace("http:", "https:"), "sha256": row["sha256"], "size": row["size"]}
+             for row in runtime]
+    pins = json.loads((directory / "native.lock.json").read_text())
+    return HEADER + "LLVM_DEBS = " + json.dumps(llvm, indent=4) + "\nNATIVE = " + json.dumps({k:v for k,v in pins.items() if k != "schema"}, indent=4) + "\n"
+
+
+GENERATED = ["tools/native-toolchain/pins.bzl","BUCK", "third-party/BUCK", "third-party/Cargo.toml", "third-party/Cargo.lock", "third-party/lib.rs", "tools/buck2/exec_sizes.bzl"]
 
 
 def main() -> int:
