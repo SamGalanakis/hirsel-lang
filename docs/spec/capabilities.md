@@ -123,5 +123,5 @@ outside the exact package and version that own it is [PROG-2](programs.md#prog-2
 Outside the owner, authority diagnostics name the seal and its declaration, never private
 representation paths or a hidden grant to add.
 
-The standard library's [read-only directory and environment-key
-facets](std-library.md#capability-facets) are sealed capabilities.
+The planned [read-only directory and environment-key
+facets](std-library.md#capability-facets), not in `std@1`, are sealed capabilities.

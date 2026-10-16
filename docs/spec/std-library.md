@@ -297,9 +297,16 @@ downgrade fails under a `ConnectTls` rule. There is no connection reuse: each re
 its own connection and sends `connection: close`, while `keep_alive` is still reported.
 There is no whole-request deadline, since a deadline needs a clock.
 
-## Capability facets
+## Planned, not in std@1
 
-The standard library's read-only facets are sealed capabilities
+The items in this section are designed but not yet declared by `std@1`: a program that
+names them does not resolve. They are recorded here so a later `std` version can add them
+under this contract; until then only the CAP-5 corpus package fixtures
+(`packages/fixtures/seal_box@1`, `seal_box@2`) exercise the sealing they rely on.
+
+### Capability facets
+
+The planned read-only facets are sealed capabilities
 ([CAP-5](capabilities.md#cap-5-capability-sealing)).
 
 `ReadDir` is an opaque global capability with `plain`, `sendable` and `noalloc_drop`
