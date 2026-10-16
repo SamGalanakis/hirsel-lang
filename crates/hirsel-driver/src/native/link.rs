@@ -1100,7 +1100,21 @@ mod tests {
         let paths = std::env::join_paths([&first, &second]).unwrap();
         let selected = on_path_in("tool", Some(&paths));
         assert_eq!(selected, first.join("tool"));
-        let output = Command::new(selected).env_clear().output().unwrap();
+        // A sibling test forking while this test wrote the tool holds its write descriptor
+        // until that child execs, and exec fails ETXTBSY meanwhile; std and Cargo retry the
+        // same fork race. Ten attempts with a doubling backoff wait half a second in all,
+        // far longer than a fork-to-exec window.
+        let output = (0..10)
+            .find_map(
+                |attempt| match Command::new(&selected).env_clear().output() {
+                    Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                        std::thread::sleep(Duration::from_millis(1 << attempt));
+                        None
+                    }
+                    output => Some(output.unwrap()),
+                },
+            )
+            .expect("the tool stayed busy through every attempt");
         assert!(output.status.success());
         assert_eq!(output.stdout, b"chosen");
         assert_eq!(
