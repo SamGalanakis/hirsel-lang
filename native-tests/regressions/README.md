@@ -35,6 +35,13 @@ The native differential gate's checked-in state.
 - `open/*.hir`: one minimal valid program per open defect the gate holds, with
   the discrepancy in its first lines. They are not run by any gate (each is
   represented by rows in `exclusions.tsv` or a kind in `agree-known.txt`);
-  reproduce with `hirsel run --native FILE` or
-  `cargo run --release -p hirsel-conformance --bin agree -- --native full`.
+  reproduce with `hirsel run --native FILE` or the campaign below.
   Delete a file when its defect is fixed.
+
+The `agree --native full` campaign, from the repository root:
+
+```bash
+archives="$(.buck2/bin/buck2 build //:hirsel-rt-archives --show-full-simple-output)"
+agree="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-agree --show-full-simple-output)"
+HIRSEL_RUNTIME_ARCHIVES="$archives" "$agree" --native full
+```

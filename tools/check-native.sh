@@ -53,15 +53,16 @@ timeout=(--timeout 1800)
 long=(--timeout 14400)
 llvm="$PWD/tools/buck2/toolchains/llvm-files"
 libtest() { local argument; for argument in "$@"; do printf -- '--test-arg=%s\n' "$argument"; done; }
-c_harness() {
+# The C harnesses link the Buck2 runtime archives; a failed archive build ends the stage.
+with_archives() {
   local archives
   archives="$(buck2 build //:hirsel-rt-archives --show-full-simple-output)"
-  HIRSEL_RUNTIME_ARCHIVES="$archives" PATH="$llvm/bin:$PATH" LD_LIBRARY_PATH="$llvm/lib" \
-    crates/hirsel-rt/harness/run.sh
+  HIRSEL_RUNTIME_ARCHIVES="$archives" "$@"
 }
 mapfile -t runtime < <(buck2 uquery 'kind("_rust_test", attrregexfilter(name, "^hirsel-rt-", //...))')
 run_stage "runtime tests" buck2 test "${runtime[@]}" -- "${timeout[@]}"
-run_stage "runtime C harness" c_harness
+run_stage "runtime C harness" with_archives crates/hirsel-rt/harness/run.sh
+run_stage "library C probes" with_archives native-tests/library/run-c.sh
 run_stage "layout C probes" buck2 test //:hirsel-lir-test-it -- "${timeout[@]}" $(libtest layout:: --ignored)
 run_stage "LLVM toolchain pin" env LD_LIBRARY_PATH="$llvm/lib" tools/native-toolchain/check --prefix "$llvm"
 # They link AArch64 programs with the cross gcc and run them under qemu-user.

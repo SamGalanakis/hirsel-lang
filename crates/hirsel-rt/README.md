@@ -163,8 +163,8 @@ allocation registers its owner and poisons its payload through the runtime (the 
 archive keeps it null too, so every reservation is described to Valgrind);
 runtime reservations and builders derive the actual bound from the segment.
 
-Checks: `cargo test -p hirsel-rt` and `harness/run.sh` (ASan/UBSan C harness, AArch64 under
-qemu), which `tools/check-native.sh` runs. `harness/bench.sh` times the `binarytrees` C port
+Checks: the `hirsel-rt` Buck2 tests and `harness/run.sh` (ASan/UBSan C harness, AArch64 under
+qemu, on the diagnostic `//:hirsel-rt-archives` archive), which `tools/check-native.sh` runs. `harness/bench.sh` times the `binarytrees` C port
 against glibc malloc, mimalloc, jemalloc and 48- and 32-byte-node mimalloc controls (the prior header controls) in paired rounds, with a tree freed by the walk
 (`hirsel-walk`) and by the compiled glue of the node layout (`hirsel`).
 

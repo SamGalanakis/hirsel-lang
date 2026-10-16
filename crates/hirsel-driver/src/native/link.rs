@@ -163,8 +163,8 @@ fn checked(stage: StageName, command: &mut Command) -> Result<(), NativeError> {
 impl Toolchain {
     /// The toolchain of a source checkout: the pinned LLVM prefix
     /// (`LLVM_SYS_211_PREFIX`), the installed cross tools, and the runtime
-    /// archive of each listed target built with aborting panics into
-    /// `build_dir` (as `crates/hirsel-rt/harness/run.sh` builds it).
+    /// archive of each listed target: Buck2's under `HIRSEL_RUNTIME_ARCHIVES`, or
+    /// built by Cargo with aborting panics into `build_dir`.
     pub fn in_tree(build_dir: &Path, targets: &[&TargetSpec]) -> Result<Self, NativeError> {
         Self::in_tree_with_runtime(build_dir, targets, RuntimeBuild::default())
     }

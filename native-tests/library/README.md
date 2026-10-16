@@ -6,7 +6,8 @@
 
 Numeric algorithms execute in ordinary std source; the independent rational
 exact-sum vectors are consumed by `hirsel-driver/tests/stdlib_wave2_num.rs`.
-`run-c.sh` runs x86-64 ASan/UBSan and AArch64 under qemu. Integer comparator transport, including
+`run-c.sh` runs the C probes on the diagnostic Buck2 runtime archive, x86-64 under
+ASan/UBSan and AArch64 under qemu; `tools/check-native.sh` runs it. Integer comparator transport, including
 128-bit values, remains checked by compiled Order values.
 
 `hirsel-rt/tests/io.rs` performs real disposable-filesystem interactions, records completions, consumes the same tape with SimIo and converts its requests/faults into interpreter capability calls. Every completion, exact stdout (including a split UTF-8 prefix), final tree and surviving grant matches. A second interpreter pass strictly consumes its canonical capability-event tape. Other cases reject missing/extra/reordered/forged events before effects; confinement and inode replacement tests retain accepted regular-file twins.

@@ -42,7 +42,7 @@ fn aarch64(target: &TargetSpec) -> bool {
 }
 
 /// The release diagnostic `libhirsel_rt.a` for `target` with aborting panics, as
-/// `crates/hirsel-rt/harness/run.sh` links it: Buck2's prebuilt archive under
+/// `crates/hirsel-rt/harness/run.sh` links it: Buck2's archive under
 /// `HIRSEL_RUNTIME_ARCHIVES` (`<triple>/diagnostic/libhirsel_rt.a`), or otherwise built
 /// once per test process with Cargo.
 pub fn runtime_archive(target: &TargetSpec) -> PathBuf {
