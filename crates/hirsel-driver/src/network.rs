@@ -488,9 +488,18 @@ impl HostLibrary {
         } else {
             let directory = match tag(&a[4])? {
                 0 => None,
-                _ => Some(self.id(fields(&a[4])?[0]).map_err(|_| {
-                    Error::Unavailable("a test.dir Dir cannot start a host program".into())
-                })?),
+                _ => match self.id(fields(&a[4])?[0]) {
+                    Ok(directory) => Some(directory),
+                    Err(_) => {
+                        return Ok(OperationResult::returned(
+                            hirsel_interp::library::process::outcome_value(
+                                &hirsel_rt::process::ProcessOutcome::Error(
+                                    hirsel_rt::process::ProcessFailure::InvalidInput,
+                                ),
+                            ),
+                        ));
+                    }
+                },
             };
             R::ProcessRun {
                 process: self.id(&a[0])?,
@@ -1145,5 +1154,85 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             return Ok(());
         }
         self.library.drop_handle(kind, id, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_run_with_a_scripted_directory_returns_invalid_input_without_host_io() {
+        let run = hirsel_tir::RunConfiguration {
+            entry: DefPath::core("main"),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let admitted = hirsel_run_config::RunConfig::empty(
+            [0; 32],
+            "core@1/main".into(),
+            hirsel_run_config::LaunchKind::Main,
+        )
+        .validated()
+        .unwrap();
+        let mut host = HostLibrary::new(
+            &run,
+            &admitted,
+            HostIo::Replay(SimIo::new(Default::default(), vec![])),
+            Default::default(),
+        )
+        .unwrap();
+        let process = host.handle(1, "Proc");
+        // Main admission disallows Test, so create its directory at the adapter
+        // seam. It must retain Library's scripted identity beside a host Proc.
+        let test = host.library.simulation.grant_test();
+        let mut types = hirsel_types::TypeStore::default();
+        let result_type = types.push(hirsel_types::Type::unit());
+        let Some(OperationResult::Complete {
+            value: directory, ..
+        }) = host
+            .library
+            .call(
+                OperationCall {
+                    runtime: &Default::default(),
+                    path: &DefPath::core("test.dir"),
+                    generics: &[],
+                    arguments: &[test, sequence(BuiltinType::List, [])],
+                    result_type,
+                    types: &types,
+                    site: hirsel_span::Span::default(),
+                },
+                &mut OperationContext {
+                    configuration: &run,
+                    sources: &Default::default(),
+                    stdout: &mut vec![],
+                    trace: &mut vec![],
+                    trace_mode: Default::default(),
+                    anchor: None,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("test.dir must return a directory");
+        };
+        let arguments = [
+            process,
+            Value::Record {
+                definition: DefPath::core("Path"),
+                fields: vec![Some(Value::String("/bin/echo".into()))],
+            },
+            sequence(BuiltinType::List, []),
+            Value::Bytes(vec![]),
+            variant(1, vec![directory]),
+            u64_value(1024),
+        ];
+        assert_eq!(
+            host.host_process("proc.run", &arguments).unwrap(),
+            OperationResult::returned(error(variant(1, vec![])))
+        );
+        let HostIo::Replay(io) = &host.io else {
+            unreachable!()
+        };
+        io.finish().unwrap();
     }
 }
