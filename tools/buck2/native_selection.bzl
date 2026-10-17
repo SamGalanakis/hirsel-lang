@@ -25,6 +25,12 @@ _selection = rule(
 
 
 def hirsel_native_selection(name, collector, data):
+    # Fault replay must freeze the healthy cover instead of deriving it from
+    # a deliberately broken compiler. The override is still a declared input.
+    frozen = read_root_config("hirsel", "native_selection_file", "")
+    if frozen:
+        native.export_file(name = name, src = frozen, labels = ["gate"], visibility = ["PUBLIC"])
+        return
     # Gate-labelled targets are excluded from the ordinary workspace build.
     # Keep this build action available without enabling full test campaigns.
     native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:release", labels = ["gate"])

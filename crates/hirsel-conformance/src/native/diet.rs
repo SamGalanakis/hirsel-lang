@@ -351,11 +351,14 @@ pub fn replay_history(
     root: &Path,
     seed: u64,
     filters: &[String],
+    shard: Option<crate::Shard>,
 ) -> Result<serde_json::Value, String> {
     let paths = protected(root)?;
+    let historical_programs = paths.len();
     let cases: Vec<_> = paths
         .into_iter()
         .filter(|p| filters.is_empty() || filters.iter().any(|f| p.contains(f)))
+        .filter(|p| shard.is_none_or(|s| s.holds(p)))
         .map(|id| {
             Ok(native::Case {
                 source: std::fs::read_to_string(root.join(&id))
@@ -420,7 +423,7 @@ pub fn replay_history(
         );
     }
     Ok(
-        json!({"programs": results.len(), "seeds_per_program": matrix.len(), "configuration_attempts": results.iter().map(|r| r.outcomes.len()).sum::<usize>(), "lost": lost, "unreplayable": unreplayable, "classifications": classifications}),
+        json!({"historical_programs": historical_programs, "programs": results.len(), "seeds_per_program": matrix.len(), "configuration_attempts": results.iter().map(|r| r.outcomes.len()).sum::<usize>(), "lost": lost, "unreplayable": unreplayable, "classifications": classifications}),
     )
 }
 

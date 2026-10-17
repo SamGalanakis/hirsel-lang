@@ -264,6 +264,10 @@ GATE_TESTS = [
            args=["--full", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
            runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
       for index in range(1, NATIVE_FULL_SHARDS + 1)),
+    *(dict(name=f"gate-native-history-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native-select",
+           args=["--replay-history", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
+           runtime_archives=RUNTIME_ARCHIVES, **GATE)
+      for index in range(1, NATIVE_FULL_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",

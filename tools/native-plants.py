@@ -6,15 +6,20 @@ on a failed build or replay. Run after deriving selection.json, before landing.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import subprocess
+import re
+import sys
+
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 BUCK = ROOT / '.buck2/bin/buck2'
-LOCK = '/workspace/code/hirsel-briefs/locks/native-campaign.lock'
 COW = 'conformance/OWN/OWN-3-element-sibling-field-block-argument-run.hir'
 ADD = 'conformance/SEM/SEM-1-signed-add-fail.hir'
+sys.path.insert(0, str(ROOT / 'tools/buck2'))
+from gating import PASS, test_results  # noqa: E402
+from sync import NATIVE_FULL_SHARDS  # noqa: E402
 PLANTS = [
     ('aarch64-add', ADD, 'crates/hirsel-llvm/src/emit.rs',
      'scalar::binary(&self.builder, op, kind, l, r, &mut guard)',
@@ -38,94 +43,90 @@ PLANTS = [
 ]
 
 
-def build(history=False):
-    targets = ['//:hirsel-conformance-bin-native', '//:hirsel-rt-archives']
-    if history:
-        targets.append('//:hirsel-conformance-bin-native-select')
-    targets += ['//tools/buck2/native-toolchain:' + name
-                for name in ['llvm', 'arm', 'qemu', 'valgrind']]
-    command = [str(BUCK), 'build', '--target-platforms', '//tools/buck2:release',
-               *targets, '--show-full-json-output']
-    result = subprocess.run(command, cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE)
-    outputs = {target.rsplit(':', 1)[-1]: str(Path(path).resolve())
-               for target, path in json.loads(result.stdout).items()}
-    llvm, arm, qemu, valgrind = [Path(outputs[name]) for name in ['llvm', 'arm', 'qemu', 'valgrind']]
-    # Match the explicit native inputs exported by test_launcher.sh.
-    env = {
-        'LLVM_SYS_211_PREFIX': str(llvm),
-        'LD_LIBRARY_PATH': str(llvm / 'lib'),
-        'HIRSEL_AARCH64_CC': str(arm / 'bin/aarch64-none-linux-gnu-gcc'),
-        'HIRSEL_AARCH64_SYSROOT': str(arm / 'aarch64-none-linux-gnu/libc'),
-        'HIRSEL_QEMU_AARCH64': str(qemu / 'qemu-aarch64'),
-        'HIRSEL_VALGRIND': str(valgrind / 'bin/valgrind'),
-        'VALGRIND_LIB': str(valgrind / 'libexec/valgrind'),
-        'HIRSEL_VALGRIND_RUNTIME': str(valgrind / 'lib/x86_64-linux-gnu'),
-    }
-    return outputs, env
-
-
-def matrix(artifacts, tools, selection, program, output, exhaustive):
-    env = os.environ | tools | {
-        'HIRSEL_RUNTIME_ARCHIVES': str(Path(artifacts['hirsel-rt-archives']).resolve()),
-        'HIRSEL_NATIVE_SELECTION': str(selection),
-    }
-    binary = artifacts['hirsel-conformance-bin-native']
-    command = ['flock', LOCK, binary, '--full', '--root', str(ROOT), '--seed', '1',
-               '--filter', program, '--out', str(output)]
-    if exhaustive:
-        command.append('--exhaustive')
-    result = subprocess.run(command, cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
+def pool(targets, config, arguments, output):
     output.mkdir(parents=True, exist_ok=True)
-    (output / 'run.log').write_text(result.stdout)
-    table = output / 'native-matrix.tsv'
-    if not table.is_file():
-        raise RuntimeError(f'campaign failed before reporting: {output / "run.log"}')
-    rows = [line.split('\t', 3) for line in table.read_text().splitlines()
-            if line and not line.startswith('#')]
-    if not rows or any(row[1] == 'snapshot' for row in rows):
-        raise RuntimeError(f'no executable native control: {program}')
-    # Any command error without a reported discrepancy is an infrastructure
-    # failure, never evidence that the planted bug was detected.
-    failures = {(row[2], row[3]) for row in rows if row[2] != 'agree'}
-    if result.returncode and not failures:
-        raise RuntimeError(f'campaign error without findings: {output / "run.log"}')
-    return failures, len(rows)
+    events = output / 'events.pb.zst'
+    command = [str(BUCK), 'test', *config, '--event-log', str(events), *targets,
+               '--', *['--test-arg=' + arg for arg in arguments]]
+    with (output / 'run.log').open('w') as log:
+        subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+    results = test_results(events)
+    expected = {target.removeprefix('//:') for target in targets}
+    if set(results) != expected:
+        raise RuntimeError(f'pool did not run every replay target: {output / "run.log"}')
+    for name, result in results.items():
+        (output / (name + '.txt')).write_text(result['details'])
+    return results
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--selection', required=True, type=Path)
-    parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--history-only', action='store_true',
-                        help='replay the pinned historical set instead of transient faults')
-    args = parser.parse_args()
-    if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
-        parser.error('commit the lane changes before running transient mutations')
-    selection = args.selection.resolve()
-    selected = set(json.loads(selection.read_text())['selected'])
-    for _, program, *_ in PLANTS:
-        if program not in selected:
-            parser.error(f'healthy cover omitted planted-bug control: {program}')
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=True)
+def report(details, key):
+    decoder = json.JSONDecoder()
     reports = []
-    artifacts, tools = build(history=args.history_only)
+    for match in re.finditer(r'(?m)^\{', details):
+        try:
+            value, _ = decoder.raw_decode(details[match.start():])
+        except ValueError:
+            continue
+        if isinstance(value, dict) and key in value:
+            reports.append(value)
+    if len(reports) != 1:
+        raise RuntimeError(f'expected one replay report with {key}, got {len(reports)}')
+    return reports[0]
+
+
+def matrix(config, program, output, exhaustive):
+    arguments = ['--filter', program, '--seed', '1']
+    if exhaustive:
+        arguments.append('--exhaustive')
+    result = pool(['//:gate-native-full'], config, arguments, output)['gate-native-full']
+    value = report(result['details'], 'baseline_minus_native_unlisted')
+    if value['baseline_executable'] != 1 or value['stale_exclusions']:
+        raise RuntimeError(f'no clean executable control: {output}')
+    failures = set()
+    for row in value['baseline_minus_native_unlisted']:
+        configuration, reason = row.split(' under ', 1)[1].split(': ', 1)
+        if configuration == 'snapshot':
+            raise RuntimeError(f'no executable native control: {program}')
+        failures.add(('heap' if '/heap' in configuration else 'llvm', reason))
+    if (not failures and result['status'] != PASS or
+            'artifact does not replay or reduce' in result['details']):
+        raise RuntimeError(f'pool replay failed independently of findings: {output}')
+    return failures, value['configuration_attempts'], result['seconds']
+
+
+def replay(args, selected, output, config):
     if args.history_only:
-        env = os.environ | tools | {'HIRSEL_RUNTIME_ARCHIVES': artifacts['hirsel-rt-archives']}
-        command = ['flock', LOCK, artifacts['hirsel-conformance-bin-native-select'],
-                   '--root', str(ROOT), '--replay-history', '--seed', '1']
-        with (output / 'history.json').open('w') as log:
-            subprocess.run(command, cwd=ROOT, env=env, stdout=log, check=True)
-        print((output / 'history.json').read_text())
+        targets = [f'//:gate-native-history-shard-{index}' for index in range(1, NATIVE_FULL_SHARDS + 1)]
+        results = pool(targets, config, [], output)
+        reports = [report(result['details'], 'historical_programs') for result in results.values()]
+        total = reports[0]['historical_programs']
+        paths = []
+        for value in reports:
+            if value['historical_programs'] != total or value['lost']:
+                raise RuntimeError('inconsistent historical inventory or lost findings')
+            paths.extend(row['path'] for row in value['classifications'] + value['unreplayable'])
+        if len(paths) != len(set(paths)) or len(paths) != total:
+            raise RuntimeError('historical shards did not replay each protected source once')
+        if any(result['status'] != PASS for result in results.values()):
+            raise RuntimeError('historical pool replay failed')
+        value = dict(programs=total, configuration_attempts=sum(r['configuration_attempts'] for r in reports),
+                     lost=[], unreplayable=[r for v in reports for r in v['unreplayable']],
+                     classifications=[r for v in reports for r in v['classifications']],
+                     seeds_per_program=reports[0]['seeds_per_program'],
+                     pool_cpus_per_shard=1, slowest_shard_seconds=max(r['seconds'] for r in results.values()))
+        (output / 'history.json').write_text(json.dumps(value, indent=2) + '\n')
+        print(json.dumps(value, indent=2))
         return
-    for program in sorted({plant[1] for plant in PLANTS}):
-        found, count = matrix(artifacts, tools, selection, program,
-                              output / ('healthy-' + Path(program).stem), True)
+    plants = [plant for plant in PLANTS if not args.plant or plant[0] in args.plant]
+    reports = []
+    for program in sorted({plant[1] for plant in plants}):
+        if program not in selected:
+            raise RuntimeError(f'healthy cover omitted planted-bug control: {program}')
+        found, count, seconds = matrix(config, program, output / ('healthy-' + Path(program).stem), True)
         if found:
             raise RuntimeError(f'healthy control already disagrees: {program}')
-        reports.append(dict(control=program, healthy=True, configurations=count))
-    for name, program, path, original, replacement in PLANTS:
+        reports.append(dict(control=program, healthy=True, configurations=count, seconds=seconds))
+    for name, program, path, original, replacement in plants:
         source = ROOT / path
         saved = source.read_bytes()
         text = saved.decode()
@@ -133,17 +134,41 @@ def main():
             raise RuntimeError(f'{name}: mutation anchor must occur exactly once')
         try:
             source.write_text(text.replace(original, replacement))
-            artifacts, tools = build()
-            full, before = matrix(artifacts, tools, selection, program, output / name / 'exhaustive', True)
-            slim, after = matrix(artifacts, tools, selection, program, output / name / 'slim', False)
+            full, before, before_seconds = matrix(config, program, output / name / 'exhaustive', True)
+            slim, after, after_seconds = matrix(config, program, output / name / 'slim', False)
             if not full or full != slim:
                 raise RuntimeError(f'{name}: full={sorted(full)}, slim={sorted(slim)}')
             reports.append(dict(plant=name, detected=True, exhaustive=before, slim=after,
-                                findings=sorted(full)))
+                                exhaustive_seconds=before_seconds, slim_seconds=after_seconds,
+                                pool_cpus=1, findings=sorted(full)))
+            (output / 'replay.json').write_text(json.dumps(reports, indent=2) + '\n')
         finally:
             source.write_bytes(saved)
-    (output / 'replay.json').write_text(json.dumps(reports, indent=2) + '\n')
     print(json.dumps(reports, indent=2))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--selection', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--history-only', action='store_true')
+    parser.add_argument('--plant', action='append', choices=[p[0] for p in PLANTS])
+    args = parser.parse_args()
+    if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
+        parser.error('commit the lane changes before running transient mutations')
+    selection = args.selection.resolve()
+    selected = set(json.loads(selection.read_text())['selected'])
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    frozen = ROOT / '.native-diet-selection.json'
+    with frozen.open('xb') as target:
+        target.write(selection.read_bytes())
+    config = ['-c', 'hirsel.full=true', '-c', 'hirsel.tests=focus',
+              '-c', 'hirsel.native_selection_file=' + frozen.name]
+    try:
+        replay(args, selected, output, config)
+    finally:
+        frozen.unlink()
 
 
 if __name__ == '__main__':

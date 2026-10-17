@@ -6407,6 +6407,198 @@ hirsel_command_test(
 )
 
 hirsel_command_test(
+    name = "gate-native-history-shard-1",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "1/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-history-shard-2",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "2/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-history-shard-3",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "3/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-history-shard-4",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "4/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-history-shard-5",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "5/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-history-shard-6",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "6/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-history-shard-7",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "7/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-history-shard-8",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native-select",
+    args = [
+        "--replay-history",
+        "--shard",
+        "8/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
     name = "gate-native-sanitize",
     full = True,
     binary = "//:hirsel-conformance-bin-native",

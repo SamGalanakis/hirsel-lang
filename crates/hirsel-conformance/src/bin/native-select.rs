@@ -9,6 +9,7 @@ fn run() -> Result<(), String> {
     let mut replay = false;
     let mut filters = Vec::new();
     let mut seed = 1;
+    let mut shard = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--root" => root = args.next().ok_or("--root needs a path")?.into(),
@@ -16,6 +17,12 @@ fn run() -> Result<(), String> {
             "--derive" => derive = Some(args.next().ok_or("--derive needs an output path")?),
             "--replay-history" => replay = true,
             "--filter" => filters.push(args.next().ok_or("--filter needs text")?),
+            "--shard" => {
+                shard = Some(
+                    hirsel_conformance::Shard::parse(&args.next().ok_or("--shard needs I/N")?)
+                        .ok_or("invalid --shard")?,
+                );
+            }
             "--seed" => {
                 seed = args
                     .next()
@@ -31,7 +38,8 @@ fn run() -> Result<(), String> {
         }
     }
     if replay {
-        let report = hirsel_conformance::native::diet::replay_history(&root, seed, &filters)?;
+        let report =
+            hirsel_conformance::native::diet::replay_history(&root, seed, &filters, shard)?;
         println!("{report:#}");
         if !report["lost"].as_array().unwrap().is_empty() {
             return Err("slim campaign lost historical findings".into());

@@ -355,14 +355,14 @@ package and library sources, so changing them regenerates the cover.
 `native-select --replay-history` executes every reconstructable historical
 source under the exhaustive matrix once and checks that all findings survive
 every rotating slim configuration cover. It reports source snapshots it could
-not execute. `--filter TEXT` bounds this replay. Run it under the shared native
-campaign lock. `tools/native-plants.py --selection FILE --output DIR` starts
+not execute. `--filter TEXT` or `--shard I/N` bounds this replay. `tools/native-plants.py --selection FILE --output DIR` starts
 from a clean worktree and a frozen healthy selection, checks healthy controls,
 then temporarily plants real AArch64 add lowering, system-allocator dup-count
 and regions-off release omissions. It restores each source byte-for-byte and
-requires identical full/slim finding sets for each plant. The script builds the
-pinned tools and supplies the same explicit paths as the Buck2 launcher. Add
-`--history-only` to replay the protected historical set with that environment.
+requires identical full/slim finding sets for each plant. The script runs bounded Buck2 pool tests at lane priority with one CPU each,
+and freezes the healthy cover as a declared source input. Add `--history-only`
+to replay the protected historical set in pool shards, or `--plant NAME` to
+run one fault. No native campaign lock is used.
 
 Feature coverage, pairwise coverage and historical/mutation replay are
 finite evidence, not a guarantee of identical findings for arbitrary bugs.
