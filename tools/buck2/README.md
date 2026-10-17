@@ -286,7 +286,8 @@ run executes in shard 1.
 The prelude cell is the one bundled in the pinned executable, expanded to
 `.buck2/prelude` (`.buckconfig`: `[external_cells] prelude = disabled`) and
 patched by `prelude_overlay.py`. Command wrappers use `/bin/bash` from the
-pool image, so rustdoc can invoke its linker without a `PATH`. It moves helper work off
+pool image, so rustdoc can invoke its linker without a `PATH`. The LLVM tool
+wrappers also locate their tree using shell builtins. It moves helper work off
 the pool:
 
 - `failure_filter` (`rust/failure_filter.bzl`): the daemon reads a compile's

@@ -9,7 +9,8 @@ symbolic links (Buck2 hashes a link, not its target):
     bin/                 every LLVM, clang and lld executable (RUNPATH $ORIGIN/../lib),
                          and hirsel-clang, hirsel-clang++, hirsel-llvm-ar: those
                          tools with lib/ on the loader path, since libedit finds
-                         libbsd only through it
+                         libbsd only through it; wrapper lookup uses shell builtins
+                         so it also works without PATH
     lib/                 libLLVM, libclang-cpp, the clang resource directory, and
                          the libraries they load that a minimal worker image lacks
                          (llvm-runtime-lock.json)
@@ -42,7 +43,7 @@ RUNTIME_LOCK = pathlib.Path(__file__).with_name("llvm-runtime-lock.json")
 INSTALL = ROOT / "tools/native-toolchain/install"
 DEFAULT_OUTPUT = pathlib.Path(__file__).with_name("toolchains") / "llvm-files"
 RECEIPT = ".hirsel-llvm.json"
-LAYOUT = 5
+LAYOUT = 6
 REQUIRED = (
     "bin/clang",
     "bin/clang-21",
@@ -63,7 +64,7 @@ REQUIRED = (
 WRAPPER = """#!/bin/sh
 # %s from this tree, with the tree's lib/ on the loader path: libLLVM finds
 # its libraries through RUNPATH, but libedit finds libbsd only through this.
-tree="$(cd "$(dirname "$0")/.." && pwd)"
+tree="$(cd "${0%%/*}/.." && pwd)"
 LD_LIBRARY_PATH="$tree/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$tree/bin/%s" "$@"
 """
 
