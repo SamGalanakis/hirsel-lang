@@ -1849,6 +1849,24 @@ unsafe fn detach_reserved(
         }
         let elements = sequence_elements_offset(element_align);
         let count = payload(block).cast::<u64>().read();
+        if count == 0 && (*block).domain() == DOMAIN_STATIC {
+            // An empty literal has no existing elements, holders or heap credit. Size
+            // its fresh storage directly; neither an old-capacity lookup nor a copy
+            // walk is needed. Keep the same checked request and exact class capacity.
+            let extent = capacity
+                .checked_mul(element_size)
+                .and_then(|bytes| bytes.checked_add(elements))
+                .unwrap_or_else(|| fault("a sequence capacity overflows its extent"));
+            let align = element_align.max(8);
+            check_request(extent, align);
+            let (fresh, bytes) = (*ctx).heap.allocate((*block).index(), extent, align);
+            if (*ctx).heap.diagnostic {
+                ptr::write_bytes(payload(fresh), UNINIT_POISON, bytes as usize);
+            }
+            payload(fresh).cast::<u64>().write(0);
+            set_sequence_capacity(fresh, slots_in_bytes(bytes - elements, element_size));
+            return fresh;
+        }
         let used = count
             .checked_mul(element_size)
             .and_then(|bytes| bytes.checked_add(elements))
@@ -1863,18 +1881,7 @@ unsafe fn detach_reserved(
         };
         let align = element_align.max(8);
         check_request(extent, align);
-        let (detached, bytes) = if count == 0 && (*block).domain() == DOMAIN_STATIC {
-            // An empty list literal's static block has no element, holder or credit to
-            // carry: its first reserve is one fresh allocation.
-            let (fresh, bytes) = (*ctx).heap.allocate((*block).index(), extent, align);
-            if (*ctx).heap.diagnostic {
-                ptr::write_bytes(payload(fresh), UNINIT_POISON, bytes as usize);
-            }
-            payload(fresh).cast::<u64>().write(0);
-            (fresh, bytes)
-        } else {
-            crate::copy::detach_sized(ctx, block, used, extent, align)
-        };
+        let (detached, bytes) = crate::copy::detach_sized(ctx, block, used, extent, align);
         // The validated request includes the prefix, and the chosen class holds the request.
         set_sequence_capacity(detached, slots_in_bytes(bytes - elements, element_size));
         detached

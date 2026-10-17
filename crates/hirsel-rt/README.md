@@ -122,7 +122,8 @@ Invariants and boundary:
   static empty sequence of its layout) is detached once at the requested capacity: count and
   elements copied, each counted element one more holder, the caller's credit of the original
   given back. Compiled code therefore does not detach a place whose only write is a reserve,
-  so `[]` then `reserve(n)` makes one allocation. A dead block and an overflowing size are
+  so `[]` then `reserve(n)` makes one allocation. Empty static sequences size
+  that fresh allocation directly, without querying old capacity or preparing a copy walk. A dead block and an overflowing size are
   invariant faults. Fresh allocations derive exact slots from `class_capacity`, the same
   mapping the allocator and `request_capacity` use. Reserves carry the allocator's chosen
   byte capacity with the new block, avoiding both a metadata read and a second class
