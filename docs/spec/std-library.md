@@ -459,3 +459,13 @@ Connection headers. The caller owns the stream, closes it after the response, an
 sequential listen/accept loop. A server maps malformed requests to a 400 response before
 invoking application handling. No routing, concurrency or persistent-connection framework
 is implied.
+
+## Hexadecimal codec
+
+`hex.encode(data: Bytes) -> String` emits lowercase hexadecimal.
+`hex.decode(text: String) -> Result[Bytes, hex.DecodeError]` accepts both ASCII
+letter cases, with `DecodeError = InvalidDigit(u64) | OddLength`. Offsets are
+input byte offsets. Decoding checks digits in order; an invalid final byte
+precedes an odd-length error. No partial output is returned. Both functions
+are pure ordinary source and borrow their input; outputs are owned. Encoding
+checks doubled size for overflow before building.

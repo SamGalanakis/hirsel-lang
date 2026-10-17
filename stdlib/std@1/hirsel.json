@@ -242,6 +242,12 @@
       "module": [
         "bufio"
       ]
+    },
+    {
+      "path": "hex.hir",
+      "module": [
+        "hex"
+      ]
     }
   ],
   "dependencies": []

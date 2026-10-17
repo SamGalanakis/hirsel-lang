@@ -1,0 +1,60 @@
+// Go encoding/hex Encode/Decode, adapted under BSD-3-Clause; see NOTICES.
+pub type DecodeError = InvalidDigit(u64) | OddLength
+
+@noalloc
+fn value(byte: u8) -> u8 uses {} {
+  if byte >= 48 && byte <= 57 {
+    byte - 48
+  } else if byte >= 65 && byte <= 70 {
+    byte - 55
+  } else if byte >= 97 && byte <= 102 {
+    byte - 87
+  } else {
+    16
+  }
+}
+
+pub fn encode(data: Bytes) -> String uses {} {
+  let digits = core@1/string.as_bytes("0123456789abcdef")
+  let len = core@1/bytes.len(data)
+  core@1/failure.check(len <= 9223372036854775807u64, TextInvariant())
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < len {
+    let high: u64 = core@1/int.widen(data[i] / 16u8)
+    let low: u64 = core@1/int.widen(data[i] % 16u8)
+    core@1/list.push(mut out, digits[high])
+    core@1/list.push(mut out, digits[low])
+    i += 1
+  }
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+pub fn decode(text: String) -> Result[Bytes, DecodeError] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let len = core@1/bytes.len(data)
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < len {
+    let high = value(data[i])
+    if high == 16 {
+      return Error(InvalidDigit(i))
+    }
+    if len - i == 1 {
+      return Error(OddLength())
+    }
+    let low = value(data[i + 1])
+    if low == 16 {
+      return Error(InvalidDigit(i + 1))
+    }
+    core@1/list.push(mut out, high * 16u8 + low)
+    i += 2
+  }
+  Ok(core@1/bytes.from_list(take out))
+}

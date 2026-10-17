@@ -1,0 +1,72 @@
+// rule: SEM-3
+// expect: run
+// Go encoding/hex encDecTests and errTests.
+pub fn main() -> Result[(), ()] {
+  failure.check(std@1/hex.encode(bytes.from_list([])) == "", TextInvariant())
+  failure.check(std@1/hex.decode("") == Ok(bytes.from_list([])), TextInvariant())
+  failure.check(
+    std@1/hex.encode(bytes.from_list([0, 1, 2, 3, 4, 5, 6, 7])) == "0001020304050607",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.decode("0001020304050607") == Ok(
+      bytes.from_list([0, 1, 2, 3, 4, 5, 6, 7])
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.encode(bytes.from_list([8, 9, 10, 11, 12, 13, 14, 15])) == "08090a0b0c0d0e0f",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.decode("08090a0b0c0d0e0f") == Ok(
+      bytes.from_list([8, 9, 10, 11, 12, 13, 14, 15])
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.encode(bytes.from_list([240, 241, 242, 243, 244, 245, 246, 247])) == "f0f1f2f3f4f5f6f7",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.decode("f0f1f2f3f4f5f6f7") == Ok(
+      bytes.from_list([240, 241, 242, 243, 244, 245, 246, 247])
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.encode(bytes.from_list([248, 249, 250, 251, 252, 253, 254, 255])) == "f8f9fafbfcfdfeff",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.decode("f8f9fafbfcfdfeff") == Ok(
+      bytes.from_list([248, 249, 250, 251, 252, 253, 254, 255])
+    ),
+    TextInvariant()
+  )
+  failure.check(std@1/hex.encode(bytes.from_list([103])) == "67", TextInvariant())
+  failure.check(std@1/hex.decode("67") == Ok(bytes.from_list([103])), TextInvariant())
+  failure.check(
+    std@1/hex.encode(bytes.from_list([227, 161])) == "e3a1",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.decode("e3a1") == Ok(bytes.from_list([227, 161])),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/hex.decode("F8F9FAFBFCFDFEFF") == Ok(
+      bytes.from_list([248u8, 249u8, 250u8, 251u8, 252u8, 253u8, 254u8, 255u8])
+    ),
+    TextInvariant()
+  )
+  failure.check(std@1/hex.decode("0") == Error(OddLength()), TextInvariant())
+  failure.check(std@1/hex.decode("zd4aa") == Error(InvalidDigit(0)), TextInvariant())
+  failure.check(std@1/hex.decode("d4aaz") == Error(InvalidDigit(4)), TextInvariant())
+  failure.check(std@1/hex.decode("30313") == Error(OddLength()), TextInvariant())
+  failure.check(std@1/hex.decode("0g") == Error(InvalidDigit(1)), TextInvariant())
+  failure.check(std@1/hex.decode("00gg") == Error(InvalidDigit(2)), TextInvariant())
+  failure.check(std@1/hex.decode("ffeed") == Error(OddLength()), TextInvariant())
+  failure.check(std@1/hex.decode("é") == Error(InvalidDigit(0)), TextInvariant())
+  Ok(())
+}
