@@ -1,16 +1,16 @@
 // Adapted unit composition from Rust library/core/src/time.rs Duration::new/as_nanos.
 // Reference commit f6c1107f8be13e48465e12c0fd26e6a39fe18e4f; copyright Rust Project Contributors (third-party/NOTICES.md).
 @noalloc
-pub fn from_parts(seconds: i64, nanoseconds: i32) -> std@1/time.Duration uses {} {
+pub fn from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {} {
   let wide_seconds: i128 = core@1/int.widen(seconds)
   let wide_nanos: i128 = core@1/int.widen(nanoseconds)
-  std@1/time.Duration(nanoseconds: wide_seconds * 1000000000 + wide_nanos)
+  time.Duration(nanoseconds: wide_seconds * 1000000000 + wide_nanos)
 }
 
 // Contract-specific parser: neither referenced Zig nor Rust std has signed seconds-text parsing.
 // Accumulate unsigned magnitude with a prechecked bound; MIN is one larger.
 @noalloc
-pub fn parse(text: String) -> Result[std@1/time.Duration, std@1/scalar.ParseError] uses {} {
+pub fn parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {} {
   let bytes = core@1/string.as_bytes(text)
   let len = core@1/bytes.len(bytes)
   if len == 0 {
@@ -77,12 +77,12 @@ pub fn parse(text: String) -> Result[std@1/time.Duration, std@1/scalar.ParseErro
     magnitude
   }
   let nanos: i128 = core@1/int.truncate(raw)
-  Ok(std@1/time.Duration(nanoseconds: nanos))
+  Ok(time.Duration(nanoseconds: nanos))
 }
 
 // Adapted decimal fraction emission from Rust library/core/src/time.rs Debug::fmt_decimal.
 // Reference commit f6c1107f8be13e48465e12c0fd26e6a39fe18e4f; fixed seconds unit and signed i128 replace unsigned auto units.
-pub fn format(value: std@1/time.Duration) -> String uses {} {
+pub fn format(value: time.Duration) -> String uses {} {
   let raw: u128 = core@1/int.truncate(value.nanoseconds)
   let negative = value.nanoseconds < 0
   let magnitude = if negative {
@@ -94,7 +94,7 @@ pub fn format(value: std@1/time.Duration) -> String uses {} {
   if negative {
     core@1/list.push(mut builder, 45)
   }
-  std@1/u128.format_into(magnitude / 1000000000, mut builder)
+  u128.format_into(magnitude / 1000000000, mut builder)
   let mut fraction = magnitude % 1000000000
   if fraction != 0 {
     core@1/list.push(mut builder, 46)
@@ -107,7 +107,7 @@ pub fn format(value: std@1/time.Duration) -> String uses {} {
     }
   }
   core@1/list.push(mut builder, 115)
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(text) => take text,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())

@@ -1,7 +1,7 @@
 // rule: SEM-5
 // expect: run
 // stdout: ok
-// "std@1/map.same_entries compares as sets".
+// "map.same_entries compares as sets".
 fn output_error[E](take e: E) -> () {}
 
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
@@ -13,7 +13,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   map.insert(mut n, 2, 20)
   out.print(
     io.stdout(rt) ? grant_error,
-    if std@1/map.same_entries(m, n) {
+    if map.same_entries(m, n) {
       "ok\n"
     } else {
       "bad\n"

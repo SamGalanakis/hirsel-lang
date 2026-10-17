@@ -3,11 +3,11 @@
 pub fn main(t: Test) -> Result[(), ()] {
   core@1/test.check(
     t,
-    std@1/i128.to_string(-170141183460469231731687303715884105728i128) == "-170141183460469231731687303715884105728"
+    i128.to_string(-170141183460469231731687303715884105728i128) == "-170141183460469231731687303715884105728"
   )
   core@1/test.check(
     t,
-    std@1/i128.parse("-170141183460469231731687303715884105728") == Ok(
+    i128.parse("-170141183460469231731687303715884105728") == Ok(
       -170141183460469231731687303715884105728i128
     )
   )
@@ -55,9 +55,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   ]
   core@1/test.check(
     t,
-    std@1/i128.format(-170141183460469231731687303715884105728i128, mut buffer1) == Ok(
-      40u64
-    )
+    i128.format(-170141183460469231731687303715884105728i128, mut buffer1) == Ok(40u64)
   )
   core@1/test.check(
     t,
@@ -106,11 +104,11 @@ pub fn main(t: Test) -> Result[(), ()] {
   )
   core@1/test.check(
     t,
-    std@1/i128.to_string(170141183460469231731687303715884105727i128) == "170141183460469231731687303715884105727"
+    i128.to_string(170141183460469231731687303715884105727i128) == "170141183460469231731687303715884105727"
   )
   core@1/test.check(
     t,
-    std@1/i128.parse("170141183460469231731687303715884105727") == Ok(
+    i128.parse("170141183460469231731687303715884105727") == Ok(
       170141183460469231731687303715884105727i128
     )
   )
@@ -157,9 +155,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   ]
   core@1/test.check(
     t,
-    std@1/i128.format(170141183460469231731687303715884105727i128, mut buffer2) == Ok(
-      39u64
-    )
+    i128.format(170141183460469231731687303715884105727i128, mut buffer2) == Ok(39u64)
   )
   core@1/test.check(
     t,
@@ -205,10 +201,10 @@ pub fn main(t: Test) -> Result[(), ()] {
       55u8
     ]
   )
-  core@1/test.check(t, std@1/i128.to_string(0i128) == "0")
-  core@1/test.check(t, std@1/i128.parse("0") == Ok(0i128))
+  core@1/test.check(t, i128.to_string(0i128) == "0")
+  core@1/test.check(t, i128.parse("0") == Ok(0i128))
   let mut buffer3: Inline[u8, 1] = [99u8]
-  core@1/test.check(t, std@1/i128.format(0i128, mut buffer3) == Ok(1u64))
+  core@1/test.check(t, i128.format(0i128, mut buffer3) == Ok(1u64))
   core@1/test.check(t, buffer3 == [48u8])
   Ok(())
 }

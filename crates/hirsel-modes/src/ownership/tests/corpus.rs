@@ -40,11 +40,14 @@ pub(super) fn run(
             map.location(d.primary).unwrap().line
         ));
     }
-    let (index, ds) = ManifestIndex::new(ManifestFixture::from_files(
-        support::context().package,
-        [&file],
-        ast::ContentHash::default(),
-    ));
+    let (index, ds) = ManifestIndex::new(
+        ManifestFixture::from_files(
+            support::context().package,
+            [&file],
+            ast::ContentHash::default(),
+        )
+        .with_dependency_signatures(base.signatures.values()),
+    );
     if let Some(d) = ds.first() {
         return Err(format!("dependency-owned resolver index: {}", d.rule));
     }

@@ -2,5 +2,5 @@
 // expect: accept
 @noalloc
 fn probe[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool uses {} {
-  std@1/map.same_entries(a, b)
+  map.same_entries(a, b)
 }

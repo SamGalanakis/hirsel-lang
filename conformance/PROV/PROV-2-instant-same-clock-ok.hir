@@ -1,6 +1,6 @@
 // rule: PROV-2
 // expect: accept
-fn example(c: MonotonicClock) -> Result[std@1/time.Duration, ClockError] {
+fn example(c: MonotonicClock) -> Result[time.Duration, ClockError] {
   let start = clock.monotonic(c)?
-  std@1/time.elapsed(c, start)
+  time.elapsed(c, start)
 }

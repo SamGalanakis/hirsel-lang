@@ -6,7 +6,7 @@
 // ff47b3187adddb14813e6fb2cfc1a079f58cfddc. MIT; third-party/NOTICES.md.
 fn verify(text: String, expected: Array[String]) -> bool {
   let mut i: u64 = 0
-  for piece in std@1/unicode.graphemes(text) {
+  for piece in unicode.graphemes(text) {
     if i >= array.len(expected) {
       return false
     }

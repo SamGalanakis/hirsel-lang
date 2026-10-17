@@ -1,7 +1,7 @@
 // rule: OWN-2
 // expect: accept
 fn probe(take s: String) -> () {
-  std@1/string.starts_with(take s, "é")
+  string.starts_with(take s, "é")
   string.byte_len("é")
   ()
 }

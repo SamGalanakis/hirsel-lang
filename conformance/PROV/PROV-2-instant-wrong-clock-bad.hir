@@ -1,9 +1,9 @@
 // rule: PROV-2
 // expect: reject PROV-1 at line 8
 fn example(c: MonotonicClock, other: MonotonicClock) -> Result[
-  std@1/time.Duration,
+  time.Duration,
   ClockError
 ] {
   let start = clock.monotonic(c)?
-  std@1/time.elapsed(other, start)
+  time.elapsed(other, start)
 }

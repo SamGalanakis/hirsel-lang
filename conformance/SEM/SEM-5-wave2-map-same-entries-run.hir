@@ -11,8 +11,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     map.insert(mut c, i, i + 2)
     map.insert(mut missing, i + 1, i + 1)
   }
-  failure.check(a != b && std@1/map.same_entries(a, b), TextInvariant())
-  failure.check(!std@1/map.same_entries(a, c), TextInvariant())
-  failure.check(!std@1/map.same_entries(a, missing), TextInvariant())
+  failure.check(a != b && map.same_entries(a, b), TextInvariant())
+  failure.check(!map.same_entries(a, c), TextInvariant())
+  failure.check(!map.same_entries(a, missing), TextInvariant())
   Ok(())
 }

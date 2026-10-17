@@ -7,5 +7,5 @@ fn callback(a: u64) -> bool uses {} {
 
 fn example() -> () {
   let mut xs: unique List[u64] = unique [1]
-  std@1/list.find(xs, callback);
+  list.find(xs, callback);
 }

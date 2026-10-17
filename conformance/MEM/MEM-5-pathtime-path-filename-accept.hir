@@ -2,6 +2,6 @@
 // expect: accept
 // Allocating source call permitted.
 fn example(p: Path) {
-  std@1/path.filename(p)
+  path.filename(p)
   ()
 }

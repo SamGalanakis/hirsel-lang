@@ -3,13 +3,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   // Eliminate duplicate comparisons before sorting large repeated inputs.
   let mut seen: Set[String] = set.empty()
   let mut lines: List[String] = []
-  for line in std@1/string.split(take text, "\n") {
+  for line in string.split(take text, "\n") {
     if !set.contains(seen, line) {
       set.insert(mut seen, copy line)
       list.push(mut lines, copy line)
     }
   }
   let mut ordered = unique take lines
-  std@1/list.sort(mut ordered, std@1/string.compare)
-  common.print(rt, std@1/string.concat(std@1/string.join(ordered, "\n"), "\n"))
+  list.sort(mut ordered, string.compare)
+  common.print(rt, string.concat(string.join(ordered, "\n"), "\n"))
 }

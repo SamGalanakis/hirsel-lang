@@ -1,5 +1,5 @@
 // rule: MEM-5
 // expect: accept
 fn normalized(s: String) -> String uses {} {
-  std@1/unicode.normalize_nfc(s)
+  unicode.normalize_nfc(s)
 }

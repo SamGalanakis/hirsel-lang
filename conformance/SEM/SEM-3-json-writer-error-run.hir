@@ -1,26 +1,26 @@
 // rule: SEM-3
 // expect: run
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
-  let value: std@1/json.Value = Array([box Text("owned"), box Number("01")])
+  let value: json.Value = Array([box Text("owned"), box Number("01")])
   let mut builder: List[u8] = [112, 114, 101, 58]
   let alias = copy builder
-  match std@1/json.write(value, mut builder) {
+  match json.write(value, mut builder) {
     Error(InvalidNumber()) => (),
     _ => failure.check(false, TextInvariant()),
   }
   failure.check(alias == [112, 114, 101, 58], TextInvariant())
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(s) => failure.check(s == "pre:[\"owned\",", TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/json.stringify(value) {
+  match json.stringify(value) {
     Error(InvalidNumber()) => (),
     _ => failure.check(false, TextInvariant()),
   }
   let inputs: List[String] = ["", "01", "+1", "NaN", "inf", "1 ", "1.", "1e+"]
   for text in inputs {
-    let invalid: std@1/json.Value = Number(copy text)
-    match std@1/json.stringify(invalid) {
+    let invalid: json.Value = Number(copy text)
+    match json.stringify(invalid) {
       Error(InvalidNumber()) => (),
       _ => failure.check(false, TextInvariant()),
     }

@@ -2,7 +2,7 @@
 @noalloc
 pub fn format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[
   u64,
-  std@1/scalar.FormatError
+  scalar.FormatError
 ] uses {} {
   let bits: u64 = core@1/int.widen(core@1/f32.bits(value))
   let negative = bits & 2147483648u64 != 0
@@ -16,10 +16,10 @@ pub fn format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[
     } else {
       "inf"
     }
-    return std@1/internal.float_decimal.special(spelling, mut buffer)
+    return internal.float_decimal.special(spelling, mut buffer)
   }
   if raw_exponent == 0 && fraction == 0 {
-    return std@1/internal.float_decimal.special(
+    return internal.float_decimal.special(
       if negative {
         "-0"
       } else {
@@ -39,12 +39,12 @@ pub fn format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[
   } else {
     biased
   } - 150
-  let (digits, scale) = std@1/internal.float_decimal.shortest(
+  let (digits, scale) = internal.float_decimal.shortest(
     mantissa,
     exponent,
     fraction == 0 && raw_exponent > 1
   )
-  std@1/internal.float_decimal.render(digits, scale, negative, mut buffer)
+  internal.float_decimal.render(digits, scale, negative, mut buffer)
 }
 
 // Appends the shortest round-trip text of `value` to `out`; to_string is that
@@ -99,17 +99,17 @@ pub fn format_into(value: f32, mut out: List[u8]) -> () uses {} {
       0
     },
   }
-  std@1/internal.decimal.append_prefix(mut out, buffer, count)
+  internal.decimal.append_prefix(mut out, buffer, count)
 }
 
 pub fn to_string(value: f32) -> String uses {} {
   let mut out: List[u8] = []
   format_into(value, mut out)
-  std@1/internal.decimal.finish(take out)
+  internal.decimal.finish(take out)
 }
 
 @noalloc
-pub fn parse(text: String) -> Result[f32, std@1/scalar.ParseError] uses {} {
+pub fn parse(text: String) -> Result[f32, scalar.ParseError] uses {} {
   if text == "NaN" {
     return Ok(core@1/f32.from_bits(2143289344u32))
   }
@@ -119,7 +119,7 @@ pub fn parse(text: String) -> Result[f32, std@1/scalar.ParseError] uses {} {
   if text == "-inf" {
     return Ok(core@1/f32.from_bits(4286578688u32))
   }
-  match std@1/internal.float_decimal.parse(text, 23, 127) {
+  match internal.float_decimal.parse(text, 23, 127) {
     Error(error) => Error(error),
     Ok(bits) => {
       let word: u32 = core@1/int.narrow(bits)
@@ -155,7 +155,7 @@ pub fn sum(xs: Array[f32]) -> f32 uses {} {
 }
 
 pub fn sum_exact(xs: Array[f32]) -> f32 uses {} {
-  let mut accumulator = std@1/internal.superacc.acc_zero()
+  let mut accumulator = internal.superacc.acc_zero()
   let mut positive_infinity: bool = false
   let mut negative_infinity: bool = false
   let mut all_negative_zero: bool = core@1/array.len(xs) != 0
@@ -186,7 +186,7 @@ pub fn sum_exact(xs: Array[f32]) -> f32 uses {} {
       } else {
         raw_exponent - 1
       }
-      std@1/internal.superacc.acc_add(mut accumulator, mantissa, shift, negative)
+      internal.superacc.acc_add(mut accumulator, mantissa, shift, negative)
     }
     i += 1
   }
@@ -199,7 +199,7 @@ pub fn sum_exact(xs: Array[f32]) -> f32 uses {} {
   if negative_infinity {
     return core@1/f32.from_bits(4286578688u32)
   }
-  let bits = std@1/internal.superacc.acc_finish(
+  let bits = internal.superacc.acc_finish(
     accumulator,
     23,
     255,

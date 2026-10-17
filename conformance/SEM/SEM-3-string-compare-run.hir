@@ -3,20 +3,20 @@
 // Rust str test_le vectors and slice order; byte-lexicographic with a prefix first.
 fn sorted(take xs: List[String]) -> List[String] {
   let mut ordered = unique take xs
-  std@1/list.sort(mut ordered, std@1/string.compare)
+  list.sort(mut ordered, string.compare)
   take ordered
 }
 
 pub fn main() -> Result[(), ()] {
-  failure.check(std@1/string.compare("", "") == 0, TextInvariant())
-  failure.check(std@1/string.compare("", "foo") == -1, TextInvariant())
-  failure.check(std@1/string.compare("foo", "foo") == 0, TextInvariant())
-  failure.check(std@1/string.compare("foo", "bar") == 1, TextInvariant())
-  failure.check(std@1/string.compare("ab", "b") == -1, TextInvariant())
-  failure.check(std@1/string.compare("abc", "ab") == 1, TextInvariant())
+  failure.check(string.compare("", "") == 0, TextInvariant())
+  failure.check(string.compare("", "foo") == -1, TextInvariant())
+  failure.check(string.compare("foo", "foo") == 0, TextInvariant())
+  failure.check(string.compare("foo", "bar") == 1, TextInvariant())
+  failure.check(string.compare("ab", "b") == -1, TextInvariant())
+  failure.check(string.compare("abc", "ab") == 1, TextInvariant())
   // Byte order, not collation: U+00E9 encodes as C3 A9, after every ASCII byte.
-  failure.check(std@1/string.compare("z", "é") == -1, TextInvariant())
-  failure.check(std@1/string.compare("Z", "a") == -1, TextInvariant())
+  failure.check(string.compare("z", "é") == -1, TextInvariant())
+  failure.check(string.compare("Z", "a") == -1, TextInvariant())
   let input: List[String] = ["pear", "", "Apple", "é", "apple", "pear"]
   let expected: List[String] = ["", "Apple", "apple", "pear", "pear", "é"]
   failure.check(sorted(take input) == expected, TextInvariant())

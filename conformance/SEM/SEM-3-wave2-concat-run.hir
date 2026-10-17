@@ -1,7 +1,7 @@
 // rule: SEM-3
 // expect: run
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
-  failure.check(std@1/string.concat("é", "😀") == "é😀", TextInvariant())
-  failure.check(std@1/string.concat("A\0", "B") == "A\0B", TextInvariant())
+  failure.check(string.concat("é", "😀") == "é😀", TextInvariant())
+  failure.check(string.concat("A\0", "B") == "A\0B", TextInvariant())
   Ok(())
 }

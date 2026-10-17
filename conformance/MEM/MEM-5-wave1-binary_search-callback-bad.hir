@@ -6,5 +6,5 @@ fn callback(a: u64, b: u64) -> i32 uses {} {
 
 fn example() -> () {
   let mut xs: unique List[u64] = unique [1]
-  std@1/list.binary_search(xs, 1, callback);
+  list.binary_search(xs, 1, callback);
 }

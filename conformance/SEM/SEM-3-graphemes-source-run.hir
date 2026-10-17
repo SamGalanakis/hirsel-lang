@@ -4,7 +4,7 @@
 @noalloc
 fn count(s: String) -> u64 uses {} {
   let mut n: u64 = 0
-  for piece in std@1/unicode.graphemes(s) {
+  for piece in unicode.graphemes(s) {
     n += 1
   }
   n
@@ -12,7 +12,7 @@ fn count(s: String) -> u64 uses {} {
 
 @noalloc
 fn first(s: String) -> String in s uses {} {
-  for piece in std@1/unicode.graphemes(s) {
+  for piece in unicode.graphemes(s) {
     return copy piece
   }
   copy s
@@ -22,7 +22,7 @@ fn first(s: String) -> String in s uses {} {
 fn boundaries(s: String) -> bool uses {} {
   let mut n: u64 = 0
   let mut size: u64 = 0
-  for piece in std@1/unicode.graphemes(s) {
+  for piece in unicode.graphemes(s) {
     size += string.byte_len(piece)
     n += 1
     continue

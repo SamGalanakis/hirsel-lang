@@ -156,7 +156,7 @@ pub fn trim(s: String) -> String in s uses {} {
 
 // Builders below only append valid UTF-8 or change one ASCII byte to another.
 fn finish_valid(take builder: List[u8]) -> String uses {} {
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(text) => take text,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
@@ -193,7 +193,7 @@ pub fn ascii_upper(s: String) -> String uses {} {
 }
 
 // Rust str Ord: byte-lexicographic, a proper prefix first, as `<` orders
-// String. Returns -1, 0 or 1, the comparator shape std@1/list.sort takes.
+// String. Returns -1, 0 or 1, the comparator shape list.sort takes.
 @noalloc
 pub fn compare(a: String, b: String) -> i32 uses {} {
   if a < b {
@@ -207,8 +207,8 @@ pub fn compare(a: String, b: String) -> i32 uses {} {
 
 pub fn concat(a: String, b: String) -> String uses {} {
   let mut builder: List[u8] = []
-  std@1/text.append(mut builder, a)
-  std@1/text.append(mut builder, b)
+  text.append(mut builder, a)
+  text.append(mut builder, b)
   finish_valid(take builder)
 }
 
@@ -217,9 +217,9 @@ pub fn join(parts: List[String], separator: String) -> String uses {} {
   let mut i: u64 = 0
   while i < core@1/list.len(parts) {
     if i != 0 {
-      std@1/text.append(mut builder, separator)
+      text.append(mut builder, separator)
     }
-    std@1/text.append(mut builder, parts[i])
+    text.append(mut builder, parts[i])
     i += 1
   }
   finish_valid(take builder)

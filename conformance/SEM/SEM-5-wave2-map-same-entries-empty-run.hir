@@ -5,8 +5,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   let b: Map[u64, u64] = map.empty()
   let mut c: Map[u64, u64] = map.empty()
   map.insert(mut c, 0, 0)
-  failure.check(std@1/map.same_entries(a, b), TextInvariant())
-  failure.check(!std@1/map.same_entries(a, c), TextInvariant())
-  failure.check(!std@1/map.same_entries(c, a), TextInvariant())
+  failure.check(map.same_entries(a, b), TextInvariant())
+  failure.check(!map.same_entries(a, c), TextInvariant())
+  failure.check(!map.same_entries(c, a), TextInvariant())
   Ok(())
 }

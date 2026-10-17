@@ -2,7 +2,7 @@
 @noalloc
 pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u8, n]) -> Result[
   u64,
-  std@1/scalar.FormatError
+  scalar.FormatError
 ] uses {} {
   let mut count: u64 = 1
   let mut remaining = value
@@ -39,7 +39,7 @@ pub fn read_unsigned(
   signed: bool,
   positive_limit: u128,
   negative_limit: u128
-) -> Result[(u128, bool), std@1/scalar.ParseError] uses {} {
+) -> Result[(u128, bool), scalar.ParseError] uses {} {
   let bytes = core@1/string.as_bytes(text)
   let length = core@1/bytes.len(bytes)
   if length == 0 {

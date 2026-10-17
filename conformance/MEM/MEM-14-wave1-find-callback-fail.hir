@@ -8,6 +8,6 @@ fn callback(x: u64) -> bool uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   let mut xs: unique List[u64] = [1, 2, 3]
-  std@1/list.find(xs, callback)
+  list.find(xs, callback)
   Ok(())
 }

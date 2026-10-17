@@ -41,24 +41,24 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     )
   ]
   for (input, expected) in cases {
-    let value = match std@1/json.parse(copy input) {
+    let value = match json.parse(copy input) {
       Ok(v) => v,
       Error(_) => {
         failure.check(false, TextInvariant())
-        let empty: std@1/json.Value = Null()
+        let empty: json.Value = Null()
         empty
       },
     }
-    match std@1/json.stringify(value) {
+    match json.stringify(value) {
       Ok(s) => failure.check(s == expected, TextInvariant()),
       Error(_) => failure.check(false, TextInvariant()),
     }
     let mut builder: List[u8] = []
-    match std@1/json.write(value, mut builder) {
+    match json.write(value, mut builder) {
       Ok(_) => (),
       Error(_) => failure.check(false, TextInvariant()),
     }
-    match std@1/text.finish(take builder) {
+    match text.finish(take builder) {
       Ok(s) => failure.check(s == expected, TextInvariant()),
       Error(_) => failure.check(false, TextInvariant()),
     }

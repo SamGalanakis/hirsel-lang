@@ -2,18 +2,18 @@
 // expect: run
 // stdout: nfc
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
-  failure.check(std@1/unicode.normalize_nfc("") == "", TextInvariant())
-  failure.check(std@1/unicode.normalize_nfc("ASCII") == "ASCII", TextInvariant())
+  failure.check(unicode.normalize_nfc("") == "", TextInvariant())
+  failure.check(unicode.normalize_nfc("ASCII") == "ASCII", TextInvariant())
   failure.check(
-    std@1/unicode.normalize_nfc("\0\u{10ffff}") == "\0\u{10ffff}",
+    unicode.normalize_nfc("\0\u{10ffff}") == "\0\u{10ffff}",
     TextInvariant()
   )
   failure.check(
-    std@1/unicode.normalize_nfc("\u{ac00}\u{d7a3}") == "\u{ac00}\u{d7a3}",
+    unicode.normalize_nfc("\u{ac00}\u{d7a3}") == "\u{ac00}\u{d7a3}",
     TextInvariant()
   )
   failure.check(
-    std@1/unicode.normalize_nfc("\u{11a7}\u{11c3}") == "\u{11a7}\u{11c3}",
+    unicode.normalize_nfc("\u{11a7}\u{11c3}") == "\u{11a7}\u{11c3}",
     TextInvariant()
   )
   out.print(io.stdout(rt) ? Grant, "nfc\n") ? Output

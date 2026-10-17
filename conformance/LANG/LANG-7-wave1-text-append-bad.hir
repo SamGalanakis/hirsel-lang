@@ -1,5 +1,5 @@
 // rule: LANG-7
 // expect: reject LANG-7 at line 4
 fn example(mut builder: Array[u8], text: String) -> () {
-  std@1/text.append(mut builder, text)
+  text.append(mut builder, text)
 }

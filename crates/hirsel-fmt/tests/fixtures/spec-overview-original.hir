@@ -3,7 +3,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
   let root = arg.path(args, 0) ? Usage
   let dir = io.dir(rt, root) ? Files
   let n = normalize_tree(dir) ? Files
-  out.print(io.stdout(rt), std@1/u64.to_string(n)) ? Output
+  out.print(io.stdout(rt), u64.to_string(n)) ? Output
   Ok(())
 }
 

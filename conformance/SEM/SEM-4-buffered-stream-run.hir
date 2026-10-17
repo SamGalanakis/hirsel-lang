@@ -1,6 +1,6 @@
 // rule: SEM-4
 // expect: run
-pub type ReadFailure = Network(NetError) | Buffered(std@1/bufio.ReadError[NetError])
+pub type ReadFailure = Network(NetError) | Buffered(bufio.ReadError[NetError])
 
 pub fn main(t: Test) -> Result[(), ReadFailure] {
   let n = test.net(
@@ -16,19 +16,13 @@ pub fn main(t: Test) -> Result[(), ReadFailure] {
     ]
   )
   let mut stream = net.connect(n, "example.com", 80u16, Unbounded()) ? Network
-  let mut r = std@1/bufio.new(2)
-  test.check(
-    t,
-    std@1/bufio.stream_read_line(n, mut stream, mut r, 10) ? Buffered == "a\n"
-  )
-  test.check(
-    t,
-    std@1/bufio.stream_read_line(n, mut stream, mut r, 10) ? Buffered == "bc\n"
-  )
+  let mut r = bufio.new(2)
+  test.check(t, bufio.stream_read_line(n, mut stream, mut r, 10) ? Buffered == "a\n")
+  test.check(t, bufio.stream_read_line(n, mut stream, mut r, 10) ? Buffered == "bc\n")
   let mut out: List[u8] = [0]
-  std@1/bufio.stream_read_exact(n, mut stream, mut r, mut out, 2) ? Buffered
+  bufio.stream_read_exact(n, mut stream, mut r, mut out, 2) ? Buffered
   test.check(t, out == [0, 120, 121])
-  test.check(t, std@1/bufio.stream_read_line(n, mut stream, mut r, 10) ? Buffered == "")
+  test.check(t, bufio.stream_read_line(n, mut stream, mut r, 10) ? Buffered == "")
   net.close(n, take stream)
   Ok(())
 }

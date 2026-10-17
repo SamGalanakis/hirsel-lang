@@ -3,5 +3,5 @@
 fn example(c: MonotonicClock) -> Result[i32, ClockError] {
   let other = copy c
   let start = clock.monotonic(c)?
-  Ok(std@1/time.compare(other, start, start))
+  Ok(time.compare(other, start, start))
 }

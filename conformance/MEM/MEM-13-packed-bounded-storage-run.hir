@@ -15,19 +15,19 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   ]
   let (small, a) = xs[0]
   let (large, b) = xs[1]
-  let _ = out.print(out, std@1/u64.to_string(small.Small.value))
+  let _ = out.print(out, u64.to_string(small.Small.value))
   let _ = out.print(out, "\n")
-  let _ = out.print(out, std@1/u64.to_string(large.Large.extra))
+  let _ = out.print(out, u64.to_string(large.Large.extra))
   let _ = out.print(out, "\n")
-  let _ = out.print(out, std@1/u64.to_string(a))
+  let _ = out.print(out, u64.to_string(a))
   let _ = out.print(out, "\n")
-  let _ = out.print(out, std@1/u64.to_string(b))
+  let _ = out.print(out, u64.to_string(b))
   let _ = out.print(out, "\n")
   let f = fn() {
     copy small
   }
   let captured = f()
-  let _ = out.print(out, std@1/u64.to_string(captured.Small.value))
+  let _ = out.print(out, u64.to_string(captured.Small.value))
   let _ = out.print(out, "\n")
   Ok(())
 }

@@ -15,9 +15,9 @@ pub type Header {
 
 pub type Config {
   max_redirects: u32,
-  connect_timeout: Option[std@1/time.Duration],
-  read_timeout: Option[std@1/time.Duration],
-  write_timeout: Option[std@1/time.Duration],
+  connect_timeout: Option[time.Duration],
+  read_timeout: Option[time.Duration],
+  write_timeout: Option[time.Duration],
   max_head_bytes: u64,
   max_headers: u64,
   user_agent: String,
@@ -44,9 +44,7 @@ pub type Response {
   url: String,
 }
 
-pub type HttpError = Net(NetError) | Url(std@1/uri.UriError) | Malformed(
-  std@1/http_wire.HeadError
-) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
+pub type HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
   u16
 ) | OutOfOrder
 
@@ -58,13 +56,13 @@ pub opaque resource type Request: noalloc_drop uses {Net} {
   stream: Stream of .net,
   config: Config,
   method: Method,
-  uri: std@1/uri.Uri,
+  uri: uri.Uri,
   url: String,
   headers: List[Header],
   redirects: u32,
   state: u8,
   sent_body: bool,
-  input: std@1/bufio.Reader,
+  input: bufio.Reader,
   body_kind: u8,
   remaining: u64,
   chunk_suffix: bool,
@@ -130,7 +128,7 @@ fn http_text(buf: Bytes, start: u64, end: u64) -> Result[String, HttpError] uses
     core@1/list.push(mut out, buf[i])
     i += 1
   }
-  match std@1/text.finish(take out) {
+  match text.finish(take out) {
     Ok(s) => Ok(take s),
     Error(_) => Error(Malformed(HeaderValue())),
   }
@@ -140,7 +138,7 @@ fn http_net_error(error: NetError) -> HttpError uses {} {
   Net(unique error)
 }
 
-fn http_timeout(value: Option[std@1/time.Duration]) -> Result[NetTimeout, HttpError] uses {} {
+fn http_timeout(value: Option[time.Duration]) -> Result[NetTimeout, HttpError] uses {} {
   match value {
     None() => Ok(Unbounded()),
     Some(d) => {
@@ -153,17 +151,17 @@ fn http_timeout(value: Option[std@1/time.Duration]) -> Result[NetTimeout, HttpEr
 }
 
 // Zig HostName.fromUri: decode, remove IPv6 brackets and canonicalize for Net.
-fn http_host(parsed_uri: std@1/uri.Uri) -> Result[String, HttpError] uses {} {
+fn http_host(parsed_uri: uri.Uri) -> Result[String, HttpError] uses {} {
   let component = match parsed_uri.host {
     Some(c) => c,
     None() => return Error(Url(InvalidHostName())),
   }
-  let raw = std@1/uri.component_raw(component)
+  let raw = uri.component_raw(component)
   let len = core@1/bytes.len(raw)
   if len >= 2 && raw[0] == 91 && raw[len - 1] == 93 {
     let name = http_text(raw, 1, len - 1)?
-    return match std@1/net.parse_ip(name) {
-      Ok(ip) => Ok(std@1/net.format_ip(ip)),
+    return match net.parse_ip(name) {
+      Ok(ip) => Ok(net.format_ip(ip)),
       Error(_) => Error(Url(InvalidHostName())),
     }
   }
@@ -178,18 +176,18 @@ fn http_host(parsed_uri: std@1/uri.Uri) -> Result[String, HttpError] uses {} {
     core@1/list.push(mut out, http_lower(raw[i]))
     i += 1
   }
-  let name = match std@1/text.finish(take out) {
+  let name = match text.finish(take out) {
     Ok(s) => take s,
     Error(_) => return Error(Url(InvalidHostName())),
   }
-  match std@1/net.validate_host(name) {
+  match net.validate_host(name) {
     Ok(()) => Ok(take name),
     Error(_) => Error(Url(InvalidHostName())),
   }
 }
 
 @noalloc
-fn http_port(parsed_uri: std@1/uri.Uri) -> u16 uses {} {
+fn http_port(parsed_uri: uri.Uri) -> u16 uses {} {
   match parsed_uri.port {
     Some(p) => p,
     None() => if http_same(parsed_uri.scheme, "https") {
@@ -200,7 +198,7 @@ fn http_port(parsed_uri: std@1/uri.Uri) -> u16 uses {} {
   }
 }
 
-fn http_open(n: Net, config: Config, parsed_uri: std@1/uri.Uri) -> Result[
+fn http_open(n: Net, config: Config, parsed_uri: uri.Uri) -> Result[
   Stream of n,
   HttpError
 ] {
@@ -272,11 +270,11 @@ pub fn request(
 ) -> Result[Request, HttpError] {
   http_validate_headers(headers)?
   http_validate_headers([Header(name: "user-agent", value: config.user_agent)])?
-  let parsed_uri = std@1/uri.parse(url) ? Url
-  let target = std@1/uri.component_encoded(parsed_uri.path, Path())
+  let parsed_uri = uri.parse(url) ? Url
+  let target = uri.component_encoded(parsed_uri.path, Path())
   http_validate_target(target)?
   match parsed_uri.query {
-    Some(q) => http_validate_target(std@1/uri.component_encoded(q, Query()))?,
+    Some(q) => http_validate_target(uri.component_encoded(q, Query()))?,
     None() => (),
   }
   let s = http_open(n, config, parsed_uri)?
@@ -292,7 +290,7 @@ pub fn request(
       redirects: config.max_redirects,
       state: 0,
       sent_body: false,
-      input: std@1/bufio.new(4096),
+      input: bufio.new(4096),
       body_kind: 0,
       remaining: 0,
       chunk_suffix: false,
@@ -321,10 +319,10 @@ fn http_write(mut r: Request, data: Bytes) -> Result[(), HttpError] {
 fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError] {
   r.state = 5
   let mut out: List[u8] = []
-  std@1/text.append(mut out, http_method_text(r.method))
-  std@1/text.append(mut out, " ")
-  let target_path = std@1/uri.component_encoded(r.uri.path, Path())
-  std@1/text.append(
+  text.append(mut out, http_method_text(r.method))
+  text.append(mut out, " ")
+  let target_path = uri.component_encoded(r.uri.path, Path())
+  text.append(
     mut out,
     if target_path == "" {
       "/"
@@ -334,12 +332,12 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
   )
   match r.uri.query {
     Some(q) => {
-      std@1/text.append(mut out, "?")
-      std@1/text.append(mut out, std@1/uri.component_encoded(q, Query()))
+      text.append(mut out, "?")
+      text.append(mut out, uri.component_encoded(q, Query()))
     },
     None() => (),
   }
-  std@1/text.append(mut out, " HTTP/1.1\r\nhost: ")
+  text.append(mut out, " HTTP/1.1\r\nhost: ")
   let hostname = http_host(r.uri)?
   let data = core@1/string.as_bytes(hostname)
   let mut ipv6: bool = false
@@ -351,22 +349,22 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
     i += 1
   }
   if ipv6 {
-    std@1/text.append(mut out, "[")
+    text.append(mut out, "[")
   }
-  std@1/text.append(mut out, hostname)
+  text.append(mut out, hostname)
   if ipv6 {
-    std@1/text.append(mut out, "]")
+    text.append(mut out, "]")
   }
   match r.uri.port {
     Some(p) => {
-      std@1/text.append(mut out, ":")
-      std@1/u16.format_into(p, mut out)
+      text.append(mut out, ":")
+      u16.format_into(p, mut out)
     },
     None() => (),
   }
-  std@1/text.append(mut out, "\r\nuser-agent: ")
-  std@1/text.append(mut out, r.config.user_agent)
-  std@1/text.append(mut out, "\r\nconnection: close\r\n")
+  text.append(mut out, "\r\nuser-agent: ")
+  text.append(mut out, r.config.user_agent)
+  text.append(mut out, "\r\nconnection: close\r\n")
   for h in r.headers {
     // Framing and connection headers belong to this state machine (Zig's
     // overridable built-in headers), never to two competing wire encodings.
@@ -374,14 +372,14 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
       h.name,
       "connection"
     ) && !http_same(h.name, "content-length") && !http_same(h.name, "transfer-encoding") {
-      std@1/text.append(mut out, h.name)
-      std@1/text.append(mut out, ": ")
-      std@1/text.append(mut out, h.value)
-      std@1/text.append(mut out, "\r\n")
+      text.append(mut out, h.name)
+      text.append(mut out, ": ")
+      text.append(mut out, h.value)
+      text.append(mut out, "\r\n")
     }
   }
-  std@1/text.append(mut out, framing_line)
-  std@1/text.append(mut out, "\r\n")
+  text.append(mut out, framing_line)
+  text.append(mut out, "\r\n")
   let request_bytes = core@1/bytes.from_list(take out)
   http_write(mut r, request_bytes)
 }
@@ -400,10 +398,10 @@ pub fn send_body(mut r: Request, body: Bytes) -> Result[(), HttpError] {
     return Error(OutOfOrder())
   }
   let mut line: List[u8] = []
-  std@1/text.append(mut line, "content-length: ")
-  std@1/u64.format_into(core@1/bytes.len(body), mut line)
-  std@1/text.append(mut line, "\r\n")
-  let framing_line = std@1/text.finish(take line)
+  text.append(mut line, "content-length: ")
+  u64.format_into(core@1/bytes.len(body), mut line)
+  text.append(mut line, "\r\n")
+  let framing_line = text.finish(take line)
   match framing_line {
     Ok(s) => http_send_head(mut r, s)?,
     Error(_) => return Error(Malformed(HeaderValue())),
@@ -469,14 +467,14 @@ pub fn end_body(mut r: Request, request_trailers: List[Header]) -> Result[(), Ht
   http_begin_chunks(mut r)?
   r.state = 5
   let mut out: List[u8] = []
-  std@1/text.append(mut out, "0\r\n")
+  text.append(mut out, "0\r\n")
   for h in request_trailers {
-    std@1/text.append(mut out, h.name)
-    std@1/text.append(mut out, ": ")
-    std@1/text.append(mut out, h.value)
-    std@1/text.append(mut out, "\r\n")
+    text.append(mut out, h.name)
+    text.append(mut out, ": ")
+    text.append(mut out, h.value)
+    text.append(mut out, "\r\n")
   }
-  std@1/text.append(mut out, "\r\n")
+  text.append(mut out, "\r\n")
   let wire_bytes = core@1/bytes.from_list(take out)
   http_write(mut r, wire_bytes)?
   r.state = 2
@@ -489,13 +487,13 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
   Option[(ResponseHead, u64)],
   HttpError
 ] uses {} {
-  let empty = std@1/http_wire.RawHeader(
+  let empty = http_wire.RawHeader(
     name_start: 0,
     name_end: 0,
     value_start: 0,
     value_end: 0
   )
-  let mut raw: Inline[std@1/http_wire.RawHeader, 16] = [
+  let mut raw: Inline[http_wire.RawHeader, 16] = [
     empty,
     empty,
     empty,
@@ -513,7 +511,7 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
     empty,
     empty
   ]
-  let mut line = std@1/http_wire.StatusLine(
+  let mut line = http_wire.StatusLine(
     version: 0,
     code: 0,
     reason_start: 0,
@@ -528,9 +526,9 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
   let mut keep_alive: bool = false
   while true {
     let parsed = if first {
-      std@1/http_wire.parse_response(buf, mut line, mut raw, mut count)
+      http_wire.parse_response(buf, mut line, mut raw, mut count)
     } else {
-      std@1/http_wire.parse_headers(buf, start, mut raw, mut count)
+      http_wire.parse_headers(buf, start, mut raw, mut count)
     }
     let mut complete: bool = false
     match parsed {
@@ -569,7 +567,7 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
     if (batch_cl || content_length != None()) && (batch_te || chunked) {
       return Error(Malformed(TransferEncoding()))
     }
-    let frame = match std@1/http_wire.framing(buf, line.version, raw, count) {
+    let frame = match http_wire.framing(buf, line.version, raw, count) {
       Ok(f) => f,
       Error(TransferEncoding()) => return Error(UnsupportedTransferEncoding()),
       Error(e) => return Error(Malformed(e)),
@@ -642,7 +640,7 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
   Ok(None())
 }
 
-fn http_buffer_error(error: std@1/bufio.ReadError[NetError]) -> HttpError uses {} {
+fn http_buffer_error(error: bufio.ReadError[NetError]) -> HttpError uses {} {
   match error {
     Source(e) => Net(e),
     Limit() => HeadTooLarge(),
@@ -654,25 +652,23 @@ fn http_buffer_error(error: std@1/bufio.ReadError[NetError]) -> HttpError uses {
 
 fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
   let n = r.net
-  Ok(
-    std@1/bufio.stream_read_more(n, mut r.stream, mut r.input, max) ? http_buffer_error
-  )
+  Ok(bufio.stream_read_more(n, mut r.stream, mut r.input, max) ? http_buffer_error)
 }
 
 fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   while true {
-    let buf = std@1/bufio.contents(r.input)
+    let buf = bufio.contents(r.input)
     match http_parse_head(buf, r.config)? {
       Some((head, end)) => {
         if end > r.config.max_head_bytes {
           return Error(HeadTooLarge())
         }
-        std@1/bufio.consume(mut r.input, end)
+        bufio.consume(mut r.input, end)
         return Ok(take head)
       },
       None() => (),
     }
-    let have = std@1/bufio.buffered(r.input)
+    let have = bufio.buffered(r.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -699,13 +695,13 @@ fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
     Some(s) => s,
     None() => return Error(RedirectLocationInvalid()),
   }
-  let parsed_uri = match std@1/uri.resolve(r.uri, location) {
+  let parsed_uri = match uri.resolve(r.uri, location) {
     Ok(u) => take u,
     Error(_) => return Error(RedirectLocationInvalid()),
   }
-  http_validate_target(std@1/uri.component_encoded(parsed_uri.path, Path()))?
+  http_validate_target(uri.component_encoded(parsed_uri.path, Path()))?
   match parsed_uri.query {
-    Some(q) => http_validate_target(std@1/uri.component_encoded(q, Query()))?,
+    Some(q) => http_validate_target(uri.component_encoded(q, Query()))?,
     None() => (),
   }
   let changed = !http_same(r.uri.scheme, parsed_uri.scheme) || http_host(r.uri)? != http_host(
@@ -734,7 +730,7 @@ fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
   } else {
     r.method
   }
-  let next_url = std@1/uri.format(parsed_uri)
+  let next_url = uri.format(parsed_uri)
   let mut fresh = request(r.net, r.config, next_method, next_url, headers)?
   fresh.redirects = r.redirects - 1
   r = take fresh
@@ -787,24 +783,24 @@ pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
 // Zig Reader.State.body_remaining_chunk_len: head -> data -> suffix -> head.
 fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
   if r.chunk_suffix {
-    while std@1/bufio.buffered(r.input) < 2 {
+    while bufio.buffered(r.input) < 2 {
       if http_read_more(mut r, 4096)? == 0 {
         return Error(Truncated())
       }
     }
-    let suffix = std@1/bufio.contents(r.input)
+    let suffix = bufio.contents(r.input)
     if suffix[0] != 13 || suffix[1] != 10 {
       return Error(Chunk())
     }
-    std@1/bufio.consume(mut r.input, 2)
+    bufio.consume(mut r.input, 2)
     r.chunk_suffix = false
   }
   while true {
-    let buf = std@1/bufio.contents(r.input)
-    match std@1/http_wire.parse_chunk_size(buf, 0) {
+    let buf = bufio.contents(r.input)
+    match http_wire.parse_chunk_size(buf, 0) {
       Error(_) => return Error(Chunk()),
       Ok(Complete(consumed, size)) => {
-        std@1/bufio.consume(mut r.input, consumed)
+        bufio.consume(mut r.input, consumed)
         r.remaining = size
         if size == 0 {
           http_read_trailers(mut r)?
@@ -814,7 +810,7 @@ fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
       },
       Ok(Partial()) => (),
     }
-    let have = std@1/bufio.buffered(r.input)
+    let have = bufio.buffered(r.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -836,16 +832,16 @@ fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
 fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
   // Prefix a synthetic status line to reuse strict batched header parsing.
   let mut collected: List[u8] = []
-  std@1/text.append(mut collected, "HTTP/1.1 200 OK\r\n")
+  text.append(mut collected, "HTTP/1.1 200 OK\r\n")
   while true {
-    let count = std@1/bufio.buffered(r.input)
-    let unread = std@1/bufio.contents(r.input)
+    let count = bufio.buffered(r.input)
+    let unread = bufio.contents(r.input)
     let mut i: u64 = 0
     while i < count {
       core@1/list.push(mut collected, unread[i])
       i += 1
     }
-    std@1/bufio.consume(mut r.input, count)
+    bufio.consume(mut r.input, count)
     let buf = core@1/bytes.from_list(copy collected)
     match http_parse_head(buf, r.config)? {
       Some((head, end)) => {
@@ -892,7 +888,7 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  if std@1/bufio.buffered(r.input) == 0 {
+  if bufio.buffered(r.input) == 0 {
     if http_read_more(
       mut r,
       if max > 4096 {
@@ -908,7 +904,7 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  let mut count = std@1/bufio.buffered(r.input)
+  let mut count = bufio.buffered(r.input)
   if count > max {
     count = max
   }
@@ -916,7 +912,7 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
     count = r.remaining
   }
   let n = r.net
-  let _ = std@1/bufio.stream_read(n, mut r.stream, mut r.input, mut out, count) ? http_buffer_error
+  let _ = bufio.stream_read(n, mut r.stream, mut r.input, mut out, count) ? http_buffer_error
   if r.body_kind != 0 {
     r.remaining -= count
     if r.remaining == 0 {
@@ -1001,13 +997,13 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
   Option[(ServerRequest, u64)],
   HttpError
 ] uses {} {
-  let empty = std@1/http_wire.RawHeader(
+  let empty = http_wire.RawHeader(
     name_start: 0,
     name_end: 0,
     value_start: 0,
     value_end: 0
   )
-  let mut raw: Inline[std@1/http_wire.RawHeader, 16] = [
+  let mut raw: Inline[http_wire.RawHeader, 16] = [
     empty,
     empty,
     empty,
@@ -1025,7 +1021,7 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
     empty,
     empty
   ]
-  let mut line = std@1/http_wire.RequestLine(
+  let mut line = http_wire.RequestLine(
     method_start: 0,
     method_end: 0,
     target_start: 0,
@@ -1033,7 +1029,7 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
     version: 0
   )
   let mut count: u64 = 0
-  let end = match std@1/http_wire.parse_request(buf, mut line, mut raw, mut count) {
+  let end = match http_wire.parse_request(buf, mut line, mut raw, mut count) {
     Ok(Partial()) => {
       if core@1/bytes.len(buf) >= max_head_bytes {
         return Error(HeadTooLarge())
@@ -1046,7 +1042,7 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
   if end > max_head_bytes {
     return Error(HeadTooLarge())
   }
-  let frame = match std@1/http_wire.framing(buf, line.version, raw, count) {
+  let frame = match http_wire.framing(buf, line.version, raw, count) {
     Ok(f) => f,
     Error(e) => return Error(Malformed(e)),
   }
@@ -1104,14 +1100,14 @@ pub fn receive_request(
   max_head_bytes: u64,
   max_body_bytes: u64
 ) -> Result[ServerRequest, HttpError] {
-  let mut input = std@1/bufio.new(4096)
+  let mut input = bufio.new(4096)
   while true {
-    let buf = std@1/bufio.contents(input)
+    let buf = bufio.contents(input)
     match parse_server_request(buf, max_head_bytes, max_body_bytes)? {
       Some((incoming, _)) => return Ok(take incoming),
       None() => (),
     }
-    if std@1/bufio.stream_read_more(n, mut s, mut input, 4096) ? http_buffer_error == 0 {
+    if bufio.stream_read_more(n, mut s, mut input, 4096) ? http_buffer_error == 0 {
       return Error(Truncated())
     }
   }
@@ -1133,9 +1129,9 @@ pub fn respond(
   }
   http_validate_headers(headers)?
   let mut out: List[u8] = []
-  std@1/text.append(mut out, "HTTP/1.1 ")
-  std@1/u16.format_into(status, mut out)
-  std@1/text.append(mut out, " \r\n")
+  text.append(mut out, "HTTP/1.1 ")
+  u16.format_into(status, mut out)
+  text.append(mut out, " \r\n")
   for h in headers {
     if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
       h.name,
@@ -1143,14 +1139,14 @@ pub fn respond(
     ) {
       return Error(Malformed(ContentLength()))
     }
-    std@1/text.append(mut out, h.name)
-    std@1/text.append(mut out, ": ")
-    std@1/text.append(mut out, h.value)
-    std@1/text.append(mut out, "\r\n")
+    text.append(mut out, h.name)
+    text.append(mut out, ": ")
+    text.append(mut out, h.value)
+    text.append(mut out, "\r\n")
   }
-  std@1/text.append(mut out, "Content-Length: ")
-  std@1/u64.format_into(core@1/bytes.len(body), mut out)
-  std@1/text.append(mut out, "\r\nConnection: close\r\n\r\n")
+  text.append(mut out, "Content-Length: ")
+  u64.format_into(core@1/bytes.len(body), mut out)
+  text.append(mut out, "\r\nConnection: close\r\n\r\n")
   core@1/net.write_all(n, mut s, core@1/bytes.from_list(take out)) ? http_net_error
   core@1/net.write_all(n, mut s, body) ? http_net_error
   Ok(())

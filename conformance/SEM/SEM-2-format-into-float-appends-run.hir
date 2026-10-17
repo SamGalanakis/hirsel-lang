@@ -11,37 +11,37 @@ fn text(take out: List[u8]) -> String {
 
 pub fn main(t: Test) -> Result[(), ()] {
   let mut a1: List[u8] = [120u8, 61u8]
-  std@1/f64.format_into(0.0f64, mut a1)
+  f64.format_into(0.0f64, mut a1)
   core@1/test.check(t, text(take a1) == "x=0")
   let mut a2: List[u8] = [120u8, 61u8]
-  std@1/f64.format_into(-0.0f64, mut a2)
+  f64.format_into(-0.0f64, mut a2)
   core@1/test.check(t, text(take a2) == "x=-0")
   let mut a3: List[u8] = [120u8, 61u8]
-  std@1/f64.format_into(1.5f64, mut a3)
+  f64.format_into(1.5f64, mut a3)
   core@1/test.check(t, text(take a3) == "x=1.5")
   let mut a4: List[u8] = [120u8, 61u8]
-  std@1/f64.format_into(0.1f64, mut a4)
+  f64.format_into(0.1f64, mut a4)
   core@1/test.check(t, text(take a4) == "x=0.1")
   let mut a5: List[u8] = [120u8, 61u8]
-  std@1/f64.format_into(1e21f64, mut a5)
+  f64.format_into(1e21f64, mut a5)
   core@1/test.check(t, text(take a5) == "x=1e21")
   let mut a6: List[u8] = [120u8, 61u8]
-  std@1/f64.format_into(1e-7f64, mut a6)
+  f64.format_into(1e-7f64, mut a6)
   core@1/test.check(t, text(take a6) == "x=1e-7")
   let mut a7: List[u8] = [120u8, 61u8]
-  std@1/f32.format_into(0.1f32, mut a7)
+  f32.format_into(0.1f32, mut a7)
   core@1/test.check(t, text(take a7) == "x=0.1")
   let mut a8: List[u8] = [120u8, 61u8]
-  std@1/f32.format_into(100.0f32, mut a8)
+  f32.format_into(100.0f32, mut a8)
   core@1/test.check(t, text(take a8) == "x=100")
   let mut b: List[u8] = []
-  std@1/f64.format_into(0.1f64, mut b)
-  core@1/test.check(t, text(take b) == std@1/f64.to_string(0.1f64))
+  f64.format_into(0.1f64, mut b)
+  core@1/test.check(t, text(take b) == f64.to_string(0.1f64))
   let mut a9: List[u8] = [120u8, 61u8]
-  std@1/bool.format_into(true, mut a9)
+  bool.format_into(true, mut a9)
   core@1/test.check(t, text(take a9) == "x=true")
   let mut a10: List[u8] = [120u8, 61u8]
-  std@1/bool.format_into(false, mut a10)
+  bool.format_into(false, mut a10)
   core@1/test.check(t, text(take a10) == "x=false")
   Ok(())
 }

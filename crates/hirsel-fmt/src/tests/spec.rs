@@ -216,7 +216,7 @@ fn build(name: &str) -> Fixture {
             let n = f.question(n, Some("Files"));
             let n = f.binding("n", n, false, None);
             let stdout = f.invoke("io.stdout", &["rt"]);
-            let string = f.invoke("std@1/u64.to_string", &["n"]);
+            let string = f.invoke("u64.to_string", &["n"]);
             let print = f.call("out.print", vec![stdout, string]);
             let print = f.question(print, Some("Output"));
             let print = f.st(StmtKind::Expr(print));

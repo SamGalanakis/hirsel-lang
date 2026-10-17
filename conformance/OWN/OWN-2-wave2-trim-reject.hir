@@ -1,7 +1,7 @@
 // rule: OWN-2
 // expect: reject OWN-2 at line 5
 fn probe(take s: String) -> () {
-  std@1/string.trim(take s)
+  string.trim(take s)
   string.byte_len(s)
   ()
 }

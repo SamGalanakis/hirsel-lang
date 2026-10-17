@@ -1,8 +1,8 @@
 // A deliberately small line-oriented subset, escaping all raw HTML.
 fn escape(take text: String) -> String {
-  let amp = std@1/bytes.replace(string.as_bytes(text), b"&", b"&amp;")
-  let lt = std@1/bytes.replace(amp, b"<", b"&lt;")
-  let gt = std@1/bytes.replace(lt, b">", b"&gt;")
+  let amp = bytes.replace(string.as_bytes(text), b"&", b"&amp;")
+  let lt = bytes.replace(amp, b"<", b"&lt;")
+  let gt = bytes.replace(lt, b">", b"&gt;")
   match string.from_bytes(take gt) {
     Ok(s) => take s,
     Error(_) => "",
@@ -13,11 +13,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   let text = common.input(rt, args, "# Flock\n\nSheep & <grass>\n- ewe\n- lamb\n")?
   let mut builder: List[u8] = []
   let mut in_list: bool = false
-  for raw in std@1/string.split(take text, "\n") {
-    let line = std@1/string.trim(raw)
-    let item = std@1/string.starts_with(line, "- ")
+  for raw in string.split(take text, "\n") {
+    let line = string.trim(raw)
+    let item = string.starts_with(line, "- ")
     if in_list && !item {
-      std@1/text.append(mut builder, "</ul>\n")
+      text.append(mut builder, "</ul>\n")
       in_list = false
     }
     if string.byte_len(line) == 0 {
@@ -25,33 +25,30 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     }
     let mut tag: String = "p"
     let mut start: u64 = 0
-    if std@1/string.starts_with(line, "# ") {
+    if string.starts_with(line, "# ") {
       tag = "h1"
       start = 2
-    } else if std@1/string.starts_with(line, "## ") {
+    } else if string.starts_with(line, "## ") {
       tag = "h2"
       start = 3
     } else if item {
       if !in_list {
-        std@1/text.append(mut builder, "<ul>\n")
+        text.append(mut builder, "<ul>\n")
         in_list = true
       }
       tag = "li"
       start = 2
     }
-    std@1/text.append(mut builder, "<")
-    std@1/text.append(mut builder, tag)
-    std@1/text.append(mut builder, ">")
-    std@1/text.append(
-      mut builder,
-      escape(common.slice(line, start, string.byte_len(line)))
-    )
-    std@1/text.append(mut builder, "</")
-    std@1/text.append(mut builder, tag)
-    std@1/text.append(mut builder, ">\n")
+    text.append(mut builder, "<")
+    text.append(mut builder, tag)
+    text.append(mut builder, ">")
+    text.append(mut builder, escape(common.slice(line, start, string.byte_len(line))))
+    text.append(mut builder, "</")
+    text.append(mut builder, tag)
+    text.append(mut builder, ">\n")
   }
   if in_list {
-    std@1/text.append(mut builder, "</ul>\n")
+    text.append(mut builder, "</ul>\n")
   }
   common.print(rt, common.finish(take builder)?)
 }

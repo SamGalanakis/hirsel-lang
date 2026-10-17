@@ -2,7 +2,7 @@
 // expect: run
 @noalloc
 fn parsed_bits(t: Test, text: String, expected: u64) -> () {
-  match std@1/f64.parse(text) {
+  match f64.parse(text) {
     Ok(value) => core@1/test.check(t, core@1/f64.bits(value) == expected),
     Error(_) => core@1/test.check(t, false),
   }
@@ -10,23 +10,23 @@ fn parsed_bits(t: Test, text: String, expected: u64) -> () {
 
 pub fn main(t: Test) -> Result[(), ()] {
   let mut short: Inline[u8, 1] = [99]
-  core@1/test.check(t, std@1/f64.format(1.25f64, mut short) == Error(BufferTooSmall))
+  core@1/test.check(t, f64.format(1.25f64, mut short) == Error(BufferTooSmall))
   core@1/test.check(t, short == [99u8])
-  core@1/test.check(t, std@1/f64.parse("") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("+1") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse(" 1") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1 ") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1_0") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("0x1") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("-NaN") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("nan") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("Infinity") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse(".1") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1.") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1e") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1e+") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1e1e1") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1.2.3") == Error(Invalid))
-  core@1/test.check(t, std@1/f64.parse("1e999z") == Error(Invalid))
+  core@1/test.check(t, f64.parse("") == Error(Invalid))
+  core@1/test.check(t, f64.parse("+1") == Error(Invalid))
+  core@1/test.check(t, f64.parse(" 1") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1 ") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1_0") == Error(Invalid))
+  core@1/test.check(t, f64.parse("0x1") == Error(Invalid))
+  core@1/test.check(t, f64.parse("-NaN") == Error(Invalid))
+  core@1/test.check(t, f64.parse("nan") == Error(Invalid))
+  core@1/test.check(t, f64.parse("Infinity") == Error(Invalid))
+  core@1/test.check(t, f64.parse(".1") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1.") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1e") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1e+") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1e1e1") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1.2.3") == Error(Invalid))
+  core@1/test.check(t, f64.parse("1e999z") == Error(Invalid))
   Ok(())
 }

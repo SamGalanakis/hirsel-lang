@@ -12,7 +12,7 @@ fn output_error[E](take e: E) -> () {}
 
 fn show(found: Option[u64]) -> String {
   match found {
-    Some(v) => std@1/u64.to_string(v),
+    Some(v) => u64.to_string(v),
     None => "none",
   }
 }

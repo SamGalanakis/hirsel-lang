@@ -2,14 +2,14 @@
 // expect: run
 pub fn main(t: Test) -> Result[(), ()] {
   let mut buffer: Inline[u8, 3] = [99, 99, 99]
-  core@1/test.check(t, std@1/bool.format(true, mut buffer) == Error(BufferTooSmall))
+  core@1/test.check(t, bool.format(true, mut buffer) == Error(BufferTooSmall))
   core@1/test.check(t, buffer == [99u8, 99u8, 99u8])
-  core@1/test.check(t, std@1/bool.parse("") == Error(Invalid))
-  core@1/test.check(t, std@1/bool.parse("True") == Error(Invalid))
-  core@1/test.check(t, std@1/bool.parse("False") == Error(Invalid))
-  core@1/test.check(t, std@1/bool.parse("0") == Error(Invalid))
-  core@1/test.check(t, std@1/bool.parse("1") == Error(Invalid))
-  core@1/test.check(t, std@1/bool.parse(" true") == Error(Invalid))
-  core@1/test.check(t, std@1/bool.parse("false ") == Error(Invalid))
+  core@1/test.check(t, bool.parse("") == Error(Invalid))
+  core@1/test.check(t, bool.parse("True") == Error(Invalid))
+  core@1/test.check(t, bool.parse("False") == Error(Invalid))
+  core@1/test.check(t, bool.parse("0") == Error(Invalid))
+  core@1/test.check(t, bool.parse("1") == Error(Invalid))
+  core@1/test.check(t, bool.parse(" true") == Error(Invalid))
+  core@1/test.check(t, bool.parse("false ") == Error(Invalid))
   Ok(())
 }

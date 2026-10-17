@@ -23,7 +23,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
       Item(key: 2, label: "B\n", out: out)
     ]
     failure.check(
-      std@1/list.find(
+      list.find(
         items,
         fn(x: Item) -> bool uses {out} {
           out.print(out, x.label)
@@ -33,7 +33,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
       Bounds()
     )
     failure.check(
-      !std@1/list.all(
+      !list.all(
         items,
         fn(x: Item) -> bool uses {out} {
           out.print(out, x.label)
@@ -43,7 +43,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
       Bounds()
     )
     failure.check(
-      std@1/list.any(
+      list.any(
         items,
         fn(x: Item) -> bool uses {out} {
           out.print(out, x.label)

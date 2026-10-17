@@ -3,6 +3,6 @@
 // entry: trial
 @noalloc
 fn trial(t: Test, s: String) {
-  std@1/test.equal(t, s, s)
-  std@1/test.approx(t, 1.0, 1.0, 0.0, 0.0)
+  test.equal(t, s, s)
+  test.approx(t, 1.0, 1.0, 0.0, 0.0)
 }

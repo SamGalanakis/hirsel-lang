@@ -7,7 +7,7 @@ pub fn normalize_tree(dir: Dir) -> Result[u64, FileError] {
   for step in take walk {
     let path = step?
     let old = file.read_bytes(dir, path)?
-    let new = std@1/bytes.replace(old, b"\r\n", b"\n")
+    let new = bytes.replace(old, b"\r\n", b"\n")
     if new != old {
       file.write_bytes(dir, path, take new)?
       changed += 1
@@ -20,7 +20,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let root = arg.path(args, 0) ? Usage
   let dir = io.dir(rt, root) ? Files
   let n = normalize_tree(dir) ? Files
-  out.print(io.stdout(rt) ? Grant, std@1/u64.to_string(n)) ? Output
+  out.print(io.stdout(rt) ? Grant, u64.to_string(n)) ? Output
   Ok(())
 }
 

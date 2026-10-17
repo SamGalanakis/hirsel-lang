@@ -11,10 +11,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         ""
       },
     }
-    failure.check(std@1/input.read_line(s) == Ok(Some(expected)), Bounds())
+    failure.check(input.read_line(s) == Ok(Some(expected)), Bounds())
     index += 1
   }
-  failure.check(std@1/input.read_line(s) == Ok(None()), Bounds())
-  failure.check(std@1/input.read_all(s) == Ok(b""), Bounds())
+  failure.check(input.read_line(s) == Ok(None()), Bounds())
+  failure.check(input.read_all(s) == Ok(b""), Bounds())
   Ok(())
 }

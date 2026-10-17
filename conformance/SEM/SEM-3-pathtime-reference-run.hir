@@ -3,25 +3,25 @@
 // Zig path.zig/epoch.zig bff490a23889750de7096d9057c0a432efc929a8 vectors.
 // Rust core/src/time.rs f6c1107f8be13e48465e12c0fd26e6a39fe18e4f unit vectors.
 fn check_join(base: String, child: String, expected: String) -> () uses {} {
-  match std@1/path.join(path.of(base), path.of(child)) {
+  match path.join(path.of(base), path.of(child)) {
     Ok(value) => failure.check(path.text(value) == expected, TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
 }
 
 fn check_parent(input: String, expected: String) -> () uses {} {
-  match std@1/path.parent(path.of(input)) {
+  match path.parent(path.of(input)) {
     Some(value) => failure.check(path.text(value) == expected, TextInvariant()),
     None() => failure.check(false, TextInvariant()),
   }
 }
 
 fn check_epoch(seconds: i128, expected: String) -> () uses {} {
-  match std@1/time.format(std@1/time.Timestamp(unix_nanoseconds: seconds * 1000000000)) {
+  match time.format(time.Timestamp(unix_nanoseconds: seconds * 1000000000)) {
     Ok(text) => failure.check(text == expected, TextInvariant()),
     Error(_) => failure.check(false, Arithmetic()),
   }
-  match std@1/time.parse(expected) {
+  match time.parse(expected) {
     Ok(value) => failure.check(
       value.unix_nanoseconds == seconds * 1000000000,
       Arithmetic()
@@ -31,16 +31,16 @@ fn check_epoch(seconds: i128, expected: String) -> () uses {} {
 }
 
 fn check_leap(text: String, valid: bool) -> () uses {} {
-  match std@1/time.parse(text) {
+  match time.parse(text) {
     Ok(_) => failure.check(valid, Arithmetic()),
     Error(_) => failure.check(!valid, Arithmetic()),
   }
 }
 
 fn check_fraction(nanos: i32, expected: String) -> () uses {} {
-  let value = std@1/duration.from_parts(0, nanos)
-  failure.check(std@1/duration.format(value) == expected, TextInvariant())
-  match std@1/duration.parse(expected) {
+  let value = duration.from_parts(0, nanos)
+  failure.check(duration.format(value) == expected, TextInvariant())
+  match duration.parse(expected) {
     Ok(parsed) => failure.check(parsed.nanoseconds == value.nanoseconds, Arithmetic()),
     Error(_) => failure.check(false, Arithmetic()),
   }
@@ -56,29 +56,29 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   check_parent("a", ".")
   check_parent("a//", ".")
   failure.check(
-    std@1/path.filename(path.of("/dir/basename.ext")) == "basename.ext",
+    path.filename(path.of("/dir/basename.ext")) == "basename.ext",
     TextInvariant()
   )
   failure.check(
-    std@1/path.filename(path.of("basename.ext//")) == "basename.ext",
+    path.filename(path.of("basename.ext//")) == "basename.ext",
     TextInvariant()
   )
-  failure.check(std@1/path.filename(path.of("/aaa/")) == "aaa", TextInvariant())
-  failure.check(std@1/path.filename(path.of("//a")) == "a", TextInvariant())
-  failure.check(std@1/path.filename(path.of("")) == "", TextInvariant())
-  failure.check(std@1/path.extension(path.of(".gitignore")) == "", TextInvariant())
-  failure.check(std@1/path.extension(path.of(".image.png")) == "png", TextInvariant())
-  failure.check(std@1/path.extension(path.of("file.ext.")) == "", TextInvariant())
+  failure.check(path.filename(path.of("/aaa/")) == "aaa", TextInvariant())
+  failure.check(path.filename(path.of("//a")) == "a", TextInvariant())
+  failure.check(path.filename(path.of("")) == "", TextInvariant())
+  failure.check(path.extension(path.of(".gitignore")) == "", TextInvariant())
+  failure.check(path.extension(path.of(".image.png")) == "png", TextInvariant())
+  failure.check(path.extension(path.of("file.ext.")) == "", TextInvariant())
   failure.check(
-    std@1/path.extension(path.of("very-long-file.bruh")) == "bruh",
+    path.extension(path.of("very-long-file.bruh")) == "bruh",
     TextInvariant()
   )
-  failure.check(std@1/path.extension(path.of("/a.b.c/")) == "c", TextInvariant())
+  failure.check(path.extension(path.of("/a.b.c/")) == "c", TextInvariant())
   failure.check(
-    std@1/path.components(path.of("/a//b/c///")) == ["a", "b", "c"],
+    path.components(path.of("/a//b/c///")) == ["a", "b", "c"],
     TextInvariant()
   )
-  match std@1/path.normalize(path.of("a/b/c/../../..")) {
+  match path.normalize(path.of("a/b/c/../../..")) {
     Ok(value) => failure.check(path.text(value) == ".", TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
@@ -91,14 +91,14 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   check_leap("2100-02-29T00:00:00Z", false)
   check_leap("2400-02-29T00:00:00Z", true)
   failure.check(
-    std@1/duration.from_parts(1, 1000000000).nanoseconds == 2000000000i128,
+    duration.from_parts(1, 1000000000).nanoseconds == 2000000000i128,
     Arithmetic()
   )
   failure.check(
-    std@1/duration.format(std@1/duration.from_parts(1, 123456789)) == "1.123456789s",
+    duration.format(duration.from_parts(1, 123456789)) == "1.123456789s",
     TextInvariant()
   )
-  match std@1/duration.parse("1.123456789s") {
+  match duration.parse("1.123456789s") {
     Ok(value) => failure.check(value.nanoseconds == 1123456789, Arithmetic()),
     Error(_) => failure.check(false, Arithmetic()),
   }

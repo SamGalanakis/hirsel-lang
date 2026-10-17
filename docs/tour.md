@@ -6,7 +6,7 @@ below are small enough to copy and run from the repository root with
 `hirsel run <linked-source.hir>`. Each selects
 `std@1` through its adjacent `.hir.json` manifest; copy that sidecar too, and
 adjust its source and dependency paths when moving a program. There are no imports
-or dependency downloads. `std@1/json.parse` names a selected package definition;
+or dependency downloads. `json.parse` names a selected package definition;
 `out.print` is supplied by `core@1`.
 
 The mistakes to avoid first:
@@ -63,7 +63,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let p = Point(x: 3, y: 4)
   let n = score(Dot(p))
   let output = io.stdout(rt) ? Grant
-  out.print(output, std@1/u64.to_string(n)) ? Output
+  out.print(output, u64.to_string(n)) ? Output
   out.print(output, "\n") ? Output
   Ok(())
 }
@@ -114,9 +114,9 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   grow(mut ys)
   let kept = keep(take ys)
   let output = io.stdout(rt) ? Grant
-  out.print(output, std@1/u64.to_string(first(xs))) ? Output
+  out.print(output, u64.to_string(first(xs))) ? Output
   out.print(output, "\n") ? Output
-  out.print(output, std@1/u64.to_string(list.len(kept))) ? Output
+  out.print(output, u64.to_string(list.len(kept))) ? Output
   out.print(output, "\n") ? Output
   Ok(())
 }
@@ -184,7 +184,7 @@ updates element places, and `for x in take xs` consumes the collection.
 
 Maps iterate in insertion order; replacement preserves a key's position.
 `map.get` returns `Option[V] in m`. Map equality is order-sensitive;
-`std@1/map.same_entries` ignores insertion order. Sets ignore order for equality.
+`map.same_entries` ignores insertion order. Sets ignore order for equality.
 `std@1/list` provides sorting, filtering and folds with explicit callbacks.
 
 <!-- tour: conformance/SEM/SEM-5-tour-04-collections-run.hir -->
@@ -227,7 +227,7 @@ apple
 
 `String` is valid UTF-8; `Bytes` may contain arbitrary bytes. There is no generic
 string length or integer string indexing. Choose byte length, Unicode scalar
-iteration or `std@1/unicode.graphemes`. A `StrPos of text` comes from that exact
+iteration or `unicode.graphemes`. A `StrPos of text` comes from that exact
 string and permits a boundary-safe slice. Position 1 is inside `é` and would
 return `None()`. Slices keep their owner alive and retain its locality.
 `string.from_bytes(take data)` returns the original bytes on invalid UTF-8.
@@ -244,7 +244,7 @@ their locality; it would not satisfy the taken global input.
 pub type AppError = Boundary | Grant(GrantError) | Output(OutputError)
 
 fn words(line: String) -> List[String] {
-  std@1/string.split(unique std@1/string.trim(line), " ")
+  string.split(unique string.trim(line), " ")
 }
 
 pub fn main(rt: Io) -> Result[(), AppError] {
@@ -269,9 +269,9 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let output = io.stdout(rt) ? Grant
   out.print(output, part) ? Output
   out.print(output, "\n") ? Output
-  out.print(output, std@1/u64.to_string(string.byte_len(part))) ? Output
+  out.print(output, u64.to_string(string.byte_len(part))) ? Output
   out.print(output, "\n") ? Output
-  out.print(output, std@1/u64.to_string(scalars)) ? Output
+  out.print(output, u64.to_string(scalars)) ? Output
   out.print(output, "\n") ? Output
   Ok(())
 }
@@ -291,17 +291,17 @@ Expected:
 `std@1` is ordinary Hirsel source. JSON numbers retain their decimal spelling;
 objects retain insertion order and duplicate keys are rejected. There is no
 automatic conversion of application records to JSON: construct or inspect
-`std@1/json.Value`, whose nested arrays and objects contain `box Value`.
+`json.Value`, whose nested arrays and objects contain `box Value`.
 
 <!-- tour: conformance/LANG/LANG-8-tour-06-json-run.hir -->
 [Runnable source](../conformance/LANG/LANG-8-tour-06-json-run.hir)
 
 ```hirsel
-pub type AppError = Json(std@1/json.JsonError) | Grant(GrantError) | Output(OutputError)
+pub type AppError = Json(json.JsonError) | Grant(GrantError) | Output(OutputError)
 
 pub fn main(rt: Io) -> Result[(), AppError] {
-  let value = std@1/json.parse("{\"n\": 1, \"ok\": true}") ? Json
-  let text = std@1/json.stringify(value) ? Json
+  let value = json.parse("{\"n\": 1, \"ok\": true}") ? Json
+  let text = json.stringify(value) ? Json
   out.print(io.stdout(rt) ? Grant, text) ? Output
   out.print(io.stdout(rt) ? Grant, "\n") ? Output
   Ok(())
@@ -318,7 +318,7 @@ Expected:
 ## Standard library: paths and time
 
 Path normalization and RFC 3339 parsing are pure algorithms. Normalizing a path
-does not grant access or resolve symlinks. `std@1/time.Duration` is a signed
+does not grant access or resolve symlinks. `time.Duration` is a signed
 nanosecond value used for formatting and parsing; core `Duration` is a separate
 type. Sampling real time needs `io.monotonic_clock` or `io.wall_clock` and its
 explicit grant. An `Instant of clock` belongs to that clock; time sampling is
@@ -328,21 +328,21 @@ never an ambient pure operation.
 [Runnable source](../conformance/LANG/LANG-8-tour-07-path-time-run.hir)
 
 ```hirsel
-pub type AppError = PathError(std@1/path.PathError) | Parse(std@1/scalar.ParseError) | Time(
-  std@1/time.TimeError
+pub type AppError = PathError(path.PathError) | Parse(scalar.ParseError) | Time(
+  time.TimeError
 ) | Grant(GrantError) | Output(OutputError)
 
 pub fn main(rt: Io) -> Result[(), AppError] {
-  let p = std@1/path.normalize(path.of("notes/./draft/../tour.txt")) ? PathError
-  let stamp = std@1/time.parse("1970-01-01T01:00:00+01:00") ? Parse
-  let text = std@1/time.format(stamp) ? Time
-  let duration = std@1/duration.parse("1.500s") ? Parse
+  let p = path.normalize(path.of("notes/./draft/../tour.txt")) ? PathError
+  let stamp = time.parse("1970-01-01T01:00:00+01:00") ? Parse
+  let text = time.format(stamp) ? Time
+  let duration = duration.parse("1.500s") ? Parse
   let output = io.stdout(rt) ? Grant
   out.print(output, path.text(p)) ? Output
   out.print(output, "\n") ? Output
   out.print(output, text) ? Output
   out.print(output, "\n") ? Output
-  out.print(output, std@1/duration.format(duration)) ? Output
+  out.print(output, duration.format(duration)) ? Output
   out.print(output, "\n") ? Output
   Ok(())
 }
@@ -369,7 +369,7 @@ scripted peer from `Test`, so it needs no live server. Run a Test entry with
 [Runnable source](../conformance/LANG/LANG-9-tour-08-http-run.hir)
 
 ```hirsel
-pub fn main(t: Test) -> Result[(), std@1/http.HttpError] {
+pub fn main(t: Test) -> Result[(), http.HttpError] {
   let n = test.net(
     t,
     [
@@ -384,9 +384,9 @@ pub fn main(t: Test) -> Result[(), std@1/http.HttpError] {
       )
     ]
   )
-  let response = std@1/http.fetch(
+  let response = http.fetch(
     n,
-    std@1/http.default_config(),
+    http.default_config(),
     Get(),
     "http://tour.test/",
     [],
@@ -426,14 +426,14 @@ including on an early `?`.
 [Runnable source](../conformance/LANG/LANG-9-tour-09-files-bufio-run.hir)
 
 ```hirsel
-pub type AppError = Files(FileError) | Read(std@1/bufio.ReadError[FileError])
+pub type AppError = Files(FileError) | Read(bufio.ReadError[FileError])
 
 pub fn main(t: Test) -> Result[(), AppError] {
   let dir = test.dir(t, [(path.of("input.txt"), b"one\ntwo\n")])
   let mut f = file.open(dir, path.of("input.txt")) ? Files
-  let mut reader = std@1/bufio.new(4)
-  let first = std@1/bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
-  let second = std@1/bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
+  let mut reader = bufio.new(4)
+  let first = bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
+  let second = bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
   test.check(t, first == "one\n")
   test.check(t, second == "two\n")
   let mut output = file.create_atomic(dir, path.of("output.txt")) ? Files
@@ -491,7 +491,7 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), AppError] {
   out.print(output, "\n") ? Output
   let input = io.stdin(rt) ? Grant
   while true {
-    match std@1/input.read_line(input) ? Input {
+    match input.read_line(input) ? Input {
       Some(line) => out.print(output, line) ? Output,
       None() => return Ok(()),
     }
@@ -567,7 +567,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
     }
   ) ? Channel
   let output = io.stdout(rt) ? Grant
-  out.print(output, std@1/u64.to_string(received)) ? Output
+  out.print(output, u64.to_string(received)) ? Output
   out.print(output, "\n") ? Output
   Ok(())
 }
@@ -638,11 +638,11 @@ fn law(n: u64) -> bool uses {} {
 pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, 2u64 + 2 == 4)
   let xs: List[u64] = [1, 2]
-  std@1/test.equal(t, xs, [1, 2])
-  std@1/test.approx(t, 0.1f64 + 0.2, 0.3, 0.000001, 0.0)
-  std@1/test.for_all(t, generate, law)
+  test.equal(t, xs, [1, 2])
+  test.approx(t, 0.1f64 + 0.2, 0.3, 0.000001, 0.0)
+  test.for_all(t, generate, law)
   let rejected: Result[u64, String] = Error("bad input")
-  let error = std@1/test.expect_error(t, take rejected)
+  let error = test.expect_error(t, take rejected)
   test.check(t, error == "bad input")
   Ok(())
 }

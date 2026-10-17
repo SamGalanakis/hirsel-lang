@@ -36,27 +36,27 @@ pub type ServerError = Grant(GrantError) | Network(NetError) | Files(FileError) 
 const STATE: String = "todos.json"
 
 // ---- JSON ----
-fn text_value(s: String) -> std@1/json.Value uses {} {
+fn text_value(s: String) -> json.Value uses {} {
   Text(unique s)
 }
 
-fn todo_value(t: Todo) -> std@1/json.Value uses {} {
-  let mut fields: Map[String, box std@1/json.Value] = map.empty()
-  map.insert(mut fields, "id", box Number(std@1/u64.to_string(t.id)))
+fn todo_value(t: Todo) -> json.Value uses {} {
+  let mut fields: Map[String, box json.Value] = map.empty()
+  map.insert(mut fields, "id", box Number(u64.to_string(t.id)))
   map.insert(mut fields, "title", box text_value(t.title))
   map.insert(mut fields, "done", box Bool(t.done))
   Object(take fields)
 }
 
 fn todo_json(t: Todo) -> String uses {} {
-  match std@1/json.stringify(todo_value(t)) {
+  match json.stringify(todo_value(t)) {
     Ok(s) => take s,
     Error(_) => "{}",
   }
 }
 
-fn list_value(todos: List[Todo]) -> std@1/json.Value uses {} {
-  let mut items: List[box std@1/json.Value] = []
+fn list_value(todos: List[Todo]) -> json.Value uses {} {
+  let mut items: List[box json.Value] = []
   for t in todos {
     list.push(mut items, box todo_value(t))
   }
@@ -64,42 +64,42 @@ fn list_value(todos: List[Todo]) -> std@1/json.Value uses {} {
 }
 
 fn store_json(st: Store) -> String uses {} {
-  let mut fields: Map[String, box std@1/json.Value] = map.empty()
-  map.insert(mut fields, "next_id", box Number(std@1/u64.to_string(st.next_id)))
+  let mut fields: Map[String, box json.Value] = map.empty()
+  map.insert(mut fields, "next_id", box Number(u64.to_string(st.next_id)))
   map.insert(mut fields, "todos", box list_value(st.todos))
-  match std@1/json.stringify(Object(take fields)) {
+  match json.stringify(Object(take fields)) {
     Ok(s) => take s,
     Error(_) => "{}",
   }
 }
 
 fn error_json(message: String) -> String uses {} {
-  let mut fields: Map[String, box std@1/json.Value] = map.empty()
+  let mut fields: Map[String, box json.Value] = map.empty()
   map.insert(mut fields, "error", box text_value(message))
-  match std@1/json.stringify(Object(take fields)) {
+  match json.stringify(Object(take fields)) {
     Ok(s) => take s,
     Error(_) => "{}",
   }
 }
 
 // Patterns look through each member's box, so a field reads without unboxing.
-fn text_field(fields: Map[String, box std@1/json.Value], key: String) -> Option[String] uses {} {
+fn text_field(fields: Map[String, box json.Value], key: String) -> Option[String] uses {} {
   match map.get(fields, key) {
     Some(Text(s)) => Some(unique s),
     _ => None(),
   }
 }
 
-fn bool_field(fields: Map[String, box std@1/json.Value], key: String) -> Option[bool] uses {} {
+fn bool_field(fields: Map[String, box json.Value], key: String) -> Option[bool] uses {} {
   match map.get(fields, key) {
     Some(Bool(b)) => Some(b),
     _ => None(),
   }
 }
 
-fn u64_field(fields: Map[String, box std@1/json.Value], key: String) -> Option[u64] uses {} {
+fn u64_field(fields: Map[String, box json.Value], key: String) -> Option[u64] uses {} {
   match map.get(fields, key) {
-    Some(Number(n)) => match std@1/u64.parse(n) {
+    Some(Number(n)) => match u64.parse(n) {
       Ok(v) => Some(v),
       Error(_) => None(),
     },
@@ -107,19 +107,19 @@ fn u64_field(fields: Map[String, box std@1/json.Value], key: String) -> Option[u
   }
 }
 
-fn parse_object(body: Bytes) -> Option[Map[String, box std@1/json.Value]] uses {} {
+fn parse_object(body: Bytes) -> Option[Map[String, box json.Value]] uses {} {
   let text = match string.from_bytes(unique body) {
     Ok(s) => take s,
     Error(_) => return None(),
   }
-  match std@1/json.parse(take text) {
+  match json.parse(take text) {
     Ok(Object(fields)) => Some(copy fields),
     _ => None(),
   }
 }
 
 fn parse_store(take text: String) -> Result[Store, ServerError] uses {} {
-  let fields = match std@1/json.parse(take text) {
+  let fields = match json.parse(take text) {
     Ok(Object(fields)) => copy fields,
     _ => return Error(Corrupt("state is not a JSON object")),
   }
@@ -253,7 +253,7 @@ fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
   match action {
     Index() => Reply(
       status: 200u16,
-      body: match std@1/json.stringify(list_value(st.todos)) {
+      body: match json.stringify(list_value(st.todos)) {
         Ok(s) => take s,
         Error(_) => "[]",
       },
@@ -304,25 +304,25 @@ fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
 }
 
 // `application/json`, in any case and with or without parameters such as a charset.
-fn json_content(request: std@1/http.ServerRequest) -> bool uses {} {
-  let value = match std@1/http.header(request.headers, "content-type") {
-    Some(v) => std@1/string.ascii_lower(v),
+fn json_content(request: http.ServerRequest) -> bool uses {} {
+  let value = match http.header(request.headers, "content-type") {
+    Some(v) => string.ascii_lower(v),
     None() => return false,
   }
-  let media = match std@1/string.split_once(value, ";") {
+  let media = match string.split_once(value, ";") {
     Some((media, _)) => media,
     None() => value,
   }
-  std@1/string.trim(media) == "application/json"
+  string.trim(media) == "application/json"
 }
 
 // Decide the action from method, path and body; an error is the reply to send.
-fn route(request: std@1/http.ServerRequest) -> Result[Action, Reply] uses {} {
-  let target = match std@1/string.split_once(request.target, "?") {
+fn route(request: http.ServerRequest) -> Result[Action, Reply] uses {} {
+  let target = match string.split_once(request.target, "?") {
     Some((target_path, _)) => target_path,
     None() => request.target,
   }
-  let parts = std@1/string.split(unique target, "/")
+  let parts = string.split(unique target, "/")
   if list.len(parts) < 2 || parts[0] != "" || parts[1] != "todos" || list.len(parts) > 3 {
     return Error(not_found())
   }
@@ -349,7 +349,7 @@ fn route(request: std@1/http.ServerRequest) -> Result[Action, Reply] uses {} {
       None() => Error(bad_request("title must be a string")),
     }
   }
-  let id = match std@1/u64.parse(parts[2]) {
+  let id = match u64.parse(parts[2]) {
     Ok(n) => n,
     Error(_) => return Error(not_found()),
   }
@@ -378,19 +378,16 @@ fn route(request: std@1/http.ServerRequest) -> Result[Action, Reply] uses {} {
 // ---- connections ----
 fn send_reply(n: Net, mut stream: Stream of n, reply: Reply) -> Result[
   (),
-  std@1/http.HttpError
+  http.HttpError
 ] {
-  let mut headers: List[std@1/http.Header] = []
+  let mut headers: List[http.Header] = []
   if string.byte_len(reply.body) > 0 {
-    list.push(
-      mut headers,
-      std@1/http.Header(name: "Content-Type", value: "application/json")
-    )
+    list.push(mut headers, http.Header(name: "Content-Type", value: "application/json"))
   }
   if string.byte_len(reply.allow) > 0 {
-    list.push(mut headers, std@1/http.Header(name: "Allow", value: unique reply.allow))
+    list.push(mut headers, http.Header(name: "Allow", value: unique reply.allow))
   }
-  std@1/http.respond(n, mut stream, reply.status, headers, string.as_bytes(reply.body))
+  http.respond(n, mut stream, reply.status, headers, string.as_bytes(reply.body))
 }
 
 // A Sender destructured from channel.open is not yet provably sendable inside a
@@ -416,7 +413,7 @@ fn handle(
   tasks: Tasks,
   state: Mutex[Store],
   mut saves: Sender[SaveJob],
-  request: std@1/http.ServerRequest
+  request: http.ServerRequest
 ) -> Reply {
   let action = match route(request) {
     Ok(a) => take a,
@@ -459,7 +456,7 @@ fn serve(
 ) -> () {
   let mut stream = take incoming
   let mut jobs = take saves
-  let reply = match std@1/http.receive_request(n, mut stream, 16384, 65536) {
+  let reply = match http.receive_request(n, mut stream, 16384, 65536) {
     Ok(request) => handle(tasks, state, mut jobs, request),
     Error(_) => bad_request("malformed HTTP request"),
   }
@@ -475,7 +472,7 @@ fn port_arg(args: Args) -> Result[u16, ServerError] {
     Ok(t) => take t,
     Error(_) => return Error(Usage("port must be UTF-8")),
   }
-  match std@1/u16.parse(text) {
+  match u16.parse(text) {
     Ok(p) => Ok(p),
     Error(_) => Error(Usage("port must be a number from 0 to 65535")),
   }
@@ -494,9 +491,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let output = io.stdout(rt) ? Grant
   let _ = out.print(
     output,
-    std@1/string.concat(
+    string.concat(
       "listening on 127.0.0.1:",
-      std@1/string.concat(std@1/u16.to_string(bound.port), "\n")
+      string.concat(u16.to_string(bound.port), "\n")
     )
   )
   task.scope(

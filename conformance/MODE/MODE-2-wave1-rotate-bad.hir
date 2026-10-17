@@ -1,5 +1,5 @@
 // rule: MODE-2
 // expect: reject MODE-2 at line 4
 fn example(mut xs: List[u64]) -> () {
-  std@1/list.rotate(mut xs, 0);
+  list.rotate(mut xs, 0);
 }

@@ -2,5 +2,5 @@
 // expect: reject OWN-2 at line 5
 // entry: trial
 fn trial(t: Test, value: Result[u64, String]) -> String {
-  std@1/test.expect_error(t, value)
+  test.expect_error(t, value)
 }

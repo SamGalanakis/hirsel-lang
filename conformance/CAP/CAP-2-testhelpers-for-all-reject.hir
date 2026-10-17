@@ -2,7 +2,7 @@
 // expect: reject CLO-2 at line 11
 // entry: trial
 fn trial(t: Test) {
-  std@1/test.for_all(
+  test.for_all(
     t,
     fn(grant: Test) -> u64 {
       7

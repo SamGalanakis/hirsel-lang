@@ -15,7 +15,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let x: String = "a"
   let y: String = "bc"
   let chosen = probe(x, y)
-  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(string.byte_len(chosen)))
+  let _ = out.print(io.stdout(rt)?, u64.to_string(string.byte_len(chosen)))
   let _ = out.print(io.stdout(rt)?, "\n")
   Ok(())
 }

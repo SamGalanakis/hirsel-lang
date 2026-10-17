@@ -11,6 +11,6 @@ fn law(value: u8) -> bool uses {} {
 }
 
 pub fn trial(t: Test) -> Result[(), ()] {
-  std@1/test.for_all(t, generate, law)
+  test.for_all(t, generate, law)
   Ok(())
 }

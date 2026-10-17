@@ -1,10 +1,10 @@
 // rule: SEM-1
 // expect: run
 fn check_value(text: String, expected: i128, canonical: String) -> () uses {} {
-  match std@1/time.parse(text) {
+  match time.parse(text) {
     Ok(value) => {
       failure.check(value.unix_nanoseconds == expected, Arithmetic())
-      match std@1/time.format(value) {
+      match time.format(value) {
         Ok(formatted) => failure.check(formatted == canonical, TextInvariant()),
         Error(_) => failure.check(false, Arithmetic()),
       }
@@ -14,7 +14,7 @@ fn check_value(text: String, expected: i128, canonical: String) -> () uses {} {
 }
 
 fn check_invalid(text: String) -> () uses {} {
-  match std@1/time.parse(text) {
+  match time.parse(text) {
     Error(Invalid()) => (),
     _ => failure.check(false, Arithmetic()),
   }

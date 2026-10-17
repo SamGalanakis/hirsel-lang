@@ -2,7 +2,7 @@
 // expect: run
 // Rust std LowerExp supplies independent shortest digits and decimal parsing.
 pub fn main(t: Test) -> Result[(), ()] {
-  match std@1/f64.parse("2.2250738585072014e-308") {
+  match f64.parse("2.2250738585072014e-308") {
     Ok(value) => core@1/test.check(t, core@1/f64.bits(value) == 4503599627370496u64),
     Error(_) => core@1/test.check(t, false),
   }

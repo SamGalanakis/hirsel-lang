@@ -29,5 +29,5 @@ fn main() -> () {
     0u8,
     0u8
   ]
-  std@1/f64.format(1.0f64, mut buffer);
+  f64.format(1.0f64, mut buffer);
 }

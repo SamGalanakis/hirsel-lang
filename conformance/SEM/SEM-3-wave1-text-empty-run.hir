@@ -3,19 +3,16 @@
 // stdout: ok
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let mut builder: List[u8] = []
-  std@1/text.append(mut builder, "")
-  failure.check(std@1/text.finish(take builder) == Ok(""), TextInvariant())
+  text.append(mut builder, "")
+  failure.check(text.finish(take builder) == Ok(""), TextInvariant())
   failure.check(
-    std@1/text.finish([255u8, 192u8, 175u8]) == Error(b"\xff\xc0\xaf"),
+    text.finish([255u8, 192u8, 175u8]) == Error(b"\xff\xc0\xaf"),
     TextInvariant()
   )
-  failure.check(std@1/string.split("", "::") == [""], TextInvariant())
-  failure.check(
-    std@1/string.split("::a::::", "::") == ["", "a", "", ""],
-    TextInvariant()
-  )
-  failure.check(std@1/string.split("aaaaa", "aa") == ["", "", "a"], TextInvariant())
-  failure.check(std@1/string.split("é😀é", "é") == ["", "😀", ""], TextInvariant())
+  failure.check(string.split("", "::") == [""], TextInvariant())
+  failure.check(string.split("::a::::", "::") == ["", "a", "", ""], TextInvariant())
+  failure.check(string.split("aaaaa", "aa") == ["", "", "a"], TextInvariant())
+  failure.check(string.split("é😀é", "é") == ["", "😀", ""], TextInvariant())
   let bytes = string.as_bytes("")
   failure.check(
     bytes.len(bytes) == 0 && bytes.slice(bytes, 0, 0) == b"",

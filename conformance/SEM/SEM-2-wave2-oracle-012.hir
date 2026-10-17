@@ -4,9 +4,9 @@
 pub fn main(t: Test) -> Result[(), ()] {
   core@1/test.check(
     t,
-    std@1/f64.to_string(core@1/f64.from_bits(4921056587992461136u64)) == "1e21"
+    f64.to_string(core@1/f64.from_bits(4921056587992461136u64)) == "1e21"
   )
-  match std@1/f64.parse("1e21") {
+  match f64.parse("1e21") {
     Ok(value) => core@1/test.check(t, core@1/f64.bits(value) == 4921056587992461136u64),
     Error(_) => core@1/test.check(t, false),
   }

@@ -4,9 +4,9 @@
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let mut builder: List[u8] = [65u8, 66u8]
   let retained = bytes.from_list(copy builder)
-  std@1/text.append(mut builder, "é")
+  text.append(mut builder, "é")
   failure.check(retained == b"AB", TextInvariant())
-  failure.check(std@1/text.finish(take builder) == Ok("ABé"), TextInvariant())
+  failure.check(text.finish(take builder) == Ok("ABé"), TextInvariant())
   let outer = bytes.slice(string.as_bytes("prefixé😀TAIL"), 6, 12)
   let inner = bytes.slice(outer, 2, 6)
   failure.check(

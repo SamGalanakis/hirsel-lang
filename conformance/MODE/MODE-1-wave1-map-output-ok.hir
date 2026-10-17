@@ -5,7 +5,7 @@ fn mapper(s: String) -> String in s {
 }
 
 fn example(xs: List[String]) -> () {
-  std@1/list.map(
+  list.map(
     xs,
     fn(s: String) -> String {
       "owned"

@@ -5,7 +5,7 @@ fn network_error(e: NetError) -> () uses {} {
   ()
 }
 
-fn http_error(e: std@1/http.HttpError) -> () uses {} {
+fn http_error(e: http.HttpError) -> () uses {} {
   ()
 }
 
@@ -35,12 +35,12 @@ pub fn main(t: Test) -> Result[(), ()] {
     ]
   )
   let mut s = net.connect(n, "example.com", 80u16, Unbounded()) ? network_error
-  let incoming = std@1/http.receive_request(n, mut s, 1024, 3) ? http_error
+  let incoming = http.receive_request(n, mut s, 1024, 3) ? http_error
   test.check(
     t,
     incoming.method == "POST" && incoming.target == "/submit" && incoming.body == b"abc"
   )
-  std@1/http.respond(n, mut s, 200u16, [], incoming.body) ? http_error
+  http.respond(n, mut s, 200u16, [], incoming.body) ? http_error
   net.close(n, take s)
   Ok(())
 }

@@ -12,7 +12,7 @@ const M: Map[u64, String] = build()
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   for (k, v) in M {
-    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(k))
+    let _ = out.print(io.stdout(rt)?, u64.to_string(k))
     let _ = out.print(io.stdout(rt)?, v)
   }
   let _ = out.print(io.stdout(rt)?, "\n")

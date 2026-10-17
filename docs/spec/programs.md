@@ -47,7 +47,7 @@ malformed metadata are tool-input errors, not language diagnostics.
 {"schema":1,"package":{"name":"tool","version":"1"},
  "entry":{"module":[],"name":"main"},
  "sources":[{"path":"main.hir","module":[]},{"path":"text/wrap.hir","module":["wrap"]}],
- "dependencies":[{"manifest":"../stdlib/std@1/hirsel.json","package":{"name":"std","version":"1"},
+ "dependencies":[{"manifest":"../stdlib/hirsel.json","package":{"name":"std","version":"1"},
                   "expose":[{"head":"json","module":["json"]}]}]}
 ```
 
@@ -80,7 +80,7 @@ host Io in either engine. Without `--run`, source-run tooling keeps its simulate
 captured stdout, empty virtual directories and no network. This simulation grants no real
 host authority.
 
-The standard library is the source package `stdlib/std@1/hirsel.json`
+The standard library is the source package `stdlib/hirsel.json`
 ([standard library](std-library.md)). It is selected by the same manifest mechanism as any
 third-party package, can be replaced by another ordinary source location, and has neither a
 builtin fallback nor a registry entry. Source bodies keep their source origin through

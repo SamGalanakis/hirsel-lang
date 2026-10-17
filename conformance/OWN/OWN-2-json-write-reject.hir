@@ -1,7 +1,7 @@
 // rule: OWN-2
 // expect: reject OWN-2 at line 5
-fn probe(take value: std@1/json.Value, mut builder: List[u8]) -> () uses {} {
-  std@1/json.write(take value, mut builder)
-  std@1/json.stringify(value)
+fn probe(take value: json.Value, mut builder: List[u8]) -> () uses {} {
+  json.write(take value, mut builder)
+  json.stringify(value)
   ()
 }

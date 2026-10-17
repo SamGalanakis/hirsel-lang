@@ -11,11 +11,11 @@ fn law(n: u64) -> bool uses {} {
 pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, 2u64 + 2 == 4)
   let xs: List[u64] = [1, 2]
-  std@1/test.equal(t, xs, [1, 2])
-  std@1/test.approx(t, 0.1f64 + 0.2, 0.3, 0.000001, 0.0)
-  std@1/test.for_all(t, generate, law)
+  test.equal(t, xs, [1, 2])
+  test.approx(t, 0.1f64 + 0.2, 0.3, 0.000001, 0.0)
+  test.for_all(t, generate, law)
   let rejected: Result[u64, String] = Error("bad input")
-  let error = std@1/test.expect_error(t, take rejected)
+  let error = test.expect_error(t, take rejected)
   test.check(t, error == "bad input")
   Ok(())
 }

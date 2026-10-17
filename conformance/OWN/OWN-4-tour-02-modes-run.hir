@@ -23,9 +23,9 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   grow(mut ys)
   let kept = keep(take ys)
   let output = io.stdout(rt) ? Grant
-  out.print(output, std@1/u64.to_string(first(xs))) ? Output
+  out.print(output, u64.to_string(first(xs))) ? Output
   out.print(output, "\n") ? Output
-  out.print(output, std@1/u64.to_string(list.len(kept))) ? Output
+  out.print(output, u64.to_string(list.len(kept))) ? Output
   out.print(output, "\n") ? Output
   Ok(())
 }

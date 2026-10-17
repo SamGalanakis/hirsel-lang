@@ -1,18 +1,16 @@
-pub type ServerError = Grant(GrantError) | Network(NetError) | Http(
-  std@1/http.HttpError
-)
+pub type ServerError = Grant(GrantError) | Network(NetError) | Http(http.HttpError)
 
 fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
   let mut (stream, _) = net.accept(n, mut listener) ? Network
-  match std@1/http.receive_request(n, mut stream, 16384, 1048576) {
-    Ok(incoming) => std@1/http.respond(
+  match http.receive_request(n, mut stream, 16384, 1048576) {
+    Ok(incoming) => http.respond(
       n,
       mut stream,
       200u16,
-      [std@1/http.Header(name: "Content-Type", value: "text/plain")],
+      [http.Header(name: "Content-Type", value: "text/plain")],
       b"Hello, world"
     ) ? Http,
-    Error(_) => std@1/http.respond(n, mut stream, 400u16, [], b"Bad Request") ? Http,
+    Error(_) => http.respond(n, mut stream, 400u16, [], b"Bad Request") ? Http,
   }
   net.close(n, take stream)
   Ok(())

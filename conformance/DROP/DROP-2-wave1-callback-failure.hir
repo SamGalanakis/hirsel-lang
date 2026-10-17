@@ -22,7 +22,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
     Item(key: 2, label: "B\n", out: out),
     Item(key: 3, label: "C\n", out: out)
   ]
-  std@1/list.filter(take items, predicate)
+  list.filter(take items, predicate)
   Ok(())
 }
 

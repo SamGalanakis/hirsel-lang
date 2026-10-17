@@ -32,11 +32,11 @@ const B: Both = Both(m: build_map(), s: build_set(false))
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let both = copy B
   for (k, v) in both.m {
-    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(k))
-    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(v))
+    let _ = out.print(io.stdout(rt)?, u64.to_string(k))
+    let _ = out.print(io.stdout(rt)?, u64.to_string(v))
   }
   for n in both.s {
-    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+    let _ = out.print(io.stdout(rt)?, u64.to_string(n))
   }
   let _ = out.print(io.stdout(rt)?, "\n")
   Ok(())

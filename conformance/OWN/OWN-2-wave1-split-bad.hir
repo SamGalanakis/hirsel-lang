@@ -10,6 +10,6 @@ fn keep(take s: String, n: u64) -> String uses {} {
 
 fn example() -> () {
   let xs: String = "a"
-  std@1/string.split(take xs, ",")
+  string.split(take xs, ",")
   string.byte_len(xs);
 }

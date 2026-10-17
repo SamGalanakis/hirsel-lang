@@ -14,9 +14,9 @@ fn compare(a: u64, b: u64) -> i32 uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let mut xs: unique List[u64] = unique [4, 1, 3, 2, 2]
-  std@1/list.sort(mut xs, compare)
-  std@1/list.reverse(mut xs)
-  std@1/list.rotate(mut xs, 2)
+  list.sort(mut xs, compare)
+  list.reverse(mut xs)
+  list.rotate(mut xs, 2)
   if xs == [2, 2, 1, 4, 3] {
     out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
   } else {

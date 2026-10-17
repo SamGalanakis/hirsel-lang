@@ -109,7 +109,7 @@ and select it with this manifest, whose dependency path is relative to the manif
 ([packages](programs.md#package-selection)):
 
 ```json
-{"schema":1,"package":{"name":"application","version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":"stdlib/std@1/hirsel.json","package":{"name":"std","version":"1"},"expose":[]}]}
+{"schema":1,"package":{"name":"application","version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":"stdlib/hirsel.json","package":{"name":"std","version":"1"},"expose":[]}]}
 ```
 
 ```hirsel
@@ -117,7 +117,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
   let root = arg.path(args, 0) ? Usage
   let dir = io.dir(rt, root) ? Files
   let n = normalize_tree(dir) ? Files
-  out.print(io.stdout(rt), std@1/u64.to_string(n)) ? Output
+  out.print(io.stdout(rt), u64.to_string(n)) ? Output
   Ok(())
 }
 

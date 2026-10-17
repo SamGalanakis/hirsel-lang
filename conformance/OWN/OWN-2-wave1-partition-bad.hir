@@ -10,6 +10,6 @@ fn keep(take s: String, n: u64) -> String uses {} {
 
 fn example() -> () {
   let xs: List[u64] = [1]
-  std@1/list.partition(take xs, predicate)
+  list.partition(take xs, predicate)
   list.len(xs);
 }

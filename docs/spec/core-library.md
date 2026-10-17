@@ -527,7 +527,7 @@ false raises SEM-1, SEM-3 or MEM-14 respectively at that ordinary source call si
 enters the ordinary failure and cleanup path with its complete cause chain. It takes no
 arbitrary rule or string, inspects no stack, grants no capability, reads no Test input,
 allocates nothing and forwards no caller site. This is how source libraries, the standard
-library included, raise language failures; `std@1/bytes.replace`'s empty-pattern SEM-3, for
+library included, raise language failures; `bytes.replace`'s empty-pattern SEM-3, for
 example, is reported at its check site in the std source. A failure during cleanup keeps
 FAIL-3 shielding.
 
@@ -578,7 +578,7 @@ binary32 and binary64 representation, and `from_bits` reinterprets an unsigned w
 same width. These allocate nothing, preserve signed zero, infinities and every finite bit
 pattern, and canonicalize NaNs as [SEM-2](semantics.md#sem-2-floats) requires.
 
-The library reductions `std@1/f32.sum` and `std@1/f64.sum` repeatedly add adjacent pairs
+The library reductions `f32.sum` and `f64.sum` repeatedly add adjacent pairs
 left to right, carry an odd tail, and repeat until one value is left; an empty sum is +0.
 `sum_exact` rounds the exact real sum once; NaN or opposing infinities give the canonical
 NaN, a single infinity sign is preserved, and an exact zero is +0 except for an input of

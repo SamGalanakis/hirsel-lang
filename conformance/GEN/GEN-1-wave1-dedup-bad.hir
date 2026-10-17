@@ -1,5 +1,5 @@
 // rule: GEN-1
 // expect: reject GEN-1 at line 4
 fn example(take xs: List[Io]) -> () {
-  std@1/list.dedup(take xs);
+  list.dedup(take xs);
 }

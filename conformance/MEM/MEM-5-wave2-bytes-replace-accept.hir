@@ -1,5 +1,5 @@
 // rule: MEM-5
 // expect: accept
 fn probe(src: Bytes) -> Bytes in src uses {} {
-  std@1/bytes.replace(src, b"a", b"b")
+  bytes.replace(src, b"a", b"b")
 }

@@ -1,6 +1,6 @@
 // rule: SEM-4
 // expect: accept
-fn probe(xs: std@1/unicode.GraphemeView) {
+fn probe(xs: unicode.GraphemeView) {
   for x in xs {
     let _ = x
   }

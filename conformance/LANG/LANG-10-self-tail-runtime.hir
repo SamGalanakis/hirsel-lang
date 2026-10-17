@@ -12,7 +12,7 @@ fn sum(n: u64, total: u64) -> u64 {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
-  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(sum(10000, 0)))
+  let _ = out.print(io.stdout(rt)?, u64.to_string(sum(10000, 0)))
   let _ = out.print(io.stdout(rt)?, "\n")
   Ok(())
 }

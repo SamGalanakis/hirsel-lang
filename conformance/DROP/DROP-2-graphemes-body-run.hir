@@ -12,7 +12,7 @@ resource type Trace {
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let a = Trace(out: io.stdout(rt)?, label: "A\n")
-  for piece in std@1/unicode.graphemes("e\u{301}🇩🇪unvisited") {
+  for piece in unicode.graphemes("e\u{301}🇩🇪unvisited") {
     let b = Trace(out: io.stdout(rt)?, label: "B\n")
     failure.check(true, Bounds())
     break

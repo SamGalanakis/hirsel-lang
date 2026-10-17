@@ -2,38 +2,38 @@
 // expect: run
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let p = path.of("/a//é/../b.txt/")
-  match std@1/path.normalize(p) {
+  match path.normalize(p) {
     Ok(q) => failure.check(path.text(q) == "/a/b.txt", TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/path.join(path.of("a/b"), path.of("../c")) {
+  match path.join(path.of("a/b"), path.of("../c")) {
     Ok(q) => failure.check(path.text(q) == "a/c", TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/path.parent(p) {
+  match path.parent(p) {
     Some(q) => failure.check(path.text(q) == "/a/é/..", TextInvariant()),
     None() => failure.check(false, TextInvariant()),
   }
-  failure.check(std@1/path.filename(p) == "b.txt", TextInvariant())
-  failure.check(std@1/path.extension(p) == "txt", TextInvariant())
-  failure.check(std@1/path.components(p) == ["a", "é", "..", "b.txt"], TextInvariant())
-  match std@1/path.normalize(path.of("../../a/../..")) {
+  failure.check(path.filename(p) == "b.txt", TextInvariant())
+  failure.check(path.extension(p) == "txt", TextInvariant())
+  failure.check(path.components(p) == ["a", "é", "..", "b.txt"], TextInvariant())
+  match path.normalize(path.of("../../a/../..")) {
     Ok(q) => failure.check(path.text(q) == "../../..", TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/path.normalize(path.of("/../x")) {
+  match path.normalize(path.of("/../x")) {
     Error(Invalid(i)) => failure.check(i == 1, TextInvariant()),
     Ok(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/path.join(path.of("a"), path.of("/b")) {
+  match path.join(path.of("a"), path.of("/b")) {
     Error(Invalid(i)) => failure.check(i == 0, TextInvariant()),
     Ok(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/path.normalize(path.of("é\0x")) {
+  match path.normalize(path.of("é\0x")) {
     Error(Invalid(i)) => failure.check(i == 2, TextInvariant()),
     Ok(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/path.join(path.of("a"), path.of("b\\c")) {
+  match path.join(path.of("a"), path.of("b\\c")) {
     Error(Invalid(i)) => failure.check(i == 1, TextInvariant()),
     Ok(_) => failure.check(false, TextInvariant()),
   }

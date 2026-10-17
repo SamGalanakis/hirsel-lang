@@ -10,12 +10,12 @@ resource type Watch {
 
 pub fn trial(t: Test) -> Result[(), ()] {
   let plain: Result[String, u64] = Error(7)
-  std@1/test.equal(t, std@1/test.expect_error(t, take plain), 7)
+  test.equal(t, test.expect_error(t, take plain), 7)
   let counted: Result[u64, String] = Error("boom")
-  let message = std@1/test.expect_error(t, take counted)
-  std@1/test.equal(t, message, "boom")
+  let message = test.expect_error(t, take counted)
+  test.equal(t, message, "boom")
   let held: Result[u64, Watch] = Error(Watch(n: 7))
-  let watch = std@1/test.expect_error(t, take held)
-  std@1/test.equal(t, watch.n, 7)
+  let watch = test.expect_error(t, take held)
+  test.equal(t, watch.n, 7)
   Ok(())
 }

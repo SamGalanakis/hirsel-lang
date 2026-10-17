@@ -21,7 +21,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let p = Point(x: 3, y: 4)
   let n = score(Dot(p))
   let output = io.stdout(rt) ? Grant
-  out.print(output, std@1/u64.to_string(n)) ? Output
+  out.print(output, u64.to_string(n)) ? Output
   out.print(output, "\n") ? Output
   Ok(())
 }

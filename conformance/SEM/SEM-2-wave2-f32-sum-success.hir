@@ -7,10 +7,10 @@ pub fn main(t: Test) -> Result[(), ()] {
     -100000000000000000000.0f32,
     1.0f32
   ]
-  core@1/test.check(t, std@1/f32.sum(xs) == 0.0f32)
-  core@1/test.check(t, std@1/f32.sum_exact(xs) == 2.0f32)
+  core@1/test.check(t, f32.sum(xs) == 0.0f32)
+  core@1/test.check(t, f32.sum_exact(xs) == 2.0f32)
   let odd: Array[f32] = [1.0f32, 2.0f32, 3.0f32, 4.0f32, 5.0f32]
-  core@1/test.check(t, std@1/f32.sum(odd) == 15.0f32)
-  core@1/test.check(t, std@1/f32.sum_exact(odd) == 15.0f32)
+  core@1/test.check(t, f32.sum(odd) == 15.0f32)
+  core@1/test.check(t, f32.sum_exact(odd) == 15.0f32)
   Ok(())
 }

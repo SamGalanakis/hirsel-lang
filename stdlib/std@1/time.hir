@@ -63,10 +63,7 @@ fn month_days(year: i128, month: i128) -> i128 uses {} {
 }
 
 @noalloc
-fn read_digits(bytes: Bytes, begin: u64, count: u64) -> Result[
-  i128,
-  std@1/scalar.ParseError
-] uses {} {
+fn read_digits(bytes: Bytes, begin: u64, count: u64) -> Result[i128, scalar.ParseError] uses {} {
   let mut value: i128 = 0
   let mut i: u64 = 0
   while i < count {
@@ -98,7 +95,7 @@ fn civil_days(year: i128, month: i128, day: i128) -> i128 uses {} {
 // Contract-specific RFC3339 scanner; neither Zig epoch nor Rust std exposes one.
 // Date validation adapts Zig lib/std/time/epoch.zig at bff490a23889750de7096d9057c0a432efc929a8.
 @noalloc
-pub fn parse(text: String) -> Result[Timestamp, std@1/scalar.ParseError] uses {} {
+pub fn parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {} {
   let bytes = core@1/string.as_bytes(text)
   let len = core@1/bytes.len(bytes)
   if len < 20 {
@@ -241,7 +238,7 @@ pub fn format(value: Timestamp) -> Result[String, TimeError] uses {} {
     }
   }
   core@1/list.push(mut builder, 90)
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(text) => Ok(take text),
     Error(_) => {
       core@1/failure.check(false, TextInvariant())

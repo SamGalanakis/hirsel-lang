@@ -19,7 +19,7 @@ fn probe(flag: bool, take label: String) -> u64 {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
-  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(probe(true, "kept")))
+  let _ = out.print(io.stdout(rt)?, u64.to_string(probe(true, "kept")))
   let _ = out.print(io.stdout(rt)?, "\n")
   Ok(())
 }

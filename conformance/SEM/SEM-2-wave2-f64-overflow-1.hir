@@ -2,13 +2,13 @@
 // expect: run
 @noalloc
 fn parsed_bits(t: Test, text: String, expected: u64) -> () {
-  match std@1/f64.parse(text) {
+  match f64.parse(text) {
     Ok(value) => core@1/test.check(t, core@1/f64.bits(value) == expected),
     Error(_) => core@1/test.check(t, false),
   }
 }
 
 pub fn main(t: Test) -> Result[(), ()] {
-  core@1/test.check(t, std@1/f64.parse("1.7976931348623159e308") == Error(OutOfRange))
+  core@1/test.check(t, f64.parse("1.7976931348623159e308") == Error(OutOfRange))
   Ok(())
 }

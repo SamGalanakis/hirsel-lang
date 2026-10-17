@@ -24,18 +24,18 @@ fn deep_copy_of_borrowed_string_has_no_parameter_root() {
 
 fn parsed(text: &str, checks: &str) -> String {
     format!(
-        "{{ let uri = match std@1/uri.parse({text:?}) {{ Ok(uri) => take uri, Error(_) => {{core@1/test.check(t, false); return Error(())}} }}\n{checks}\n}}\n"
+        "{{ let parsed_uri = match std@1/uri.parse({text:?}) {{ Ok(parsed_uri) => take parsed_uri, Error(_) => {{core@1/test.check(t, false); return Error(())}} }}\n{checks}\n}}\n"
     )
 }
 fn string_field(field: &str, expected: &str) -> String {
-    format!("core@1/test.check(t, uri.{field} == {expected:?})\n")
+    format!("core@1/test.check(t, parsed_uri.{field} == {expected:?})\n")
 }
 fn component(field: &str, expected: Option<&str>) -> String {
     let expected = match expected {
         Some(text) => format!("Some(Encoded({text:?}))"),
         None => "None()".into(),
     };
-    format!("core@1/test.check(t, uri.{field} == {expected})\n")
+    format!("core@1/test.check(t, parsed_uri.{field} == {expected})\n")
 }
 fn bad(texts: &[&str], expected: &str) {
     for chunk in texts.chunks(10) {
@@ -50,13 +50,13 @@ fn zig_basic_and_with_port() {
         "https://ziglang.org/download",
         &(string_field("scheme", "https")
             + &component("host", Some("ziglang.org"))
-            + "core@1/test.check(t, uri.path == Encoded(\"/download\"))\ncore@1/test.check(t, uri.port == None())"),
+            + "core@1/test.check(t, parsed_uri.path == Encoded(\"/download\"))\ncore@1/test.check(t, parsed_uri.port == None())"),
     ));
     execute(&parsed(
         "http://example:1337/",
         &(string_field("scheme", "http")
             + &component("host", Some("example"))
-            + "core@1/test.check(t, uri.path == Encoded(\"/\"))\ncore@1/test.check(t, uri.port == Some(1337))"),
+            + "core@1/test.check(t, parsed_uri.path == Encoded(\"/\"))\ncore@1/test.check(t, parsed_uri.port == Some(1337))"),
     ));
 }
 #[test]
@@ -84,7 +84,7 @@ fn zig_file() {
             text,
             &(string_field("scheme", "file")
                 + &component("host", host)
-                + &format!("core@1/test.check(t, uri.path == Encoded({path:?}))")),
+                + &format!("core@1/test.check(t, parsed_uri.path == Encoded({path:?}))")),
         ));
     }
 }
@@ -164,7 +164,7 @@ fn zig_authority_and_password() {
                 &(component("user", user)
                     + &component("password", password)
                     + &component("host", host)
-                    + &format!("core@1/test.check(t, uri.port == {port})")),
+                    + &format!("core@1/test.check(t, parsed_uri.port == {port})")),
             );
         }
         execute(&body);
@@ -221,7 +221,7 @@ fn zig_rfc_examples() {
             + &component("host", Some("example.com"))
             + &component("query", Some("name=ferret"))
             + &component("fragment", Some("nose"))
-            + "core@1/test.check(t, uri.port == Some(8042))\ncore@1/test.check(t, uri.path == Encoded(\"/over/there\"))"),
+            + "core@1/test.check(t, parsed_uri.port == Some(8042))\ncore@1/test.check(t, parsed_uri.path == Encoded(\"/over/there\"))"),
     ));
     execute(&parsed(
         "urn:example:animal:ferret:nose",
@@ -231,7 +231,7 @@ fn zig_rfc_examples() {
             + &component("password", None)
             + &component("query", None)
             + &component("fragment", None)
-            + "core@1/test.check(t, uri.port == None())\ncore@1/test.check(t, uri.path == Encoded(\"example:animal:ferret:nose\"))"),
+            + "core@1/test.check(t, parsed_uri.port == None())\ncore@1/test.check(t, parsed_uri.path == Encoded(\"example:animal:ferret:nose\"))"),
     ));
 }
 #[test]
@@ -293,20 +293,20 @@ fn zig_percent_encoding_decoding_and_query_encoding() {
     }
     execute(&parsed(
         "https://objects.githubusercontent.com/?response-content-type=application%2Foctet-stream",
-        "core@1/test.check(t, std@1/uri.component_encoded(uri.path, Path()) == \"/\")\ncore@1/test.check(t, uri.query == Some(Encoded(\"response-content-type=application%2Foctet-stream\")))",
+        "core@1/test.check(t, std@1/uri.component_encoded(parsed_uri.path, Path()) == \"/\")\ncore@1/test.check(t, parsed_uri.query == Some(Encoded(\"response-content-type=application%2Foctet-stream\")))",
     ));
 }
 #[test]
 fn zig_format_and_component_specific_escape_sets() {
     execute(
-        "let uri = std@1/uri.Uri(scheme: \"file\", user: None(), password: None(), host: None(), port: None(), path: Raw(\"/foo/bar/baz\"), query: None(), fragment: None())\ncore@1/test.check(t, std@1/uri.format(uri) == \"file:/foo/bar/baz\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Path()) == \"a/b:@%3F%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Query()) == \"a/b:@?%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a:b@c\"), User()) == \"a%3Ab%40c\")",
+        "let parsed_uri = std@1/uri.Uri(scheme: \"file\", user: None(), password: None(), host: None(), port: None(), path: Raw(\"/foo/bar/baz\"), query: None(), fragment: None())\ncore@1/test.check(t, std@1/uri.format(parsed_uri) == \"file:/foo/bar/baz\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Path()) == \"a/b:@%3F%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Query()) == \"a/b:@?%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a:b@c\"), User()) == \"a%3Ab%40c\")",
     );
     execute(
         "core@1/test.check(t, std@1/uri.component_encoded(Encoded(\"a%2Fb\"), Path()) == \"a%2Fb\")",
     );
     execute(&parsed(
         "http://user:pass@example.com:80?x#y",
-        "core@1/test.check(t, std@1/uri.format(uri) == \"http://user:pass@example.com:80/?x#y\")",
+        "core@1/test.check(t, std@1/uri.format(parsed_uri) == \"http://user:pass@example.com:80/?x#y\")",
     ));
 }
 #[test]
@@ -383,10 +383,10 @@ fn zig_remove_dot_segments_and_rfc3986_reference_resolution() {
     ];
     for chunk in vectors.chunks(6) {
         let mut body = String::new();
-        body += "let base = match std@1/uri.parse(\"http://a/b/c/d;p?q\") { Ok(uri) => take uri, Error(_) => {core@1/test.check(t, false); return Error(())} }\n";
+        body += "let base = match std@1/uri.parse(\"http://a/b/c/d;p?q\") { Ok(parsed_uri) => take parsed_uri, Error(_) => {core@1/test.check(t, false); return Error(())} }\n";
         for &(reference, expected) in chunk {
             body += &format!(
-                "match std@1/uri.resolve(base, {reference:?}) {{ Ok(uri) => core@1/test.check(t, std@1/uri.format(uri) == {expected:?}), Error(_) => core@1/test.check(t, false) }}\n"
+                "match std@1/uri.resolve(base, {reference:?}) {{ Ok(parsed_uri) => core@1/test.check(t, std@1/uri.format(parsed_uri) == {expected:?}), Error(_) => core@1/test.check(t, false) }}\n"
             );
         }
         execute(&body);
@@ -396,7 +396,7 @@ fn zig_remove_dot_segments_and_rfc3986_reference_resolution() {
 #[test]
 fn absolute_reference_numeric_refusals_do_not_fall_back_to_paths() {
     execute(
-        "let base = match std@1/uri.parse(\"http://example.com/a\") { Ok(uri) => take uri, Error(_) => {core@1/test.check(t, false); return Error(())} }\nmatch std@1/uri.resolve(base, \"http://127.1/a\") { Error(InvalidHostName()) => (), _ => core@1/test.check(t, false) }\nmatch std@1/uri.resolve(base, \"http://127.0.0.1/a\") { Ok(uri) => core@1/test.check(t, std@1/uri.format(uri) == \"http://127.0.0.1/a\"), Error(_) => core@1/test.check(t, false) }",
+        "let base = match std@1/uri.parse(\"http://example.com/a\") { Ok(parsed_uri) => take parsed_uri, Error(_) => {core@1/test.check(t, false); return Error(())} }\nmatch std@1/uri.resolve(base, \"http://127.1/a\") { Error(InvalidHostName()) => (), _ => core@1/test.check(t, false) }\nmatch std@1/uri.resolve(base, \"http://127.0.0.1/a\") { Ok(parsed_uri) => core@1/test.check(t, std@1/uri.format(parsed_uri) == \"http://127.0.0.1/a\"), Error(_) => core@1/test.check(t, false) }",
     );
 }
 
@@ -411,7 +411,7 @@ fn zig_uri_decimal_ports_and_signed_hex_pairs_follow_fmt_parse_int() {
     ] {
         execute(&parsed(
             &format!("http://example.com:{text}/"),
-            &format!("core@1/test.check(t, uri.port == Some({port}))"),
+            &format!("core@1/test.check(t, parsed_uri.port == Some({port}))"),
         ));
     }
     bad(

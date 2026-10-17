@@ -7,7 +7,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   map.insert(mut a, "e\u{301}", "AZ")
   map.insert(mut b, "e\u{301}", "AZ")
   map.insert(mut b, "é", "😀")
-  failure.check(a != b && std@1/map.same_entries(a, b), TextInvariant())
+  failure.check(a != b && map.same_entries(a, b), TextInvariant())
   failure.check(
     match map.get(a, "é") {
       Some(v) => v == "😀",
@@ -15,7 +15,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     },
     TextInvariant()
   )
-  failure.check(std@1/map.same_entries(copy a, take b), TextInvariant())
-  failure.check(std@1/map.same_entries(a, a), TextInvariant())
+  failure.check(map.same_entries(copy a, take b), TextInvariant())
+  failure.check(map.same_entries(a, a), TextInvariant())
   Ok(())
 }

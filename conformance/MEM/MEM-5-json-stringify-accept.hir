@@ -1,5 +1,5 @@
 // rule: MEM-5
 // expect: accept
-fn probe(s: String) -> Result[String, std@1/json.JsonError] uses {} {
-  std@1/json.stringify(Text(s))
+fn probe(s: String) -> Result[String, json.JsonError] uses {} {
+  json.stringify(Text(s))
 }

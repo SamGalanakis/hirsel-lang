@@ -1,5 +1,5 @@
 // rule: MEM-5
 // expect: accept
 fn main() -> String {
-  std@1/bool.to_string(true)
+  bool.to_string(true)
 }

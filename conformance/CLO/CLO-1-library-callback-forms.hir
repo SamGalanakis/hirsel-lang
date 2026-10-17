@@ -54,11 +54,11 @@ fn probe_iter_map_literal(take it: Iter[u64]) {
 }
 
 fn probe_test_for_all_named(t: Test) {
-  std@1/test.for_all(t, generate, law)
+  test.for_all(t, generate, law)
 }
 
 fn probe_test_for_all_literal(t: Test) {
-  std@1/test.for_all(
+  test.for_all(
     t,
     fn(seed: Test) -> u64 {
       0
@@ -68,11 +68,11 @@ fn probe_test_for_all_literal(t: Test) {
 }
 
 fn probe_test_for_all_law_named(t: Test) {
-  std@1/test.for_all(t, generate, law)
+  test.for_all(t, generate, law)
 }
 
 fn probe_test_for_all_law_literal(t: Test) {
-  std@1/test.for_all(
+  test.for_all(
     t,
     generate,
     fn(n: u64) -> bool uses {} {

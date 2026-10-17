@@ -20,7 +20,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     inspect(t)
   }
   let n = repeat(f)
-  let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+  let _ = out.print(io.stdout(rt)?, u64.to_string(n))
   let _ = out.print(io.stdout(rt)?, "\n")
   Ok(())
 }

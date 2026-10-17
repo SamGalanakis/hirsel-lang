@@ -17,7 +17,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let a = Watch(data: b"aaa", label: "A\n", out: out)
   let b = Watch(data: b"bbb", label: "B\n", out: out)
   out.print(out, "before\n") ? Output
-  std@1/bytes.replace(a.data, b"", b.data)
+  bytes.replace(a.data, b"", b.data)
   Ok(())
 }
 

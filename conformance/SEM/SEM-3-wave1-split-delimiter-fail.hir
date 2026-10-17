@@ -1,24 +1,24 @@
 // rule: SEM-3
 // expect: fail SEM-3 at line 24
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
-  std@1/string.split("a", "")
+  string.split("a", "")
   Ok(())
 }
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
-// The failure anchor is the delimiter check in std@1/string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.
+// The failure anchor is the delimiter check in string.

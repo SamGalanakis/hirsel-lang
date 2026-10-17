@@ -6,5 +6,5 @@ type Value {
 }
 
 fn trial(t: Test, v: Value) {
-  std@1/test.equal(t, v, v)
+  test.equal(t, v, v)
 }

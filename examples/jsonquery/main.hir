@@ -1,5 +1,5 @@
 // Inspect a boxed node through patterns while keeping its borrowed provenance.
-fn value_view(item: box std@1/json.Value) -> std@1/json.Value in item {
+fn value_view(item: box json.Value) -> json.Value in item {
   match item {
     Null() => Null(),
     Bool(b) => Bool(b),
@@ -17,13 +17,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     Ok(p) => path.text(p),
     Error(_) => "flock",
   }
-  let value = match std@1/json.parse(take text) {
+  let value = match json.parse(take text) {
     Ok(v) => take v,
     Error(_) => return Error(Invalid()),
   }
   let output = match value {
     Object(object) => match map.get(object, key) {
-      Some(item) => match std@1/json.stringify(value_view(item)) {
+      Some(item) => match json.stringify(value_view(item)) {
         Ok(s) => copy s,
         Error(_) => return Error(Invalid()),
       },
@@ -31,5 +31,5 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     },
     _ => return Error(Invalid()),
   }
-  common.print(rt, std@1/string.concat(output, "\n"))
+  common.print(rt, string.concat(output, "\n"))
 }

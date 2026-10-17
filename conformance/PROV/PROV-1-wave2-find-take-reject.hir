@@ -1,6 +1,6 @@
 // rule: PROV-1
 // expect: reject PROV-1 at line 4
 fn probe(take s: String) -> () {
-  std@1/string.find(take s, "é")
+  string.find(take s, "é")
   ()
 }

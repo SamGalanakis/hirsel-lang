@@ -13,526 +13,515 @@ fn text(take out: List[u8]) -> String {
 
 pub fn main(t: Test) -> Result[(), ()] {
   let mut a1: List[u8] = [120u8, 61u8]
-  std@1/u8.format_into(0u8, mut a1)
+  u8.format_into(0u8, mut a1)
   core@1/test.check(t, text(take a1) == "x=0")
   let mut a2: List[u8] = []
-  std@1/u8.format_into(0u8, mut a2)
-  core@1/test.check(t, text(take a2) == std@1/u8.to_string(0u8))
+  u8.format_into(0u8, mut a2)
+  core@1/test.check(t, text(take a2) == u8.to_string(0u8))
   let mut a3: List[u8] = [120u8, 61u8]
-  std@1/u8.format_into(1u8, mut a3)
+  u8.format_into(1u8, mut a3)
   core@1/test.check(t, text(take a3) == "x=1")
   let mut a4: List[u8] = []
-  std@1/u8.format_into(1u8, mut a4)
-  core@1/test.check(t, text(take a4) == std@1/u8.to_string(1u8))
+  u8.format_into(1u8, mut a4)
+  core@1/test.check(t, text(take a4) == u8.to_string(1u8))
   let mut a5: List[u8] = [120u8, 61u8]
-  std@1/u8.format_into(55u8, mut a5)
+  u8.format_into(55u8, mut a5)
   core@1/test.check(t, text(take a5) == "x=55")
   let mut a6: List[u8] = []
-  std@1/u8.format_into(55u8, mut a6)
-  core@1/test.check(t, text(take a6) == std@1/u8.to_string(55u8))
+  u8.format_into(55u8, mut a6)
+  core@1/test.check(t, text(take a6) == u8.to_string(55u8))
   let mut a7: List[u8] = [120u8, 61u8]
-  std@1/u8.format_into(255u8, mut a7)
+  u8.format_into(255u8, mut a7)
   core@1/test.check(t, text(take a7) == "x=255")
   let mut a8: List[u8] = []
-  std@1/u8.format_into(255u8, mut a8)
-  core@1/test.check(t, text(take a8) == std@1/u8.to_string(255u8))
+  u8.format_into(255u8, mut a8)
+  core@1/test.check(t, text(take a8) == u8.to_string(255u8))
   let mut a9: List[u8] = [120u8, 61u8]
-  std@1/u16.format_into(0u16, mut a9)
+  u16.format_into(0u16, mut a9)
   core@1/test.check(t, text(take a9) == "x=0")
   let mut a10: List[u8] = []
-  std@1/u16.format_into(0u16, mut a10)
-  core@1/test.check(t, text(take a10) == std@1/u16.to_string(0u16))
+  u16.format_into(0u16, mut a10)
+  core@1/test.check(t, text(take a10) == u16.to_string(0u16))
   let mut a11: List[u8] = [120u8, 61u8]
-  std@1/u16.format_into(1u16, mut a11)
+  u16.format_into(1u16, mut a11)
   core@1/test.check(t, text(take a11) == "x=1")
   let mut a12: List[u8] = []
-  std@1/u16.format_into(1u16, mut a12)
-  core@1/test.check(t, text(take a12) == std@1/u16.to_string(1u16))
+  u16.format_into(1u16, mut a12)
+  core@1/test.check(t, text(take a12) == u16.to_string(1u16))
   let mut a13: List[u8] = [120u8, 61u8]
-  std@1/u16.format_into(55u16, mut a13)
+  u16.format_into(55u16, mut a13)
   core@1/test.check(t, text(take a13) == "x=55")
   let mut a14: List[u8] = []
-  std@1/u16.format_into(55u16, mut a14)
-  core@1/test.check(t, text(take a14) == std@1/u16.to_string(55u16))
+  u16.format_into(55u16, mut a14)
+  core@1/test.check(t, text(take a14) == u16.to_string(55u16))
   let mut a15: List[u8] = [120u8, 61u8]
-  std@1/u16.format_into(65535u16, mut a15)
+  u16.format_into(65535u16, mut a15)
   core@1/test.check(t, text(take a15) == "x=65535")
   let mut a16: List[u8] = []
-  std@1/u16.format_into(65535u16, mut a16)
-  core@1/test.check(t, text(take a16) == std@1/u16.to_string(65535u16))
+  u16.format_into(65535u16, mut a16)
+  core@1/test.check(t, text(take a16) == u16.to_string(65535u16))
   let mut a17: List[u8] = [120u8, 61u8]
-  std@1/u32.format_into(0u32, mut a17)
+  u32.format_into(0u32, mut a17)
   core@1/test.check(t, text(take a17) == "x=0")
   let mut a18: List[u8] = []
-  std@1/u32.format_into(0u32, mut a18)
-  core@1/test.check(t, text(take a18) == std@1/u32.to_string(0u32))
+  u32.format_into(0u32, mut a18)
+  core@1/test.check(t, text(take a18) == u32.to_string(0u32))
   let mut a19: List[u8] = [120u8, 61u8]
-  std@1/u32.format_into(1u32, mut a19)
+  u32.format_into(1u32, mut a19)
   core@1/test.check(t, text(take a19) == "x=1")
   let mut a20: List[u8] = []
-  std@1/u32.format_into(1u32, mut a20)
-  core@1/test.check(t, text(take a20) == std@1/u32.to_string(1u32))
+  u32.format_into(1u32, mut a20)
+  core@1/test.check(t, text(take a20) == u32.to_string(1u32))
   let mut a21: List[u8] = [120u8, 61u8]
-  std@1/u32.format_into(55u32, mut a21)
+  u32.format_into(55u32, mut a21)
   core@1/test.check(t, text(take a21) == "x=55")
   let mut a22: List[u8] = []
-  std@1/u32.format_into(55u32, mut a22)
-  core@1/test.check(t, text(take a22) == std@1/u32.to_string(55u32))
+  u32.format_into(55u32, mut a22)
+  core@1/test.check(t, text(take a22) == u32.to_string(55u32))
   let mut a23: List[u8] = [120u8, 61u8]
-  std@1/u32.format_into(4294967295u32, mut a23)
+  u32.format_into(4294967295u32, mut a23)
   core@1/test.check(t, text(take a23) == "x=4294967295")
   let mut a24: List[u8] = []
-  std@1/u32.format_into(4294967295u32, mut a24)
-  core@1/test.check(t, text(take a24) == std@1/u32.to_string(4294967295u32))
+  u32.format_into(4294967295u32, mut a24)
+  core@1/test.check(t, text(take a24) == u32.to_string(4294967295u32))
   let mut a25: List[u8] = [120u8, 61u8]
-  std@1/u64.format_into(0u64, mut a25)
+  u64.format_into(0u64, mut a25)
   core@1/test.check(t, text(take a25) == "x=0")
   let mut a26: List[u8] = []
-  std@1/u64.format_into(0u64, mut a26)
-  core@1/test.check(t, text(take a26) == std@1/u64.to_string(0u64))
+  u64.format_into(0u64, mut a26)
+  core@1/test.check(t, text(take a26) == u64.to_string(0u64))
   let mut a27: List[u8] = [120u8, 61u8]
-  std@1/u64.format_into(1u64, mut a27)
+  u64.format_into(1u64, mut a27)
   core@1/test.check(t, text(take a27) == "x=1")
   let mut a28: List[u8] = []
-  std@1/u64.format_into(1u64, mut a28)
-  core@1/test.check(t, text(take a28) == std@1/u64.to_string(1u64))
+  u64.format_into(1u64, mut a28)
+  core@1/test.check(t, text(take a28) == u64.to_string(1u64))
   let mut a29: List[u8] = [120u8, 61u8]
-  std@1/u64.format_into(55u64, mut a29)
+  u64.format_into(55u64, mut a29)
   core@1/test.check(t, text(take a29) == "x=55")
   let mut a30: List[u8] = []
-  std@1/u64.format_into(55u64, mut a30)
-  core@1/test.check(t, text(take a30) == std@1/u64.to_string(55u64))
+  u64.format_into(55u64, mut a30)
+  core@1/test.check(t, text(take a30) == u64.to_string(55u64))
   let mut a31: List[u8] = [120u8, 61u8]
-  std@1/u64.format_into(18446744073709551615u64, mut a31)
+  u64.format_into(18446744073709551615u64, mut a31)
   core@1/test.check(t, text(take a31) == "x=18446744073709551615")
   let mut a32: List[u8] = []
-  std@1/u64.format_into(18446744073709551615u64, mut a32)
-  core@1/test.check(t, text(take a32) == std@1/u64.to_string(18446744073709551615u64))
+  u64.format_into(18446744073709551615u64, mut a32)
+  core@1/test.check(t, text(take a32) == u64.to_string(18446744073709551615u64))
   let mut a33: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(0u128, mut a33)
+  u128.format_into(0u128, mut a33)
   core@1/test.check(t, text(take a33) == "x=0")
   let mut a34: List[u8] = []
-  std@1/u128.format_into(0u128, mut a34)
-  core@1/test.check(t, text(take a34) == std@1/u128.to_string(0u128))
+  u128.format_into(0u128, mut a34)
+  core@1/test.check(t, text(take a34) == u128.to_string(0u128))
   let mut a35: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(1u128, mut a35)
+  u128.format_into(1u128, mut a35)
   core@1/test.check(t, text(take a35) == "x=1")
   let mut a36: List[u8] = []
-  std@1/u128.format_into(1u128, mut a36)
-  core@1/test.check(t, text(take a36) == std@1/u128.to_string(1u128))
+  u128.format_into(1u128, mut a36)
+  core@1/test.check(t, text(take a36) == u128.to_string(1u128))
   let mut a37: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(55u128, mut a37)
+  u128.format_into(55u128, mut a37)
   core@1/test.check(t, text(take a37) == "x=55")
   let mut a38: List[u8] = []
-  std@1/u128.format_into(55u128, mut a38)
-  core@1/test.check(t, text(take a38) == std@1/u128.to_string(55u128))
+  u128.format_into(55u128, mut a38)
+  core@1/test.check(t, text(take a38) == u128.to_string(55u128))
   let mut a39: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(9999999999999999u128, mut a39)
+  u128.format_into(9999999999999999u128, mut a39)
   core@1/test.check(t, text(take a39) == "x=9999999999999999")
   let mut a40: List[u8] = []
-  std@1/u128.format_into(9999999999999999u128, mut a40)
-  core@1/test.check(t, text(take a40) == std@1/u128.to_string(9999999999999999u128))
+  u128.format_into(9999999999999999u128, mut a40)
+  core@1/test.check(t, text(take a40) == u128.to_string(9999999999999999u128))
   let mut a41: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(10000000000000000u128, mut a41)
+  u128.format_into(10000000000000000u128, mut a41)
   core@1/test.check(t, text(take a41) == "x=10000000000000000")
   let mut a42: List[u8] = []
-  std@1/u128.format_into(10000000000000000u128, mut a42)
-  core@1/test.check(t, text(take a42) == std@1/u128.to_string(10000000000000000u128))
+  u128.format_into(10000000000000000u128, mut a42)
+  core@1/test.check(t, text(take a42) == u128.to_string(10000000000000000u128))
   let mut a43: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(10000000000000001u128, mut a43)
+  u128.format_into(10000000000000001u128, mut a43)
   core@1/test.check(t, text(take a43) == "x=10000000000000001")
   let mut a44: List[u8] = []
-  std@1/u128.format_into(10000000000000001u128, mut a44)
-  core@1/test.check(t, text(take a44) == std@1/u128.to_string(10000000000000001u128))
+  u128.format_into(10000000000000001u128, mut a44)
+  core@1/test.check(t, text(take a44) == u128.to_string(10000000000000001u128))
   let mut a45: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(18446744073709551615u128, mut a45)
+  u128.format_into(18446744073709551615u128, mut a45)
   core@1/test.check(t, text(take a45) == "x=18446744073709551615")
   let mut a46: List[u8] = []
-  std@1/u128.format_into(18446744073709551615u128, mut a46)
-  core@1/test.check(t, text(take a46) == std@1/u128.to_string(18446744073709551615u128))
+  u128.format_into(18446744073709551615u128, mut a46)
+  core@1/test.check(t, text(take a46) == u128.to_string(18446744073709551615u128))
   let mut a47: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(18446744073709551616u128, mut a47)
+  u128.format_into(18446744073709551616u128, mut a47)
   core@1/test.check(t, text(take a47) == "x=18446744073709551616")
   let mut a48: List[u8] = []
-  std@1/u128.format_into(18446744073709551616u128, mut a48)
-  core@1/test.check(t, text(take a48) == std@1/u128.to_string(18446744073709551616u128))
+  u128.format_into(18446744073709551616u128, mut a48)
+  core@1/test.check(t, text(take a48) == u128.to_string(18446744073709551616u128))
   let mut a49: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(99999999999999999999999999999999u128, mut a49)
+  u128.format_into(99999999999999999999999999999999u128, mut a49)
   core@1/test.check(t, text(take a49) == "x=99999999999999999999999999999999")
   let mut a50: List[u8] = []
-  std@1/u128.format_into(99999999999999999999999999999999u128, mut a50)
+  u128.format_into(99999999999999999999999999999999u128, mut a50)
   core@1/test.check(
     t,
-    text(take a50) == std@1/u128.to_string(99999999999999999999999999999999u128)
+    text(take a50) == u128.to_string(99999999999999999999999999999999u128)
   )
   let mut a51: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(100000000000000000000000000000000u128, mut a51)
+  u128.format_into(100000000000000000000000000000000u128, mut a51)
   core@1/test.check(t, text(take a51) == "x=100000000000000000000000000000000")
   let mut a52: List[u8] = []
-  std@1/u128.format_into(100000000000000000000000000000000u128, mut a52)
+  u128.format_into(100000000000000000000000000000000u128, mut a52)
   core@1/test.check(
     t,
-    text(take a52) == std@1/u128.to_string(100000000000000000000000000000000u128)
+    text(take a52) == u128.to_string(100000000000000000000000000000000u128)
   )
   let mut a53: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(100000000000000000000000000000001u128, mut a53)
+  u128.format_into(100000000000000000000000000000001u128, mut a53)
   core@1/test.check(t, text(take a53) == "x=100000000000000000000000000000001")
   let mut a54: List[u8] = []
-  std@1/u128.format_into(100000000000000000000000000000001u128, mut a54)
+  u128.format_into(100000000000000000000000000000001u128, mut a54)
   core@1/test.check(
     t,
-    text(take a54) == std@1/u128.to_string(100000000000000000000000000000001u128)
+    text(take a54) == u128.to_string(100000000000000000000000000000001u128)
   )
   let mut a55: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(100000000000000000000000000000000000000u128, mut a55)
+  u128.format_into(100000000000000000000000000000000000000u128, mut a55)
   core@1/test.check(t, text(take a55) == "x=100000000000000000000000000000000000000")
   let mut a56: List[u8] = []
-  std@1/u128.format_into(100000000000000000000000000000000000000u128, mut a56)
+  u128.format_into(100000000000000000000000000000000000000u128, mut a56)
   core@1/test.check(
     t,
-    text(take a56) == std@1/u128.to_string(100000000000000000000000000000000000000u128)
+    text(take a56) == u128.to_string(100000000000000000000000000000000000000u128)
   )
   let mut a57: List[u8] = [120u8, 61u8]
-  std@1/u128.format_into(340282366920938463463374607431768211455u128, mut a57)
+  u128.format_into(340282366920938463463374607431768211455u128, mut a57)
   core@1/test.check(t, text(take a57) == "x=340282366920938463463374607431768211455")
   let mut a58: List[u8] = []
-  std@1/u128.format_into(340282366920938463463374607431768211455u128, mut a58)
+  u128.format_into(340282366920938463463374607431768211455u128, mut a58)
   core@1/test.check(
     t,
-    text(take a58) == std@1/u128.to_string(340282366920938463463374607431768211455u128)
+    text(take a58) == u128.to_string(340282366920938463463374607431768211455u128)
   )
   let mut a59: List[u8] = [120u8, 61u8]
-  std@1/i8.format_into(0i8, mut a59)
+  i8.format_into(0i8, mut a59)
   core@1/test.check(t, text(take a59) == "x=0")
   let mut a60: List[u8] = []
-  std@1/i8.format_into(0i8, mut a60)
-  core@1/test.check(t, text(take a60) == std@1/i8.to_string(0i8))
+  i8.format_into(0i8, mut a60)
+  core@1/test.check(t, text(take a60) == i8.to_string(0i8))
   let mut a61: List[u8] = [120u8, 61u8]
-  std@1/i8.format_into(1i8, mut a61)
+  i8.format_into(1i8, mut a61)
   core@1/test.check(t, text(take a61) == "x=1")
   let mut a62: List[u8] = []
-  std@1/i8.format_into(1i8, mut a62)
-  core@1/test.check(t, text(take a62) == std@1/i8.to_string(1i8))
+  i8.format_into(1i8, mut a62)
+  core@1/test.check(t, text(take a62) == i8.to_string(1i8))
   let mut a63: List[u8] = [120u8, 61u8]
-  std@1/i8.format_into(55i8, mut a63)
+  i8.format_into(55i8, mut a63)
   core@1/test.check(t, text(take a63) == "x=55")
   let mut a64: List[u8] = []
-  std@1/i8.format_into(55i8, mut a64)
-  core@1/test.check(t, text(take a64) == std@1/i8.to_string(55i8))
+  i8.format_into(55i8, mut a64)
+  core@1/test.check(t, text(take a64) == i8.to_string(55i8))
   let mut a65: List[u8] = [120u8, 61u8]
-  std@1/i8.format_into(127i8, mut a65)
+  i8.format_into(127i8, mut a65)
   core@1/test.check(t, text(take a65) == "x=127")
   let mut a66: List[u8] = []
-  std@1/i8.format_into(127i8, mut a66)
-  core@1/test.check(t, text(take a66) == std@1/i8.to_string(127i8))
+  i8.format_into(127i8, mut a66)
+  core@1/test.check(t, text(take a66) == i8.to_string(127i8))
   let mut a67: List[u8] = [120u8, 61u8]
-  std@1/i8.format_into(-128i8, mut a67)
+  i8.format_into(-128i8, mut a67)
   core@1/test.check(t, text(take a67) == "x=-128")
   let mut a68: List[u8] = []
-  std@1/i8.format_into(-128i8, mut a68)
-  core@1/test.check(t, text(take a68) == std@1/i8.to_string(-128i8))
+  i8.format_into(-128i8, mut a68)
+  core@1/test.check(t, text(take a68) == i8.to_string(-128i8))
   let mut a69: List[u8] = [120u8, 61u8]
-  std@1/i16.format_into(0i16, mut a69)
+  i16.format_into(0i16, mut a69)
   core@1/test.check(t, text(take a69) == "x=0")
   let mut a70: List[u8] = []
-  std@1/i16.format_into(0i16, mut a70)
-  core@1/test.check(t, text(take a70) == std@1/i16.to_string(0i16))
+  i16.format_into(0i16, mut a70)
+  core@1/test.check(t, text(take a70) == i16.to_string(0i16))
   let mut a71: List[u8] = [120u8, 61u8]
-  std@1/i16.format_into(1i16, mut a71)
+  i16.format_into(1i16, mut a71)
   core@1/test.check(t, text(take a71) == "x=1")
   let mut a72: List[u8] = []
-  std@1/i16.format_into(1i16, mut a72)
-  core@1/test.check(t, text(take a72) == std@1/i16.to_string(1i16))
+  i16.format_into(1i16, mut a72)
+  core@1/test.check(t, text(take a72) == i16.to_string(1i16))
   let mut a73: List[u8] = [120u8, 61u8]
-  std@1/i16.format_into(55i16, mut a73)
+  i16.format_into(55i16, mut a73)
   core@1/test.check(t, text(take a73) == "x=55")
   let mut a74: List[u8] = []
-  std@1/i16.format_into(55i16, mut a74)
-  core@1/test.check(t, text(take a74) == std@1/i16.to_string(55i16))
+  i16.format_into(55i16, mut a74)
+  core@1/test.check(t, text(take a74) == i16.to_string(55i16))
   let mut a75: List[u8] = [120u8, 61u8]
-  std@1/i16.format_into(32767i16, mut a75)
+  i16.format_into(32767i16, mut a75)
   core@1/test.check(t, text(take a75) == "x=32767")
   let mut a76: List[u8] = []
-  std@1/i16.format_into(32767i16, mut a76)
-  core@1/test.check(t, text(take a76) == std@1/i16.to_string(32767i16))
+  i16.format_into(32767i16, mut a76)
+  core@1/test.check(t, text(take a76) == i16.to_string(32767i16))
   let mut a77: List[u8] = [120u8, 61u8]
-  std@1/i16.format_into(-32768i16, mut a77)
+  i16.format_into(-32768i16, mut a77)
   core@1/test.check(t, text(take a77) == "x=-32768")
   let mut a78: List[u8] = []
-  std@1/i16.format_into(-32768i16, mut a78)
-  core@1/test.check(t, text(take a78) == std@1/i16.to_string(-32768i16))
+  i16.format_into(-32768i16, mut a78)
+  core@1/test.check(t, text(take a78) == i16.to_string(-32768i16))
   let mut a79: List[u8] = [120u8, 61u8]
-  std@1/i32.format_into(0i32, mut a79)
+  i32.format_into(0i32, mut a79)
   core@1/test.check(t, text(take a79) == "x=0")
   let mut a80: List[u8] = []
-  std@1/i32.format_into(0i32, mut a80)
-  core@1/test.check(t, text(take a80) == std@1/i32.to_string(0i32))
+  i32.format_into(0i32, mut a80)
+  core@1/test.check(t, text(take a80) == i32.to_string(0i32))
   let mut a81: List[u8] = [120u8, 61u8]
-  std@1/i32.format_into(1i32, mut a81)
+  i32.format_into(1i32, mut a81)
   core@1/test.check(t, text(take a81) == "x=1")
   let mut a82: List[u8] = []
-  std@1/i32.format_into(1i32, mut a82)
-  core@1/test.check(t, text(take a82) == std@1/i32.to_string(1i32))
+  i32.format_into(1i32, mut a82)
+  core@1/test.check(t, text(take a82) == i32.to_string(1i32))
   let mut a83: List[u8] = [120u8, 61u8]
-  std@1/i32.format_into(55i32, mut a83)
+  i32.format_into(55i32, mut a83)
   core@1/test.check(t, text(take a83) == "x=55")
   let mut a84: List[u8] = []
-  std@1/i32.format_into(55i32, mut a84)
-  core@1/test.check(t, text(take a84) == std@1/i32.to_string(55i32))
+  i32.format_into(55i32, mut a84)
+  core@1/test.check(t, text(take a84) == i32.to_string(55i32))
   let mut a85: List[u8] = [120u8, 61u8]
-  std@1/i32.format_into(2147483647i32, mut a85)
+  i32.format_into(2147483647i32, mut a85)
   core@1/test.check(t, text(take a85) == "x=2147483647")
   let mut a86: List[u8] = []
-  std@1/i32.format_into(2147483647i32, mut a86)
-  core@1/test.check(t, text(take a86) == std@1/i32.to_string(2147483647i32))
+  i32.format_into(2147483647i32, mut a86)
+  core@1/test.check(t, text(take a86) == i32.to_string(2147483647i32))
   let mut a87: List[u8] = [120u8, 61u8]
-  std@1/i32.format_into(-2147483648i32, mut a87)
+  i32.format_into(-2147483648i32, mut a87)
   core@1/test.check(t, text(take a87) == "x=-2147483648")
   let mut a88: List[u8] = []
-  std@1/i32.format_into(-2147483648i32, mut a88)
-  core@1/test.check(t, text(take a88) == std@1/i32.to_string(-2147483648i32))
+  i32.format_into(-2147483648i32, mut a88)
+  core@1/test.check(t, text(take a88) == i32.to_string(-2147483648i32))
   let mut a89: List[u8] = [120u8, 61u8]
-  std@1/i64.format_into(0i64, mut a89)
+  i64.format_into(0i64, mut a89)
   core@1/test.check(t, text(take a89) == "x=0")
   let mut a90: List[u8] = []
-  std@1/i64.format_into(0i64, mut a90)
-  core@1/test.check(t, text(take a90) == std@1/i64.to_string(0i64))
+  i64.format_into(0i64, mut a90)
+  core@1/test.check(t, text(take a90) == i64.to_string(0i64))
   let mut a91: List[u8] = [120u8, 61u8]
-  std@1/i64.format_into(1i64, mut a91)
+  i64.format_into(1i64, mut a91)
   core@1/test.check(t, text(take a91) == "x=1")
   let mut a92: List[u8] = []
-  std@1/i64.format_into(1i64, mut a92)
-  core@1/test.check(t, text(take a92) == std@1/i64.to_string(1i64))
+  i64.format_into(1i64, mut a92)
+  core@1/test.check(t, text(take a92) == i64.to_string(1i64))
   let mut a93: List[u8] = [120u8, 61u8]
-  std@1/i64.format_into(55i64, mut a93)
+  i64.format_into(55i64, mut a93)
   core@1/test.check(t, text(take a93) == "x=55")
   let mut a94: List[u8] = []
-  std@1/i64.format_into(55i64, mut a94)
-  core@1/test.check(t, text(take a94) == std@1/i64.to_string(55i64))
+  i64.format_into(55i64, mut a94)
+  core@1/test.check(t, text(take a94) == i64.to_string(55i64))
   let mut a95: List[u8] = [120u8, 61u8]
-  std@1/i64.format_into(9223372036854775807i64, mut a95)
+  i64.format_into(9223372036854775807i64, mut a95)
   core@1/test.check(t, text(take a95) == "x=9223372036854775807")
   let mut a96: List[u8] = []
-  std@1/i64.format_into(9223372036854775807i64, mut a96)
-  core@1/test.check(t, text(take a96) == std@1/i64.to_string(9223372036854775807i64))
+  i64.format_into(9223372036854775807i64, mut a96)
+  core@1/test.check(t, text(take a96) == i64.to_string(9223372036854775807i64))
   let mut a97: List[u8] = [120u8, 61u8]
-  std@1/i64.format_into(-9223372036854775808i64, mut a97)
+  i64.format_into(-9223372036854775808i64, mut a97)
   core@1/test.check(t, text(take a97) == "x=-9223372036854775808")
   let mut a98: List[u8] = []
-  std@1/i64.format_into(-9223372036854775808i64, mut a98)
-  core@1/test.check(t, text(take a98) == std@1/i64.to_string(-9223372036854775808i64))
+  i64.format_into(-9223372036854775808i64, mut a98)
+  core@1/test.check(t, text(take a98) == i64.to_string(-9223372036854775808i64))
   let mut a99: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(0i128, mut a99)
+  i128.format_into(0i128, mut a99)
   core@1/test.check(t, text(take a99) == "x=0")
   let mut a100: List[u8] = []
-  std@1/i128.format_into(0i128, mut a100)
-  core@1/test.check(t, text(take a100) == std@1/i128.to_string(0i128))
+  i128.format_into(0i128, mut a100)
+  core@1/test.check(t, text(take a100) == i128.to_string(0i128))
   let mut a101: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(1i128, mut a101)
+  i128.format_into(1i128, mut a101)
   core@1/test.check(t, text(take a101) == "x=1")
   let mut a102: List[u8] = []
-  std@1/i128.format_into(1i128, mut a102)
-  core@1/test.check(t, text(take a102) == std@1/i128.to_string(1i128))
+  i128.format_into(1i128, mut a102)
+  core@1/test.check(t, text(take a102) == i128.to_string(1i128))
   let mut a103: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(55i128, mut a103)
+  i128.format_into(55i128, mut a103)
   core@1/test.check(t, text(take a103) == "x=55")
   let mut a104: List[u8] = []
-  std@1/i128.format_into(55i128, mut a104)
-  core@1/test.check(t, text(take a104) == std@1/i128.to_string(55i128))
+  i128.format_into(55i128, mut a104)
+  core@1/test.check(t, text(take a104) == i128.to_string(55i128))
   let mut a105: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(9999999999999999i128, mut a105)
+  i128.format_into(9999999999999999i128, mut a105)
   core@1/test.check(t, text(take a105) == "x=9999999999999999")
   let mut a106: List[u8] = []
-  std@1/i128.format_into(9999999999999999i128, mut a106)
-  core@1/test.check(t, text(take a106) == std@1/i128.to_string(9999999999999999i128))
+  i128.format_into(9999999999999999i128, mut a106)
+  core@1/test.check(t, text(take a106) == i128.to_string(9999999999999999i128))
   let mut a107: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(-10000000000000000i128, mut a107)
+  i128.format_into(-10000000000000000i128, mut a107)
   core@1/test.check(t, text(take a107) == "x=-10000000000000000")
   let mut a108: List[u8] = []
-  std@1/i128.format_into(-10000000000000000i128, mut a108)
-  core@1/test.check(t, text(take a108) == std@1/i128.to_string(-10000000000000000i128))
+  i128.format_into(-10000000000000000i128, mut a108)
+  core@1/test.check(t, text(take a108) == i128.to_string(-10000000000000000i128))
   let mut a109: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(10000000000000000i128, mut a109)
+  i128.format_into(10000000000000000i128, mut a109)
   core@1/test.check(t, text(take a109) == "x=10000000000000000")
   let mut a110: List[u8] = []
-  std@1/i128.format_into(10000000000000000i128, mut a110)
-  core@1/test.check(t, text(take a110) == std@1/i128.to_string(10000000000000000i128))
+  i128.format_into(10000000000000000i128, mut a110)
+  core@1/test.check(t, text(take a110) == i128.to_string(10000000000000000i128))
   let mut a111: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(10000000000000001i128, mut a111)
+  i128.format_into(10000000000000001i128, mut a111)
   core@1/test.check(t, text(take a111) == "x=10000000000000001")
   let mut a112: List[u8] = []
-  std@1/i128.format_into(10000000000000001i128, mut a112)
-  core@1/test.check(t, text(take a112) == std@1/i128.to_string(10000000000000001i128))
+  i128.format_into(10000000000000001i128, mut a112)
+  core@1/test.check(t, text(take a112) == i128.to_string(10000000000000001i128))
   let mut a113: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(18446744073709551615i128, mut a113)
+  i128.format_into(18446744073709551615i128, mut a113)
   core@1/test.check(t, text(take a113) == "x=18446744073709551615")
   let mut a114: List[u8] = []
-  std@1/i128.format_into(18446744073709551615i128, mut a114)
-  core@1/test.check(
-    t,
-    text(take a114) == std@1/i128.to_string(18446744073709551615i128)
-  )
+  i128.format_into(18446744073709551615i128, mut a114)
+  core@1/test.check(t, text(take a114) == i128.to_string(18446744073709551615i128))
   let mut a115: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(-18446744073709551616i128, mut a115)
+  i128.format_into(-18446744073709551616i128, mut a115)
   core@1/test.check(t, text(take a115) == "x=-18446744073709551616")
   let mut a116: List[u8] = []
-  std@1/i128.format_into(-18446744073709551616i128, mut a116)
-  core@1/test.check(
-    t,
-    text(take a116) == std@1/i128.to_string(-18446744073709551616i128)
-  )
+  i128.format_into(-18446744073709551616i128, mut a116)
+  core@1/test.check(t, text(take a116) == i128.to_string(-18446744073709551616i128))
   let mut a117: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(18446744073709551616i128, mut a117)
+  i128.format_into(18446744073709551616i128, mut a117)
   core@1/test.check(t, text(take a117) == "x=18446744073709551616")
   let mut a118: List[u8] = []
-  std@1/i128.format_into(18446744073709551616i128, mut a118)
-  core@1/test.check(
-    t,
-    text(take a118) == std@1/i128.to_string(18446744073709551616i128)
-  )
+  i128.format_into(18446744073709551616i128, mut a118)
+  core@1/test.check(t, text(take a118) == i128.to_string(18446744073709551616i128))
   let mut a119: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(99999999999999999999999999999999i128, mut a119)
+  i128.format_into(99999999999999999999999999999999i128, mut a119)
   core@1/test.check(t, text(take a119) == "x=99999999999999999999999999999999")
   let mut a120: List[u8] = []
-  std@1/i128.format_into(99999999999999999999999999999999i128, mut a120)
+  i128.format_into(99999999999999999999999999999999i128, mut a120)
   core@1/test.check(
     t,
-    text(take a120) == std@1/i128.to_string(99999999999999999999999999999999i128)
+    text(take a120) == i128.to_string(99999999999999999999999999999999i128)
   )
   let mut a121: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(100000000000000000000000000000000i128, mut a121)
+  i128.format_into(100000000000000000000000000000000i128, mut a121)
   core@1/test.check(t, text(take a121) == "x=100000000000000000000000000000000")
   let mut a122: List[u8] = []
-  std@1/i128.format_into(100000000000000000000000000000000i128, mut a122)
+  i128.format_into(100000000000000000000000000000000i128, mut a122)
   core@1/test.check(
     t,
-    text(take a122) == std@1/i128.to_string(100000000000000000000000000000000i128)
+    text(take a122) == i128.to_string(100000000000000000000000000000000i128)
   )
   let mut a123: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(-100000000000000000000000000000001i128, mut a123)
+  i128.format_into(-100000000000000000000000000000001i128, mut a123)
   core@1/test.check(t, text(take a123) == "x=-100000000000000000000000000000001")
   let mut a124: List[u8] = []
-  std@1/i128.format_into(-100000000000000000000000000000001i128, mut a124)
+  i128.format_into(-100000000000000000000000000000001i128, mut a124)
   core@1/test.check(
     t,
-    text(take a124) == std@1/i128.to_string(-100000000000000000000000000000001i128)
+    text(take a124) == i128.to_string(-100000000000000000000000000000001i128)
   )
   let mut a125: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(100000000000000000000000000000001i128, mut a125)
+  i128.format_into(100000000000000000000000000000001i128, mut a125)
   core@1/test.check(t, text(take a125) == "x=100000000000000000000000000000001")
   let mut a126: List[u8] = []
-  std@1/i128.format_into(100000000000000000000000000000001i128, mut a126)
+  i128.format_into(100000000000000000000000000000001i128, mut a126)
   core@1/test.check(
     t,
-    text(take a126) == std@1/i128.to_string(100000000000000000000000000000001i128)
+    text(take a126) == i128.to_string(100000000000000000000000000000001i128)
   )
   let mut a127: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(100000000000000000000000000000000000000i128, mut a127)
+  i128.format_into(100000000000000000000000000000000000000i128, mut a127)
   core@1/test.check(t, text(take a127) == "x=100000000000000000000000000000000000000")
   let mut a128: List[u8] = []
-  std@1/i128.format_into(100000000000000000000000000000000000000i128, mut a128)
+  i128.format_into(100000000000000000000000000000000000000i128, mut a128)
   core@1/test.check(
     t,
-    text(take a128) == std@1/i128.to_string(100000000000000000000000000000000000000i128)
+    text(take a128) == i128.to_string(100000000000000000000000000000000000000i128)
   )
   let mut a129: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(170141183460469231731687303715884105727i128, mut a129)
+  i128.format_into(170141183460469231731687303715884105727i128, mut a129)
   core@1/test.check(t, text(take a129) == "x=170141183460469231731687303715884105727")
   let mut a130: List[u8] = []
-  std@1/i128.format_into(170141183460469231731687303715884105727i128, mut a130)
+  i128.format_into(170141183460469231731687303715884105727i128, mut a130)
   core@1/test.check(
     t,
-    text(take a130) == std@1/i128.to_string(170141183460469231731687303715884105727i128)
+    text(take a130) == i128.to_string(170141183460469231731687303715884105727i128)
   )
   let mut a131: List[u8] = [120u8, 61u8]
-  std@1/i128.format_into(-170141183460469231731687303715884105728i128, mut a131)
+  i128.format_into(-170141183460469231731687303715884105728i128, mut a131)
   core@1/test.check(t, text(take a131) == "x=-170141183460469231731687303715884105728")
   let mut a132: List[u8] = []
-  std@1/i128.format_into(-170141183460469231731687303715884105728i128, mut a132)
+  i128.format_into(-170141183460469231731687303715884105728i128, mut a132)
   core@1/test.check(
     t,
-    text(take a132) == std@1/i128.to_string(
-      -170141183460469231731687303715884105728i128
-    )
+    text(take a132) == i128.to_string(-170141183460469231731687303715884105728i128)
   )
   let mut joined: List[u8] = []
-  std@1/u64.format_into(1u64, mut joined)
+  u64.format_into(1u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(9u64, mut joined)
+  u64.format_into(9u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(10u64, mut joined)
+  u64.format_into(10u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(99u64, mut joined)
+  u64.format_into(99u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(100u64, mut joined)
+  u64.format_into(100u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(999u64, mut joined)
+  u64.format_into(999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(1000u64, mut joined)
+  u64.format_into(1000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(9999u64, mut joined)
+  u64.format_into(9999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(10000u64, mut joined)
+  u64.format_into(10000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(99999u64, mut joined)
+  u64.format_into(99999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(100000u64, mut joined)
+  u64.format_into(100000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(999999u64, mut joined)
+  u64.format_into(999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(1000000u64, mut joined)
+  u64.format_into(1000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(9999999u64, mut joined)
+  u64.format_into(9999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(10000000u64, mut joined)
+  u64.format_into(10000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(99999999u64, mut joined)
+  u64.format_into(99999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(100000000u64, mut joined)
+  u64.format_into(100000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(999999999u64, mut joined)
+  u64.format_into(999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(1000000000u64, mut joined)
+  u64.format_into(1000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(9999999999u64, mut joined)
+  u64.format_into(9999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(10000000000u64, mut joined)
+  u64.format_into(10000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(99999999999u64, mut joined)
+  u64.format_into(99999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(100000000000u64, mut joined)
+  u64.format_into(100000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(999999999999u64, mut joined)
+  u64.format_into(999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(1000000000000u64, mut joined)
+  u64.format_into(1000000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(9999999999999u64, mut joined)
+  u64.format_into(9999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(10000000000000u64, mut joined)
+  u64.format_into(10000000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(99999999999999u64, mut joined)
+  u64.format_into(99999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(100000000000000u64, mut joined)
+  u64.format_into(100000000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(999999999999999u64, mut joined)
+  u64.format_into(999999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(1000000000000000u64, mut joined)
+  u64.format_into(1000000000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(9999999999999999u64, mut joined)
+  u64.format_into(9999999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(10000000000000000u64, mut joined)
+  u64.format_into(10000000000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(99999999999999999u64, mut joined)
+  u64.format_into(99999999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(100000000000000000u64, mut joined)
+  u64.format_into(100000000000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(999999999999999999u64, mut joined)
+  u64.format_into(999999999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(1000000000000000000u64, mut joined)
+  u64.format_into(1000000000000000000u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(9999999999999999999u64, mut joined)
+  u64.format_into(9999999999999999999u64, mut joined)
   list.push(mut joined, 44u8)
-  std@1/u64.format_into(10000000000000000000u64, mut joined)
+  u64.format_into(10000000000000000000u64, mut joined)
   list.push(mut joined, 44u8)
   core@1/test.check(
     t,

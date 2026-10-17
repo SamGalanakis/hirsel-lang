@@ -24,12 +24,12 @@ pub fn slice(text: String, start: u64, end: u64) -> String {
   for i in start..end {
     list.push(mut builder, data[i])
   }
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(s) => take s,
     Error(_) => "",
   }
 }
 
 pub fn finish(take builder: List[u8]) -> Result[String, Error] {
-  Ok(std@1/text.finish(take builder) ? Utf8)
+  Ok(text.finish(take builder) ? Utf8)
 }

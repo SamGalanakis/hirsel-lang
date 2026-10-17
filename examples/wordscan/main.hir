@@ -19,18 +19,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     in_word = !space
   }
   let mut builder: List[u8] = []
-  std@1/text.append(mut builder, "lines=")
-  std@1/u64.format_into(lines, mut builder)
-  std@1/text.append(mut builder, " words=")
-  std@1/u64.format_into(words, mut builder)
-  std@1/text.append(mut builder, " bytes=")
-  std@1/u64.format_into(string.byte_len(text), mut builder)
-  std@1/text.append(mut builder, "\n")
-  for line in std@1/string.split(copy text, "\n") {
-    match std@1/string.find(line, needle) {
+  text.append(mut builder, "lines=")
+  u64.format_into(lines, mut builder)
+  text.append(mut builder, " words=")
+  u64.format_into(words, mut builder)
+  text.append(mut builder, " bytes=")
+  u64.format_into(string.byte_len(text), mut builder)
+  text.append(mut builder, "\n")
+  for line in string.split(copy text, "\n") {
+    match string.find(line, needle) {
       Some(_) => {
-        std@1/text.append(mut builder, line)
-        std@1/text.append(mut builder, "\n")
+        text.append(mut builder, line)
+        text.append(mut builder, "\n")
       },
       None() => (),
     }

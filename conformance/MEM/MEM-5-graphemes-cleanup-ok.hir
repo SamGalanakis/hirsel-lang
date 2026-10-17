@@ -5,7 +5,7 @@ resource type Trace {}
 
 @noalloc
 fn inspect(take value: Trace, text: String) {
-  for piece in std@1/unicode.graphemes(text) {
+  for piece in unicode.graphemes(text) {
     break
   }
 }

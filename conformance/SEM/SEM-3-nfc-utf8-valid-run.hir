@@ -3,10 +3,7 @@
 // stdout: nfc
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   match string.from_bytes(b"e\xcc\x81") {
-    Ok(text) => failure.check(
-      std@1/unicode.normalize_nfc(text) == "\u{e9}",
-      TextInvariant()
-    ),
+    Ok(text) => failure.check(unicode.normalize_nfc(text) == "\u{e9}", TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
   out.print(io.stdout(rt) ? Grant, "nfc\n") ? Output

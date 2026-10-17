@@ -3,6 +3,6 @@
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
   let largest = core@1/f64.from_bits(0x7fefffffffffffff)
-  std@1/test.approx(t, -largest, largest, 0.0, 1.9)
+  test.approx(t, -largest, largest, 0.0, 1.9)
   Ok(())
 }

@@ -71,22 +71,22 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     }
     map.insert(mut names, name, true)
   }
-  let mut converted: List[box std@1/json.Value] = []
+  let mut converted: List[box json.Value] = []
   for i in 1u64..list.len(records) {
     let row = records[i]
     if list.len(row) != list.len(headers) {
       return Error(Invalid())
     }
-    let mut object: Map[String, box std@1/json.Value] = map.empty()
+    let mut object: Map[String, box json.Value] = map.empty()
     for j in 0u64..list.len(headers) {
       map.insert(mut object, headers[j], box Text(copy row[j]))
     }
     list.push(mut converted, box Object(take object))
   }
-  let value: std@1/json.Value = Array(take converted)
-  let output = match std@1/json.stringify(value) {
+  let value: json.Value = Array(take converted)
+  let output = match json.stringify(value) {
     Ok(s) => take s,
     Error(_) => return Error(Invalid()),
   }
-  common.print(rt, std@1/string.concat(output, "\n"))
+  common.print(rt, string.concat(output, "\n"))
 }

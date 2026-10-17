@@ -12,6 +12,6 @@ resource type Watch {
 // finalizer is the first recorded failure.
 pub fn trial(t: Test) -> Result[(), ()] {
   let unexpected: Result[Watch, u64] = Ok(Watch(n: 8))
-  let code = std@1/test.expect_error(t, take unexpected)
+  let code = test.expect_error(t, take unexpected)
   Ok(())
 }

@@ -2,7 +2,7 @@
 // expect: reject OWN-2 at line 6
 fn example() {
   let text: String = ""
-  std@1/time.parse(take text)
+  time.parse(take text)
   string.byte_len(text)
   ()
 }

@@ -1,6 +1,6 @@
 // rule: LANG-9
 // expect: run
-pub fn main(t: Test) -> Result[(), std@1/http.HttpError] {
+pub fn main(t: Test) -> Result[(), http.HttpError] {
   let n = test.net(
     t,
     [
@@ -15,9 +15,9 @@ pub fn main(t: Test) -> Result[(), std@1/http.HttpError] {
       )
     ]
   )
-  let response = std@1/http.fetch(
+  let response = http.fetch(
     n,
-    std@1/http.default_config(),
+    http.default_config(),
     Get(),
     "http://tour.test/",
     [],

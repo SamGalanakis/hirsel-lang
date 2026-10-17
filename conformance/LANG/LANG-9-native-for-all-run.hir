@@ -3,7 +3,7 @@
 // entry: trial
 fn gen(t: Test) -> String {
   test.check(t, true)
-  std@1/u64.to_string(7)
+  u64.to_string(7)
 }
 
 fn law(s: String) -> bool uses {} {
@@ -11,7 +11,7 @@ fn law(s: String) -> bool uses {} {
 }
 
 pub fn trial(t: Test) -> Result[(), ()] {
-  std@1/test.for_all(t, gen, law)
+  test.for_all(t, gen, law)
   Ok(())
 }
 

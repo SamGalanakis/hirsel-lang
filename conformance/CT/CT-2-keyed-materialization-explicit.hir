@@ -32,11 +32,11 @@ fn materialized_set() -> Set[u64] {
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   for (k, v) in materialized_map() {
-    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(k))
-    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(v))
+    let _ = out.print(io.stdout(rt)?, u64.to_string(k))
+    let _ = out.print(io.stdout(rt)?, u64.to_string(v))
   }
   for n in materialized_set() {
-    let _ = out.print(io.stdout(rt)?, std@1/u64.to_string(n))
+    let _ = out.print(io.stdout(rt)?, u64.to_string(n))
   }
   let _ = out.print(io.stdout(rt)?, "\n")
   Ok(())

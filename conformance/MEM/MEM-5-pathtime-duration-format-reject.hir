@@ -1,7 +1,7 @@
 // rule: MEM-5
 // expect: reject MEM-5 at line 5
 @noalloc
-fn example(value: std@1/time.Duration) {
-  std@1/duration.format(value)
+fn example(value: time.Duration) {
+  duration.format(value)
   ()
 }

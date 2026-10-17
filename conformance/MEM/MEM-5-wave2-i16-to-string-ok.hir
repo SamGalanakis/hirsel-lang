@@ -1,5 +1,5 @@
 // rule: MEM-5
 // expect: accept
 fn main() -> String {
-  std@1/i16.to_string(1i16)
+  i16.to_string(1i16)
 }

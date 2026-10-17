@@ -45,16 +45,16 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     "[1,{\"a\":[\"owned\",{\"b\":true}]}, invalid]"
   ]
   for text in inputs {
-    match std@1/json.parse(copy text) {
+    match json.parse(copy text) {
       Error(Syntax(_)) => (),
       _ => failure.check(false, TextInvariant()),
     }
   }
-  match std@1/json.parse("{\"a\":1,\"\\u0061\":2}") {
+  match json.parse("{\"a\":1,\"\\u0061\":2}") {
     Error(DuplicateKey(7)) => (),
     _ => failure.check(false, TextInvariant()),
   }
-  match std@1/json.parse("[1,\"é\",?]") {
+  match json.parse("[1,\"é\",?]") {
     Error(Syntax(8)) => (),
     _ => failure.check(false, TextInvariant()),
   }

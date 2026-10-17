@@ -4,5 +4,5 @@ fn example(c: MonotonicClock, replacement: MonotonicClock) -> Result[i32, ClockE
   let mut owner = copy c
   let start = clock.monotonic(owner)?
   owner = replacement
-  Ok(std@1/time.compare(owner, start, start))
+  Ok(time.compare(owner, start, start))
 }

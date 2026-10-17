@@ -27,7 +27,7 @@ type Node {
 
 fn number(n: u64) -> Bytes {
   let mut out: List[u8] = []
-  let s = std@1/u64.to_string(n)
+  let s = u64.to_string(n)
   let b = string.as_bytes(s)
   for i in 0u64..bytes.len(b) {
     list.push(mut out, b[i])
@@ -59,7 +59,7 @@ fn bracketed(n: u64) -> Bytes {
   let mut out: List[u8] = []
   list.push(mut out, 40u8)
   failure.check(n < 1000u64, Arithmetic())
-  let s = std@1/u64.to_string(n)
+  let s = u64.to_string(n)
   let b = string.as_bytes(s)
   for i in 0u64..bytes.len(b) {
     list.push(mut out, b[i])
@@ -94,7 +94,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   append(mut output, number(12u64))
   let signed: Array[i64] = [-9223372036854775808i64, 42i64]
   for v in signed {
-    let s = std@1/i64.to_string(v)
+    let s = i64.to_string(v)
     let b = string.as_bytes(s)
     for i in 0u64..bytes.len(b) {
       list.push(mut output, b[i])

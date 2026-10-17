@@ -2,14 +2,14 @@
 // expect: run
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
-  std@1/test.approx(t, 0.0, -0.0, 0.0, 0.0)
+  test.approx(t, 0.0, -0.0, 0.0, 0.0)
   let inf = core@1/f64.from_bits(0x7ff0000000000000)
-  std@1/test.approx(t, inf, inf, 0.0, 0.0)
-  std@1/test.approx(t, -inf, -inf, 0.0, 0.0)
-  std@1/test.approx(t, 1.0, 2.0, inf, 0.0)
+  test.approx(t, inf, inf, 0.0, 0.0)
+  test.approx(t, -inf, -inf, 0.0, 0.0)
+  test.approx(t, 1.0, 2.0, inf, 0.0)
   let largest = core@1/f64.from_bits(0x7fefffffffffffff)
-  std@1/test.approx(t, largest, -largest, 0.0, 2.0)
-  std@1/test.approx(t, -largest, largest, 0.0, 2.0)
-  std@1/test.approx(t, largest, 0.0, 0.0, 2.0)
+  test.approx(t, largest, -largest, 0.0, 2.0)
+  test.approx(t, -largest, largest, 0.0, 2.0)
+  test.approx(t, largest, 0.0, 0.0, 2.0)
   Ok(())
 }

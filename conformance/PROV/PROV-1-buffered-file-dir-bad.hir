@@ -2,8 +2,8 @@
 // expect: reject PROV-1 at line 8
 fn line(d: Dir, other: Dir, mut f: File of d) -> Result[
   String,
-  std@1/bufio.ReadError[FileError]
+  bufio.ReadError[FileError]
 ] {
-  let mut r = std@1/bufio.new(3)
-  std@1/bufio.file_read_line(other, mut f, mut r, 32)
+  let mut r = bufio.new(3)
+  bufio.file_read_line(other, mut f, mut r, 32)
 }

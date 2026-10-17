@@ -25,7 +25,7 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), AppError] {
   out.print(output, "\n") ? Output
   let input = io.stdin(rt) ? Grant
   while true {
-    match std@1/input.read_line(input) ? Input {
+    match input.read_line(input) ? Input {
       Some(line) => out.print(output, line) ? Output,
       None() => return Ok(()),
     }

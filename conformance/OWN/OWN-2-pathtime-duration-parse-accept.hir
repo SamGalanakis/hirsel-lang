@@ -2,7 +2,7 @@
 // expect: accept
 fn example() {
   let text: String = ""
-  std@1/duration.parse(text)
+  duration.parse(text)
   string.byte_len(text)
   ()
 }

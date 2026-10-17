@@ -19,14 +19,14 @@ pub fn main(e: Env, args: Args, rt: Io) -> Result[(), GrantError] {
     let _ = err.print(dest, name)
     i += 1
   }
-  let line = std@1/input.read_line(s)
+  let line = input.read_line(s)
   if arg.count(args) == 0 {
     failure.check(line == Ok(None()), Bounds())
   } else {
     failure.check(line == Ok(Some("λ\n")), Bounds())
     failure.check(stdin.read(s, mut buffer, 1) == Ok(1), Bounds())
     failure.check(buffer == [7, 0], Bounds())
-    failure.check(std@1/input.read_all(s) == Ok(b"\xff"), Bounds())
+    failure.check(input.read_all(s) == Ok(b"\xff"), Bounds())
     failure.check(env.get(e, "SET") == Ok(Some("value")), Bounds())
     failure.check(env.get(e, "UNSET") == Ok(None()), Bounds())
   }

@@ -1,10 +1,10 @@
 // rule: SEM-1
 // expect: run
 pub fn main(t: Test) -> Result[(), ()] {
-  core@1/test.check(t, std@1/bool.to_string(true) == "true")
-  core@1/test.check(t, std@1/bool.parse("true") == Ok(true))
+  core@1/test.check(t, bool.to_string(true) == "true")
+  core@1/test.check(t, bool.parse("true") == Ok(true))
   let mut buffer: Inline[u8, 4] = [99u8, 99u8, 99u8, 99u8]
-  core@1/test.check(t, std@1/bool.format(true, mut buffer) == Ok(4u64))
+  core@1/test.check(t, bool.format(true, mut buffer) == Ok(4u64))
   core@1/test.check(t, buffer == [116u8, 114u8, 117u8, 101u8])
   Ok(())
 }

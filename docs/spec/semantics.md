@@ -31,9 +31,9 @@ Floats are IEEE binary32 and binary64, round-to-nearest-even, with no mode state
 no contraction or reassociation; `float.mul_add` fuses explicitly. Each float type has one
 observable NaN. `float.min` and `float.max` are IEEE 754-2019 `minimum` and `maximum` (NaN
 propagates, −0 < +0); `float.min_number` and `float.max_number` ignore NaN.
-`std@1/f32.sum` and `std@1/f64.sum` use the fixed reduction tree of the
-[core library](core-library.md#numeric-and-string-details); `std@1/f32.sum_exact` and
-`std@1/f64.sum_exact` are correctly rounded. Math functions are correctly rounded library
+`f32.sum` and `f64.sum` use the fixed reduction tree of the
+[core library](core-library.md#numeric-and-string-details); `f32.sum_exact` and
+`f64.sum_exact` are correctly rounded. Math functions are correctly rounded library
 definitions. `float.to_i32` returns a `Result`; `float.total_order` is for sorting. A finite
 literal spelling outside its type's finite range rounds to infinity.
 
@@ -117,7 +117,7 @@ neither.
 ### SEM-5: Maps
 
 `Map[K: key, V]` iterates in insertion order; the hash seed affects placement only. Map
-`==` is order-sensitive, and `std@1/map.same_entries` compares as sets. `Set` equality
+`==` is order-sensitive, and `map.same_entries` compares as sets. `Set` equality
 ignores order. Structural comparison of `Set` values sorts each set's elements by
 structural order on their element type, then compares the sorted sequences
 lexicographically, the shorter first on a common prefix; nested sets use the same rule.

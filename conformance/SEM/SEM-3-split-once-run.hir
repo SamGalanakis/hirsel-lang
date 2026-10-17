@@ -2,7 +2,7 @@
 // expect: run
 // Rust alloctests test_split_once vectors, plus a multibyte separator.
 fn parts(s: String, separator: String) -> Option[(String, String)] {
-  match std@1/string.split_once(s, separator) {
+  match string.split_once(s, separator) {
     Some((head, rest)) => Some((unique head, unique rest)),
     None() => None(),
   }

@@ -1,7 +1,7 @@
 # Standard library
 
 The standard library is the ordinary source package `std@1`, at
-`stdlib/std@1/hirsel.json`, pinned exactly by the selecting manifest
+`stdlib/hirsel.json`, pinned exactly by the selecting manifest
 ([packages](programs.md#package-selection)). Programs use short module names such as
 `string.find` and `json.parse`; the catalogue uses these source spellings. Definition
 identity, proof obligation ids and cache keys retain `std@1/...`. The fully versioned
@@ -52,7 +52,7 @@ signatures and the rules in this part.
 
 ## Paths
 
-`std@1/path.PathError = Invalid(u64)` reports a byte offset. Components are separated by
+`path.PathError = Invalid(u64)` reports a byte offset. Components are separated by
 slashes only, and empty components are ignored. `normalize` removes `.` components and
 cancels `..` against an ordinary preceding component, preserves leading relative `..`,
 rejects escaping above an absolute root and rejects NUL and backslash. An empty relative
@@ -67,15 +67,15 @@ host, resolve no links and establish no confinement.
 
 ## Durations and timestamps
 
-`std@1/time.Duration` holds signed `i128` nanoseconds. `duration.from_parts` widens signed
+`time.Duration` holds signed `i128` nanoseconds. `duration.from_parts` widens signed
 `i64` seconds and signed `i32` nanoseconds before summing, with no range imposed on the
 fractional part. `duration.parse` accepts an optional sign, integer decimal seconds, an
 optional dot followed by one to nine fraction digits, and a final `s`, with no whitespace.
-Invalid grammar is `std@1/scalar.ParseError.Invalid`; a value not representable as signed
+Invalid grammar is `scalar.ParseError.Invalid`; a value not representable as signed
 `i128` nanoseconds is `OutOfRange`. `duration.format` covers the whole signed `i128` range
 and emits canonical seconds with a final `s` and trimmed fractional zeros; zero is `0s`.
 
-`std@1/time.Timestamp` holds signed `i128` `unix_nanoseconds`; `TimeError` is `OutOfRange`.
+`time.Timestamp` holds signed `i128` `unix_nanoseconds`; `TimeError` is `OutOfRange`.
 `time.parse` accepts RFC 3339 with Gregorian years 0000–9999, a `T` or `t` separator, a `Z`,
 `z` or numeric `±HH:MM` offset (hours 00–23, minutes 00–59), and an optional fraction of one
 to nine digits, validating dates and 00–23/00–59/00–59 times. Space separators, a leap
@@ -123,10 +123,10 @@ reflection, automatic record conversion or authority.
 - `to_string(value) -> String`;
 - `format_into(value, mut out: List[u8]) -> ()`, which appends exactly the text `to_string`
   returns and fails only by allocation exhaustion;
-- `@noalloc format[n: size](value, mut buffer: Inline[u8, n]) -> Result[u64, std@1/scalar.FormatError]`,
+- `@noalloc format[n: size](value, mut buffer: Inline[u8, n]) -> Result[u64, scalar.FormatError]`,
   which checks capacity before writing, returns the length of the UTF-8 prefix and leaves
   the whole buffer unchanged on error;
-- `@noalloc parse(text: String) -> Result[scalar, std@1/scalar.ParseError]`.
+- `@noalloc parse(text: String) -> Result[scalar, scalar.ParseError]`.
 
 `FormatError` is `BufferTooSmall()`; `ParseError` is `Invalid | OutOfRange`. `bool` is
 exactly `true` or `false`. Integers use decimal `-?[0-9]+`, with a minus only for signed
@@ -216,25 +216,25 @@ or a count above the requested maximum is `InvalidRead`. The callback must prese
 existing list prefix.
 
 ```text
-fn std@1/bufio.new(capacity: u64) -> Reader uses {}
-fn std@1/bufio.buffered(r: Reader) -> u64 uses {}
-fn std@1/bufio.contents(r: Reader) -> Bytes uses {}
-fn std@1/bufio.consume(mut r: Reader, count: u64) -> () uses {}
-fn std@1/bufio.read_more[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], max: u64) -> Result[u64,ReadError[E]]
-fn std@1/bufio.read[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,ReadError[E]]
-fn std@1/bufio.read_exact[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], count: u64) -> Result[(),ReadError[E]]
-fn std@1/bufio.read_until[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[E]]
-fn std@1/bufio.read_line[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[String,ReadError[E]]
-fn std@1/bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[u64,ReadError[NetError]]
-fn std@1/bufio.stream_read(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[NetError]]
-fn std@1/bufio.stream_read_exact(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[NetError]]
-fn std@1/bufio.stream_read_until(n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[NetError]]
-fn std@1/bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[String,ReadError[NetError]]
-fn std@1/bufio.file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Result[u64,ReadError[FileError]]
-fn std@1/bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[FileError]]
-fn std@1/bufio.file_read_exact(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[FileError]]
-fn std@1/bufio.file_read_until(d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[FileError]]
-fn std@1/bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[String,ReadError[FileError]]
+fn bufio.new(capacity: u64) -> Reader uses {}
+fn bufio.buffered(r: Reader) -> u64 uses {}
+fn bufio.contents(r: Reader) -> Bytes uses {}
+fn bufio.consume(mut r: Reader, count: u64) -> () uses {}
+fn bufio.read_more[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], max: u64) -> Result[u64,ReadError[E]]
+fn bufio.read[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,ReadError[E]]
+fn bufio.read_exact[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], count: u64) -> Result[(),ReadError[E]]
+fn bufio.read_until[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[E]]
+fn bufio.read_line[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[String,ReadError[E]]
+fn bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[u64,ReadError[NetError]]
+fn bufio.stream_read(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[NetError]]
+fn bufio.stream_read_exact(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[NetError]]
+fn bufio.stream_read_until(n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[NetError]]
+fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[String,ReadError[NetError]]
+fn bufio.file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Result[u64,ReadError[FileError]]
+fn bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[FileError]]
+fn bufio.file_read_exact(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[FileError]]
+fn bufio.file_read_until(d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[FileError]]
+fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[String,ReadError[FileError]]
 ```
 
 `new(0)` uses capacity one. Capacity bounds each refill, not accumulated unread data.
@@ -259,9 +259,9 @@ Discard buffered state before seeking or otherwise reading the underlying File d
 A line read over an existing branded Stream needs only persistent buffer state:
 
 ```hirsel
-fn line(n: Net, mut stream: Stream of n) -> Result[String, std@1/bufio.ReadError[NetError]] {
-  let mut reader = std@1/bufio.new(4096)
-  std@1/bufio.stream_read_line(n, mut stream, mut reader, 8192)
+fn line(n: Net, mut stream: Stream of n) -> Result[String, bufio.ReadError[NetError]] {
+  let mut reader = bufio.new(4096)
+  bufio.stream_read_line(n, mut stream, mut reader, 8192)
 }
 ```
 
@@ -310,7 +310,7 @@ ResponseHead = { version: Version, status: u16, reason: String, headers: List[He
                  content_length: Option[u64], chunked: bool, keep_alive: bool,
                  location: Option[String], content_type: Option[String] }
 Response     = { status: u16, headers: List[Header], body: Bytes, url: String }
-HttpError    = Net(NetError) | Url(std@1/uri.UriError) | Malformed(std@1/http_wire.HeadError)
+HttpError    = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError)
              | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects
              | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme
              | UnsupportedTransferEncoding | Status(u16) | OutOfOrder
@@ -373,8 +373,8 @@ There is no whole-request deadline, since a deadline needs a clock.
 
 ## Input
 
-`std@1/input.read_all(s: Stdin) -> Result[Bytes, InputError]` reads to end of input.
-`std@1/input.read_line(s: Stdin) -> Result[Option[String], InputError]` reads through
+`input.read_all(s: Stdin) -> Result[Bytes, InputError]` reads to end of input.
+`input.read_line(s: Stdin) -> Result[Option[String], InputError]` reads through
 one newline, retaining it (and a preceding carriage return). It returns `None()`
 only for EOF before any bytes, and `InvalidUtf8()` for an invalid complete line.
 Both are ordinary source loops over `core@1/stdin.read`; they grant no authority
@@ -425,11 +425,11 @@ The server helpers share the client's wire parser and error type:
 
 ```text
 RequestLine = { method_start: u64, method_end: u64, target_start: u64, target_end: u64, version: u8 }
-N fn std@1/http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut headers: Inline[RawHeader, k], mut count: u64) -> Result[ParseStatus, HeadError] uses {}
+N fn http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut headers: Inline[RawHeader, k], mut count: u64) -> Result[ParseStatus, HeadError] uses {}
 ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes }
-fn std@1/http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
-fn std@1/http.receive_request(n: Net, mut s: Stream of n, max_head_bytes: u64, max_body_bytes: u64) -> Result[ServerRequest, HttpError]
-fn std@1/http.respond(n: Net, mut s: Stream of n, status: u16, headers: List[Header], body: Bytes) -> Result[(), HttpError]
+fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
+fn http.receive_request(n: Net, mut s: Stream of n, max_head_bytes: u64, max_body_bytes: u64) -> Result[ServerRequest, HttpError]
+fn http.respond(n: Net, mut s: Stream of n, status: u16, headers: List[Header], body: Bytes) -> Result[(), HttpError]
 ```
 
 `parse_request` follows httparse's strict request-line delimiters, accepts HTTP/1.0 and

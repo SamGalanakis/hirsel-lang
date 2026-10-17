@@ -17,17 +17,17 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     },
   }
   let text = core@1/string.slice(source, start, end)
-  let value = match std@1/json.parse(take text) {
+  let value = match json.parse(take text) {
     Ok(v) => v,
     Error(_) => {
       failure.check(false, TextInvariant())
       {
-        let empty: std@1/json.Value = Null()
+        let empty: json.Value = Null()
         empty
       }
     },
   }
-  match std@1/json.stringify(value) {
+  match json.stringify(value) {
     Ok(s) => failure.check(s == "{\"a\":\"é\",\"n\":-0.00E+001}", TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }

@@ -5,5 +5,5 @@ resource type Cell {
 }
 
 fn probe(a: Map[u64, Cell], b: Map[u64, Cell]) -> bool {
-  std@1/map.same_entries(a, b)
+  map.same_entries(a, b)
 }

@@ -7,13 +7,13 @@
 // Helpers live below internal/ and have no external package visibility.
 @noalloc
 fn interval(
-  low: std@1/internal.big.Big,
-  high: std@1/internal.big.Big,
+  low: internal.big.Big,
+  high: internal.big.Big,
   low_tail: bool,
   high_tail: bool,
   even: bool
 ) -> bool uses {} {
-  let order = std@1/internal.big.big_compare(low, high, low_tail || !even)
+  let order = internal.big.big_compare(low, high, low_tail || !even)
   order < 0 || order == 0 && (even || high_tail)
 }
 
@@ -32,12 +32,12 @@ pub fn shortest(m: u64, e: i32, asymmetric: bool) -> (u64, i32) uses {} {
       exponent
     }
   )
-  let mut factor = std@1/internal.big.big_from_word(1)
-  std@1/internal.big.big_power(mut factor, base, magnitude)
+  let mut factor = internal.big.big_from_word(1)
+  internal.big.big_power(mut factor, base, magnitude)
   let mut low = factor
   let mut center = factor
   let mut high = factor
-  std@1/internal.big.big_mul_word(
+  internal.big.big_mul_word(
     mut low,
     m * 4 - if asymmetric {
       1
@@ -45,8 +45,8 @@ pub fn shortest(m: u64, e: i32, asymmetric: bool) -> (u64, i32) uses {} {
       2
     }
   )
-  std@1/internal.big.big_mul_word(mut center, m * 4)
-  std@1/internal.big.big_mul_word(mut high, m * 4 + 2)
+  internal.big.big_mul_word(mut center, m * 4)
+  internal.big.big_mul_word(mut high, m * 4 + 2)
   let mut scale: i32 = if exponent < 0 {
     exponent
   } else {
@@ -62,8 +62,8 @@ pub fn shortest(m: u64, e: i32, asymmetric: bool) -> (u64, i32) uses {} {
   while center.used > 2 {
     let old_low = low
     let old_high = high
-    let lr = std@1/internal.big.big_divide(mut low, 9)
-    let hr = std@1/internal.big.big_divide(mut high, 9)
+    let lr = internal.big.big_divide(mut low, 9)
+    let hr = internal.big.big_divide(mut high, 9)
     if !interval(low, high, low_tail || lr != 0, high_tail || hr != 0, even) {
       low = old_low
       high = old_high
@@ -72,15 +72,15 @@ pub fn shortest(m: u64, e: i32, asymmetric: bool) -> (u64, i32) uses {} {
     low_tail = low_tail || lr != 0
     high_tail = high_tail || hr != 0
     sticky = sticky || last != 0
-    last = std@1/internal.big.big_divide(mut center, 9)
+    last = internal.big.big_divide(mut center, 9)
     divisor = 1000000000
     scale += 9
   }
   while true {
     let old_low = low
     let old_high = high
-    let lr = std@1/internal.big.big_divide(mut low, 1)
-    let hr = std@1/internal.big.big_divide(mut high, 1)
+    let lr = internal.big.big_divide(mut low, 1)
+    let hr = internal.big.big_divide(mut high, 1)
     if !interval(low, high, low_tail || lr != 0, high_tail || hr != 0, even) {
       low = old_low
       high = old_high
@@ -89,22 +89,22 @@ pub fn shortest(m: u64, e: i32, asymmetric: bool) -> (u64, i32) uses {} {
     low_tail = low_tail || lr != 0
     high_tail = high_tail || hr != 0
     sticky = sticky || last != 0
-    last = std@1/internal.big.big_divide(mut center, 1)
+    last = internal.big.big_divide(mut center, 1)
     divisor = 10
     scale += 1
   }
-  let floor = std@1/internal.big.big_word(center)
+  let floor = internal.big.big_word(center)
   let rounded = floor + if last * 2 > divisor || last * 2 == divisor && (sticky || floor % 2 != 0) {
     1
   } else {
     0
   }
-  let minimum = std@1/internal.big.big_word(low) + if low_tail || !even {
+  let minimum = internal.big.big_word(low) + if low_tail || !even {
     1
   } else {
     0
   }
-  let maximum = std@1/internal.big.big_word(high) - if !even && !high_tail {
+  let maximum = internal.big.big_word(high) - if !even && !high_tail {
     1
   } else {
     0
@@ -127,7 +127,7 @@ pub fn render[n: size](
   scale: i32,
   negative: bool,
   mut buffer: Inline[u8, n]
-) -> Result[u64, std@1/scalar.FormatError] uses {} {
+) -> Result[u64, scalar.FormatError] uses {} {
   let mut digits: Inline[u8, 20] = [
     0,
     0,
@@ -150,7 +150,7 @@ pub fn render[n: size](
     0,
     0
   ]
-  let count = match std@1/internal.decimal.write_unsigned(
+  let count = match internal.decimal.write_unsigned(
     core@1/int.widen(significand),
     false,
     mut digits
@@ -265,7 +265,7 @@ pub fn render[n: size](
 @noalloc
 pub fn special[n: size](text: String, mut buffer: Inline[u8, n]) -> Result[
   u64,
-  std@1/scalar.FormatError
+  scalar.FormatError
 ] uses {} {
   let data = core@1/string.as_bytes(text)
   let length = core@1/bytes.len(data)
@@ -285,10 +285,7 @@ pub fn special[n: size](text: String, mut buffer: Inline[u8, n]) -> Result[
 // digits (53+2 bits times 5^1075). Beyond that, one sticky bit distinguishes
 // an exact tie from every strictly larger input. Long input is still validated.
 @noalloc
-pub fn parse(text: String, fraction: u64, bias: i32) -> Result[
-  u64,
-  std@1/scalar.ParseError
-] uses {} {
+pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.ParseError] uses {} {
   let bytes = core@1/string.as_bytes(text)
   let length = core@1/bytes.len(bytes)
   if length == 0 {
@@ -306,7 +303,7 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[
   let mut significant: u64 = 0
   let mut kept: u64 = 0
   let mut sticky: bool = false
-  let mut numerator = std@1/internal.big.big_from_word(0)
+  let mut numerator = internal.big.big_from_word(0)
   let mut dot: bool = false
   while at < length {
     let byte = bytes[at]
@@ -329,8 +326,8 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[
     if byte != 48 || significant > 0 {
       significant += 1
       if kept < 800 {
-        std@1/internal.big.big_mul(mut numerator, 10)
-        std@1/internal.big.big_add_small(mut numerator, core@1/int.widen(byte - 48))
+        internal.big.big_mul(mut numerator, 10)
+        internal.big.big_add_small(mut numerator, core@1/int.widen(byte - 48))
         kept += 1
       } else {
         sticky = sticky || byte != 48
@@ -389,30 +386,30 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[
   }
   decimal_exponent += core@1/int.widen(significant - kept)
   let power: i32 = core@1/int.narrow(decimal_exponent)
-  let mut denominator = std@1/internal.big.big_from_word(1)
+  let mut denominator = internal.big.big_from_word(1)
   if power < 0 {
-    std@1/internal.big.big_power(mut denominator, 10, core@1/int.narrow(-power))
+    internal.big.big_power(mut denominator, 10, core@1/int.narrow(-power))
   } else {
-    std@1/internal.big.big_power(mut numerator, 10, core@1/int.narrow(power))
+    internal.big.big_power(mut numerator, 10, core@1/int.narrow(power))
   }
   // floor(order * log2(10)), a lower estimate within four bits over this domain.
   let order_i: i32 = core@1/int.narrow(order)
   let mut exponent: i32 = core@1/int.div_floor(order_i * 217706, 65536)
   if exponent < 0 {
-    std@1/internal.big.big_power(mut numerator, 2, core@1/int.narrow(-exponent))
+    internal.big.big_power(mut numerator, 2, core@1/int.narrow(-exponent))
   } else {
-    std@1/internal.big.big_power(mut denominator, 2, core@1/int.narrow(exponent))
+    internal.big.big_power(mut denominator, 2, core@1/int.narrow(exponent))
   }
-  while std@1/internal.big.big_compare(numerator, denominator, false) < 0 {
-    std@1/internal.big.big_mul(mut numerator, 2)
+  while internal.big.big_compare(numerator, denominator, false) < 0 {
+    internal.big.big_mul(mut numerator, 2)
     exponent -= 1
   }
   let mut doubled = denominator
-  std@1/internal.big.big_mul(mut doubled, 2)
-  while std@1/internal.big.big_compare(numerator, doubled, false) >= 0 {
+  internal.big.big_mul(mut doubled, 2)
+  while internal.big.big_compare(numerator, doubled, false) >= 0 {
     denominator = doubled
     exponent += 1
-    std@1/internal.big.big_mul(mut doubled, 2)
+    internal.big.big_mul(mut doubled, 2)
   }
   if exponent > bias {
     return Error(OutOfRange)
@@ -429,19 +426,19 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[
   let mut mantissa: u64 = 0
   if count >= 0 {
     mantissa = 1
-    std@1/internal.big.big_subtract(mut numerator, denominator)
+    internal.big.big_subtract(mut numerator, denominator)
     while count > 0 {
-      std@1/internal.big.big_mul(mut numerator, 2)
+      internal.big.big_mul(mut numerator, 2)
       mantissa *= 2
-      if std@1/internal.big.big_compare(numerator, denominator, false) >= 0 {
+      if internal.big.big_compare(numerator, denominator, false) >= 0 {
         mantissa += 1
-        std@1/internal.big.big_subtract(mut numerator, denominator)
+        internal.big.big_subtract(mut numerator, denominator)
       }
       count -= 1
     }
-    std@1/internal.big.big_mul(mut numerator, 2)
+    internal.big.big_mul(mut numerator, 2)
   }
-  let rounding = std@1/internal.big.big_compare(numerator, denominator, false)
+  let rounding = internal.big.big_compare(numerator, denominator, false)
   if rounding > 0 || rounding == 0 && (sticky || mantissa % 2 != 0) {
     mantissa += 1
   }

@@ -420,6 +420,9 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
             .signatures
             .insert(signature.definition.clone(), Arc::new(signature));
     }
+    registry.index =
+        ManifestIndex::new(fixture(file).with_dependency_signatures(registry.signatures.values()))
+            .0;
     registry
 }
 pub(super) fn normalize_file(

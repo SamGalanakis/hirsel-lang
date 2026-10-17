@@ -2,21 +2,21 @@
 // expect: run
 // stdout: aa
 fn first(s: String) -> String in s {
-  for piece in std@1/unicode.graphemes(s) {
+  for piece in unicode.graphemes(s) {
     return piece
   }
   copy s
 }
 
 fn first_copy(s: String) -> String in s {
-  for piece in std@1/unicode.graphemes(s) {
+  for piece in unicode.graphemes(s) {
     return copy piece
   }
   copy s
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
-  let s = std@1/string.concat("a", "b")
+  let s = string.concat("a", "b")
   let _ = out.print(io.stdout(rt)?, first(s))
   let _ = out.print(io.stdout(rt)?, first_copy(s))
   let _ = out.print(io.stdout(rt)?, "\n")

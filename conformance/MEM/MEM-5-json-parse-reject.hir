@@ -1,6 +1,6 @@
 // rule: MEM-5
 // expect: reject MEM-5 at line 5
 @noalloc
-fn probe(take s: String) -> Result[std@1/json.Value, std@1/json.JsonError] uses {} {
-  std@1/json.parse(take s)
+fn probe(take s: String) -> Result[json.Value, json.JsonError] uses {} {
+  json.parse(take s)
 }

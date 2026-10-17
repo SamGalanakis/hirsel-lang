@@ -29,5 +29,5 @@ fn main() -> () {
     0u8,
     0u8
   ]
-  std@1/f32.format(1.0f32, mut buffer);
+  f32.format(1.0f32, mut buffer);
 }

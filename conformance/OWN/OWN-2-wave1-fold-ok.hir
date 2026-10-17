@@ -10,7 +10,7 @@ fn keep(take s: String, n: u64) -> String uses {} {
 
 fn example() -> () {
   let xs: String = "a"
-  std@1/list.fold(
+  list.fold(
     {
       let values: List[u64] = [1]
       take values

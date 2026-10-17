@@ -1,19 +1,19 @@
 // rule: SEM-3
 // expect: run
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
-  let value = match std@1/json.parse(
+  let value = match json.parse(
     "{\"z\":[null,true,false,9007199254740993,-0,1.2300E+004],\"a\":\"é😀\"}"
   ) {
     Ok(v) => v,
     Error(_) => {
       failure.check(false, TextInvariant())
       {
-        let empty: std@1/json.Value = Null()
+        let empty: json.Value = Null()
         empty
       }
     },
   }
-  match std@1/json.stringify(value) {
+  match json.stringify(value) {
     Ok(s) => failure.check(
       s == "{\"z\":[null,true,false,9007199254740993,-0,1.2300E+004],\"a\":\"é😀\"}",
       TextInvariant()
@@ -21,12 +21,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     Error(_) => failure.check(false, TextInvariant()),
   }
   let mut builder: List[u8] = [112, 114, 101, 58]
-  match std@1/json.write(value, mut builder) {
+  match json.write(value, mut builder) {
     Ok(_) => (),
     Error(_) => failure.check(false, TextInvariant()),
   }
-  match std@1/text.finish(take builder) {
-    Ok(s) => failure.check(std@1/string.starts_with(s, "pre:{"), TextInvariant()),
+  match text.finish(take builder) {
+    Ok(s) => failure.check(string.starts_with(s, "pre:{"), TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
   Ok(())

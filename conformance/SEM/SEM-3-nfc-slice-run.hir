@@ -4,7 +4,7 @@
 fn slice_nfc(s: String) -> String uses {} {
   match string.position(s, 2) {
     Some(a) => match string.position(s, 5) {
-      Some(b) => std@1/unicode.normalize_nfc(string.slice(s, a, b)),
+      Some(b) => unicode.normalize_nfc(string.slice(s, a, b)),
       None() => "wrong",
     },
     None() => "wrong",

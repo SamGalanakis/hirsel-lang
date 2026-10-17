@@ -3,13 +3,13 @@
 // stdout: ok
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let mut builder: List[u8] = []
-  std@1/text.append(mut builder, "é")
-  std@1/text.append(mut builder, "😀")
-  let text: String = match std@1/text.finish(take builder) {
+  text.append(mut builder, "é")
+  text.append(mut builder, "😀")
+  let text: String = match text.finish(take builder) {
     Ok(s) => take s,
     Error(_) => "bad",
   }
-  let parts = std@1/string.split(take text, "é")
+  let parts = string.split(take text, "é")
   failure.check(parts == ["", "😀"], TextInvariant())
   let bytes = string.as_bytes("prefixé😀TAIL")
   let interval = bytes.slice(bytes, 6, 12)

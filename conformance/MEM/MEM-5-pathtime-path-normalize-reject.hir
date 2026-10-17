@@ -2,6 +2,6 @@
 // expect: reject MEM-5 at line 5
 @noalloc
 fn example(p: Path) {
-  std@1/path.normalize(p)
+  path.normalize(p)
   ()
 }

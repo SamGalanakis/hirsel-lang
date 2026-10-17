@@ -27,23 +27,23 @@ fn count(take n: u64, x: String) -> u64 uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let mut xs: unique List[String] = unique ["c", "b", "a", "b"]
-  std@1/list.sort(mut xs, compare)
+  list.sort(mut xs, compare)
   failure.check(xs == ["a", "b", "b", "c"], Bounds())
-  failure.check(std@1/list.binary_search(xs, "b", compare) == Some(1), Bounds())
-  failure.check(std@1/list.find(xs, selected) == Some(1), Bounds())
-  failure.check(!std@1/list.all(xs, selected) && std@1/list.any(xs, selected), Bounds())
-  failure.check(std@1/list.map(xs, make) == ["made", "made", "made", "made"], Bounds())
-  failure.check(std@1/list.fold(xs, 0u64, count) == 4, Bounds())
+  failure.check(list.binary_search(xs, "b", compare) == Some(1), Bounds())
+  failure.check(list.find(xs, selected) == Some(1), Bounds())
+  failure.check(!list.all(xs, selected) && list.any(xs, selected), Bounds())
+  failure.check(list.map(xs, make) == ["made", "made", "made", "made"], Bounds())
+  failure.check(list.fold(xs, 0u64, count) == 4, Bounds())
   let alias = copy xs
-  let filtered = std@1/list.filter(copy xs, selected)
+  let filtered = list.filter(copy xs, selected)
   failure.check(filtered == ["b", "b"] && alias == xs, Bounds())
-  let (yes, no) = std@1/list.partition(copy xs, selected)
+  let (yes, no) = list.partition(copy xs, selected)
   failure.check(yes == ["b", "b"] && no == ["a", "c"], Bounds())
-  failure.check(std@1/list.concat(take yes, take no) == ["b", "b", "a", "c"], Bounds())
-  failure.check(std@1/list.dedup(copy xs) == ["a", "b", "c"], Bounds())
+  failure.check(list.concat(take yes, take no) == ["b", "b", "a", "c"], Bounds())
+  failure.check(list.dedup(copy xs) == ["a", "b", "c"], Bounds())
   let mut unique_xs = unique xs
-  std@1/list.reverse(mut unique_xs)
-  std@1/list.rotate(mut unique_xs, 1)
+  list.reverse(mut unique_xs)
+  list.rotate(mut unique_xs, 1)
   failure.check(unique_xs == ["b", "b", "a", "c"], Bounds())
   failure.check(alias == ["a", "b", "b", "c"], Bounds())
   let popped: String = match list.pop(mut unique_xs) {

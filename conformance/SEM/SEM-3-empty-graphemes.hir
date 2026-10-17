@@ -7,7 +7,7 @@ fn output_error[E](take e: E) -> () {}
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let s: String = ""
   let mut n: u64 = 0
-  for x in std@1/unicode.graphemes(s) {
+  for x in unicode.graphemes(s) {
     n += 1
   }
   out.print(

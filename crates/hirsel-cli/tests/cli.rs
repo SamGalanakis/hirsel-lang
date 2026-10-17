@@ -29,14 +29,17 @@ fn file(text: &str) -> std::path::PathBuf {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(&path, text).unwrap();
-    if text.contains("std@1/") {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../stdlib/std@1/hirsel.json")
-            .canonicalize()
-            .unwrap();
-        let sidecar = format!("{}.json", path.display());
-        std::fs::write(sidecar, format!(r#"{{"schema":1,"package":{{"name":"standalone","version":"0"}},"entry":{{"module":[],"name":"main"}},"sources":[{{"path":"{}","module":[]}}],"dependencies":[{{"manifest":"{}","package":{{"name":"std","version":"1"}},"expose":[]}}]}}"#, path.display(), manifest.display())).unwrap();
-    }
+    path
+}
+fn std_file(text: &str) -> std::path::PathBuf {
+    let path = file(text);
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap();
+    let sidecar = format!("{}.json", path.display());
+    std::fs::write(sidecar, format!(r#"{{"schema":1,"package":{{"name":"standalone","version":"0"}},"entry":{{"module":[],"name":"main"}},"sources":[{{"path":"{}","module":[]}}],"dependencies":[{{"manifest":"{}","package":{{"name":"std","version":"1"}},"expose":[]}}]}}"#, path.display(), manifest.display())).unwrap();
+
     path
 }
 #[test]
@@ -531,7 +534,7 @@ fn native_run_matches_the_reference_run() {
     let map = file(
         "pub fn main(rt: Io, args: Args) -> Result[(), ()] {\n  let mut m: Map[u64, u64] = map.empty()\n  map.insert(mut m, 4u64, 1u64)\n  Ok(())\n}\n",
     );
-    let decimal = file(
+    let decimal = std_file(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let text = std@1/u64.to_string(4u64)\n  let _ = out.print(io.stdout(rt)?, if text == \"4\" { \"ok\\n\" } else { \"bad\\n\" })\n  Ok(())\n}\n",
     );
     let directory = file(
@@ -1325,7 +1328,7 @@ fn standalone_grants_bind_embedded_code_without_an_exported_record() {
 
 #[test]
 fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
-    let source = file(include_str!(
+    let source = std_file(include_str!(
         "../../../conformance/CAP/CAP-1-host-inputs-run.hir"
     ));
     let simulation = source.with_extension("simulation.json");
@@ -1379,7 +1382,7 @@ fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
 fn host_io_records_use_piped_stdin_distinct_stderr_and_exact_environment_snapshots() {
     use std::io::Write;
     use std::process::Stdio;
-    let source = file(include_str!(
+    let source = std_file(include_str!(
         "../../../conformance/CAP/CAP-1-host-inputs-run.hir"
     ));
     for native in [false, true] {

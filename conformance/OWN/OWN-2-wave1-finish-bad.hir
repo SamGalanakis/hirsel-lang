@@ -10,6 +10,6 @@ fn keep(take s: String, n: u64) -> String uses {} {
 
 fn example() -> () {
   let xs: List[u8] = [65u8]
-  std@1/text.finish(take xs)
+  text.finish(take xs)
   list.len(xs);
 }

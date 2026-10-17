@@ -3,7 +3,7 @@
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
   let unexpected: Result[String, u64] = Ok("value")
-  let code = std@1/test.expect_error(t, take unexpected)
-  std@1/test.equal(t, code, 7)
+  let code = test.expect_error(t, take unexpected)
+  test.equal(t, code, 7)
   Ok(())
 }

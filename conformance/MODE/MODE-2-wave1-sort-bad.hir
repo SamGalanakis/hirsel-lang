@@ -6,5 +6,5 @@ fn compare(a: u64, b: u64) -> i32 uses {} {
 }
 
 fn example(mut xs: List[u64]) -> () {
-  std@1/list.sort(mut xs, compare);
+  list.sort(mut xs, compare);
 }

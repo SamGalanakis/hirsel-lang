@@ -60,15 +60,15 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
       Item(key: 1, label: "A\n", out: out),
       Item(key: 2, label: "B\n", out: out)
     ]
-    std@1/list.sort(mut xs, compare)
+    list.sort(mut xs, compare)
     let needle = Item(key: 2, label: "N\n", out: out)
-    failure.check(std@1/list.binary_search(xs, needle, compare) == Some(1), Bounds())
-    failure.check(std@1/list.find(xs, even) == Some(1), Bounds())
-    failure.check(std@1/list.all(xs, present) && std@1/list.any(xs, even), Bounds())
-    failure.check(std@1/list.map(xs, key) == [1, 2, 3], Bounds())
-    failure.check(std@1/list.fold(xs, 0u64, add) == 6, Bounds())
-    std@1/list.reverse(mut xs)
-    std@1/list.rotate(mut xs, 1)
+    failure.check(list.binary_search(xs, needle, compare) == Some(1), Bounds())
+    failure.check(list.find(xs, even) == Some(1), Bounds())
+    failure.check(list.all(xs, present) && list.any(xs, even), Bounds())
+    failure.check(list.map(xs, key) == [1, 2, 3], Bounds())
+    failure.check(list.fold(xs, 0u64, add) == 6, Bounds())
+    list.reverse(mut xs)
+    list.rotate(mut xs, 1)
     list.swap(mut xs, 0, 0)
     let removed = list.remove(mut xs, 1)
     let tail: Item = match list.pop(mut xs) {
@@ -84,9 +84,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
       Item(key: 3, label: "F\n", out: out),
       Item(key: 4, label: "G\n", out: out)
     ]
-    let filtered = std@1/list.filter(take xs, even)
-    let (yes, no) = std@1/list.partition(take filtered, below)
-    let joined = std@1/list.concat(take no, take yes)
+    let filtered = list.filter(take xs, even)
+    let (yes, no) = list.partition(take filtered, below)
+    let joined = list.concat(take no, take yes)
     for item in take joined {
       failure.check(item.key % 2 == 0, Bounds())
     }

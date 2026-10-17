@@ -2,5 +2,5 @@
 // expect: reject MEM-5 at line 5
 @noalloc
 fn probe(s: String) -> String uses {} {
-  std@1/string.concat(s, "")
+  string.concat(s, "")
 }

@@ -9,7 +9,7 @@ fn owned_piece(text: String, begin: u64, end: u64) -> String uses {} {
     core@1/list.push(mut builder, bytes[i])
     i += 1
   }
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(value) => take value,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
@@ -61,7 +61,7 @@ pub fn normalize(p: Path) -> Result[Path, PathError] uses {} {
     Some(i) => return Error(Invalid(i)),
     None() => (),
   }
-  let absolute = std@1/string.starts_with(text, "/")
+  let absolute = string.starts_with(text, "/")
   let bytes = core@1/string.as_bytes(text)
   let len = core@1/bytes.len(bytes)
   // Keep an active stack prefix; dormant entries are replaced or released on exit.
@@ -99,10 +99,10 @@ pub fn normalize(p: Path) -> Result[Path, PathError] uses {} {
     if j != 0 {
       core@1/list.push(mut builder, 47)
     }
-    std@1/text.append(mut builder, parts[j])
+    text.append(mut builder, parts[j])
     j += 1
   }
-  let joined = match std@1/text.finish(take builder) {
+  let joined = match text.finish(take builder) {
     Ok(value) => take value,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
@@ -112,7 +112,7 @@ pub fn normalize(p: Path) -> Result[Path, PathError] uses {} {
   Ok(
     core@1/path.of(
       if absolute {
-        std@1/string.concat("/", joined)
+        string.concat("/", joined)
       } else if joined == "" {
         "."
       } else {
@@ -135,13 +135,13 @@ pub fn join(base: Path, child: Path) -> Result[Path, PathError] uses {} {
     Some(i) => return Error(Invalid(i)),
     None() => (),
   }
-  if std@1/string.starts_with(right, "/") {
+  if string.starts_with(right, "/") {
     return Error(Invalid(0))
   }
   if left == "" {
     normalize(child)
   } else {
-    normalize(core@1/path.of(std@1/string.join([left, right], "/")))
+    normalize(core@1/path.of(string.join([left, right], "/")))
   }
 }
 
@@ -154,18 +154,18 @@ pub fn parent(p: Path) -> Option[Path] uses {} {
   if count == 0 {
     return None()
   }
-  let absolute = std@1/string.starts_with(text, "/")
+  let absolute = string.starts_with(text, "/")
   let mut prefix: List[String] = []
   let mut i: u64 = 0
   while i + 1 < count {
     core@1/list.push(mut prefix, copy parts[i])
     i += 1
   }
-  let joined = std@1/string.join(prefix, "/")
+  let joined = string.join(prefix, "/")
   Some(
     core@1/path.of(
       if absolute {
-        std@1/string.concat("/", joined)
+        string.concat("/", joined)
       } else if joined == "" {
         "."
       } else {

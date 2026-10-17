@@ -5,10 +5,10 @@ fn serializable_value[T: serializable](value: T) {}
 
 @noalloc
 fn example(text: String) {
-  std@1/duration.from_parts(0, 0)
-  std@1/duration.parse(text)
-  std@1/time.parse(text)
-  serializable_value(std@1/duration.from_parts(0, 0))
-  serializable_value(std@1/time.Timestamp(unix_nanoseconds: 0))
+  duration.from_parts(0, 0)
+  duration.parse(text)
+  time.parse(text)
+  serializable_value(duration.from_parts(0, 0))
+  serializable_value(time.Timestamp(unix_nanoseconds: 0))
   ()
 }

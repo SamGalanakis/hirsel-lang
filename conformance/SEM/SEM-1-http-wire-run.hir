@@ -4,24 +4,24 @@
 // Strict noalloc ports of httparse and Zig HTTP wire parsing.
 @noalloc
 fn wire(buf: Bytes) -> bool uses {} {
-  let empty = std@1/http_wire.RawHeader(
+  let empty = http_wire.RawHeader(
     name_start: 0,
     name_end: 0,
     value_start: 0,
     value_end: 0
   )
-  let mut headers: Inline[std@1/http_wire.RawHeader, 2] = [empty, empty]
+  let mut headers: Inline[http_wire.RawHeader, 2] = [empty, empty]
   let mut count: u64 = 0
-  let mut line = std@1/http_wire.StatusLine(
+  let mut line = http_wire.StatusLine(
     version: 0,
     code: 0,
     reason_start: 0,
     reason_end: 0
   )
-  match std@1/http_wire.parse_response(buf, mut line, mut headers, mut count) {
+  match http_wire.parse_response(buf, mut line, mut headers, mut count) {
     Ok(Complete(end)) => {
-      match std@1/http_wire.framing(buf, line.version, headers, count) {
-        Ok(frame) => frame.chunked && frame.keep_alive && line.code == 200 && std@1/http_wire.parse_chunk_size(
+      match http_wire.framing(buf, line.version, headers, count) {
+        Ok(frame) => frame.chunked && frame.keep_alive && line.code == 200 && http_wire.parse_chunk_size(
           buf,
           end
         ) == Ok(Complete(3, 4)),
@@ -34,19 +34,19 @@ fn wire(buf: Bytes) -> bool uses {} {
 
 @noalloc
 fn lookup(buf: Bytes) -> bool uses {} {
-  let mut it = std@1/http_wire.header_iterator(buf)
-  let first = std@1/http_wire.next_header(buf, mut it)
-  let empty = std@1/http_wire.RawHeader(
+  let mut it = http_wire.header_iterator(buf)
+  let first = http_wire.next_header(buf, mut it)
+  let empty = http_wire.RawHeader(
     name_start: 0,
     name_end: 0,
     value_start: 0,
     value_end: 0
   )
-  let mut headers: Inline[std@1/http_wire.RawHeader, 1] = [empty]
+  let mut headers: Inline[http_wire.RawHeader, 1] = [empty]
   let mut count: u64 = 0
-  match std@1/http_wire.parse_headers(buf, it.index, mut headers, mut count) {
+  match http_wire.parse_headers(buf, it.index, mut headers, mut count) {
     Ok(Complete(_)) => {
-      match std@1/http_wire.find_header(buf, headers, count, b"CONTENT-TYPE") {
+      match http_wire.find_header(buf, headers, count, b"CONTENT-TYPE") {
         Some(h) => first != None() && bytes.slice(buf, h.value_start, h.value_end) == b"text/plain",
         None() => false,
       }
@@ -62,7 +62,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   )
   test.check(
     t,
-    std@1/http_wire.parse_chunk_size(b"ffxyz\r\n", 0) == Error(InvalidChunkSize())
+    http_wire.parse_chunk_size(b"ffxyz\r\n", 0) == Error(InvalidChunkSize())
   )
   test.check(t, lookup(b"HTTP/1.1 200 OK\r\nx:y\r\ncontent-type:text/plain\r\n\r\n"))
   Ok(())

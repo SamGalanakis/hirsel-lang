@@ -20,7 +20,7 @@ pub type UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidH
 pub type Part = Unreserved | User | Password | Host | Path | Query | Fragment
 
 fn finish(take builder: List[u8]) -> String uses {} {
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(s) => take s,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
@@ -311,14 +311,14 @@ fn parse_after_scheme(take scheme: String, take text: String) -> Result[Uri, Uri
           return Error(InvalidHostName())
         }
         // The only URI host-grammar tightening: guard numeric hosts after decoding,
-        // using the same WHATWG checker as grants and std@1/net.validate_host.
+        // using the same WHATWG checker as grants and net.validate_host.
         if data[start] != 91 {
           let decoded = match core@1/string.from_bytes(percent_decode(host)) {
             Ok(s) => take s,
             Error(_) => return Error(InvalidHostName()),
           }
-          if std@1/net.ends_in_number(decoded) {
-            match std@1/net.parse_ipv4(decoded) {
+          if net.ends_in_number(decoded) {
+            match net.parse_ipv4(decoded) {
               Ok(_) => (),
               Error(_) => return Error(InvalidHostName()),
             }
@@ -368,18 +368,18 @@ pub fn parse(text: String) -> Result[Uri, UriError] uses {} {
 // Zig writeToStream(.all): an empty path is rendered as '/'.
 pub fn format(parsed_uri: Uri) -> String uses {} {
   let mut out: List[u8] = []
-  std@1/text.append(mut out, parsed_uri.scheme)
+  text.append(mut out, parsed_uri.scheme)
   core@1/list.push(mut out, 58)
   match parsed_uri.host {
     Some(host) => {
-      std@1/text.append(mut out, "//")
+      text.append(mut out, "//")
       match parsed_uri.user {
         Some(user) => {
-          std@1/text.append(mut out, component_encoded(user, User()))
+          text.append(mut out, component_encoded(user, User()))
           match parsed_uri.password {
             Some(password) => {
               core@1/list.push(mut out, 58)
-              std@1/text.append(mut out, component_encoded(password, Password()))
+              text.append(mut out, component_encoded(password, Password()))
             },
             None() => (),
           }
@@ -387,11 +387,11 @@ pub fn format(parsed_uri: Uri) -> String uses {} {
         },
         None() => (),
       }
-      std@1/text.append(mut out, component_encoded(host, Host()))
+      text.append(mut out, component_encoded(host, Host()))
       match parsed_uri.port {
         Some(port) => {
           core@1/list.push(mut out, 58)
-          std@1/u16.format_into(port, mut out)
+          u16.format_into(port, mut out)
         },
         None() => (),
       }
@@ -399,7 +399,7 @@ pub fn format(parsed_uri: Uri) -> String uses {} {
     None() => (),
   }
   let path = component_encoded(parsed_uri.path, Path())
-  std@1/text.append(
+  text.append(
     mut out,
     if path == "" {
       "/"
@@ -410,14 +410,14 @@ pub fn format(parsed_uri: Uri) -> String uses {} {
   match parsed_uri.query {
     Some(query) => {
       core@1/list.push(mut out, 63)
-      std@1/text.append(mut out, component_encoded(query, Query()))
+      text.append(mut out, component_encoded(query, Query()))
     },
     None() => (),
   }
   match parsed_uri.fragment {
     Some(fragment) => {
       core@1/list.push(mut out, 35)
-      std@1/text.append(mut out, component_encoded(fragment, Fragment()))
+      text.append(mut out, component_encoded(fragment, Fragment()))
     },
     None() => (),
   }
@@ -538,7 +538,7 @@ pub fn resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {} {
       },
       Some(_) => (),
     }
-  } else if std@1/string.starts_with(path, "/") {
+  } else if string.starts_with(path, "/") {
     next.path = Encoded(remove_dot_segments(path))
   } else {
     let base_path = component_encoded(owned_base.path, Path())
@@ -548,9 +548,9 @@ pub fn resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {} {
       cut -= 1
     }
     let merged = if cut > 0 {
-      std@1/string.concat(piece(base_path, 0, cut), path)
+      string.concat(piece(base_path, 0, cut), path)
     } else if base_path == "" {
-      std@1/string.concat("/", path)
+      string.concat("/", path)
     } else {
       path
     }

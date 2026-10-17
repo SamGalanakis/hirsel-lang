@@ -3,10 +3,10 @@
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
   let empty: List[u8] = []
-  std@1/test.equal(t, empty, empty)
+  test.equal(t, empty, empty)
   let text: String = ""
-  std@1/test.equal(t, text, text)
-  std@1/test.equal(t, (), ())
-  std@1/test.equal(t, -0.0f64, 0.0f64)
+  test.equal(t, text, text)
+  test.equal(t, (), ())
+  test.equal(t, -0.0f64, 0.0f64)
   Ok(())
 }

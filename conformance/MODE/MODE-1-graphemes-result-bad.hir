@@ -1,7 +1,7 @@
 // rule: MODE-1
 // expect: reject MODE-1 at line 5
 fn first(s: String) -> String {
-  for piece in std@1/unicode.graphemes(s) {
+  for piece in unicode.graphemes(s) {
     return copy piece
   }
   ""

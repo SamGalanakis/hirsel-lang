@@ -211,7 +211,7 @@ pub fn parse_socket_addr(text: String) -> Result[SocketAddr, AddrParseError] use
 }
 
 fn finish(take builder: List[u8]) -> String uses {} {
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(text) => take text,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
@@ -226,7 +226,7 @@ fn write_v4(octets: Inline[u8, 4], mut out: List[u8]) -> () uses {} {
     if i > 0 {
       core@1/list.push(mut out, 46)
     }
-    std@1/u8.format_into(octets[i], mut out)
+    u8.format_into(octets[i], mut out)
     i += 1
   }
 }
@@ -260,7 +260,7 @@ pub fn format_ip(ip: IpAddr) -> String uses {} {
         i += 1
       }
       if groups[0] == 0 && groups[1] == 0 && groups[2] == 0 && groups[3] == 0 && groups[4] == 0 && groups[5] == 65535 {
-        std@1/text.append(mut out, "::ffff:")
+        text.append(mut out, "::ffff:")
         write_v4([octets[12], octets[13], octets[14], octets[15]], mut out)
       } else {
         let mut longest_start: u64 = 0
@@ -286,7 +286,7 @@ pub fn format_ip(ip: IpAddr) -> String uses {} {
         i = 0
         while i < 8 {
           if longest_len > 1 && i == longest_start {
-            std@1/text.append(mut out, "::")
+            text.append(mut out, "::")
             i += longest_len
           } else {
             if i > 0 && !(longest_len > 1 && i == longest_start + longest_len) {
@@ -305,15 +305,15 @@ pub fn format_ip(ip: IpAddr) -> String uses {} {
 pub fn format_socket_addr(addr: SocketAddr) -> String uses {} {
   let mut out: List[u8] = []
   match addr.ip {
-    V4(_) => std@1/text.append(mut out, format_ip(addr.ip)),
+    V4(_) => text.append(mut out, format_ip(addr.ip)),
     V6(_) => {
       core@1/list.push(mut out, 91)
-      std@1/text.append(mut out, format_ip(addr.ip))
+      text.append(mut out, format_ip(addr.ip))
       core@1/list.push(mut out, 93)
     },
   }
   core@1/list.push(mut out, 58)
-  std@1/u16.format_into(addr.port, mut out)
+  u16.format_into(addr.port, mut out)
   finish(take out)
 }
 

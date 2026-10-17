@@ -11,21 +11,21 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   }
   let dir = io.dir(rt, path.of("")) ? Files
   let mut tasks: List[String] = []
-  if !std@1/string.starts_with(commands, "init\n") && commands != "init" {
+  if !string.starts_with(commands, "init\n") && commands != "init" {
     let data = file.read_bytes(dir, state) ? Files
     let text = string.from_bytes(copy data) ? Utf8
-    for line in std@1/string.split(take text, "\n") {
+    for line in string.split(take text, "\n") {
       if string.byte_len(line) > 0 {
         list.push(mut tasks, copy line)
       }
     }
   }
-  for raw in std@1/string.split(take commands, "\n") {
-    let line = std@1/string.trim(raw)
-    if std@1/string.starts_with(line, "add ") {
+  for raw in string.split(take commands, "\n") {
+    let line = string.trim(raw)
+    if string.starts_with(line, "add ") {
       list.push(mut tasks, common.slice(line, 4, string.byte_len(line)))
-    } else if std@1/string.starts_with(line, "done ") {
-      let n = match std@1/u64.parse(common.slice(line, 5, string.byte_len(line))) {
+    } else if string.starts_with(line, "done ") {
+      let n = match u64.parse(common.slice(line, 5, string.byte_len(line))) {
         Ok(n) => n,
         Error(_) => return Error(Invalid()),
       }
@@ -43,16 +43,16 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
       return Error(Invalid())
     }
   }
-  let saved = std@1/string.join(tasks, "\n")
+  let saved = string.join(tasks, "\n")
   let mut file = file.create_atomic(dir, state) ? Files
   file.write_all(dir, mut file, string.as_bytes(saved)) ? Files
   file.commit(dir, take file) ? Files
   let mut builder: List[u8] = []
   for i in 0u64..list.len(tasks) {
-    std@1/u64.format_into(i + 1, mut builder)
-    std@1/text.append(mut builder, ". ")
-    std@1/text.append(mut builder, tasks[i])
-    std@1/text.append(mut builder, "\n")
+    u64.format_into(i + 1, mut builder)
+    text.append(mut builder, ". ")
+    text.append(mut builder, tasks[i])
+    text.append(mut builder, "\n")
   }
   common.print(rt, common.finish(take builder)?)
 }

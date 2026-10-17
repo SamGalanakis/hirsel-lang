@@ -2,6 +2,6 @@
 // expect: accept
 fn encode[T: serializable](x: T) {}
 
-fn example(x: std@1/time.Duration) {
+fn example(x: time.Duration) {
   encode(x)
 }

@@ -1,7 +1,7 @@
 // rule: OWN-2
 // expect: reject OWN-2 at line 5
 fn probe(take src: Bytes) -> () {
-  std@1/bytes.replace(take src, b"a", b"b")
+  bytes.replace(take src, b"a", b"b")
   bytes.len(src)
   ()
 }

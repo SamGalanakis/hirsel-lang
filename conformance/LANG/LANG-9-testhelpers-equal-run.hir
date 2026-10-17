@@ -2,14 +2,14 @@
 // expect: run
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
-  std@1/test.equal(t, 42u64, 42u64)
+  test.equal(t, 42u64, 42u64)
   let yes: bool = true
-  std@1/test.equal(t, yes, yes)
+  test.equal(t, yes, yes)
   let pair: (u8, String) = (1, "é")
-  std@1/test.equal(t, pair, pair)
-  let a = std@1/u64.to_string(123)
-  let b = std@1/u64.to_string(123)
-  std@1/test.equal(t, a, b)
+  test.equal(t, pair, pair)
+  let a = u64.to_string(123)
+  let b = u64.to_string(123)
+  test.equal(t, a, b)
   core@1/test.check(t, a == "123" && b == "123")
   Ok(())
 }

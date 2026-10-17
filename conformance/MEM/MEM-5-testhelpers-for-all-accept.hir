@@ -2,7 +2,7 @@
 // expect: accept
 // entry: trial
 fn trial(t: Test) {
-  std@1/test.for_all(
+  test.for_all(
     t,
     fn(grant: Test) -> u8 {
       7

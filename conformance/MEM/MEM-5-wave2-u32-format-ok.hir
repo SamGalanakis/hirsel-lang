@@ -3,5 +3,5 @@
 @noalloc
 fn main() -> () {
   let mut buffer: Inline[u8, 2] = [0, 0]
-  std@1/u32.format(12, mut buffer);
+  u32.format(12, mut buffer);
 }

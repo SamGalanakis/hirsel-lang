@@ -1,5 +1,5 @@
 // rule: MEM-5
 // expect: accept
 fn main() -> String {
-  std@1/f64.to_string(1f64)
+  f64.to_string(1f64)
 }

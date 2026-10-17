@@ -33,20 +33,20 @@ impl TirProvider for Edited<'_> {
 }
 
 fn accepted(source: &str) -> QueryEngine {
-    if !source.contains("std@1/") {
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("source.hir", source.into()).unwrap();
-        let output = check_progress(&mut engine, file, &default_context()).unwrap();
-        assert!(
-            output
-                .diagnostics
-                .iter()
-                .all(|d| d.severity != hirsel_diag::Severity::Error),
-            "{:?}",
-            output.diagnostics
-        );
-        return engine;
-    }
+    let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+    let file = engine.sources.add("source.hir", source.into()).unwrap();
+    let output = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .all(|d| d.severity != hirsel_diag::Severity::Error),
+        "{:?}",
+        output.diagnostics
+    );
+    engine
+}
+fn accepted_with_std(source: &str) -> QueryEngine {
     let mut loaded = load_program_source(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_numeric.hir"),
         Some(source),
@@ -744,7 +744,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 #[test]
 fn nested_callable_content_still_traps_after_its_source_scope_ends() {
     with_compiler_stack(|| {
-        let mut engine = accepted(include_str!(
+        let mut engine = accepted_with_std(include_str!(
             "../../../../conformance/CLO/CLO-1-consumed-loop-content-capture-nested-run.hir"
         ));
         assert_eq!(printed(run(&mut engine, &[], false)), "15\n");

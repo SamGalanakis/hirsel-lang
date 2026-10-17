@@ -1,12 +1,12 @@
 // rule: SEM-3
 // expect: run
-pub fn main(rt: Io, args: Args) -> Result[(), std@1/uri.UriError] {
-  let parsed = std@1/uri.parse("https://example.com/a/b?old")?
+pub fn main(rt: Io, args: Args) -> Result[(), uri.UriError] {
+  let parsed = uri.parse("https://example.com/a/b?old")?
   failure.check(
     parsed.scheme == "https" && parsed.host == Some(Encoded("example.com")),
     TextInvariant()
   )
-  let raw_uri = std@1/uri.Uri(
+  let raw_uri = uri.Uri(
     scheme: "file",
     user: None(),
     password: None(),
@@ -16,19 +16,16 @@ pub fn main(rt: Io, args: Args) -> Result[(), std@1/uri.UriError] {
     query: None(),
     fragment: None()
   )
-  failure.check(std@1/uri.format(raw_uri) == "file:/a/b", TextInvariant())
-  failure.check(std@1/uri.percent_encode(b"a/b ") == "a%2Fb%20", TextInvariant())
-  failure.check(std@1/uri.percent_decode("a%2Fb%20") == b"a/b ", TextInvariant())
-  failure.check(std@1/uri.component_raw(Raw("plain")) == b"plain", TextInvariant())
+  failure.check(uri.format(raw_uri) == "file:/a/b", TextInvariant())
+  failure.check(uri.percent_encode(b"a/b ") == "a%2Fb%20", TextInvariant())
+  failure.check(uri.percent_decode("a%2Fb%20") == b"a/b ", TextInvariant())
+  failure.check(uri.component_raw(Raw("plain")) == b"plain", TextInvariant())
+  failure.check(uri.component_text(Encoded("a%2Fb")) == Ok("a/b"), TextInvariant())
   failure.check(
-    std@1/uri.component_text(Encoded("a%2Fb")) == Ok("a/b"),
+    uri.component_encoded(Raw("a b?"), Path()) == "a%20b%3F",
     TextInvariant()
   )
-  failure.check(
-    std@1/uri.component_encoded(Raw("a b?"), Path()) == "a%20b%3F",
-    TextInvariant()
-  )
-  match std@1/uri.parse("http://0x7f.0.0.1") {
+  match uri.parse("http://0x7f.0.0.1") {
     Error(InvalidHostName()) => (),
     _ => failure.check(false, TextInvariant()),
   }

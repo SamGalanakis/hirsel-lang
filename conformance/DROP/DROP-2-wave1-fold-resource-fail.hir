@@ -17,7 +17,7 @@ fn add(take acc: Acc, value: u64) -> Acc uses {acc} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let xs: List[u64] = [1, 2, 3]
-  let folded = std@1/list.fold(xs, Acc(total: 0, out: io.stdout(rt) ? Grant), add)
+  let folded = list.fold(xs, Acc(total: 0, out: io.stdout(rt) ? Grant), add)
   failure.check(folded.total == 6, Bounds())
   Ok(())
 }

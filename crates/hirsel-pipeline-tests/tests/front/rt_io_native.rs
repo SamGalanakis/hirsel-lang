@@ -81,8 +81,8 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
         let mut failures = vec![];
         'cases: for (name, path, test) in cases {
             eprintln!("Io native matrix: {name}");
-            let source = std::fs::read_to_string(path).unwrap();
-            let mut engine = if source.contains("std@1/") {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let mut engine = if path.with_extension("hir.json").exists() {
                 source_std::engine()
             } else {
                 QueryEngine::new(default_environment(), compiler_adapters())
@@ -375,12 +375,11 @@ fn partial_write_replay(
             ),
         ];
         for (name, operation, fault, events) in cases {
-            let source = std::fs::read_to_string(
-                root.join("native-tests/library")
-                    .join(format!("{name}.hir")),
-            )
-            .unwrap();
-            let mut engine = if source.contains("std@1/") {
+            let path = root
+                .join("native-tests/library")
+                .join(format!("{name}.hir"));
+            let source = std::fs::read_to_string(&path).unwrap();
+            let mut engine = if path.with_extension("hir.json").exists() {
                 source_std::engine()
             } else {
                 QueryEngine::new(default_environment(), compiler_adapters())

@@ -3,31 +3,31 @@
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   let inputs: List[String] = ["null", "false", "true", "[]", "{}", "\"\"", "0", "-0"]
   for text in inputs {
-    let value = match std@1/json.parse(copy text) {
+    let value = match json.parse(copy text) {
       Ok(v) => v,
       Error(_) => {
         failure.check(false, TextInvariant())
         {
-          let empty: std@1/json.Value = Null()
+          let empty: json.Value = Null()
           empty
         }
       },
     }
-    match std@1/json.stringify(value) {
+    match json.stringify(value) {
       Ok(s) => failure.check(s == text, TextInvariant()),
       Error(_) => failure.check(false, TextInvariant()),
     }
     let mut builder: List[u8] = []
-    match std@1/json.write(value, mut builder) {
+    match json.write(value, mut builder) {
       Ok(_) => (),
       Error(_) => failure.check(false, TextInvariant()),
     }
-    match std@1/text.finish(take builder) {
+    match text.finish(take builder) {
       Ok(s) => failure.check(s == text, TextInvariant()),
       Error(_) => failure.check(false, TextInvariant()),
     }
   }
-  match std@1/json.parse("") {
+  match json.parse("") {
     Error(Syntax(0)) => (),
     _ => failure.check(false, TextInvariant()),
   }

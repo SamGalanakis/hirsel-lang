@@ -1,14 +1,14 @@
 // rule: MODE-1
 // expect: reject MODE-1 at line 5
 fn first(s: String) -> String {
-  for piece in std@1/unicode.graphemes(s) {
+  for piece in unicode.graphemes(s) {
     return piece
   }
   copy s
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
-  let s = std@1/string.concat("a", "b")
+  let s = string.concat("a", "b")
   let _ = out.print(io.stdout(rt)?, first(s))
   let _ = out.print(io.stdout(rt)?, "\n")
   Ok(())

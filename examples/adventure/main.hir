@@ -5,8 +5,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   let mut room: Room = Meadow()
   let mut key: bool = false
   let mut builder: List[u8] = []
-  for raw in std@1/string.split(take commands, "\n") {
-    let command = std@1/string.trim(raw)
+  for raw in string.split(take commands, "\n") {
+    let command = string.trim(raw)
     if string.byte_len(command) == 0 {
       continue
     }
@@ -33,8 +33,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
       },
       Home() => "The adventure is complete.",
     }
-    std@1/text.append(mut builder, reply)
-    std@1/text.append(mut builder, "\n")
+    text.append(mut builder, reply)
+    text.append(mut builder, "\n")
   }
   common.print(rt, common.finish(take builder)?)
 }

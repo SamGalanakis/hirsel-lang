@@ -2,27 +2,27 @@
 @noalloc
 pub fn format[n: size](value: u32, mut buffer: Inline[u8, n]) -> Result[
   u64,
-  std@1/scalar.FormatError
+  scalar.FormatError
 ] uses {} {
   let magnitude: u128 = core@1/int.widen(value)
-  std@1/internal.decimal.write_unsigned(magnitude, false, mut buffer)
+  internal.decimal.write_unsigned(magnitude, false, mut buffer)
 }
 
 // Appends the decimal text of `value` to `out`; to_string is that text,
 // built from the same digits in a list reserved to its exact length.
 pub fn format_into(value: u32, mut out: List[u8]) -> () uses {} {
-  std@1/internal.decimal.append(mut out, core@1/int.widen(value), false)
+  internal.decimal.append(mut out, core@1/int.widen(value), false)
 }
 
 pub fn to_string(value: u32) -> String uses {} {
   let mut out: List[u8] = []
-  std@1/u32.format_into(value, mut out)
-  std@1/internal.decimal.finish(take out)
+  u32.format_into(value, mut out)
+  internal.decimal.finish(take out)
 }
 
 @noalloc
-pub fn parse(text: String) -> Result[u32, std@1/scalar.ParseError] uses {} {
-  match std@1/internal.decimal.read_unsigned(text, false, 4294967295u128, 0u128) {
+pub fn parse(text: String) -> Result[u32, scalar.ParseError] uses {} {
+  match internal.decimal.read_unsigned(text, false, 4294967295u128, 0u128) {
     Error(error) => Error(error),
     Ok((magnitude, negative)) => {
       let value: u32 = core@1/int.narrow(magnitude)

@@ -93,7 +93,7 @@ fn json_owned_text(data: Bytes, start: u64, end: u64) -> String uses {} {
     core@1/list.push(mut output, data[i])
     i += 1
   }
-  match std@1/text.finish(take output) {
+  match text.finish(take output) {
     Ok(s) => s,
     Error(_) => {
       core@1/failure.check(false, TextInvariant())
@@ -160,7 +160,7 @@ fn json_quoted(data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
     let c = data[pos]
     pos += 1
     if c == 34 {
-      return match std@1/text.finish(take output) {
+      return match text.finish(take output) {
         Ok(s) => Ok(s),
         Error(_) => Error(Syntax(pos)),
       }
@@ -397,7 +397,7 @@ fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonErro
   if pos != core@1/bytes.len(data) {
     return Error(InvalidNumber())
   }
-  std@1/text.append(mut builder, text)
+  text.append(mut builder, text)
   Ok(())
 }
 
@@ -410,11 +410,11 @@ fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result
 ] uses {} {
   match value {
     Null() => {
-      std@1/text.append(mut builder, "null")
+      text.append(mut builder, "null")
       Ok(())
     },
     Bool(b) => {
-      std@1/text.append(
+      text.append(
         mut builder,
         if b {
           "true"
@@ -478,7 +478,7 @@ pub fn write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses 
 pub fn stringify(value: Value) -> Result[String, JsonError] uses {} {
   let mut builder: List[u8] = []
   write(value, mut builder)?
-  match std@1/text.finish(take builder) {
+  match text.finish(take builder) {
     Ok(s) => Ok(s),
     Error(_) => Error(InvalidNumber()),
   }

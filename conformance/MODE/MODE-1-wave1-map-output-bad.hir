@@ -5,5 +5,5 @@ fn mapper(s: String) -> String in s {
 }
 
 fn example(xs: List[String]) -> () {
-  std@1/list.map(xs, mapper);
+  list.map(xs, mapper);
 }

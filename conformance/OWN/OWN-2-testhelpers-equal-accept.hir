@@ -2,6 +2,6 @@
 // expect: accept
 // entry: trial
 fn trial(t: Test, take actual: String, take expected: String) {
-  std@1/test.equal(t, actual, expected)
+  test.equal(t, actual, expected)
   core@1/test.check(t, actual == expected)
 }

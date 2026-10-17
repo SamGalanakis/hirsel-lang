@@ -2,7 +2,7 @@
 // expect: run
 // entry: exercise
 // Zig http/Client.zig fetch/receiveHead flow; two runs have independent scripts.
-pub fn exercise(t: Test) -> Result[(), std@1/http.HttpError] {
+pub fn exercise(t: Test) -> Result[(), http.HttpError] {
   let n = test.net(
     t,
     [
@@ -26,9 +26,9 @@ pub fn exercise(t: Test) -> Result[(), std@1/http.HttpError] {
       )
     ]
   )
-  let response = std@1/http.fetch(
+  let response = http.fetch(
     n,
-    std@1/http.default_config(),
+    http.default_config(),
     Get(),
     "http://example.com/",
     [],

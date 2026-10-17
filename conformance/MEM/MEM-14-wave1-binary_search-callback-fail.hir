@@ -8,6 +8,6 @@ fn callback(a: u64, b: u64) -> i32 uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   let mut xs: unique List[u64] = [1, 2, 3]
-  std@1/list.binary_search(xs, 1u64, callback)
+  list.binary_search(xs, 1u64, callback)
   Ok(())
 }

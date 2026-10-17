@@ -2,7 +2,7 @@
 // expect: fail LANG-9 at line 6
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
-  std@1/test.equal(
+  test.equal(
     t,
     core@1/f64.from_bits(0x7ff8000000000000),
     core@1/f64.from_bits(0x7ff8000000000000)
