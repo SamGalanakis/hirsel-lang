@@ -1,0 +1,46 @@
+// rule: MEM-6
+// expect: run
+// stdout: outer out of space
+// The boundary catches only its own arena's OutOfSpace. An inner bounded callback
+// that exhausts the outer arena propagates, and the outer call returns Error.
+type Tree = Leaf | Branch(left: box Tree, right: box Tree)
+
+fn tree(a: Arena, depth: u64) -> (box Tree) in a {
+  if depth == 0u64 {
+    box Leaf()
+  } else {
+    box Branch(left: tree(a, depth - 1u64), right: tree(a, depth - 1u64))
+  }
+}
+
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let outcome: Result[u8, OutOfSpace] = arena.bounded(
+    40u64,
+    fn(outer: Arena) -> u8 {
+      let inner: Result[u8, OutOfSpace] = arena.bounded(
+        1000u64,
+        fn(a: Arena) -> u8 {
+          let t = tree(outer, 1u64)
+          7u8
+        }
+      )
+      8u8
+    }
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if outcome == Error(OutOfSpace()) {
+      "outer out of space\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

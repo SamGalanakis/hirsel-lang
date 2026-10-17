@@ -155,6 +155,7 @@ fn execute_frames(
     execution: &mut Execution,
 ) -> Result<(), Error> {
     let mut tooling = None;
+    let mut budgets = crate::bounded::Budgets::default();
     let mut task = 0;
     let mut runnable = std::collections::VecDeque::new();
     let mut parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)> = Vec::new();
@@ -1150,6 +1151,40 @@ fn execute_frames(
                     .continuation
                     .take()
                     .ok_or_else(|| invalid("missing continuation"))?;
+                // MEM-6: a bounded callback's result is Ok, and its own OutOfSpace,
+                // with no failure during the cleanup that followed, is Error(OutOfSpace).
+                let ending = match (finished.bounded, ending) {
+                    (None, ending) => ending,
+                    (Some(boundary), ending) => {
+                        let caught = budgets.close(boundary, execution.failures.len());
+                        match ending {
+                            crate::resources::Ending::Return(value) => {
+                                returned = Shadow::Parts(vec![returned]);
+                                crate::resources::Ending::Return(Value::Variant {
+                                    variant: 0,
+                                    fields: vec![Some(value)],
+                                })
+                            }
+                            crate::resources::Ending::Failed if caught => {
+                                execution.failures.truncate(boundary.failures);
+                                if let Some(last) = execution.failures.last_mut()
+                                    && last.cause == Some(boundary.failures)
+                                {
+                                    last.cause = None;
+                                }
+                                returned = Shadow::default();
+                                crate::resources::Ending::Return(Value::Variant {
+                                    variant: 1,
+                                    fields: vec![Some(Value::Variant {
+                                        variant: 0,
+                                        fields: vec![],
+                                    })],
+                                })
+                            }
+                            failed => failed,
+                        }
+                    }
+                };
                 for (place, local) in continuation.writebacks {
                     let value = finished
                         .slots
@@ -1308,6 +1343,7 @@ fn execute_frames(
                     &mut execution.trace,
                     provider,
                     &mut constants,
+                    &mut budgets,
                 )
                 .map(|_| Action::Continue),
             }
@@ -1330,6 +1366,19 @@ fn execute_frames(
                     runtime.trace_mode,
                     execution,
                     failure(sources, site, "SEM-1", &format!("{reason:?}"))?,
+                    anchor(frame, site),
+                );
+                frame.ending = Some(crate::resources::Ending::Failed);
+                if let Some(id) = cleanup {
+                    enqueue_cleanup(frame, id, site)?;
+                }
+            }
+            Err(EvalError::OutOfSpace(arena)) => {
+                budgets.exhausted(arena, execution.failures.len());
+                record_failure(
+                    runtime.trace_mode,
+                    execution,
+                    failure(sources, site, "MEM-6", "OutOfSpace")?,
                     anchor(frame, site),
                 );
                 frame.ending = Some(crate::resources::Ending::Failed);
@@ -1406,8 +1455,8 @@ fn execute_frames(
                 returns,
                 on_failure,
             }) => {
-                let (callee, closes_arena) =
-                    checked_callee(frame, callee, &mut arguments, &mut checks)?;
+                let (callee, closes_arena, bounded) =
+                    checked_callee(frame, callee, &mut arguments, &mut checks, &mut budgets)?;
                 let mut closure_check = None;
                 let (definition, body, captures, sizes) = match callee {
                     RuntimeCallee::Closure {
@@ -1540,24 +1589,48 @@ fn execute_frames(
                                     ..hirsel_types::Type::unit()
                                 }),
                         };
-                        let result = operations.call(
-                            OperationCall {
-                                path: &path,
-                                generics: &generics,
-                                arguments: &arguments,
-                                result_type,
-                                types: call_types.as_ref().unwrap_or(&frame.definition.types),
-                                site,
-                            },
-                            &mut OperationContext {
-                                configuration,
+                        let types = call_types.as_ref().unwrap_or(&frame.definition.types);
+                        // MEM-6: a copy into a bounded arena charges its whole tree first.
+                        let exhausted = match arguments.as_slice() {
+                            [Value::Handle { kind, id }, value]
+                                if path == hirsel_syntax::DefPath::core("copy_to")
+                                    && kind == crate::checked::ARENA_HANDLE
+                                    && budgets.bounded(*id) =>
+                            {
+                                let bytes =
+                                    crate::bounded::copy(runtime, types, result_type, value)?;
+                                budgets.charge(*id, bytes).err()
+                            }
+                            _ => None,
+                        };
+                        let result = if let Some(arena) = exhausted {
+                            budgets.exhausted(arena, execution.failures.len());
+                            Some(OperationResult::Failed(failure(
                                 sources,
-                                stdout: &mut execution.stdout,
-                                trace: &mut execution.trace,
-                                trace_mode: runtime.trace_mode,
-                                anchor: Some(&anchor(frame, site)),
-                            },
-                        )?;
+                                site,
+                                "MEM-6",
+                                "OutOfSpace",
+                            )?))
+                        } else {
+                            operations.call(
+                                OperationCall {
+                                    path: &path,
+                                    generics: &generics,
+                                    arguments: &arguments,
+                                    result_type,
+                                    types,
+                                    site,
+                                },
+                                &mut OperationContext {
+                                    configuration,
+                                    sources,
+                                    stdout: &mut execution.stdout,
+                                    trace: &mut execution.trace,
+                                    trace_mode: runtime.trace_mode,
+                                    anchor: Some(&anchor(frame, site)),
+                                },
+                            )?
+                        };
                         if let Some(result) = result {
                             let bounds = frame.check.as_ref().map(|check| {
                                 operation_bounds(
@@ -1617,6 +1690,14 @@ fn execute_frames(
                     entered.closes_arena = closes_arena;
                     callee.check = Some(entered);
                 }
+                // MEM-6: the callback never runs with an unbounded arena.
+                callee.bounded = bounded.map(|(arena, cap)| {
+                    budgets.open(arena, cap);
+                    crate::bounded::Boundary {
+                        arena,
+                        failures: execution.failures.len(),
+                    }
+                });
                 let writebacks = mut_places
                     .into_iter()
                     .map(|(i, p)| {
@@ -1777,6 +1858,8 @@ enum EvalError {
     InactiveVariant,
     OutOfBounds,
     Depth,
+    /// A charge exceeded this bounded arena's budget (MEM-6).
+    OutOfSpace(u64),
     Api(Error),
     Scalar(ScalarError),
 }
@@ -1825,6 +1908,7 @@ fn rvalue(
     runtime: &crate::aggregate::RuntimeTypes,
     provider: &mut (impl TirProvider + ?Sized),
     constants: &mut crate::constants::Constants,
+    budgets: &mut crate::bounded::Budgets,
 ) -> Result<(Value, Shadow), EvalError> {
     let value = frame
         .body()
@@ -1959,6 +2043,20 @@ fn rvalue(
             fields,
             destination: placement,
         } => {
+            // MEM-6: charge a bounded arena before any operand is consumed.
+            if let Some(arena) = bounded_destination(frame, &placement, budgets) {
+                let ty = frame.place(destination)?.ty;
+                let bytes = crate::bounded::construction(
+                    runtime,
+                    &frame.definition.types,
+                    ty,
+                    &constructor,
+                    fields.len(),
+                )?;
+                budgets
+                    .charge(arena, bytes)
+                    .map_err(EvalError::OutOfSpace)?;
+            }
             let mut values = vec![None; fields.len()];
             let mut parts = vec![Shadow::default(); fields.len()];
             for field in fields {
@@ -2037,6 +2135,18 @@ fn rvalue(
             captures,
             destination: placement,
         } => {
+            if !captures.is_empty()
+                && let Some(arena) = bounded_destination(frame, &placement, budgets)
+            {
+                let types = captures
+                    .iter()
+                    .map(|c| frame.place(c.place).map(|p| p.ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let bytes = crate::bounded::environment(runtime, &frame.definition.types, &types)?;
+                budgets
+                    .charge(arena, bytes)
+                    .map_err(EvalError::OutOfSpace)?;
+            }
             let owned_captures = captures
                 .iter()
                 .map(|o| {
@@ -2107,6 +2217,18 @@ fn rvalue(
         shadow.for_value(&value)
     };
     Ok((value, shadow))
+}
+/// The bounded arena a construction's destination names, if any.
+fn bounded_destination(
+    frame: &Frame,
+    placement: &Destination,
+    budgets: &crate::bounded::Budgets,
+) -> Option<u64> {
+    let Destination::Arena(origin) = placement else {
+        return None;
+    };
+    let arena = u64::from(frame.arena_of(origin)?);
+    budgets.bounded(arena).then_some(arena)
 }
 /// DROP-2: later declarations in this scope and all live descendant owners
 /// must release first, even when the exit uses several cleanup chains.
@@ -2215,6 +2337,7 @@ fn execute_instruction(
     trace: &mut Vec<TraceEvent>,
     provider: &mut (impl TirProvider + ?Sized),
     constants: &mut crate::constants::Constants,
+    budgets: &mut crate::bounded::Budgets,
 ) -> Result<(), EvalError> {
     match kind {
         InstructionKind::Defuse { place } => {
@@ -2302,7 +2425,15 @@ fn execute_instruction(
                 frame.body().rvalues.get(value.0 as usize),
                 Some(Rvalue::Construct { .. })
             );
-            let (value, shadow) = rvalue(frame, value, destination, runtime, provider, constants)?;
+            let (value, shadow) = rvalue(
+                frame,
+                value,
+                destination,
+                runtime,
+                provider,
+                constants,
+                budgets,
+            )?;
             if let Value::Resource { definition, .. } | Value::ResourceVariant { definition, .. } =
                 &value
             {
@@ -2587,26 +2718,31 @@ enum RuntimeCallee {
 }
 /// `arena.with` becomes a call of its callback with a fresh arena, which ends
 /// when the callback returns (MEM-4); placement is unobservable (MEM-10), so
-/// normal execution needs nothing more. Checked execution also poisons the
-/// arena at its end, and `@noalloc` bodies call only `@noalloc` definitions
-/// (MEM-5).
+/// normal execution needs nothing more. `arena.bounded` does the same with a
+/// fresh bounded arena, the third result: its handle id and capacity (MEM-6).
+/// Checked execution also poisons the arena at its end, and `@noalloc` bodies
+/// call only `@noalloc` definitions (MEM-5).
 fn checked_callee(
     frame: &Frame,
     callee: RuntimeCallee,
     arguments: &mut Vec<Value>,
     checks: &mut Vec<crate::checked::Argument>,
-) -> Result<(RuntimeCallee, Option<u32>), Error> {
+    budgets: &mut crate::bounded::Budgets,
+) -> Result<(RuntimeCallee, Option<u32>, Option<(u64, u64)>), Error> {
     let RuntimeCallee::Definition { path, .. } = &callee else {
-        return Ok((callee, None));
+        return Ok((callee, None, None));
     };
+    let bounded = *path == hirsel_syntax::DefPath::core(crate::library::ARENA_BOUNDED_OPERATION);
     let Some(check) = &frame.check else {
-        if *path != hirsel_syntax::DefPath::core(crate::library::ARENA_WITH_OPERATION) {
-            return Ok((callee, None));
+        if !bounded && *path != hirsel_syntax::DefPath::core(crate::library::ARENA_WITH_OPERATION) {
+            return Ok((callee, None, None));
         }
+        let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
         let (definition, body, captures, _, sizes) = arena_callback(arguments)?;
+        let id = if bounded { budgets.issue() } else { 0 };
         *arguments = vec![Value::Handle {
             kind: crate::checked::ARENA_HANDLE.into(),
-            id: 0,
+            id,
         }];
         let callee = RuntimeCallee::Closure {
             definition,
@@ -2616,7 +2752,7 @@ fn checked_callee(
             generic_sizes: vec![],
             check: None,
         };
-        return Ok((callee, None));
+        return Ok((callee, None, cap.map(|cap| (id, cap))));
     };
     let mut state = check.state.borrow_mut();
     if check.noalloc && !state.config.noalloc.contains(path) {
@@ -2625,9 +2761,10 @@ fn checked_callee(
             format!("call to {:?}", path.0.name),
         ));
     }
-    if state.config.arena_with.as_ref() != Some(path) {
-        return Ok((callee, None));
+    if !bounded && state.config.arena_with.as_ref() != Some(path) {
+        return Ok((callee, None, None));
     }
+    let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
     let (definition, body, captures, owned_captures, sizes) = arena_callback(arguments)?;
     let arena = state.arena();
     let shadow = checks.pop().unwrap_or_default().shadow;
@@ -2652,7 +2789,19 @@ fn checked_callee(
         generic_sizes: vec![],
         check: Some(check),
     };
-    Ok((callee, Some(arena)))
+    Ok((callee, Some(arena), cap.map(|cap| (arena.into(), cap))))
+}
+/// Remove `arena.bounded`'s leading capacity argument.
+fn bounded_capacity(arguments: &mut Vec<Value>) -> Result<u64, Error> {
+    if arguments.len() != 2 {
+        return Err(invalid("arena.bounded takes a capacity and one callback"));
+    }
+    match arguments.remove(0) {
+        Value::Integer(cap) => {
+            u64::try_from(cap.bits()).map_err(|_| invalid("arena.bounded capacity"))
+        }
+        _ => Err(invalid("arena.bounded capacity is not a u64")),
+    }
 }
 type Callback = (
     DefPath,

@@ -1178,6 +1178,9 @@ impl QueryEngine {
                 distinct: t.distinct,
                 finalizer,
                 fields,
+                representation: t
+                    .representation
+                    .map(|shape| (signature.types.clone(), shape)),
             });
         }
         Ok(runtime)

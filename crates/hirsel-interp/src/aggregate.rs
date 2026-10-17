@@ -12,6 +12,9 @@ pub struct Nominal {
     /// A resource's owner definition contains its drop body (revision 1).
     pub finalizer: Option<(DefPath, BodyId)>,
     pub fields: usize,
+    /// The private representation's shape in its own store, which a bounded
+    /// arena's logical charge reads (MEM-6); None for an opaque nominal.
+    pub representation: Option<(hirsel_types::TypeStore, hirsel_types::TypeId)>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeTypes {

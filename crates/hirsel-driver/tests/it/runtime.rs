@@ -634,7 +634,7 @@ pub fn main(rt:Io) -> Result[(),GrantError] {{
 fn observed_api_failure_retains_stdout_and_inner_cause() {
     hirsel_engine::with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("unavailable.hir", "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let outcome: Result[u8, OutOfSpace] = arena.bounded(0u64, fn(a: Arena) -> u8 { 7u8 }); Ok(()) }".into()).unwrap();
+        let file = engine.sources.add("unavailable.hir", "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let frozen: Shared[u8] = shared.freeze(7u8); Ok(()) }".into()).unwrap();
         let checked = check_progress(&mut engine, file, &default_context()).unwrap();
         assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
         let result = run_observed_snapshot(

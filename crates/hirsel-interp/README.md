@@ -80,7 +80,7 @@ conversion signatures, float-to-integer behavior, explicit fused math, IEEE bits
 float min/max/total order, scalar views are dependency
 owned by M against docs/spec/core-library.md (which settles #18). There is no conversion opcode in frozen `Rvalue`.
 `copy_to` deep-copies semantic values; checked result bounds follow its allocator
-parameter. Bounded arenas and sealed-region cleanup remain unavailable. Unavailable features are
+parameter. Sealed-region cleanup remains unavailable. Unavailable features are
 reported explicitly, never silently approximated.
 
 ## Explicit limit and exit policies
@@ -320,6 +320,17 @@ Normal execution runs `arena.with` by calling its callback with an opaque
 `Arena` handle: placement is never observable (MEM-10), so the arena allocates
 and frees nothing here; the native and checked executions are measured against
 this.
+
+`arena.bounded(cap, body)` (MEM-6, `src/bounded.rs`) calls its callback the same way
+with a fresh bounded arena handle (a checked arena instance under checked execution), whose
+budget is `cap`. A box, sequence, map, set or closure construction into that arena, and a
+`copy_to` into it, takes its logical charge (`hirsel_types::logical`, the table in the
+runtime README) before any operand is consumed; a charge past the budget records the failure
+`OutOfSpace` (MEM-6) at that site. When the callback frame exits, a return is `Ok`, and a
+failure whose first record is that arena's `OutOfSpace` with no later record (no failure
+during its cleanup) is removed and becomes `Error(OutOfSpace)`; every other failure
+propagates unchanged. A charge of a generic type, which parametric execution cannot size,
+is `Error::Unavailable`, as is a copy of a callable into a bounded arena.
 
 The private heap producer returns an opaque stable `$Heap` handle with identity zero. It performs no allocation. This executes the heap keyword independently of the M2 `copy_to` operation.
 

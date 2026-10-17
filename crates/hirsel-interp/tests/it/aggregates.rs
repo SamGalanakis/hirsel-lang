@@ -56,6 +56,7 @@ fn nominal(name: &str, count: usize, finalizer: bool) -> Nominal {
         distinct: false,
         finalizer: finalizer.then(|| (path(&format!("{name}_drop")), BodyId(0))),
         fields: count,
+        representation: None,
     }
 }
 fn resource(b: &mut Builder, name: &str, parts: Vec<PlaceId>) -> PlaceId {

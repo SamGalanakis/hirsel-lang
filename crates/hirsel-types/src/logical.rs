@@ -307,8 +307,11 @@ mod tests {
             &mut store,
             TypeKind::Builtin {
                 kind: BuiltinType::Inline,
-                arguments: vec![GenericArgument::Type(word), GenericArgument::Size(Size::Constant(3))]
-                    .into(),
+                arguments: vec![
+                    GenericArgument::Type(word),
+                    GenericArgument::Size(Size::Constant(3)),
+                ]
+                .into(),
             },
         );
         let list = push(

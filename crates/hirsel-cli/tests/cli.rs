@@ -299,7 +299,7 @@ fn simulation_input_errors_are_tool_errors() {
 #[test]
 fn unavailable_execution_preserves_stdout_before_the_tool_error() {
     let source = file(
-        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let outcome: Result[u8, OutOfSpace] = arena.bounded(0u64, fn(a: Arena) -> u8 { 7u8 }); Ok(()) }",
+        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let frozen: Shared[u8] = shared.freeze(7u8); Ok(()) }",
     );
     let config = run_record(
         &source,

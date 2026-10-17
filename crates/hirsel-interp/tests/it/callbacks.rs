@@ -494,6 +494,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
                             distinct: false,
                             finalizer: Some((path(&format!("{name}_drop")), BodyId(0))),
                             fields: 0,
+                            representation: None,
                         })
                         .collect(),
                     ..RuntimeTypes::default()
@@ -706,6 +707,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                 distinct: false,
                 finalizer: Some((path("Item_drop"), BodyId(0))),
                 fields: 0,
+                representation: None,
             }],
             ..RuntimeTypes::default()
         };
@@ -1008,6 +1010,7 @@ fn blocked_stop_retains_the_prefix_and_runs_no_language_cleanup() {
                 distinct: false,
                 finalizer: None,
                 fields: 1,
+                representation: None,
             }],
             ..Default::default()
         },

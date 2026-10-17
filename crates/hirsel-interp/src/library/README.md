@@ -68,7 +68,8 @@ the payload through the evaluator. Copyable payload snapshots may remain in the
 library until the run ends, as with the reference model's other allocation costs.
 `copy_to` uses the interpreter's iterative semantic value copy; checked execution
 uses the declared destination relation to retain the target arena lifetime.
-Shared, bounded arenas and sealed regions still report Error::Unavailable. Property traversal and test helpers execute ordinary
+The evaluator charges a `copy_to` into a bounded arena before it runs (MEM-6).
+Shared and sealed regions still report Error::Unavailable. Property traversal and test helpers execute ordinary
 std@1 source; core Test check_case reports its recorded seed and the supplied
 case index. Core test.fail records LANG-9 and only fails; std expect_error
 transfers the Error payload and destroys an Ok value before test.fail. Pull iterators own state/callbacks and lazily apply adapters;

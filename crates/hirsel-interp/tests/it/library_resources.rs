@@ -51,6 +51,7 @@ fn runtime() -> aggregate::RuntimeTypes {
             distinct: false,
             finalizer: Some((support::path("R_drop"), BodyId(0))),
             fields: 0,
+            representation: None,
         }],
         forget: None,
         checked: None,
@@ -258,6 +259,7 @@ fn mapper_cases(materialized: bool) {
             distinct: false,
             finalizer: None,
             fields: 1,
+            representation: None,
         });
         let e = run_with_runtime(
             &mut Provider {

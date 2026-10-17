@@ -144,6 +144,7 @@ pub fn core_runtime_types() -> crate::aggregate::RuntimeTypes {
             distinct: false,
             finalizer: None,
             fields: 1,
+            representation: None,
         }],
         forget: None,
         checked: None,

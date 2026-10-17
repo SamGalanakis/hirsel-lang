@@ -125,7 +125,7 @@ proven, and an inferred closure literal carries the evidence its body proves.
 `arena.bounded(cap, body) -> Result[R, OutOfSpace]`: each constructor into that arena
 charges a logical size; standard containers grow by doubling from capacity 4, charging the
 requested capacity; exceeding `cap` is a failure that unwinds to this call, which returns
-`Error(OutOfSpace)`. **Unspecified:** the logical size table.
+`Error(OutOfSpace)`. The logical size table is in the Bounded arenas section of [the runtime README](../../crates/hirsel-rt/README.md).
 
 ### MEM-7: Layout
 

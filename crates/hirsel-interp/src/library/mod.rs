@@ -22,6 +22,8 @@ mod cursors;
 pub const FORGET_OPERATION: &str = "forget";
 /// `arena.with` calls its callback with an opaque arena handle (MEM-10).
 pub const ARENA_WITH_OPERATION: &str = "arena.with";
+/// `arena.bounded` calls its callback with a bounded arena handle (MEM-6).
+pub const ARENA_BOUNDED_OPERATION: &str = "arena.bounded";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationDisposition {
     Primitive,
@@ -49,6 +51,10 @@ pub fn operation_dispatch()
         .chain([
             (FORGET_OPERATION.into(), OperationDisposition::Evaluator),
             (ARENA_WITH_OPERATION.into(), OperationDisposition::Evaluator),
+            (
+                ARENA_BOUNDED_OPERATION.into(),
+                OperationDisposition::Evaluator,
+            ),
         ]);
     for (name, kind) in entries {
         assert!(

@@ -1,0 +1,44 @@
+// rule: MEM-6
+// expect: run
+// stdout: 27 fits
+// stdout: 26 out of space
+// A copy into a bounded arena charges its whole tree first. A List[String] of two
+// elements is 2 * 8 bytes, and its strings their lengths, 5 and 6.
+fn output_error[E](take e: E) -> () {}
+
+fn copied(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let source: List[String] = ["first", "second"]
+      let inside: List[String] in a = copy_to(a, source)
+      list.len(inside)
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  out.print(
+    stdout,
+    if copied(27u64) == Ok(2u64) {
+      "27 fits\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  out.print(
+    stdout,
+    if copied(26u64) == Error(OutOfSpace()) {
+      "26 out of space\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

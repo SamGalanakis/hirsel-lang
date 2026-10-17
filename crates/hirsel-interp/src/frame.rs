@@ -64,6 +64,8 @@ pub(crate) struct Frame {
     pub place_failure_site: Option<hirsel_span::Span>,
     /// Lifetimes of this frame's values under checked execution.
     pub check: Option<crate::checked::FrameCheck>,
+    /// An `arena.bounded` callback's boundary (MEM-6).
+    pub bounded: Option<crate::bounded::Boundary>,
 }
 impl Frame {
     /// Replace value storage while retaining the lexical size environment and
@@ -174,6 +176,7 @@ impl Frame {
             depth_failure: false,
             place_failure_site: None,
             check: None,
+            bounded: None,
         })
     }
     pub fn body(&self) -> &Body {

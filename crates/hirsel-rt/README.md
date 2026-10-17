@@ -176,6 +176,46 @@ qemu, on the diagnostic `//:hirsel-rt-archives` archive), which `tools/check-nat
 against glibc malloc, mimalloc, jemalloc and 48- and 32-byte-node mimalloc controls (the prior header controls) in paired rounds, with a tree freed by the walk
 (`hirsel-walk`) and by the compiled glue of the node layout (`hirsel`).
 
+## Bounded arenas
+
+`arena.bounded(cap, body)` (MEM-6) charges every block placed in its arena a logical size
+before the block exists; a charge past the remaining budget is the failure `OutOfSpace`
+(rule MEM-6) at the constructing site. The charge is target-independent: it reads the type,
+never a physical layout, and no header, extent, slab, segment or padding is charged.
+
+| value | logical bytes |
+|---|---|
+| `bool`, `u8`, `i8` | 1 |
+| `u16`, `i16` | 2 |
+| `u32`, `i32`, `f32` | 4 |
+| `u64`, `i64`, `f64` | 8 |
+| `u128`, `i128` | 16 |
+| `()`, `Never` | 0 |
+| a block reference (`box T`, `String`, `Bytes`, `List`, `Array`, `Map`, `Set`, `SortedMap`, `Shared`, ...), an opaque nominal (a capability, handle or `Arena`) | 8 |
+| a function or closure value, `Iter[T]` | 16 |
+| a tuple, record or resource | the sum of its fields |
+| a variant | 4 plus its largest variant's fields |
+| `Inline[T, n]`, `Simd[T, n]` | `n` times `T` |
+| `Packed[T]` | `T` |
+
+| block placed in the arena | charge |
+|---|---|
+| `box T` | `T` |
+| a `List` or `Array` literal of `n` elements of `T` | `n` times `T` |
+| a `Map[K, V]` or `Set[K]` of `n` entries | `n` times `K` plus `V`, or `K` |
+| a `String` or `Bytes` | its length |
+| a closure environment | the sum of its captures |
+| `copy_to(a, x)` | every block of `x`'s tree at its length, one charge before anything is copied |
+
+A copy charges each reference to a shared block again, so sharing is unobservable. A growable
+list's capacity is charged when it is allocated in the arena: the requested capacity times its
+element, growth doubling from four elements. No growth allocates in an arena yet: pushing to an
+arena list detaches it onto the counted heap, so the bound does not cover list growth. A
+callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
+cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
+reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
+`hirsel_types::logical`.
+
 ## Library and Io
 
 `operations::manifest` joins registry-produced rows against all 144 reviewed identities in `native-tests/library/operations.tsv`, including exact declaration digests and passing/cleanup conventions. Missing, duplicate, stale and foreign identities fail closed. M2 entries name their feature; remaining aggregate/backend gaps explicitly use NotImplemented. Effects retain registry conservatism. The scalar operations (`operations::SCALAR_INTRINSICS`) are `Instruction` rows: LIR instructions since schema revision 6, with no runtime entry. So are the inline library operations (`operations::INLINE_OPERATIONS`: the sequence lengths, which import lowers to `SeqLen`, and the legalized `simd.add` and `simd.splat`, and `forget`, which consumes without cleanup); a library body's row is `Body`, and each library lane edits only its own operations' rows. The four f32/f64 bits/from_bits operations are among them: `Convert` in its `Reinterpret` mode (LIR revision 23), a bitcast with NaN canonicalization. Formatting, parsing and reductions are ordinary std source, with no host algorithm entry or boxed universal value.

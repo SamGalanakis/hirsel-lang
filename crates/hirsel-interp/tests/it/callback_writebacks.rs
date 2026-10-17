@@ -260,6 +260,7 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
             distinct: false,
             finalizer: Some((path("State_drop"), BodyId(0))),
             fields: 1,
+            representation: None,
         }],
         ..RuntimeTypes::default()
     };

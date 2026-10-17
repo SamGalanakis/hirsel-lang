@@ -1,0 +1,56 @@
+// rule: MEM-6
+// expect: fail MEM-6 at line 23
+// stdout: released
+// The call returns Error(OutOfSpace) only when its cleanup adds no failure. Here the
+// resource's drop fails while the OutOfSpace unwinds, so the failure propagates with the
+// OutOfSpace primary and the drop's failure in its cause chain (FAIL-3).
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+  let n: u8 = 255
+  let broken = n + 1
+}
+
+type Tree = Leaf | Branch(left: box Tree, right: box Tree)
+
+fn tree(a: Arena, depth: u64) -> (box Tree) in a {
+  if depth == 0u64 {
+    box Leaf()
+  } else {
+    box Branch(left: tree(a, depth - 1u64), right: tree(a, depth - 1u64))
+  }
+}
+
+fn count(t: box Tree) -> u64 {
+  match t {
+    Leaf() => 1u64,
+    Branch(left: l, right: r) => 1u64 + count(l) + count(r),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  let outcome: Result[u64, OutOfSpace] = arena.bounded(
+    299u64,
+    fn(a: Arena) -> u64 {
+      let guard = Trace(stdout: stdout, text: "released\n")
+      count(tree(a, 3u64))
+    }
+  )
+  let _ = out.print(
+    stdout,
+    match outcome {
+      Ok(n) => "fits\n",
+      Error(e) => "out of space\n",
+    }
+  )
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
