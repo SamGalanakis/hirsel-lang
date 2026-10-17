@@ -366,3 +366,8 @@ borrowed indexed items. The projected item's existing brand, locality and arena
 placement remain unchanged. This lets `string.find(item, ...)` return positions
 of that exact item without claiming the collection itself is a string owner.
 `PROV-1-for-item-find-run` and its rejected twin retain the same-owner requirement.
+
+Call completion retires invocation permissions through the surviving content
+holders. Evaluated temporary owners last through their statement, including
+owners named only by result brands. Their captured views retain permissions
+until owner cleanup, including mixed borrowed handle and taken payload captures.

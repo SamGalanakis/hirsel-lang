@@ -166,6 +166,11 @@ struct Value {
     invalid: bool,
     deep_copy: bool,
     site: Option<ExprId>,
+    /// The counted input that prevents deep uniqueness, independently of
+    /// the input that bounds locality.
+    uniqueness_site: Option<ExprId>,
+    /// An owned call receipt whose outer root has never been shared.
+    fresh_receipt: bool,
     /// The parameter of this body and the field paths within it that this
     /// value was read from, as finite prefix states per joined alternative. A
     /// result related to `p.a` must stay within `p.a` (#77).
@@ -185,8 +190,14 @@ impl Value {
             invalid: false,
             deep_copy: false,
             site: None,
+            uniqueness_site: None,
+            fresh_receipt: false,
             part_of: None,
         }
+    }
+    fn share(&mut self) {
+        self.modes.uniqueness = Uniqueness::Aliased;
+        self.fresh_receipt = false;
     }
     /// The binding whose storage this value is, with its issue site.
     /// The same checked path abstraction as retained content loans. Facts
@@ -475,7 +486,19 @@ impl Value {
     }
     fn join(&mut self, other: &Self) {
         work::count(Counter::OwnershipValueJoins);
+        if other.modes.uniqueness == Uniqueness::Aliased {
+            let incoming = other.uniqueness_site.or(other.site);
+            self.uniqueness_site = if self.modes.uniqueness == Uniqueness::Unique {
+                incoming
+            } else {
+                match (self.uniqueness_site, incoming) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                }
+            };
+        }
         self.envelope = creation::join([self.envelope.clone(), other.envelope.clone()]);
+        self.fresh_receipt &= other.fresh_receipt;
         self.crossing_parts.join(&other.crossing_parts);
         for borrow in other.crossing_borrows.iter() {
             if !self.crossing_borrows.contains(borrow) {
@@ -2166,6 +2189,15 @@ impl Checker<'_> {
         }
     }
     fn record(&mut self, expression: ExprId, value: &mut Value) {
+        if value.modes.uniqueness == Uniqueness::Unique
+            || self
+                .property(expression)
+                .is_some_and(|p| p.plain || p.shared)
+        {
+            value.uniqueness_site = None;
+        } else {
+            value.uniqueness_site.get_or_insert(expression);
+        }
         value.restrict_crossing_paths(self.retention_depth);
         if value.modes.sendability == Sendability::NotSendable
             && value.modes.uniqueness == Uniqueness::Unique
@@ -2789,7 +2821,7 @@ impl Checker<'_> {
                     );
                 }
                 if !plain && !flat {
-                    state.slots[index].value.modes.uniqueness = Uniqueness::Aliased;
+                    state.slots[index].value.share();
                     if !self.properties[self.body.bindings[index].ty.index()].sendable_aliased {
                         state.slots[index].value.modes.sendability = Sendability::NotSendable;
                         state.slots[index]
@@ -3532,7 +3564,7 @@ impl Checker<'_> {
                     && !property.shared
                     && *context != Context::Unique
                 {
-                    state.slots[place.binding].value.modes.uniqueness = Uniqueness::Aliased;
+                    state.slots[place.binding].value.share();
                     let copied_independently = property.sendable_aliased
                         || value.modes.sendability == Sendability::Sendable
                             && self
@@ -3548,10 +3580,10 @@ impl Checker<'_> {
                                             }
                                     )
                                 });
-                    value.modes.uniqueness = Uniqueness::Aliased;
+                    value.share();
                     if !copied_independently {
                         if let Some(owner) = element_owner.filter(|owner| *owner != place.binding) {
-                            state.slots[owner].value.modes.uniqueness = Uniqueness::Aliased;
+                            state.slots[owner].value.share();
                             state.slots[owner].value.modes.sendability = Sendability::NotSendable;
                             state.slots[owner]
                                 .value
@@ -3641,6 +3673,55 @@ impl Checker<'_> {
             }
             Op::Forward { expression, child } => {
                 let mut value = self.value(state, *child);
+                if matches!(
+                    self.tree.expressions[expression.0 as usize].kind,
+                    ExprKind::Try { .. }
+                ) {
+                    // H checked a registered Result; inspect its declaration's
+                    // success tag rather than inheriting the whole root's modes.
+                    let success = self
+                        .ty(*child)
+                        .and_then(|ty| match &self.body.types.get(ty)?.kind {
+                            TypeKind::Named { definition, .. } => {
+                                self.signatures.cached(definition)
+                            }
+                            _ => None,
+                        })
+                        .and_then(|signature| {
+                            let SignatureKind::Type(declaration) = &signature.kind else {
+                                return None;
+                            };
+                            let TypeKind::Variant(variants) =
+                                &signature.types.get(declaration.representation?)?.kind
+                            else {
+                                return None;
+                            };
+                            variants.iter().position(|variant| {
+                                variant.name == "Ok" && variant.fields.len() == 1
+                            })
+                        });
+                    if let Some(variant) = success {
+                        value.project_content(&[Projection::VariantField {
+                            variant: variant as u32,
+                            field: 0,
+                        }]);
+                    } else {
+                        *self.proof_error.borrow_mut() =
+                            Some(QueryError::Operational(OperationalFailure {
+                                operation: "ownership Result projection".into(),
+                                message: "registered Result lacks its declared success payload"
+                                    .into(),
+                            }));
+                    }
+                    if value.usage == UseKind::Take
+                        && value.fresh_receipt
+                        && let Some(ty) = self.ty(*expression)
+                        && self.body.types.get(ty).unwrap().modes.uniqueness == Uniqueness::Unique
+                    {
+                        value.modes.uniqueness = Uniqueness::Unique;
+                    }
+                    value.fresh_receipt &= value.modes.uniqueness == Uniqueness::Unique;
+                }
                 self.receiving_scope(
                     &value,
                     self.graph.lifetimes.expressions[expression],
@@ -3846,7 +3927,7 @@ impl Checker<'_> {
                         && !property.shared
                         && !property.flat
                     {
-                        value.modes.uniqueness = Uniqueness::Aliased;
+                        value.share();
                         if !property.sendable_aliased {
                             value.modes.sendability = Sendability::NotSendable;
                             value.crossing_parts.set(&[], Sendability::NotSendable);
@@ -3908,6 +3989,7 @@ impl Checker<'_> {
                                     Projection::Field(index as u32)
                                 };
                                 let part = self.value(state, *child);
+
                                 value
                                     .crossing_parts
                                     .set(&[projection.clone()], part.modes.sendability.clone());
@@ -3957,6 +4039,7 @@ impl Checker<'_> {
                         } => {
                             if let Some(child) = children.first() {
                                 let part = self.value(state, *child);
+
                                 value.crossing_parts = CrossingParts::default();
                                 value.crossing_borrows = Arc::new(Vec::new());
                                 value.install_crossing_borrows(&[Projection::Field(0)], &part);
@@ -4025,7 +4108,7 @@ impl Checker<'_> {
                             value.modes.uniqueness = Uniqueness::Unique;
                         } else if !property.shared {
                             if let Some(root) = value.aliased() {
-                                state.slots[root].value.modes.uniqueness = Uniqueness::Aliased;
+                                state.slots[root].value.share();
                                 if !self.properties[self.body.bindings[root].ty.index()]
                                     .sendable_aliased
                                 {
@@ -4037,7 +4120,7 @@ impl Checker<'_> {
                                         .set(&[], Sendability::NotSendable);
                                 }
                             }
-                            value.modes.uniqueness = Uniqueness::Aliased;
+                            value.share();
                             if !property.sendable_aliased {
                                 value.modes.sendability = Sendability::NotSendable;
                                 value.crossing_parts.set(&[], Sendability::NotSendable);
@@ -4211,8 +4294,9 @@ impl Checker<'_> {
                 } else {
                     value.modes.clone()
                 };
-                let mut pending = vec![(root_pattern, Vec::new(), physical_root)];
-                while let Some((pattern, mut path, parent_modes)) = pending.pop() {
+                let mut pending =
+                    vec![(root_pattern, Vec::new(), physical_root, value.fresh_receipt)];
+                while let Some((pattern, mut path, parent_modes, fresh_receipt)) = pending.pop() {
                     if let Some(&index) = self.pattern_indices.get(&pattern) {
                         let row = &self.body.patterns[index];
                         if !matches!(
@@ -4273,23 +4357,6 @@ impl Checker<'_> {
                             self.pattern_modes.insert(pattern, physical_modes.clone());
                         }
                     }
-                    if let Some(row) = self.body.patterns.iter().find(|p| p.pattern == pattern) {
-                        for (field, child) in &row.fields {
-                            let projection = match &row.kind {
-                                PatternDecisionKind::Constructor(ContextualName::Variant {
-                                    variant,
-                                    ..
-                                }) => Projection::VariantField {
-                                    variant: variant.0,
-                                    field: field.0,
-                                },
-                                _ => Projection::Field(field.0),
-                            };
-                            let mut child_path = path.clone();
-                            child_path.push(projection);
-                            pending.push((*child, child_path, physical_modes.clone()));
-                        }
-                    }
                     let binding = self
                         .body
                         .bindings
@@ -4304,6 +4371,7 @@ impl Checker<'_> {
                     });
                     let plain = ty.is_some_and(|ty| self.properties[ty.index()].plain);
                     let mut part = value.clone();
+                    part.fresh_receipt = fresh_receipt;
                     part.project_content(&path);
                     // SEM-4 binds sequence elements as places, rather than
                     // readonly aliases of a mut parameter.
@@ -4386,11 +4454,13 @@ impl Checker<'_> {
                                 part.modes.uniqueness = field.uniqueness;
                             } else if part.aliased().is_some() {
                                 part.modes.uniqueness = Uniqueness::Aliased;
+                            } else if field.uniqueness == Uniqueness::Unique && part.fresh_receipt {
+                                part.modes.uniqueness = Uniqueness::Unique;
                             }
-                            if let Some(proof) = part.crossing_parts.get(&[]) {
-                                if !self.properties[ty.index()].sendable_aliased {
-                                    part.modes.sendability = proof;
-                                }
+                            if self.properties[ty.index()].sendable_aliased {
+                                part.modes.sendability = Sendability::Sendable;
+                            } else if let Some(proof) = part.crossing_parts.get(&[]) {
+                                part.modes.sendability = proof;
                             } else if field.sendability != Sendability::Sendable {
                                 part.modes.sendability = Sendability::NotSendable;
                             }
@@ -4444,6 +4514,34 @@ impl Checker<'_> {
                         part.modes.relation = Relation::global();
                         part.set_alias(None);
                         part.content = Content::default();
+                    }
+                    // An unqualified counted part can have aliases outside
+                    // this receipt. Only independently unique payloads carry
+                    // the unshared-root proof into their new owned root.
+                    if !path.is_empty() && part.modes.uniqueness != Uniqueness::Unique {
+                        part.fresh_receipt = false;
+                    }
+                    if let Some(row) = self.body.patterns.iter().find(|p| p.pattern == pattern) {
+                        for (field, child) in &row.fields {
+                            let projection = match &row.kind {
+                                PatternDecisionKind::Constructor(ContextualName::Variant {
+                                    variant,
+                                    ..
+                                }) => Projection::VariantField {
+                                    variant: variant.0,
+                                    field: field.0,
+                                },
+                                _ => Projection::Field(field.0),
+                            };
+                            let mut child_path = path.clone();
+                            child_path.push(projection);
+                            pending.push((
+                                *child,
+                                child_path,
+                                physical_modes.clone(),
+                                part.fresh_receipt,
+                            ));
+                        }
                     }
                     if self.emit && *guarded {
                         let commit = if plain {
@@ -4789,7 +4887,7 @@ impl Checker<'_> {
                             if let Some(owner) =
                                 expected.aliased().filter(|owner| *owner != place.binding)
                             {
-                                state.slots[owner].value.modes.uniqueness = Uniqueness::Aliased;
+                                state.slots[owner].value.share();
                                 state.slots[owner].value.modes.sendability =
                                     Sendability::NotSendable;
                                 state.slots[owner]
@@ -4823,7 +4921,7 @@ impl Checker<'_> {
                 {
                     // The root now reaches the stored counted aliases. Plain
                     // bits and Shared boundaries do not share its owned graph.
-                    state.slots[place.binding].value.modes.uniqueness = Uniqueness::Aliased;
+                    state.slots[place.binding].value.share();
                     if !self.properties[self.body.bindings[place.binding].ty.index()]
                         .sendable_aliased
                     {
@@ -5550,7 +5648,7 @@ impl Checker<'_> {
                             roots.extend(source.aliased().into_iter().chain(source.sources()));
                         }
                         for root in roots {
-                            state.slots[root].value.modes.uniqueness = Uniqueness::Aliased;
+                            state.slots[root].value.share();
                             if !self.properties[self.body.bindings[root].ty.index()]
                                 .sendable_aliased
                             {
@@ -5611,7 +5709,7 @@ impl Checker<'_> {
                             .is_some_and(|p| !p.plain && !p.flat && !p.shared)
                     {
                         for root in value.content.summary().bindings(Kind::Read) {
-                            state.slots[root].value.modes.uniqueness = Uniqueness::Aliased;
+                            state.slots[root].value.share();
                             if !self.properties[self.body.bindings[root].ty.index()]
                                 .sendable_aliased
                             {
@@ -5642,14 +5740,14 @@ impl Checker<'_> {
                             .flatten()
                             .filter(|owner| *owner != root)
                         {
-                            state.slots[owner].value.modes.uniqueness = Uniqueness::Aliased;
+                            state.slots[owner].value.share();
                             state.slots[owner].value.modes.sendability = Sendability::NotSendable;
                             state.slots[owner]
                                 .value
                                 .crossing_parts
                                 .set(&[Projection::Elements], Sendability::NotSendable);
                         }
-                        state.slots[root].value.modes.uniqueness = Uniqueness::Aliased;
+                        state.slots[root].value.share();
                         if !self.properties[self.body.bindings[root].ty.index()].sendable_aliased {
                             state.slots[root].value.modes.sendability = Sendability::NotSendable;
                             state.slots[root]
@@ -5690,8 +5788,7 @@ impl Checker<'_> {
                                         })
                                 });
                         if !preserves_unique {
-                            state.slots[storage.binding].value.modes.uniqueness =
-                                Uniqueness::Aliased;
+                            state.slots[storage.binding].value.share();
                         }
                         let receipts =
                             self.crossing_receipts(self.body.bindings[storage.binding].ty);
@@ -5716,6 +5813,20 @@ impl Checker<'_> {
                             crossing
                         };
                     } else if *mutable {
+                        // A plain mutable part may receive aliased counted
+                        // content, ending the whole owner's deep uniqueness.
+                        let preserves_unique =
+                            arguments.iter().zip(requirements).any(|(arg, req)| {
+                                arg.value == *argument
+                                    && req
+                                        .as_ref()
+                                        .is_some_and(|r| r.modes.uniqueness == Uniqueness::Unique)
+                            }) || self
+                                .property(*argument)
+                                .is_some_and(|p| p.plain || p.shared);
+                        if !preserves_unique {
+                            state.slots[storage.binding].value.share();
+                        }
                         let preserves_crossing =
                             arguments
                                 .iter()
@@ -5745,6 +5856,7 @@ impl Checker<'_> {
                     self.tree.expressions[expression.0 as usize].origin.span,
                     None,
                 );
+                value.fresh_receipt = true;
                 value.usage = UseKind::Take;
                 self.usage(*expression, value.usage);
                 self.record(*expression, &mut value);
@@ -5772,7 +5884,14 @@ impl Checker<'_> {
                 self.record_return_uniqueness(state);
                 if self.property(*value).is_some() {
                     let actual = self.value(state, *value);
-                    let site = self.tree.expressions[actual.site.unwrap_or(*value).0 as usize]
+                    let cause = if result.uniqueness == Uniqueness::Unique
+                        && self.arenas.global(&actual.modes.relation)
+                    {
+                        actual.uniqueness_site.or(actual.site)
+                    } else {
+                        actual.site
+                    };
+                    let site = self.tree.expressions[cause.unwrap_or(*value).0 as usize]
                         .origin
                         .span;
                     if actual.invalid {
@@ -6329,6 +6448,7 @@ impl Checker<'_> {
             && actual.modes.uniqueness != Uniqueness::Unique
             && !self.property(expression).is_some_and(|p| p.plain)
         {
+            let value_site = self.span_of(actual.uniqueness_site.unwrap_or(expression));
             self.report(
                 const { RuleId::of("MODE-2") },
                 span,

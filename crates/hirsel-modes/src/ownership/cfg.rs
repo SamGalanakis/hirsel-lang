@@ -943,7 +943,7 @@ pub(super) fn build(
                             jobs.push(Job::Expr {
                                 entry,
                                 expression: *value,
-                                context,
+                                context: Context::Store,
                                 operation,
                                 escaping,
                                 owning,

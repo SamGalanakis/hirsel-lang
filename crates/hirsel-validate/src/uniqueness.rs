@@ -130,14 +130,18 @@ impl Checker<'_> {
         }
         let part_path = crossing::path(&self.body.places[value.place.0 as usize].projection);
         let part_proof = state.crossing_parts[root].get(&part_path);
-        if let Some(proof) = part_proof {
-            let independent = hirsel_types::sendability_after_sharing(
+        let independent = (!part_path.is_empty() || part_proof.is_some())
+            && hirsel_types::sendability_after_sharing(
                 store,
                 ty,
                 &self.generic_declarations(),
                 &mut |path| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new)),
             )
             .is_ok_and(|proof| proof == Sendability::Sendable);
+        if independent && !part_path.is_empty() && !erased_environment(&row.kind) {
+            row.modes.sendability = Sendability::Sendable;
+        }
+        if let Some(proof) = part_proof {
             if !independent && (!part_path.is_empty() || !proof || erased_environment(&row.kind)) {
                 row.modes.sendability = if proof {
                     Sendability::Sendable
@@ -169,7 +173,7 @@ impl Checker<'_> {
         if copied != ty {
             return copied;
         }
-        if self.operand_unique(state, value) && state.current_unique[root] {
+        if self.operand_unique(state, value) {
             let unique = self.unique_type(store, ty);
             if state.must[root].has(MustFacts::SENDABLE) {
                 let mut row = store.get(unique).unwrap().clone();
@@ -897,6 +901,33 @@ impl Checker<'_> {
         .unwrap_or_else(|error| self.proof_failure(error, hirsel_types::Sendability::NotSendable));
         store.push(row)
     }
+    pub(super) fn operand_fresh_receipt(&self, state: &State, value: &Operand) -> bool {
+        let place = &self.body.places[value.place.0 as usize];
+        value.usage == UseKind::Take
+            && !state.shared[place.root.0 as usize]
+            && state.must[place.root.0 as usize].has(MustFacts::OWNED)
+            && (place.projection.is_empty()
+                && state.must[place.root.0 as usize].has(MustFacts::FRESH_RECEIPT)
+                || self.operand_unique(state, value))
+    }
+    pub(super) fn rvalue_fresh_receipt(&self, state: &State, value: &Rvalue) -> bool {
+        match value {
+            Rvalue::Use(value) => self.operand_fresh_receipt(state, value),
+            Rvalue::Construct { .. }
+            | Rvalue::Closure { .. }
+            | Rvalue::Unary {
+                op: hirsel_syntax::UnaryOp::Unique | hirsel_syntax::UnaryOp::Box,
+                ..
+            } => true,
+            _ => false,
+        }
+    }
+    pub(super) fn set_fresh_receipt(&self, state: &mut State, destination: PlaceId, fresh: bool) {
+        let place = &self.body.places[destination.0 as usize];
+        if place.projection.is_empty() {
+            state.must[place.root.0 as usize].set(MustFacts::FRESH_RECEIPT, fresh);
+        }
+    }
     pub(super) fn operand_unique(&self, state: &State, value: &Operand) -> bool {
         if !needs_release(self, self.place_type(value.place), &self.definition.types) {
             return false;
@@ -907,12 +938,22 @@ impl Checker<'_> {
         let place = &self.body.places[value.place.0 as usize];
         let root = place.root.0 as usize;
         if !place.projection.is_empty() {
-            // A physical field promise cannot prove a receipt from an aliased
-            // owner. Deep uniqueness of the current owner proves taken parts;
-            // valid physical projections cannot cross a Shared boundary.
+            // A declared unique payload may move from an unshared owned
+            // receipt. Otherwise the parent must prove deep uniqueness;
+            // neither proof survives a counted share or a Shared boundary.
             return value.usage == UseKind::Take
                 && !state.shared[root]
-                && state.current_unique[root]
+                && (state.current_unique[root]
+                    || state.must[root].has(MustFacts::OWNED)
+                        && state.must[root].has(MustFacts::FRESH_RECEIPT)
+                        && self
+                            .definition
+                            .types
+                            .get(place.ty)
+                            .unwrap()
+                            .modes
+                            .uniqueness
+                            == Uniqueness::Unique)
                 && !matches!(
                     self.definition.types.get(place.ty).unwrap().kind,
                     TypeKind::Builtin {

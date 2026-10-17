@@ -832,3 +832,199 @@ fn a_scoped_constructor_part_keeps_its_unplaced_holders_frame_bound() {
         bare.kinds()
     );
 }
+
+// A call receipt owns its root without promising that every child is unique.
+// Its declared unique child can move; copying the receipt invalidates that proof.
+fn fresh_call_payload(shared: bool, parameter: bool) -> Fixture {
+    let mut f = Fixture::unit();
+    let mut unique = ty(TypeKind::Primitive(Primitive::Bytes));
+    unique.modes.uniqueness = Uniqueness::Unique;
+    unique.modes.sendability = Sendability::NotSendable;
+    let payload_ty = f.definition.types.push(unique.clone());
+    let root = f.slot(
+        TypeKind::Tuple(vec![payload_ty].into()),
+        if parameter {
+            Storage::Parameter
+        } else {
+            Storage::Temporary
+        },
+    );
+    let root_ty = f.body().places[root as usize].ty;
+    unique.modes.sendability = Sendability::Sendable;
+    let destination = f.slot(TypeKind::Primitive(Primitive::Bytes), Storage::Temporary);
+    row(&mut f, destination, |t| *t = unique.clone());
+    let alias = shared.then(|| f.slot(TypeKind::Tuple(vec![payload_ty].into()), Storage::Local));
+    let payload = f.body().places.len() as u32;
+    f.body().places.push(Place {
+        root: LocalId(root),
+        projection: vec![Projection::Field(0)].into(),
+        ty: payload_ty,
+        loan: None,
+        binding: None,
+    });
+    let mut instructions = vec![];
+    if let Some(alias) = alias {
+        let rv = RvalueId(f.body().rvalues.len() as u32);
+        f.body().rvalues.push(Rvalue::Use(copy(root)));
+        instructions.push(inst(
+            InstructionKind::Assign {
+                destination: PlaceId(alias),
+                value: rv,
+            },
+            0,
+        ));
+    }
+    let cleanup_root = f.cleanup(vec![drop(root)]);
+    let rv = RvalueId(f.body().rvalues.len() as u32);
+    f.body().rvalues.push(Rvalue::Use(take(payload)));
+    instructions.push(inst(
+        InstructionKind::Assign {
+            destination: PlaceId(destination),
+            value: rv,
+        },
+        cleanup_root,
+    ));
+    let mut actions = vec![drop(destination)];
+    if let Some(alias) = alias {
+        actions.push(drop(alias));
+    }
+    actions.push(drop(root));
+    let cleanup = f.cleanup(actions);
+    if parameter {
+        f.body().parameters.push(LocalId(root));
+        f.body().blocks[0].instructions.extend(instructions);
+        f.body().blocks[0].terminator = ret(0, cleanup);
+        owner_signature(&mut f, PassingMode::Take);
+    } else {
+        let mut signature = function_signature("receipt", vec![], TypeKind::Tuple(vec![].into()));
+        signature.types = f.definition.types.clone();
+        if let SignatureKind::Function(fun) = &mut signature.kind {
+            fun.result = root_ty;
+        }
+        f.signatures.insert(path("receipt"), signature);
+        f.body().blocks[0].terminator = Terminator::Call {
+            callee: Callee::Definition {
+                path: path("receipt"),
+                arguments: vec![],
+            },
+            arguments: vec![],
+            returns: Some(CallReturn {
+                destination: PlaceId(root),
+                next: BlockId(1),
+            }),
+            on_failure: CleanupId(0),
+        };
+        f.body().blocks.push(block(instructions, ret(0, cleanup)));
+    }
+    f
+}
+
+#[test]
+fn declared_unique_payload_requires_an_unshared_owned_call_receipt() {
+    fresh_call_payload(false, false).valid();
+    for f in [
+        fresh_call_payload(true, false),
+        fresh_call_payload(false, true),
+    ] {
+        assert!(
+            f.kinds().contains(&ViolationKind::TypeMismatch {
+                entity: "value modes"
+            }),
+            "{:?}",
+            f.kinds()
+        );
+    }
+}
+
+// The enclosing tuple is not Sendable; an underclaimed field row must not hide
+// an independently Sendable handle. Local handles and Receiver remain controls.
+fn structural_handle_payload(receiver: bool, local: bool) -> Fixture {
+    let mut f = Fixture::unit();
+    let item = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::U64)));
+    let kind = if receiver {
+        BuiltinType::Receiver
+    } else {
+        BuiltinType::Sender
+    };
+    let mut payload = ty(TypeKind::Builtin {
+        kind,
+        arguments: vec![GenericArgument::Type(item)].into(),
+    });
+    payload.modes.sendability = Sendability::NotSendable;
+    if local {
+        payload.modes.relation = Relation::environment();
+    }
+    let payload_ty = f.definition.types.push(payload.clone());
+    let other = f.definition.types.push(ty(TypeKind::Builtin {
+        kind: BuiltinType::Receiver,
+        arguments: vec![GenericArgument::Type(item)].into(),
+    }));
+    let root = f.slot(
+        TypeKind::Tuple(vec![payload_ty, other].into()),
+        Storage::Parameter,
+    );
+    f.body().parameters.push(LocalId(root));
+    payload.modes.relation = Relation::global();
+    payload.modes.sendability = Sendability::Sendable;
+    let destination = f.slot(payload.kind.clone(), Storage::Temporary);
+    row(&mut f, destination, |t| *t = payload);
+    let part = f.body().places.len() as u32;
+    f.body().places.push(Place {
+        root: LocalId(root),
+        projection: vec![Projection::Field(0)].into(),
+        ty: payload_ty,
+        loan: None,
+        binding: None,
+    });
+    let value = RvalueId(f.body().rvalues.len() as u32);
+    f.body().rvalues.push(Rvalue::Use(operand(
+        part,
+        if local {
+            UseKind::Borrow
+        } else {
+            UseKind::Take
+        },
+    )));
+    f.body().blocks[0].instructions.push(inst(
+        InstructionKind::Assign {
+            destination: PlaceId(destination),
+            value,
+        },
+        0,
+    ));
+    let cleanup = f.cleanup(vec![drop(destination), drop(root)]);
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    owner_signature(
+        &mut f,
+        if local {
+            PassingMode::Borrow
+        } else {
+            PassingMode::Take
+        },
+    );
+    f
+}
+
+#[test]
+fn projected_handle_sendability_is_structural_and_requires_global_content() {
+    structural_handle_payload(false, false).valid();
+    for f in [
+        structural_handle_payload(true, false),
+        structural_handle_payload(false, true),
+    ] {
+        assert!(
+            f.kinds().contains(&ViolationKind::TypeMismatch {
+                entity: "value modes"
+            }) || f.kinds().contains(&ViolationKind::TypeMismatch {
+                entity: "sendable receipt"
+            }) || f.kinds().contains(&ViolationKind::TypeMismatch {
+                entity: "assignment"
+            }),
+            "{:?}",
+            f.kinds()
+        );
+    }
+}

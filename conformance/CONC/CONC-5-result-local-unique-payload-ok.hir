@@ -1,0 +1,12 @@
+// rule: CONC-5
+// expect: accept
+fn load() -> Result[unique List[u64], ()] {
+  Ok([1])
+}
+
+fn a(tasks: Tasks) -> Result[(), ()] {
+  let receipt = load()
+  let xs = receipt?
+  let m = mutex.create(tasks, take xs)
+  Ok(())
+}

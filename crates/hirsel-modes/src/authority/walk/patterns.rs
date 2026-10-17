@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum PatternOwnership {
+    Borrowed,
+    Owned,
+    Unique,
+}
+
 impl Checker<'_> {
     pub(super) fn binding(&self, e: ExprId) -> Option<BindingDecision> {
         let name = self.resolved.get(&e)?;
@@ -156,14 +163,21 @@ impl Checker<'_> {
                 .is_some_and(|binding| binding.usage == UseKind::Take);
         let deep_unique = owned
             && self.out.body.types.get(actual).unwrap().modes.uniqueness == Uniqueness::Unique;
-        self.bind_pattern_value(pattern, actual, value, deep_unique, false, iteration);
+        let ownership = if deep_unique {
+            PatternOwnership::Unique
+        } else if owned {
+            PatternOwnership::Owned
+        } else {
+            PatternOwnership::Borrowed
+        };
+        self.bind_pattern_value(pattern, actual, value, ownership, false, iteration);
     }
     fn bind_pattern_value(
         &mut self,
         pattern: hirsel_syntax::PatternId,
         actual: TypeId,
         value: ExprId,
-        deep_unique: bool,
+        ownership: PatternOwnership,
         part: bool,
         iteration: bool,
     ) {
@@ -195,10 +209,20 @@ impl Checker<'_> {
                 ..
             }
         );
-        let deep_unique = deep_unique && !boundary;
+        let ownership = if boundary {
+            PatternOwnership::Borrowed
+        } else {
+            ownership
+        };
+        let deep_unique = matches!(ownership, PatternOwnership::Unique);
         let received = if part && !boundary && !self.property(refined, Bound::Plain) {
             let mut row = self.out.body.types.get(refined).unwrap().clone();
-            row.modes.uniqueness = if deep_unique {
+            // I checks the current ownership of this root. J must retain
+            // the declaration's payload contract for an owned transfer.
+            row.modes.uniqueness = if deep_unique
+                || matches!(ownership, PatternOwnership::Owned)
+                    && a.modes.uniqueness == Uniqueness::Unique
+            {
                 Uniqueness::Unique
             } else {
                 Uniqueness::Aliased
@@ -329,7 +353,7 @@ impl Checker<'_> {
             if let Some(part) = actual_fields.get(field.0 as usize) {
                 let part = super::facts::siblings(&mut self.out.body.types, *part, &roots);
                 let part = self.projected_item(refined, part);
-                self.bind_pattern_value(child, part, value, deep_unique, true, iteration);
+                self.bind_pattern_value(child, part, value, ownership, true, iteration);
                 if let Some(b) = self.out.body.bindings.iter().find(|b| {
                     work::count(Counter::AuthoritySourceRows);
                     b.site == NameSite::Pattern(child)

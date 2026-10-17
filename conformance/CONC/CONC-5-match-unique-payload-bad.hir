@@ -1,0 +1,16 @@
+// rule: CONC-5
+// expect: reject MODE-2 at line 12
+fn load() -> Result[unique List[u64], ()] {
+  Ok([1])
+}
+
+fn a(tasks: Tasks) -> () {
+  let receipt = load()
+  let alias = copy receipt
+  match take receipt {
+    Ok(xs) => {
+      let m = mutex.create(tasks, take xs)
+    },
+    Error(_) => {},
+  }
+}

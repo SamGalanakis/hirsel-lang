@@ -1,0 +1,15 @@
+// rule: OWN-2
+// expect: accept
+fn load() -> Result[bool, String] {
+  Ok(true)
+}
+
+fn encode(value: bool) -> Bytes {
+  b"x"
+}
+
+fn decode() -> Result[Bytes, String] {
+  let decoded: Result[bool, String] = load()
+  let bytes = encode(decoded?)
+  Ok(take bytes)
+}

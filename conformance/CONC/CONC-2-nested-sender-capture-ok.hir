@@ -1,0 +1,20 @@
+// rule: CONC-2
+// expect: accept
+fn work(take tx: Sender[bool], take x: unique String) -> () {}
+
+fn a(tasks: Tasks, outer_sender: Sender[bool]) -> () {
+  let text: unique String = unique "a"
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let tx = sender.dup(tasks, outer_sender)
+      let child = task.async(
+        s,
+        fn() -> () {
+          work(take tx, take text)
+        }
+      )
+      task.detach(s, take child)
+    }
+  )
+}

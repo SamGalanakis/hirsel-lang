@@ -524,7 +524,8 @@ Pattern rows retain the physical scrutinee type at every node. Receipt modes are
 published only on BindingDecision.ty: destructuring an aliased whole weakens a
 counted receiving value, while taking from a currently deep-unique whole gives
 counted receipts unique evidence up to a Shared boundary. Declared-aliased
-intermediate fields do not erase that stronger value evidence.
+intermediate fields do not erase that stronger value evidence. An unshared
+owned call receipt also retains its declared unique payload contracts.
 The use judgment is shared by both rows. Unused and wildcard nodes still provide
 the physical field type; their lack of reads cannot change projection validity.
 Ownership binding slots use the shared `hirsel_types::rows::Rows` container.
@@ -847,3 +848,11 @@ both assignment and call mutation without weakening their expected diagnostics.
 Diagnostic origin names recover a fresh initializer's declaring let when it has
 one. Descriptive owner names keep their prose classification when embedded in
 `of`/`in` qualifiers, so internal rendering markers never become source spelling.
+
+Ownership retains an unshared owned call-receipt root separately from deep
+uniqueness. A consuming Result propagation or pattern can move its declared
+unique payload; copying or sharing the receipt invalidates that evidence.
+An unqualified counted payload starts a separate root without that proof.
+Propagation owns its Result independently of the success value's consumer.
+Uniqueness diagnostic causes follow counted aggregate inputs separately from
+locality causes, so a plain sibling cannot become the cited counted alias.

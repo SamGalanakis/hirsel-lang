@@ -1,0 +1,16 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 14
+fn load() -> Result[bool, String] {
+  Ok(true)
+}
+
+fn encode(value: bool) -> Bytes {
+  b"x"
+}
+
+fn decode() -> Result[Bytes, String] {
+  let decoded: Result[bool, String] = load()
+  let bytes = encode(decoded?)
+  let _ = take decoded
+  Ok(take bytes)
+}

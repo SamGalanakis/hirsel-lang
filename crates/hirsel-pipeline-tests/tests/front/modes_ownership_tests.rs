@@ -297,12 +297,12 @@ fn physical_pattern_modes_are_distinct_from_the_bound_values_modes() {
         (
             "fn make()->Result[unique String,()]{Ok(\"x\")}\nfn probe(){match make(){Ok(text) if text==\"x\"=>(),Ok(_)=>(),Error(_)=>()}}",
             Primitive::String,
-            false,
+            true,
         ),
         (
             "fn make()->Result[unique String,()]{Ok(\"x\")}\nfn probe(){match make(){Ok(text)=>(),Error(e)=>()}}",
             Primitive::String,
-            false,
+            true,
         ),
         (
             "type Rec {items:unique Bytes}\nfn probe(take r:Rec){let Rec(items:items)=take r}",

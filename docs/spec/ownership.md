@@ -175,7 +175,12 @@ Without `unique`, in-place update still happens whenever the run-time count allo
 Uniqueness describes actual owned contents, independently of how fields are declared.
 Taking or destructuring a currently unique owner keeps uniqueness on what it yields
 through nested fields up to a `Shared` boundary; copying non-flat parts or sharing an
-intermediate owner weakens it. Fresh records, variants, tuples, sequences and boxes derive
+intermediate owner weakens it. An owned call-result receipt has an unshared outer root,
+independently of its deep uniqueness. Consuming that receipt with `?` or a `take` match
+preserves its declared unique payloads; a local holding it keeps that evidence until the
+root is shared. This does not prove uniqueness of unqualified counted payloads. Taking
+an unqualified counted payload does not carry the receipt's outer-root evidence into
+that payload. Fresh records, variants, tuples, sequences and boxes derive
 uniqueness from owned unique transfers, plain bits, flat copies and `Shared` boundaries.
 Projected plain writes preserve it; aliased counted replacements end it. A borrowed or
 `mut` counted local-result share ends its source's uniqueness, and so does a closure call

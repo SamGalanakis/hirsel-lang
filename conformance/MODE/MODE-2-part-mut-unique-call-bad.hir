@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 14
+type Store {
+  version: u64,
+  items: List[u64],
+}
+
+fn bump(mut st: unique Store) -> () uses {} {
+  st.version += 1
+}
+
+fn add(mut st: unique Store) -> () uses {} {
+  list.push(mut st.items, 1)
+  bump(mut st)
+}

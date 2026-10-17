@@ -40,6 +40,7 @@ impl MustFacts {
     const GLOBAL: u8 = 2;
     const SENDABLE: u8 = 4;
     const AUTHORITY: u8 = 8;
+    const FRESH_RECEIPT: u8 = 16;
 
     fn has(self, fact: u8) -> bool {
         self.0 & fact != 0
@@ -3916,6 +3917,14 @@ impl Checker<'_> {
             },
         );
         let new_unique = self.operand_unique(state, value);
+        let new_receipt = self.operand_fresh_receipt(state, value);
+        let old_receipt = self.operand_fresh_receipt(
+            state,
+            &Operand {
+                place: destination,
+                usage: UseKind::Take,
+            },
+        );
         let old_unique = self.operand_unique(
             state,
             &Operand {
@@ -3927,6 +3936,7 @@ impl Checker<'_> {
         self.read(model, state, value, report);
         self.reset_unique(state, displaced);
         self.set_current_unique(state, displaced, old_unique);
+        self.set_fresh_receipt(state, displaced, old_receipt);
         self.set_current_global(state, displaced, old_global);
         self.set_current_sendable(state, displaced, old_sendable);
         self.install_crossing_parts(state, displaced, &old_crossing, model.crossing_depth);
@@ -3967,6 +3977,7 @@ impl Checker<'_> {
         self.clear(model, state, destination, MOVED);
         self.reset_unique(state, destination);
         self.set_current_unique(state, destination, new_unique);
+        self.set_fresh_receipt(state, destination, new_receipt);
         self.set_current_global(state, destination, new_global);
         self.set_current_sendable(state, destination, new_sendable);
         self.install_crossing_parts(state, destination, &new_crossing, model.crossing_depth);
@@ -4661,6 +4672,7 @@ impl Checker<'_> {
                         .collect();
                     let authority = self.rvalue_authority(model, state, rvalue);
                     let unique = self.rvalue_unique(state, rvalue);
+                    let fresh_receipt = self.rvalue_fresh_receipt(state, rvalue);
                     let sendable = self.rvalue_sendable(state, *destination, rvalue);
                     let crossing_parts = self.rvalue_crossing_parts(state, *destination, rvalue);
                     let mut global = self.rvalue_global(state, *destination, rvalue);
@@ -4834,6 +4846,7 @@ impl Checker<'_> {
                         && environment.retained().is_empty();
                     self.reset_unique(state, *destination);
                     self.set_current_unique(state, *destination, unique);
+                    self.set_fresh_receipt(state, *destination, fresh_receipt);
                     self.set_current_global(state, *destination, global);
                     self.set_current_sendable(state, *destination, sendable);
                     self.install_crossing_parts(
@@ -5468,6 +5481,7 @@ impl Checker<'_> {
                     return;
                 };
                 self.reset_unique(state, destination);
+                self.set_fresh_receipt(state, destination, true);
                 self.set_current_unique(
                     state,
                     destination,

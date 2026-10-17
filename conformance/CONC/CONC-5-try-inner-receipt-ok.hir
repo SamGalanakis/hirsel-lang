@@ -1,0 +1,16 @@
+// rule: CONC-5
+// expect: accept
+type Parcel {
+  body: unique String,
+}
+
+fn load() -> Result[unique Parcel, ()] {
+  Ok(Parcel(body: "x"))
+}
+
+fn a(tasks: Tasks) -> Result[(), ()] {
+  let parcel = load()?
+  let Parcel(body: body) = take parcel
+  let m = mutex.create(tasks, take body)
+  Ok(())
+}

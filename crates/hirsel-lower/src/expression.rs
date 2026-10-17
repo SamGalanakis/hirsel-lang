@@ -850,7 +850,6 @@ impl Builder<'_, '_> {
                 site: span,
                 message: "missing checked call parameter".into(),
             })?;
-        let loans_before = self.loan_count;
         let pending = self.evaluation_holders.len();
         let mut retain_callee_access = false;
         let (callee, constructor) = match plan.target {
@@ -972,7 +971,6 @@ impl Builder<'_, '_> {
             return self.error(span, "call plan ordinals are not a permutation");
         }
         let mut prepared = vec![];
-        let mut argument_loans = Vec::new();
         let mut argument_dependencies = Vec::new();
         let mut global_arguments = std::collections::BTreeSet::new();
         for (a, ordinal) in arguments.iter().zip(&ordinals) {
@@ -1042,7 +1040,6 @@ impl Builder<'_, '_> {
         };
         let keeping = self.keeping;
         for (a, ordinal) in arguments.into_iter().zip(ordinals) {
-            let argument_loans_before = self.loan_count;
             // A constructor stores its fields; a call keeps the arguments its
             // result selects. Others end with this call.
             let kept = keeping && (constructor.is_some() || keeps(ordinal));
@@ -1134,11 +1131,6 @@ impl Builder<'_, '_> {
                 }
                 _ => None,
             };
-            argument_loans.extend(
-                self.new_loans_since(argument_loans_before)
-                    .iter()
-                    .map(|(loan, _)| (*loan, ordinal)),
-            );
             argument_dependencies.push((
                 ordinal,
                 self.operand_loans(&Operand {
@@ -1155,13 +1147,11 @@ impl Builder<'_, '_> {
             });
             prepared.push((ordinal, value, a.value));
         }
-        self.evaluation_holders.truncate(pending);
+        let evaluation_holders = self.evaluation_holders.split_off(pending);
         let mut entered = Vec::with_capacity(prepared.len());
         for (index, (ordinal, mut value, source)) in prepared.into_iter().enumerate() {
             if constructor.is_none() && value.usage == UseKind::Mut {
-                if let Some(loan) = self.loan(&mut value, self.span(source)?) {
-                    argument_loans.push((loan, ordinal));
-                }
+                let _ = self.loan(&mut value, self.span(source)?);
                 argument_dependencies[index].1 = self.operand_loans(&Operand {
                     place: value.place,
                     usage: value.usage,
@@ -1352,33 +1342,24 @@ impl Builder<'_, '_> {
             held.extend(callee_dependencies);
         }
         self.set_held_loans(destination, held);
-        if let Some(retained) = retained {
-            let end: Vec<_> = self
-                .new_loans_since(loans_before)
-                .iter()
-                .filter(|(loan, _)| {
-                    argument_loans
-                        .iter()
-                        .find(|(id, _)| id == loan)
-                        .map_or_else(
-                            || {
-                                retained.iter().all(|p| {
-                                    matches!(p, hirsel_types::ParameterRef::Bound { depth: 0, .. })
-                                })
-                            },
-                            |(_, parameter)| {
-                                !retained.contains(&hirsel_types::ParameterRef::bound(ParamId(
-                                    *parameter,
-                                )))
-                            },
-                        )
-                })
-                .map(|(loan, _)| *loan)
-                .collect();
-            for loan in end.into_iter().rev() {
-                self.state.loans.retain(|(id, _)| *id != loan);
-                self.end_loan(Some(loan), span);
+        if retained.is_some() {
+            // Evaluated owners last through their statement, including owners
+            // named only by a result's brand. End invocation access now, while
+            // their installed capture dependencies remain held until cleanup.
+            for value in evaluation_holders {
+                let root = self.root(value.place);
+                if self.owned[root.0 as usize]
+                    && self.state.live.contains(&root.0)
+                    && self.body.locals[root.0 as usize].storage == Storage::Temporary
+                {
+                    self.evaluation_holders.push(Operand {
+                        place: value.place,
+                        usage: UseKind::Take,
+                    });
+                }
             }
+            self.end_unheld_loans(span);
+            self.evaluation_holders.truncate(pending);
         }
         Ok(Some(Value {
             checked_ty: None,

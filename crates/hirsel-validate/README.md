@@ -475,11 +475,16 @@ so moving, copying, returning or passing one (a `u64` read out of a local list)
 carries no escape. Heap/caller destinations count;
 arena/region destinations do not. ReadConstant and FunctionReference construct
 no counted storage. Invocation and cleanup obligations remain separate.
-Projected unique receipts require a take from a currently deep-unique root,
-independently of declared field modes. Actual sharing ends that proof; Shared
-is not traversable by a physical projection. Flat copies retain their independent
-copy proof. Pattern physical types and receiving local types may therefore differ
-in modes while retaining their checked shape.
+Projected unique receipts require a take from a currently deep-unique root, or
+a declared unique payload of an unshared owned call receipt. The receipt fact
+is separate from deep uniqueness: moving through locals preserves it, sharing
+ends it, and unqualified counted payloads gain no uniqueness. Shared is not
+traversable by a physical projection. Flat copies retain their independent copy
+proof. Pattern physical types and receiving local types may therefore differ
+in modes while retaining their checked shape. Hand-built tuple controls cover
+fresh, copied and parameter roots. Unique receipts recompute their crossing
+proof, and projected handles retain independently derived structural sendability
+even when their physical row underclaims it. Local and Receiver controls reject.
 
 Loan expiry follows the installed content rather than the displaced value's
 release. Independent flow tests replace a retained result with fresh content and

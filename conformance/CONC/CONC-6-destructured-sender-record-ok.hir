@@ -1,0 +1,10 @@
+// rule: CONC-6
+// expect: accept
+type Job {
+  reply: Sender[bool],
+}
+
+fn a(tasks: Tasks, mut jobs: Sender[Job]) -> () {
+  let (tx, rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let _ = channel.send(tasks, mut jobs, Job(reply: take tx))
+}

@@ -1,0 +1,23 @@
+// rule: CONC-2
+// expect: reject CLO-3 at line 15
+fn work(m: Mutex[u64], take x: unique String) -> () {}
+
+fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let state: Mutex[u64] = mutex.create(tasks, 0u64)
+  let text: unique String = unique "a"
+  let alias = copy text
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() -> () {
+          work(state, take text)
+        }
+      )
+      task.detach(s, take child)
+    }
+  )
+  Ok(())
+}
