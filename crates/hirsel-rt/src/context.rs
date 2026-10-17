@@ -147,7 +147,7 @@ impl RunCtx {
         self.io_data = data;
     }
     /// Retrieve the explicitly bound adapter; there is no ambient fallback.
-    pub fn io_data(&self) -> *mut std::ffi::c_void {
+    pub(crate) fn io_data(&self) -> *mut std::ffi::c_void {
         self.io_data
     }
 

@@ -433,7 +433,7 @@ impl Default for State {
     }
 }
 impl State {
-    pub fn denied_projection(&self, request: &Request) -> bool {
+    pub(crate) fn denied_projection(&self, request: &Request) -> bool {
         match request {
             Request::Directory { path, .. } if self.mount(path).is_none() => return true,
             Request::Write { directory, .. }
@@ -495,7 +495,7 @@ impl State {
     pub fn grant_test(&mut self, seed: u64) -> u64 {
         self.handles.insert(Grant::Test { seed })
     }
-    pub fn is_fake_request(&self, request: &Request) -> bool {
+    pub(crate) fn is_fake_request(&self, request: &Request) -> bool {
         self.fake_tree(request).is_some()
     }
     fn fake_tree(&self, request: &Request) -> Option<u64> {
@@ -1004,7 +1004,7 @@ impl Binding {
             arguments: Vec::new(),
         }
     }
-    pub fn from_box(adapter: Box<dyn Adapter>) -> Self {
+    pub(crate) fn from_box(adapter: Box<dyn Adapter>) -> Self {
         Self {
             adapter,
             paths: Vec::new(),

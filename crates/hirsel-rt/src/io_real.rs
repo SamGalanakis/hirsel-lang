@@ -115,12 +115,6 @@ impl RealIo {
             .map(|(path, pin)| (path.as_str(), pin))
             .collect()
     }
-    /// Pin and refuse tape/grant overlap before snapshotting or writing a header.
-    /// Multi-mount HostAuthority adapters use RecorderDestination::open with all
-    /// retained mount pins instead of this single-root convenience.
-    pub fn prepare_recording(&self, path: &Path) -> Result<File, hirsel_run_config::RunRefusal> {
-        self.prepare_recording_with_files(path, &[])
-    }
     /// Include file-backed output grants acquired by the launcher/provider.
     pub fn prepare_recording_with_files(
         &self,

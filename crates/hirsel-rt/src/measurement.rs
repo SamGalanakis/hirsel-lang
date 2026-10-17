@@ -8,7 +8,7 @@ use std::io::Write;
 use crate::{CLASS_COUNT, CLASS_SIZES, RunCtx};
 
 /// The last bin holds capacities outside the small class schedule, regardless of storage kind.
-pub const BIN_COUNT: usize = CLASS_COUNT + 1;
+pub(crate) const BIN_COUNT: usize = CLASS_COUNT + 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Counters {

@@ -1,12 +1,11 @@
 //! Mount authority is selected before an effect and retained through narrowed grants.
 use crate::support;
+use crate::support::library::{Io, Library};
 use hirsel_rt::{
-    handles::Io,
     host_paths::{PinnedDirectory, RecorderDirectory},
     io::{Adapter, AdapterError, Completion as C, Fault, IoError, Request as R, Tree},
     io_real::RealIo,
     io_sim::SimIo,
-    operations::Library,
 };
 use hirsel_run_config::{Access, RunRefusal};
 use std::{collections::BTreeMap, fs, path::PathBuf};
@@ -276,7 +275,9 @@ fn mount_pins_survive_replacement_and_every_recorder_checks_every_retained_pin()
     assert_eq!(real.read(archive, "b"), Ok(Ok(b"B".to_vec())));
     for path in ["retained/tape", "retained/b"] {
         assert_eq!(
-            real.0.prepare_recording(&scratch.0.join(path)).unwrap_err(),
+            real.0
+                .prepare_recording_with_files(&scratch.0.join(path), &[])
+                .unwrap_err(),
             RunRefusal::RecorderOverlap {
                 mount: "archive".into()
             }
@@ -286,10 +287,10 @@ fn mount_pins_survive_replacement_and_every_recorder_checks_every_retained_pin()
     assert!(!scratch.0.join("retained/tape").exists());
     // A file recorder owns only the leaf, so common-parent placement is accepted.
     real.0
-        .prepare_recording(&scratch.0.join("beside-mounts"))
+        .prepare_recording_with_files(&scratch.0.join("beside-mounts"), &[])
         .unwrap();
     real.0
-        .prepare_recording(&scratch.0.join("two/tape"))
+        .prepare_recording_with_files(&scratch.0.join("two/tape"), &[])
         .unwrap();
     assert_eq!(
         RecorderDirectory::pin(&scratch.0)

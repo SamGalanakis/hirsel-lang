@@ -1,4 +1,5 @@
-use hirsel_rt::{handles::Io, io::*, io_real::RealIo, operations::Library};
+use crate::support::library::{Io, Library};
+use hirsel_rt::{io::*, io_real::RealIo};
 fn temp() -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let p = std::env::temp_dir().join(format!(

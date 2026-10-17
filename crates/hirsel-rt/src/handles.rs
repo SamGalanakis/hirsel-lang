@@ -1,15 +1,5 @@
 //! Logical capability identities, scoped to one adapter. No host address is a handle.
 use std::collections::BTreeMap;
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Io(pub u64);
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Stdout(pub u64);
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Dir(pub u64);
-#[derive(Debug, Eq, PartialEq)]
-pub struct File(pub u64);
-#[derive(Debug, Eq, PartialEq)]
-pub struct AtomicFile(pub u64);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Grant {
     Io,

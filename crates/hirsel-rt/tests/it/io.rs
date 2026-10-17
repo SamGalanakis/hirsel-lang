@@ -1,4 +1,5 @@
-use hirsel_rt::{handles::Io, io::*, io_real::RealIo, io_sim::SimIo, operations::Library};
+use crate::support::library::{Io, Library};
+use hirsel_rt::{io::*, io_real::RealIo, io_sim::SimIo};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use support::io::replay_interpreter;
@@ -1020,7 +1021,7 @@ fn opened_identity_matches_disk_and_replays_live_unlink_identical_replacement_an
 
 #[test]
 fn fake_test_directories_derive_identity_and_refuse_foreign_trees() {
-    use hirsel_rt::handles::{Dir, File};
+    use crate::support::library::{Dir, File};
     let (temp, mut io) = setup();
     io.test_context(7);
     let mut real = Library(io);
@@ -1190,7 +1191,7 @@ fn atomic_commit_rejects_identical_replacement_of_its_prepared_temporary_in_each
             else {
                 panic!()
             };
-            hirsel_rt::handles::Dir(id)
+            support::library::Dir(id)
         } else {
             let Completion::Handle(Ok(id)) = io
                 .call(Request::Directory {
@@ -1201,7 +1202,7 @@ fn atomic_commit_rejects_identical_replacement_of_its_prepared_temporary_in_each
             else {
                 panic!()
             };
-            hirsel_rt::handles::Dir(id)
+            support::library::Dir(id)
         };
         let mut real = Library(io);
         let mut atomic = real.create_atomic(dir, "saved").unwrap().unwrap();

@@ -1,6 +1,4 @@
 //! Native operation inventory and typed adapters. Unknown identity never selects a fallback.
-use crate::handles;
-use crate::io::{Adapter, AdapterError, Completion, IoError, Request};
 use hirsel_core_contract::{
     CallOwnership, CleanupEffect, Disposition, M2Feature, Manifest, ManifestError, OperationRow,
     Passing, Unavailable,
@@ -212,7 +210,7 @@ pub const NET_EXPORTS: &[&str] = &[
     "tls.close",
 ];
 
-pub const MAP_BODIES: &[&str] = &[
+pub(crate) const MAP_BODIES: &[&str] = &[
     "$intrinsic.SetElements_open",
     "$intrinsic.SetElements_next",
     "$intrinsic.MapInsertionOrder_open",
@@ -720,158 +718,6 @@ pub fn manifest(rows: impl IntoIterator<Item = OperationRow>) -> Result<Manifest
             .map_err(|e: ManifestError| format!("{e:?}"))?;
     }
     Ok(manifest)
-}
-
-/// Typed Rust adapter for native thunks: only this boundary decodes the I/O protocol.
-pub struct Library<A: Adapter>(pub A);
-macro_rules! typed {
-    ($name:ident($($arg:ident : $ty:ty),* $(,)?) -> $result:ty, $request:expr, $variant:ident, $convert:expr) => {
-        pub fn $name(&mut self, $($arg: $ty),*) -> Result<$result, AdapterError> {
-            if let Completion::$variant(value) = self.0.call($request)? { Ok(($convert)(value)) } else { Err(AdapterError::InvalidCompletion) }
-        }
-    };
-}
-impl<A: Adapter> Library<A> {
-    typed!(
-        stdout(io: handles::Io) -> Result<handles::Stdout, IoError>,
-        Request::Stdout { io: io.0 },
-        Handle,
-        |v: Result<u64, IoError>| v.map(handles::Stdout)
-    );
-    typed!(
-        directory(io: handles::Io, path: &str) -> Result<handles::Dir, IoError>,
-        Request::Directory {
-            io: io.0,
-            path: path.into()
-        },
-        Handle,
-        |v: Result<u64, IoError>| v.map(handles::Dir)
-    );
-    typed!(
-        narrow_dir(directory: handles::Dir, path: &str) -> Result<handles::Dir, IoError>,
-        Request::NarrowDir {
-            directory: directory.0,
-            path: path.into()
-        },
-        Handle,
-        |v: Result<u64, IoError>| v.map(handles::Dir)
-    );
-    typed!(
-        print(stdout: handles::Stdout, text: &str) -> Result<(), IoError>,
-        Request::Print {
-            stdout: stdout.0,
-            bytes: text.as_bytes().to_vec()
-        },
-        Unit,
-        |v| v
-    );
-    typed!(
-        open(directory: handles::Dir, path: &str) -> Result<handles::File, IoError>,
-        Request::Open {
-            directory: directory.0,
-            path: path.into()
-        },
-        Handle,
-        |v: Result<u64, IoError>| v.map(handles::File)
-    );
-    typed!(
-        narrow_file(directory: handles::Dir, file: handles::File) -> Option<handles::File>,
-        Request::NarrowFile {
-            directory: directory.0,
-            file: file.0
-        },
-        OptionalFile,
-        |v: Option<u64>| v.map(handles::File)
-    );
-    typed!(
-        walk(directory: handles::Dir) -> Result<Vec<String>, IoError>,
-        Request::Walk {
-            directory: directory.0
-        },
-        Paths,
-        |v| v
-    );
-    typed!(
-        size(directory: handles::Dir, path: &str) -> Result<u64, IoError>,
-        Request::Size {
-            directory: directory.0,
-            path: path.into()
-        },
-        Size,
-        |v| v
-    );
-    typed!(
-        read(directory: handles::Dir, path: &str) -> Result<Vec<u8>, IoError>,
-        Request::Read {
-            directory: directory.0,
-            path: path.into()
-        },
-        Bytes,
-        |v| v
-    );
-    typed!(
-        write(directory: handles::Dir, path: &str, bytes: Vec<u8>) -> Result<(), IoError>,
-        Request::Write {
-            directory: directory.0,
-            path: path.into(),
-            bytes
-        },
-        Unit,
-        |v| v
-    );
-    typed!(
-        remove(directory: handles::Dir, path: &str) -> Result<(), IoError>,
-        Request::Remove {
-            directory: directory.0,
-            path: path.into()
-        },
-        Unit,
-        |v| v
-    );
-    typed!(
-        create_atomic(directory: handles::Dir, path: &str) -> Result<handles::AtomicFile, IoError>,
-        Request::CreateAtomic {
-            directory: directory.0,
-            path: path.into()
-        },
-        Handle,
-        |v: Result<u64, IoError>| v.map(handles::AtomicFile)
-    );
-    typed!(
-        write_all(
-            directory: handles::Dir,
-            file: &mut handles::AtomicFile,
-            bytes: &[u8],
-        ) -> Result<(), IoError>,
-        Request::WriteAll {
-            directory: directory.0,
-            file: file.0,
-            bytes: bytes.into()
-        },
-        Unit,
-        |v| v
-    );
-    typed!(
-        commit(directory: handles::Dir, file: handles::AtomicFile) -> Result<(), IoError>,
-        Request::Commit {
-            directory: directory.0,
-            file: file.0
-        },
-        Unit,
-        |v| v
-    );
-    typed!(
-        close_file(file: handles::File) -> Result<(), IoError>,
-        Request::Close { handle: file.0 },
-        Unit,
-        |v| v
-    );
-    typed!(
-        abort(file: handles::AtomicFile) -> Result<(), IoError>,
-        Request::Close { handle: file.0 },
-        Unit,
-        |v| v
-    );
 }
 
 /// Explicit identities: additions to the registry fail coverage until reviewed here.

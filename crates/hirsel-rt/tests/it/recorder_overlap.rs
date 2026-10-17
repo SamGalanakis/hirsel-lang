@@ -277,12 +277,12 @@ fn validated_host_admission_reports_recorder_overlap_before_entry_for_read_only_
     }
     let io = RealIo::grant_pinned_with_output(scratch.directory("work"), std::io::sink());
     assert_eq!(
-        io.prepare_recording(&scratch.path("work/tape"))
+        io.prepare_recording_with_files(&scratch.path("work/tape"), &[])
             .unwrap_err(),
         RunRefusal::RecorderOverlap { mount: "".into() }
     );
     drop(
-        io.prepare_recording(&scratch.path("tapes/real-tape"))
+        io.prepare_recording_with_files(&scratch.path("tapes/real-tape"), &[])
             .unwrap(),
     );
 }

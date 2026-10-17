@@ -119,7 +119,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_hash_bytes(state: u64, bytes: *const u8, l
 }
 
 /// The second SipHash key word of [`hirsel_rt_v2_hash_bytes`]; the state is the first.
-pub const HASH_KEY_1: u64 = 0x6869_7273_656c_2d37;
+pub(crate) const HASH_KEY_1: u64 = 0x6869_7273_656c_2d37;
 
 /// The interface version this library implements.
 #[unsafe(no_mangle)]

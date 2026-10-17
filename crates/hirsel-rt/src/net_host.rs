@@ -17,7 +17,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 /// The largest single read; a read never waits to fill its limit (docs/spec/core-library.md).
-pub const READ_CHUNK: u64 = 64 * 1024;
+pub(crate) const READ_CHUNK: u64 = 64 * 1024;
 /// Zig `ListenOptions.kernel_backlog`.
 const BACKLOG: libc::c_int = 128;
 

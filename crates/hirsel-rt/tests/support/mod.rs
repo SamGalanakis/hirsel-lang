@@ -2,6 +2,7 @@
 //! a context guard, descriptor builders, a finalizer event log and abort probes.
 
 pub mod io;
+pub mod library;
 pub mod schema;
 
 use std::alloc::{GlobalAlloc, Layout as HostLayout, System};

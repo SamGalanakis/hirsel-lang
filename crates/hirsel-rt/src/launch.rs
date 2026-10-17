@@ -44,13 +44,13 @@ pub const OBSERVATION_VERSION: u32 = 1;
 /// Process exit code of a language failure (FAIL-1).
 pub const EXIT_FAILURE: i32 = 2;
 /// Process exit code of a refused launch: bad grants, ABI or entry contract.
-pub const EXIT_LAUNCH: i32 = 3;
+pub(crate) const EXIT_LAUNCH: i32 = 3;
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
 /// The logical identity of the launch argument-table capability.
 pub const ARGS_HANDLE: u64 = 0;
 /// Sole root of a Test launch; its recorded seed is an explicit launcher input.
-pub const TEST_HANDLE: u64 = 1;
+pub(crate) const TEST_HANDLE: u64 = 1;
 pub type TestEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8, *const u64) -> u8;
 /// A root-free entry, with only the ordinary hidden context and result addresses.
 pub type ZeroEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8) -> u8;
@@ -72,7 +72,7 @@ pub type Entry = unsafe extern "C" fn(
 ) -> u8;
 
 /// The tape file's first line.
-pub const TAPE_HEADER: &str = "hirsel-io-tape 4";
+pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 4";
 
 /// An adapter the launcher still holds after binding it.
 struct Shared<A>(Rc<RefCell<A>>);

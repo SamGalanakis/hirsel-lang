@@ -40,7 +40,7 @@ pub struct NetRule {
 }
 impl NetRule {
     /// The validated RunConfig rule set (`io.net.rules`), already canonical and unique.
-    pub fn from_config(grant: &hirsel_run_config::NetGrant) -> BTreeSet<Self> {
+    pub(crate) fn from_config(grant: &hirsel_run_config::NetGrant) -> BTreeSet<Self> {
         grant
             .rules
             .iter()
@@ -211,7 +211,7 @@ pub trait NetProvider {
 /// A world with no network: every admitted operation is a tool refusal. SimIo uses it
 /// between events; launches without a host network never reach it after policy.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct NoNet;
+pub(crate) struct NoNet;
 impl NetProvider for NoNet {
     fn resolve(&mut self, _: &str, _: u16) -> Provided<Vec<SocketAddr>> {
         Err(AdapterError::InvalidCompletion)
@@ -265,7 +265,7 @@ pub fn canonical_address(address: &str) -> bool {
 }
 
 /// The canonical literal of an address (Rust `Display`, RFC 5952 for IPv6).
-pub fn ip_literal(ip: std::net::IpAddr) -> String {
+pub(crate) fn ip_literal(ip: std::net::IpAddr) -> String {
     ip.to_string()
 }
 
