@@ -1,3 +1,4 @@
+use hirsel_run_config::hex;
 use hirsel_syntax::{DefPath, ItemPath, PackageId};
 use hirsel_types::serialization::{
     SchemaArgument as A, SchemaId as S, SchemaNode as N, SerializableSchema,
@@ -420,9 +421,6 @@ fn cases() -> Vec<Case> {
         },
     ]);
     result
-}
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 fn unhex(s: &str) -> Vec<u8> {
     s.as_bytes()

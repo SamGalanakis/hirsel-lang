@@ -596,6 +596,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-diag",
  "hirsel-intern",
+ "hirsel-run-config",
  "hirsel-span",
  "hirsel-syntax",
  "serde_json",

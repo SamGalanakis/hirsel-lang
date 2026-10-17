@@ -2,6 +2,7 @@
 
 Own semantic types, complete signatures, checked decisions and shared query data.
 Allowed dependencies: syntax, intern, span, diag; no implementation crates.
+Wire tests use run-config's shared `hex` formatter as a dev dependency.
 
 - `TypeStore` owns immutable rows. TypeIds have ephemeral provenance, checked by
   `get` (debug assertion, None in release for a foreign row). Clone shares immutable

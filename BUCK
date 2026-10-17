@@ -2768,6 +2768,7 @@ hirsel_test(
     deps = [
         "//:hirsel-diag",
         "//:hirsel-intern",
+        "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
         "//third-party:serde_json",
@@ -2790,6 +2791,7 @@ hirsel_test(
         "//:hirsel-types",
         "//:hirsel-diag",
         "//:hirsel-intern",
+        "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
         "//third-party:serde_json",
