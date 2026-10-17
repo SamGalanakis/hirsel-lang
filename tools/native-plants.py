@@ -38,18 +38,38 @@ PLANTS = [
 ]
 
 
-def build():
+def build(history=False):
+    targets = ['//:hirsel-conformance-bin-native', '//:hirsel-rt-archives']
+    if history:
+        targets.append('//:hirsel-conformance-bin-native-select')
+    targets += ['//tools/buck2/native-toolchain:' + name
+                for name in ['llvm', 'arm', 'qemu', 'valgrind']]
     command = [str(BUCK), 'build', '--target-platforms', '//tools/buck2:release',
-               '//:hirsel-conformance-bin-native', '//:hirsel-rt-archives', '--show-full-json-output']
+               *targets, '--show-full-json-output']
     result = subprocess.run(command, cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE)
-    outputs = {target.rsplit(':', 1)[-1]: path for target, path in json.loads(result.stdout).items()}
-    return outputs['hirsel-conformance-bin-native'], outputs['hirsel-rt-archives']
+    outputs = {target.rsplit(':', 1)[-1]: str(Path(path).resolve())
+               for target, path in json.loads(result.stdout).items()}
+    llvm, arm, qemu, valgrind = [Path(outputs[name]) for name in ['llvm', 'arm', 'qemu', 'valgrind']]
+    # Match the explicit native inputs exported by test_launcher.sh.
+    env = {
+        'LLVM_SYS_211_PREFIX': str(llvm),
+        'LD_LIBRARY_PATH': str(llvm / 'lib'),
+        'HIRSEL_AARCH64_CC': str(arm / 'bin/aarch64-none-linux-gnu-gcc'),
+        'HIRSEL_AARCH64_SYSROOT': str(arm / 'aarch64-none-linux-gnu/libc'),
+        'HIRSEL_QEMU_AARCH64': str(qemu / 'qemu-aarch64'),
+        'HIRSEL_VALGRIND': str(valgrind / 'bin/valgrind'),
+        'VALGRIND_LIB': str(valgrind / 'libexec/valgrind'),
+        'HIRSEL_VALGRIND_RUNTIME': str(valgrind / 'lib/x86_64-linux-gnu'),
+    }
+    return outputs, env
 
 
-def matrix(binary, archives, selection, program, output, exhaustive):
-    env = os.environ | {'HIRSEL_RUNTIME_ARCHIVES': str(Path(archives).resolve()),
-                       'HIRSEL_NATIVE_SELECTION': str(selection),
-                       'LLVM_SYS_211_PREFIX': str(ROOT / 'tools/buck2/toolchains/llvm-files')}
+def matrix(artifacts, tools, selection, program, output, exhaustive):
+    env = os.environ | tools | {
+        'HIRSEL_RUNTIME_ARCHIVES': str(Path(artifacts['hirsel-rt-archives']).resolve()),
+        'HIRSEL_NATIVE_SELECTION': str(selection),
+    }
+    binary = artifacts['hirsel-conformance-bin-native']
     command = ['flock', LOCK, binary, '--full', '--root', str(ROOT), '--seed', '1',
                '--filter', program, '--out', str(output)]
     if exhaustive:
@@ -77,6 +97,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--selection', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--history-only', action='store_true',
+                        help='replay the pinned historical set instead of transient faults')
     args = parser.parse_args()
     if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
         parser.error('commit the lane changes before running transient mutations')
@@ -88,9 +110,17 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     reports = []
-    binary, archives = build()
+    artifacts, tools = build(history=args.history_only)
+    if args.history_only:
+        env = os.environ | tools | {'HIRSEL_RUNTIME_ARCHIVES': artifacts['hirsel-rt-archives']}
+        command = ['flock', LOCK, artifacts['hirsel-conformance-bin-native-select'],
+                   '--root', str(ROOT), '--replay-history', '--seed', '1']
+        with (output / 'history.json').open('w') as log:
+            subprocess.run(command, cwd=ROOT, env=env, stdout=log, check=True)
+        print((output / 'history.json').read_text())
+        return
     for program in sorted({plant[1] for plant in PLANTS}):
-        found, count = matrix(binary, archives, selection, program,
+        found, count = matrix(artifacts, tools, selection, program,
                               output / ('healthy-' + Path(program).stem), True)
         if found:
             raise RuntimeError(f'healthy control already disagrees: {program}')
@@ -103,9 +133,9 @@ def main():
             raise RuntimeError(f'{name}: mutation anchor must occur exactly once')
         try:
             source.write_text(text.replace(original, replacement))
-            binary, archives = build()
-            full, before = matrix(binary, archives, selection, program, output / name / 'exhaustive', True)
-            slim, after = matrix(binary, archives, selection, program, output / name / 'slim', False)
+            artifacts, tools = build()
+            full, before = matrix(artifacts, tools, selection, program, output / name / 'exhaustive', True)
+            slim, after = matrix(artifacts, tools, selection, program, output / name / 'slim', False)
             if not full or full != slim:
                 raise RuntimeError(f'{name}: full={sorted(full)}, slim={sorted(slim)}')
             reports.append(dict(plant=name, detected=True, exhaustive=before, slim=after,

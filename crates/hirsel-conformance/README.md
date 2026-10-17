@@ -360,7 +360,9 @@ campaign lock. `tools/native-plants.py --selection FILE --output DIR` starts
 from a clean worktree and a frozen healthy selection, checks healthy controls,
 then temporarily plants real AArch64 add lowering, system-allocator dup-count
 and regions-off release omissions. It restores each source byte-for-byte and
-requires identical full/slim finding sets for each plant.
+requires identical full/slim finding sets for each plant. The script builds the
+pinned tools and supplies the same explicit paths as the Buck2 launcher. Add
+`--history-only` to replay the protected historical set with that environment.
 
 Feature coverage, pairwise coverage and historical/mutation replay are
 finite evidence, not a guarantee of identical findings for arbitrary bugs.
