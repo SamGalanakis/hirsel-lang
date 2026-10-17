@@ -66,12 +66,21 @@ Valgrind redirects do not depend on the worker image's stripped loader.
 
 Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.
 
-`run_path_with_config` with an explicit record is the production interpreter launch: it validates the record,
-checks the semantic revision and required roots with `admit_run`, then executes TIR with
-`network::HostLibrary`. This adapter translates explicit filesystem, clock and network
-calls to the runtime's typed Request/Completion protocol, which owns grant enforcement;
-the interpreter has no host effects. Pure calls and recorded Args/Env snapshots use the
-ordinary Library. `run_path`, `run_path_with_simulation` and `run_file` are the fake-provider
+`run_path_on_host` is the production interpreter launch. `bind_host_run` either validates
+a record or template, checks the semantic revision and required roots with `admit_run` and,
+with `HostLaunch::Live { record: Some(tape) }`, streams the runtime tape
+(`hirsel_rt::host_launch::record`); or binds a `HostLaunch::Replay` tape's own run to the
+checked revision, entry and roots and runs on `hirsel_rt::host_launch::replay`'s SimIo. It
+then executes TIR with `network::HostLibrary`. This adapter translates every Io
+projection, stdout and stderr writes, stdin and Env reads, and filesystem, clock and
+network calls to the runtime's typed Request/Completion protocol, which owns grant
+enforcement, in the order native code issues them, so one tape replays in either engine.
+The interpreter has no host effects: live stdout and stderr are written by the runtime
+adapter, and a replay copies its recorded output to the process's streams. A replay never
+parks on readiness; the order in which ready sockets resume cooperative tasks is not yet
+recorded, so a run whose tasks interleave host requests by readiness may refuse its own
+replay as a divergence (never replay differently). Pure calls and
+recorded Args/Env snapshots use the ordinary Library. `run_path`, `run_path_with_simulation` and `run_file` are the fake-provider
 entry points for semantic fixtures. Production native runs pass the same validated record
 to linking and launch; explicit host runs have streaming stdout and no harness wall-time limit.
 
@@ -84,15 +93,18 @@ validated and admitted by the runtime, independently of compiler profile.
 
 `LaunchConfig` selects either a bound record or a grants template. Both source
 engines resolve it against the checked semantic revision before host admission;
-templates never pass through a temporary exported record.
+templates never pass through a temporary exported record. Native host launches pass
+`--hirsel-record <tape>` or `--hirsel-replay <tape>` to the executable after the driver
+has bound the run, so a recording of other code refuses before linking; a replay inherits
+no stdin.
 
 Native live launches inherit stdin only under the admitted stdin projection.
 Their two output pipes drain concurrently into separate caller-owned writers,
 while retaining the same bytes for native observations and launch diagnostics.
 
 `run_path_with_step_limit` selects an explicit simulation execution budget;
-`run_path_with_config` receives the selected runtime step bound for both its
-no-record simulation and admitted host path. CLI callers supply one billion
+`run_path_on_host` receives the selected runtime step bound for live and replayed
+host runs. CLI callers supply one billion
 unless overridden. `run_path`, `run_path_with_simulation`, and interpreter
 `Limits::default` retain their existing test/conformance budgets.
 

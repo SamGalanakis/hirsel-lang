@@ -106,13 +106,22 @@ are exclusive, and neither combines with `--simulation`. Templates omit binding
 fields and deny omitted roots. Standalone executables accept the corresponding
 `--hirsel-grants grants.json [args...]` spelling.
 
+`--record <tape>` beside `--run` or `--grants` streams the run's Io tape;
+`hirsel run <source|manifest> --replay <tape>` replays one, in either engine, with no
+grants and no host effect. Replay refuses a tape bound to another semantic revision,
+entry or root set before entry (exit 1), and a divergence, missing or unconsumed event
+after the output it confirmed: a tool error (exit 1) interpreted, the executable's launch
+refusal (`hirsel: native launch: ...`, exit 2) with `--native`. `--replay` takes no `--run`,
+`--grants` or `--record`, and neither option combines with `--simulation`. Executables
+spell them `--hirsel-record <tape>` (before their launch input) and `--hirsel-replay <tape>`.
+
 Simulation writes stdout and stderr to distinct tool sinks. Live Stdin/Stderr and
 Env operations use the admitted runtime providers through HostLibrary; only exact
 Env names in the run record are readable, with null distinct from a denied name.
 
 Interpreted `hirsel run` defaults to 1,000,000,000 execution steps. Use
 `--max-steps <n>` to select an explicit nonnegative u64 budget, including zero.
-The option works with simulated inputs and explicit host `--run` records;
+The option works with simulated inputs, explicit host `--run` records and replays;
 `--native` rejects it. Exhaustion deterministically exits 2 and reports
 `evaluator tooling limit: Steps`. Driver/conformance adapter defaults and
 compile-time evaluation budgets are independent.

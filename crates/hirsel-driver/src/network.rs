@@ -7,6 +7,7 @@ use hirsel_interp::{
 use hirsel_rt::{
     io::{Adapter, Completion as C, Request as R},
     io_real::RealIo,
+    io_sim::SimIo,
     net::*,
 };
 use hirsel_syntax::DefPath;
@@ -179,11 +180,43 @@ fn result<T>(r: Result<T, NetError>, f: impl FnOnce(T) -> Value) -> Value {
     }
 }
 
-pub(crate) struct HostLibrary<'a> {
-    output: &'a mut dyn std::io::Write,
-    written: usize,
+/// The interpreter's host Io: the admitted real adapter, which writes the process's
+/// standard streams itself and may stream a tape, or a recording's replay.
+pub(crate) enum HostIo {
+    Live(RealIo),
+    Replay(SimIo),
+}
+impl HostIo {
+    fn call(&mut self, request: R) -> Result<C, hirsel_rt::io::AdapterError> {
+        match self {
+            Self::Live(io) => io.call(request),
+            Self::Replay(io) => io.call(request),
+        }
+    }
+    fn tls_roots(&mut self, pem: &[u8]) {
+        match self {
+            Self::Live(io) => io.tls_roots(pem),
+            Self::Replay(io) => io.tls_roots(pem),
+        }
+    }
+    /// The committed prefix of the last completion's fault.
+    fn last_partial(&self) -> usize {
+        match self {
+            Self::Live(io) => io.tape().last(),
+            Self::Replay(io) => io.last_event(),
+        }
+        .and_then(|e| e.fault.as_ref())
+        .map_or(0, |f| f.partial)
+    }
+}
+
+pub(crate) struct HostLibrary {
     pub library: Library,
-    io: RealIo,
+    pub io: HostIo,
+    /// The first adapter refusal: a replay divergence or a live provider error.
+    pub refused: Option<String>,
+    /// Replay output already copied to the process's streams.
+    echoed: (usize, usize),
     handles: BTreeMap<u64, u64>,
     next: u64,
     next_wait: u64,
@@ -195,13 +228,12 @@ struct HostWait {
     name: String,
     arguments: Vec<Value>,
 }
-impl<'a> HostLibrary<'a> {
+impl HostLibrary {
     pub fn new(
         run: &hirsel_tir::RunConfiguration,
         admitted: &hirsel_run_config::ValidatedRun,
-        io: RealIo,
+        io: HostIo,
         readiness: hirsel_rt::readiness::Readiness,
-        output: &'a mut dyn std::io::Write,
     ) -> Result<Self, Error> {
         let record = admitted.record();
         let mut grants = std::collections::BTreeSet::new();
@@ -236,13 +268,40 @@ impl<'a> HostLibrary<'a> {
             next_wait: 1 << 62,
             waits: BTreeMap::new(),
             yield_now: false,
-            output,
-            written: 0,
             library: Library::new(run, config)?,
             io,
+            refused: None,
+            echoed: (0, 0),
             handles: BTreeMap::new(),
             next: 1 << 63,
         })
+    }
+    /// Every host request goes through here. A provider that would block parks the
+    /// task; any other adapter error is a refusal (a replay divergence or host fault).
+    fn host(&mut self, request: R) -> Result<C, Error> {
+        self.io.call(request).map_err(|e| match e {
+            hirsel_rt::io::AdapterError::Blocked => Error::Blocked(vec![]),
+            e => {
+                let message = format!("{e:?}");
+                self.refused.get_or_insert(message.clone());
+                Error::Unavailable(format!("host Io: {message}"))
+            }
+        })
+    }
+    /// Replay performs no host effect, so the program's recorded output is copied
+    /// to the process's streams as it is produced.
+    fn echo(&mut self, stdout: &[u8]) -> Result<(), Error> {
+        use std::io::Write;
+        if let HostIo::Replay(_) = self.io {
+            let stderr = &self.library.simulation.stderr;
+            std::io::stdout()
+                .write_all(&stdout[self.echoed.0..])
+                .and_then(|()| std::io::stdout().flush())
+                .and_then(|()| std::io::stderr().write_all(&stderr[self.echoed.1..]))
+                .map_err(|e| Error::Unavailable(format!("replay output: {e}")))?;
+            self.echoed = (stdout.len(), stderr.len());
+        }
+        Ok(())
     }
     fn id(&self, v: &Value) -> Result<u64, Error> {
         if let Value::Handle { id, .. } = v {
@@ -268,17 +327,19 @@ impl<'a> HostLibrary<'a> {
     ) -> Result<Option<OperationResult>, Error> {
         use hirsel_rt::io::{ENV_HANDLE, IoError};
         let a = call.arguments;
-        if matches!(name, "io.stdin" | "io.stderr") {
+        if matches!(
+            name,
+            "io.stdin" | "io.stderr" | "io.stdout" | "io.random" | "io.tasks"
+        ) {
             // The library validates the root and records the semantic projection once.
             let result = self.library.call(call, cx)?;
-            let completion = self
-                .io
-                .call(if name == "io.stdin" {
-                    R::Stdin { io: 1 }
-                } else {
-                    R::Stderr { io: 1 }
-                })
-                .map_err(|e| Error::Unavailable(format!("host projection: {e:?}")))?;
+            let completion = self.host(match name {
+                "io.stdin" => R::Stdin { io: 1 },
+                "io.stderr" => R::Stderr { io: 1 },
+                "io.stdout" => R::Stdout { io: 1 },
+                "io.random" => R::Random { io: 1 },
+                _ => R::Tasks { io: 1 },
+            })?;
             match (&result, completion) {
                 (
                     Some(OperationResult::Complete {
@@ -305,13 +366,10 @@ impl<'a> HostLibrary<'a> {
         }
         if name == "env.get" {
             let result = self.library.call(call, cx)?;
-            let completion = self
-                .io
-                .call(R::EnvGet {
-                    env: ENV_HANDLE,
-                    name: text(&a[1])?,
-                })
-                .map_err(|e| Error::Unavailable(format!("host Env read: {e:?}")))?;
+            let completion = self.host(R::EnvGet {
+                env: ENV_HANDLE,
+                name: text(&a[1])?,
+            })?;
             let C::Env(value) = completion else {
                 return Err(invalid());
             };
@@ -328,8 +386,10 @@ impl<'a> HostLibrary<'a> {
             return Ok(result);
         }
         // The library validates the handle/schema and returns Canceled without
-        // consuming input or publishing stderr. Destruction's entered task is shielded.
-        if matches!(name, "stdin.read" | "err.print") && self.library.cancellation().is_some() {
+        // consuming input or publishing output. Destruction's entered task is shielded.
+        if matches!(name, "stdin.read" | "err.print" | "out.print")
+            && self.library.cancellation().is_some()
+        {
             return self.library.call(call, cx);
         }
         if name == "stdin.read" {
@@ -356,13 +416,18 @@ impl<'a> HostLibrary<'a> {
                 },
             }));
         }
-        let completion = self
-            .io
-            .call(R::PrintStderr {
+        let request = if name == "err.print" {
+            R::PrintStderr {
                 stderr: self.id(&a[0])?,
                 bytes: bytes(&a[1])?,
-            })
-            .map_err(|e| Error::Unavailable(format!("host input: {e:?}")))?;
+            }
+        } else {
+            R::Print {
+                stdout: self.id(&a[0])?,
+                bytes: bytes(&a[1])?,
+            }
+        };
+        let completion = self.host(request)?;
         self.supply(name, completion)?;
         self.library.call(call, cx)
     }
@@ -374,11 +439,11 @@ impl<'a> HostLibrary<'a> {
             max: word(&a[2])?,
         };
         self.readiness.enter(token);
-        let completion = match self.io.call(request) {
-            Err(hirsel_rt::io::AdapterError::Blocked) => return Ok(false),
+        let completion = match self.host(request) {
+            Err(Error::Blocked(_)) => return Ok(false),
             completion => {
                 self.readiness.finish(token);
-                completion.map_err(|e| Error::Unavailable(format!("host input: {e:?}")))?
+                completion?
             }
         };
         self.supply("stdin.read", completion)?;
@@ -399,12 +464,7 @@ impl<'a> HostLibrary<'a> {
             C::Unit(Ok(())) => None,
             C::Unit(Err(IoError::Fault(code))) => Some(Fault::Fault {
                 code,
-                partial: self
-                    .io
-                    .tape()
-                    .last()
-                    .and_then(|e| e.fault.as_ref())
-                    .map_or(0, |f| f.partial),
+                partial: self.io.last_partial(),
             }),
             C::Unit(Err(IoError::Canceled(cause))) => Some(Fault::Canceled(cause)),
             _ => return Err(invalid()),
@@ -435,9 +495,7 @@ impl<'a> HostLibrary<'a> {
         {
             if name == "file.commit" {
                 let handle = self.id(&a[1])?;
-                self.io
-                    .call(R::Close { handle })
-                    .map_err(|e| Error::Unavailable(format!("host close: {e:?}")))?;
+                self.host(R::Close { handle })?;
                 if let Value::Handle { id, .. } = a[1] {
                     self.handles.remove(&id);
                 }
@@ -536,10 +594,7 @@ impl<'a> HostLibrary<'a> {
             },
             _ => return Err(invalid()),
         };
-        let completion = self
-            .io
-            .call(request)
-            .map_err(|e| Error::Unavailable(format!("host operation {name}: {e:?}")))?;
+        let completion = self.host(request)?;
         let mut updates = vec![];
         let value = match completion {
             C::Handle(r) => match r {
@@ -818,20 +873,14 @@ impl<'a> HostLibrary<'a> {
                 "net.read" | "net.read_into" => C::NetBytes(Err(e)),
                 "net.write" => C::Count(Err(e)),
                 "tls.connect" | "tls.close" => {
-                    self.io
-                        .call(R::Close {
-                            handle: self.id(&a[1])?,
-                        })
-                        .map_err(|e| Error::Unavailable(format!("host close: {e:?}")))?;
+                    let handle = self.id(&a[1])?;
+                    self.host(R::Close { handle })?;
                     C::NetUnit(Err(e))
                 }
                 _ => C::NetUnit(Err(e)),
             }
         } else {
-            self.io.call(request).map_err(|e| match e {
-                hirsel_rt::io::AdapterError::Blocked => Error::Blocked(vec![]),
-                e => Error::Unavailable(format!("host network: {e:?}")),
-            })?
+            self.host(request)?
         };
         let mut updates = vec![];
         let value = match completion {
@@ -910,7 +959,7 @@ impl<'a> HostLibrary<'a> {
         })
     }
 }
-impl hirsel_interp::OperationsAdapter for HostLibrary<'_> {
+impl hirsel_interp::OperationsAdapter for HostLibrary {
     fn operations(&self) -> &dyn Operations {
         &self.library
     }
@@ -980,9 +1029,19 @@ impl hirsel_interp::OperationsAdapter for HostLibrary<'_> {
                 .join(".");
             if matches!(
                 name.as_str(),
-                "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get"
+                "io.stdin"
+                    | "io.stderr"
+                    | "io.stdout"
+                    | "io.random"
+                    | "io.tasks"
+                    | "stdin.read"
+                    | "err.print"
+                    | "out.print"
+                    | "env.get"
             ) {
-                return self.host_input(&name, call, cx);
+                let result = self.host_input(&name, call, cx);
+                self.echo(cx.stdout)?;
+                return result;
             }
             if name == "io.dir" || name == "io.monotonic_clock" || name == "io.wall_clock" {
                 if !matches!(call.arguments.first(),Some(Value::Handle {kind,..}) if kind=="Io") {
@@ -1016,12 +1075,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary<'_> {
                 return self.host_network(&name, call.arguments, cx).map(Some);
             }
         }
-        let result = self.library.call(call, cx);
-        self.output
-            .write_all(&cx.stdout[self.written..])
-            .map_err(|e| Error::Unavailable(format!("stdout: {e}")))?;
-        self.written = cx.stdout.len();
-        result
+        self.library.call(call, cx)
     }
     fn drop_handle(
         &mut self,
@@ -1032,9 +1086,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary<'_> {
         if matches!(kind, "Stream" | "Listener" | "File" | "AtomicFile")
             && let Some(handle) = self.handles.remove(&id)
         {
-            self.io
-                .call(R::Close { handle })
-                .map_err(|e| Error::Unavailable(format!("network close: {e:?}")))?;
+            self.host(R::Close { handle })?;
             return Ok(());
         }
         self.library.drop_handle(kind, id, cx)

@@ -107,6 +107,10 @@ impl SimIo {
     pub fn position(&self) -> usize {
         self.position
     }
+    /// The last consumed event; its fault states a committed prefix.
+    pub fn last_event(&self) -> Option<&Event> {
+        self.position.checked_sub(1).map(|index| &self.tape[index])
+    }
 }
 impl Adapter for SimIo {
     fn replay_stderr(&self) -> Vec<u8> {

@@ -1008,8 +1008,28 @@ fn launch_impl(
         .env_clear()
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record);
-    if live.is_some() {
-        command.arg("--hirsel-run").arg(dir.join("run.json"));
+    // A live launch selects record and replay by flag; harness launches by environment.
+    match (&live, tape) {
+        (Some(_), Tape::Replay(path)) => {
+            command.arg("--hirsel-replay").arg(absolute(path)?);
+        }
+        (Some(_), Tape::Record(path)) => {
+            command
+                .arg("--hirsel-record")
+                .arg(absolute(path)?)
+                .arg("--hirsel-run")
+                .arg(dir.join("run.json"));
+        }
+        (Some(_), Tape::None) => {
+            command.arg("--hirsel-run").arg(dir.join("run.json"));
+        }
+        (None, Tape::None) => {}
+        (None, Tape::Record(path)) => {
+            command.env("HIRSEL_RT_TAPE", path);
+        }
+        (None, Tape::Replay(path)) => {
+            command.env("HIRSEL_RT_REPLAY", path);
+        }
     }
     if !toolchain.wrapper.is_empty() {
         command
@@ -1022,26 +1042,16 @@ fn launch_impl(
     if diagnostic {
         command.env("HIRSEL_RT_DIAGNOSTIC", "1");
     }
-    match tape {
-        Tape::None => {}
-        Tape::Record(path) => {
-            command.env("HIRSEL_RT_TAPE", path);
-        }
-        Tape::Replay(path) => {
-            command.env("HIRSEL_RT_REPLAY", path);
-        }
-    }
     let output = if let Some(live) = live {
-        run_live(
-            &mut command,
-            live.run
+        // A replay reads no host input.
+        let stdin = !matches!(tape, Tape::Replay(_))
+            && live
+                .run
                 .record()
                 .io
                 .as_ref()
-                .is_some_and(|io| io.stdin.is_some()),
-            live.stdout,
-            live.stderr,
-        )?
+                .is_some_and(|io| io.stdin.is_some());
+        run_live(&mut command, stdin, live.stdout, live.stderr)?
     } else {
         bounded(&mut command, toolchain.launch_timeout)?
     };
@@ -1054,10 +1064,14 @@ fn launch_impl(
     })
 }
 
-struct LiveRun<'a> {
-    run: &'a hirsel_run_config::ValidatedRun,
-    stdout: &'a mut dyn std::io::Write,
-    stderr: &'a mut dyn std::io::Write,
+fn absolute(path: &Path) -> Result<PathBuf, NativeError> {
+    std::path::absolute(path).map_err(|e| NativeError::new(StageName::Launch, e.to_string()))
+}
+
+pub(crate) struct LiveRun<'a> {
+    pub run: &'a hirsel_run_config::ValidatedRun,
+    pub stdout: &'a mut dyn std::io::Write,
+    pub stderr: &'a mut dyn std::io::Write,
 }
 
 /// A user's server runs until it exits or is interrupted; harness timeouts remain tooling.
@@ -1066,23 +1080,10 @@ pub(crate) fn launch_live(
     target: &TargetSpec,
     toolchain: &Toolchain,
     dir: &Path,
-    run: &hirsel_run_config::ValidatedRun,
-    stdout: &mut dyn std::io::Write,
-    stderr: &mut dyn std::io::Write,
+    tape: Tape<'_>,
+    live: LiveRun<'_>,
 ) -> Result<Launched, NativeError> {
-    launch_impl(
-        executable,
-        target,
-        toolchain,
-        dir,
-        false,
-        Tape::None,
-        Some(LiveRun {
-            run,
-            stdout,
-            stderr,
-        }),
-    )
+    launch_impl(executable, target, toolchain, dir, false, tape, Some(live))
 }
 fn run_live(
     command: &mut Command,

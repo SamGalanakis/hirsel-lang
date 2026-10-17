@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] | --replay <tape>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
 
 const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
 
@@ -30,7 +30,7 @@ enum Command {
     },
     Run {
         file: OsString,
-        record: Option<(bool, OsString)>,
+        launch: Option<Launch>,
         native: bool,
         proofs: Proofs,
         max_steps: u64,
@@ -40,6 +40,36 @@ enum Command {
         flag: Option<&'static str>,
         file: OsString,
     },
+}
+
+/// A host launch: a run record or grants template, optionally recording its tape, or
+/// the replay of a tape, which binds its own run.
+enum Launch {
+    Live {
+        grants: bool,
+        config: OsString,
+        record: Option<OsString>,
+    },
+    Replay(OsString),
+}
+impl Launch {
+    fn host(&self) -> hirsel_driver::HostLaunch<'_> {
+        match self {
+            Self::Live {
+                grants,
+                config,
+                record,
+            } => hirsel_driver::HostLaunch::Live {
+                config: if *grants {
+                    hirsel_driver::LaunchConfig::Grants(Path::new(config))
+                } else {
+                    hirsel_driver::LaunchConfig::Record(Path::new(config))
+                },
+                record: record.as_deref().map(Path::new),
+            },
+            Self::Replay(tape) => hirsel_driver::HostLaunch::Replay(Path::new(tape)),
+        }
+    }
 }
 
 /// `--proofs <sidecar>` and the checkers `--trust` names (PS-12, PS-15).
@@ -138,7 +168,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 _ => "fmt",
             };
             if name == "run" {
+                let mut config = None;
                 let mut record = None;
+                let mut replay = None;
                 let mut native = false;
                 let mut simulation = None;
                 let mut max_steps = None;
@@ -151,9 +183,11 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         }
                         Long("trust") => proofs.trust(args.value()?)?,
                         Long("native") if !native => native = true,
-                        Long("run" | "grants") if record.is_none() => {
-                            record = Some((matches!(arg, Long("grants")), args.value()?));
+                        Long("run" | "grants") if config.is_none() => {
+                            config = Some((matches!(arg, Long("grants")), args.value()?));
                         }
+                        Long("record") if record.is_none() => record = Some(args.value()?),
+                        Long("replay") if replay.is_none() => replay = Some(args.value()?),
                         Long("max-steps") if max_steps.is_none() => {
                             max_steps = Some(
                                 args.value()
@@ -182,10 +216,26 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     return Err("--proofs requires --native".into());
                 }
                 let max_steps = max_steps.unwrap_or(DEFAULT_RUN_MAX_STEPS);
-                if let Some(config) = simulation {
-                    if native || record.is_some() {
+                let launch = match (config, record, replay) {
+                    (None, None, None) => None,
+                    (Some((grants, config)), record, None) => Some(Launch::Live {
+                        grants,
+                        config,
+                        record,
+                    }),
+                    (None, None, Some(tape)) => Some(Launch::Replay(tape)),
+                    (None, Some(_), _) => return Err("--record requires --run or --grants".into()),
+                    (Some(_), _, Some(_)) => {
                         return Err(
-                            "--simulation cannot combine with --native, --run or --grants".into(),
+                            "--replay binds its recorded run: it takes no --run, --grants or --record"
+                                .into(),
+                        );
+                    }
+                };
+                if let Some(config) = simulation {
+                    if native || launch.is_some() {
+                        return Err(
+                            "--simulation cannot combine with --native, --run, --grants, --record or --replay".into(),
                         );
                     }
                     Command::Simulation {
@@ -196,7 +246,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 } else {
                     Command::Run {
                         file,
-                        record,
+                        launch,
                         native,
                         proofs,
                         max_steps,
@@ -329,7 +379,7 @@ fn execute(args: Vec<OsString>) -> u8 {
         }
         Command::Run {
             file,
-            record,
+            launch,
             native: true,
             proofs,
             max_steps: _,
@@ -343,13 +393,7 @@ fn execute(args: Vec<OsString>) -> u8 {
             // program yet is a tool outcome (exit 2).
             return match hirsel_driver::native::run_path_native_with_config(
                 Path::new(&file),
-                record.as_ref().map(|(grants, path)| {
-                    if *grants {
-                        hirsel_driver::LaunchConfig::Grants(Path::new(path))
-                    } else {
-                        hirsel_driver::LaunchConfig::Record(Path::new(path))
-                    }
-                }),
+                launch.as_ref().map(Launch::host),
                 evidence.as_ref(),
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
@@ -365,23 +409,24 @@ fn execute(args: Vec<OsString>) -> u8 {
         }
         Command::Run {
             file,
-            record,
+            launch,
             native: false,
             proofs: _,
             max_steps,
         } => {
-            return run_result(hirsel_driver::run_path_with_config(
-                Path::new(&file),
-                record.as_ref().map(|(grants, path)| {
-                    if *grants {
-                        hirsel_driver::LaunchConfig::Grants(Path::new(path))
-                    } else {
-                        hirsel_driver::LaunchConfig::Record(Path::new(path))
-                    }
-                }),
-                max_steps,
-                &mut std::io::stdout().lock(),
-            ));
+            return run_result(match &launch {
+                Some(launch) => {
+                    hirsel_driver::run_path_on_host(Path::new(&file), launch.host(), max_steps)
+                }
+                // Without a record the simulated world grants no host authority.
+                None => hirsel_driver::run_path_with_step_limit(
+                    Path::new(&file),
+                    hirsel_engine::SimulationConfig::default(),
+                    max_steps,
+                    &mut std::io::stdout().lock(),
+                    &mut std::io::stderr().lock(),
+                ),
+            });
         }
         Command::Source {
             command,

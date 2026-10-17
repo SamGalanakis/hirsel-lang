@@ -23,40 +23,37 @@ pub fn run_path_native(
     run_path_native_with_config(path, None, None, stdout, stderr)
 }
 
-/// `run_path_native` with a launch record and PS-12 evidence; the proof
-/// report goes to `stderr` before the program runs.
+/// `run_path_native` with a host launch and PS-12 evidence; the proof report goes to
+/// `stderr` before the program runs. Record and replay pass to the executable as
+/// `--hirsel-record` and `--hirsel-replay`; the driver binds the run first, so a
+/// recording of other code refuses before building.
 pub fn run_path_native_with_config(
     path: &Path,
-    record: Option<crate::LaunchConfig<'_>>,
+    launch: Option<crate::HostLaunch<'_>>,
     evidence: Option<&super::Evidence>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let mut loaded = crate::load_program(path)?;
     loaded.check_for_execution()?;
-    let admitted = if let Some(record) = record {
-        let signature = crate::launch_signature(&mut loaded)?;
-        let revision = loaded
-            .engine
-            .semantic_program_revision(&loaded.entry)
-            .map_err(|e| loaded.error(e))?;
-        let requested = record
-            .read(&revision)
-            .map_err(|e| ToolError::Runtime(e.to_string()))?;
-        let mut host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
-        Some(
-            hirsel_engine::admit_run(
-                &signature,
-                &revision,
-                hirsel_run_config::LaunchKind::Main,
-                Some(&requested),
-                &mut host,
-                crate::admission_time()?,
-            )
-            .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?,
-        )
-    } else {
-        None
+    let host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
+    let host = match launch {
+        Some(crate::HostLaunch::Live { config, record }) => {
+            let live = crate::HostLaunch::Live {
+                config,
+                record: None,
+            };
+            let bound = crate::bind_host_run(&mut loaded, live, host)?;
+            Some((
+                bound.run().clone(),
+                record.map_or(super::link::Tape::None, super::link::Tape::Record),
+            ))
+        }
+        Some(launch @ crate::HostLaunch::Replay(tape)) => {
+            let bound = crate::bind_host_run(&mut loaded, launch, host)?;
+            Some((bound.run().clone(), super::link::Tape::Replay(tape)))
+        }
+        None => None,
     };
     let entry = loaded.entry;
     let mut engine = loaded.engine;
@@ -88,7 +85,7 @@ pub fn run_path_native_with_config(
     Ok(run(
         &validated,
         &entry,
-        admitted.as_ref().map(|run| run.run()),
+        host.as_ref().map(|(run, tape)| (run, *tape)),
         proofs.as_ref(),
         stdout,
         stderr,
@@ -126,11 +123,12 @@ pub fn run_path_native_with_config(
 fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
     entry: &hirsel_engine::DefPath,
-    run: Option<&hirsel_run_config::ValidatedRun>,
+    host: Option<(&hirsel_run_config::ValidatedRun, super::link::Tape<'_>)>,
     proofs: Option<&super::Proofs>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Observation, NativeError> {
+    let run = host.map(|(run, _)| run);
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let mut options = Options::new(target.clone());
     if let Some(proofs) = proofs {
@@ -154,15 +152,18 @@ fn run(
         let executable = super::link::link_objects_with_run(
             &program, entry, &objects, &toolchain, &scratch, run,
         )?;
-        let launched = if let Some(run) = run {
+        let launched = if let Some((run, tape)) = host {
             super::link::launch_live(
                 &executable,
                 &target,
                 &toolchain,
                 &scratch,
-                run,
-                stdout,
-                stderr,
+                tape,
+                super::link::LiveRun {
+                    run,
+                    stdout,
+                    stderr,
+                },
             )?
         } else {
             let launched = super::link::launch(&executable, &target, &toolchain, &scratch, false)?;

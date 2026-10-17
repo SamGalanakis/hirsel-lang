@@ -127,7 +127,7 @@ fn loopback_recording_replays_without_sockets() {
     let (rules, port, tape, chunks) = record_exchange();
     // The server is gone: replay must not touch the network at all.
     let text = render_tape(&tape).unwrap();
-    assert!(text.starts_with("hirsel-io-tape 4\n"));
+    assert!(text.starts_with("hirsel-io-tape 5\n"));
     let parsed = parse_tape(&text).unwrap();
     assert_eq!(parsed, tape);
     let mut sim = replay(&rules, parsed);
@@ -844,14 +844,14 @@ fn tape_v4_round_trips_every_network_event_and_other_versions_are_refused() {
     let text = render_tape(&events).unwrap();
     assert_eq!(parse_tape(&text).unwrap(), events);
 
-    assert!(parse_tape("hirsel-io-tape 3\n").is_err());
-    assert!(parse_tape("hirsel-io-tape 5\n").is_err());
+    assert!(parse_tape("hirsel-io-tape 4\n").is_err());
+    assert!(parse_tape("hirsel-io-tape 6\n").is_err());
     // Exactly one spelling of each value.
     for bad in [
-        "hirsel-io-tape 4\nnet_read 2 3 01 -> net_bytes ok \n",
-        "hirsel-io-tape 4\nlisten 2 [0::1]:80 -> net_handle ok 3\n",
-        "hirsel-io-tape 4\nnet_read 2 3 1 -> net_bytes err not_granted\n",
-        "hirsel-io-tape 4\nnet_read 2 3 1 -> net_unit ok x\n",
+        "hirsel-io-tape 5\nnet_read 2 3 01 -> net_bytes ok \n",
+        "hirsel-io-tape 5\nlisten 2 [0::1]:80 -> net_handle ok 3\n",
+        "hirsel-io-tape 5\nnet_read 2 3 1 -> net_bytes err not_granted\n",
+        "hirsel-io-tape 5\nnet_read 2 3 1 -> net_unit ok x\n",
     ] {
         assert!(parse_tape(bad).is_err(), "{bad}");
     }

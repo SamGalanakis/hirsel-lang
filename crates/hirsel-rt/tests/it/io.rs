@@ -614,6 +614,7 @@ fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malfo
         hash_seed: 0,
         random_seed: 0,
         test_seed: u64::MAX,
+        binding: None,
         tree: initial(),
         events,
     };

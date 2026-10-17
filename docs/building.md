@@ -82,6 +82,39 @@ artifact with the pinned qemu and cross sysroot:
   --hirsel-run /absolute/path/run.json
 ```
 
+## Record and replay a run
+
+A host run can stream every capability input it received (file, stdin and Env reads,
+socket exchanges, clock samples and the outcome of every write) to a tape, and the tape
+replays that run deterministically with no grants and no host effects
+([DET-1](spec/determinism.md#det-1-contract)). Capture a failing run, then replay it as
+often as needed, after the files, stdin and peers are gone:
+
+```sh
+hirsel run app.hir --grants grants.json --record failing.tape < input.txt
+hirsel run app.hir --replay failing.tape              # same stdout, stderr and exit
+hirsel run app.hir --replay failing.tape --native     # the same tape, compiled
+```
+
+Executables take the same inputs: `--hirsel-record <tape>` precedes their launch input,
+and `--hirsel-replay <tape>` stands alone:
+
+```sh
+./app --hirsel-record failing.tape --hirsel-grants grants.json argument-one
+./app --hirsel-replay failing.tape
+```
+
+`--record` combines with `--run` or `--grants`; `--replay` takes neither, because the tape
+binds the canonical run record and admission time it was recorded with. The tape is one
+format for both engines: a run recorded interpreted replays compiled and the other way
+round. Replay refuses before entry a tape bound to a different semantic program revision,
+entry or root set, so editing a function body invalidates its recordings; while it
+runs, a request that differs from the next recorded one, a missing event or an unconsumed
+event refuses it after the output it confirmed. A tape cut short (no `complete` trailer)
+never replays. The tape path must lie outside every granted directory. Tapes hold the run
+record, including granted Env values, and every byte read or written: treat them as
+secrets.
+
 ## Layout
 
 - `docs/spec/` is the specification, starting at `docs/spec/index.md`. Rule IDs

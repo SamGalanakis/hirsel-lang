@@ -7,7 +7,12 @@
 //! (borrow, take or mut). The process exits 0 for `Ok`, 1 for `Error` and [`EXIT_FAILURE`] for a language
 //! failure, with nothing printed beyond the program's own output.
 //!
-//! Grants are the launcher's explicit inputs, read once here and never by a semantic kernel:
+//! A production launch takes its grants from a run record (`--hirsel-run`, or a template
+//! with `--hirsel-grants`), optionally preceded by `--hirsel-record <tape>`, or replays a
+//! tape alone with `--hirsel-replay <tape>`; the tape binds its own run record.
+//!
+//! Harness launches without a record take explicit inputs from the environment, read once
+//! here and never by a semantic kernel:
 //! `HIRSEL_RT_ROOT` (the granted directory, default the working directory),
 //! `HIRSEL_RT_DIAGNOSTIC` (poisoning and header checks) and `HIRSEL_RT_OBSERVATION` (a file
 //! that receives the observation record below), `HIRSEL_RT_TAPE` (a file that receives the
@@ -86,7 +91,7 @@ pub type Entry = unsafe extern "C" fn(
 ) -> u8;
 
 /// The tape file's first line.
-pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 4";
+pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 5";
 
 /// An adapter the launcher still holds after binding it.
 struct Shared<A>(Rc<RefCell<A>>);
@@ -512,8 +517,50 @@ pub struct Recording {
     pub hash_seed: u64,
     pub random_seed: u64,
     pub test_seed: u64,
+    /// The admitted run record a production launch bound; harness launches have none.
+    pub binding: Option<RecordedRun>,
     pub tree: Tree,
     pub events: Vec<Event>,
+}
+/// The canonical validated run record and the admission evidence it was accepted with
+/// (DET-1): replay rebuilds every grant decision from these bytes and needs no grants.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedRun {
+    pub canonical: Vec<u8>,
+    pub admitted_at: i64,
+}
+impl Recording {
+    /// The bound run, checked against this header and its recorded admission without
+    /// consulting a clock, revocation source or host provider.
+    pub fn bound_run(
+        &self,
+    ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_config::RunRefusal> {
+        let invalid = |detail: &str| hirsel_run_config::RunRefusal::Invalid {
+            field: "recording".into(),
+            detail: detail.into(),
+        };
+        let binding = self
+            .binding
+            .as_ref()
+            .ok_or_else(|| invalid("the recording binds no run record"))?;
+        let run = hirsel_run_config::RunConfig::validate(&binding.canonical)?;
+        run.check_replay(
+            &binding.canonical,
+            self.run_identity,
+            &hirsel_run_config::AdmissionEvidence {
+                at: binding.admitted_at,
+                revocation: None,
+            },
+        )?;
+        let config = run.config();
+        if (config.hash_seed(), config.random_seed(), config.test_seed())
+            != (self.hash_seed, self.random_seed, self.test_seed)
+            || run.record().args.clone().unwrap_or_default() != self.arguments
+        {
+            return Err(invalid("the header disagrees with its run record"));
+        }
+        Ok(run)
+    }
 }
 pub fn render_recording(record: &Recording) -> Result<String, String> {
     let mut text = format!(
@@ -523,6 +570,14 @@ pub fn render_recording(record: &Recording) -> Result<String, String> {
         record.random_seed,
         record.test_seed
     );
+    if let Some(binding) = &record.binding {
+        let _ = writeln!(
+            text,
+            "run {}\nadmitted_at {}",
+            hex(&binding.canonical),
+            binding.admitted_at
+        );
+    }
     for argument in &record.arguments {
         let _ = writeln!(text, "argument {}", hex(argument.as_bytes()));
     }
@@ -580,6 +635,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
     }
     let mut run_identity = None;
     let (mut hash_seed, mut random_seed, mut test_seed) = (None, None, None);
+    let (mut run, mut admitted_at) = (None, None);
     let mut arguments = vec![];
     let mut files = std::collections::BTreeMap::new();
     let mut links = std::collections::BTreeMap::new();
@@ -609,6 +665,14 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             }
             ["test_seed", value] if test_seed.is_none() => {
                 test_seed = Some(value.parse().map_err(|_| "bad recorded test seed")?)
+            }
+            ["run", value] if run.is_none() => run = Some(bytes(value)?),
+            ["admitted_at", value] if admitted_at.is_none() => {
+                let at: i64 = value.parse().map_err(|_| "bad recorded admission time")?;
+                if at.to_string() != *value {
+                    return Err("bad recorded admission time".into());
+                }
+                admitted_at = Some(at);
             }
             ["argument", value] => arguments.push(string(value)?),
             ["directory", value] => {
@@ -676,6 +740,14 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             hash_seed: hash_seed.ok_or("missing hash seed")?,
             random_seed: random_seed.ok_or("missing random seed")?,
             test_seed: test_seed.ok_or("missing test seed")?,
+            binding: match (run, admitted_at) {
+                (Some(canonical), Some(admitted_at)) => Some(RecordedRun {
+                    canonical,
+                    admitted_at,
+                }),
+                (None, None) => None,
+                _ => return Err("a run record without its admission time".into()),
+            },
             tree,
             events,
         },
@@ -818,16 +890,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
     else {
         return refuse("invalid entry name");
     };
-    let run = match crate::standalone::select_run(
+    let selected = match crate::standalone::select(
         std::env::args_os().skip(1).collect(),
         *program,
         name,
         roots,
     ) {
-        Ok(run) => run,
+        Ok(selected) => selected,
         Err(error) => return refuse(&error.to_string()),
     };
-    let config = run.config();
+    let config = selected.run().config();
     let config = Config {
         hash_seed: config.hash_seed(),
         random_seed: config.random_seed(),
@@ -841,7 +913,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
             layouts,
             layout_count,
             &config,
-            Some(&run),
+            Some(selected),
         )
     }
 }
@@ -857,18 +929,37 @@ unsafe fn launch(
         return refuse("missing launch configuration");
     };
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    let requested = if arguments.first().is_some_and(|arg| arg == "--hirsel-run") {
-        let [_, path] = arguments.as_slice() else {
-            return refuse("expected only --hirsel-run /absolute/run.json");
-        };
-        match hirsel_run_config::RunConfig::read_path(std::path::Path::new(path)) {
-            Ok(run) => Some(run),
-            Err(e) => return refuse(&e.to_string()),
-        }
-    } else {
-        None
+    let read = |path: &std::ffi::OsString| {
+        hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))
+            .map_err(|e| e.to_string())
     };
-    if let Some(run) = &requested {
+    // Without a production flag, process argv is the harness launch's Args.
+    let requested = match arguments.iter().map(|a| a.to_str()).collect::<Vec<_>>()[..] {
+        [Some("--hirsel-run"), _] => read(&arguments[1]).map(|run| {
+            Some(crate::standalone::Selected::Live { run, tape: None })
+        }),
+        [Some("--hirsel-record"), _, Some("--hirsel-run"), _] => read(&arguments[3]).map(|run| {
+            Some(crate::standalone::Selected::Live {
+                run,
+                tape: Some(arguments[1].clone().into()),
+            })
+        }),
+        [Some("--hirsel-replay"), _] => {
+            crate::host_launch::replay(std::path::Path::new(&arguments[1]))
+                .map(|(io, run)| Some(crate::standalone::Selected::Replay { run, io }))
+                .map_err(|e| e.to_string())
+        }
+        [Some("--hirsel-run" | "--hirsel-record" | "--hirsel-replay"), ..] => Err(
+            "expected only [--hirsel-record <tape>] --hirsel-run /absolute/run.json or --hirsel-replay <tape>"
+                .into(),
+        ),
+        _ => Ok(None),
+    };
+    let requested = match requested {
+        Ok(requested) => requested,
+        Err(error) => return refuse(&error),
+    };
+    if let Some(run) = requested.as_ref().map(|selected| selected.run()) {
         if run.identity() != launch_config.run_identity
             || run.config().hash_seed() != launch_config.hash_seed
             || run.config().random_seed() != launch_config.random_seed
@@ -884,7 +975,7 @@ unsafe fn launch(
             layouts,
             layout_count,
             launch_config,
-            requested.as_ref(),
+            requested,
         )
     }
 }
@@ -895,32 +986,41 @@ unsafe fn execute(
     layouts: *const *const Layout,
     layout_count: u32,
     launch_config: &Config,
-    requested: Option<&hirsel_run_config::ValidatedRun>,
+    selected: Option<crate::standalone::Selected>,
 ) -> i32 {
+    let requested = selected.as_ref().map(|selected| selected.run().clone());
     let mut production_io = None;
-    if let Some(run) = requested {
+    let mut production_replay = None;
+    if let Some(selected) = selected {
         if let Launch::Roots(_, roots) = &entry {
             let roots = match crate::standalone::required_roots(*roots) {
                 Ok(roots) => roots,
                 Err(e) => return refuse(&e.to_string()),
             };
-            if let Err(e) = run.require_roots(&roots) {
+            if let Err(e) = selected.run().require_roots(&roots) {
                 return refuse(&e.to_string());
             }
         }
-        let mut host = crate::host_launch::HostGrants::new(RawStdout);
-        let now = match std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .and_then(|n| i64::try_from(n.as_nanos()).ok())
-        {
-            Some(now) => now,
-            None => return refuse("admission clock out of range"),
-        };
-        if let Err(e) = run.admit(&mut host, now) {
-            return refuse(&e.to_string());
+        match selected {
+            // A replay performs no host effect: no admission, clock or provider.
+            crate::standalone::Selected::Replay { io, .. } => production_replay = Some(io),
+            crate::standalone::Selected::Live { run, tape } => {
+                let mut host = crate::host_launch::HostGrants::new(RawStdout);
+                let now = match std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .and_then(|n| i64::try_from(n.as_nanos()).ok())
+                {
+                    Some(now) => now,
+                    None => return refuse("admission clock out of range"),
+                };
+                let admitted = match run.admit(&mut host, now) {
+                    Ok(admitted) => admitted,
+                    Err(e) => return refuse(&e.to_string()),
+                };
+                production_io = Some((host.into_io(), admitted, tape));
+            }
         }
-        production_io = Some(host.into_io());
     }
     let seed = launch_config.test_seed;
     if !(4..=RESULT_MAX).contains(&result_size) {
@@ -934,7 +1034,7 @@ unsafe fn execute(
         .iter()
         .map(|(name, file)| (*name, file))
         .collect();
-    let mut arguments = if let Some(run) = requested {
+    let mut arguments = if let Some(run) = &requested {
         run.record().args.clone().unwrap_or_default()
     } else if entry.is_zero() {
         vec![]
@@ -970,13 +1070,26 @@ unsafe fn execute(
     let mut real = None;
     let mut zero_recording = None;
     let mut replay = None;
-    let adapter: Box<dyn Adapter> = if let Some(mut io) = production_io {
+    let adapter: Box<dyn Adapter> = if let Some((mut io, admitted, tape)) = production_io {
+        if let Some(path) = tape
+            && let Err(error) =
+                crate::host_launch::record(&mut io, &admitted, &path, &output_grants)
+        {
+            return refuse(&error);
+        }
         if entry.is_test() {
             io.test_context(seed);
         }
         io.discard_history();
         let io = Rc::new(RefCell::new(io));
         real = Some(io.clone());
+        Box::new(Shared(io))
+    } else if let Some(mut io) = production_replay {
+        if entry.is_test() {
+            io.test_context(seed);
+        }
+        let io = Rc::new(RefCell::new(io));
+        replay = Some(io.clone());
         Box::new(Shared(io))
     } else {
         match std::env::var_os("HIRSEL_RT_REPLAY") {
@@ -1018,6 +1131,7 @@ unsafe fn execute(
                         hash_seed: launch_config.hash_seed,
                         random_seed: launch_config.random_seed,
                         test_seed: launch_config.test_seed,
+                        binding: None,
                         tree: initial_tree.clone(),
                         events: vec![],
                     };
@@ -1074,6 +1188,7 @@ unsafe fn execute(
                             hash_seed: launch_config.hash_seed,
                             random_seed: launch_config.random_seed,
                             test_seed: launch_config.test_seed,
+                            binding: None,
                             tree: initial_tree.clone(),
                             events: vec![],
                         };
@@ -1340,8 +1455,9 @@ impl<W: std::io::Write> RecordingWriter<W> {
     }
 }
 
-/// Unbuffered OS boundary: unlike std::io::stdout, EBADF is never suppressed.
-struct RawStdout;
+/// The process's standard output as an unbuffered OS boundary: unlike std::io::stdout,
+/// EBADF is never suppressed, so write errors reach the program as recorded outcomes.
+pub struct RawStdout;
 impl std::io::Write for RawStdout {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         // SAFETY: borrowed readable bytes; libc never retains their pointer.

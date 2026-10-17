@@ -186,48 +186,126 @@ impl LaunchConfig<'_> {
     }
 }
 
-/// Execute checked TIR with freshly admitted host grants and exact snapshots.
-pub fn run_path_with_config(
-    path: &Path,
-    record: Option<LaunchConfig<'_>>,
-    max_steps: u64,
-    stdout: &mut dyn Write,
-) -> Result<RunOutcome, ToolError> {
-    use hirsel_interp::Outcome;
-    if record.is_none() {
-        return run_path_with_step_limit(
-            path,
-            SimulationConfig::default(),
-            max_steps,
-            stdout,
-            &mut std::io::stderr().lock(),
-        );
+/// A production host launch: freshly admitted grants, optionally streaming every Io
+/// completion to a tape, or the replay of such a tape (DET-1). A replay binds the run
+/// its tape recorded, needs no grants and performs no host effect.
+#[derive(Clone, Copy)]
+pub enum HostLaunch<'a> {
+    Live {
+        config: LaunchConfig<'a>,
+        record: Option<&'a Path>,
+    },
+    Replay(&'a Path),
+}
+
+/// A host launch bound to the checked program, before entry.
+pub(crate) enum HostRun {
+    Live {
+        admitted: hirsel_run_config::AdmittedRun,
+        io: hirsel_rt::io_real::RealIo,
+        /// Present for cooperative (interpreter) admission.
+        readiness: Option<hirsel_rt::readiness::Readiness>,
+    },
+    Replay {
+        run: hirsel_run_config::ValidatedRun,
+        io: hirsel_rt::io_sim::SimIo,
+    },
+}
+impl HostRun {
+    pub(crate) fn run(&self) -> &hirsel_run_config::ValidatedRun {
+        match self {
+            Self::Live { admitted, .. } => admitted.run(),
+            Self::Replay { run, .. } => run,
+        }
     }
-    let mut program = load_program(path)?;
-    program.check_for_execution()?;
-    let signature = launch_signature(&mut program)?;
+}
+
+/// Admit fresh grants, or bind a recording, against the selected semantic revision and
+/// entry. A recording bound to other code, entry or roots refuses before entry; a live
+/// launch is admitted by `host`, whose Io writes the granted standard output.
+pub(crate) fn bind_host_run(
+    program: &mut LoadedProgram,
+    launch: HostLaunch<'_>,
+    mut host: hirsel_rt::host_launch::HostGrants,
+) -> Result<HostRun, ToolError> {
+    use hirsel_run_config::LaunchKind;
+    let signature = launch_signature(program)?;
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
         .map_err(|e| program.error(e))?;
-    let requested = record
-        .map(|record| record.read(&revision))
-        .transpose()
-        .map_err(|e| ToolError::Runtime(e.to_string()))?;
-    let mut host = hirsel_rt::host_launch::HostGrants::cooperative(std::io::sink());
-    let admitted = hirsel_engine::admit_run(
-        &signature,
-        &revision,
-        hirsel_run_config::LaunchKind::Main,
-        requested.as_ref(),
-        &mut host,
-        admission_time()?,
-    )
-    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-    let config = admitted.run().record();
-    let run = hirsel_tir::RunConfiguration {
+    match launch {
+        HostLaunch::Live { config, record } => {
+            let requested = config
+                .read(&revision)
+                .map_err(|e| ToolError::Runtime(e.to_string()))?;
+            let admitted = hirsel_engine::admit_run(
+                &signature,
+                &revision,
+                LaunchKind::Main,
+                Some(&requested),
+                &mut host,
+                admission_time()?,
+            )
+            .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            let (mut io, readiness) = host.into_parts();
+            if let Some(tape) = record {
+                hirsel_rt::host_launch::record(&mut io, &admitted, tape, &[])
+                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            }
+            Ok(HostRun::Live {
+                admitted,
+                io,
+                readiness,
+            })
+        }
+        HostLaunch::Replay(tape) => {
+            let refused = |e: hirsel_run_config::RunRefusal| {
+                ToolError::Runtime(format!("replay refused: {e}"))
+            };
+            let (io, run) = hirsel_rt::host_launch::replay(tape).map_err(refused)?;
+            let roots =
+                hirsel_engine::entry_roots(&signature, LaunchKind::Main).map_err(refused)?;
+            run.check_revision(&revision, LaunchKind::Main)
+                .and_then(|()| run.require_roots(&roots))
+                .map_err(refused)?;
+            Ok(HostRun::Replay { run, io })
+        }
+    }
+}
+
+/// Execute checked TIR on the host: live with admitted grants and exact snapshots,
+/// writing the process's standard streams, or replaying a recording without host effects.
+pub fn run_path_on_host(
+    path: &Path,
+    launch: HostLaunch<'_>,
+    max_steps: u64,
+) -> Result<RunOutcome, ToolError> {
+    use hirsel_interp::Outcome;
+    let mut program = load_program(path)?;
+    program.check_for_execution()?;
+    let signature = launch_signature(&mut program)?;
+    let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
+    let (run, io, readiness) = match bind_host_run(&mut program, launch, host)? {
+        HostRun::Live {
+            admitted,
+            io,
+            readiness,
+        } => (
+            admitted.run().clone(),
+            network::HostIo::Live(io),
+            readiness.expect("cooperative admission"),
+        ),
+        // A replay never parks: its completions are recorded.
+        HostRun::Replay { run, io } => (
+            run,
+            network::HostIo::Replay(io),
+            hirsel_rt::readiness::Readiness::default(),
+        ),
+    };
+    let tir_run = hirsel_tir::RunConfiguration {
         entry: program.entry.clone(),
-        hash_seed: config.inputs.hash_seed,
+        hash_seed: run.record().inputs.hash_seed,
         inputs: vec![],
     };
     let mut runtime = program
@@ -235,8 +313,7 @@ pub fn run_path_with_config(
         .runtime_types()
         .map_err(|e| program.error(e))?;
     runtime.trace_mode = hirsel_interp::TraceMode::Effects;
-    let (io, readiness) = host.into_cooperative();
-    let mut operations = network::HostLibrary::new(&run, admitted.run(), io, readiness, stdout)
+    let mut operations = network::HostLibrary::new(&tir_run, &run, io, readiness)
         .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
     let args = operations
         .library
@@ -246,7 +323,7 @@ pub fn run_path_with_config(
     let execution = hirsel_interp::run_with_runtime(
         &mut program.engine,
         &sources,
-        &run,
+        &tir_run,
         args,
         hirsel_interp::Limits {
             steps: max_steps,
@@ -254,8 +331,16 @@ pub fn run_path_with_config(
         },
         &mut operations,
         &runtime,
-    )
-    .map_err(|e| match e.error {
+    );
+    let replay = matches!(operations.io, network::HostIo::Replay(_));
+    if let Some(refusal) = operations.refused.take() {
+        return Err(ToolError::Runtime(if replay {
+            format!("replay refused: {refusal}")
+        } else {
+            format!("host Io: {refusal}")
+        }));
+    }
+    let execution = execution.map_err(|e| match e.error {
         hirsel_interp::Error::Unavailable(_) => ToolError::Query {
             error: hirsel_types::QueryError::NotImplemented,
             phase: Some(hirsel_engine::QueryKind::Interpret),
@@ -268,6 +353,14 @@ pub fn run_path_with_config(
         },
         error => ToolError::Runtime(format!("interpret: {error:?}")),
     })?;
+    match &mut operations.io {
+        network::HostIo::Live(io) => io
+            .finish_recording()
+            .map_err(|e| ToolError::Runtime(format!("the Io tape: {e}")))?,
+        network::HostIo::Replay(io) => io
+            .finish()
+            .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?,
+    }
     Ok(match execution.outcome {
         Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
         Outcome::Failed(f) => RunOutcome::Failure {

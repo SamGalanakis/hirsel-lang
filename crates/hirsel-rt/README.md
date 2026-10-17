@@ -289,8 +289,8 @@ granted on `HIRSEL_RT_ROOT`, and exits 0 for `Ok`, 1 for `Error`, 2 for a
 language failure and 3 for a refused launch. With `HIRSEL_RT_OBSERVATION` it
 writes the observation record (`hirsel-observation 1`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
-audit in a diagnostic or measurement archive, or `audit unavailable` in production). `HIRSEL_RT_TAPE` receives the real Io completion tape
-(`hirsel-io-tape 4`: run identity digest, independent hash/Random/Test seeds, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
+audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
+(`hirsel-io-tape 5`: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
 Io that accepts exactly a recorded tape and refuses a mismatch, a missing event
 and an unconsumed one. Each completion is appended and flushed before delivery; an abort preserves its confirmed prefix. A missing trailer marks an unknown suffix and refuses complete replay or any resumability claim. Native stdout uses raw OS writes, so EPIPE and EBADF become recorded OutputError outcomes; generated main ignores SIGPIPE before entry. Replay divergence exits 3 with confirmed stdout, including during handle cleanup.
 
@@ -559,6 +559,20 @@ always uses admitted host grants and never the conformance fixture profile.
 executable's embedded program and entry, then follows the same validation,
 argv snapshot and host admission path as `--hirsel-run`.
 
+Production record and replay are explicit launch inputs, never environment variables.
+`--hirsel-record <tape>` before either launch input streams the admitted run's tape
+(`host_launch::record`): the header binds the canonical record, its admission time and
+the mounts' initial tree before entry, and each completion is flushed before delivery.
+The tape must lie outside every granted mount and inherited output file.
+`--hirsel-replay <tape>` alone replays it (`host_launch::replay`): it parses the tape,
+checks its run record against the header and recorded admission (`Recording::bound_run`),
+checks program, entry, launch kind and roots against the executable, then runs SimIo
+with the record's projections, mounts, Env snapshot, clocks and Net rules. Replay needs
+no grants and acquires no host resource; a recording of other code refuses before entry.
+Source-run launches (`hirsel run --native`) accept the same two spellings beside
+`--hirsel-run`, and the interpreter's host launch uses the same helpers, so a tape
+recorded by either engine replays in the other.
+
 Stdin and stderr are independent Io projections. RealIo pins explicitly supplied
 Read/Write providers, retries interrupted reads, captures accepted stderr prefixes
 and records every typed stdin completion. SimIo replays those completions without
@@ -592,5 +606,5 @@ DNS runs outside the evaluator and signals a descriptor; relative timeouts retai
 deadline across readiness retries. Partially published writes/TLS exchanges cannot be
 reported as effect-free cancellation. HostNet remains the native blocking provider.
 `HostGrants::cooperative` admits `tasks.cooperative@1` for the interpreter and installs
-CooperativeNet and CooperativeStdin over one Readiness (`into_cooperative`);
+CooperativeNet and CooperativeStdin over one Readiness (`into_parts`);
 `HostGrants::new` refuses Tasks until native scheduling supports that contract.

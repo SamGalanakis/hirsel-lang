@@ -13,6 +13,7 @@ fn header() -> Recording {
         hash_seed: 2,
         random_seed: 3,
         test_seed: 5,
+        binding: None,
         tree: Tree::new(BTreeMap::new()).unwrap(),
         events: vec![],
     }
@@ -294,4 +295,58 @@ fn link_metadata_round_trips_without_flattening_or_admitting_a_collision() {
         ))
         .is_err()
     );
+}
+
+/// A production recording binds its admitted run; replay trusts no header field the
+/// record does not agree with.
+#[test]
+fn bound_runs_round_trip_and_refuse_a_header_that_disagrees() {
+    use hirsel_rt::launch::{RecordedRun, render_recording};
+    use hirsel_run_config::{LaunchKind, RunConfig, RunRefusal};
+    let mut record = RunConfig::empty([1; 32], "replayed@1/main".into(), LaunchKind::Main);
+    record.inputs.random_seed = 3;
+    record.args = Some(vec!["a".into()]);
+    let run = record.validated().unwrap();
+    let mut recording = header();
+    recording.run_identity = run.identity();
+    (
+        recording.hash_seed,
+        recording.random_seed,
+        recording.test_seed,
+    ) = (0, 3, 0);
+    recording.arguments = vec!["a".into()];
+    recording.binding = Some(RecordedRun {
+        canonical: run.canonical().to_vec(),
+        admitted_at: -5,
+    });
+    let text = render_recording(&recording).unwrap();
+    let parsed = parse_recording(&text).unwrap();
+    assert_eq!(parsed, recording);
+    assert_eq!(parsed.bound_run().unwrap(), run);
+    let disagrees = |change: fn(&mut Recording)| {
+        let mut forged = recording.clone();
+        change(&mut forged);
+        forged.bound_run()
+    };
+    for change in [
+        (|r: &mut Recording| r.random_seed = 4) as fn(&mut Recording),
+        |r| r.arguments.clear(),
+    ] {
+        assert!(
+            matches!(disagrees(change), Err(RunRefusal::Invalid { .. })),
+            "{:?}",
+            disagrees(change)
+        );
+    }
+    assert!(matches!(
+        disagrees(|r| r.run_identity = [0; 32]),
+        Err(RunRefusal::Binding { .. })
+    ));
+    assert!(matches!(
+        disagrees(|r| r.binding = None),
+        Err(RunRefusal::Invalid { .. })
+    ));
+    // The record and its admission time come together.
+    assert!(parse_recording(&text.replace("admitted_at -5\n", "")).is_err());
+    assert!(parse_recording(&text.replace("admitted_at -5\n", "admitted_at -05\n")).is_err());
 }

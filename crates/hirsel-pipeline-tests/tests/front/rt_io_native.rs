@@ -452,6 +452,7 @@ fn partial_write_replay(
                             hash_seed: config.hash_seed(),
                             random_seed: config.random_seed(),
                             test_seed: config.test_seed(),
+                            binding: None,
                             tree: tree.clone(),
                             events: events.clone(),
                         })
