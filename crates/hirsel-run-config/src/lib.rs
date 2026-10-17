@@ -21,6 +21,8 @@ pub const IDENTITY_DOMAIN: &str = "hirsel.run-config.v1";
 /// Execution origin never changes the requested provider contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderContract {
+    StdinBytes,
+    StderrBytes,
     StdoutBytes,
     RandomSplitMix64,
     MonotonicNanoseconds,
@@ -29,7 +31,9 @@ pub enum ProviderContract {
     NetScript,
 }
 impl ProviderContract {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
+        Self::StdinBytes,
+        Self::StderrBytes,
         Self::StdoutBytes,
         Self::RandomSplitMix64,
         Self::MonotonicNanoseconds,
@@ -39,6 +43,8 @@ impl ProviderContract {
     ];
     pub const fn name(self) -> &'static str {
         match self {
+            Self::StdinBytes => "stdin.bytes@1",
+            Self::StderrBytes => "stderr.bytes@1",
             Self::StdoutBytes => "stdout.bytes@1",
             Self::RandomSplitMix64 => "random.splitmix64@1",
             Self::MonotonicNanoseconds => "clock.monotonic.ns@1",
@@ -92,6 +98,8 @@ pub struct Mount {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IoGrants {
+    pub stdin: Option<String>,
+    pub stderr: Option<String>,
     pub stdout: Option<String>,
     pub tasks: Option<String>,
     pub monotonic_clock: Option<String>,
@@ -302,6 +310,8 @@ impl RunConfig {
         }
         if let Some(io) = &mut record.io {
             for (field, value) in [
+                ("io.stdin", &io.stdin),
+                ("io.stderr", &io.stderr),
                 ("io.stdout", &io.stdout),
                 ("io.tasks", &io.tasks),
                 ("io.monotonic_clock", &io.monotonic_clock),
@@ -386,6 +396,8 @@ impl ValidatedRun {
             return BTreeSet::new();
         };
         [
+            ("stdin", io.stdin.is_some()),
+            ("stderr", io.stderr.is_some()),
             ("stdout", io.stdout.is_some()),
             ("tasks", io.tasks.is_some()),
             ("net", io.net.is_some()),
@@ -700,6 +712,8 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
     }
     if let Some(io) = &record.io {
         for (field, value, expected) in [
+            ("io.stdin", &io.stdin, Some(ProviderContract::StdinBytes)),
+            ("io.stderr", &io.stderr, Some(ProviderContract::StderrBytes)),
             ("io.stdout", &io.stdout, Some(ProviderContract::StdoutBytes)),
             ("io.tasks", &io.tasks, None),
             (

@@ -32,7 +32,8 @@ pub struct SimulationConfig {
     /// Virtual selectors and inherited operation rights; independent of host designators.
     pub mounts: BTreeMap<String, Access>,
     pub args: Vec<String>,
-    pub env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, Option<String>>,
+    pub stdin: Vec<u8>,
     pub files: BTreeMap<String, Vec<u8>>,
     pub directories: BTreeSet<String>,
     pub links: BTreeMap<String, String>,
@@ -55,12 +56,13 @@ impl Default for SimulationConfig {
                 .map(str::to_owned)
                 .collect(),
             mounts: BTreeMap::from([(String::new(), Access::ReadWrite)]),
-            projections: ["stdout", "tasks", "net", "random", "dir"]
+            projections: ["stdin", "stderr", "stdout", "tasks", "net", "random", "dir"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
             args: vec![],
             env: BTreeMap::new(),
+            stdin: Vec::new(),
             files: BTreeMap::new(),
             directories: [String::new()].into_iter().collect(),
             links: BTreeMap::new(),
@@ -107,6 +109,8 @@ pub struct Simulation {
     pub(super) net_streams: BTreeMap<u64, super::net::ScriptStream>,
     pub config: SimulationConfig,
     pub events: Vec<CapabilityEvent>,
+    pub stderr: Vec<u8>,
+    pub(crate) stdin_position: usize,
     pub(crate) grants: BTreeMap<u64, Grant>,
     pub(crate) trees: BTreeMap<u64, (BTreeSet<String>, BTreeMap<String, Vec<u8>>)>,
     pub(crate) resolved_directories: BTreeMap<u64, String>,
@@ -121,6 +125,7 @@ pub struct Simulation {
 /// Final fake filesystem and surviving logical grants, including independent trees.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedSimulation {
+    pub stderr: Vec<u8>,
     pub trees: BTreeMap<u64, (BTreeSet<String>, BTreeMap<String, Vec<u8>>)>,
     pub handles: BTreeMap<u64, ObservedGrant>,
 }
@@ -195,11 +200,18 @@ impl Simulation {
             })
             .collect();
         ObservedSimulation {
+            stderr: self.stderr.clone(),
             trees: self.trees.clone(),
             handles,
         }
     }
     pub fn new(run: &RunConfiguration, mut config: SimulationConfig) -> Result<Self, Error> {
+        config.env = hirsel_run_config::snapshot_env(
+            std::mem::take(&mut config.env)
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.map(Into::into))),
+        )
+        .map_err(|error| invalid(format!("simulation environment: {error}")))?;
         // Validate snapshot entry names before granting anything. Link targets
         // remain data and are checked at the confined operation boundary.
         let mut files = BTreeMap::new();
@@ -253,6 +265,8 @@ impl Simulation {
             net_streams: BTreeMap::new(),
             config,
             events: vec![],
+            stderr: Vec::new(),
+            stdin_position: 0,
             grants: BTreeMap::new(),
             trees: BTreeMap::from([(0, (dirs, files))]),
             resolved_directories: BTreeMap::new(),
@@ -483,6 +497,29 @@ impl Simulation {
     pub(crate) fn fault(&mut self, op: &str) -> Option<Fault> {
         self.config.faults.get_mut(op).and_then(VecDeque::pop_front)
     }
+    /// Peek a recorded input only after the operation has checked its current authority.
+    /// record() accepts and advances it after the completion shape has been validated.
+    pub(crate) fn replay_output(
+        &self,
+        capability: &str,
+        operation: &str,
+        input: &[u8],
+    ) -> Result<Option<&[u8]>, Error> {
+        if self.replay.is_empty() {
+            return Ok(None);
+        }
+        let event = self
+            .replay
+            .get(self.replay_index)
+            .ok_or_else(|| invalid("missing capability replay event"))?;
+        if event.capability != DefPath::core(capability)
+            || event.operation != operation
+            || event.input != input
+        {
+            return Err(invalid("capability replay request mismatch"));
+        }
+        Ok(Some(&event.output))
+    }
     /// Event payloads are length-framed UTF-8/bits, with no spans/host identities.
     pub(crate) fn record(
         &mut self,
@@ -536,7 +573,7 @@ impl Simulation {
             Ok(())
         }
     }
-    /// Typed random/env kernels remain unpublished until their ledger cutover.
+    /// Typed random kernel remains unpublished until its ledger cutover.
     pub fn random_u64(
         &mut self,
         random: &Value,
@@ -558,21 +595,6 @@ impl Simulation {
         )?;
         self.state = next_state;
         Ok(z)
-    }
-    pub fn env_get(
-        &mut self,
-        env: &Value,
-        key: &str,
-        context: &mut OperationContext<'_>,
-    ) -> Result<Option<String>, Error> {
-        self.id(env, "Env")?;
-        let v = self.config.env.get(key).cloned();
-        let mut out = vec![u8::from(v.is_some())];
-        if let Some(v) = &v {
-            out.extend_from_slice(v.as_bytes());
-        }
-        self.record("Env", "env.get", key.as_bytes().to_vec(), out, context)?;
-        Ok(v)
     }
     pub fn grant_test(&mut self) -> Value {
         self.handle("Test", Grant::Root("Test".into()))

@@ -1,0 +1,8 @@
+// rule: CAP-1
+// expect: run
+// stdout: stdout
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = err.print(io.stderr(rt)?, "stderr\n")
+  let _ = out.print(io.stdout(rt)?, "stdout\n")
+  Ok(())
+}

@@ -48,6 +48,8 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "Env",
         "Unsafe",
         "Dir",
+        "Stdin",
+        "Stderr",
         "Stdout",
         "MonotonicClock",
         "WallClock",
@@ -163,6 +165,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "Send(Bytes)|Expect(Bytes)|Stall()|Close()|Reset()|Truncate()",
         ),
         ("GrantError", "", "NotGranted()"),
+        (
+            "InputError",
+            "",
+            "InputFault(u32)|Canceled(CancelCause)|InvalidInput()|InvalidUtf8()",
+        ),
+        ("EnvError", "", "NotGranted()|InvalidUtf8()"),
         ("OutputError", "", "OutputFault(u32)|Canceled(CancelCause)"),
         ("ClockError", "", "Unavailable()|OutOfRange()"),
         ("ArgError", "", "MissingArgument()|InvalidUtf8()"),
@@ -749,6 +757,8 @@ impl Builder {
                                 | "Env"
                                 | "Unsafe"
                                 | "Dir"
+                                | "Stdin"
+                                | "Stderr"
                                 | "Stdout"
                                 | "MonotonicClock"
                                 | "WallClock"

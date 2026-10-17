@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Grant {
     Io,
+    Stdin,
+    Stderr,
     Stdout,
     MonotonicClock,
     WallClock,

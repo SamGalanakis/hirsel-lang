@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: accept
+pub fn query(rt: Io) -> Result[Stderr, GrantError] {
+  io.stderr(rt)
+}

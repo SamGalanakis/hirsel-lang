@@ -1,0 +1,20 @@
+// rule: CAP-1
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let s = io.stdin(rt)?
+  let mut index: u64 = 0
+  while index < arg.count(args) {
+    let expected = match arg.text(args, index) {
+      Ok(text) => text,
+      Error(_) => {
+        failure.check(false, Bounds())
+        ""
+      },
+    }
+    failure.check(std@1/input.read_line(s) == Ok(Some(expected)), Bounds())
+    index += 1
+  }
+  failure.check(std@1/input.read_line(s) == Ok(None()), Bounds())
+  failure.check(std@1/input.read_all(s) == Ok(b""), Bounds())
+  Ok(())
+}

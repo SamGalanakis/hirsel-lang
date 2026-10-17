@@ -31,7 +31,8 @@ codes, plus injected tool operations for clean checking, run and formatting code
 
 `hirsel run --simulation config.json program.hir` supplies a deterministic fake
 filesystem and root arguments. The JSON object accepts `args`, `grants`, `projections` and
-`directories` as string arrays, `files` and `env` as string-valued maps, and
+`directories` as string arrays, `files` as a string-valued map, `env` as an exact
+name-to-string-or-null grant map, `stdin` as text or an array of bytes, and
 `monotonic` as a nonnegative u64 and `wall` as signed i64 nanoseconds. File strings are exact UTF-8 bytes; paths remain
 confined to the simulated root. For example:
 
@@ -70,7 +71,7 @@ launch manifest JSON path. A source path loads its exact `.hir.json` sidecar
 when present, otherwise standalone@0. `fmt` always formats a source file.
 
 An explicit empty simulation `projections` array grants no Io projections. Its
-allowed names are stdout, tasks, net, random and dir; an unknown name refuses
+allowed names are stdin, stderr, stdout, tasks, net, random and dir; an unknown name refuses
 the simulation input. Root Io and Args grants remain separate. This fake-input
 seam is independent of the production RunConfig admission contract.
 
@@ -96,3 +97,7 @@ that program and uses the same validation and admission as `--run`. These option
 are exclusive, and neither combines with `--simulation`. Templates omit binding
 fields and deny omitted roots. Standalone executables accept the corresponding
 `--hirsel-grants grants.json [args...]` spelling.
+
+Simulation writes stdout and stderr to distinct tool sinks. Live Stdin/Stderr and
+Env operations use the admitted runtime providers through HostLibrary; only exact
+Env names in the run record are readable, with null distinct from a denied name.

@@ -121,7 +121,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "file.remove" | "file.write_bytes" | "file.write_all" | "io.monotonic_clock"
         | "io.wall_clock" | "clock.monotonic" | "clock.wall" | "instant.ticks" | "io.random"
         | "io.tasks" | "io.net" | "test.check" | "test.check_case" | "test.fail" | "test.dir"
-        | "test.net" | "file.read_bytes" | "file.walk" => {
+        | "test.net" | "file.read_bytes" | "file.walk" | "io.stdin" | "io.stderr"
+        | "stdin.read" | "err.print" | "env.get" => {
             Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
         }
         // Streams and listeners use the same explicit Net policy.
@@ -163,6 +164,10 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "clock.monotonic"
             | "clock.wall"
             | "io.random"
+            | "io.stdin"
+            | "io.stderr"
+            | "stdin.read"
+            | "env.get"
             | "io.stdout"
             | "io.tasks"
             | "io.net"
@@ -704,6 +709,46 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer],
     },
     AbiExport {
+        symbol: "hirsel_rt_v2_io_stdin",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_io_stderr",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_stdin_read",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_err_print",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_env_get",
+        destination: true,
+        result: Some((40, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
         symbol: "hirsel_rt_v2_io_stdout",
         destination: true,
         result: Some((16, 8)),
@@ -878,6 +923,11 @@ pub const NATIVE_PATHS: &[&str] = &[
     "io.dir",
     "io.net",
     "io.random",
+    "io.stdin",
+    "io.stderr",
+    "stdin.read",
+    "err.print",
+    "env.get",
     "io.stdout",
     "io.tasks",
     "iter.from",

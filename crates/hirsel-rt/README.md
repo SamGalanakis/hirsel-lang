@@ -502,3 +502,11 @@ always uses admitted host grants and never the conformance fixture profile.
 `--hirsel-grants grants.json [args...]` binds a template to the standalone
 executable's embedded program and entry, then follows the same validation,
 argv snapshot and host admission path as `--hirsel-run`.
+
+Stdin and stderr are independent Io projections. RealIo pins explicitly supplied
+Read/Write providers, retries interrupted reads, captures accepted stderr prefixes
+and records every typed stdin completion. SimIo replays those completions without
+a reader and rechecks their handle and maximum. Env reads use the exact admitted
+name-to-optional-value snapshot: missing keys are denied, null keys are unset.
+Host input tape forms live in host_io_tape.rs; fixed ABI thunks share ordinary
+byte-list COW growth with network reads.

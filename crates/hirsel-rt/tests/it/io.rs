@@ -1333,3 +1333,127 @@ fn grant_and_file_refusals_have_the_declared_inline_layouts() {
         }
     );
 }
+#[test]
+fn host_input_tape_rechecks_exact_grants_and_never_reads_the_provider_on_replay() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    #[derive(Clone)]
+    struct Input {
+        calls: Rc<Cell<usize>>,
+        bytes: std::io::Cursor<Vec<u8>>,
+    }
+    impl std::io::Read for Input {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            self.calls.set(self.calls.get() + 1);
+            std::io::Read::read(&mut self.bytes, out)
+        }
+    }
+    let calls = Rc::new(Cell::new(0));
+    let mut real = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+    real.set_stdin(Input {
+        calls: calls.clone(),
+        bytes: std::io::Cursor::new(vec![0, 255, 10]),
+    });
+    real.set_env(BTreeMap::from([
+        ("SET".into(), Some("λ".into())),
+        ("UNSET".into(), None),
+    ]));
+    real.set_projections(Default::default());
+    assert_eq!(
+        real.call(Request::Stdin { io: 1 }),
+        Ok(Completion::Handle(Err(IoError::NotGranted)))
+    );
+    assert_eq!(calls.get(), 0);
+    real.set_projections(["stdin".into(), "stderr".into()].into_iter().collect());
+    let Completion::Handle(Ok(stdin)) = real.call(Request::Stdin { io: 1 }).unwrap() else {
+        panic!()
+    };
+    real.inject(Fault {
+        error: IoError::Canceled(1),
+        partial: 0,
+    });
+    assert_eq!(
+        real.call(Request::ReadStdin { stdin, max: 0 }),
+        Ok(Completion::Input(Err(InputError::InvalidInput)))
+    );
+    assert_eq!(calls.get(), 0);
+    assert_eq!(
+        real.call(Request::ReadStdin { stdin: 999, max: 2 }),
+        Err(AdapterError::InvalidHandle(999))
+    );
+    assert_eq!(calls.get(), 0);
+    assert_eq!(
+        real.call(Request::ReadStdin { stdin, max: 1 }),
+        Ok(Completion::Input(Err(InputError::Canceled(1))))
+    );
+    assert_eq!(calls.get(), 0);
+    for (max, expected) in [(2, vec![0, 255]), (10, vec![10]), (1, vec![])] {
+        assert_eq!(
+            real.call(Request::ReadStdin { stdin, max }),
+            Ok(Completion::Input(Ok(expected)))
+        );
+    }
+    for (name, expected) in [
+        ("SET", Ok(Some("λ".into()))),
+        ("UNSET", Ok(None)),
+        ("SECRET", Err(EnvError::NotGranted)),
+    ] {
+        assert_eq!(
+            real.call(Request::EnvGet {
+                env: ENV_HANDLE,
+                name: name.into()
+            }),
+            Ok(Completion::Env(expected))
+        );
+    }
+    let Completion::Handle(Ok(stderr)) = real.call(Request::Stderr { io: 1 }).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        real.call(Request::PrintStderr {
+            stderr,
+            bytes: b"separate\n".to_vec()
+        }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    assert_eq!(real.stdout(), b"");
+    assert_eq!(real.stderr(), b"separate\n");
+    let tape = real.tape().to_vec();
+    let encoded = hirsel_rt::launch::render_tape(&tape).unwrap();
+    assert_eq!(hirsel_rt::launch::parse_tape(&encoded).unwrap(), tape);
+    let mut replay = SimIo::new(Tree::new(BTreeMap::new()).unwrap(), tape.clone());
+    replay.set_env(BTreeMap::from([
+        ("SET".into(), Some("λ".into())),
+        ("UNSET".into(), None),
+    ]));
+    replay.set_projections(Default::default());
+    for (index, event) in tape.iter().enumerate() {
+        if index == 1 {
+            replay.set_projections(["stdin".into(), "stderr".into()].into_iter().collect());
+        }
+        match &event.completion {
+            Completion::Refused(id) => assert_eq!(
+                replay.call(event.request.clone()),
+                Err(AdapterError::InvalidHandle(*id))
+            ),
+            _ => assert_eq!(
+                replay.call(event.request.clone()),
+                Ok(event.completion.clone())
+            ),
+        }
+    }
+    replay.finish().unwrap();
+    assert_eq!(replay.stderr(), real.stderr());
+    // Tape data alone cannot grant a name absent from admission.
+    let event = tape
+        .iter()
+        .find(|e| matches!(&e.request,Request::EnvGet { name,.. } if name=="SET"))
+        .unwrap()
+        .clone();
+    let mut denied = SimIo::new(Tree::new(BTreeMap::new()).unwrap(), vec![event.clone()]);
+    assert_eq!(
+        denied.call(event.request),
+        Err(AdapterError::ReplayMismatch(0))
+    );
+    assert_eq!(denied.position(), 0);
+}

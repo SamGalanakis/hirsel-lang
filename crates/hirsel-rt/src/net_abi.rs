@@ -392,25 +392,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_read(
         return STATUS_FAILURE;
     };
     let value = value.map(|bytes| {
-        if !bytes.is_empty() {
-            unsafe {
-                let block = buffer.read();
-                let count = crate::alloc::payload(block).cast::<u64>().read();
-                let total = count
-                    .checked_add(bytes.len() as u64)
-                    .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
-                let block = crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, total);
-                let payload = crate::alloc::payload(block);
-                std::ptr::copy_nonoverlapping(
-                    bytes.as_ptr(),
-                    payload
-                        .add(crate::alloc::sequence_elements_offset(1) as usize + count as usize),
-                    bytes.len(),
-                );
-                payload.cast::<u64>().write(total);
-                buffer.write(block);
-            }
-        }
+        unsafe { crate::io::append_byte_list(ctx, buffer, &bytes) };
         bytes.len() as u64
     });
     unsafe { out.write(NetWordResult::of(value)) };

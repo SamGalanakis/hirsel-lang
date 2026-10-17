@@ -230,6 +230,12 @@
       "module": [
         "http"
       ]
+    },
+    {
+      "path": "input.hir",
+      "module": [
+        "input"
+      ]
     }
   ],
   "dependencies": []

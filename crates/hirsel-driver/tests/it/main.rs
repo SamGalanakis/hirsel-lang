@@ -26,6 +26,7 @@ mod frozen_revision;
 mod generic_graph;
 mod growth_ir;
 mod header_diagnostics;
+mod host_io;
 mod incremental_positions;
 mod invalidation;
 mod ir_size;

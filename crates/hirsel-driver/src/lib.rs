@@ -52,8 +52,33 @@ pub fn run_path_with_simulation(
     path: &Path,
     simulation: SimulationConfig,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
-    COMPILER.run_path_with_simulation(path, simulation, stdout)
+    let mut program = load_program(path)?;
+    program.check_for_execution()?;
+    let run = hirsel_tir::RunConfiguration {
+        entry: program.entry.clone(),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    let observed = hirsel_engine::run_observed_snapshot(&mut program.engine, &run, simulation)?;
+    if let Some(observation) = observed.observation {
+        stdout
+            .write_all(&observation.output)
+            .map_err(ToolError::Io)?;
+        if let Some(state) = observation.final_state {
+            stderr.write_all(&state.stderr).map_err(ToolError::Io)?;
+        }
+    } else {
+        stdout
+            .write_all(&observed.tooling_output)
+            .map_err(ToolError::Io)?;
+    }
+    observed.outcome.map_err(|error| match error {
+        hirsel_engine::RuntimeError::Io(error) => ToolError::Io(error),
+        hirsel_engine::RuntimeError::Query(error) => program.error(error),
+        hirsel_engine::RuntimeError::Tool(message) => ToolError::Runtime(message),
+    })
 }
 /// `hirsel export --tir <source|manifest.json>`: the proof-seam TIR export
 ///  of the checked program's entry closure.

@@ -108,7 +108,10 @@ hirsel_test(
     runtime_archives = "//:hirsel-rt-archives",
     crate = "cli",
     crate_root = "crates/hirsel-cli/tests/cli.rs",
-    srcs = glob(["crates/hirsel-cli/tests/**"]) + ["examples/hello-web/main.hir"],
+    srcs = glob(["crates/hirsel-cli/tests/**"]) + [
+        "conformance/CAP/CAP-1-host-inputs-run.hir",
+        "examples/hello-web/main.hir",
+    ],
     features = [],
     manifest_dir = "crates/hirsel-cli",
     package_name = "hirsel-cli",
@@ -900,6 +903,10 @@ hirsel_test(
         "crates/hirsel-driver/tests/it/**",
         "crates/hirsel-driver/tests/support/**",
     ]) + [
+        "conformance/CAP/CAP-1-env-names-run.hir",
+        "conformance/CAP/CAP-1-stderr-stream-run.hir",
+        "conformance/CAP/CAP-1-stdin-invalid-line-run.hir",
+        "conformance/CAP/CAP-1-stdin-lines-run.hir",
         "conformance/CAP/CAP-2-plain-wrapper-inert-ok.hir",
         "conformance/CAP/CAP-2-resource-drop-summary-ok.hir",
         "conformance/CLO/CLO-1-consumed-loop-content-capture-nested-run.hir",
@@ -1109,6 +1116,10 @@ hirsel_test(
     crate = "stack_depth",
     crate_root = "crates/hirsel-driver/tests/stack_depth.rs",
     srcs = glob(["crates/hirsel-driver/tests/**"]) + [
+        "conformance/CAP/CAP-1-env-names-run.hir",
+        "conformance/CAP/CAP-1-stderr-stream-run.hir",
+        "conformance/CAP/CAP-1-stdin-invalid-line-run.hir",
+        "conformance/CAP/CAP-1-stdin-lines-run.hir",
         "conformance/CAP/CAP-2-plain-wrapper-inert-ok.hir",
         "conformance/CAP/CAP-2-resource-drop-summary-ok.hir",
         "conformance/CLO/CLO-1-consumed-loop-content-capture-nested-run.hir",

@@ -1162,3 +1162,55 @@ fn standalone_grants_bind_embedded_code_without_an_exported_record() {
         assert!(output.stdout.is_empty());
     }
 }
+
+#[test]
+fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
+    let source = file(include_str!(
+        "../../../conformance/CAP/CAP-1-host-inputs-run.hir"
+    ));
+    let simulation = source.with_extension("simulation.json");
+    std::fs::write(
+        &simulation,
+        serde_json::to_vec(&serde_json::json!({
+            "stdin":[206,187,10,0,255],
+            "args":["","λ","--flag"],
+            "env":{"SET":"value","UNSET":null},
+            "projections":["stdin","stderr"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--simulation")
+        .arg(&simulation)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, "λ--flag".as_bytes());
+    std::fs::write(
+        &simulation,
+        br#"{"stdin":"unread","projections":["stderr"]}"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--simulation")
+        .arg(&simulation)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    std::fs::remove_file(simulation).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    std::fs::remove_file(format!("{}.json", source.display())).unwrap();
+}

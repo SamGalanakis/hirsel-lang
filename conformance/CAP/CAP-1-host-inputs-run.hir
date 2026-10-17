@@ -1,0 +1,34 @@
+// rule: CAP-1
+// expect: run
+pub fn main(e: Env, args: Args, rt: Io) -> Result[(), GrantError] {
+  let s = io.stdin(rt)?
+  let mut buffer: List[u8] = [7]
+  failure.check(stdin.read(s, mut buffer, 0) == Error(InvalidInput()), Bounds())
+  failure.check(buffer == [7], Bounds())
+  let dest = io.stderr(rt)?
+  let mut i: u64 = 0
+  while i < arg.count(args) {
+    let name = match arg.text(args, i) {
+      Ok(text) => text,
+      Error(_) => {
+        failure.check(false, Bounds())
+        ""
+      },
+    }
+    let _ = err.print(dest, name)
+    i += 1
+  }
+  let line = std@1/input.read_line(s)
+  if arg.count(args) == 0 {
+    failure.check(line == Ok(None()), Bounds())
+  } else {
+    failure.check(line == Ok(Some("λ\n")), Bounds())
+    failure.check(stdin.read(s, mut buffer, 2) == Ok(2), Bounds())
+    failure.check(buffer == [7, 0, 255], Bounds())
+    failure.check(std@1/input.read_all(s) == Ok(b""), Bounds())
+    failure.check(env.get(e, "SET") == Ok(Some("value")), Bounds())
+    failure.check(env.get(e, "UNSET") == Ok(None()), Bounds())
+  }
+  failure.check(env.get(e, "SECRET") == Error(NotGranted()), Bounds())
+  Ok(())
+}

@@ -128,3 +128,9 @@ representation paths or a hidden grant to add.
 
 The planned [read-only directory and environment-key
 facets](std-library.md#capability-facets), not in `std@1`, are sealed capabilities.
+
+`io.stdin` and `io.stderr` project `Stdin` and `Stderr` only when their exact
+run grants are present. `Env` grants a set of exact names: `env.get` returns
+`EnvError.NotGranted()` for every other name, independently of whether that name
+exists on the host. Granted but unset names return `None`; the Env object
+in the run configuration records both the name grants and their snapshots.

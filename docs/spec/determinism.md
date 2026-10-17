@@ -234,3 +234,14 @@ wait records the stable spawn path, the suspended operation's source anchor, the
 and the logical creation ordinals of its target. Reports keep the output and effect prefix.
 Wait rows are ordered by spawn path, source anchor, wait kind and target ordinals. Host
 identifiers and elapsed host time are excluded. Abandonment runs no speculative drop.
+
+### Host input streams and environment
+
+Stdin bytes and environment values are run inputs under DET-1. Each stdin read
+records its handle, maximum and completion (bytes, end of input or error); each
+environment read records its exact name and completion. Replay consumes these
+inputs without reading a host stream or ambient environment, and independently
+checks the admitted stream grants and exact Env name grants. Stderr writes record
+the accepted prefix and errors just like stdout, on a distinct stream. Simulation
+JSON supplies `stdin` as UTF-8 text or an array of bytes, and `env` as an object
+whose exact keys are grants and whose values are UTF-8 strings or null for unset.

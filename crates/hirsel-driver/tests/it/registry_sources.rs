@@ -135,7 +135,9 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "std@1/test.equal",
                 "std@1/test.approx",
                 "std@1/test.for_all",
-                "std@1/test.expect_error"
+                "std@1/test.expect_error",
+                "std@1/input.read_all",
+                "std@1/input.read_line"
             ]
         );
     });
@@ -269,7 +271,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         assert_eq!(normalized.metadata.visibility, Visibility::Public);
         checked += 1;
     }
-    assert_eq!(checked, 108);
+    assert_eq!(checked, 113);
 }
 
 #[test]

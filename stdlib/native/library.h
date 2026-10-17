@@ -52,6 +52,12 @@ typedef struct { hirsel_rt_v2_header *owner; uint64_t start, length; } hirsel_rt
  * generated caller glue records the rule at the call site before cleanup. */
 extern const hirsel_rt_v2_layout hirsel_rt_v2_bytes_descriptor;
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_string_result;
+typedef struct { uint32_t tag, padding, option, option_padding; hirsel_rt_v2_slice value; } hirsel_rt_v2_env_result;
+uint8_t hirsel_rt_v2_io_stdin(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
+uint8_t hirsel_rt_v2_io_stderr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
+uint8_t hirsel_rt_v2_stdin_read(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, hirsel_rt_v2_header**, uint64_t);
+uint8_t hirsel_rt_v2_err_print(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_env_get(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_env_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_arg_count(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_arg_text(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_string_result*, const uint64_t*, uint64_t);
 uint8_t hirsel_rt_v2_string_from_bytes(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_string_result*, hirsel_rt_v2_header*, uint64_t, uint64_t);

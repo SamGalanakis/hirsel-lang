@@ -16,11 +16,28 @@ pub struct RealIo {
     tape: Vec<Event>,
     fault: Option<Fault>,
     output: Box<dyn Write>,
+    input: Box<dyn Read>,
+    stderr: Box<dyn Write>,
     recording: Option<crate::launch::RecordingWriter<File>>,
     retain_history: bool,
     net: Box<dyn NetProvider>,
 }
 impl RealIo {
+    /// Pin the explicitly admitted input stream before entry. Projections remain independent.
+    pub fn set_stdin(&mut self, input: impl Read + 'static) {
+        self.input = Box::new(input);
+    }
+    pub fn set_stderr(&mut self, output: impl Write + 'static) {
+        self.stderr = Box::new(output);
+    }
+    /// Exact name grants and their admission snapshots; no later ambient lookup.
+    pub fn set_env(&mut self, env: BTreeMap<String, Option<String>>) {
+        self.state.env = env;
+    }
+    pub fn stderr(&self) -> &[u8] {
+        &self.state.stderr
+    }
+
     /// Configure the root Net's isolated scripted world before entry. Rules are
     /// supplied separately by set_net_rules; peer data never widens them.
     pub fn set_net_script(
@@ -102,6 +119,8 @@ impl RealIo {
             tape: vec![],
             fault: None,
             output: Box::new(output),
+            input: Box::new(std::io::empty()),
+            stderr: Box::new(std::io::sink()),
             recording: None,
             retain_history: true,
             net: Box::new(crate::net_host::HostNet::new()),
@@ -325,15 +344,63 @@ impl Adapter for RealIo {
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         let fake = self.state.is_fake_request(&request);
-        let mut fault =
-            if self.state.denied_projection(&request) || crate::net::is_net_request(&request) {
-                None
-            } else {
-                self.fault.take()
-            };
+        let mut fault = if self.state.denied_projection(&request)
+            || crate::net::is_net_request(&request)
+            || matches!(&request, Request::ReadStdin { stdin, .. } if self.state.expect(*stdin, crate::handles::Grant::Stdin).is_err())
+            || matches!(
+                request,
+                Request::Stdin { .. }
+                    | Request::Stderr { .. }
+                    | Request::ReadStdin { max: 0, .. }
+                    | Request::EnvGet { .. }
+            ) {
+            None
+        } else {
+            self.fault.take()
+        };
         self.disk.partial = None;
         let before = self.state.stdout.len();
+        let stderr_before = self.state.stderr.len();
         let result = match &request {
+            Request::ReadStdin { stdin, max } => {
+                // Validate authority before touching the provider, including injected faults.
+                match self.state.expect(*stdin, crate::handles::Grant::Stdin) {
+                    Err(error) => Err(error),
+                    Ok(()) => {
+                        let value = if *max == 0 {
+                            Err(InputError::InvalidInput)
+                        } else if let Some(fault) = &fault {
+                            match fault.error {
+                                IoError::Fault(code) => Err(InputError::Fault(code)),
+                                IoError::Canceled(cause) => Err(InputError::Canceled(cause)),
+                                IoError::NotGranted => return Err(AdapterError::InvalidCompletion),
+                            }
+                        } else {
+                            let len = usize::try_from(*max).unwrap_or(usize::MAX).min(64 * 1024);
+                            let mut bytes = vec![0; len];
+                            loop {
+                                match self.input.read(&mut bytes) {
+                                    Ok(count) => {
+                                        bytes.truncate(count);
+                                        break Ok(bytes);
+                                    }
+                                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        let IoError::Fault(code) = error(e) else {
+                                            unreachable!()
+                                        };
+                                        break Err(InputError::Fault(code));
+                                    }
+                                }
+                            }
+                        };
+                        fault = None;
+                        self.state.sample(&request, Completion::Input(value))
+                    }
+                }
+            }
             Request::Monotonic { .. } | Request::Wall { .. } => {
                 let input = clock_input(&request, fault.as_ref());
                 self.state.sample(&request, input)
@@ -372,11 +439,23 @@ impl Adapter for RealIo {
                 self.state.stdout.truncate(before);
             }
         }
-        if matches!(request, Request::Print { .. }) {
-            let bytes = &self.state.stdout[before..];
+        if matches!(request, Request::Print { .. } | Request::PrintStderr { .. }) {
+            let stderr = matches!(request, Request::PrintStderr { .. });
+            let output = if stderr {
+                &mut self.stderr
+            } else {
+                &mut self.output
+            };
+            let captured = if stderr {
+                &mut self.state.stderr
+            } else {
+                &mut self.state.stdout
+            };
+            let before = if stderr { stderr_before } else { before };
+            let bytes = &captured[before..];
             let mut written = 0;
             while written < bytes.len() {
-                match self.output.write(&bytes[written..]) {
+                match output.write(&bytes[written..]) {
                     Ok(0) => {
                         let e = IoError::Fault(1);
                         completion = Completion::Unit(Err(e.clone()));
@@ -401,7 +480,7 @@ impl Adapter for RealIo {
             }
             // Completion means acceptance at the provider boundary, including
             // flushing any private buffer before its success enters the tape.
-            if let Err(e) = self.output.flush() {
+            if let Err(e) = output.flush() {
                 let e = error(e);
                 completion = Completion::Unit(Err(e.clone()));
                 fault = Some(Fault {
@@ -409,7 +488,7 @@ impl Adapter for RealIo {
                     partial: written,
                 });
             }
-            self.state.stdout.truncate(if self.retain_history {
+            captured.truncate(if self.retain_history {
                 before + written
             } else {
                 before

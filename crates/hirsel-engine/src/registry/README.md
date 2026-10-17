@@ -95,3 +95,7 @@ The wave-2 numeric cutover removes core u64.to_string and both intrinsic float
 reduction schemas. Four fixed IEEE bits/from_bits declarations remain core; the
 43 concrete numeric algorithms and their shared error types load through the
 ordinary std@1 source manifest. There are no std registry slots.
+
+The host I/O ledger declares Stdin/Stderr as global capability types, typed
+InputError/EnvError variants, and Args count/text operations. All use the existing
+parameter-authority derivation; no ambient-grant or checker exception is added.

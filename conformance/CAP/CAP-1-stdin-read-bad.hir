@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 4
+pub fn query(mut buf: List[u8]) -> Result[u64, InputError] {
+  stdin.read(mut buf, 1)
+}

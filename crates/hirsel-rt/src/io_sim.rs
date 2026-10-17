@@ -11,6 +11,13 @@ pub struct SimIo {
     identities: FileIdentities,
 }
 impl SimIo {
+    pub fn set_env(&mut self, env: std::collections::BTreeMap<String, Option<String>>) {
+        self.state.env = env;
+    }
+    pub fn stderr(&self) -> &[u8] {
+        &self.state.stderr
+    }
+
     /// Configure the root Net's isolated scripted world before entry. Rules are
     /// supplied separately by set_net_rules; peer data never widens them.
     pub fn set_net_script(
@@ -123,7 +130,10 @@ impl Adapter for SimIo {
             active: Default::default(),
             identities: &mut identities,
         };
-        let result = if matches!(request, Request::Monotonic { .. } | Request::Wall { .. }) {
+        let result = if matches!(
+            request,
+            Request::Monotonic { .. } | Request::Wall { .. } | Request::ReadStdin { .. }
+        ) {
             if event.fault.is_some() {
                 return Err(AdapterError::InvalidCompletion);
             }

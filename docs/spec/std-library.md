@@ -37,6 +37,8 @@ N fn std@1/test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 N fn std@1/test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
 fn std@1/test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
 fn std@1/test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
+fn std@1/input.read_all(s: Stdin) -> Result[Bytes, InputError]
+fn std@1/input.read_line(s: Stdin) -> Result[Option[String], InputError]
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`
@@ -297,6 +299,19 @@ downgrade fails under a `ConnectTls` rule. There is no connection reuse: each re
 its own connection and sends `connection: close`, while `keep_alive` is still reported.
 There is no whole-request deadline, since a deadline needs a clock.
 
+## Input
+
+`std@1/input.read_all(s: Stdin) -> Result[Bytes, InputError]` reads to end of input.
+`std@1/input.read_line(s: Stdin) -> Result[Option[String], InputError]` reads through
+one newline, retaining it (and a preceding carriage return). It returns `None()`
+only for EOF before any bytes, and `InvalidUtf8()` for an invalid complete line.
+Both are ordinary source loops over `core@1/stdin.read`; they grant no authority
+and share the passed stream's cursor. A final unterminated line is `Some`.
+
+Exact environment-name authority is available in core through `env.get(Env, String)`.
+The run configuration's Env object is the concrete exact-name facet: only its keys
+are readable, with null representing a granted but unset name.
+
 ## Planned, not in std@1
 
 The items in this section are designed but not yet declared by `std@1`: a program that
@@ -322,7 +337,8 @@ its operation is `fn read_walk.next(mut walk: ReadWalk) -> Option[Result[Path, F
 The read-only interface exports no unwrapping, mutation, raw-grant callback,
 authority-bearing read result or effectful cleanup.
 
-`EnvKey` is an opaque global capability holding `Env` and one validated, immutable `String`
+The optional sealed wrapper `EnvKey` remains planned; the exact-name grant
+discipline itself is implemented by core `env.get`. `EnvKey` is an opaque global capability holding `Env` and one validated, immutable `String`
 key, with public authority `{EnvKey}`, a private `Env` ceiling and truthful `copyable` and
 `noalloc_drop` promises; its `String` makes it counted, not plain. Its operations are
 `fn env_key.of(env: Env, take key: String) -> Result[EnvKey, EnvError]` and

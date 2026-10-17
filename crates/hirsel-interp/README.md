@@ -501,3 +501,10 @@ Production host operations are supplied by the driver's Operations adapter; this
 remains host-independent. Scripted `net.listen` checks the exact grant before reporting
 that scripted incoming peers are unavailable, so an empty rule set returns NotGranted
 without a provider effect.
+
+SimulationConfig supplies stdin bytes and exact Env name-to-optional-value snapshots.
+Library dispatch owns stdin cursor advancement, append-only mut byte buffers,
+UTF-8 argument text, and distinct stderr capture in ObservedSimulation. Each
+operation records its typed input and completion through the ordinary replay
+check. `supply_stdin` lets a host adapter provide one already-read chunk without
+changing authority or replay state; it then uses the same operation implementation.

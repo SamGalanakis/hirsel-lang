@@ -164,6 +164,8 @@ impl Operations for Io {
 
 #[derive(Clone)]
 enum IoGrant {
+    Stdin,
+    Stderr,
     Root,
     Random,
     Tasks,
@@ -263,6 +265,67 @@ impl Io {
                         scalar: ScalarKind::U64,
                         ..
                     },
+                ],
+            ) => OpValue::Variant {
+                tag: 1,
+                value: Box::new(OpValue::Variant {
+                    tag: 0,
+                    value: Box::new(OpValue::Unit),
+                }),
+            },
+            (Some("io"), kind @ ("stdin" | "stderr"), [OpValue::Handle(IO_HANDLE)]) => {
+                let grant = if kind == "stdin" {
+                    IoGrant::Stdin
+                } else {
+                    IoGrant::Stderr
+                };
+                io_ok(OpValue::Handle(self.grant(grant)))
+            }
+            (
+                Some("stdin"),
+                "read",
+                [
+                    OpValue::Handle(stream),
+                    buffer,
+                    OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: max,
+                    },
+                ],
+            ) => {
+                if !matches!(self.grants.get(stream), Some(IoGrant::Stdin)) {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                if *max == 0 {
+                    OpValue::Variant {
+                        tag: 1,
+                        value: Box::new(OpValue::Variant {
+                            tag: 2,
+                            value: Box::new(OpValue::Unit),
+                        }),
+                    }
+                } else {
+                    return Some(OpOutcome::Updated {
+                        value: io_ok(OpValue::Bits {
+                            scalar: ScalarKind::U64,
+                            bits: 0,
+                        }),
+                        arguments: vec![(1, buffer.clone())],
+                    });
+                }
+            }
+            (Some("err"), "print", [OpValue::Handle(stream), OpValue::Bytes(_)]) => {
+                if !matches!(self.grants.get(stream), Some(IoGrant::Stderr)) {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                io_ok(OpValue::Unit)
+            }
+            (
+                Some("env"),
+                "get",
+                [
+                    OpValue::Handle(hirsel_rt::io::ENV_HANDLE),
+                    OpValue::Bytes(_),
                 ],
             ) => OpValue::Variant {
                 tag: 1,

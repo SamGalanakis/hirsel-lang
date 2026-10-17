@@ -23,6 +23,8 @@ syntax needs no library call.
 
 ```text
 // CAP-1/2/4, LANG-9, CONC-3
+N fn io.stdin(rt: Io) -> Result[Stdin, GrantError]
+N fn io.stderr(rt: Io) -> Result[Stderr, GrantError]
 N fn io.stdout(rt: Io) -> Result[Stdout, GrantError]
 N fn io.tasks(rt: Io) -> Result[Tasks, GrantError]
 N fn io.monotonic_clock(rt: Io) -> Result[MonotonicClock, GrantError]
@@ -38,7 +40,10 @@ N fn arg.count(args: Args) -> u64
 fn arg.text(args: Args, index: u64) -> Result[String, ArgError]
 fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
 fn path.of(text: String) -> Path
+fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]
+N fn err.print(s: Stderr, text: String) -> Result[(), OutputError]
 N fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
+fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]
 N fn test.check(t: Test, condition: bool) -> ()
 N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
@@ -189,7 +194,9 @@ CancelError   = Canceled(CancelCause)
 ChannelError  = Closed | Canceled(CancelCause)
 GrantError    = NotGranted()
 FileError     = FileFault(u32) | Canceled(CancelCause) | NotGranted()
+InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
+EnvError      = NotGranted() | InvalidUtf8()
 ArgError      = MissingArgument() | InvalidUtf8()
 FloatIntError = NotFinite | OutOfRange
 OutOfSpace    = OutOfSpace()
@@ -247,7 +254,22 @@ before entry. Neither operation consults ambient process arguments.
 
 ## Effects and cancellation
 
-`out.print` writes exactly the supplied UTF-8 bytes, with no newline. `Canceled` means no
+`stdin.read` appends at most `max` bytes to `buf` and returns the appended count,
+zero only at end of input. A positive read returns as soon as bytes are available;
+it does not wait to fill `max`. Zero `max` returns `InvalidInput()` without reading.
+Interrupted reads retry inside the provider. An error appends nothing. All handles
+of the run's `Stdin` share one input cursor. `InputFault` codes are capability
+inputs, like `OutputFault` codes. The runtime byte operation accepts arbitrary bytes;
+`InvalidUtf8()` is available to the source text helpers.
+
+`env.get` reads only an exact name in the run configuration's Env object. An
+absent name returns `NotGranted()`; a name mapped to null returns `Ok(None())`;
+a string returns `Ok(Some(value))`. No enumeration or ambient process lookup is
+provided. Invalid UTF-8 from a host provider returns `InvalidUtf8()`; run-description
+admission may reject an invalid snapshot before entry. Io presence alone grants
+neither input nor output: stdin and stderr require their own configured projections.
+
+`err.print` and `out.print` write exactly the supplied UTF-8 bytes, with no newline. `Canceled` means no
 output or effect happened; another output or file error may follow partial effects.
 Output success records that the provider accepted all supplied bytes at its stated effect
 boundary; an unflushed private buffer is not that boundary. Neither an ordinary successful

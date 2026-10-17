@@ -236,6 +236,7 @@ fn execute(args: Vec<OsString>) -> u8 {
                 Path::new(&file),
                 simulation,
                 &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
             ));
         }
         Command::Run {
@@ -412,7 +413,7 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
                         for projection in &values {
                             if !matches!(
                                 projection.as_str(),
-                                "stdout" | "tasks" | "net" | "random" | "dir"
+                                "stdin" | "stderr" | "stdout" | "tasks" | "net" | "random" | "dir"
                             ) {
                                 return Err(format!("unknown Io projection {projection}"));
                             }
@@ -422,18 +423,38 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
                     _ => config.directories = values.into_iter().collect(),
                 }
             }
+            "stdin" => {
+                config.stdin = if let Some(text) = value.as_str() {
+                    text.as_bytes().to_vec()
+                } else {
+                    value
+                        .as_array()
+                        .ok_or("stdin: expected text or an array of bytes")?
+                        .iter()
+                        .map(|byte| {
+                            byte.as_u64()
+                                .and_then(|n| u8::try_from(n).ok())
+                                .ok_or("stdin: expected bytes")
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+            }
             "files" | "env" => {
                 let entries = value
                     .as_object()
                     .ok_or_else(|| format!("{key}: expected an object"))?;
                 for (name, text) in entries {
+                    if key == "env" && text.is_null() {
+                        config.env.insert(name.clone(), None);
+                        continue;
+                    }
                     let text = text
                         .as_str()
                         .ok_or_else(|| format!("{key}: expected string values"))?;
                     if key == "files" {
                         config.files.insert(name.clone(), text.as_bytes().to_vec());
                     } else {
-                        config.env.insert(name.clone(), text.into());
+                        config.env.insert(name.clone(), Some(text.into()));
                     }
                 }
             }

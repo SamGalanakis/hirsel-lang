@@ -512,7 +512,9 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
     fn execute() -> (Vec<CapabilityEvent>, Vec<u8>, Vec<u64>) {
         let mut h = Harness::new(SimulationConfig {
             random_seed: 42,
-            env: [("NAME".into(), "value".into())].into_iter().collect(),
+            env: [("NAME".into(), Some("value".into()))]
+                .into_iter()
+                .collect(),
             monotonic: 77,
             ..Default::default()
         });
@@ -537,6 +539,10 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
         );
         let random = h.project(&io, "random");
         let env = h.root("Env");
+        assert_eq!(
+            h.value("env.get", vec![env, Value::String("NAME".into())]),
+            ok(some(Value::String("value".into())))
+        );
         let mut context = OperationContext {
             trace_mode: Default::default(),
             anchor: None,
@@ -545,13 +551,7 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
             stdout: &mut h.stdout,
             trace: &mut h.trace,
         };
-        assert_eq!(
-            h.library
-                .simulation
-                .env_get(&env, "NAME", &mut context)
-                .unwrap(),
-            Some("value".into())
-        );
+
         let values = (0..10)
             .map(|_| {
                 h.library
@@ -1288,4 +1288,44 @@ fn recorded_scheduler_choices_select_runnable_tasks_and_reject_blocked_ones() {
         .unwrap();
     h.library.simulation.finish_replay().unwrap();
     assert_eq!(h.library.simulation.events, h.run.inputs);
+}
+
+#[test]
+fn stdin_replay_rejects_oversized_chunks_and_invalid_errors_before_publication() {
+    let config = SimulationConfig {
+        stdin: vec![0, 255],
+        ..Default::default()
+    };
+    let mut recorded = Harness::new(config.clone());
+    let io = recorded.root("Io");
+    let input = unok(recorded.value("io.stdin", vec![io]));
+    let buffer = Value::Sequence {
+        kind: BuiltinType::List,
+        elements: vec![Some(Value::Integer(n(Primitive::U8, 7)))],
+    };
+    recorded.value("stdin.read", vec![input, buffer.clone(), u64_value(2)]);
+    let tape = recorded.library.simulation.events.clone();
+    let mut too_long = vec![0];
+    too_long.extend_from_slice(&3u64.to_le_bytes());
+    too_long.extend_from_slice(&[0, 255, 1]);
+    let mut invalid_cause = vec![1];
+    invalid_cause.extend_from_slice(&1u32.to_le_bytes());
+    invalid_cause.extend_from_slice(&3u32.to_le_bytes());
+    for bad_output in [too_long, invalid_cause, vec![0]] {
+        let mut h = Harness::new(Default::default());
+        h.run.inputs = tape.clone();
+        h.run.inputs.last_mut().unwrap().output = bad_output;
+        h.library = Library::new(&h.run, SimulationConfig::default()).unwrap();
+        let io = h.root("Io");
+        let input = unok(h.value("io.stdin", vec![io]));
+        assert!(
+            h.try_call(
+                "stdin.read",
+                vec![input, buffer.clone(), u64_value(2)],
+                TypeKind::Tuple(vec![].into())
+            )
+            .is_err()
+        );
+        assert_eq!(h.library.simulation.events.len(), 1);
+    }
 }

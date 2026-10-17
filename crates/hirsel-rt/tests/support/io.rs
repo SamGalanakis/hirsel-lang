@@ -131,6 +131,13 @@ pub fn replay_interpreter_with_fixture(
             assert_eq!(event.request, fixture_event.request, "fixture request");
             assert_eq!(event.fault, fixture_event.fault, "fixture fault input");
             let (name, args) = match &event.request {
+                Request::Stdin { .. }
+                | Request::Stderr { .. }
+                | Request::ReadStdin { .. }
+                | Request::PrintStderr { .. }
+                | Request::EnvGet { .. } => {
+                    panic!("host input tapes require the explicit stream and Env replay fixture")
+                }
                 Request::MonotonicClock { io } => ("io.monotonic_clock", vec![handle("Io", *io)]),
                 Request::WallClock { io } => ("io.wall_clock", vec![handle("Io", *io)]),
                 Request::Monotonic { clock } => {
@@ -390,6 +397,8 @@ pub fn replay_interpreter_with_fixture(
                         hirsel_rt::handles::Grant::Test { .. } => {
                             ObservedGrant::Root("Test".into())
                         }
+                        hirsel_rt::handles::Grant::Stdin => ObservedGrant::Root("Stdin".into()),
+                        hirsel_rt::handles::Grant::Stderr => ObservedGrant::Root("Stderr".into()),
                         hirsel_rt::handles::Grant::Stdout => ObservedGrant::Root("Stdout".into()),
                         hirsel_rt::handles::Grant::Directory { root, access } => {
                             ObservedGrant::Directory {

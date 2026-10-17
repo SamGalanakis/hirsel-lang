@@ -39,6 +39,21 @@ pub enum IoError {
     Canceled(u32),
     NotGranted,
 }
+/// Ordinals follow core InputError; host errno is translated to the existing fault input.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InputError {
+    Fault(u32),
+    Canceled(u32),
+    InvalidInput,
+    InvalidUtf8,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EnvError {
+    NotGranted,
+    InvalidUtf8,
+}
+/// The root Env identity is separate from every adapter-allocated logical handle.
+pub const ENV_HANDLE: u64 = u64::MAX;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdapterError {
     InvalidHandle(u64),
@@ -54,6 +69,24 @@ pub enum AdapterError {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Request {
+    Stdin {
+        io: u64,
+    },
+    Stderr {
+        io: u64,
+    },
+    ReadStdin {
+        stdin: u64,
+        max: u64,
+    },
+    PrintStderr {
+        stderr: u64,
+        bytes: Vec<u8>,
+    },
+    EnvGet {
+        env: u64,
+        name: String,
+    },
     MonotonicClock {
         io: u64,
     },
@@ -238,6 +271,8 @@ pub enum ClockError {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Completion {
+    Input(Result<Vec<u8>, InputError>),
+    Env(Result<Option<String>, EnvError>),
     ClockGrant(Result<u64, ()>),
     Monotonic(Result<u64, ClockError>),
     Wall(Result<i64, ClockError>),
@@ -400,6 +435,8 @@ pub(crate) struct State {
     pub(crate) wall_granted: bool,
     last_monotonic: Option<u64>,
     pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub env: BTreeMap<String, Option<String>>,
     pub fake_trees: BTreeMap<u64, Tree>,
     pub fake_directories: BTreeMap<u64, u64>,
     fake_files: BTreeMap<u64, crate::io_sim::FileIdentities>,
@@ -418,6 +455,8 @@ impl Default for State {
             wall_granted: false,
             last_monotonic: None,
             stdout: vec![],
+            stderr: Vec::new(),
+            env: BTreeMap::new(),
             fake_trees: BTreeMap::new(),
             fake_directories: BTreeMap::new(),
             fake_files: BTreeMap::new(),
@@ -425,7 +464,7 @@ impl Default for State {
             net_rules: BTreeSet::new(),
             net_world: NetWorld::Host,
             net_scripts: BTreeMap::new(),
-            projections: ["stdout", "tasks", "net", "random", "dir"]
+            projections: ["stdin", "stderr", "stdout", "tasks", "net", "random", "dir"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
@@ -452,6 +491,8 @@ impl State {
             _ => {}
         }
         let name = match request {
+            Request::Stdin { .. } => "stdin",
+            Request::Stderr { .. } => "stderr",
             Request::Stdout { .. } => "stdout",
             Request::Tasks { .. } => "tasks",
             Request::Net { .. } => "net",
@@ -485,7 +526,7 @@ impl State {
             _ => Err(AdapterError::InvalidHandle(id)),
         }
     }
-    fn expect(&self, id: u64, grant: Grant) -> Result<(), AdapterError> {
+    pub(crate) fn expect(&self, id: u64, grant: Grant) -> Result<(), AdapterError> {
         if self.handles.rows.get(&id) == Some(&grant) {
             Ok(())
         } else {
@@ -604,6 +645,19 @@ impl State {
         input: Completion,
     ) -> Result<Completion, AdapterError> {
         match (request, &input) {
+            (Request::ReadStdin { stdin, max }, Completion::Input(value)) => {
+                self.expect(*stdin, Grant::Stdin)?;
+                let valid = match value {
+                    Err(InputError::InvalidInput) => *max == 0,
+                    Ok(bytes) => *max > 0 && bytes.len() as u64 <= *max,
+                    Err(InputError::Fault(_)) => *max > 0,
+                    Err(InputError::Canceled(cause)) => *max > 0 && *cause <= 2,
+                    Err(InputError::InvalidUtf8) => false,
+                };
+                if !valid {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+            }
             (Request::Monotonic { clock }, Completion::Monotonic(value)) => {
                 self.expect(*clock, Grant::MonotonicClock)?;
                 if let Ok(ticks) = value {
@@ -725,6 +779,27 @@ impl State {
                 self.fake_directories.insert(id, id);
                 Ok(C::Handle(Ok(id)))
             }
+            R::Stdin { io } | R::Stderr { io } => {
+                self.expect(*io, Grant::Io)?;
+                let (projection, grant) = if matches!(request, R::Stdin { .. }) {
+                    ("stdin", Grant::Stdin)
+                } else {
+                    ("stderr", Grant::Stderr)
+                };
+                if !self.projections.contains(projection) {
+                    return Ok(C::Handle(Err(IoError::NotGranted)));
+                }
+                Ok(C::Handle(Ok(self.handles.insert(grant))))
+            }
+            R::ReadStdin { .. } => Err(AdapterError::InvalidCompletion),
+            R::EnvGet { env, name } => {
+                if *env != ENV_HANDLE {
+                    return Err(AdapterError::InvalidHandle(*env));
+                }
+                Ok(C::Env(
+                    self.env.get(name).cloned().ok_or(EnvError::NotGranted),
+                ))
+            }
             R::Stdout { io } => {
                 self.expect(*io, Grant::Io)?;
                 if !self.projections.contains("stdout") {
@@ -768,6 +843,11 @@ impl State {
                         })
                 };
                 Ok(C::Handle(result))
+            }
+            R::PrintStderr { stderr, bytes } => {
+                self.expect(*stderr, Grant::Stderr)?;
+                self.stderr.extend(prefix(bytes));
+                Ok(C::Unit(error.map_or(Ok(()), Err)))
             }
             R::Print { stdout, bytes } => {
                 self.expect(*stdout, Grant::Stdout)?;
@@ -1127,6 +1207,34 @@ pub unsafe extern "C" fn hirsel_rt_v2_out_print(
         .wrapping_add(start);
     let bytes = unsafe { native_text(data, len) }.as_bytes().to_vec();
     let Completion::Unit(value) = (unsafe { native_call(ctx, Request::Print { stdout, bytes }) })
+    else {
+        crate::fault("Io completion type mismatch");
+    };
+    unsafe { out.write(UnitResult::of(value)) };
+    crate::STATUS_OK
+}
+
+/// # Safety
+/// Context and borrowed Stderr/String are live; out is writable Result storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_err_print(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    s: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    let stderr = unsafe { s.read() };
+    let start =
+        usize::try_from(start).unwrap_or_else(|_| crate::fault("Io start exceeds target usize"));
+    let data = crate::alloc::payload(owner)
+        .wrapping_add(8)
+        .wrapping_add(start);
+    let bytes = unsafe { native_text(data, len) }.as_bytes().to_vec();
+    let Completion::Unit(value) =
+        (unsafe { native_call(ctx, Request::PrintStderr { stderr, bytes }) })
     else {
         crate::fault("Io completion type mismatch");
     };
@@ -1577,6 +1685,8 @@ macro_rules! grant_projection_export {
         }
     };
 }
+grant_projection_export!(hirsel_rt_v2_io_stdin, Stdin);
+grant_projection_export!(hirsel_rt_v2_io_stderr, Stderr);
 grant_projection_export!(hirsel_rt_v2_io_stdout, Stdout);
 grant_projection_export!(hirsel_rt_v2_io_random, Random);
 grant_projection_export!(hirsel_rt_v2_io_tasks, Tasks);
@@ -2019,4 +2129,133 @@ fn adapter_refusal(binding: &mut Binding, error: AdapterError) -> ! {
     }
     eprintln!("hirsel-rt: Io refused: {error:?}");
     std::process::exit(crate::launch::EXIT_LAUNCH)
+}
+
+/// # Safety
+/// Context is bound; Stdin and list addresses are live, list exclusive; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_stdin_read(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut HandleResult,
+    stdin: *const u64,
+    buffer: *mut *mut crate::Header,
+    max: u64,
+) -> u8 {
+    let request = Request::ReadStdin {
+        stdin: unsafe { stdin.read() },
+        max,
+    };
+    let Ok(Completion::Input(value)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let result = match value {
+        Ok(bytes) => {
+            unsafe { append_byte_list(ctx, buffer, &bytes) };
+            HandleResult {
+                tag: 0,
+                padding: 0,
+                value: bytes.len() as u64,
+            }
+        }
+        Err(error) => {
+            let (tag, payload) = match error {
+                InputError::Fault(code) => (0u32, code),
+                InputError::Canceled(cause) => (1, cause),
+                InputError::InvalidInput => (2, 0),
+                InputError::InvalidUtf8 => (3, 0),
+            };
+            HandleResult {
+                tag: 1,
+                padding: 0,
+                value: u64::from(tag) | u64::from(payload) << 32,
+            }
+        }
+    };
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+
+/// Result[Option[String], EnvError]: nested Option starts at byte 8, String at byte 16.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct EnvResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub option: u32,
+    pub option_padding: u32,
+    pub value: crate::views::Slice,
+}
+/// # Safety
+/// Context and borrowed Env/String are live; out is writable nested Result storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_env_get(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut EnvResult,
+    env: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    let data = crate::alloc::payload(owner)
+        .wrapping_add(8)
+        .wrapping_add(start as usize);
+    let name = unsafe { native_text(data, len) }.to_owned();
+    let Ok(Completion::Env(value)) = (unsafe {
+        capability_call(
+            ctx,
+            Request::EnvGet {
+                env: env.read(),
+                name,
+            },
+        )
+    }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let mut result: EnvResult = unsafe { std::mem::zeroed() };
+    match value {
+        Ok(Some(text)) => {
+            result.option = 1;
+            result.value = unsafe { crate::text::allocate_bytes(ctx, text.as_bytes()) };
+        }
+        Ok(None) => {}
+        Err(error) => {
+            result.tag = 1;
+            result.option = match error {
+                EnvError::NotGranted => 0,
+                EnvError::InvalidUtf8 => 1,
+            };
+        }
+    }
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+
+/// Append initialized bytes to an exclusive physical List slot through ordinary COW growth.
+/// # Safety
+/// Context is live; buffer is an exclusive address of a live List[u8].
+pub(crate) unsafe fn append_byte_list(
+    ctx: *mut crate::RunCtx,
+    buffer: *mut *mut crate::Header,
+    bytes: &[u8],
+) {
+    if !bytes.is_empty() {
+        unsafe {
+            let block = buffer.read();
+            let count = crate::alloc::payload(block).cast::<u64>().read();
+            let total = count
+                .checked_add(bytes.len() as u64)
+                .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
+            let block = crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, total);
+            let payload = crate::alloc::payload(block);
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                payload.add(crate::alloc::sequence_elements_offset(1) as usize + count as usize),
+                bytes.len(),
+            );
+            payload.cast::<u64>().write(total);
+            buffer.write(block);
+        }
+    }
 }

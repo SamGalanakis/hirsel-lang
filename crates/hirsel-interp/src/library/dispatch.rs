@@ -34,6 +34,79 @@ impl Library {
             next_callback: 0,
         })
     }
+    fn read_stdin(
+        &mut self,
+        call: &OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let a = call.arguments;
+        self.simulation.id(arg(a, 0)?, "Stdin")?;
+        let max = int(arg(a, 2)?)?.bits() as u64;
+        let mut buffer = arg(a, 1)?.clone();
+        let Value::Sequence {
+            kind: BuiltinType::List,
+            elements,
+        } = &mut buffer
+        else {
+            return Err(invalid("stdin.read expects List[u8]"));
+        };
+        let request = encode_arguments(&[a[0].clone(), a[2].clone()]);
+        // A tape completion is the input provider during replay, including short reads.
+        // The current Stdin handle was checked above; no configured bytes are consulted.
+        let replay = self
+            .simulation
+            .replay_output("Stdin", "stdin.read", &request)?;
+        let replaying = replay.is_some();
+        let completion = match replay {
+            Some(bytes) => decode_stdin_completion(bytes)?,
+            None if max == 0 => Err((2, 0)),
+            None => match self.simulation.fault("stdin.read") {
+                Some(Fault::Canceled(cause)) => Err((1, cause)),
+                Some(Fault::Fault { code, .. }) => Err((0, code)),
+                None => {
+                    let position = self.simulation.stdin_position;
+                    let remaining = &self.simulation.config.stdin[position..];
+                    let len = remaining
+                        .len()
+                        .min(usize::try_from(max).unwrap_or(usize::MAX));
+                    Ok(remaining[..len].to_vec())
+                }
+            },
+        };
+        let valid = match &completion {
+            Ok(bytes) => max > 0 && bytes.len() as u64 <= max,
+            Err((0, _)) => max > 0,
+            Err((1, cause)) => max > 0 && *cause <= 2,
+            Err((2, 0)) => max == 0,
+            _ => false,
+        };
+        if !valid {
+            return Err(invalid("invalid stdin tape completion"));
+        }
+        let recorded = encode_stdin_completion(&completion);
+        let (value, delivered) = match completion {
+            Ok(bytes) => (ok(u64_value(bytes.len() as u64)), bytes),
+            Err((0, code)) => (error(variant(0, vec![u32_value(code)])), vec![]),
+            Err((1, cause)) => (error(variant(1, vec![variant(cause, vec![])])), vec![]),
+            Err((2, _)) => (error(variant(2, vec![])), vec![]),
+            _ => unreachable!(),
+        };
+        self.simulation
+            .record("Stdin", "stdin.read", request, recorded, context)?;
+        if !replaying {
+            self.simulation.stdin_position += delivered.len();
+        }
+        elements.extend(delivered.into_iter().map(|byte| {
+            Some(Value::Integer(
+                Integer::new(Primitive::U8, byte.into()).unwrap(),
+            ))
+        }));
+        let mut result = OperationResult::returned(value);
+        if let OperationResult::Complete { arguments, .. } = &mut result {
+            arguments.push((1, buffer));
+        }
+        Ok(result)
+    }
     fn capability(
         &mut self,
         name: &str,
@@ -44,9 +117,11 @@ impl Library {
         let a = call.arguments;
         let op = name.split_once('.').unwrap().1;
         let value = match name {
-            "io.stdout" | "io.random" | "io.net" | "io.tasks" => {
+            "io.stdin" | "io.stderr" | "io.stdout" | "io.random" | "io.net" | "io.tasks" => {
                 self.simulation.id(arg(a, 0)?, "Io")?;
                 let kind = match op {
+                    "stdin" => "Stdin",
+                    "stderr" => "Stderr",
                     "stdout" => "Stdout",
                     "random" => "Random",
                     "net" => "Net",
@@ -203,24 +278,35 @@ impl Library {
                     })
                     .unwrap_or_else(|| error(variant(0, vec![])))
             }
-            "out.print" => {
-                self.simulation.id(arg(a, 0)?, "Stdout")?;
+            "env.get" => {
+                self.simulation.id(arg(a, 0)?, "Env")?;
+                match self.simulation.config.env.get(text(arg(a, 1)?)?) {
+                    None => error(variant(0, vec![])),
+                    Some(None) => ok(none()),
+                    Some(Some(value)) => ok(some(Value::String(value.clone()))),
+                }
+            }
+            "stdin.read" => return self.read_stdin(call, context).map(Some),
+            "err.print" | "out.print" => {
+                self.simulation.id(
+                    arg(a, 0)?,
+                    if name == "err.print" {
+                        "Stderr"
+                    } else {
+                        "Stdout"
+                    },
+                )?;
                 let text = text(arg(a, 1)?)?;
-                match self
-                    .tasks
-                    .canceled()
-                    .map(Fault::Canceled)
-                    .or_else(|| self.simulation.fault(name))
-                {
+                let fault = self.tasks.canceled().map(Fault::Canceled).or_else(|| self.simulation.fault(name));
+                let output = if name == "err.print" { &mut self.simulation.stderr } else { &mut *context.stdout };
+                match fault {
                     Some(Fault::Canceled(cause)) => error(variant(1, vec![variant(cause, vec![])])),
                     Some(Fault::Fault { code, partial }) => {
-                        context
-                            .stdout
-                            .extend_from_slice(&text.as_bytes()[..partial.min(text.len())]);
+                        output.extend_from_slice(&text.as_bytes()[..partial.min(text.len())]);
                         error(variant(0, vec![u32_value(code)]))
                     }
                     None => {
-                        context.stdout.extend_from_slice(text.as_bytes());
+                        output.extend_from_slice(text.as_bytes());
                         ok(Value::Unit)
                     }
                 }
@@ -316,6 +402,10 @@ impl Library {
             "Args"
         } else if name.starts_with("test.") {
             "Test"
+        } else if name == "env.get" {
+            "Env"
+        } else if name == "err.print" {
+            "Stderr"
         } else if name.starts_with("out.") {
             "Stdout"
         } else {
@@ -918,7 +1008,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();
@@ -1641,4 +1731,38 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
         }
     }
     out
+}
+
+// Stdin completions are independently framed input bytes, rather than the caller's
+// mutable buffer or returned count. Error tags are the core InputError ordinals.
+fn encode_stdin_completion(value: &Result<Vec<u8>, (u32, u32)>) -> Vec<u8> {
+    match value {
+        Ok(bytes) => {
+            let mut output = vec![0];
+            output.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            output.extend_from_slice(bytes);
+            output
+        }
+        Err((tag, payload)) => {
+            let mut output = vec![1];
+            output.extend_from_slice(&tag.to_le_bytes());
+            output.extend_from_slice(&payload.to_le_bytes());
+            output
+        }
+    }
+}
+fn decode_stdin_completion(bytes: &[u8]) -> Result<Result<Vec<u8>, (u32, u32)>, Error> {
+    if bytes.len() < 9 {
+        return Err(invalid("truncated stdin tape completion"));
+    }
+    match bytes[0] {
+        0 if u64::from_le_bytes(bytes[1..9].try_into().unwrap()) == (bytes.len() - 9) as u64 => {
+            Ok(Ok(bytes[9..].to_vec()))
+        }
+        1 if bytes.len() == 9 => Ok(Err((
+            u32::from_le_bytes(bytes[1..5].try_into().unwrap()),
+            u32::from_le_bytes(bytes[5..9].try_into().unwrap()),
+        ))),
+        _ => Err(invalid("invalid stdin tape completion framing")),
+    }
 }

@@ -1,0 +1,11 @@
+// rule: CAP-1
+// expect: run
+pub fn main(e: Env, args: Args) -> Result[(), ()] {
+  if arg.count(args) > 0 {
+    failure.check(env.get(e, "SET") == Ok(Some("λ🐑")), Bounds())
+    failure.check(env.get(e, "UNSET") == Ok(None()), Bounds())
+    failure.check(env.get(e, "EMPTY") == Ok(Some("")), Bounds())
+  }
+  failure.check(env.get(e, "SECRET") == Error(NotGranted()), Bounds())
+  Ok(())
+}
