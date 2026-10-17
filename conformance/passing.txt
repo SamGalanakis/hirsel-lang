@@ -1061,6 +1061,8 @@ conformance/LANG/LANG-2-nested-call-type-capture-run.hir
 conformance/LANG/LANG-2-nested-call-type-forward-run.hir
 conformance/LANG/LANG-2-nested-call-type-run.hir
 conformance/LANG/LANG-2-operand-context.hir
+conformance/LANG/LANG-2-option-comparison-context-run.hir
+conformance/LANG/LANG-2-option-comparison-slots-ok.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-ok.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-bad.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-ok.hir
@@ -3005,8 +3007,12 @@ conformance/PROV/PROV-1-field-path-bad.hir
 conformance/PROV/PROV-1-field-path-ok.hir
 conformance/PROV/PROV-1-file-stream-dir-bad.hir
 conformance/PROV/PROV-1-file-stream-dir-ok.hir
+conformance/PROV/PROV-1-for-item-find-reject.hir
+conformance/PROV/PROV-1-for-item-find-run.hir
 conformance/PROV/PROV-1-for-mut-container-bad.hir
 conformance/PROV/PROV-1-for-mut-container-ok.hir
+conformance/PROV/PROV-1-for-mut-item-call-bad.hir
+conformance/PROV/PROV-1-for-mut-item-call-ok.hir
 conformance/PROV/PROV-1-frame-temporary-result-bad.hir
 conformance/PROV/PROV-1-frame-temporary-result-ok.hir
 conformance/PROV/PROV-1-fresh-alias-consuming-run.hir
@@ -3560,6 +3566,7 @@ conformance/SEM/SEM-3-pathtime-reference-run.hir
 conformance/SEM/SEM-3-positions-empty-terminal.hir
 conformance/SEM/SEM-3-positions-terminal.hir
 conformance/SEM/SEM-3-scalar-safe-slices.hir
+conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-unicode-positions.hir
 conformance/SEM/SEM-3-unicode-scalars.hir
 conformance/SEM/SEM-3-wave1-byte-alias-run.hir
