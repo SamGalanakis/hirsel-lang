@@ -60,6 +60,19 @@ impl Harness {
             )
             .map(|v| v.unwrap())
     }
+    fn poll(&mut self, token: u64) -> Result<Option<OperationResult>, Error> {
+        self.library.poll(
+            token,
+            &mut OperationContext {
+                trace_mode: TraceMode::Effects,
+                anchor: None,
+                configuration: &self.run,
+                sources: &self.sources,
+                stdout: &mut self.stdout,
+                trace: &mut self.trace,
+            },
+        )
+    }
     fn call(&mut self, name: &str, args: Vec<Value>) -> OperationResult {
         self.try_call(name, args).unwrap()
     }
@@ -261,9 +274,14 @@ fn refusal_timeout_exhaustion_and_unbounded_connect_quiescence() {
     };
     assert_eq!(h.value("net.connect", a(unbounded())), error(v(5, vec![])));
     assert_eq!(h.value("net.connect", a(bounded())), error(v(15, vec![])));
-    assert!(
-        matches!(h.try_call("net.connect",a(unbounded())), Err(Error::Blocked(waits)) if waits.len() == 1)
-    );
+    let OperationResult::Park { token, wait } = h.call("net.connect", a(unbounded())) else {
+        panic!("an unanswered connection must park without completing");
+    };
+    assert_eq!(wait.kind, "net.connect");
+    assert_eq!(wait.targets.len(), 1);
+    let events = h.library.simulation.events.len();
+    assert!(h.poll(token).unwrap().is_none());
+    assert_eq!(h.library.simulation.events.len(), events);
     assert_eq!(h.value("net.connect", a(unbounded())), error(v(5, vec![])));
 }
 #[test]
@@ -333,9 +351,15 @@ fn reads_append_and_inline_reads_fill_only_a_prefix() {
 #[test]
 fn read_timeout_and_no_timeout_blocked_are_distinct() {
     let (mut h, n, s) = setup(vec![NetStep::Stall]);
-    assert!(
-        matches!(h.try_call("net.read",vec![n.clone(),s.clone(),list(vec![]),u64_value(1)]), Err(Error::Blocked(waits)) if waits.len() == 1)
-    );
+    let OperationResult::Park { token, wait } = h.call(
+        "net.read",
+        vec![n.clone(), s.clone(), list(vec![]), u64_value(1)],
+    ) else {
+        panic!("a read without a timeout must park without completing");
+    };
+    assert_eq!(wait.kind, "net.read");
+    assert_eq!(wait.targets.len(), 1);
+    assert!(h.poll(token).unwrap().is_none());
     assert_eq!(
         h.value(
             "net.set_read_timeout",
@@ -343,10 +367,10 @@ fn read_timeout_and_no_timeout_blocked_are_distinct() {
         ),
         ok(Value::Unit)
     );
-    assert_eq!(
-        h.value("net.read", vec![n, s, list(vec![]), u64_value(1)]),
-        error(v(15, vec![]))
-    );
+    let Some(OperationResult::Complete { value, .. }) = h.poll(token).unwrap() else {
+        panic!("the parked read must complete after its timeout becomes enabled");
+    };
+    assert_eq!(value, error(v(15, vec![])));
 }
 
 #[test]

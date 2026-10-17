@@ -448,13 +448,18 @@ effects and stable wait rows (spawn path, source anchor, kind, logical targets).
 
 The reference runtime uses cooperative fibers: each task owns a frame stack and
 failure chain. A FIFO runnable queue advances only at Io calls, CAP-4 operations
-and explicit cancellation checks. Pure code and shielded destruction do not yield.
+and explicit cancellation checks. Pure code does not yield. Destruction suppresses
+cancellation but can yield at permitted Io operations.
 Spawn transfers the once closure into a new task; its captured value tree has no
 shared counted storage in this value-based interpreter. Scope continuations join
 all children, including detached children, before releasing the scope body.
 Cancellation is persistent task state and is observed before a blocking effect,
 never by pure code, joins or mutex acquisition. Synchronizing operations record
-ordered capability events through the existing strict replay input.
+ordered capability events through the existing strict replay input. The default
+choice is FIFO; task.resume inputs may select any runnable task and reject blocked
+tasks. Completion is recorded after cleanup, separately from await completion.
+Blocking simulated network operations retain their typed arguments and mutable
+loans while another task runs.
 
 Channels own FIFO payload values, endpoint counts and suspended receives. A send
 transfers its argument only on success; a closed or canceled send returns it.
@@ -467,7 +472,15 @@ scalar values and use the same total operation order.
 An isolate continuation alone may catch the callback's language failure after all
 cleanup; ordinary callbacks preserve failure propagation. Child completion retains
 its failure chain and spawn path. Scope joins select failures in spawn order and
-cancel siblings. Tooling termination and global quiescence bypass isolation.
+cancel siblings and the enclosing scope body at its next blocking operation.
+Tooling termination and global quiescence bypass isolation.
+
+Scope exit distinguishes the declared Result nominal from other variants: an
+Option::Some result joins normally. For a generic erased result R, values retain
+only their variant ordinal and fields, without nominal identity. A second variant
+at that boundary reports Error::Unavailable rather than guessing whether it is a
+Result::Error. Supporting that case requires carrying the instantiated result
+nominal through generic calls or into value metadata.
 
 The native implementation will require separate task contexts, each owning its
 allocator, plain counts and failure state. Cooperative stackful fibers avoid

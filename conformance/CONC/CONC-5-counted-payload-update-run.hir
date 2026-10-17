@@ -1,0 +1,29 @@
+// rule: CONC-5
+// expect: run
+// Mutex callbacks retain counted payload updates after returning.
+@noalloc
+fn check(value: bool) -> ()
+  requires value {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let m: Mutex[List[u32]] = mutex.create(tasks, [1])
+  mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique List[u32]) {
+      list.push(mut value, 2)
+    }
+  )
+  let n = mutex.with(
+    tasks,
+    m,
+    fn(mut value: unique List[u32]) {
+      list.len(value)
+    }
+  )
+  check(n == 2)
+  Ok(())
+}

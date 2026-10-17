@@ -1,0 +1,25 @@
+// rule: CONC-2
+// expect: run
+// stdout: child
+// A Some result is a normal scope exit, so it must not cancel a detached child.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let value: Option[u8] = task.scope(
+    tasks,
+    fn(s: Scope) -> Option[u8] {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() -> Result[(), OutputError] {
+          let mut r = take receiver
+          let status = channel.receive(tasks, mut r)
+          out.print(stdout, "child\n")
+        }
+      )
+      task.detach(s, take h)
+      Some(7)
+    }
+  )
+  Ok(())
+}

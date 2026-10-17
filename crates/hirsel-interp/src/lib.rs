@@ -205,8 +205,19 @@ pub trait Operations {
     fn take_tasks(&mut self) -> Vec<TaskStart> {
         vec![]
     }
-    fn enter_task(&mut self, _id: u64) {}
-    fn task_finished(&mut self, _id: u64, _result: OperationResult) -> Result<(), Error> {
+    fn enter_task(&mut self, _id: u64, _shielded: bool) {}
+    fn choose_task(&self, _runnable: &[u64]) -> Result<usize, Error> {
+        Ok(0)
+    }
+    fn task_resumed(&mut self, _id: u64, _context: &mut OperationContext<'_>) -> Result<(), Error> {
+        Ok(())
+    }
+    fn task_finished(
+        &mut self,
+        _id: u64,
+        _result: OperationResult,
+        _context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
         Err(invalid("unexpected task completion"))
     }
     fn take_yield(&mut self) -> bool {

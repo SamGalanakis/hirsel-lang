@@ -1,0 +1,32 @@
+// rule: CONC-2
+// expect: run
+// An expected-error scope exit cancels its detached child before joining it.
+@noalloc
+fn check(value: bool) -> ()
+  requires value {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+  let status: Result[(), u8] = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[(), u8] {
+      let h = task.async(
+        s,
+        fn() {
+          let mut r = take receiver
+          let canceled: bool = match channel.receive(tasks, mut r) {
+            Error(Canceled(Parent)) => true,
+            _ => false,
+          }
+          check(canceled)
+        }
+      )
+      task.detach(s, take h)
+      Error(7)
+    }
+  )
+  Ok(())
+}

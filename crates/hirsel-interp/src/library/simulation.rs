@@ -526,6 +526,9 @@ impl Simulation {
         self.events.push(event);
         Ok(())
     }
+    pub(super) fn next_replay(&self) -> Option<&hirsel_tir::CapabilityEvent> {
+        self.replay.get(self.replay_index)
+    }
     pub fn finish_replay(&self) -> Result<(), Error> {
         if !self.replay.is_empty() && self.replay_index != self.replay.len() {
             Err(invalid("unconsumed capability replay events"))

@@ -11,6 +11,10 @@ use std::collections::BTreeMap;
 pub(super) struct Tasks {
     pub current: u64,
     pub yield_now: bool,
+    pub shielded: bool,
+    spawn_counts: BTreeMap<u64, u32>,
+    active_scopes: BTreeMap<u64, Vec<u64>>,
+    scope_canceled: BTreeMap<u64, u32>,
     next: u64,
     starts: Vec<TaskStart>,
     tasks: BTreeMap<u64, Child>,
@@ -25,7 +29,10 @@ struct Child {
     result: Option<OperationResult>,
 }
 pub(super) enum Pending {
-    Scope(u64),
+    Scope {
+        scope: u64,
+        result: Option<bool>,
+    },
     Isolate,
     Join {
         scope: u64,
@@ -55,7 +62,19 @@ impl Tasks {
         std::mem::take(&mut self.starts)
     }
     pub fn canceled(&self) -> Option<u32> {
-        self.tasks.get(&self.current).and_then(|t| t.canceled)
+        if self.shielded {
+            return None;
+        }
+        self.tasks
+            .get(&self.current)
+            .and_then(|t| t.canceled)
+            .or_else(|| {
+                self.active_scopes
+                    .get(&self.current)?
+                    .iter()
+                    .rev()
+                    .find_map(|id| self.scope_canceled.get(id).copied())
+            })
     }
     pub fn path(&self) -> Vec<u32> {
         self.tasks
@@ -67,7 +86,9 @@ impl Tasks {
         let path = self.tasks[&task].path.clone();
         for child in self.tasks.values_mut() {
             if child.path.starts_with(&path) {
-                child.canceled.get_or_insert(cause);
+                child
+                    .canceled
+                    .get_or_insert(if child.path == path { cause } else { 1 });
             }
         }
     }
@@ -83,6 +104,7 @@ impl Tasks {
                 }
             }
             let scope = child.scope;
+            self.scope_canceled.entry(scope).or_insert(2);
             let siblings = self.scopes[&scope].clone();
             for sibling in siblings {
                 if sibling != task {
@@ -152,7 +174,11 @@ impl Library {
         self.tasks.yield_now = true;
         self.simulation.record(
             "Tasks",
-            name,
+            if name == "task.await" {
+                "task.await.start"
+            } else {
+                name
+            },
             super::channels::request(self.tasks.current, a),
             vec![],
             context,
@@ -162,8 +188,27 @@ impl Library {
                 self.simulation.id(arg(a, 0)?, "Tasks")?;
                 let scope = self.tasks.fresh();
                 self.tasks.scopes.insert(scope, vec![]);
+                self.tasks
+                    .active_scopes
+                    .entry(self.tasks.current)
+                    .or_default()
+                    .push(scope);
                 self.task_callback(
-                    Pending::Scope(scope),
+                    Pending::Scope {
+                        scope,
+                        result: match &call
+                            .types
+                            .get(call.result_type)
+                            .ok_or_else(|| invalid("scope result type"))?
+                            .kind
+                        {
+                            hirsel_types::TypeKind::Parameter(_) => None,
+                            hirsel_types::TypeKind::Named { definition, .. } => {
+                                Some(*definition == hirsel_syntax::DefPath::core("Result"))
+                            }
+                            _ => Some(false),
+                        },
+                    },
                     arg(a, 1)?.clone(),
                     vec![handle("Scope", scope)],
                 )
@@ -181,9 +226,15 @@ impl Library {
                     .scopes
                     .get_mut(&scope)
                     .ok_or_else(|| invalid("expired task scope"))?;
-                path.push(children.len() as u32);
+                let ordinal = self
+                    .tasks
+                    .spawn_counts
+                    .entry(self.tasks.current)
+                    .or_default();
+                path.push(*ordinal);
+                *ordinal += 1;
                 children.push(task);
-                let canceled = self.tasks.canceled();
+                let canceled = self.tasks.canceled().map(|_| 1);
                 self.tasks.tasks.insert(
                     task,
                     Child {
@@ -213,6 +264,7 @@ impl Library {
                     OperationResult::returned(Value::Unit).transferring([1])
                 } else if let Some(result) = self.tasks.tasks.get_mut(&task).unwrap().result.take()
                 {
+                    self.record_join(task, &result, context)?;
                     result
                 } else {
                     self.task_wait(Pending::Await(task), context, "task.await", vec![task])
@@ -237,20 +289,41 @@ impl Library {
         Ok(match pending {
             Pending::Isolate => match result {
                 OperationResult::Complete { value, .. } => OperationResult::returned(ok(value)),
-                OperationResult::FailureChain { failures, .. } => {
+                OperationResult::FailureChain { mut failures, .. } => {
+                    for failure in &mut failures {
+                        if failure.spawn_path.is_empty() {
+                            failure.spawn_path = self.tasks.path();
+                        }
+                    }
                     OperationResult::returned(error(failure_value(&failures, context)?))
                 }
                 _ => return Err(invalid("isolate callback did not complete")),
             },
-            Pending::Scope(scope) => {
-                if matches!(
+            Pending::Scope {
+                scope,
+                result: is_result,
+            } => {
+                let active = self
+                    .tasks
+                    .active_scopes
+                    .get_mut(&self.tasks.current)
+                    .ok_or_else(|| invalid("missing active scope"))?;
+                if active.pop() != Some(scope) {
+                    return Err(invalid("scope exit order"));
+                }
+                let error_value = matches!(
                     &result,
-                    OperationResult::FailureChain { .. }
-                        | OperationResult::Complete {
-                            value: Value::Variant { variant: 1, .. },
-                            ..
-                        }
-                ) {
+                    OperationResult::Complete {
+                        value: Value::Variant { variant: 1, .. },
+                        ..
+                    }
+                );
+                if error_value && is_result.is_none() {
+                    return Err(Error::Unavailable("task.scope needs the concrete result nominal for an erased generic error exit".into()));
+                }
+                if matches!(&result, OperationResult::FailureChain { .. })
+                    || error_value && is_result == Some(true)
+                {
                     for child in self.tasks.scopes[&scope].clone() {
                         self.tasks.cancel(child, 1);
                     }
@@ -302,7 +375,15 @@ impl Library {
                             failures: primary, ..
                         } = &mut result
                         {
-                            append_chain(primary, chain);
+                            if chain.first().map(|f| &f.spawn_path)
+                                < primary.first().map(|f| &f.spawn_path)
+                            {
+                                let mut earlier = chain;
+                                append_chain(&mut earlier, std::mem::take(primary));
+                                *primary = earlier;
+                            } else {
+                                append_chain(primary, chain);
+                            }
                         } else {
                             if let OperationResult::Complete { value, .. } = result {
                                 released.push(value);
@@ -318,6 +399,7 @@ impl Library {
             }
         }
         self.tasks.scopes.remove(&scope);
+        self.tasks.scope_canceled.remove(&scope);
         match &mut result {
             OperationResult::Complete {
                 released: pending, ..
@@ -328,6 +410,27 @@ impl Library {
             _ => return Err(invalid("invalid scope result")),
         }
         Ok(result)
+    }
+    fn record_join(
+        &mut self,
+        task: u64,
+        result: &OperationResult,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        let output = match result {
+            OperationResult::Complete { value, .. } => super::dispatch::encode_value(value),
+            OperationResult::FailureChain { failures, .. } => {
+                super::dispatch::encode_value(&failure_value(failures, context)?)
+            }
+            _ => return Err(invalid("unfinished joined task")),
+        };
+        self.simulation.record(
+            "Tasks",
+            "task.await.complete",
+            task.to_le_bytes().to_vec(),
+            output,
+            context,
+        )
     }
     pub(super) fn poll_task(
         &mut self,
@@ -348,7 +451,9 @@ impl Library {
                     .ok_or_else(|| invalid("expired awaited task"))?
                     .result
                     .take();
-                if result.is_none() {
+                if let Some(result) = &result {
+                    self.record_join(task, result, context)?;
+                } else {
                     self.tasks.pending.insert(token, Pending::Await(task));
                 }
                 Ok(result)

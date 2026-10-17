@@ -18,6 +18,7 @@ pub struct Library {
     pub(super) tasks: super::tasks::Tasks,
     pub(super) channels: super::channels::Channels,
     pub(super) synchronizers: super::synchronization::Synchronizers,
+    pub(super) network_waits: std::collections::BTreeMap<u64, super::net::NetworkWait>,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
 }
@@ -28,6 +29,7 @@ impl Library {
             tasks: Default::default(),
             channels: Default::default(),
             synchronizers: Default::default(),
+            network_waits: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
         })
@@ -204,7 +206,12 @@ impl Library {
             "out.print" => {
                 self.simulation.id(arg(a, 0)?, "Stdout")?;
                 let text = text(arg(a, 1)?)?;
-                match self.simulation.fault(name) {
+                match self
+                    .tasks
+                    .canceled()
+                    .map(Fault::Canceled)
+                    .or_else(|| self.simulation.fault(name))
+                {
                     Some(Fault::Canceled(cause)) => error(variant(1, vec![variant(cause, vec![])])),
                     Some(Fault::Fault { code, partial }) => {
                         context
@@ -361,7 +368,13 @@ impl Library {
         {
             return Ok(error(variant(2, vec![])));
         }
-        if let Some(f) = self.simulation.fault(name) {
+        let canceled = (name != "file.narrow")
+            .then(|| self.tasks.canceled())
+            .flatten();
+        if let Some(f) = canceled
+            .map(Fault::Canceled)
+            .or_else(|| self.simulation.fault(name))
+        {
             // Cancellation has no effects. Other faults may commit a prefix.
             if let Fault::Fault { partial, .. } = &f
                 && *partial > 0
@@ -695,10 +708,48 @@ impl Operations for Library {
     fn take_tasks(&mut self) -> Vec<crate::TaskStart> {
         self.tasks.take_starts()
     }
-    fn enter_task(&mut self, id: u64) {
+    fn enter_task(&mut self, id: u64, shielded: bool) {
         self.tasks.current = id;
+        self.tasks.shielded = shielded;
     }
-    fn task_finished(&mut self, id: u64, result: OperationResult) -> Result<(), Error> {
+    fn choose_task(&self, runnable: &[u64]) -> Result<usize, Error> {
+        if let Some(event) = self.simulation.next_replay() {
+            if event.operation != "task.resume" || event.input.len() != 8 {
+                return Err(invalid("missing task scheduling input"));
+            }
+            let id = u64::from_le_bytes(event.input.as_slice().try_into().unwrap());
+            return runnable
+                .iter()
+                .position(|candidate| *candidate == id)
+                .ok_or_else(|| invalid("scheduling input selects a blocked task"));
+        }
+        Ok(0)
+    }
+    fn task_resumed(&mut self, id: u64, context: &mut OperationContext<'_>) -> Result<(), Error> {
+        self.simulation.record(
+            "Tasks",
+            "task.resume",
+            id.to_le_bytes().to_vec(),
+            vec![],
+            context,
+        )
+    }
+    fn task_finished(
+        &mut self,
+        id: u64,
+        result: OperationResult,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        self.simulation.record(
+            "Tasks",
+            "task.complete",
+            id.to_le_bytes().to_vec(),
+            vec![u8::from(matches!(
+                result,
+                OperationResult::FailureChain { .. }
+            ))],
+            context,
+        )?;
         self.tasks.finished(id, result)
     }
     fn take_yield(&mut self) -> bool {
@@ -712,8 +763,18 @@ impl Operations for Library {
         token: u64,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
+        if self.network_waits.contains_key(&token) {
+            return self.poll_network(token, context);
+        }
         if self.channels.waits.contains_key(&token) {
-            self.poll_channel(token, context)
+            let saved = (!context.configuration.inputs.is_empty()).then(|| self.channels.clone());
+            let result = self.poll_channel(token, context);
+            if result.is_err()
+                && let Some(saved) = saved
+            {
+                self.channels = saved;
+            }
+            result
         } else {
             self.poll_task(token, context)
         }
@@ -874,15 +935,17 @@ primary_operations! { self, call, context, name, a, value;
             return self.capability(name, &call, context);
             },
     Capability: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
-    Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { return self.channel_call(name, &call, context).map(Some); },
-    Capability: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" => { return self.synchronization_call(name, &call, context).map(Some); },
+    Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { let saved = (!context.configuration.inputs.is_empty()).then(|| self.channels.clone());
+        let result = self.channel_call(name, &call, context);
+        if result.is_err() && let Some(saved) = saved { self.channels = saved; }
+        return result.map(Some); },
+    Capability: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" => { let saved = (!context.configuration.inputs.is_empty()).then(|| self.synchronizers.clone());
+        let result = self.synchronization_call(name, &call, context);
+        if result.is_err() && let Some(saved) = saved { self.synchronizers = saved; }
+        return result.map(Some); },
     Unavailable: "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" => {
-        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-        let result = self.simulation.net_call(name, &call, context).map(Some);
-        if result.is_err() && !matches!(&result, Err(Error::Blocked(_)))
-            && let Some(saved) = saved { self.simulation = saved; }
-        return result;
+        return self.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Unavailable: "reservations.insert" | "stock.get" | "stock.put" | "store.transact" => { return Err(Error::Unavailable(format!("{name} is a signature-only application fixture"))); },

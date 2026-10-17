@@ -405,6 +405,7 @@ impl Simulation {
         name: &str,
         call: &OperationCall<'_>,
         cx: &mut OperationContext<'_>,
+        cancellation: Option<u32>,
     ) -> Result<OperationResult, Error> {
         let a = call.arguments;
         if name == "test.net" {
@@ -479,7 +480,10 @@ impl Simulation {
                             && r.service == port.to_string()
                             && (name == "net.resolve" || r.operation != "listen")
                     }) {
-                        if let Some(fault) = self.fault(name) {
+                        if let Some(fault) = cancellation
+                            .map(Fault::Canceled)
+                            .or_else(|| self.fault(name))
+                        {
                             break 'operation Err(injected(fault));
                         }
                         let peer_idx = self.net_worlds.get(&world).and_then(|w| {
@@ -634,7 +638,9 @@ impl Simulation {
                             | "tls.close"
                     );
                     let fault = if access.is_ok() && blocking {
-                        self.fault(name)
+                        cancellation
+                            .map(Fault::Canceled)
+                            .or_else(|| self.fault(name))
                     } else {
                         None
                     };
@@ -910,3 +916,98 @@ pub(super) fn configured_world(grant: Option<&NetGrant>) -> Result<BTreeMap<u64,
 #[cfg(test)]
 #[path = "net_tests.rs"]
 mod tests;
+
+/// A suspended Io call retains its typed snapshot; the evaluator retains owners
+/// and mutable loans until this operation completes or the run is abandoned.
+pub(super) struct NetworkWait {
+    name: String,
+    path: hirsel_syntax::DefPath,
+    arguments: Vec<Value>,
+    generics: Vec<hirsel_types::GenericArgument>,
+    types: hirsel_types::TypeStore,
+    result_type: hirsel_types::TypeId,
+    site: hirsel_span::Span,
+}
+impl super::Library {
+    pub(super) fn network_call(
+        &mut self,
+        name: &str,
+        call: &OperationCall<'_>,
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        self.tasks.yield_now = true;
+        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+        let result = self
+            .simulation
+            .net_call(name, call, context, self.tasks.canceled());
+        match result {
+            Err(Error::Blocked(mut waits)) => {
+                let token = self.next_callback;
+                self.next_callback += 1;
+                self.network_waits.insert(
+                    token,
+                    NetworkWait {
+                        name: name.into(),
+                        path: call.path.clone(),
+                        arguments: call.arguments.to_vec(),
+                        generics: call.generics.to_vec(),
+                        types: call.types.clone(),
+                        result_type: call.result_type,
+                        site: call.site,
+                    },
+                );
+                let mut wait = waits.pop().ok_or_else(|| invalid("network wait missing"))?;
+                wait.spawn_path = self.tasks.path();
+                Ok(OperationResult::Park { token, wait })
+            }
+            Err(error) => {
+                if let Some(saved) = saved {
+                    self.simulation = saved;
+                }
+                Err(error)
+            }
+            Ok(result) => Ok(result),
+        }
+    }
+    pub(super) fn poll_network(
+        &mut self,
+        token: u64,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let wait = &self.network_waits[&token];
+        // An Unanswered scripted connection has no readiness source. Polling
+        // must not issue a new connect and consume the next scripted attempt.
+        if matches!(wait.name.as_str(), "net.connect" | "net.connect_addr")
+            && self.tasks.canceled().is_none()
+        {
+            return Ok(None);
+        }
+        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+        let result = self.simulation.net_call(
+            &wait.name,
+            &OperationCall {
+                path: &wait.path,
+                arguments: &wait.arguments,
+                generics: &wait.generics,
+                types: &wait.types,
+                result_type: wait.result_type,
+                site: wait.site,
+            },
+            context,
+            self.tasks.canceled(),
+        );
+        match result {
+            Err(Error::Blocked(_)) => Ok(None),
+            Err(error) => {
+                if let Some(saved) = saved {
+                    self.simulation = saved;
+                }
+                Err(error)
+            }
+            Ok(result) => {
+                self.network_waits.remove(&token);
+                Ok(Some(result))
+            }
+        }
+    }
+}

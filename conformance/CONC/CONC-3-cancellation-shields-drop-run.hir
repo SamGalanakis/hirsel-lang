@@ -1,0 +1,46 @@
+// rule: CONC-3
+// expect: run
+// stdout: released
+// Cancellation persists across blocking calls, while resource drops are shielded.
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "released\n")
+}
+
+@noalloc
+fn check(value: bool) -> ()
+  requires value {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() -> bool {
+          let trace = Trace(stdout: stdout)
+          let mut r = take receiver
+          let canceled: bool = match channel.receive(tasks, mut r) {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          let no_output: bool = match out.print(stdout, "unreachable\n") {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          canceled && no_output
+        }
+      )
+      task.cancel(s, h)
+      check(task.await(s, take h))
+    }
+  )
+  Ok(())
+}

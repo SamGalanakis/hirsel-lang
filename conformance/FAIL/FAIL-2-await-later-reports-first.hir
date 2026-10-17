@@ -1,0 +1,31 @@
+// rule: FAIL-2
+// expect: fail SEM-1 at line 16
+// Awaiting a later failure still reports the first child in spawn order.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let first = task.async(
+        s,
+        fn() -> u8 {
+          let mut r = take receiver
+          let status = channel.receive(tasks, mut r)
+          let n: u8 = 255
+          n + 1
+        }
+      )
+      let second = task.async(
+        s,
+        fn() -> u8 {
+          let n: u8 = 0
+          n - 1
+        }
+      )
+      let value = task.await(s, take second)
+      task.detach(s, take first)
+    }
+  )
+  Ok(())
+}

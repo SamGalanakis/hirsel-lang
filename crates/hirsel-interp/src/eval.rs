@@ -158,7 +158,7 @@ fn execute_frames(
     let mut task = 0;
     let mut runnable = std::collections::VecDeque::new();
     let mut parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)> = Vec::new();
-    operations.enter_task(task);
+    operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
     loop {
         for start in operations.take_tasks() {
             let (definition, body, captures, sizes) = match &start.callee {
@@ -229,7 +229,7 @@ fn execute_frames(
         // is no host waiting: exhausted readiness is the CONC-8 observation.
         let mut waiting = vec![];
         for (id, mut stack, failures) in parked.drain(..) {
-            operations.enter_task(id);
+            operations.enter_task(id, stack.iter().any(|f| f.finalized.is_some()));
             let frame: &mut Frame = stack.last_mut().unwrap();
             let (OperationResult::Park { token, .. }, state) = frame.operation.as_ref().unwrap()
             else {
@@ -254,11 +254,9 @@ fn execute_frames(
             }
         }
         parked = waiting;
-        operations.enter_task(task);
+        operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
         let yield_now = operations.take_yield();
-        if frames.is_empty()
-            || (yield_now && !runnable.is_empty() && !frames.iter().any(|f| f.finalized.is_some()))
-        {
+        if frames.is_empty() || (yield_now && !runnable.is_empty()) {
             if !frames.is_empty() {
                 runnable.push_back((
                     task,
@@ -266,11 +264,34 @@ fn execute_frames(
                     std::mem::take(&mut execution.failures),
                 ));
             }
-            if let Some((id, stack, failures)) = runnable.pop_front() {
+            let choice = if runnable.is_empty() {
+                0
+            } else {
+                operations
+                    .choose_task(&runnable.iter().map(|(id, _, _)| *id).collect::<Vec<_>>())?
+            };
+            if !runnable.is_empty() && choice >= runnable.len() {
+                return Err(invalid(
+                    "scheduler selected a task outside the runnable queue",
+                ));
+            }
+            if let Some((id, stack, failures)) = runnable.remove(choice) {
                 task = id;
                 frames = stack;
                 execution.failures = failures;
-                operations.enter_task(task);
+                operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
+                let resumed = frames.last().unwrap();
+                operations.task_resumed(
+                    task,
+                    &mut OperationContext {
+                        configuration,
+                        sources,
+                        stdout: &mut execution.stdout,
+                        trace: &mut execution.trace,
+                        trace_mode: runtime.trace_mode,
+                        anchor: Some(&anchor(resumed, site_of(resumed)?)),
+                    },
+                )?;
             } else {
                 let waits = parked
                     .iter()
@@ -1145,7 +1166,18 @@ fn execute_frames(
                             released: vec![],
                         }
                     };
-                    operations.task_finished(task, result)?;
+                    operations.task_finished(
+                        task,
+                        result,
+                        &mut OperationContext {
+                            configuration,
+                            sources,
+                            stdout: &mut execution.stdout,
+                            trace: &mut execution.trace,
+                            trace_mode: runtime.trace_mode,
+                            anchor: Some(&anchor(&finished, site_of(&finished)?)),
+                        },
+                    )?;
                     continue;
                 }
                 execution.outcome = if let Some(limit) = tooling {

@@ -5,7 +5,7 @@ use super::{Library, error, ok};
 use crate::{BlockedWait, Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use std::collections::{BTreeMap, VecDeque};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Channels {
     next: u64,
     channels: BTreeMap<u64, Channel>,
@@ -13,6 +13,7 @@ pub(super) struct Channels {
     pub waits: BTreeMap<u64, (u64, Vec<u8>)>,
     pub released: Vec<Value>,
 }
+#[derive(Clone)]
 struct Channel {
     queue: VecDeque<Value>,
     senders: usize,

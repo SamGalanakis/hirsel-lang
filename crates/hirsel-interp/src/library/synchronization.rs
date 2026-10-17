@@ -4,13 +4,14 @@ use super::{Library, channels::request, tasks::id};
 use crate::observation::FailureRecord;
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use std::collections::BTreeMap;
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Synchronizers {
     next: u64,
     mutexes: BTreeMap<u64, Mutex>,
     atomics: BTreeMap<u64, Value>,
     pub pending: BTreeMap<u64, u64>,
 }
+#[derive(Clone)]
 struct Mutex {
     value: Option<Value>,
     dead: Option<Vec<FailureRecord>>,
@@ -24,7 +25,7 @@ impl Library {
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         self.simulation.id(arg(call.arguments, 0)?, "Tasks")?;
-        self.tasks.yield_now = true;
+        self.tasks.yield_now = name != "mutex.with";
         let a = call.arguments;
         let result = match name {
             "mutex.create" => {
@@ -174,6 +175,7 @@ impl Library {
         token: u64,
         result: OperationResult,
     ) -> Result<OperationResult, Error> {
+        self.tasks.yield_now = true;
         let id = self
             .synchronizers
             .pending

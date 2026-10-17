@@ -1129,6 +1129,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
     let io = h.root("Io");
     let tasks = h.project(&io, "tasks");
     let mutex = h.value("mutex.create", vec![tasks.clone(), u32_value(1)]);
+    assert!(h.library.take_yield());
     let body = Value::Closure {
         invoked: Default::default(),
         definition: support::path("body"),
@@ -1144,6 +1145,8 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
     ) else {
         panic!("mutex acquisition must call its body");
     };
+    // The mutex is acquired: switching tasks here would expose its absent payload.
+    assert!(!h.library.take_yield());
     assert!(
         h.library
             .callback_finished(continuation, &[(0, u32_value(7))], false)
@@ -1191,6 +1194,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
     };
     assert_eq!(failures, vec![original.clone()]);
     assert_eq!(released, vec![u32_value(7)]);
+    assert!(h.library.take_yield());
     let path = hirsel_syntax::DefPath::core("mutex.with");
     let result_type = h.types.push(ty(TypeKind::Tuple(vec![].into())));
     let OperationResult::FailureChain { failures, released } = h
@@ -1243,4 +1247,45 @@ fn argument_snapshot_preserves_empty_unicode_and_option_like_text() {
             })
         );
     }
+}
+
+// Scheduling input cannot be expressed by a conformance header. A recorded
+// runnable choice must control replay; an unavailable task is not a substitute.
+#[test]
+fn recorded_scheduler_choices_select_runnable_tasks_and_reject_blocked_ones() {
+    let mut h = Harness::new(Default::default());
+    h.run.inputs = vec![CapabilityEvent {
+        capability: hirsel_syntax::DefPath::core("Tasks"),
+        operation: "task.resume".into(),
+        input: 9u64.to_le_bytes().to_vec(),
+        output: vec![],
+    }];
+    h.library = Library::new(&h.run, Default::default()).unwrap();
+    assert!(matches!(
+        h.library.choose_task(&[4]),
+        Err(Error::InvalidTir(_))
+    ));
+    assert!(h.library.simulation.events.is_empty());
+    assert_eq!(h.library.choose_task(&[4, 9]).unwrap(), 1);
+    let anchor = hirsel_interp::observation::Anchor {
+        definition: support::path("main"),
+        body: BodyId(0),
+        cleanup: None,
+        site: support::site(7),
+    };
+    h.library
+        .task_resumed(
+            9,
+            &mut OperationContext {
+                trace_mode: Default::default(),
+                anchor: Some(&anchor),
+                configuration: &h.run,
+                sources: &h.sources,
+                stdout: &mut h.stdout,
+                trace: &mut h.trace,
+            },
+        )
+        .unwrap();
+    h.library.simulation.finish_replay().unwrap();
+    assert_eq!(h.library.simulation.events, h.run.inputs);
 }
