@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """The prelude overlay patches only the stock files its pins name, and only where its anchors are."""
+import ast
 import importlib.util
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -24,6 +26,7 @@ STOCK = {
         '    )\n',
     )),
     'rust/failure_filter.bzl': 'def failure_filter(ctx, compile_ctx):\n' + overlay.STOCK_FAILURE_FILTER,
+    'utils/cmd_script.bzl': 'def cmd_script():\n    wrapper = [\n        "#!/usr/bin/env bash",\n    ]\n',
     'rust/sources.bzl': 'def _get_artifacts(sources):\n    return [sources]\n' + overlay.STOCK_SOURCES_TSET,
 }
 
@@ -57,6 +60,22 @@ class PreludeOverlayGuards(unittest.TestCase):
         for relative, data in outputs.items():
             self.write(relative, data.decode())
         self.assertEqual(overlay.overlaid(self.prelude, self.pins), outputs)
+
+    def test_linker_wrapper_runs_without_path_and_preserves_arguments(self):
+        def run_wrapper(source):
+            shebang = next(ast.literal_eval(line.strip().rstrip(','))
+                           for line in source.splitlines() if '"#!' in line)
+            wrapper = self.prelude / 'linker_wrapper.sh'
+            wrapper.write_text(shebang + "\n/bin/printf '%s\\n' \"$@\"\n")
+            wrapper.chmod(0o755)
+            return subprocess.run([str(wrapper), 'one argument', 'two'], env={'PATH': ''},
+                                  capture_output=True, text=True)
+
+        stock = run_wrapper(STOCK['utils/cmd_script.bzl'])
+        self.assertEqual(stock.returncode, 127)
+        patched = run_wrapper(overlay.overlaid(self.prelude, self.pins)['utils/cmd_script.bzl'].decode())
+        self.assertEqual(patched.returncode, 0, patched.stderr)
+        self.assertEqual(patched.stdout, 'one argument\ntwo\n')
 
     def test_a_file_matching_neither_pin_is_refused(self):
         self.write('rust/failure_filter.bzl', STOCK['rust/failure_filter.bzl'] + '\n')

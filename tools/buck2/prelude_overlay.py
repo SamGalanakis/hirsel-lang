@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Install the pinned Buck2 prelude at `.buck2/prelude`, with Hirsel's overlay.
 
-The transforms take helper work off the pool:
+The transforms make wrapper execution self-contained and take helper work off the pool:
 
+- command wrappers use the image's `/bin/bash` without looking it up in `PATH`;
 - `failure_filter` is decided in the daemon from the compile's build status;
 - each compile's `-Ldependency` tree (category `deps`) is laid out by the
   daemon instead of a remote action;
@@ -276,10 +277,16 @@ def lay_out_dependency_dirs_in_daemon(text: str) -> str:
     return replace_once(text, STOCK_DEPENDENCY_DIRS, DAEMON_DEPENDENCY_DIRS, "dependency directory action")
 
 
+def use_absolute_wrapper_interpreter(text: str) -> str:
+    # Rustdoc runs linker wrappers without the compiler action's PATH.
+    return replace_once(text, '"#!/usr/bin/env bash"', '"#!/bin/bash"', "command wrapper interpreter")
+
+
 TRANSFORMS = {
     "rust/build.bzl": (narrow_transitive_source_inputs, lay_out_dependency_dirs_in_daemon),
     "rust/failure_filter.bzl": (filter_failures_in_daemon,),
     "rust/sources.bzl": (add_checkout_source_projection,),
+    "utils/cmd_script.bzl": (use_absolute_wrapper_interpreter,),
 }
 
 

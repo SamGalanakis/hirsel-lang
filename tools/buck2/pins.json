@@ -11,12 +11,14 @@
     "inputs": {
       "rust/build.bzl": "2a221551779f2e4668ec3e7acac0e97fc9d557126898a6d32843647bf19546ea",
       "rust/failure_filter.bzl": "b53d328b53f9b319784d121973c95dc63516a1f98c217859bf9151876465270c",
-      "rust/sources.bzl": "a291683f417e408a6f7ba012dff370e83f859050c31b8a5a30dd2132f01e27b2"
+      "rust/sources.bzl": "a291683f417e408a6f7ba012dff370e83f859050c31b8a5a30dd2132f01e27b2",
+      "utils/cmd_script.bzl": "b12d3d22b08ae2d1c170b6333854a0a0e047478f08c173d9595e0a160b79e20e"
     },
     "outputs": {
       "rust/build.bzl": "7b5a38fdcedb5a2e20ccc66988ea80cf27d3532a54459158d04cdaa497d17384",
       "rust/failure_filter.bzl": "d5213bc9ee0ab7acec4864d609a21768a8dde31cf1b0ed9cf8d75c08d4bfc512",
-      "rust/sources.bzl": "eebeb2fa0f01e7026479e117f5fd1ef01983c9acce80ca51f6554108ea633cec"
+      "rust/sources.bzl": "eebeb2fa0f01e7026479e117f5fd1ef01983c9acce80ca51f6554108ea633cec",
+      "utils/cmd_script.bzl": "c6898d8daa6c9fda2039b6ccd881803fa6fa27b697c458d621b31a32c6778e04"
     }
   }
 }
