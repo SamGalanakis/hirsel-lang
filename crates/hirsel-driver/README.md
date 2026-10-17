@@ -79,3 +79,9 @@ templates never pass through a temporary exported record.
 Native live launches inherit stdin only under the admitted stdin projection.
 Their two output pipes drain concurrently into separate caller-owned writers,
 while retaining the same bytes for native observations and launch diagnostics.
+
+`run_path_with_step_limit` selects an explicit simulation execution budget;
+`run_path_with_config` receives the selected runtime step bound for both its
+no-record simulation and admitted host path. CLI callers supply one billion
+unless overridden. `run_path`, `run_path_with_simulation`, and interpreter
+`Limits::default` retain their existing test/conformance budgets.

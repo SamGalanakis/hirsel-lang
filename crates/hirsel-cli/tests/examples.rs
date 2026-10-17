@@ -296,6 +296,7 @@ fn httpget() {
             &fixture.0.join("hirsel.json"),
             simulation,
             &mut output,
+            &mut Vec::new(),
         )
     })
     .unwrap();
@@ -473,4 +474,123 @@ fn csvjson_rejects_malformed_input() {
     for data in ["a,a\n", "a,b\nx\n", "a\n\"unterminated", "a\n\"x\"bad\n"] {
         fixture.run(false, Some(input(data, &[])), "", 1);
     }
+}
+
+#[test]
+fn cli_interpreter_step_limits() {
+    let fixture = Fixture::new(
+        "diagnostic",
+        "pub fn main() -> Result[(), ()] { let mut i: u64 = 0; while i < 20 { i += 1 }; Ok(()) }",
+    );
+    let manifest = fixture.0.join("hirsel.json");
+    let invoke = |flags: &[&str], code: i32, message: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&manifest)
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert_eq!(String::from_utf8_lossy(&output.stderr), message);
+    };
+    invoke(&[], 0, "");
+    invoke(&["--max-steps", "1"], 2, "evaluator tooling limit: Steps\n");
+    invoke(&["--max-steps=10000"], 0, "");
+    invoke(&["--max-steps=0"], 2, "evaluator tooling limit: Steps\n");
+    let simulation = fixture.0.join("simulation.json");
+    std::fs::write(&simulation, "{}").unwrap();
+    invoke(
+        &[
+            "--simulation",
+            simulation.to_str().unwrap(),
+            "--max-steps",
+            "1",
+        ],
+        2,
+        "evaluator tooling limit: Steps\n",
+    );
+    for values in [
+        vec!["bad"],
+        vec!["-1"],
+        vec!["18446744073709551616"],
+        vec![],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&manifest)
+            .arg("--max-steps")
+            .args(values)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .starts_with("--max-steps requires an unsigned integer\n")
+        );
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--native", "--max-steps", "1"])
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .starts_with("--max-steps is only supported for interpreted run\n")
+    );
+    // An explicit host record must use the same bound as simulated execution.
+    let record = fixture.0.join("host.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["export", "--run"])
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&record)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    invoke(
+        &["--run", record.to_str().unwrap(), "--max-steps=1"],
+        2,
+        "evaluator tooling limit: Steps\n",
+    );
+    invoke(&["--run", record.to_str().unwrap()], 0, "");
+}
+
+#[test]
+fn cli_default_budget_exceeds_the_conformance_budget() {
+    let fixture = Fixture::new(
+        "diagnostic",
+        "pub fn main() -> Result[(), ()] { let mut i: u64 = 0; while i < 100000 { i += 1 }; Ok(()) }",
+    );
+    let manifest = fixture.0.join("hirsel.json");
+    let bounded = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&manifest)
+        .args(["--max-steps", "1000000"])
+        .output()
+        .unwrap();
+    assert_eq!(bounded.status.code(), Some(2));
+    assert_eq!(bounded.stderr, b"evaluator tooling limit: Steps\n");
+    let ordinary = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert!(
+        ordinary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ordinary.stderr)
+    );
+    assert!(ordinary.stdout.is_empty());
+    assert!(ordinary.stderr.is_empty());
 }

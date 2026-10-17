@@ -101,3 +101,10 @@ fields and deny omitted roots. Standalone executables accept the corresponding
 Simulation writes stdout and stderr to distinct tool sinks. Live Stdin/Stderr and
 Env operations use the admitted runtime providers through HostLibrary; only exact
 Env names in the run record are readable, with null distinct from a denied name.
+
+Interpreted `hirsel run` defaults to 1,000,000,000 execution steps. Use
+`--max-steps <n>` to select an explicit nonnegative u64 budget, including zero.
+The option works with simulated inputs and explicit host `--run` records;
+`--native` rejects it. Exhaustion deterministically exits 2 and reports
+`evaluator tooling limit: Steps`. Driver/conformance adapter defaults and
+compile-time evaluation budgets are independent.

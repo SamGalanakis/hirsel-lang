@@ -2,7 +2,9 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+
+const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
 
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))
@@ -23,11 +25,13 @@ enum Command {
     Simulation {
         config: OsString,
         file: OsString,
+        max_steps: u64,
     },
     Run {
         file: OsString,
         record: Option<(bool, OsString)>,
         native: bool,
+        max_steps: u64,
     },
     Source {
         command: &'static str,
@@ -97,12 +101,21 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let mut record = None;
                 let mut native = false;
                 let mut simulation = None;
+                let mut max_steps = None;
                 let mut file = None;
                 while let Some(arg) = args.next()? {
                     match arg {
                         Long("native") if !native => native = true,
                         Long("run" | "grants") if record.is_none() => {
                             record = Some((matches!(arg, Long("grants")), args.value()?));
+                        }
+                        Long("max-steps") if max_steps.is_none() => {
+                            max_steps = Some(
+                                args.value()
+                                    .ok()
+                                    .and_then(|value| value.to_str()?.parse::<u64>().ok())
+                                    .ok_or("--max-steps requires an unsigned integer")?,
+                            );
                         }
                         Long("simulation") if simulation.is_none() => {
                             simulation = Some(args.value()?)
@@ -116,18 +129,27 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     }
                 }
                 let file = file.ok_or("missing source path")?;
+                if native && max_steps.is_some() {
+                    return Err("--max-steps is only supported for interpreted run".into());
+                }
+                let max_steps = max_steps.unwrap_or(DEFAULT_RUN_MAX_STEPS);
                 if let Some(config) = simulation {
                     if native || record.is_some() {
                         return Err(
                             "--simulation cannot combine with --native, --run or --grants".into(),
                         );
                     }
-                    Command::Simulation { config, file }
+                    Command::Simulation {
+                        config,
+                        file,
+                        max_steps,
+                    }
                 } else {
                     Command::Run {
                         file,
                         record,
                         native,
+                        max_steps,
                     }
                 }
             } else {
@@ -224,7 +246,11 @@ fn execute(args: Vec<OsString>) -> u8 {
                 Err(error) => tool_error(error, false),
             };
         }
-        Command::Simulation { config, file } => {
+        Command::Simulation {
+            config,
+            file,
+            max_steps,
+        } => {
             let simulation = match read_simulation(Path::new(&config)) {
                 Ok(config) => config,
                 Err(error) => {
@@ -232,9 +258,10 @@ fn execute(args: Vec<OsString>) -> u8 {
                     return 2;
                 }
             };
-            return run_result(hirsel_driver::run_path_with_simulation(
+            return run_result(hirsel_driver::run_path_with_step_limit(
                 Path::new(&file),
                 simulation,
+                max_steps,
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
             ));
@@ -243,6 +270,7 @@ fn execute(args: Vec<OsString>) -> u8 {
             file,
             record,
             native: true,
+            max_steps: _,
         } => {
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
@@ -272,6 +300,7 @@ fn execute(args: Vec<OsString>) -> u8 {
             file,
             record,
             native: false,
+            max_steps,
         } => {
             return run_result(hirsel_driver::run_path_with_config(
                 Path::new(&file),
@@ -282,6 +311,7 @@ fn execute(args: Vec<OsString>) -> u8 {
                         hirsel_driver::LaunchConfig::Record(Path::new(path))
                     }
                 }),
+                max_steps,
                 &mut std::io::stdout().lock(),
             ));
         }

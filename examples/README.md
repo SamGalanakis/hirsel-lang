@@ -12,9 +12,28 @@ No arguments selects a built-in demonstration. To process a file, copy `demo.jso
 put its UTF-8 contents in `files` under a relative path, and set `args` to that path.
 For example, `{"grants":["Io","Args"],"projections":["stdout","dir"],
 "args":["in.txt"],"files":{"in.txt":"hello\n"}}`. These are explicit simulation
-launch configs; they grant no host filesystem access. The current CLI cannot pass
-such inputs to `--native`; native E2E tests run the demonstrations. The calculator currently reads an expression file; stdin support is being added
-separately. Host `--run` records are being wired through the CLI separately.
+launch configs; they grant no host filesystem access. Native supplied-file tests
+use the explicit driver fixture boundary. To grant real host inputs to either
+CLI backend, export a bound record and fill its grants and argument snapshot:
+
+```sh
+hirsel export --run examples/wordscan/hirsel.json -o /tmp/wordscan-run.json
+python3 - <<'PY_RECORD'
+import json
+from pathlib import Path
+path = Path('/tmp/wordscan-run.json')
+record = json.loads(path.read_text())
+record.update(io={"stdout": "stdout.bytes@1", "dirs": [
+    {"path": "", "host": str(Path.cwd()), "access": "read_only"}
+]}, args=["README.md", "Hirsel"])
+path.write_text(json.dumps(record))
+PY_RECORD
+hirsel run examples/wordscan/hirsel.json --run /tmp/wordscan-run.json
+hirsel run --native examples/wordscan/hirsel.json --run /tmp/wordscan-run.json
+```
+
+The calculator currently reads an expression file. Interpreted CLI runs default
+to one billion execution steps; `--max-steps <n>` selects an explicit bound.
 
 | Program | Job and optional second argument |
 | --- | --- |
@@ -34,4 +53,4 @@ through both CLI backends and additional supplied-file cases, including a
 4,096-line sort input. These examples deliberately use only documented core and
 `std@1` APIs. The HTTP test uses the existing driver simulation and native launch
 fixtures, including an actual local TCP server. File-input native tests also use
-that explicit fixture boundary until the production CLI accepts run records.
+that explicit fixture boundary; the commands above exercise production run records.

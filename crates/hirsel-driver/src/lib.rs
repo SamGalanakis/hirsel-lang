@@ -54,8 +54,37 @@ pub fn run_path_with_simulation(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
+    run_simulation(path, simulation, None, stdout, stderr)
+}
+/// Execute simulated inputs with an explicit runtime workload budget.
+/// Ordinary driver/conformance entry points retain their adapter defaults.
+pub fn run_path_with_step_limit(
+    path: &Path,
+    simulation: SimulationConfig,
+    max_steps: u64,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<RunOutcome, ToolError> {
+    run_simulation(path, simulation, Some(max_steps), stdout, stderr)
+}
+fn run_simulation(
+    path: &Path,
+    simulation: SimulationConfig,
+    max_steps: Option<u64>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<RunOutcome, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
+    if let Some(steps) = max_steps {
+        program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
+            limits: hirsel_interp::Limits {
+                steps,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+    }
     // Tool launches classify an absent entry before requesting a rich observation.
     launch_signature(&mut program)?;
     let run = hirsel_tir::RunConfiguration {
@@ -161,13 +190,15 @@ impl LaunchConfig<'_> {
 pub fn run_path_with_config(
     path: &Path,
     record: Option<LaunchConfig<'_>>,
+    max_steps: u64,
     stdout: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
     use hirsel_interp::Outcome;
     if record.is_none() {
-        return run_path_with_simulation(
+        return run_path_with_step_limit(
             path,
             SimulationConfig::default(),
+            max_steps,
             stdout,
             &mut std::io::stderr().lock(),
         );
@@ -217,7 +248,7 @@ pub fn run_path_with_config(
         &run,
         args,
         hirsel_interp::Limits {
-            steps: u64::MAX,
+            steps: max_steps,
             call_depth: 256,
         },
         &mut operations,
