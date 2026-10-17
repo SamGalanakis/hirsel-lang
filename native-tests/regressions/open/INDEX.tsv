@@ -9,7 +9,7 @@ native/heap/heap: Malformed: read names ValueId(N) but SlotId(N) holds ValueId(N
 native/heap/heap: TypeConfusion: dup copy of a non-block value	0	heap-dup-of-non-block.hir
 native/heap/import: validator: CleanupOrder	9	conformance/SEM/SEM-3-wave1-text-empty-run.hir (argument/passing)
 native/heap/perceus: validator: HolderUnderLoan	0	perceus-holder-under-loan.hir
-native/heap/placement: HeapInNoalloc("construction N of ? escapes the frame")	3	noalloc-closure-list-escapes.hir
+native/heap/placement: HeapInNoalloc("construction N of ? escapes the frame")	3	fixed exemplar: native-tests/regressions/noalloc-closure-list-escapes.hir and conformance/MEM/MEM-5-nested-region-closure-run.hir (e3cb9ca7104ecabff8f86a65905cd42005365ac1); borrowed-call/capture escapes remain conservative; kind awaits refreshed agreement
 native/llvm/emission: invalid Ready unit: no runtime descriptor for layout N: Malformed("a drop program shorter than its fields' con	0	descriptor-of-handle-field.hir
 # Kinds 7dd85479 found that agree-known.txt does not list, with the corpus program of its first variant.
 native/heap/heap: BorrowExpired: borrow of LoanId(N) used while the loan is not active	2	conformance/LANG/LANG-11-block-value-borrow-run.hir (statement/discard)

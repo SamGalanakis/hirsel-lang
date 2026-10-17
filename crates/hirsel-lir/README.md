@@ -469,8 +469,9 @@ Operation actuals use LIR-owned Primitive/BuiltinType tags. Validators receive
 with the candidate call, including the rooted layout graph.
 
 `ValueRepr::Uncounted` at an inline layout describes data whose block fields
-are headerless references into one compiler-local region. Its physical layout stays
-the logical aggregate layout, but it owns no credits. C reconstructs region
+refer into one compiler-local region without holder credits. Its physical layout
+stays the logical aggregate layout, including its pointer encoding. The emitter
+rebases headerless SSA references at field boundaries. C reconstructs region
 provenance through construction, storage versions and projected reads; regional
 constructions with elided drops must hold trivial fields or uncounted children
 of the same region. Other region payloads retain scheduled cleanup.
