@@ -21,6 +21,8 @@ opt-level = 1
 # compile seconds per edit, each measured: the shared data crates, the IR checker, and the native
 # pipeline's contract, LIR and RC crates. Debug assertions and overflow checks
 # stay on. There is no workspace-wide opt-level 1.
+[profile.dev.package.hirsel-graph]
+opt-level = 1
 [profile.dev.package.hirsel-span]
 opt-level = 1
 [profile.dev.package.hirsel-intern]

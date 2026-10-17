@@ -3,7 +3,7 @@
 The LLVM backend: emission of validated Ready LIR units through a
 small RAII layer over the LLVM C API, returning an owned `hirsel_lir::ObjectArtifact`.
 
-Allowed dependencies: the shared data crates `hirsel-lir`, `hirsel-core-contract` and
+Allowed dependencies: the pure `hirsel-graph` utility, the shared data crates `hirsel-lir`, `hirsel-core-contract` and
 `hirsel-syntax`, `hirsel-span` (the existing Unicode-aware source-line index), and `llvm-sys = "=211.0.1"` with `strict-versioning` and `force-dynamic`,
 bound to the shared libLLVM 21.1.8 pinned in `tools/native-toolchain/llvm-21.lock`. No
 Inkwell, no other implementation crate. Test-only: `hirsel-types` and `hirsel-tir` (fixture

@@ -6,7 +6,7 @@ insertion, drop specialization and reuse, cleanup lowering,
 scalar legalization and the Ready stage. Each lives in its own module;
 sharing this crate does not imply sharing implementation state.
 
-Allowed dependencies: shared data crates (`hirsel-lir`, `hirsel-core-contract`,
+Allowed dependencies: the dependency-free `hirsel-graph` utility and shared data crates (`hirsel-lir`, `hirsel-core-contract`,
 `hirsel-tir`, `hirsel-types`, `hirsel-syntax`, ...). Never another implementation
 crate (`hirsel-llvm`, `hirsel-rt`, `hirsel-heapcheck`, `hirsel-kernels`, the M1a
 implementation crates) or `hirsel-driver`; only the driver wires them. The

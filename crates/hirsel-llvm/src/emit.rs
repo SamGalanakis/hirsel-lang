@@ -2004,34 +2004,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if self.unit.entry.index() >= count {
             return self.invalid("no entry block");
         }
-        let mut seen = vec![false; count];
-        let mut post = Vec::new();
-        let mut stack = vec![(
-            self.unit.entry.index(),
-            self.successors(self.unit.entry.index())?,
-            0,
-        )];
-        seen[self.unit.entry.index()] = true;
-        while let Some((b, succ, next)) = stack.last_mut() {
-            if let Some(&s) = succ.get(*next) {
-                *next += 1;
-                if s >= count {
-                    return self.invalid("an edge to a missing block");
-                }
-                if !seen[s] {
-                    seen[s] = true;
-                    let succ = self.successors(s)?;
-                    stack.push((s, succ, 0));
-                }
-            } else {
-                post.push(*b);
-                stack.pop();
-            }
+        let adjacent: Vec<Vec<usize>> = (0..count)
+            .map(|b| self.successors(b))
+            .collect::<Emitted<_>>()?;
+        if adjacent.iter().flatten().any(|&b| b >= count) {
+            return self.invalid("an edge to a missing block");
         }
+        let post = hirsel_graph::reverse_postorder(&adjacent, self.unit.entry.index());
         if post.len() != count {
             return self.invalid("an unreachable block");
         }
-        post.reverse();
         Ok(post)
     }
 

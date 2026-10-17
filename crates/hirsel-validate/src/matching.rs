@@ -322,12 +322,29 @@ impl Checker<'_> {
             self.error(ViolationKind::MatchCoverage);
             return;
         };
+        let adjacent: Vec<Vec<usize>> = self
+            .body
+            .blocks
+            .iter()
+            .map(|b| {
+                self.body
+                    .successors(&b.terminator)
+                    .iter()
+                    .map(|b| b.0 as usize)
+                    .collect()
+            })
+            .collect();
+        let dom = hirsel_graph::Dominators::new(&adjacent, self.body.entry.0 as usize);
+        // Dominance of a dead target is vacuous in this guard proof.
+        let dominates = |a: BlockId, b: BlockId| {
+            !dom.reachable(b.0 as usize) || dom.dominates(a.0 as usize, b.0 as usize)
+        };
         let valid = self.body.blocks.iter().enumerate().any(|(index, b)| {
             let Terminator::Branch { yes, no, .. } = b.terminator else { return false; };
             yes != no && self.cleanup_reaches(yes, arm.target) && self.failed_guard_reaches(BlockId(index as u32), no, restart)
-                && self.dominates(guard, BlockId(index as u32))
+                && dominates(guard, BlockId(index as u32))
                 && self.guard_preserves_scrutinee(guard, BlockId(index as u32), self.body.matches[id.0 as usize].scrutinee)
-                && self.dominates(BlockId(index as u32), restart)
+                && dominates(BlockId(index as u32), restart)
                 && guard != self.body.entry
                 && self.body.blocks.iter().enumerate().filter(|(_, b)| self.body.successors(&b.terminator).contains(&guard)).all(|(_, b)| matches!(b.terminator, Terminator::Match { table, from: start } if table == id && start < from))
         });
@@ -481,23 +498,6 @@ impl Checker<'_> {
             block = next;
         }
         block == target
-    }
-    fn dominates(&self, guard: BlockId, target: BlockId) -> bool {
-        let mut seen = BTreeSet::new();
-        let mut pending = vec![self.body.entry];
-        while let Some(b) = pending.pop() {
-            if b == guard || !seen.insert(b.0) {
-                continue;
-            }
-            if b == target {
-                return false;
-            }
-            pending.extend(
-                self.body
-                    .successors(&self.body.blocks[b.0 as usize].terminator),
-            );
-        }
-        true
     }
     fn coverage(&mut self, table: &MatchTable, store: &mut TypeStore) -> Result<bool, ()> {
         let rows: Vec<Vec<Option<MatchPatternId>>> = table

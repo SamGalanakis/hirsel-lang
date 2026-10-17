@@ -13,6 +13,8 @@ enum Class {
     Data,
     /// Independent implementation crates (M1a phases and the M1b native crates).
     Implementation,
+    /// Dependency-free utilities any layer may consume.
+    LeafUtility,
     /// Shared pure leaves with no runtime representation or ambient inputs.
     LeafKernel,
     /// The driver layer: the engine and the driver, which wires implementation
@@ -23,6 +25,7 @@ enum Class {
 }
 
 const CRATES: &[(&str, Class)] = &[
+    ("hirsel-graph", Class::LeafUtility),
     ("hirsel-span", Class::Data),
     ("hirsel-intern", Class::Data),
     ("hirsel-diag", Class::Data),
@@ -68,8 +71,9 @@ const ENGINE_IMPLEMENTATIONS: &[&str] = &[
     "hirsel-fmt",
 ];
 
-/// Data crates owned by native tasks take no external production dependency.
-const DEPENDENCY_FREE_DATA: &[&str] = &[
+/// Shared utilities and native data crates take no external production dependency.
+const NO_EXTERNAL_PRODUCTION: &[&str] = &[
+    "hirsel-graph",
     "hirsel-lir",
     "hirsel-core-contract",
     "hirsel-codec",
@@ -104,6 +108,8 @@ fn check_edge(from: &str, to: &str, kind: Kind) -> Result<(), String> {
         return Ok(());
     }
     let allowed = match (source, target) {
+        (Class::LeafUtility, _) => false,
+        (_, Class::LeafUtility) => true,
         (Class::LeafKernel, Class::Data) => to == "hirsel-core-contract",
         (_, Class::LeafKernel) => {
             matches!(from, "hirsel-rt" | "hirsel-interp" | "hirsel-heapcheck")
@@ -198,7 +204,7 @@ fn workspace_edges_respect_the_crate_layering() {
     for edge in &edges {
         if !edge.workspace
             && edge.kind == Kind::Production
-            && DEPENDENCY_FREE_DATA.contains(&edge.from.as_str())
+            && NO_EXTERNAL_PRODUCTION.contains(&edge.from.as_str())
         {
             violations.push(format!(
                 "external production dependency {} -> {}",
@@ -260,6 +266,12 @@ fn implementation_to_implementation_production_and_build_edges_are_rejected() {
 
 #[test]
 fn layering_controls() {
+    for &(consumer, _) in CRATES {
+        if consumer != "hirsel-graph" {
+            assert!(check_edge(consumer, "hirsel-graph", Kind::Production).is_ok());
+            assert!(check_edge("hirsel-graph", consumer, Kind::Production).is_err());
+        }
+    }
     for consumer in ["hirsel-rt", "hirsel-interp", "hirsel-heapcheck"] {
         assert!(check_edge(consumer, "hirsel-kernels", Kind::Production).is_ok());
     }

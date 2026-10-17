@@ -636,6 +636,10 @@
       "name": "hirsel-fmt"
     },
     {
+      "dependencies": [],
+      "name": "hirsel-graph"
+    },
+    {
       "dependencies": [
         {
           "kind": null,
@@ -794,6 +798,13 @@
         },
         {
           "kind": null,
+          "name": "hirsel-graph",
+          "path": "crates/hirsel-graph",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
           "name": "hirsel-syntax",
           "path": "crates/hirsel-syntax",
           "req": "*",
@@ -835,6 +846,13 @@
           "kind": null,
           "name": "hirsel-core-contract",
           "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-graph",
+          "path": "crates/hirsel-graph",
           "req": "*",
           "uses_default_features": true
         },
@@ -1355,6 +1373,13 @@
         },
         {
           "kind": null,
+          "name": "hirsel-graph",
+          "path": "crates/hirsel-graph",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
           "name": "hirsel-lir",
           "path": "crates/hirsel-lir",
           "req": "*",
@@ -1729,6 +1754,13 @@
     },
     {
       "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-graph",
+          "path": "crates/hirsel-graph",
+          "req": "*",
+          "uses_default_features": true
+        },
         {
           "kind": null,
           "name": "hirsel-intern",

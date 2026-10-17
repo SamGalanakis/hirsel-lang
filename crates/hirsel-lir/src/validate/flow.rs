@@ -6,7 +6,7 @@
 //! lattices. Neither has an iteration cutoff, and both converge on
 //! irreducible graphs (loops with several entries).
 use crate::ir::{BlockId, EdgeId};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Where an edge leaves its block: an instruction's failure edge, or the
 /// terminator (including a call's or raise's failure edge).
@@ -35,10 +35,7 @@ pub(super) struct Cfg {
     pub rpo: Vec<BlockId>,
     /// Reverse-postorder index of each reachable block.
     pub order: Vec<Option<usize>>,
-    pub idom: Vec<Option<BlockId>>,
-    /// Entry and exit times of each reachable block in a walk of the
-    /// dominator tree: a block dominates exactly the blocks inside its span.
-    span: Vec<Option<(u32, u32)>>,
+    dom: hirsel_graph::Dominators,
     /// Edges the loop nesting forest removes to break every cycle.
     pub feedback: BTreeSet<EdgeId>,
 }
@@ -54,238 +51,51 @@ impl Cfg {
             preds[out.target.index()].push((block, out.edge));
             source[out.edge.index()] = Some((block, out.origin));
         }
-        let rpo = reverse_postorder(&succ, entry);
+        let adjacent: Vec<Vec<usize>> = succ
+            .iter()
+            .map(|outs| outs.iter().map(|out| out.target.index()).collect())
+            .collect();
+        let dom = hirsel_graph::Dominators::new(&adjacent, entry.index());
+        let rpo: Vec<_> = dom
+            .reverse_postorder()
+            .iter()
+            .map(|&b| BlockId(b as u32))
+            .collect();
+        let feedback_pairs = hirsel_graph::feedback_edges(&adjacent, entry.index());
+        let pairs = &feedback_pairs;
+        let feedback = succ
+            .iter()
+            .enumerate()
+            .flat_map(|(b, outs)| {
+                outs.iter().filter_map(move |out| {
+                    pairs.contains(&(b, out.target.index())).then_some(out.edge)
+                })
+            })
+            .collect();
         let mut order = vec![None; blocks];
         for (i, b) in rpo.iter().enumerate() {
             order[b.index()] = Some(i);
         }
-        let mut cfg = Self {
+        Self {
             entry,
             succ,
             preds,
             source,
             rpo,
             order,
-            idom: vec![None; blocks],
-            span: vec![None; blocks],
-            feedback: BTreeSet::new(),
-        };
-        cfg.idom = cfg.dominators();
-        cfg.span = cfg.spans();
-        cfg.feedback = cfg.forest_feedback();
-        cfg
+            dom,
+            feedback,
+        }
     }
 
     pub fn reachable(&self, block: BlockId) -> bool {
         self.order[block.index()].is_some()
     }
 
-    /// Cooper, Harvey and Kennedy's iterative dominators, run to a fixpoint.
-    fn dominators(&self) -> Vec<Option<BlockId>> {
-        let mut idom: Vec<Option<BlockId>> = vec![None; self.succ.len()];
-        idom[self.entry.index()] = Some(self.entry);
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &b in self.rpo.iter().skip(1) {
-                let mut new = None;
-                for &(p, _) in &self.preds[b.index()] {
-                    if idom[p.index()].is_none() {
-                        continue;
-                    }
-                    new = Some(match new {
-                        None => p,
-                        Some(current) => self.intersect(&idom, p, current),
-                    });
-                }
-                if new.is_some() && idom[b.index()] != new {
-                    idom[b.index()] = new;
-                    changed = true;
-                }
-            }
-        }
-        idom
-    }
-
-    fn intersect(&self, idom: &[Option<BlockId>], a: BlockId, b: BlockId) -> BlockId {
-        let rank = |x: BlockId| self.order[x.index()].unwrap_or(usize::MAX);
-        let (mut a, mut b) = (a, b);
-        while a != b {
-            while rank(a) > rank(b) {
-                a = idom[a.index()].unwrap_or(self.entry);
-            }
-            while rank(b) > rank(a) {
-                b = idom[b.index()].unwrap_or(self.entry);
-            }
-        }
-        a
-    }
-
-    /// Number the dominator tree: each block's entry and exit time.
-    fn spans(&self) -> Vec<Option<(u32, u32)>> {
-        let mut children = vec![Vec::new(); self.succ.len()];
-        for &b in &self.rpo {
-            if let Some(parent) = self.idom[b.index()].filter(|&p| p != b) {
-                children[parent.index()].push(b);
-            }
-        }
-        let mut span = vec![None; self.succ.len()];
-        let mut clock = 0u32;
-        let mut stack = vec![(self.entry, 0usize)];
-        let mut entered = vec![0u32; self.succ.len()];
-        while let Some((b, next)) = stack.pop() {
-            if next == 0 {
-                entered[b.index()] = clock;
-                clock += 1;
-            }
-            if let Some(&child) = children[b.index()].get(next) {
-                stack.push((b, next + 1));
-                stack.push((child, 0));
-            } else {
-                span[b.index()] = Some((entered[b.index()], clock));
-                clock += 1;
-            }
-        }
-        span
-    }
-
-    /// Whether `a` dominates `b` (reflexive). Unreachable blocks dominate
-    /// nothing and are dominated by nothing.
+    /// Reflexive dominance on reachable blocks.
     pub fn dominates(&self, a: BlockId, b: BlockId) -> bool {
-        match (self.span[a.index()], self.span[b.index()]) {
-            (Some((a_in, a_out)), Some((b_in, b_out))) => a_in <= b_in && b_out <= a_out,
-            _ => false,
-        }
+        self.dom.dominates(a.index(), b.index())
     }
-
-    /// The loop nesting forest's feedback edges (recursive strongly connected
-    /// components): in each cyclic component, every edge into one of its
-    /// entries is a feedback edge; removing them, the component's remainder is
-    /// decomposed again. Every cycle, reducible or not, contains one, and the
-    /// set does not depend on a search order.
-    fn forest_feedback(&self) -> BTreeSet<EdgeId> {
-        let mut removed = BTreeSet::new();
-        let mut work = vec![self.rpo.clone()];
-        while let Some(nodes) = work.pop() {
-            let inside: BTreeSet<_> = nodes.iter().copied().collect();
-            for component in components(&nodes, |b| {
-                self.succ[b.index()]
-                    .iter()
-                    .filter(|o| inside.contains(&o.target) && !removed.contains(&o.edge))
-                    .map(|o| o.target)
-                    .collect()
-            }) {
-                let members: BTreeSet<_> = component.iter().copied().collect();
-                let internal: Vec<_> = component
-                    .iter()
-                    .flat_map(|&b| self.succ[b.index()].iter())
-                    .filter(|o| members.contains(&o.target) && !removed.contains(&o.edge))
-                    .copied()
-                    .collect();
-                if internal.is_empty() {
-                    continue;
-                }
-                let mut entries: BTreeSet<_> = component
-                    .iter()
-                    .copied()
-                    .filter(|&b| {
-                        b == self.entry
-                            || self.preds[b.index()]
-                                .iter()
-                                .any(|(p, _)| !members.contains(p))
-                    })
-                    .collect();
-                if entries.is_empty() {
-                    entries = members.clone();
-                }
-                for out in internal {
-                    if entries.contains(&out.target) {
-                        removed.insert(out.edge);
-                    }
-                }
-                work.push(component);
-            }
-        }
-        removed
-    }
-}
-
-fn reverse_postorder(succ: &[Vec<Out>], entry: BlockId) -> Vec<BlockId> {
-    let mut seen = vec![false; succ.len()];
-    let mut post = Vec::new();
-    let mut stack = vec![(entry, 0usize)];
-    seen[entry.index()] = true;
-    while let Some((b, next)) = stack.pop() {
-        if let Some(out) = succ[b.index()].get(next) {
-            stack.push((b, next + 1));
-            if !seen[out.target.index()] {
-                seen[out.target.index()] = true;
-                stack.push((out.target, 0));
-            }
-        } else {
-            post.push(b);
-        }
-    }
-    post.reverse();
-    post
-}
-
-/// Tarjan's strongly connected components of the subgraph on `nodes`,
-/// iteratively, so deep graphs do not exhaust the native stack.
-fn components(nodes: &[BlockId], succ: impl Fn(BlockId) -> Vec<BlockId>) -> Vec<Vec<BlockId>> {
-    let mut index: BTreeMap<BlockId, (usize, usize)> = BTreeMap::new();
-    let mut on_stack = BTreeSet::new();
-    let mut stack = Vec::new();
-    let mut result = Vec::new();
-    let mut counter = 0;
-    for &root in nodes {
-        if index.contains_key(&root) {
-            continue;
-        }
-        let mut frames = vec![(root, succ(root), 0usize)];
-        index.insert(root, (counter, counter));
-        counter += 1;
-        stack.push(root);
-        on_stack.insert(root);
-        while let Some((node, targets, next)) = frames.last_mut() {
-            let node = *node;
-            if let Some(&target) = targets.get(*next) {
-                *next += 1;
-                if let Some(&(target_index, _)) = index.get(&target) {
-                    if on_stack.contains(&target) {
-                        let low = &mut index.get_mut(&node).expect("visited").1;
-                        *low = (*low).min(target_index);
-                    }
-                } else {
-                    index.insert(target, (counter, counter));
-                    counter += 1;
-                    stack.push(target);
-                    on_stack.insert(target);
-                    frames.push((target, succ(target), 0));
-                }
-                continue;
-            }
-            frames.pop();
-            let (node_index, node_low) = index[&node];
-            if let Some((parent, _, _)) = frames.last() {
-                let low = &mut index.get_mut(parent).expect("visited").1;
-                *low = (*low).min(node_low);
-            }
-            if node_index == node_low {
-                let mut component = Vec::new();
-                while let Some(member) = stack.pop() {
-                    on_stack.remove(&member);
-                    component.push(member);
-                    if member == node {
-                        break;
-                    }
-                }
-                component.sort();
-                result.push(component);
-            }
-        }
-    }
-    result
 }
 
 /// Forward worklist dataflow to a fixpoint. `transfer` maps a block's
@@ -410,7 +220,11 @@ mod tests {
                     if x == BlockId(a) {
                         break true;
                     }
-                    match g.idom[x.index()] {
+                    match g
+                        .dom
+                        .immediate_dominator(x.index())
+                        .map(|b| BlockId(b as u32))
+                    {
                         Some(parent) if parent != x => x = parent,
                         _ => break false,
                     }

@@ -45,8 +45,7 @@ pub struct Plan {
 pub(crate) struct Graph {
     pub(crate) succ: Vec<Vec<(usize, EdgeId)>>,
     pub(crate) pred: Vec<Vec<(usize, EdgeId)>>,
-    rank: Vec<usize>,
-    idom: Vec<Option<usize>>,
+    dom: hirsel_graph::Dominators,
 }
 impl Graph {
     pub(crate) fn new(u: &LirUnit<Value>) -> Self {
@@ -59,68 +58,15 @@ impl Graph {
                 pred[to].push((b, e));
             }
         }
-        let mut seen = vec![false; u.blocks.len()];
-        let mut post = vec![];
-        let mut stack = vec![(u.entry.index(), false)];
-        while let Some((b, exit)) = stack.pop() {
-            if exit {
-                post.push(b);
-                continue;
-            }
-            if std::mem::replace(&mut seen[b], true) {
-                continue;
-            }
-            stack.push((b, true));
-            for &(s, _) in succ[b].iter().rev() {
-                stack.push((s, false));
-            }
-        }
-        post.reverse();
-        let mut rank = vec![usize::MAX; u.blocks.len()];
-        for (i, &b) in post.iter().enumerate() {
-            rank[b] = i;
-        }
-        let mut idom = vec![None; u.blocks.len()];
-        idom[u.entry.index()] = Some(u.entry.index());
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &b in post.iter().skip(1) {
-                let mut incoming = pred[b].iter().map(|p| p.0).filter(|&p| idom[p].is_some());
-                let Some(mut d) = incoming.next() else {
-                    continue;
-                };
-                for mut p in incoming {
-                    while d != p {
-                        if rank[d] > rank[p] {
-                            d = idom[d].unwrap();
-                        } else {
-                            p = idom[p].unwrap();
-                        }
-                    }
-                }
-                if idom[b] != Some(d) {
-                    idom[b] = Some(d);
-                    changed = true;
-                }
-            }
-        }
-        Self {
-            succ,
-            pred,
-            rank,
-            idom,
-        }
+        let adjacent: Vec<Vec<usize>> = succ
+            .iter()
+            .map(|ts| ts.iter().map(|&(b, _)| b).collect())
+            .collect();
+        let dom = hirsel_graph::Dominators::new(&adjacent, u.entry.index());
+        Self { succ, pred, dom }
     }
-    pub(crate) fn dominates(&self, a: usize, mut b: usize) -> bool {
-        if self.rank[b] == usize::MAX {
-            return false;
-        }
-        while self.rank[b] > self.rank[a] {
-            let Some(d) = self.idom[b] else { return false };
-            b = d;
-        }
-        a == b
+    pub(crate) fn dominates(&self, a: usize, b: usize) -> bool {
+        self.dom.dominates(a, b)
     }
 }
 
@@ -483,7 +429,7 @@ fn prove_with(
         .reads
         .iter()
         .filter(|r| g.dominates(r.0, c.latch))
-        .min_by_key(|r| (g.rank[r.0], r.1))?;
+        .min_by_key(|r| (g.dom.order(r.0).unwrap_or(usize::MAX), r.1))?;
     if !c
         .reads
         .iter()

@@ -1197,37 +1197,6 @@ impl Model {
     }
 }
 
-/// Dependencies precede their readers in a backward walk. DFS is iterative,
-/// and visits unreachable components too, preserving recovery/fact coverage.
-fn graph_postorder<'a>(
-    count: usize,
-    entry: usize,
-    successors: impl Fn(usize) -> &'a [usize],
-) -> Vec<usize> {
-    let mut seen = vec![false; count];
-    let mut order = Vec::with_capacity(count);
-    for root in std::iter::once(entry).chain(0..count) {
-        if seen[root] {
-            continue;
-        }
-        seen[root] = true;
-        let mut stack = vec![(root, 0)];
-        while let Some((node, next)) = stack.last_mut() {
-            if let Some(&child) = successors(*node).get(*next) {
-                *next += 1;
-                if !seen[child] {
-                    seen[child] = true;
-                    stack.push((child, 0));
-                }
-            } else {
-                order.push(*node);
-                stack.pop();
-            }
-        }
-    }
-    order
-}
-
 /// Backward demand follows only value transfers into the result, killing
 /// overwritten slots. Calls and captures never grant the result-read permission.
 fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
@@ -1248,8 +1217,11 @@ fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
             predecessors[next].push(id);
         }
     }
-    let mut pending: VecDeque<_> =
-        graph_postorder(body.blocks.len(), body.entry.0 as usize, |id| &graph[id]).into();
+    let mut pending: VecDeque<_> = hirsel_graph::postorder(
+        &graph,
+        std::iter::once(body.entry.0 as usize).chain(0..graph.len()),
+    )
+    .into();
     let mut queued = vec![true; body.blocks.len()];
     // Demand starts empty and grows monotonically. A read permission once
     // discovered therefore remains present at the least fixed point.
@@ -1409,11 +1381,13 @@ impl Checker<'_> {
             })
             .collect();
         let mut rank = vec![0; graph.len()];
-        for (index, block) in
-            graph_postorder(graph.len(), self.body.entry.0 as usize, |id| &graph[id])
-                .into_iter()
-                .rev()
-                .enumerate()
+        for (index, block) in hirsel_graph::postorder(
+            &graph,
+            std::iter::once(self.body.entry.0 as usize).chain(0..graph.len()),
+        )
+        .into_iter()
+        .rev()
+        .enumerate()
         {
             rank[block] = index;
         }

@@ -9,6 +9,14 @@ implementation design, not language rules; they may change without changing any 
 meaning. Every executable artifact an
 implementation publishes is independently validated, in debug and release builds alike.
 
+## Shared graph algorithms
+
+Validators and passes share the pure graph algorithms in `hirsel-graph`: ordered
+traversal, reachability, dominators, strongly connected components and loop-forest
+feedback edges. Each validator still derives its own IR facts and edge policy
+independently. These utilities carry no producer ownership or liveness answers;
+sharing them is an implementation choice, not a language rule.
+
 ## The reference interpreter
 
 The reference interpreter executes typed IR directly and is the oracle for every observable

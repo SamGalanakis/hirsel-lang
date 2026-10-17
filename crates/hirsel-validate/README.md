@@ -4,7 +4,7 @@ The IR checker (V): independent static validation of TIR before publication and
 execution. It reports compiler invariant failures, never source diagnostics, and
 covers structure, types, CFG, live slots, loans and cleanup dataflow.
 
-Allowed dependencies: hirsel-tir, hirsel-types, hirsel-syntax, hirsel-intern; no
+Allowed dependencies: the pure hirsel-graph utility, hirsel-tir, hirsel-types, hirsel-syntax, hirsel-intern; no
 implementation crates. hirsel-lir, hirsel-rc, hirsel-heapcheck and hirsel-llvm
 consume validated TIR but never depend on this crate, so a checker edit rebuilds
 only its users: hirsel-interp (the structural entry assertion), the driver

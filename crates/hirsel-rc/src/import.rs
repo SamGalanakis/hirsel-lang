@@ -1777,28 +1777,21 @@ impl Importer<'_, '_> {
             self.body
                 .successors(&self.body.blocks[b.0 as usize].terminator)
         };
-        let mut seen = vec![false; n];
-        let mut post = Vec::new();
-        let mut stack = vec![(self.body.entry, 0usize)];
-        seen[self.body.entry.0 as usize] = true;
-        while let Some((b, i)) = stack.pop() {
-            let succ = successors(b);
-            if i < succ.len() {
-                stack.push((b, i + 1));
-                let s = succ[i];
-                if (s.0 as usize) >= n {
-                    return malformed("successor outside the body");
-                }
-                if !seen[s.0 as usize] {
-                    seen[s.0 as usize] = true;
-                    stack.push((s, 0));
-                }
-            } else {
-                post.push(b);
-            }
+        let adjacent: Vec<Vec<usize>> = (0..n)
+            .map(|b| {
+                successors(tir::BlockId(b as u32))
+                    .iter()
+                    .map(|s| s.0 as usize)
+                    .collect()
+            })
+            .collect();
+        if adjacent.iter().flatten().any(|&b| b >= n) {
+            return malformed("successor outside the body");
         }
-        post.reverse();
-        self.rpo = post;
+        self.rpo = hirsel_graph::reverse_postorder(&adjacent, self.body.entry.0 as usize)
+            .into_iter()
+            .map(|b| tir::BlockId(b as u32))
+            .collect();
         self.tir_preds = vec![0; n];
         for &b in &self.rpo {
             for s in successors(b) {

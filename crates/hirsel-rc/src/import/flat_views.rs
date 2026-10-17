@@ -62,7 +62,7 @@ impl Importer<'_, '_> {
     }
 }
 
-/// Reuse the existing iterative SCC traversal. A static assignment in a cycle
+/// A static assignment in a cycle
 /// is not one initialization per frame; a root eligible for a view is never
 /// written, moved or mutably lent after its one whole initialization.
 fn stable_owned_roots(
@@ -70,18 +70,21 @@ fn stable_owned_roots(
     assigned: &[Vec<Option<tir::PlaceId>>],
     disqualified: &[bool],
 ) -> Vec<bool> {
-    let nodes: Vec<_> = (0..body.blocks.len()).map(|i| BlockId(i as u32)).collect();
-    let successors = |b: BlockId| {
-        body.successors(&body.blocks[b.index()].terminator)
-            .into_iter()
-            .map(|b| BlockId(b.0))
-            .collect::<Vec<_>>()
-    };
-    let mut cyclic = vec![false; nodes.len()];
-    for component in crate::reuse::components(&nodes, successors) {
-        if component.len() > 1 || successors(component[0]).contains(&component[0]) {
+    let adjacent: Vec<Vec<usize>> = body
+        .blocks
+        .iter()
+        .map(|b| {
+            body.successors(&b.terminator)
+                .iter()
+                .map(|b| b.0 as usize)
+                .collect()
+        })
+        .collect();
+    let mut cyclic = vec![false; body.blocks.len()];
+    for component in hirsel_graph::components(&adjacent) {
+        if component.len() > 1 || adjacent[component[0]].contains(&component[0]) {
             for b in component {
-                cyclic[b.index()] = true;
+                cyclic[b] = true;
             }
         }
     }

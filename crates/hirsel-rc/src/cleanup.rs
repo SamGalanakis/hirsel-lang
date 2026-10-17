@@ -255,10 +255,17 @@ fn join_versions(
             facts,
         }
         .successors();
-        let entry = ed.unit.entry;
+        let adjacent: Vec<Vec<usize>> = succ
+            .iter()
+            .map(|ts| ts.iter().map(|b| b.index()).collect())
+            .collect();
+        let dom = hirsel_graph::Dominators::new(&adjacent, ed.unit.entry.index());
         let reaches = |v: ValueId, b: BlockId, point: usize| {
-            defs.get(&v)
-                .is_some_and(|&(x, at)| (x == b && at <= point) || dominates(&succ, entry, x, b))
+            defs.get(&v).is_some_and(|&(x, at)| {
+                (x == b && at <= point)
+                    || (x != b
+                        && (!dom.reachable(b.index()) || dom.dominates(x.index(), b.index())))
+            })
         };
         let drop_join = drops.iter().find_map(|(b, i, st)| {
             let address = match ed.code[b.index()][*i] {
@@ -535,31 +542,6 @@ fn version_defs(ed: &Editor<Ready>, facts: &Facts) -> BTreeMap<ValueId, (BlockId
         }
     }
     out
-}
-
-/// Whether `a` strictly dominates `b`: `b` is unreachable from `entry`
-/// without passing `a`.
-fn dominates(succ: &[Vec<BlockId>], entry: BlockId, a: BlockId, b: BlockId) -> bool {
-    if a == b {
-        return false;
-    }
-    if a == entry {
-        return true;
-    }
-    let mut seen = vec![false; succ.len()];
-    let mut work = vec![entry];
-    seen[entry.index()] = true;
-    while let Some(x) = work.pop() {
-        if x == b {
-            return false;
-        }
-        for &t in &succ[x.index()] {
-            if t != a && !std::mem::replace(&mut seen[t.index()], true) {
-                work.push(t);
-            }
-        }
-    }
-    true
 }
 
 /// Drop flags (explicit initialized masks, LIR schema revision 8). A drop that
@@ -2390,52 +2372,21 @@ impl Lowering<'_, '_> {
     /// For each block, the blocks reachable from it in one or more steps,
     /// through normal and failure edges alike.
     fn reachable(&self) -> Vec<std::collections::BTreeSet<usize>> {
-        let unit = &self.ed.unit;
-        let edge = |e: EdgeId| unit.tables.edges[e.index()].target.index();
-        let failure = |f: FailureId| edge(unit.tables.failures[f.index()].cleanup);
-        let succ: Vec<Vec<usize>> = (0..unit.blocks.len())
-            .map(|b| {
-                let mut out: Vec<usize> = self.ed.code[b]
-                    .iter()
-                    .filter_map(Inst::failure)
-                    .map(failure)
-                    .collect();
-                match unit.terminators[b] {
-                    Terminator::Jump(e) => out.push(edge(e)),
-                    Terminator::Branch { yes, no, .. } => out.extend([edge(yes), edge(no)]),
-                    Terminator::Switch {
-                        arms, otherwise, ..
-                    } => {
-                        out.extend(
-                            arms.get(&unit.pools.switch_arms)
-                                .unwrap_or(&[])
-                                .iter()
-                                .map(|a| edge(a.edge)),
-                        );
-                        out.push(edge(otherwise));
-                    }
-                    Terminator::Call {
-                        normal, failure: f, ..
-                    } => out.extend(normal.map(|e| edge(e)).into_iter().chain([failure(f)])),
-                    Terminator::Raise(f) => out.push(failure(f)),
-                    Terminator::Return(_)
-                    | Terminator::Propagate
-                    | Terminator::Unreachable
-                    | Terminator::InvariantFault { .. } => {}
-                }
-                out
-            })
-            .collect();
+        let succ: Vec<Vec<usize>> = Flow {
+            unit: &self.ed.unit,
+            code: &self.ed.code,
+            lay: self.lay,
+            facts: self.facts,
+        }
+        .successors()
+        .into_iter()
+        .map(|targets| targets.into_iter().map(|b| b.index()).collect())
+        .collect();
         (0..succ.len())
             .map(|b| {
-                let mut seen = std::collections::BTreeSet::new();
-                let mut work = succ[b].clone();
-                while let Some(n) = work.pop() {
-                    if seen.insert(n) {
-                        work.extend(succ[n].iter().copied());
-                    }
-                }
-                seen
+                hirsel_graph::postorder(&succ, succ[b].iter().copied())
+                    .into_iter()
+                    .collect()
             })
             .collect()
     }

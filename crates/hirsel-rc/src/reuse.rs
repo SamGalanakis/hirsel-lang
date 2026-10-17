@@ -113,6 +113,7 @@ pub(crate) struct Graph {
     pub preds: Vec<Vec<(BlockId, EdgeId)>>,
     pub feedback: BTreeSet<EdgeId>,
     pub entry: BlockId,
+    reach: Vec<bool>,
 }
 
 impl Graph {
@@ -139,81 +140,36 @@ impl Graph {
                 all[b].push((e, unit.tables.edges[e.index()].target));
             }
         }
-        let mut g = Self {
+        let mut adjacent: Vec<Vec<usize>> = all
+            .iter()
+            .map(|ts| ts.iter().map(|&(_, b)| b.index()).collect())
+            .collect();
+        let reach = hirsel_graph::reachable(&adjacent, unit.entry.index());
+        // Reuse's forest considers only predecessors that can execute.
+        for (b, targets) in adjacent.iter_mut().enumerate() {
+            if !reach[b] {
+                targets.clear();
+            }
+        }
+        let feedback_pairs = hirsel_graph::feedback_edges(&adjacent, unit.entry.index());
+        let pairs = &feedback_pairs;
+        let feedback = all
+            .iter()
+            .enumerate()
+            .flat_map(|(b, targets)| {
+                targets.iter().filter_map(move |&(edge, target)| {
+                    pairs.contains(&(b, target.index())).then_some(edge)
+                })
+            })
+            .collect();
+        Self {
             normal,
             all,
             preds,
-            feedback: BTreeSet::new(),
+            feedback,
+            reach,
             entry: unit.entry,
-        };
-        g.feedback = g.forest_feedback();
-        g
-    }
-
-    fn reachable(&self) -> Vec<bool> {
-        let mut seen = vec![false; self.all.len()];
-        let mut stack = vec![self.entry];
-        seen[self.entry.index()] = true;
-        while let Some(b) = stack.pop() {
-            for &(_, t) in &self.all[b.index()] {
-                if !std::mem::replace(&mut seen[t.index()], true) {
-                    stack.push(t);
-                }
-            }
         }
-        seen
-    }
-
-    fn forest_feedback(&self) -> BTreeSet<EdgeId> {
-        let reach = self.reachable();
-        let mut removed = BTreeSet::new();
-        let nodes: Vec<BlockId> = (0..self.all.len())
-            .filter(|&b| reach[b])
-            .map(|b| BlockId(b as u32))
-            .collect();
-        let mut work = vec![nodes];
-        while let Some(nodes) = work.pop() {
-            let inside: BTreeSet<_> = nodes.iter().copied().collect();
-            for component in components(&nodes, |b| {
-                self.all[b.index()]
-                    .iter()
-                    .filter(|(e, t)| inside.contains(t) && !removed.contains(e))
-                    .map(|&(_, t)| t)
-                    .collect()
-            }) {
-                let members: BTreeSet<_> = component.iter().copied().collect();
-                let internal: Vec<(EdgeId, BlockId)> = component
-                    .iter()
-                    .flat_map(|&b| self.all[b.index()].iter().copied())
-                    .filter(|(e, t)| members.contains(t) && !removed.contains(e))
-                    .collect();
-                if internal.is_empty() {
-                    continue;
-                }
-                let mut entries: BTreeSet<BlockId> = component
-                    .iter()
-                    .copied()
-                    .filter(|&b| {
-                        b == self.entry
-                            || (0..self.all.len()).any(|p| {
-                                reach[p]
-                                    && !members.contains(&BlockId(p as u32))
-                                    && self.all[p].iter().any(|&(_, t)| t == b)
-                            })
-                    })
-                    .collect();
-                if entries.is_empty() {
-                    entries = members.clone();
-                }
-                for (e, t) in internal {
-                    if entries.contains(&t) {
-                        removed.insert(e);
-                    }
-                }
-                work.push(component);
-            }
-        }
-        removed
     }
 
     /// Blocks reachable from the entry along normal edges that are not
@@ -221,7 +177,7 @@ impl Graph {
     pub fn forward_order(&self) -> Vec<BlockId> {
         let n = self.normal.len();
         let mut indegree = vec![0usize; n];
-        let reach = self.reachable();
+        let reach = &self.reach;
         for b in (0..n).filter(|&b| reach[b]) {
             for &(e, t) in &self.normal[b] {
                 if !self.feedback.contains(&e) {
@@ -249,81 +205,6 @@ impl Graph {
         }
         out
     }
-}
-
-/// Tarjan's strongly connected components of `nodes` under `succ`.
-pub(crate) fn components(
-    nodes: &[BlockId],
-    succ: impl Fn(BlockId) -> Vec<BlockId>,
-) -> Vec<Vec<BlockId>> {
-    struct Tarjan<'a, F> {
-        succ: &'a F,
-        index: BTreeMap<BlockId, usize>,
-        low: BTreeMap<BlockId, usize>,
-        stack: Vec<BlockId>,
-        on: BTreeSet<BlockId>,
-        out: Vec<Vec<BlockId>>,
-    }
-    impl<F: Fn(BlockId) -> Vec<BlockId>> Tarjan<'_, F> {
-        // Iterative, so deep straight-line code does not exhaust the stack.
-        fn visit(&mut self, root: BlockId) {
-            let mut frames: Vec<(BlockId, Vec<BlockId>, usize)> = Vec::new();
-            let start = |t: &mut Self, v: BlockId| {
-                let i = t.index.len();
-                t.index.insert(v, i);
-                t.low.insert(v, i);
-                t.stack.push(v);
-                t.on.insert(v);
-                (v, (t.succ)(v), 0)
-            };
-            let first = start(self, root);
-            frames.push(first);
-            while let Some((v, next, at)) = frames.last_mut() {
-                let v = *v;
-                if let Some(&w) = next.get(*at) {
-                    *at += 1;
-                    if !self.index.contains_key(&w) {
-                        let frame = start(self, w);
-                        frames.push(frame);
-                    } else if self.on.contains(&w) {
-                        let l = self.low[&v].min(self.index[&w]);
-                        self.low.insert(v, l);
-                    }
-                    continue;
-                }
-                frames.pop();
-                if let Some((parent, _, _)) = frames.last() {
-                    let l = self.low[parent].min(self.low[&v]);
-                    self.low.insert(*parent, l);
-                }
-                if self.low[&v] == self.index[&v] {
-                    let mut component = Vec::new();
-                    while let Some(w) = self.stack.pop() {
-                        self.on.remove(&w);
-                        component.push(w);
-                        if w == v {
-                            break;
-                        }
-                    }
-                    self.out.push(component);
-                }
-            }
-        }
-    }
-    let mut t = Tarjan {
-        succ: &succ,
-        index: BTreeMap::new(),
-        low: BTreeMap::new(),
-        stack: Vec::new(),
-        on: BTreeSet::new(),
-        out: Vec::new(),
-    };
-    for &n in nodes {
-        if !t.index.contains_key(&n) {
-            t.visit(n);
-        }
-    }
-    t.out
 }
 
 // ---------------------------------------------------------------------------

@@ -1312,6 +1312,35 @@ hirsel_test(
 )
 
 hirsel_library(
+    opt_level = 1,
+    name = "hirsel-graph",
+    deps = [],
+    crate = "hirsel_graph",
+    crate_root = "crates/hirsel-graph/src/lib.rs",
+    srcs = glob(["crates/hirsel-graph/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-graph",
+    package_name = "hirsel-graph",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    opt_level = 1,
+    name = "hirsel-graph-unittest",
+    deps = [],
+    data = glob(["crates/hirsel-graph/Cargo.toml"]) + glob(["crates/hirsel-graph/src/**"], exclude = ["crates/hirsel-graph/src/**/*.rs"]),
+    crate = "hirsel_graph",
+    crate_root = "crates/hirsel-graph/src/lib.rs",
+    srcs = glob(["crates/hirsel-graph/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-graph",
+    package_name = "hirsel-graph",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_library(
     name = "hirsel-heapcheck",
     deps = [
         "//:hirsel-codec",
@@ -1617,6 +1646,7 @@ hirsel_library(
     deps = [
         "//:hirsel-codec",
         "//:hirsel-core-contract",
+        "//:hirsel-graph",
         "//:hirsel-syntax",
         "//:hirsel-tir",
         "//:hirsel-types",
@@ -1639,6 +1669,7 @@ hirsel_test(
         "//:hirsel-codec",
         "//:hirsel-core-contract",
         "//:hirsel-diag",
+        "//:hirsel-graph",
         "//:hirsel-syntax",
         "//:hirsel-tir",
         "//:hirsel-types",
@@ -1667,6 +1698,7 @@ hirsel_test(
         "//:hirsel-codec",
         "//:hirsel-core-contract",
         "//:hirsel-diag",
+        "//:hirsel-graph",
         "//:hirsel-syntax",
         "//:hirsel-tir",
         "//:hirsel-types",
@@ -1695,6 +1727,7 @@ hirsel_library(
     name = "hirsel-llvm",
     deps = [
         "//:hirsel-core-contract",
+        "//:hirsel-graph",
         "//:hirsel-lir",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -1714,6 +1747,7 @@ hirsel_test(
     name = "hirsel-llvm-unittest",
     deps = [
         "//:hirsel-core-contract",
+        "//:hirsel-graph",
         "//:hirsel-heapcheck",
         "//:hirsel-interp",
         "//:hirsel-lir",
@@ -1748,6 +1782,7 @@ hirsel_test(
     deps = [
         "//:hirsel-llvm",
         "//:hirsel-core-contract",
+        "//:hirsel-graph",
         "//:hirsel-heapcheck",
         "//:hirsel-interp",
         "//:hirsel-lir",
@@ -2239,6 +2274,7 @@ hirsel_library(
     name = "hirsel-rc",
     deps = [
         "//:hirsel-core-contract",
+        "//:hirsel-graph",
         "//:hirsel-lir",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2261,6 +2297,7 @@ hirsel_test(
     name = "hirsel-rc-unittest",
     deps = [
         "//:hirsel-core-contract",
+        "//:hirsel-graph",
         "//:hirsel-heapcheck",
         "//:hirsel-lir",
         "//:hirsel-span",
@@ -2743,6 +2780,7 @@ hirsel_library(
     opt_level = 1,
     name = "hirsel-validate",
     deps = [
+        "//:hirsel-graph",
         "//:hirsel-intern",
         "//:hirsel-syntax",
         "//:hirsel-tir",
@@ -2767,6 +2805,7 @@ hirsel_test(
     name = "hirsel-validate-unittest",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-graph",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2794,6 +2833,7 @@ hirsel_test(
     deps = [
         "//:hirsel-validate",
         "//:hirsel-diag",
+        "//:hirsel-graph",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",

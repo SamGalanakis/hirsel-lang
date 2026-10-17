@@ -5,11 +5,13 @@ descriptors, the physical layout table, the cross-unit ABI, `hirsel_rt_v2`
 declarations, effect flags and deterministic snapshots.
 `layout.rs` derives layouts, `abi.rs` derives `FnAbi`s and `layout_validate.rs`
 checks both independently. `validate/` holds the independent stage
-validators. `persistent.rs` is the structure-sharing vector that
+validators. `hirsel-graph` supplies pure traversal, dominance and loop-forest algorithms;
+the validators derive their own normal and failure graph from the IR.
+`persistent.rs` is the structure-sharing vector that
 dataflow states are built from, here and in `hirsel-rc`: a state costs what it
 changes, so an analysis stays near-linear in the size of a function.
 
-Allowed dependencies: shared data crates only (`hirsel-syntax`, `hirsel-types`,
+Allowed dependencies: the dependency-free `hirsel-graph` utility and shared data crates (`hirsel-syntax`, `hirsel-types`,
 `hirsel-tir`, `hirsel-core-contract`, `hirsel-codec`); no external production
 dependency. Never an implementation crate or `hirsel-driver`: the driver will
 depend on the native implementation crates, which depend on this crate. Test-only: `hirsel-diag`,

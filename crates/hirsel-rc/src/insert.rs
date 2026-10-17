@@ -1416,21 +1416,14 @@ impl<S: Stage> Flow<'_, S> {
         let entry = self.unit.entry;
         let succ = self.successors();
         let mut rank = vec![usize::MAX; n];
-        let mut post = Vec::new();
-        let mut seen = vec![false; n];
-        let mut stack = vec![(entry, 0usize)];
-        seen[entry.index()] = true;
-        while let Some((b, next)) = stack.pop() {
-            if let Some(&t) = succ[b.index()].get(next) {
-                stack.push((b, next + 1));
-                if !std::mem::replace(&mut seen[t.index()], true) {
-                    stack.push((t, 0));
-                }
-            } else {
-                post.push(b);
-            }
-        }
-        post.reverse();
+        let adjacent: Vec<Vec<usize>> = succ
+            .iter()
+            .map(|ts| ts.iter().map(|b| b.index()).collect())
+            .collect();
+        let post: Vec<_> = hirsel_graph::reverse_postorder(&adjacent, entry.index())
+            .into_iter()
+            .map(|b| BlockId(b as u32))
+            .collect();
         for (i, b) in post.iter().enumerate() {
             rank[b.index()] = i;
         }

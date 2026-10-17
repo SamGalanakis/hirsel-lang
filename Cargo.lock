@@ -323,6 +323,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirsel-graph"
+version = "0.1.0"
+
+[[package]]
 name = "hirsel-heapcheck"
 version = "0.1.0"
 dependencies = [
@@ -372,6 +376,7 @@ dependencies = [
  "hirsel-codec",
  "hirsel-core-contract",
  "hirsel-diag",
+ "hirsel-graph",
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",
@@ -383,6 +388,7 @@ name = "hirsel-llvm"
 version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
+ "hirsel-graph",
  "hirsel-heapcheck",
  "hirsel-interp",
  "hirsel-lir",
@@ -495,6 +501,7 @@ name = "hirsel-rc"
 version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
+ "hirsel-graph",
  "hirsel-heapcheck",
  "hirsel-lir",
  "hirsel-span",
@@ -597,6 +604,7 @@ name = "hirsel-validate"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-graph",
  "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
