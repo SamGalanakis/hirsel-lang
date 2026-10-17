@@ -528,3 +528,20 @@ the address's shared failure-rule label. Origin/loan naming events have no guard
 Wrapping `IntArith` also admits Sub/Mul/Div/Rem/Shl/Shr; Neg is Sub from zero.
 Div/Rem require a nonzero divisor, signed Div excludes MIN / -1 and shifts require
 a count below the width. Signed MIN % -1 is zero. Checked/saturating modes stay Add.
+
+LIR revision 29 (SER-2) adds `Inst::Encode { result, value, codec }` and
+`Inst::Decode` over `SideTables::codecs`. A `codec::CodecPlan` holds the
+canonical descriptor bytes (`hirsel_types::wire::Codec::descriptor`) and one
+`CodecNode` per schema node at its native layout, plus the root, the Bytes node
+and, decoding, the `Result[T, DecodeError]` node. `CodecPlan::check` holds each
+node to its layout record: value scalars, byte slices over their storage
+sequence, record, tuple and fixed flat fields, ordinal or niche tags (Packed
+included), boxes, sequences, Inline/Simd repeats, and Map/Set containers of an
+entries list and an optional u32 index. `CodecPlan::program` lowers a plan to
+the u64 words the runtime walks, with descriptor indices from the linked
+registry rather than layout ids. Neither instruction fails: an operational
+budget is environmental and a decode error is a value. C rejects a plan that
+disagrees with the table or with the instruction's direction (`codec plan`)
+and an operand or result at another layout than the plan's (`encode`,
+`decode`); `tests/it/revision29.rs` pairs each rule with its valid twin.
+Runtime ABI 9 adds the `codec_encode` and `codec_decode` entries.

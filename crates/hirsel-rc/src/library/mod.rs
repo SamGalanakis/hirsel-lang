@@ -14,6 +14,7 @@
 pub mod arena;
 pub mod builder;
 pub mod bytes;
+pub mod codec;
 pub mod collection;
 pub mod failure;
 pub mod iter;
@@ -154,6 +155,9 @@ pub const INLINE: &[&InlineLowering] = &[
     &length::LIST_LEN,
     &length::ARRAY_LEN,
     &length::STRING_BYTE_LEN,
+    // codec (ser2-native): codec.encode and codec.decode.
+    &codec::ENCODE,
+    &codec::DECODE,
 ];
 
 /// The result of an import hook.

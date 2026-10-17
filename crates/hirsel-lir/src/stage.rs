@@ -102,6 +102,8 @@ impl StageKind {
             | Opcode::FlatField
             | Opcode::FlatClose
             | Opcode::Hash
+            | Opcode::Encode
+            | Opcode::Decode
             | Opcode::Recast
             | Opcode::UniqueCopy
             | Opcode::Freeze

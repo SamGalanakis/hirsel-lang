@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -271,6 +271,7 @@ pub enum CName {
     Stats,
     Audit,
     Failure,
+    Codec,
 }
 
 impl CName {
@@ -290,6 +291,7 @@ impl CName {
             Self::Stats => "hirsel_rt_v2_stats",
             Self::Audit => "hirsel_rt_v2_audit",
             Self::Failure => "hirsel_rt_v2_failure",
+            Self::Codec => "hirsel_rt_v2_codec",
         }
     }
 }
@@ -345,6 +347,8 @@ pub enum RuntimeEntry {
     BlockGrow,
     HashBegin,
     HashBytes,
+    CodecEncode,
+    CodecDecode,
     UniqueCopy,
     UniqueCopyValue,
     Detach,
@@ -449,7 +453,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 53] = [
+    pub const ALL: [RuntimeEntry; 55] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -469,6 +473,8 @@ impl RuntimeEntry {
         Self::BlockGrow,
         Self::HashBegin,
         Self::HashBytes,
+        Self::CodecEncode,
+        Self::CodecDecode,
         Self::UniqueCopy,
         Self::UniqueCopyValue,
         Self::Detach,
@@ -613,6 +619,30 @@ impl RuntimeEntry {
                 "hirsel_rt_v2_hash_bytes",
                 U64,
                 const { &[p("state", U64), p("bytes", cptr(N::Void)), p("length", U64)] },
+            ),
+            Self::CodecEncode => (
+                "hirsel_rt_v2_codec_encode",
+                VOID,
+                const {
+                    &[
+                        CTX,
+                        p("codec", cptr(N::Codec)),
+                        p("value", cptr(N::Void)),
+                        p("out", ptr(N::Void, 1)),
+                    ]
+                },
+            ),
+            Self::CodecDecode => (
+                "hirsel_rt_v2_codec_decode",
+                VOID,
+                const {
+                    &[
+                        CTX,
+                        p("codec", cptr(N::Codec)),
+                        p("bytes", cptr(N::Void)),
+                        p("out", ptr(N::Void, 1)),
+                    ]
+                },
             ),
             Self::UniqueCopy => (
                 "hirsel_rt_v2_unique_copy",
@@ -869,6 +899,8 @@ snapshot_enum!(RuntimeEntry {
     BlockGrow,
     HashBegin,
     HashBytes,
+    CodecEncode,
+    CodecDecode,
     UniqueCopy,
     UniqueCopyValue,
     Detach,

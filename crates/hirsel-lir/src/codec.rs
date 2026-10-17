@@ -1,0 +1,632 @@
+//! The canonical SER-2 codec over native layouts (LIR schema revision 29).
+//!
+//! A `CodecPlan` pairs one concrete checked schema with the layouts its values
+//! have: every node names the layout of the value it reads or writes, and its
+//! children are the layouts' own fields, arms and elements. The plan carries
+//! the schema's descriptor bytes, which an envelope must match exactly; it
+//! holds no type, name or TypeId. `check` is the plan's independent agreement
+//! with a layout table; `program` lowers it to the runtime's codec program,
+//! the static data `hirsel_rt_v2_codec_encode` and `_decode` walk.
+use crate::layout::sequence_elements_offset;
+use crate::layout_types::{
+    FieldLayout, LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind, SizeSpec, TagForm,
+};
+use hirsel_codec::{snapshot_enum, snapshot_struct};
+
+/// Index into `CodecPlan::nodes`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct CodecNodeId(pub u32);
+
+impl CodecNodeId {
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl hirsel_codec::Snapshot for CodecNodeId {
+    fn write(&self, w: &mut hirsel_codec::Writer) {
+        w.uint(u128::from(self.0));
+    }
+    fn read(r: &mut hirsel_codec::Reader<'_>) -> Result<Self, hirsel_codec::DecodeError> {
+        Ok(Self(<u32 as hirsel_codec::Snapshot>::read(r)?))
+    }
+}
+
+/// One schema node at the layout of the values it describes. Children are in
+/// declaration order: field `i` of a `Fields` node is the layout's field of
+/// ordinal `i`, arm `i` of a `Variant` its variant of ordinal `i`.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum CodecNode {
+    /// `bool`, a fixed-width integer or a float: a scalar layout.
+    Scalar(LayoutId),
+    /// `String` (`utf8`) or `Bytes`: a byte `Slice` layout, whose owner is a
+    /// block of the byte `Sequence` payload `storage`.
+    Text {
+        layout: LayoutId,
+        storage: LayoutId,
+        utf8: bool,
+    },
+    /// Unit, a tuple, a record, or a nominal's one-field wrapper: every field of
+    /// a `Unit`, `Aggregate` or fixed `Flat` layout, concatenated.
+    Fields {
+        layout: LayoutId,
+        fields: Vec<CodecNodeId>,
+    },
+    /// A variant or `Packed[T]`: the `u32` ordinal, then the active arm's fields.
+    Variant {
+        layout: LayoutId,
+        arms: Vec<Vec<CodecNodeId>>,
+    },
+    /// `box T`: only the payload's encoding.
+    Box {
+        layout: LayoutId,
+        payload: CodecNodeId,
+    },
+    /// `List[T]` or `Array[T]`: a block of a `Sequence` payload; a `u64` count,
+    /// then the elements.
+    Sequence {
+        layout: LayoutId,
+        element: CodecNodeId,
+    },
+    /// `Inline[T, n]` or `Simd[T, n]`: exactly `n` elements, no count.
+    Repeat {
+        layout: LayoutId,
+        element: CodecNodeId,
+    },
+    /// `Map[K, V]`: a container block whose entries are `(K, V)` pairs in
+    /// insertion order; no duplicate key encoding.
+    Map {
+        layout: LayoutId,
+        key: CodecNodeId,
+        value: CodecNodeId,
+    },
+    /// `Set[T]`: a container block whose entries are encoded strictly
+    /// increasing by their canonical bytes.
+    Set {
+        layout: LayoutId,
+        element: CodecNodeId,
+    },
+}
+
+impl CodecNode {
+    pub fn layout(&self) -> LayoutId {
+        match self {
+            Self::Scalar(layout)
+            | Self::Text { layout, .. }
+            | Self::Fields { layout, .. }
+            | Self::Variant { layout, .. }
+            | Self::Box { layout, .. }
+            | Self::Sequence { layout, .. }
+            | Self::Repeat { layout, .. }
+            | Self::Map { layout, .. }
+            | Self::Set { layout, .. } => *layout,
+        }
+    }
+
+    /// Every child node, in encoding order.
+    pub fn children(&self) -> Vec<CodecNodeId> {
+        match self {
+            Self::Scalar(_) | Self::Text { .. } => vec![],
+            Self::Fields { fields, .. } => fields.clone(),
+            Self::Variant { arms, .. } => arms.iter().flatten().copied().collect(),
+            Self::Box { payload, .. } => vec![*payload],
+            Self::Sequence { element, .. }
+            | Self::Repeat { element, .. }
+            | Self::Set { element, .. } => vec![*element],
+            Self::Map { key, value, .. } => vec![*key, *value],
+        }
+    }
+}
+
+/// One `Encode` or `Decode` site's codec (`SideTables::codecs`).
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CodecPlan {
+    /// The concrete schema's SER-2 descriptor bytes.
+    pub descriptor: Vec<u8>,
+    pub nodes: Vec<CodecNode>,
+    /// The encoded value's node.
+    pub root: CodecNodeId,
+    /// The `Bytes` node: an `Encode`'s result, a `Decode`'s operand.
+    pub bytes: CodecNodeId,
+    /// A `Decode`'s result: `Result[T, DecodeError]`, a `Variant` node whose
+    /// arm 0 holds `root` and whose arm 1 holds a `Variant` of exactly
+    /// `DECODE_ERRORS` fieldless arms. None for an `Encode`.
+    pub result: Option<CodecNodeId>,
+}
+
+/// The `DecodeError` arms, in ordinal order (core-library.md).
+pub const DECODE_ERRORS: [&str; 10] = [
+    "Version",
+    "SchemaMismatch",
+    "Truncated",
+    "Trailing",
+    "Scalar",
+    "Utf8",
+    "Tag",
+    "Length",
+    "Duplicate",
+    "Order",
+];
+
+/// `ENTRIES` and `INDEX`: the fields of a Map or Set container payload.
+pub const CONTAINER_ENTRIES: u32 = 0;
+pub const CONTAINER_INDEX: u32 = 1;
+
+fn record(table: &LayoutTable, id: LayoutId) -> Result<&LayoutRecord, String> {
+    table
+        .layout(id)
+        .ok_or_else(|| format!("layout {} outside the table", id.0))
+}
+
+/// The field of `ordinal`, which every field of a codec node's layout has once.
+fn field(record: &LayoutRecord, ordinal: u32) -> Result<&FieldLayout, String> {
+    let mut found = record.fields.iter().filter(|f| f.ordinal == ordinal);
+    match (found.next(), found.next()) {
+        (Some(f), None) => Ok(f),
+        _ => Err(format!("no single field of ordinal {ordinal}")),
+    }
+}
+
+fn fixed(record: &LayoutRecord) -> Result<u64, String> {
+    match record.size {
+        SizeSpec::Fixed(size) => Ok(size),
+        SizeSpec::Dynamic(_) => Err("a dynamic extent".into()),
+    }
+}
+
+/// The payload of a block layout.
+fn payload(table: &LayoutTable, id: LayoutId) -> Result<LayoutId, String> {
+    match record(table, id)?.kind {
+        LayoutKind::Block { payload } | LayoutKind::Box { payload } => Ok(payload),
+        ref kind => Err(format!("{kind:?} is not a block")),
+    }
+}
+
+/// The element of a block of a `Sequence` payload, and that payload.
+fn sequence(table: &LayoutTable, id: LayoutId) -> Result<(LayoutId, LayoutId), String> {
+    let payload = payload(table, id)?;
+    match record(table, payload)?.kind {
+        LayoutKind::Sequence { element } => Ok((payload, element)),
+        ref kind => Err(format!("{kind:?} is not a sequence payload")),
+    }
+}
+
+/// A core `Map` or `Set` (`name`) container payload: the payload, the
+/// entries' sequence payload and element, and the index's sequence payload.
+fn container(
+    table: &LayoutTable,
+    id: LayoutId,
+    name: &str,
+) -> Result<(LayoutId, LayoutId, LayoutId, LayoutId), String> {
+    let payload = payload(table, id)?;
+    let r = record(table, payload)?;
+    let LayoutKind::Opaque { owner } = &r.kind else {
+        return Err("a container payload that is not opaque".into());
+    };
+    if !owner.0.package.name_is("core")
+        || !owner.0.modules.is_empty()
+        || owner.0.name != name
+        || r.fields.len() != 2
+    {
+        return Err(format!("a container payload that is not core {name}'s"));
+    }
+    let (entries, element) = sequence(table, field(r, CONTAINER_ENTRIES)?.layout)?;
+    let (index, word) = sequence(table, field(r, CONTAINER_INDEX)?.layout)?;
+    if record(table, word)?.kind != LayoutKind::Scalar(ScalarKind::U32) {
+        return Err("a container index that is not a u32 sequence".into());
+    }
+    Ok((payload, entries, element, index))
+}
+
+impl CodecPlan {
+    pub fn node(&self, id: CodecNodeId) -> Result<&CodecNode, String> {
+        self.nodes
+            .get(id.index())
+            .ok_or_else(|| format!("codec node {} outside the plan", id.0))
+    }
+
+    /// The plan agrees with `table`: each node's layout has the node's kind,
+    /// and each child is at the layout its parent's layout gives it. A `Text`
+    /// storage is the byte sequence of its slice; the decode result is
+    /// `Result[root, DecodeError]`.
+    pub fn check(&self, table: &LayoutTable) -> Result<(), String> {
+        for id in [Some(self.root), Some(self.bytes), self.result]
+            .into_iter()
+            .flatten()
+        {
+            self.node(id)?;
+        }
+        if !matches!(self.node(self.bytes)?, CodecNode::Text { utf8: false, .. }) {
+            return Err("the bytes node is not Bytes".into());
+        }
+        if let Some(result) = self.result {
+            let CodecNode::Variant { arms, .. } = self.node(result)? else {
+                return Err("a decode result that is not a variant".into());
+            };
+            let [ok, error] = arms.as_slice() else {
+                return Err("a decode result without exactly two arms".into());
+            };
+            let (&[ok], &[error]) = (ok.as_slice(), error.as_slice()) else {
+                return Err("a decode result arm without exactly one field".into());
+            };
+            if ok != self.root {
+                return Err("a decode result whose Ok arm is not the root".into());
+            }
+            match self.node(error)? {
+                CodecNode::Variant { arms, .. }
+                    if arms.len() == DECODE_ERRORS.len() && arms.iter().all(Vec::is_empty) => {}
+                _ => return Err("a decode error that is not DecodeError's variant".into()),
+            }
+        }
+        let child = |id: CodecNodeId, layout: LayoutId| -> Result<(), String> {
+            if self.node(id)?.layout() != layout {
+                return Err(format!(
+                    "codec node {} is not at its parent's layout {}",
+                    id.0, layout.0
+                ));
+            }
+            Ok(())
+        };
+        for node in &self.nodes {
+            let r = record(table, node.layout())?;
+            match node {
+                CodecNode::Scalar(_) => {
+                    if !matches!(r.kind, LayoutKind::Scalar(k) if k != ScalarKind::Pointer) {
+                        return Err("a scalar node at a layout that is not a value scalar".into());
+                    }
+                }
+                CodecNode::Text { storage, .. } => {
+                    let LayoutKind::Slice { element } = r.kind else {
+                        return Err("a text node at a layout that is not a slice".into());
+                    };
+                    if record(table, element)?.kind != LayoutKind::Scalar(ScalarKind::U8)
+                        || record(table, *storage)?.kind != (LayoutKind::Sequence { element })
+                    {
+                        return Err("a text node that is not a byte slice of its storage".into());
+                    }
+                }
+                CodecNode::Fields { fields, .. } => {
+                    let flat = r.kind == LayoutKind::Flat && matches!(r.size, SizeSpec::Fixed(_));
+                    if !matches!(r.kind, LayoutKind::Unit | LayoutKind::Aggregate) && !flat
+                        || r.fields.len() != fields.len()
+                    {
+                        return Err("a fields node that does not cover its layout's fields".into());
+                    }
+                    for (ordinal, id) in fields.iter().enumerate() {
+                        child(*id, field(r, ordinal as u32)?.layout)?;
+                    }
+                }
+                CodecNode::Variant { arms, .. } => {
+                    let tag = match (&r.kind, &r.tag) {
+                        (LayoutKind::Variant | LayoutKind::Packed, Some(tag))
+                            if matches!(tag.form, TagForm::Ordinal | TagForm::Niche { .. }) =>
+                        {
+                            tag
+                        }
+                        _ => return Err("a variant node at a layout without an ordinal".into()),
+                    };
+                    if tag.variants.len() != arms.len() {
+                        return Err("a variant node that does not cover its arms".into());
+                    }
+                    for (ordinal, arm) in arms.iter().enumerate() {
+                        let variant = tag
+                            .variants
+                            .iter()
+                            .find(|v| v.ordinal == ordinal as u32)
+                            .ok_or("a variant node arm without its variant")?;
+                        if variant.fields.len() != arm.len() {
+                            return Err("a variant arm that does not cover its fields".into());
+                        }
+                        for (i, id) in arm.iter().enumerate() {
+                            let f = variant
+                                .fields
+                                .iter()
+                                .find(|f| f.ordinal == i as u32)
+                                .ok_or("a variant arm without its field")?;
+                            child(*id, f.layout)?;
+                        }
+                    }
+                }
+                CodecNode::Box { payload: p, .. } => {
+                    let LayoutKind::Box { payload } = r.kind else {
+                        return Err("a box node at a layout that is not a box".into());
+                    };
+                    fixed(record(table, payload)?)?;
+                    child(*p, payload)?;
+                }
+                CodecNode::Sequence { layout, element } => {
+                    let (_, e) = sequence(table, *layout)?;
+                    fixed(record(table, e)?)?;
+                    child(*element, e)?;
+                }
+                CodecNode::Repeat { element, .. } => {
+                    let e = match r.kind {
+                        LayoutKind::Inline { element, .. } | LayoutKind::Simd { element, .. } => {
+                            element
+                        }
+                        _ => return Err("a repeat node at a layout that is not Inline/Simd".into()),
+                    };
+                    fixed(record(table, e)?)?;
+                    child(*element, e)?;
+                }
+                CodecNode::Map { layout, key, value } => {
+                    let (_, _, pair, _) = container(table, *layout, "Map")?;
+                    let p = record(table, pair)?;
+                    if p.kind != LayoutKind::Aggregate || p.fields.len() != 2 {
+                        return Err("map entries that are not pairs".into());
+                    }
+                    child(*key, field(p, 0)?.layout)?;
+                    child(*value, field(p, 1)?.layout)?;
+                }
+                CodecNode::Set { layout, element } => {
+                    let (_, _, e, _) = container(table, *layout, "Set")?;
+                    child(*element, e)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The layouts whose descriptor indices the program names: the blocks a
+    /// decode allocates. Layouts the plan does not resolve are left out;
+    /// `program` reports them.
+    pub fn allocated(&self, table: &LayoutTable) -> Vec<LayoutId> {
+        let mut out = vec![];
+        for node in &self.nodes {
+            match node {
+                CodecNode::Text { storage, .. } => out.push(*storage),
+                CodecNode::Box { layout, .. } | CodecNode::Sequence { layout, .. } => {
+                    out.extend(payload(table, *layout).ok())
+                }
+                CodecNode::Map { layout, .. } | CodecNode::Set { layout, .. } => {
+                    let name = if matches!(node, CodecNode::Map { .. }) {
+                        "Map"
+                    } else {
+                        "Set"
+                    };
+                    if let Ok((payload, entries, _, index)) = container(table, *layout, name) {
+                        out.extend([payload, entries, index]);
+                    }
+                }
+                CodecNode::Scalar(_)
+                | CodecNode::Fields { .. }
+                | CodecNode::Variant { .. }
+                | CodecNode::Repeat { .. } => {}
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The runtime codec program of this plan (`hirsel_rt_v2.h`, "Codec
+    /// programs"): `index` is the linked descriptor index of a layout. The
+    /// plan must `check` against `table`.
+    pub fn program(
+        &self,
+        table: &LayoutTable,
+        index: &dyn Fn(LayoutId) -> Option<u32>,
+    ) -> Result<Vec<u64>, String> {
+        let descriptor = |id: LayoutId| {
+            index(id)
+                .map(u64::from)
+                .ok_or_else(|| format!("layout {} has no descriptor index", id.0))
+        };
+        let top = self.result.unwrap_or(self.bytes);
+        let mut words = vec![
+            PROGRAM_VERSION,
+            self.nodes.len() as u64,
+            fixed(record(table, self.node(top)?.layout())?)?,
+            u64::from(self.root.0),
+            u64::from(top.0),
+            u64::from(self.bytes.0),
+        ];
+        let table_at = words.len();
+        words.resize(table_at + self.nodes.len(), 0);
+        let fields = |r: &LayoutRecord, ids: &[CodecNodeId], out: &mut Vec<u64>| {
+            out.push(ids.len() as u64);
+            for (ordinal, id) in ids.iter().enumerate() {
+                out.push(field(r, ordinal as u32)?.offset);
+                out.push(u64::from(id.0));
+            }
+            Ok::<_, String>(())
+        };
+        for (n, node) in self.nodes.iter().enumerate() {
+            words[table_at + n] = words.len() as u64;
+            let r = record(table, node.layout())?;
+            let mut body = vec![];
+            match node {
+                CodecNode::Scalar(_) => {
+                    let LayoutKind::Scalar(kind) = r.kind else {
+                        return Err("a scalar node off its layout".into());
+                    };
+                    body.extend([NODE_SCALAR, scalar_code(kind)?]);
+                }
+                CodecNode::Text { storage, utf8, .. } => {
+                    body.extend([
+                        NODE_TEXT,
+                        u64::from(*utf8),
+                        field(r, 0)?.offset,
+                        field(r, 1)?.offset,
+                        field(r, 2)?.offset,
+                        descriptor(*storage)?,
+                    ]);
+                }
+                CodecNode::Fields { fields: ids, .. } => {
+                    body.push(NODE_FIELDS);
+                    fields(r, ids, &mut body)?;
+                }
+                CodecNode::Variant { arms, .. } => {
+                    let tag = r.tag.as_ref().ok_or("a variant node without a tag")?;
+                    let (form, nullary) = match tag.form {
+                        TagForm::Ordinal => (0, 0),
+                        TagForm::Niche { nullary, .. } => (1, u64::from(nullary)),
+                        TagForm::LiveBit { .. } => return Err("a live-bit variant".into()),
+                    };
+                    body.extend([NODE_VARIANT, form, tag.offset, nullary, arms.len() as u64]);
+                    for (ordinal, arm) in arms.iter().enumerate() {
+                        let variant = tag
+                            .variants
+                            .iter()
+                            .find(|v| v.ordinal == ordinal as u32)
+                            .ok_or("a variant arm without its variant")?;
+                        body.push(arm.len() as u64);
+                        for (i, id) in arm.iter().enumerate() {
+                            let f = variant
+                                .fields
+                                .iter()
+                                .find(|f| f.ordinal == i as u32)
+                                .ok_or("a variant arm without its field")?;
+                            body.extend([f.offset, u64::from(id.0)]);
+                        }
+                    }
+                }
+                CodecNode::Box { payload: p, .. } => {
+                    let LayoutKind::Box { payload } = r.kind else {
+                        return Err("a box node off its layout".into());
+                    };
+                    let pr = record(table, payload)?;
+                    body.extend([
+                        NODE_BOX,
+                        descriptor(payload)?,
+                        fixed(pr)?,
+                        u64::from(pr.align),
+                        u64::from(p.0),
+                    ]);
+                }
+                CodecNode::Sequence { layout, element } => {
+                    let (payload, e) = sequence(table, *layout)?;
+                    body.push(NODE_SEQUENCE);
+                    sequence_words(table, payload, e, descriptor(payload)?, &mut body)?;
+                    body.push(u64::from(element.0));
+                }
+                CodecNode::Repeat { element, .. } => {
+                    let (e, count) = match r.kind {
+                        LayoutKind::Inline { element, count } => (element, count),
+                        LayoutKind::Simd { element, lanes } => (element, u64::from(lanes)),
+                        _ => return Err("a repeat node off its layout".into()),
+                    };
+                    body.extend([
+                        NODE_REPEAT,
+                        count,
+                        fixed(record(table, e)?)?,
+                        u64::from(element.0),
+                    ]);
+                }
+                CodecNode::Map { layout, .. } | CodecNode::Set { layout, .. } => {
+                    let map = matches!(node, CodecNode::Map { .. });
+                    let name = if map { "Map" } else { "Set" };
+                    let (payload, entries, element, index) = container(table, *layout, name)?;
+                    let pr = record(table, payload)?;
+                    body.extend([
+                        if map { NODE_MAP } else { NODE_SET },
+                        descriptor(payload)?,
+                        fixed(pr)?,
+                        u64::from(pr.align),
+                        field(pr, CONTAINER_ENTRIES)?.offset,
+                        field(pr, CONTAINER_INDEX)?.offset,
+                    ]);
+                    sequence_words(table, entries, element, descriptor(entries)?, &mut body)?;
+                    let (_, word) = sequence(table, field(pr, CONTAINER_INDEX)?.layout)?;
+                    body.extend([
+                        descriptor(index)?,
+                        u64::from(record(table, word)?.align),
+                        fixed(record(table, word)?)?,
+                    ]);
+                    match node {
+                        CodecNode::Map { key, value, .. } => {
+                            let p = record(table, element)?;
+                            body.extend([
+                                u64::from(key.0),
+                                field(p, 0)?.offset,
+                                u64::from(value.0),
+                                field(p, 1)?.offset,
+                            ]);
+                        }
+                        CodecNode::Set { element, .. } => {
+                            body.extend([u64::from(element.0), 0, NO_NODE, 0])
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            words.extend(body);
+        }
+        Ok(words)
+    }
+}
+
+/// A sequence payload's descriptor index, alignment, first element offset and
+/// stride.
+fn sequence_words(
+    table: &LayoutTable,
+    payload: LayoutId,
+    element: LayoutId,
+    index: u64,
+    out: &mut Vec<u64>,
+) -> Result<(), String> {
+    let e = record(table, element)?;
+    let elements = sequence_elements_offset(e).map_err(|e| format!("{e:?}"))?;
+    if record(table, payload)?.kind != (LayoutKind::Sequence { element }) {
+        return Err("a sequence program off its payload".into());
+    }
+    out.extend([index, u64::from(e.align), elements, fixed(e)?]);
+    Ok(())
+}
+
+fn scalar_code(kind: ScalarKind) -> Result<u64, String> {
+    use ScalarKind as S;
+    Ok(match kind {
+        S::Bool => 0,
+        S::U8 => 1,
+        S::U16 => 2,
+        S::U32 => 3,
+        S::U64 => 4,
+        S::U128 => 5,
+        S::I8 => 6,
+        S::I16 => 7,
+        S::I32 => 8,
+        S::I64 => 9,
+        S::I128 => 10,
+        S::F32 => 11,
+        S::F64 => 12,
+        S::Pointer => return Err("a pointer is not a codec scalar".into()),
+    })
+}
+
+/// The codec program's version and node kinds (`HIRSEL_RT_V2_CODEC_*`).
+pub const PROGRAM_VERSION: u64 = 1;
+pub const NODE_SCALAR: u64 = 0;
+pub const NODE_TEXT: u64 = 1;
+pub const NODE_FIELDS: u64 = 2;
+pub const NODE_VARIANT: u64 = 3;
+pub const NODE_BOX: u64 = 4;
+pub const NODE_SEQUENCE: u64 = 5;
+pub const NODE_REPEAT: u64 = 6;
+pub const NODE_MAP: u64 = 7;
+pub const NODE_SET: u64 = 8;
+/// A Set's absent value node.
+pub const NO_NODE: u64 = u64::MAX;
+
+snapshot_enum!(CodecNode {
+    Scalar(layout),
+    Text {
+        layout,
+        storage,
+        utf8
+    },
+    Fields { layout, fields },
+    Variant { layout, arms },
+    Box { layout, payload },
+    Sequence { layout, element },
+    Repeat { layout, element },
+    Map { layout, key, value },
+    Set { layout, element },
+});
+snapshot_struct!(CodecPlan {
+    descriptor,
+    nodes,
+    root,
+    bytes,
+    result
+});

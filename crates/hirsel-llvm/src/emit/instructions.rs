@@ -1150,6 +1150,35 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.builder.call(free, &[self.context, block]);
                 self.define(result, thawed)
             }
+            // The runtime walks the operand in place against the unit's codec
+            // program and writes the produced value into a slot of its layout.
+            Inst::Encode {
+                result,
+                value,
+                codec,
+            }
+            | Inst::Decode {
+                result,
+                value,
+                codec,
+            } => {
+                let entry = match inst {
+                    Inst::Encode { .. } => RuntimeEntry::CodecEncode,
+                    _ => RuntimeEntry::CodecDecode,
+                };
+                let codec = self.codec(codec)?;
+                let layout = self.value_type(value)?.layout;
+                let at = self.stack(layout)?;
+                let operand = self.counted_view(value)?;
+                self.store(self.layout_shape(layout)?, operand, at);
+                let produced = self.value_type(result)?.layout;
+                let out = self.stack(produced)?;
+                let call = self.runtime(entry)?;
+                self.builder
+                    .call(call, &[self.context, codec, at.ptr, out.ptr]);
+                let value = self.load(self.layout_shape(produced)?, out);
+                self.define(result, value)
+            }
             // The same pointer at another payload layout: no code.
             Inst::Recast { result, value } => {
                 let pointer = self.get(value)?;

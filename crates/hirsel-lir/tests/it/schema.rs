@@ -12,6 +12,7 @@ use hirsel_layout::instance::{
     ParameterView, Substitution,
 };
 use hirsel_lir::abi_types::*;
+use hirsel_lir::codec::{CodecNode, CodecNodeId, CodecPlan};
 use hirsel_lir::effect::{Effects, Opcode};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::*;
@@ -374,7 +375,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         })
         .collect();
     let holdings = [Holding::Plain, Holding::Owned, Holding::Borrowed(LoanId(0))];
-    u.values = (0..64)
+    u.values = (0..66)
         .map(|i| ValueInfo {
             ty: LirTypeId(i % reprs.len() as u32),
             holding: holdings[i as usize % holdings.len()],
@@ -652,6 +653,24 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
             dispose: PoolRange::EMPTY,
         },
     ];
+    t.codecs = vec![CodecPlan {
+        descriptor: vec![4],
+        nodes: vec![
+            CodecNode::Scalar(LayoutId(0)),
+            CodecNode::Text {
+                layout: LayoutId(0),
+                storage: LayoutId(0),
+                utf8: false,
+            },
+            CodecNode::Variant {
+                layout: LayoutId(0),
+                arms: vec![vec![CodecNodeId(0)], Vec::new()],
+            },
+        ],
+        root: CodecNodeId(0),
+        bytes: CodecNodeId(1),
+        result: Some(CodecNodeId(2)),
+    }];
     let arms = PoolRange::push(
         &mut u.pools.switch_arms,
         [
@@ -1050,6 +1069,16 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     insts.push(Inst::Thaw {
         result: v(63),
         value: v(62),
+    });
+    insts.push(Inst::Encode {
+        result: v(64),
+        value: v(2),
+        codec: CodecId(0),
+    });
+    insts.push(Inst::Decode {
+        result: v(65),
+        value: v(64),
+        codec: CodecId(0),
     });
     for feature in [
         UnavailableFeature::Shared,

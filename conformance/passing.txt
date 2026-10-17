@@ -3990,3 +3990,4 @@ conformance/SER/SER-2-trailing-envelope-run.hir
 conformance/SER/SER-2-trailing-payload-run.hir
 conformance/SER/SER-2-truncated-run.hir
 conformance/SER/SER-2-utf8-run.hir
+conformance/SER/SER-2-vectors-run.hir

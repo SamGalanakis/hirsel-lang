@@ -75,6 +75,8 @@ ids!(
     TaskDomainId,
     /// A lexical scope (TIR `ScopeId`); `LirUnit::scopes` records its parent.
     ScopeId,
+    /// A SER-2 codec plan in `SideTables::codecs` (LIR schema revision 29).
+    CodecId,
 );
 
 /// A typed range in one of the unit's pools.
@@ -711,6 +713,25 @@ pub enum Inst {
         value: ValueId,
         layout: LayoutId,
         failure: FailureId,
+    },
+    /// `codec.encode` (LIR schema revision 29): the SER-2 envelope of the
+    /// borrowed `value`, at its plan's root layout, as a fresh owned `Bytes`
+    /// at its plan's bytes layout. The value is read whole and never written;
+    /// recursion is through data, not the native stack. It cannot fail.
+    Encode {
+        result: ValueId,
+        value: ValueId,
+        codec: CodecId,
+    },
+    /// `codec.decode` (LIR schema revision 29): the borrowed `Bytes` `value`
+    /// validated completely against the plan's descriptor and schema, then
+    /// either `Ok` of a fresh owned value of the plan's root layout or `Error`
+    /// of the first `DecodeError` in reading order, at the plan's result
+    /// layout. Nothing partially decoded exists; it cannot fail.
+    Decode {
+        result: ValueId,
+        value: ValueId,
+        codec: CodecId,
     },
     /// The same borrowed block reference at another payload layout. Exactly
     /// one of the operand's and the result's layouts is the cursor's opaque
@@ -1353,6 +1374,8 @@ pub struct SideTables {
     pub cleanup_anchors: Vec<CleanupAnchor>,
     /// Drop flags (LIR schema revision 8).
     pub init_flags: Vec<InitFlag>,
+    /// SER-2 codec plans (LIR schema revision 29).
+    pub codecs: Vec<crate::codec::CodecPlan>,
 }
 
 impl SideTables {
@@ -1540,6 +1563,7 @@ pub enum Ref {
     Shared(SharedInstanceId),
     TaskDomain(TaskDomainId),
     Scope(ScopeId),
+    Codec(CodecId),
     Values(PoolRange<ValueId>),
     Addresses(PoolRange<AddressId>),
     Projections(PoolRange<ProjectionStep>),
@@ -1582,6 +1606,8 @@ impl Inst {
             | Inst::SeqLen { result, .. }
             | Inst::SeqCapacity { result, .. }
             | Inst::Hash { result, .. }
+            | Inst::Encode { result, .. }
+            | Inst::Decode { result, .. }
             | Inst::Recast { result, .. }
             | Inst::Freeze { result, .. }
             | Inst::Thaw { result, .. }
@@ -1681,6 +1707,8 @@ impl Inst {
             | Inst::FlatAppend { .. }
             | Inst::FlatField { .. }
             | Inst::FlatClose { .. }
+            | Inst::Encode { .. }
+            | Inst::Decode { .. }
             | Inst::Recast { .. }
             | Inst::Freeze { .. }
             | Inst::Thaw { .. }
@@ -1752,6 +1780,8 @@ impl Inst {
             | Inst::FlatAppend { .. }
             | Inst::FlatField { .. }
             | Inst::FlatClose { .. }
+            | Inst::Encode { .. }
+            | Inst::Decode { .. }
             | Inst::Recast { .. }
             | Inst::Freeze { .. }
             | Inst::Thaw { .. }
@@ -1930,6 +1960,20 @@ impl Inst {
                 f(R::Value(value));
                 f(R::Layout(layout));
                 f(R::Failure(failure));
+            }
+            Self::Encode {
+                result,
+                value,
+                codec,
+            }
+            | Self::Decode {
+                result,
+                value,
+                codec,
+            } => {
+                f(R::Value(result));
+                f(R::Value(value));
+                f(R::Codec(codec));
             }
             Self::SeqReserve {
                 address,
@@ -2405,6 +2449,7 @@ impl<S: Stage> LirUnit<S> {
                 Ref::Shared(v) => id("shared", v.0, t.shared.len()),
                 Ref::TaskDomain(v) => id("task domain", v.0, t.task_domains as usize),
                 Ref::Scope(v) => id("scope", v.0, self.scopes.len()),
+                Ref::Codec(v) => id("codec", v.0, t.codecs.len()),
                 Ref::Values(r) => range("values", r.start, r.len, p.values.len()),
                 Ref::Addresses(r) => range("addresses", r.start, r.len, p.addresses.len()),
                 Ref::Projections(r) => range("projections", r.start, r.len, p.projections.len()),
@@ -2538,6 +2583,14 @@ impl<S: Stage> LirUnit<S> {
             push(Ref::Projections(flag.path));
             if let Some(layout) = flag.environment {
                 push(Ref::Layout(layout));
+            }
+        }
+        for plan in &t.codecs {
+            for node in &plan.nodes {
+                push(Ref::Layout(node.layout()));
+                if let crate::codec::CodecNode::Text { storage, .. } = node {
+                    push(Ref::Layout(*storage));
+                }
             }
         }
         p.values.iter().for_each(|&v| push(Ref::Value(v)));
@@ -2727,6 +2780,8 @@ snapshot_enum!(Inst {
     FlatField { address, field, op, version },
     FlatClose { address, construct, field, version },
     Hash { result, value, layout, failure },
+    Encode { result, value, codec },
+    Decode { result, value, codec },
     Recast { result, value },
     UniqueCopy { result, value, construct, deep, failure },
     Freeze { result, value },
@@ -2942,7 +2997,8 @@ snapshot_struct!(SideTables {
     task_domains,
     source_anchors,
     cleanup_anchors,
-    init_flags
+    init_flags,
+    codecs
 });
 snapshot_struct!(Pools {
     values,

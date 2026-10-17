@@ -1737,6 +1737,8 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::SeqLen { result, .. }
             | Inst::SeqCapacity { result, .. }
             | Inst::Hash { result, .. }
+            | Inst::Encode { result, .. }
+            | Inst::Decode { result, .. }
             | Inst::UniqueCopy { result, .. }
             | Inst::MulAdd { result, .. }
             | Inst::Copy { result, .. } => self.create(st, result),
@@ -3329,6 +3331,8 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             Inst::SeqLen { result, value }
             | Inst::SeqCapacity { result, value }
             | Inst::Hash { result, value, .. }
+            | Inst::Encode { result, value, .. }
+            | Inst::Decode { result, value, .. }
             | Inst::Recast { result, value }
             | Inst::Freeze { result, value }
             | Inst::Thaw { result, value } => {

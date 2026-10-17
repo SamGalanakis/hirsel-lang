@@ -38,6 +38,7 @@ pub mod tls_abi;
 pub mod views;
 
 pub mod alloc;
+pub mod codec;
 pub mod context;
 pub mod copy;
 pub mod count;
@@ -74,7 +75,7 @@ pub use release::{
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

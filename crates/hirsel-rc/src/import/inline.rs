@@ -68,6 +68,27 @@ impl Inline for Importer<'_, '_> {
     fn operand(&mut self, operand: &tir::Operand) -> R<ValueId> {
         Importer::operand(self, operand)
     }
+    fn codec_schema(
+        &mut self,
+        ty: TypeId,
+    ) -> R<Option<hirsel_types::serialization::SerializableSchema>> {
+        let ty = self.ty(ty)?;
+        let signatures = &self.program.signatures;
+        hirsel_types::serialization::serializable_schema(
+            &self.store,
+            ty,
+            &hirsel_types::GenericDeclarations::default(),
+            &mut |path| Ok(signatures.get(path).cloned()),
+        )
+        .map_err(|e| PassError::Unsupported(format!("codec schema: {e:?}")))
+    }
+    fn layout_table(&self) -> &hirsel_lir::layout_types::LayoutTable {
+        self.layouts.table()
+    }
+    fn add_codec(&mut self, plan: hirsel_lir::codec::CodecPlan) -> hirsel_lir::ir::CodecId {
+        self.out.tables.codecs.push(plan);
+        hirsel_lir::ir::CodecId(self.out.tables.codecs.len() as u32 - 1)
+    }
     fn read_field(&mut self, value: ValueId, field: u32) -> R<ValueId> {
         let layout = self.layout_of(self.value_type(value));
         let shape = match self.layouts.record(layout).kind {

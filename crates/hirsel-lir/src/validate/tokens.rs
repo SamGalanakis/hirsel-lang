@@ -458,6 +458,8 @@ fn token_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<ValueId> {
         | Inst::SeqLen { value, .. }
         | Inst::SeqCapacity { value, .. }
         | Inst::Hash { value, .. }
+        | Inst::Encode { value, .. }
+        | Inst::Decode { value, .. }
         | Inst::Recast { value, .. }
         | Inst::SeqReserve {
             capacity: value, ..

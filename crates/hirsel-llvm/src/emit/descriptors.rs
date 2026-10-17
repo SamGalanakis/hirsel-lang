@@ -63,6 +63,58 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         )
     }
 
+    /// The unit's codec `codec` as static `hirsel_rt_v2_codec` data: its descriptor bytes and
+    /// its program, whose descriptor indices are the linked registry's (runtime ABI 9).
+    pub(super) fn codec(&mut self, codec: CodecId) -> Emitted<Value<'m>> {
+        let Some(plan) = self.unit.tables.codecs.get(codec.index()) else {
+            return self.invalid("a codec outside the codec table");
+        };
+        for layout in plan.allocated(self.inputs.layouts) {
+            self.descriptor_pointer(layout)?;
+        }
+        let registry = &self.inputs.registry;
+        let words = match plan.program(self.inputs.layouts, &|id| registry.index(id)) {
+            Ok(words) => words,
+            Err(error) => return self.invalid(format!("a codec plan off its layouts: {error}")),
+        };
+        let (ptr, i8_ty, i64_ty) = (
+            self.module.ptr_type(),
+            self.module.int_type(8),
+            self.module.int_type(64),
+        );
+        let descriptor = self.module.private_constant(
+            "hirsel.codec.descriptor",
+            self.module.array_type(i8_ty, plan.descriptor.len() as u64),
+            1,
+        );
+        self.module
+            .set_initializer(descriptor, self.module.const_bytes(&plan.descriptor));
+        let program = self.module.private_constant(
+            "hirsel.codec.program",
+            self.module.array_type(i64_ty, words.len() as u64),
+            8,
+        );
+        let items: Vec<_> = words
+            .iter()
+            .map(|&w| self.module.const_int(i64_ty, u128::from(w)))
+            .collect();
+        self.module
+            .set_initializer(program, self.module.const_array(i64_ty, &items));
+        let global = self.module.private_constant(
+            "hirsel.codec",
+            self.module.struct_type(&[ptr, i64_ty, ptr, i64_ty]),
+            8,
+        );
+        let initializer = self.module.const_struct(&[
+            descriptor,
+            self.const_u64(plan.descriptor.len() as u64),
+            program,
+            self.const_u64(words.len() as u64),
+        ]);
+        self.module.set_initializer(global, initializer);
+        Ok(global)
+    }
+
     /// The header stores the linked descriptor index and storage kind.
     pub(super) fn block_descriptor(&self, block: Value<'m>) -> Value<'m> {
         let word = self.builder.load(

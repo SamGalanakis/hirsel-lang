@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 8
+#define HIRSEL_RT_V2_ABI_VERSION 9
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -356,6 +356,50 @@ hirsel_rt_v2_header *hirsel_rt_v2_block_grow(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2
  * hash_bytes folds `length` bytes into a state with SipHash-1-3. The bits are unobservable. */
 uint64_t hirsel_rt_v2_hash_begin(hirsel_rt_v2_ctx *ctx);
 uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t length);
+
+/* The canonical SER-2 codec (LIR schema revision 29; runtime ABI 9). A codec is compiler-emitted
+ * static data: the schema's descriptor bytes, which an envelope must match exactly, and a program
+ * of uint64_t words that pairs each schema node with the native layout of its values
+ * (hirsel_lir::codec::CodecPlan::program). Program words: CODEC_VERSION, the node count, the byte
+ * size of `out`, the root node, the out node and the Bytes node, then one word per node giving
+ * the word offset of its body. A body is a CODEC_NODE_* kind, then:
+ *   SCALAR    scalar code (bool, u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64)
+ *   TEXT      utf8, the slice's owner, start and length offsets, the byte sequence's index
+ *   FIELDS    count, then (offset, node) per field in declaration order
+ *   VARIANT   form (0 ordinal u32, 1 null-pointer niche), tag offset, the niche's nullary arm,
+ *             arm count, then per arm in ordinal order: count, (offset, node) per field
+ *   BOX       payload index, size, align, payload node
+ *   SEQUENCE  payload index, element align, first element offset, stride, element node
+ *   REPEAT    count, stride, element node
+ *   MAP, SET  container payload index, size, align, entries and index field offsets, the entries
+ *             sequence's index, element align, first element offset and stride, the index
+ *             sequence's index, element align and stride, key node, key offset, value node (or
+ *             CODEC_NO_NODE), value offset
+ * Every walk is iterative: no native stack depth follows the data. codec_encode reads the value at
+ * `value` (the root node's layout) and writes a fresh Bytes slice of the envelope at `out`.
+ * codec_decode reads the Bytes slice at `bytes`, validates the envelope and the whole payload
+ * first, then writes Result[T, DecodeError] at `out`: Ok of fresh owned data, or Error of the
+ * first malformation in reading order. Neither fails; operational budgets (the reference's
+ * limits) terminate environmentally. */
+#define HIRSEL_RT_V2_CODEC_VERSION 1
+#define HIRSEL_RT_V2_CODEC_NODE_SCALAR 0
+#define HIRSEL_RT_V2_CODEC_NODE_TEXT 1
+#define HIRSEL_RT_V2_CODEC_NODE_FIELDS 2
+#define HIRSEL_RT_V2_CODEC_NODE_VARIANT 3
+#define HIRSEL_RT_V2_CODEC_NODE_BOX 4
+#define HIRSEL_RT_V2_CODEC_NODE_SEQUENCE 5
+#define HIRSEL_RT_V2_CODEC_NODE_REPEAT 6
+#define HIRSEL_RT_V2_CODEC_NODE_MAP 7
+#define HIRSEL_RT_V2_CODEC_NODE_SET 8
+#define HIRSEL_RT_V2_CODEC_NO_NODE UINT64_MAX
+typedef struct hirsel_rt_v2_codec {
+    const uint8_t *descriptor;
+    uint64_t descriptor_length;
+    const uint64_t *program;
+    uint64_t program_length;
+} hirsel_rt_v2_codec;
+void hirsel_rt_v2_codec_encode(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_codec *codec, const void *value, void *out);
+void hirsel_rt_v2_codec_decode(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_codec *codec, const void *bytes, void *out);
 
 void hirsel_rt_v2_region_owner(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, hirsel_rt_v2_header *block, uint32_t index, uint64_t capacity, uint64_t align);
 

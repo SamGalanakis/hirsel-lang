@@ -787,6 +787,12 @@ trait Inline {
         values: &[ValueId],
     ) -> R<ValueId>;
     fn iterator_next(&mut self, call: &crate::library::CallShape<'_>) -> R<()>;
+    fn codec_schema(
+        &mut self,
+        ty: TypeId,
+    ) -> R<Option<hirsel_types::serialization::SerializableSchema>>;
+    fn layout_table(&self) -> &hirsel_lir::layout_types::LayoutTable;
+    fn add_codec(&mut self, plan: hirsel_lir::codec::CodecPlan) -> hirsel_lir::ir::CodecId;
     fn direct_call(
         &mut self,
         symbol: SymbolId,
@@ -881,6 +887,21 @@ impl ImportCx<'_> {
     /// Advance the exclusive iterator place with one indirect step call.
     pub fn iterator_next(&mut self, call: &crate::library::CallShape<'_>) -> R<()> {
         self.im.iterator_next(call)
+    }
+    /// The concrete SER-1 schema of a type of the importing definition, under
+    /// this instance's actuals; None when it is not serializable.
+    pub fn codec_schema(
+        &mut self,
+        ty: TypeId,
+    ) -> R<Option<hirsel_types::serialization::SerializableSchema>> {
+        self.im.codec_schema(ty)
+    }
+    pub fn layout_table(&self) -> &hirsel_lir::layout_types::LayoutTable {
+        self.im.layout_table()
+    }
+    /// Add a codec plan to the unit's codec table.
+    pub fn codec(&mut self, plan: hirsel_lir::codec::CodecPlan) -> hirsel_lir::ir::CodecId {
+        self.im.add_codec(plan)
     }
 }
 

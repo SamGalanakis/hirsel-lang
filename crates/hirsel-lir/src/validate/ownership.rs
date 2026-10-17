@@ -1984,7 +1984,9 @@ impl<S: Stage> Walker<'_, '_, S> {
             Inst::IsUnique { result, value }
             | Inst::SeqLen { result, value }
             | Inst::SeqCapacity { result, value }
-            | Inst::Hash { result, value, .. } => {
+            | Inst::Hash { result, value, .. }
+            | Inst::Encode { result, value, .. }
+            | Inst::Decode { result, value, .. } => {
                 self.borrow(site, st, cr, value);
                 self.create(site, st, cr, result);
             }

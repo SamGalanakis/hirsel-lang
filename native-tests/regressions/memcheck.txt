@@ -37,3 +37,6 @@ conformance/CONC/CONC-2-await.hir
 conformance/CONC/CONC-2-detach.hir
 conformance/FAIL/FAIL-2-child-propagates.hir
 conformance/OWN/OWN-6-unique-child-value.hir
+conformance/SER/SER-2-duplicate-map-run.hir
+conformance/SER/SER-2-roundtrip-run.hir
+conformance/SER/SER-2-vectors-run.hir

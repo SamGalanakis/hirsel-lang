@@ -82,7 +82,10 @@ Invariants:
   a private per-layout `hirsel.hash.<L>` (`compare.rs`, beside `hirsel.compare.<L>`) that
   folds each scalar leaf through `hirsel_rt_v2_hash_bytes` (floats with -0 as +0,
   variants by tag, sequences by count then elements) and sets a flag past
-  `COMPARE_MAX_DEPTH`, which takes the failure edge (MEM-3 Depth). Maps hash their entries in order; sets combine element hashes commutatively. Their comparators read entries, with sets sorted by structural order without allocation. A `UnitOrigin::Library` unit is `linkonce_odr`
+  `COMPARE_MAX_DEPTH`, which takes the failure edge (MEM-3 Depth). `Encode` and `Decode`
+  spill their operand and call `hirsel_rt_v2_codec_encode`/`_decode` with a private
+  `hirsel.codec` constant per plan (`descriptors.rs`): the plan's descriptor bytes and
+  the program `CodecPlan::program` writes, with the linked registry's descriptor indices. Maps hash their entries in order; sets combine element hashes commutatively. Their comparators read entries, with sets sorted by structural order without allocation. A `UnitOrigin::Library` unit is `linkonce_odr`
   and `inlinehint` in every object that defines it and is no export of the object, so
   its copy may vanish once every call is inlined. Definition-shaped library
   bodies also have a callable thunk with that linkage, so FunctionRef addresses

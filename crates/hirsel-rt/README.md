@@ -159,6 +159,19 @@ Invariants and boundary:
   `hirsel_rt_v2_hash_bytes(state, bytes, length)` folds bytes into a state. Compiled
   `Inst::Hash` walks a layout's scalar leaves itself (hirsel-llvm `compare.rs`) and calls
   only these two; the seed moves placement and never an observation.
+- The canonical codec (SER-2, runtime ABI 9, `codec.rs`):
+  `hirsel_rt_v2_codec_encode(ctx, codec, value, out)` and
+  `hirsel_rt_v2_codec_decode(ctx, codec, bytes, out)` walk a compiler-emitted
+  `hirsel_rt_v2_codec` (its descriptor bytes and the u64 program words
+  `hirsel_lir::codec::CodecPlan::program` writes) over native layouts. Encode
+  writes the `HSC1` envelope with Set elements sorted by their encodings, NaNs
+  canonical and bools 0/1; Map entries keep insertion order. Decode checks the
+  envelope, validates the whole payload in `hirsel_types::wire`'s detection order
+  (each failure one `DecodeError` class) and only then materializes zeroed
+  counted blocks and sequences, so a rejected input allocates nothing; a decoded
+  Map or Set carries an empty (unindexed) index. Both walks are iterative. Past
+  `hirsel_types::wire::Limits::default`'s byte and value budgets the run ends
+  environmentally, as the interpreter's operational limit does.
 - No numeric Depth or frame charge exists until spec #16 rules.
 
 Transitions of D's Lean model (`proofs/rc/README.md`) cited in code comments as `T<ID> <name>`;

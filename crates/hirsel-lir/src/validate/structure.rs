@@ -1902,6 +1902,40 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
                 self.fresh_holding(site, result);
             }
+            // A codec reads its operand whole at the plan's layout and yields a
+            // fresh value at the plan's (LIR schema revision 29). The plan
+            // itself agrees with the table node by node (`CodecPlan::check`).
+            Inst::Encode {
+                result,
+                value,
+                codec,
+            }
+            | Inst::Decode {
+                result,
+                value,
+                codec,
+            } => {
+                // An unknown codec is the identity check's violation.
+                if let Some(plan) = unit.tables.codecs.get(codec.index()) {
+                    let encode = matches!(inst, Inst::Encode { .. });
+                    let operand = plan.node(if encode { plan.root } else { plan.bytes });
+                    let produced = if encode {
+                        plan.node(plan.bytes)
+                    } else {
+                        plan.result
+                            .ok_or_else(|| "a decode plan without a result".to_string())
+                            .and_then(|r| plan.node(r))
+                    };
+                    if plan.check(layouts.0).is_err() || encode == plan.result.is_some() {
+                        self.add(site, K::Type("codec plan"));
+                    } else if !operand.is_ok_and(|n| n.layout() == self.layout_of(value))
+                        || !produced.is_ok_and(|n| n.layout() == self.layout_of(result))
+                    {
+                        self.add(site, K::Type(if encode { "encode" } else { "decode" }));
+                    }
+                }
+                self.fresh_holding(site, result);
+            }
             Inst::Recast { result, value } => {
                 self.library_only(site, Opcode::Recast);
                 // The cursor's opaque source: a block over no payload.
@@ -4174,6 +4208,8 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
         | Inst::SeqLen { value, .. }
         | Inst::SeqCapacity { value, .. }
         | Inst::Hash { value, .. }
+        | Inst::Encode { value, .. }
+        | Inst::Decode { value, .. }
         | Inst::Recast { value, .. }
         | Inst::SeqReserve {
             capacity: value, ..

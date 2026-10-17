@@ -24,6 +24,7 @@ use hirsel_lir::runtime_abi::{self, FREE_POISON, UNINIT_POISON};
 use hirsel_lir::stage::Stage;
 use std::collections::BTreeMap;
 
+mod codec;
 mod compare;
 mod flat;
 mod fork;
@@ -4123,6 +4124,29 @@ impl<'p, S: Stage> Machine<'p, S> {
                         bits: u128::from(hash),
                     },
                 )?;
+            }
+            Inst::Encode {
+                result,
+                value,
+                codec,
+            }
+            | Inst::Decode {
+                result,
+                value,
+                codec,
+            } => {
+                let plan = u
+                    .tables
+                    .codecs
+                    .get(codec.index())
+                    .ok_or_else(|| err(V::Malformed, "unknown codec"))?;
+                let val = self.read_use(f, value)?;
+                let produced = if matches!(inst, Inst::Encode { .. }) {
+                    self.codec_encode(plan, &val)?
+                } else {
+                    self.codec_decode(plan, &val)?
+                };
+                self.define_fresh(f, result, produced)?;
             }
             Inst::Recast { result, value } => {
                 let held = self.get(f, value)?.clone();

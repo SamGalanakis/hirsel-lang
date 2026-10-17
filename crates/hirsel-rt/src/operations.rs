@@ -270,6 +270,8 @@ pub(crate) const MAP_BODIES: &[&str] = &[
 
 pub const INLINE_OPERATIONS: &[&str] = &[
     "$intrinsic.heap",
+    "codec.encode",
+    "codec.decode",
     "slots.empty",
     "bytes.from_list",
     "bytes.len",

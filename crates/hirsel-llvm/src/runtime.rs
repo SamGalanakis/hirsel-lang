@@ -64,6 +64,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::Dispose
         | R::SeqReserve
         | R::BlockGrow
+        | R::CodecEncode
+        | R::CodecDecode
         | R::UniqueCopy
         | R::UniqueCopyValue
         | R::Detach

@@ -274,6 +274,13 @@ producer that differs changes this crate or the producer):
   as comparison and is a fault-injection site. A by-address parameter's
   value is a slot version, so a body's version joins execute. `tests/it/revision7.rs`
   holds each check's failing program and clean twin.
+- `Encode` and `Decode` (LIR schema revision 29, `exec/codec.rs`) reimplement the
+  SER-2 codec from the spec over ledger values, at the offsets of the layout
+  records the plan names, never the runtime's codec program. Decoding validates
+  the whole input in the reference's detection order before it builds fresh,
+  zeroed, counted blocks (a Map or Set with an empty index), so a malformed
+  input yields its `DecodeError` and allocates nothing; past the reference's
+  value budget the run is `Unsupported`.
 - `ReadStatic` allocates its constant's static blocks once (`Owner::Static`,
   immortal, published, each a named exemption) and installs every reference
   cell as an uncounted handle to its target block. A result that refers to

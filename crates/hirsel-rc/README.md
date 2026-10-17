@@ -318,6 +318,16 @@ per (operation, instance), and the call becomes `Callee::Direct` to it.
 calls another body or a `$native` finalizer gets it too. `library::owners()`
 supplies the `$native` cursor owners (`OwnerRepresentation::Cursor`).
 
+`library::codec` lowers `codec.encode` and `codec.decode` inline (LIR schema
+revision 29): it takes the call's concrete schema from the checker
+(`serializable_schema`), pairs each schema node with the native layout of the
+value it describes into a `CodecPlan` (memoized per schema node and layout,
+nominals over records, variants and nonempty tuples sharing their layout, Packed
+over its inner variant's arms), checks it against the table and emits
+`Inst::Encode` or `Inst::Decode` over a read-only operand. A schema node whose
+layout it cannot walk (variable flat records, sequential `List[Packed]`, SoA
+columns) declines the lowering as unsupported.
+
 A body is written against `builder::Body`, which prepares each parameter in
 an entry prologue (a `take` parameter is held in a slot with a cached failure
 cleanup that drops it). Rules every body keeps:

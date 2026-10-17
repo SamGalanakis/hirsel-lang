@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 
 /// Where one side of a pair lives: inside a value image or in an allocation.
 #[derive(Clone, Copy)]
-enum At<'e> {
+pub(super) enum At<'e> {
     Image(&'e Extent, u64),
     Heap(Ptr),
 }
@@ -23,7 +23,7 @@ enum Item<'e> {
 }
 
 impl At<'_> {
-    fn at(self, offset: u64) -> Self {
+    pub(super) fn at(self, offset: u64) -> Self {
         match self {
             At::Image(e, o) => At::Image(e, o + offset),
             At::Heap(p) => At::Heap(p.at(offset)),
@@ -531,14 +531,14 @@ impl<S: Stage> Machine<'_, S> {
         Ok(())
     }
 
-    fn extent_at<'e>(&'e self, at: At<'e>) -> Checked<(&'e Extent, u64)> {
+    pub(super) fn extent_at<'e>(&'e self, at: At<'e>) -> Checked<(&'e Extent, u64)> {
         Ok(match at {
             At::Image(e, offset) => (e, offset),
             At::Heap(p) => (&self.ledger.check(p)?.extent, p.offset),
         })
     }
 
-    fn bits_at(&self, at: At<'_>, size: u64) -> Checked<u128> {
+    pub(super) fn bits_at(&self, at: At<'_>, size: u64) -> Checked<u128> {
         let (e, offset) = self.extent_at(at)?;
         e.check_range(offset, size)?;
         if !e.all_init(offset, size) {
@@ -553,12 +553,12 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     /// The active ordinal of a variant whose tag, read as `form`, is at `at`.
-    fn tag_at(&self, at: At<'_>, form: TagForm) -> Checked<u32> {
+    pub(super) fn tag_at(&self, at: At<'_>, form: TagForm) -> Checked<u32> {
         let (e, offset) = self.extent_at(at)?;
         e.active(offset, form, self.word)
     }
 
-    fn ptr_at(&self, at: At<'_>) -> Checked<Ptr> {
+    pub(super) fn ptr_at(&self, at: At<'_>) -> Checked<Ptr> {
         let (e, offset) = self.extent_at(at)?;
         e.check_range(offset, self.word)?;
         match e.cells.get(&offset) {
