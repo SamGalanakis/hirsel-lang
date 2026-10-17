@@ -75,6 +75,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "slots.insert"
             | "slots.get"
             | "slots.remove"
+            | "shared.freeze"
+            | "shared.thaw"
             | "arena.with"
             | "arena.bounded"
             | "copy_to"

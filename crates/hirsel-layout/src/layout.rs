@@ -133,6 +133,11 @@ enum Pending<'s> {
         id: LayoutId,
         element: LayoutId,
     },
+    /// A `Shared` root block's payload (MEM-11).
+    Frozen {
+        id: LayoutId,
+        value: LayoutId,
+    },
     Container {
         id: LayoutId,
         frames: Vec<Frame<'s>>,
@@ -898,6 +903,11 @@ impl<'o> LayoutBuilder<'o> {
                         let record = self.soa_record(element)?;
                         self.complete(id, record);
                     }
+                    Pending::Frozen { id, value } => {
+                        self.settle(walk, value)?;
+                        let record = self.frozen_record(value)?;
+                        self.complete(id, record);
+                    }
                     Pending::Container {
                         id,
                         frames,
@@ -1579,6 +1589,65 @@ impl<'o> LayoutBuilder<'o> {
             });
         }
         Ok(id)
+    }
+
+    /// The payload of a `Shared[T]` root block, reserved now and derived once
+    /// `value`, the inline layout of `T`, is complete.
+    fn frozen<'s>(
+        &mut self,
+        walk: &mut Walk<'s>,
+        value: LayoutId,
+    ) -> Result<LayoutId, LayoutError> {
+        let mut key = Encoder {
+            bytes: Vec::new(),
+            revisions: true,
+        };
+        key.tag("frozen");
+        key.atom(&self.record(value).key.instance.map_or([0; 32], |h| h.0));
+        let (id, fresh) = self.reserve(&key.bytes, true)?;
+        if fresh {
+            walk.pending.push(Pending::Frozen { id, value });
+        }
+        Ok(id)
+    }
+
+    /// The value inline at offset 0. Its program thaws the value, restoring
+    /// ordinary counts, before the value's own drop releases it; a value
+    /// that holds nothing has nothing to freeze or thaw.
+    fn frozen_record(&mut self, value: LayoutId) -> Result<LayoutRecord, LayoutError> {
+        let v = self.record(value).clone();
+        if !matches!(v.size, SizeSpec::Fixed(_)) {
+            return unavailable(None, "a Shared value of dynamic extent");
+        }
+        let mut record = self.blank(&[], LayoutKind::Frozen { value }, v.size.clone(), v.align);
+        record.fields = vec![FieldLayout {
+            ordinal: 0,
+            offset: 0,
+            layout: value,
+            unaligned: false,
+        }];
+        record.initialized = v.initialized.clone();
+        record.abi = v.abi.clone();
+        if !v.scan.is_empty() {
+            record.scan = vec![ScanStep::Inline {
+                offset: 0,
+                layout: value,
+            }];
+        }
+        if !v.drop.is_empty() {
+            record.drop = vec![
+                DropStep::Thaw {
+                    offset: 0,
+                    layout: value,
+                },
+                DropStep::Child {
+                    offset: 0,
+                    layout: value,
+                },
+            ];
+        }
+        record.copy = CopyRecipe::NotCopyable;
+        Ok(record)
     }
 
     fn sequence_record(&mut self, element: LayoutId) -> Result<LayoutRecord, LayoutError> {
@@ -2436,6 +2505,14 @@ impl<'o> LayoutBuilder<'o> {
                 let payload = self.sequence(walk, element, soa)?;
                 Ok(self.block_record(key, payload))
             }
+            // MEM-11: a root reference whose header count is the root count.
+            BuiltinType::Shared => {
+                let value = self.memory(walk, ty_at(0)?, f, true)?;
+                let payload = self.frozen(walk, value)?;
+                let mut record = self.block_record(key, payload);
+                record.kind = LayoutKind::Shared { payload };
+                Ok(record)
+            }
             BuiltinType::Inline => {
                 let element_ty = ty_at(0)?;
                 let count = size_at(walk, 1)?;
@@ -2598,8 +2675,7 @@ impl<'o> LayoutBuilder<'o> {
                 unavailable(Some(6), format!("{} (foreign interop)", builtin_name(kind)))
             }
             BuiltinType::Shape => unavailable(None, "Shape materialization as static data"),
-            BuiltinType::Shared
-            | BuiltinType::Region
+            BuiltinType::Region
             | BuiltinType::Task
             | BuiltinType::Sender
             | BuiltinType::Receiver
@@ -3091,6 +3167,7 @@ fn drop_offset(step: &DropStep) -> Option<u64> {
     match step {
         DropStep::Release { offset }
         | DropStep::Child { offset, .. }
+        | DropStep::Thaw { offset, .. }
         | DropStep::Environment { offset }
         | DropStep::CloseHandle { offset }
         | DropStep::ElementsReverse { offset, .. }

@@ -330,6 +330,7 @@ impl Derived {
                             .write_unaligned(leaf)
                     };
                 }
+                DropStep::Thaw { .. } => panic!("generated layouts hold no Shared root"),
                 DropStep::CloseHandle { offset } => {
                     let id = 1_000_000 + next(rng) % 1_000_000;
                     unsafe { base.add(*offset as usize).cast::<u64>().write_unaligned(id) };
@@ -430,6 +431,7 @@ impl Derived {
                     out.push(Event::Finalize(super::payload(child) as u64));
                 }
                 DropStep::CloseHandle { offset } => out.push(Event::Close(read(base, *offset))),
+                DropStep::Thaw { .. } => panic!("generated layouts hold no Shared root"),
                 DropStep::Child { offset, layout } => {
                     self.expected(*layout, unsafe { base.add(*offset as usize) }, out)
                 }

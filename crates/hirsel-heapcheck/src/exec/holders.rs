@@ -192,7 +192,7 @@ impl Holders {
                 self.count_comparisons += 1;
             }
             let ideal = self.expected[id.0 as usize];
-            if let Some(Count::Finite(n)) = a.count
+            if let Some(n) = a.count.and_then(Count::holders)
                 && i128::from(n) != ideal
             {
                 return fail(
@@ -540,7 +540,9 @@ impl Physical {
             };
             let mismatch = a.owner == Owner::Heap
                 && !matches!(a.state, AllocState::Dead | AllocState::Raw(_))
-                && matches!(a.count,Some(Count::Finite(n)) if i128::from(n)!=self.tally.expected[i]);
+                && a.count
+                    .and_then(Count::holders)
+                    .is_some_and(|n| i128::from(n) != self.tally.expected[i]);
             if mismatch {
                 self.bad_counts.insert(id);
             } else {
@@ -680,7 +682,7 @@ impl Physical {
             );
         }
         if let Some(&id) = self.bad_counts.first() {
-            let Some(Count::Finite(n)) = ledger.get(id).count else {
+            let Some(n) = ledger.get(id).count.and_then(Count::holders) else {
                 unreachable!()
             };
             return fail(

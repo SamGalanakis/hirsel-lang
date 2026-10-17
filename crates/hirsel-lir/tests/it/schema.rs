@@ -1037,6 +1037,14 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         result: v(61),
         value: v(2),
     });
+    insts.push(Inst::Freeze {
+        result: v(62),
+        value: v(2),
+    });
+    insts.push(Inst::Thaw {
+        result: v(63),
+        value: v(62),
+    });
     for feature in [
         UnavailableFeature::Shared,
         UnavailableFeature::Arena,

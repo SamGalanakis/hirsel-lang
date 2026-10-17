@@ -67,6 +67,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::UniqueCopy
         | R::UniqueCopyValue
         | R::Detach
+        | R::Freeze
+        | R::Thaw
         | R::Finalize
         | R::FinalizeBegin
         | R::FinalizeEnd

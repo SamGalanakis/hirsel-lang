@@ -39,9 +39,84 @@ impl PartialEq for NamedFunction {
 }
 impl Eq for NamedFunction {}
 
+/// A `Shared[T]` root (MEM-11). Snapshots of one root share its graph and its
+/// explicit root count: only an owned copy adds a root ([`Value::copied`]) and
+/// only a release or a successful thaw removes one. The graph is frozen: it is
+/// never written while any root lives.
+#[derive(Clone)]
+pub struct SharedRoot {
+    id: u64,
+    graph: std::sync::Arc<std::sync::Mutex<SharedGraph>>,
+}
+struct SharedGraph {
+    roots: u64,
+    value: Option<Value>,
+}
+impl SharedRoot {
+    /// The first root of a freshly frozen value.
+    pub(crate) fn freeze(id: u64, value: Value) -> Self {
+        Self {
+            id,
+            graph: std::sync::Arc::new(std::sync::Mutex::new(SharedGraph {
+                roots: 1,
+                value: Some(value),
+            })),
+        }
+    }
+    /// The logical identity of the frozen graph, shared by all its roots.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+    fn graph(&self) -> std::sync::MutexGuard<'_, SharedGraph> {
+        self.graph.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    fn acquire(&self) {
+        self.graph().roots += 1;
+    }
+    /// Give up this root: the last one hands back the graph for release.
+    pub(crate) fn release(&self) -> Result<Option<Value>, crate::Error> {
+        let mut graph = self.graph();
+        graph.roots = graph
+            .roots
+            .checked_sub(1)
+            .ok_or_else(|| crate::invalid("release of a dead Shared root"))?;
+        Ok(if graph.roots == 0 {
+            graph.value.take()
+        } else {
+            None
+        })
+    }
+    /// The owned value when this is the last root, else the root unchanged.
+    pub(crate) fn thaw(self) -> Result<Result<Value, SharedRoot>, crate::Error> {
+        let mut graph = self.graph();
+        if graph.roots != 1 {
+            drop(graph);
+            return Ok(Err(self));
+        }
+        graph.roots = 0;
+        let value = graph
+            .value
+            .take()
+            .ok_or_else(|| crate::invalid("thaw of a dead Shared root"))?;
+        Ok(Ok(value))
+    }
+}
+impl std::fmt::Debug for SharedRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Shared#{}", self.id)
+    }
+}
+impl PartialEq for SharedRoot {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for SharedRoot {}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum Value {
     FunctionReference(NamedFunction),
+    Shared(SharedRoot),
     /// Opaque simulation identity. Tags come from the library registry, never addresses.
     Handle {
         kind: String,
@@ -247,6 +322,7 @@ impl Clone for Value {
                     kind: kind.clone(),
                     id: *id,
                 },
+                Value::Shared(root) => Value::Shared(root.clone()),
                 Value::Map(f) => Value::Map(vec![None; f.len()]),
                 Value::Set(f) => Value::Set(vec![None; f.len()]),
                 Value::Tuple(f) => Value::Tuple(vec![None; f.len()]),
@@ -322,6 +398,32 @@ impl Clone for Value {
     }
 }
 impl Value {
+    /// An owned semantic copy: the clone, with one more root for every
+    /// `Shared` root it reaches (copying never traverses Shared contents).
+    pub(crate) fn copied(&self) -> Value {
+        self.acquire_roots();
+        self.clone()
+    }
+    /// Add a root to every `Shared` root an owned copy of this value reaches.
+    pub(crate) fn acquire_roots(&self) {
+        let mut work = vec![self];
+        while let Some(value) = work.pop() {
+            match value {
+                Value::Shared(root) => root.acquire(),
+                Value::Closure {
+                    captures,
+                    owned_captures,
+                    ..
+                } => work.extend(
+                    captures
+                        .iter()
+                        .zip(owned_captures)
+                        .filter_map(|(v, owned)| owned.then(|| v.as_ref()).flatten()),
+                ),
+                _ => work.extend(value.fields().into_iter().flatten().flatten()),
+            }
+        }
+    }
     pub(crate) fn fields(&self) -> Option<&[Option<Value>]> {
         match self {
             Self::Closure {

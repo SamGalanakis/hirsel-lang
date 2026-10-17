@@ -3,9 +3,9 @@
 //! A count is a non-atomic `u32` in the block header. The configured bound `max` is D's model
 //! parameter (`proofs/rc`, `Config.max`): finite counts are `1 .. max - 1`, and a dup that would
 //! reach `max` makes the block immortal instead. [`COUNT_IMMORTAL`] is sticky, never wraps, never
-//! tests unique and ignores later dups and releases. Uncounted storage (region, arena and
-//! Shared interiors) has no header and never reaches these operations. Transitions cite the
-//! model's IDs: T03 dup, T04 release.
+//! tests unique and ignores later dups and releases. Uncounted storage (region and arena) has
+//! no header and never reaches these operations; `Shared` interiors keep their headers, made
+//! immortal while frozen (`shared`). Transitions cite the model's IDs: T03 dup, T04 release.
 
 use crate::alloc::{Header, STATE_LIVE};
 use crate::context::RunCtx;
@@ -13,6 +13,8 @@ use crate::fault;
 
 /// The sticky immortal sentinel.
 pub const COUNT_IMMORTAL: u32 = u32::MAX;
+/// The count of a block with one holder: its next release kills it.
+pub const COUNT_UNIQUE: u32 = 1;
 
 /// The largest finite count under the bound `max` (`Config::count_max`; 0 selects the full
 /// width, whose all-ones word is the sentinel).

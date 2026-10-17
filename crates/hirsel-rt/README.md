@@ -135,6 +135,25 @@ Invariants and boundary:
   `hirsel_rt_v2_block_grow(ctx, block, keep, extent, align)` is the same growth by bytes:
   a block that holds `extent` payload bytes is left alone, otherwise its first `keep` bytes
   move. A sequential Packed sequence (MEM-13, `SeqAppend`) grows through it.
+- `Shared[T]` roots (MEM-11, runtime ABI 8, `shared.rs`): a root is a heap block whose payload
+  descriptor carries `LAYOUT_FROZEN` and holds the frozen value inline at offset 0; its header
+  count is the root count, so compiled `Dup`, `Release` and the uniqueness test add, give up
+  and count roots with the ordinary count word contract. That is sound only because one
+  cooperative scheduler runs every task of a run on one heap: roots cross task boundaries as
+  pointer moves, and no two threads touch a count. `hirsel_rt_v2_freeze(ctx, root)` walks the
+  value through its scan steps and makes every counted heap block it reaches `COUNT_IMMORTAL`
+  (static and region blocks, never written, and nested roots, which keep their own counts, are
+  skipped), so a read that copies a part writes no count and copy on write detaches. A
+  `unique` input is a tree: a block whose count is not unique faults. The frozen descriptor's
+  drop program leads with `THAW` (step 9), which restores those blocks to `COUNT_UNIQUE` before
+  the following steps release them, so the last root's release frees the whole value; compiled
+  glue never covers a `THAW` layout. `hirsel_rt_v2_thaw(ctx, root)` faults unless the root is
+  the last, restores the counts the same way, and the caller moves the value out and frees the
+  root shallowly. Both walks keep their stack in the run context and never recurse.
+  `unique_copy` dups a root it reaches instead of copying it: copying never traverses a
+  frozen graph. A threaded scheduler would need atomic root counts (the compiled fast paths
+  and the runtime entries alike) and a frozen graph whose blocks no thread's heap reclaims
+  before the last root's thaw or release.
 - Keyed hashing (SEM-5): `hirsel_rt_v2_hash_begin(ctx)` answers the run's SipHash-1-3 key
   state from `Config.hash_seed` (Config's hash-seed word, revision 7), and
   `hirsel_rt_v2_hash_bytes(state, bytes, length)` folds bytes into a state. Compiled

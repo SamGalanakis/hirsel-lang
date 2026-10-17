@@ -319,7 +319,7 @@ fn a_native_gap_is_a_tool_outcome_not_a_source_verdict() {
         assert_eq!(grant.reference.exit_code, Some(0));
         assert!(build(&grant.validated, &Options::new(x86())).is_ok());
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("unavailable.hir", "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let frozen: Shared[u8] = shared.freeze(7u8); Ok(()) }".into()).unwrap();
+        let file = engine.sources.add("unavailable.hir", "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let counter: Atomic[u8] = atomic.create(tasks, 7u8); Ok(()) }".into()).unwrap();
         let progress = check_progress(&mut engine, file, &default_context()).unwrap();
         assert!(progress.diagnostics.is_empty());
         assert_eq!(
@@ -329,7 +329,7 @@ fn a_native_gap_is_a_tool_outcome_not_a_source_verdict() {
         let input = engine.export_native_input().unwrap();
         let input = engine.import_native_input(input).unwrap();
         let Err(error) = build(&input, &Options::new(x86())) else {
-            panic!("shared.freeze requires the native Shared implementation")
+            panic!("atomic.create requires the native Atomic implementation")
         };
         assert!(
             (StageName::Import..=StageName::Ready).contains(&error.stage),

@@ -25,6 +25,7 @@ mod revision7;
 mod revision8;
 mod revision9;
 mod schema;
+mod shared;
 #[path = "../support/mod.rs"]
 mod support;
 mod tokens;

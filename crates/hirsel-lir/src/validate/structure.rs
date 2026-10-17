@@ -596,6 +596,8 @@ impl<S: Stage> Checker<'_, '_, S> {
                     ValueRepr::Block | ValueRepr::Uncounted,
                     LayoutKind::Block { .. } | LayoutKind::Box { .. },
                 ) => true,
+                // A `Shared` root is always a counted heap block (MEM-11).
+                (ValueRepr::Block, LayoutKind::Shared { .. }) => true,
                 (ValueRepr::Callable, LayoutKind::Callable { .. }) => true,
                 (ValueRepr::Handle, LayoutKind::Handle) => true,
                 (ValueRepr::Arena, LayoutKind::Arena) => true,
@@ -1407,6 +1409,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 if self.cx.stage < StageKind::Rc
                     && unit.header.origin == crate::ir::UnitOrigin::Library
                     && !early_unique_cursor(self.cx, value, result)
+                    && !owned_root(self.cx, value)
                 {
                     self.add(site, K::Type("library uniqueness ownership"));
                 }
@@ -1891,6 +1894,42 @@ impl<S: Stage> Checker<'_, '_, S> {
                 self.fresh_holding(site, result);
                 self.placement(site, construct_placement(self.cx, construct), Some(result));
             }
+            // MEM-11 (LIR schema revision 26): a Shared root block reference
+            // and the value its Frozen payload holds.
+            Inst::Freeze { result, value }
+            | Inst::Thaw {
+                value: result,
+                result: value,
+            } => {
+                let op = if matches!(*inst, Inst::Freeze { .. }) {
+                    Opcode::Freeze
+                } else {
+                    Opcode::Thaw
+                };
+                self.library_only(site, op);
+                let frozen = match layouts.get(self.layout_of(result)).map(|r| &r.kind) {
+                    Some(LayoutKind::Shared { payload }) => {
+                        match layouts.get(*payload).map(|r| &r.kind) {
+                            Some(LayoutKind::Frozen { value }) => Some(*value),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if self.ty(result).repr != ValueRepr::Block || frozen != Some(self.layout_of(value))
+                {
+                    self.add(
+                        site,
+                        K::Type(if op == Opcode::Freeze {
+                            "freeze"
+                        } else {
+                            "thaw"
+                        }),
+                    );
+                }
+                let made = if op == Opcode::Freeze { result } else { value };
+                self.fresh_holding(site, made);
+            }
             Inst::Store {
                 address,
                 value,
@@ -2355,7 +2394,7 @@ impl<S: Stage> Checker<'_, '_, S> {
     fn release(&mut self, site: Site, value: ValueId, layout: LayoutId, live: MaskRef) {
         let own = self.layout_of(value);
         let admitted = match self.ty(value).repr {
-            ValueRepr::Block => self.cx.layouts.payload(own) == Some(layout),
+            ValueRepr::Block => self.cx.layouts.released(own) == Some(layout),
             ValueRepr::Aggregate | ValueRepr::Callable | ValueRepr::Handle => {
                 layout == own && self.cx.owns(value) && !self.cx.layouts.inline_finalizer(own)
             }
@@ -4068,6 +4107,8 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
             out.push((reaching, usage));
         }
         Inst::UniqueCopy { value, .. }
+        | Inst::Freeze { value, .. }
+        | Inst::Thaw { value, .. }
         | Inst::Store { value, .. }
         | Inst::Replace { value, .. }
         | Inst::Dup { value }
@@ -4277,6 +4318,18 @@ fn terminator_operands<S>(cx: &Cx<'_, S>, term: &Terminator) -> Vec<(ValueId, Us
 /// Before Perceus, only a library cursor may observe a credited source's count.
 /// The queried value has exactly one later use: a move (possibly through same-
 /// payload recasts) into the cursor whose private flag records this answer.
+/// An owned `Shared` root: its count is the number of roots, which only the
+/// program's own copies add (MEM-11), so `shared.thaw` may test it before RC.
+fn owned_root<S>(cx: &Cx<'_, S>, value: ValueId) -> bool {
+    let unit = cx.unit;
+    let info = &unit.values[value.index()];
+    info.holding == Holding::Owned
+        && cx
+            .layouts
+            .get(unit.types[info.ty.index()].layout)
+            .is_some_and(|l| matches!(l.kind, LayoutKind::Shared { .. }))
+}
+
 fn early_unique_cursor<S>(cx: &Cx<'_, S>, mut source: ValueId, answer: ValueId) -> bool {
     let unit = cx.unit;
     if early_unique_collection_cursor(cx, source, answer) {

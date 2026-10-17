@@ -12,6 +12,7 @@
 //! to the child's copy, so every copy holds exactly the credits its slots name. Immortal and
 //! static blocks are copied like any other: the copy is unique, so a `unique` parameter
 //! writes it in place without a test (MODE-2), which a shared static block would not survive.
+//! A `Shared` root is never copied: the copy holds one more root of the same graph (MEM-11).
 //! A `FINALIZE` or `CLOSE_HANDLE`
 //! step is an invariant fault: resources and handles are noncopyable, which the validators
 //! enforce. The walk keeps its state in runtime-owned scratch (a visited map and two explicit
@@ -33,7 +34,7 @@ use crate::count::check_live_block;
 use crate::release::{LAYOUT_LOGICAL_PER_ELEMENT, LOGICAL_UNSUPPORTED};
 use crate::release::{
     Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
-    STEP_NONNULL, STEP_RELEASE, STEP_TAG, Step, variant_inactive,
+    STEP_NONNULL, STEP_RELEASE, STEP_TAG, STEP_THAW, Step, variant_inactive,
 };
 use crate::{STATUS_EXHAUSTED, STATUS_OK, fault};
 
@@ -98,7 +99,11 @@ struct Span {
 }
 
 /// Visits every counted holder slot of the value at `value`, read through `layout`'s program.
-unsafe fn holders(layout: *const Layout, value: *mut u8, visit: &mut dyn FnMut(*mut u8)) {
+pub(crate) unsafe fn holders(
+    layout: *const Layout,
+    value: *mut u8,
+    visit: &mut dyn FnMut(*mut u8),
+) {
     // SAFETY: `layout` is the descriptor of the value at `value`.
     unsafe {
         let steps: *const Step = (*layout).steps;
@@ -169,6 +174,7 @@ unsafe fn holders(layout: *const Layout, value: *mut u8, visit: &mut dyn FnMut(*
                     STEP_FINALIZE | STEP_CLOSE_HANDLE => {
                         fault("a unique copy reached a resource or handle, which is noncopyable");
                     }
+                    STEP_THAW => fault("a holder walk entered a Shared root's own program"),
                     _ => fault("a drop step has an unknown kind"),
                 }
             }
@@ -199,6 +205,11 @@ unsafe fn copy_graph(
             let child = slot.cast::<*mut Header>().read_unaligned();
             if diagnostic {
                 check_live_block(ctx, child);
+            }
+            // A Shared root is never copied: the copy holds one more root (MEM-11).
+            if crate::shared::is_root(&*raw, child) {
+                crate::count::hirsel_rt_v2_dup(raw, child);
+                return;
             }
             let target = match copies.get(&child) {
                 Some(&target) => {

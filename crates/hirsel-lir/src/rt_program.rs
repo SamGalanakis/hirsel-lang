@@ -20,6 +20,8 @@
 //!   static count) over the element's program; `ColumnsReverse` becomes a
 //!   dynamic `STEP_LOOP` of stride 0 holding one `STEP_COLUMN` per dropped
 //!   column, in reverse declaration order.
+//! - `Thaw` (a `Shared` root's `Frozen` payload) becomes a `STEP_THAW` naming the
+//!   frozen value's layout, so that layout gets its own descriptor too.
 //! - The layout's own leading `Finalize` is the descriptor's finalizer.
 //!
 //! A dynamic count belongs only to an outermost loop: a dynamic extent is
@@ -39,7 +41,7 @@ use crate::layout_types::{
 use crate::runtime_abi::{
     LAYOUT_DYNAMIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN,
     STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE,
-    STEP_TAG, WHOLE_VALUE,
+    STEP_TAG, STEP_THAW, WHOLE_VALUE,
 };
 
 /// Whether `record`'s arena blocks omit the extent before their header ([`LAYOUT_NO_EXTENT`]):
@@ -76,6 +78,8 @@ pub enum StepKind {
     /// Run the next `span` steps once on the enclosing loop's element of one
     /// structure-of-arrays column.
     Column,
+    /// Restore ordinary counts in the frozen value at `offset`, of `layout`.
+    Thaw,
 }
 
 impl StepKind {
@@ -89,6 +93,7 @@ impl StepKind {
             Self::LiveBit => STEP_LIVE_BIT,
             Self::Loop => STEP_LOOP,
             Self::Column => STEP_COLUMN,
+            Self::Thaw => STEP_THAW,
         }
     }
 }
@@ -114,7 +119,7 @@ pub struct Step {
     /// `Loop`: the offset of the dynamic u64 element count, or `NO_OFFSET` for
     /// a static count. `Column`: the offset of the u64 element capacity.
     pub count_offset: u64,
-    /// `Finalize`: the inline resource's layout.
+    /// `Finalize`: the inline resource's layout. `Thaw`: the frozen value's.
     pub layout: Option<LayoutId>,
 }
 
@@ -136,7 +141,7 @@ pub struct Descriptor {
 }
 
 impl Descriptor {
-    /// Layouts this descriptor's `Finalize` steps name; each needs its own descriptor.
+    /// Layouts this descriptor's `Finalize` and `Thaw` steps name; each needs its own descriptor.
     pub fn referenced(&self) -> impl Iterator<Item = LayoutId> + '_ {
         self.steps.iter().filter_map(|s| s.layout)
     }
@@ -260,6 +265,11 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
             | if dynamic { LAYOUT_DYNAMIC } else { 0 }
             | if no_extent(record) {
                 LAYOUT_NO_EXTENT
+            } else {
+                0
+            }
+            | if matches!(record.kind, LayoutKind::Frozen { .. }) {
+                crate::runtime_abi::LAYOUT_FROZEN
             } else {
                 0
             }
@@ -536,6 +546,10 @@ impl Lower<'_> {
                 }
                 DropStep::CloseHandle { offset } => {
                     self.push(StepKind::CloseHandle, at + offset);
+                }
+                DropStep::Thaw { offset, layout } => {
+                    let step = self.push(StepKind::Thaw, at + offset);
+                    self.steps[step].layout = Some(*layout);
                 }
                 DropStep::Child { offset, layout } => self.child(*layout, at + offset)?,
                 DropStep::ActiveVariant {

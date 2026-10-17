@@ -183,6 +183,8 @@ fn inventory_set_equality_and_digest_control() {
         "$intrinsic.ListConsume_next",
         "$intrinsic.InlineConsume_open",
         "$intrinsic.InlineConsume_next",
+        "shared.freeze",
+        "shared.thaw",
     ] {
         assert_eq!(
             native
@@ -194,13 +196,7 @@ fn inventory_set_equality_and_digest_control() {
             Disposition::Body
         );
     }
-    for name in [
-        "task.async",
-        "channel.open",
-        "mutex.with",
-        "atomic.load",
-        "shared.thaw",
-    ] {
+    for name in ["task.async", "channel.open", "mutex.with", "atomic.load"] {
         assert!(matches!(
             native
                 .rows()

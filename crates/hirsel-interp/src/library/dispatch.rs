@@ -21,6 +21,7 @@ pub struct Library {
     pub(super) network_waits: std::collections::BTreeMap<u64, super::net::NetworkWait>,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
+    pub(super) next_shared: u64,
 }
 impl Library {
     pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
@@ -32,6 +33,7 @@ impl Library {
             network_waits: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
+            next_shared: 0,
         })
     }
     /// `stdin.read` over the configured input; a host adapter resumes a parked read here.
@@ -1093,7 +1095,10 @@ primary_operations! { self, call, context, name, a, value;
             Value::Handle { kind, .. } if kind == "$Heap" || kind == crate::checked::ARENA_HANDLE => {},
             _ => return Err(invalid("copy_to destination is not an Arena")),
         }
-        arg(a, 1)?.clone()
+        arg(a, 1)?.copied()
+    },
+    Primitive: "shared.freeze" | "shared.thaw" => {
+        return super::shared::call(name, a, &mut self.next_shared).map(Some);
     },
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
@@ -1123,7 +1128,7 @@ primary_operations! { self, call, context, name, a, value;
         let result = self.synchronization_call(name, &call, context);
         if result.is_err() && let Some(saved) = saved { self.synchronizers = saved; }
         return result.map(Some); },
-    Unavailable: "shared.freeze" | "shared.thaw" | "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Unavailable: "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" => {
         return self.network_call(name, &call, context).map(Some);
     },
@@ -1710,6 +1715,10 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 out.push(5);
                 atom(&mut out, kind.as_bytes());
                 out.extend_from_slice(&id.to_le_bytes());
+            }
+            Value::Shared(root) => {
+                out.push(20);
+                out.extend_from_slice(&root.id().to_le_bytes());
             }
             Value::Variant {
                 variant,

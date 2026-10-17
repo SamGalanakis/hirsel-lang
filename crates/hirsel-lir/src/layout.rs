@@ -458,6 +458,10 @@ pub fn shift_drop(step: &DropStep, by: u64) -> DropStep {
         DropStep::Environment { offset } => DropStep::Environment {
             offset: offset + by,
         },
+        DropStep::Thaw { offset, layout } => DropStep::Thaw {
+            offset: offset + by,
+            layout: *layout,
+        },
         DropStep::CloseHandle { offset } => DropStep::CloseHandle {
             offset: offset + by,
         },
@@ -535,6 +539,7 @@ fn logical_at(table: &LayoutTable, id: LayoutId, depth: usize) -> Option<u64> {
         }
         LayoutKind::Block { .. }
         | LayoutKind::Box { .. }
+        | LayoutKind::Shared { .. }
         | LayoutKind::Slice { .. }
         | LayoutKind::Opaque { .. }
         | LayoutKind::Handle
@@ -543,6 +548,7 @@ fn logical_at(table: &LayoutTable, id: LayoutId, depth: usize) -> Option<u64> {
         LayoutKind::Callable { .. } | LayoutKind::Iterator { .. } => LOGICAL_CALLABLE,
         LayoutKind::Environment { .. }
         | LayoutKind::Header
+        | LayoutKind::Frozen { .. }
         | LayoutKind::Flat
         | LayoutKind::SoaColumns { .. }
         | LayoutKind::Sequence { .. }

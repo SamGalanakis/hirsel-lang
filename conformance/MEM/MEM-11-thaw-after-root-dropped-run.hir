@@ -1,0 +1,34 @@
+// rule: MEM-11
+// expect: run
+// stdout: ok
+// A thaw that another root refused succeeds once that root is dropped.
+fn output_error[E](take e: E) -> () {}
+
+fn thawed(take s: Shared[String]) -> bool {
+  match shared.thaw(take s) {
+    Ok(text) => text == "value",
+    Error(root) => false,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let built: String = "value"
+  let s: Shared[String] = shared.freeze(take built)
+  let other = copy s
+  let refused = !thawed(take s)
+  let valid = refused && thawed(take other)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

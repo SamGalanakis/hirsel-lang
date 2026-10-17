@@ -348,6 +348,8 @@ impl<'m> Generator<'m, '_> {
             }
             LayoutKind::Environment { .. }
             | LayoutKind::Handle
+            | LayoutKind::Shared { .. }
+            | LayoutKind::Frozen { .. }
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }
@@ -1092,6 +1094,8 @@ impl<'m> HashGenerator<'m, '_> {
             }
             LayoutKind::Environment { .. }
             | LayoutKind::Handle
+            | LayoutKind::Shared { .. }
+            | LayoutKind::Frozen { .. }
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }

@@ -7,6 +7,8 @@ conformance/DROP/DROP-2-wave1-resource-run.hir
 conformance/FACT/FACT-3-reserved-push-run.hir
 conformance/LANG/LANG-11-block-local-share-run.hir
 conformance/MEM/MEM-10-caller-arena-tree-run.hir
+conformance/MEM/MEM-11-nested-root-release-run.hir
+conformance/MEM/MEM-11-shared-index-example.hir
 conformance/MEM/MEM-12-flat-list-builder-run.hir
 conformance/MEM/MEM-3-keyed-read-nested-key-run.hir
 conformance/MEM/MEM-6-cleanup-failure-propagates-run.hir

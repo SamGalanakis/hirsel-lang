@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 7
+#define HIRSEL_RT_V2_ABI_VERSION 8
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -119,6 +119,9 @@ extern "C" {
 #define HIRSEL_RT_V2_LAYOUT_LOGICAL_PER_ELEMENT 16
 /* `logical` of a layout with no logical size (a flat encoding, an environment). */
 #define HIRSEL_RT_V2_LOGICAL_UNSUPPORTED UINT64_MAX
+/* The payload of a Shared root block (MEM-11): the blocks its value reaches are frozen while the
+ * root lives, and a deep copy reaching such a block adds a root instead. */
+#define HIRSEL_RT_V2_LAYOUT_FROZEN 32
 #define HIRSEL_RT_V2_INDEX_MASK 0x1fffffffu
 #define HIRSEL_RT_V2_KIND_SHIFT 29
 #define HIRSEL_RT_V2_KIND_SMALL 0
@@ -131,6 +134,9 @@ extern "C" {
 #define HIRSEL_RT_V2_STEP_COLUMN 6
 #define HIRSEL_RT_V2_STEP_NONNULL 7
 #define HIRSEL_RT_V2_STEP_LIVE_BIT 8
+/* Restore ordinary counts in the frozen value at offset (read through layout) before releasing
+ * it: the first step of a Shared root block's program (MEM-11). */
+#define HIRSEL_RT_V2_STEP_THAW 9
 #define HIRSEL_RT_V2_STEP_CURSOR_BITS 24
 #define HIRSEL_RT_V2_WHOLE_VALUE UINT32_MAX
 #define HIRSEL_RT_V2_NO_OFFSET UINT64_MAX
@@ -372,6 +378,12 @@ uint8_t hirsel_rt_v2_unique_copy_value(hirsel_rt_v2_ctx *ctx, uint32_t index,
 /* Copy-on-write detach: the block alone, its counted children shared. */
 uint8_t hirsel_rt_v2_detach(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t site,
                             hirsel_rt_v2_header **out_block);
+
+/* Shared roots (MEM-11). The root block's descriptor begins with STEP_THAW naming its frozen
+ * value's layout. Freeze makes every counted block the value reaches immortal, stopping at
+ * static blocks and nested roots; thaw (of the last root) restores each to one holder. */
+void hirsel_rt_v2_freeze(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
+void hirsel_rt_v2_thaw(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 
 /* Finalizers. */
 uint8_t hirsel_rt_v2_finalize(hirsel_rt_v2_ctx *ctx, uint32_t index, void *value,

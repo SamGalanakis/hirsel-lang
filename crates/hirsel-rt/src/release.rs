@@ -51,6 +51,9 @@ pub const LAYOUT_NO_EXTENT: u32 = 8;
 pub const LAYOUT_LOGICAL_PER_ELEMENT: u32 = 16;
 /// `Layout::logical` of a layout with no logical size (a flat encoding, an environment).
 pub const LOGICAL_UNSUPPORTED: u64 = u64::MAX;
+/// `Layout::flags`: the payload of a `Shared` root block (MEM-11). The blocks its value reaches
+/// are immortal while the root lives; its program begins with [`STEP_THAW`] when it holds any.
+pub const LAYOUT_FROZEN: u32 = 32;
 
 /// Release the counted block reference stored at `offset`.
 pub const STEP_RELEASE: u32 = 1;
@@ -71,6 +74,9 @@ pub const STEP_COLUMN: u32 = 6;
 pub const STEP_NONNULL: u32 = 7;
 /// Skip the span when `variant` names a clear bit of the persistent u64 live word.
 pub const STEP_LIVE_BIT: u32 = 8;
+/// Restore ordinary counts in the frozen value at `offset`, read through `layout`, before the
+/// steps that release it: the first step of a `Shared` root block's program (MEM-11).
+pub const STEP_THAW: u32 = 9;
 
 /// Step bits of the logical dead cursor. Simple programs use the count word alone;
 /// wide programs retain the complete remaining forty mixed-radix bits in header plus shadow.
@@ -165,7 +171,8 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
             | LAYOUT_DYNAMIC
             | LAYOUT_WIDE_CURSOR
             | LAYOUT_NO_EXTENT
-            | LAYOUT_LOGICAL_PER_ELEMENT)
+            | LAYOUT_LOGICAL_PER_ELEMENT
+            | LAYOUT_FROZEN)
         != 0
     {
         fault("a layout descriptor has unknown flags");
@@ -298,6 +305,22 @@ fn check_frame(
         match step.kind {
             STEP_RELEASE | STEP_CLOSE_HANDLE => {
                 if !fits(step.offset, 8) {
+                    fault("a drop step lies outside its layout");
+                }
+            }
+            STEP_THAW => {
+                if at != 0 || loops > 0 || layout.flags & LAYOUT_FROZEN == 0 {
+                    fault("a thaw step that does not begin a frozen payload's program");
+                }
+                if step.layout.is_null() {
+                    fault("a thaw step has no layout");
+                }
+                // SAFETY: a nonnull descriptor pointer; its fields are plain data.
+                let child = unsafe { &*step.layout };
+                if child.magic != LAYOUT_MAGIC || child.version != LAYOUT_VERSION {
+                    fault("a thaw step's layout has the wrong magic or version");
+                }
+                if !fits(step.offset, child.size) {
                     fault("a drop step lies outside its layout");
                 }
             }
@@ -897,6 +920,8 @@ unsafe fn run_step(
                 }
             }
             STEP_FINALIZE => *status |= run_finalizer(ctx, step.layout, at, anchor),
+            // The last root died: the value is ordinary again before its steps release it.
+            STEP_THAW => crate::shared::thaw_value(ctx, step.layout, at),
             STEP_CLOSE_HANDLE => {
                 *status |= run_close(ctx, at.cast::<u64>().read_unaligned(), anchor);
             }

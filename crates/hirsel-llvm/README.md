@@ -244,7 +244,11 @@ is a move, and `UniqueCopy` calls
 `hirsel_rt_v2_unique_copy` when deep and `hirsel_rt_v2_detach` when shallow; a deep copy of
 an inline value spills it to a stack slot of its layout and calls
 `hirsel_rt_v2_unique_copy_value` with that layout's descriptor. Both deep-copy entries
-receive the construction's destination token (runtime ABI 6). Regions use `region_enter`/`reserve`/`schedule`/`exit` on a
+receive the construction's destination token (runtime ABI 6). `Freeze` allocates a heap
+root of its `Frozen` payload, stores the value in it and calls `hirsel_rt_v2_freeze`;
+`Thaw` calls `hirsel_rt_v2_thaw`, loads the value out and frees the root shallowly
+(runtime ABI 8). A `Shared` root is one pointer word; no glue covers a frozen layout, whose
+`THAW` step only the runtime walk runs. Regions use `region_enter`/`reserve`/`schedule`/`exit` on a
 48-byte record per region instance, and a region reference addresses its payload directly.
 `FinalizeBegin`/`FinalizeEnd` call `hirsel_rt_v2_finalize_begin`/`end`. A layout with a
 user finalizer gets a private drop wrapper `hirsel.drop.<id>` that calls its drop body

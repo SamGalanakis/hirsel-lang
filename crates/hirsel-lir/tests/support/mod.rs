@@ -121,6 +121,9 @@ pub mod l {
     pub const ARENA: LayoutId = LayoutId(44);
     /// f32, the other width `Reinterpret` pairs (LIR revision 23).
     pub const F32: LayoutId = LayoutId(45);
+    /// A frozen `BLK` and the `Shared` root over it (LIR revision 27).
+    pub const FROZEN: LayoutId = LayoutId(46);
+    pub const SHARED: LayoutId = LayoutId(47);
 }
 
 fn record(table: &LayoutTable, kind: LayoutKind, size: u64, align: u32) -> LayoutRecord {
@@ -422,6 +425,27 @@ pub fn table() -> LayoutTable {
     arena.fields = vec![field(0, 0, l::PTR)];
     layouts.push(arena);
     layouts.push(record(&t, LayoutKind::Scalar(ScalarKind::F32), 4, 4));
+    let mut frozen = record(&t, LayoutKind::Frozen { value: l::BLK }, 8, 8);
+    frozen.fields = vec![field(0, 0, l::BLK)];
+    frozen.copy = CopyRecipe::NotCopyable;
+    frozen.scan = vec![ScanStep::Inline {
+        offset: 0,
+        layout: l::BLK,
+    }];
+    frozen.drop = vec![
+        DropStep::Thaw {
+            offset: 0,
+            layout: l::BLK,
+        },
+        DropStep::Child {
+            offset: 0,
+            layout: l::BLK,
+        },
+    ];
+    layouts.push(frozen);
+    let mut shared = block(&t, l::FROZEN);
+    shared.kind = LayoutKind::Shared { payload: l::FROZEN };
+    layouts.push(shared);
     t.layouts = layouts;
     t
 }
@@ -448,6 +472,7 @@ pub fn repr_of(layout: LayoutId) -> ValueRepr {
         | l::FLAT_OUTER_BLK
         | l::NICHEBLK
         | l::SEQBLK
+        | l::SHARED
         | l::SOURCE => ValueRepr::Block,
         l::HDR => ValueRepr::Token,
         l::ARENA => ValueRepr::Arena,
@@ -903,7 +928,9 @@ impl<S: Stage> Lir<S> {
     pub fn payload(&self, value: ValueId) -> LayoutId {
         let ty = &self.builder.unit.types[self.builder.unit.values[value.index()].ty.index()];
         match self.table.layouts[ty.layout.0 as usize].kind {
-            LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
+            LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } => payload,
             _ => ty.layout,
         }
     }

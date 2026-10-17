@@ -915,6 +915,15 @@ fn execute_frames(
                             check.state.borrow_mut().released += 1;
                         }
                     }
+                    if let Value::Shared(root) = &value {
+                        // The last root releases the frozen graph it held.
+                        if let Some(graph) = root.release()? {
+                            frame
+                                .work
+                                .push_front(crate::resources::Work::Release(graph, anchor));
+                        }
+                        continue;
+                    }
                     if let Value::Handle { kind, id } = &value {
                         effect(
                             &mut execution.trace,

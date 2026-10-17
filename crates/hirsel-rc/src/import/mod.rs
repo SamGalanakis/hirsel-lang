@@ -1445,7 +1445,9 @@ pub(crate) fn repr_of(kind: &LayoutKind) -> ValueRepr {
     match kind {
         LayoutKind::Unit => ValueRepr::Unit,
         LayoutKind::Scalar(k) => ValueRepr::Scalar(*k),
-        LayoutKind::Block { .. } | LayoutKind::Box { .. } => ValueRepr::Block,
+        LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } => {
+            ValueRepr::Block
+        }
         LayoutKind::Callable { .. } => ValueRepr::Callable,
         LayoutKind::Handle => ValueRepr::Handle,
         LayoutKind::Path => ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::U64),

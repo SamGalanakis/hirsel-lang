@@ -1,0 +1,47 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// A Shared root crosses into a child task. The child's thaw is refused while
+// the parent holds another root, and the parent's thaw succeeds after.
+fn output_error[E](take e: E) -> () {}
+
+fn thawed(take s: Shared[String]) -> bool {
+  match shared.thaw(take s) {
+    Ok(text) => text == "value",
+    Error(root) => false,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let built: String = "value"
+  let s: Shared[String] = shared.freeze(take built)
+  let sent = copy s
+  let refused: bool = task.scope(
+    tasks,
+    fn(scope: Scope) -> bool {
+      let h = task.async(
+        scope,
+        fn() -> bool {
+          !thawed(take sent)
+        }
+      )
+      task.await(scope, take h)
+    }
+  )
+  let valid = refused && thawed(take s)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

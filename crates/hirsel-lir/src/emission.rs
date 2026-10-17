@@ -237,6 +237,7 @@ pub fn scalar_shape(kind: &LayoutKind) -> Option<ScalarKind> {
         LayoutKind::Path => Some(ScalarKind::U64),
         LayoutKind::Block { .. }
         | LayoutKind::Box { .. }
+        | LayoutKind::Shared { .. }
         | LayoutKind::Header
         | LayoutKind::Arena => Some(ScalarKind::Pointer),
         _ => None,

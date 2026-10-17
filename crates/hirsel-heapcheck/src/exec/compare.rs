@@ -278,6 +278,8 @@ impl<S: Stage> Machine<'_, S> {
                 | LayoutKind::Callable { .. }
                 | LayoutKind::Iterator { .. }
                 | LayoutKind::Resource
+                | LayoutKind::Shared { .. }
+                | LayoutKind::Frozen { .. }
                 | LayoutKind::Header => {
                     return fail(
                         V::TypeConfusion,
@@ -476,6 +478,8 @@ impl<S: Stage> Machine<'_, S> {
                 | LayoutKind::Callable { .. }
                 | LayoutKind::Iterator { .. }
                 | LayoutKind::Resource
+                | LayoutKind::Shared { .. }
+                | LayoutKind::Frozen { .. }
                 | LayoutKind::Header => {
                     return fail(V::TypeConfusion, format!("a hash of {:?}", record.kind));
                 }

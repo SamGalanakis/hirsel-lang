@@ -360,6 +360,23 @@ pub enum Count {
     Finite(u64),
     /// Sticky: overflow saturation or static data. Never decremented.
     Immortal,
+    /// A `Shared` root block: the number of live roots (MEM-11), kept apart
+    /// from ordinary credits. Only roots dup and release it.
+    Root(u64),
+    /// A block of a frozen graph: one holder, its parent, and no count
+    /// operation or write while a root of the graph lives.
+    Frozen,
+}
+
+impl Count {
+    /// The number of holder cells the count stands for, when it is exact.
+    pub fn holders(self) -> Option<u64> {
+        match self {
+            Count::Finite(n) | Count::Root(n) => Some(n),
+            Count::Frozen => Some(1),
+            Count::Immortal => None,
+        }
+    }
 }
 
 /// Which storage owns an allocation (the ledger's view of

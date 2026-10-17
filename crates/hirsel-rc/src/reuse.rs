@@ -20,7 +20,7 @@
 //!   field of its donor skips that store (`Reuse::kept`).
 //!
 //! Donors are only owned counted heap blocks of a known task heap: never a
-//! static, region, arena, frozen, caller-destination or borrowed value, and
+//! static, region, arena, frozen (a `Shared` root), caller-destination or borrowed value, and
 //! never a block the specialized drop just found shared. A release keeps its
 //! place, so every operand that reads the donor was evaluated before the
 //! donor's storage is given up. `Options::reuse = false` is the reuse-off
@@ -81,6 +81,10 @@ pub(crate) fn bucket(
     let record = table.layout(payload)?;
     if record.kind == LayoutKind::Flat {
         // A flat payload's extent is its encoding's, not the layout's.
+        return None;
+    }
+    if matches!(record.kind, LayoutKind::Frozen { .. }) {
+        // A Shared root block is never a donor: its last release thaws it.
         return None;
     }
     let hirsel_lir::layout_types::SizeSpec::Fixed(size) = record.size else {

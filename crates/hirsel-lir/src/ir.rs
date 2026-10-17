@@ -726,6 +726,24 @@ pub enum Inst {
         deep: bool,
         failure: FailureId,
     },
+    /// `shared.freeze` (MEM-11, LIR schema revision 27, library units only):
+    /// move the owned `value` into a fresh heap root block of the `Shared`
+    /// layout of `result`, whose `Frozen` payload is the value's layout, with
+    /// a root count of one, then make every counted block the value reaches
+    /// immortal, stopping at nested `Shared` roots and static blocks. It
+    /// cannot fail.
+    Freeze {
+        result: ValueId,
+        value: ValueId,
+    },
+    /// `shared.thaw` of the last root (library units only): consume the owned
+    /// `Shared` `value`, whose root count must be one, restore ordinary unique
+    /// counts in its frozen value, move that value out as `result` and free
+    /// the root block. It cannot fail.
+    Thaw {
+        result: ValueId,
+        value: ValueId,
+    },
     /// Initialize dead storage; `version` is the root's new reaching value.
     Store {
         address: AddressId,
@@ -1557,6 +1575,8 @@ impl Inst {
             | Inst::SeqCapacity { result, .. }
             | Inst::Hash { result, .. }
             | Inst::Recast { result, .. }
+            | Inst::Freeze { result, .. }
+            | Inst::Thaw { result, .. }
             | Inst::UniqueCopy { result, .. }
             | Inst::UpdateMask { result, .. }
             | Inst::Construct { result, .. }
@@ -1654,6 +1674,8 @@ impl Inst {
             | Inst::FlatField { .. }
             | Inst::FlatClose { .. }
             | Inst::Recast { .. }
+            | Inst::Freeze { .. }
+            | Inst::Thaw { .. }
             | Inst::Store { .. }
             | Inst::UpdateMask { .. }
             | Inst::Weaken { .. }
@@ -1723,6 +1745,8 @@ impl Inst {
             | Inst::FlatField { .. }
             | Inst::FlatClose { .. }
             | Inst::Recast { .. }
+            | Inst::Freeze { .. }
+            | Inst::Thaw { .. }
             | Inst::Store { .. }
             | Inst::UpdateMask { .. }
             | Inst::Weaken { .. }
@@ -1839,7 +1863,9 @@ impl Inst {
             | Self::Weaken { result, value }
             | Self::SeqLen { result, value }
             | Self::SeqCapacity { result, value }
-            | Self::Recast { result, value } => {
+            | Self::Recast { result, value }
+            | Self::Freeze { result, value }
+            | Self::Thaw { result, value } => {
                 f(R::Value(result));
                 f(R::Value(value));
             }
@@ -2693,6 +2719,8 @@ snapshot_enum!(Inst {
     Hash { result, value, layout, failure },
     Recast { result, value },
     UniqueCopy { result, value, construct, deep, failure },
+    Freeze { result, value },
+    Thaw { result, value },
     Store { address, value, version },
     Replace { address, value, displaced, version, displaced_version, if_live, failure },
     UpdateMask { result, mask, field, initialized },

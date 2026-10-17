@@ -191,6 +191,13 @@ impl ObservedValue {
                     });
                     continue;
                 }
+                Value::Shared(root) => {
+                    nodes.push(O::Handle {
+                        kind: "Shared".into(),
+                        logical_id: root.id(),
+                    });
+                    continue;
+                }
                 Value::FunctionReference(reference) => {
                     nodes.push(O::FunctionReference {
                         definition: reference.definition.clone(),

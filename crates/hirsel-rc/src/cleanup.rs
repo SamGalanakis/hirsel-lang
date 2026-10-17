@@ -2143,7 +2143,7 @@ impl Lowering<'_, '_> {
             return true;
         }
         match record.kind {
-            LayoutKind::Block { .. } | LayoutKind::Box { .. } => false,
+            LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } => false,
             LayoutKind::Inline { element, .. } | LayoutKind::Simd { element, .. } => {
                 self.inline_finalizer(element)
             }

@@ -450,6 +450,8 @@ fn token_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<ValueId> {
         Inst::Store { value, .. }
         | Inst::Replace { value, .. }
         | Inst::UniqueCopy { value, .. }
+        | Inst::Freeze { value, .. }
+        | Inst::Thaw { value, .. }
         | Inst::Dup { value }
         | Inst::IsUnique { value, .. }
         | Inst::Weaken { value, .. }

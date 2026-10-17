@@ -1864,7 +1864,7 @@ impl<S: Stage> Walker<'_, '_, S> {
         self.discharged.insert(anchor);
         // A block destroys its payload; an inline value its own content.
         let own = self.cx.value_layout(value);
-        let destroyed = self.cx.layouts.payload(own).unwrap_or(own);
+        let destroyed = self.cx.layouts.released(own).unwrap_or(own);
         if self.cx.stage < StageKind::Ready && self.cx.layouts.destructible(destroyed) {
             self.err(site, K::ResourceOutsideAnchor(value));
         }
@@ -1986,6 +1986,11 @@ impl<S: Stage> Walker<'_, '_, S> {
             | Inst::SeqCapacity { result, value }
             | Inst::Hash { result, value, .. } => {
                 self.borrow(site, st, cr, value);
+                self.create(site, st, cr, result);
+            }
+            // Both move the whole owned value into a new representation.
+            Inst::Freeze { result, value } | Inst::Thaw { result, value } => {
+                self.consume(site, st, cr, value);
                 self.create(site, st, cr, result);
             }
             // The same view at another payload layout: it happens inside

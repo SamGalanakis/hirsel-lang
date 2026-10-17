@@ -295,7 +295,8 @@ impl<'o> LayoutBuilder<'o> {
                 | BuiltinType::Map
                 | BuiltinType::Set
                 | BuiltinType::SortedMap
-                | BuiltinType::Slots => Class::Value(vec![ScalarKind::Pointer]),
+                | BuiltinType::Slots
+                | BuiltinType::Shared => Class::Value(vec![ScalarKind::Pointer]),
                 BuiltinType::Iter => Class::Value(vec![ScalarKind::Pointer; 3]),
                 _ => Class::Aggregate,
             },

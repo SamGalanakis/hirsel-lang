@@ -564,12 +564,25 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
     }
 
-    /// A finite-count heap block: one that a credit actually keeps alive.
+    /// A finite-count heap block or a `Shared` root: one that a credit actually keeps alive.
     fn counted_target(&self, p: Ptr) -> bool {
         self.ledger
             .allocations
             .get(p.alloc.0 as usize)
-            .is_some_and(|a| a.owner == Owner::Heap && matches!(a.count, Some(Count::Finite(_))))
+            .is_some_and(|a| {
+                a.owner == Owner::Heap && matches!(a.count, Some(Count::Finite(_) | Count::Root(_)))
+            })
+    }
+
+    /// A block a write through an address must find unique: a counted one,
+    /// or a block of a frozen graph, which no write may reach (MEM-11).
+    fn guarded_target(&self, p: Ptr) -> bool {
+        self.counted_target(p)
+            || self
+                .ledger
+                .allocations
+                .get(p.alloc.0 as usize)
+                .is_some_and(|a| a.count == Some(Count::Frozen))
     }
 
     fn define(&mut self, f: &mut Frame, v: ValueId, held: Held) -> Checked<()> {
@@ -933,7 +946,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
                     _ => ty.layout,
                 };
-                if self.counted_target(p) {
+                if self.guarded_target(p) {
                     path.push(p.alloc);
                 }
                 (p, layout)
@@ -959,7 +972,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 };
                 let target = self.read_ptr(ptr)?;
                 self.ledger.check(target)?;
-                if self.counted_target(target) {
+                if self.guarded_target(target) {
                     path.push(target.alloc);
                 }
                 ptr = target;
@@ -972,7 +985,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             {
                 let target = self.read_ptr(ptr)?;
                 self.ledger.check(target)?;
-                if self.counted_target(target) {
+                if self.guarded_target(target) {
                     path.push(target.alloc);
                 }
                 ptr = target;
@@ -1166,7 +1179,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                             let count = u64::try_from(self.read_scalar(ptr.at(length.offset), 8)?)
                                 .map_err(|_| err(V::Malformed, "slice length beyond u64"))?;
                             self.ledger.check(target)?;
-                            if self.counted_target(target) {
+                            if self.guarded_target(target) {
                                 path.push(target.alloc);
                             }
                             ptr = target;
@@ -2077,6 +2090,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     record.kind,
                     LayoutKind::Block { .. }
                         | LayoutKind::Box { .. }
+                        | LayoutKind::Shared { .. }
                         | LayoutKind::Slice { .. }
                         | LayoutKind::Opaque { .. }
                         | LayoutKind::Iterator { .. }
@@ -2225,7 +2239,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         let max = self.config.count_max;
         let a = self.ledger.get_mut(ptr.alloc);
         match a.count {
-            Some(Count::Finite(n)) if n >= max => {
+            Some(Count::Finite(n) | Count::Root(n)) if n >= max => {
                 a.count = Some(Count::Immortal);
                 self.ledger
                     .exemptions
@@ -2239,10 +2253,23 @@ impl<'p, S: Stage> Machine<'p, S> {
                     count: Some(n + 1),
                 });
             }
+            Some(Count::Root(n)) => {
+                a.count = Some(Count::Root(n + 1));
+                self.ledger.trace.push(Event::Dup {
+                    alloc: ptr.alloc,
+                    count: Some(n + 1),
+                });
+            }
             Some(Count::Immortal) => self.ledger.trace.push(Event::Dup {
                 alloc: ptr.alloc,
                 count: None,
             }),
+            Some(Count::Frozen) => {
+                return fail(
+                    V::WriteShared,
+                    format!("dup of {:?}, a block of a frozen graph", ptr.alloc),
+                );
+            }
             None => {
                 return fail(
                     V::TypeConfusion,
@@ -2261,12 +2288,28 @@ impl<'p, S: Stage> Machine<'p, S> {
         self.ledger.counters.releases += 1;
         let a = self.ledger.get_mut(ptr.alloc);
         match a.count {
-            Some(Count::Finite(0)) | None => fail(
+            Some(Count::Finite(0) | Count::Root(0)) | None => fail(
                 V::TypeConfusion,
                 format!("release of {:?}, which has no count", ptr.alloc),
             ),
+            Some(Count::Frozen) => fail(
+                V::WriteShared,
+                format!("release of {:?}, a block of a frozen graph", ptr.alloc),
+            ),
             Some(Count::Finite(n)) => {
                 a.count = Some(Count::Finite(n - 1));
+                if n == 1 {
+                    a.state = AllocState::Dying;
+                }
+                self.ledger.trace.push(Event::Release {
+                    alloc: ptr.alloc,
+                    count: Some(n - 1),
+                });
+                Ok(n == 1)
+            }
+            // The last root's drop program thaws the graph first (`DropStep::Thaw`).
+            Some(Count::Root(n)) => {
+                a.count = Some(Count::Root(n - 1));
                 if n == 1 {
                     a.state = AllocState::Dying;
                 }
@@ -2381,7 +2424,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 continue;
             }
             let ideal = holders[index];
-            if let Some(Count::Finite(n)) = a.count
+            if let Some(n) = a.count.and_then(Count::holders)
                 && n != ideal
             {
                 return fail(
@@ -3159,11 +3202,15 @@ impl<'p, S: Stage> Machine<'p, S> {
             // The Lean model's uniqueness test (`cnt = .fin 1`, the guard of
             // T05 write, T06 take and T12 reset in proofs/rc/Rc/Machine.lean): an
             // immortal count never passes it (Sticky.lean, immortal_never_unique).
+            // A `Shared` root passes it as the sole root (`shared.thaw`).
             Inst::IsUnique { result, value } => {
                 let Val::Ptr(p) = self.read_use(f, value)? else {
                     return fail(V::TypeConfusion, "is_unique of a non-block");
                 };
-                let unique = self.ledger.check(p)?.count == Some(Count::Finite(1));
+                let unique = matches!(
+                    self.ledger.check(p)?.count,
+                    Some(Count::Finite(1) | Count::Root(1))
+                );
                 self.define_fresh(
                     f,
                     result,
@@ -4063,6 +4110,49 @@ impl<'p, S: Stage> Machine<'p, S> {
                 };
                 self.define_fresh(f, result, val)?;
             }
+            Inst::Freeze { result, value } => {
+                let (payload, frozen) =
+                    self.frozen_layouts(self.value_type(unit, result)?.layout)?;
+                let m = self.take_owned(f, value, "freeze")?;
+                let (size, align) = (self.size(payload)?, self.record(payload)?.align);
+                let root = self.heap_alloc(payload, size, align)?;
+                self.ledger.get_mut(root.alloc).count = Some(Count::Root(1));
+                self.write_value(root, frozen, m)?;
+                self.refreeze(root.alloc, Count::Finite(1), Count::Frozen)?;
+                self.define_fresh(f, result, Val::Ptr(root))?;
+            }
+            Inst::Thaw { result, value } => {
+                let (_, frozen) = self.frozen_layouts(self.value_type(unit, value)?.layout)?;
+                let m = self.take_owned(f, value, "thaw")?;
+                let Val::Ptr(root) = m.val else {
+                    return fail(V::TypeConfusion, "a thaw of a value that is no root");
+                };
+                if self.ledger.check(root)?.count != Some(Count::Root(1)) {
+                    return fail(
+                        V::WriteShared,
+                        format!("thaw of {:?}, which is not the last root", root.alloc),
+                    );
+                }
+                self.refreeze(root.alloc, Count::Frozen, Count::Finite(1))?;
+                let ty = self.value_type(unit, result)?;
+                let (size, owned) = (self.size(frozen)?, self.resources_of(frozen)?);
+                let e = self.take_part(root, size, &owned);
+                let e = self.widened(e, frozen)?;
+                let (val, borrow, credited) = self.val_from(e, ty.repr, frozen)?;
+                self.bind(
+                    f,
+                    result,
+                    Moved {
+                        val,
+                        credited,
+                        borrow,
+                    },
+                )?;
+                let a = self.ledger.get_mut(root.alloc);
+                a.count = Some(Count::Root(0));
+                a.state = AllocState::Dying;
+                self.ledger.free(root.alloc)?;
+            }
             Inst::Store {
                 address,
                 value,
@@ -4426,7 +4516,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                 // block-reference layout, whose drop program releases it.
                 let own = self.value_type(unit, value)?.layout;
                 let payload = match self.record(own)?.kind {
-                    LayoutKind::Block { payload } | LayoutKind::Box { payload } => Some(payload),
+                    LayoutKind::Block { payload }
+                    | LayoutKind::Box { payload }
+                    | LayoutKind::Shared { payload } => Some(payload),
                     _ => None,
                 };
                 if layout != own && payload != Some(layout) {
@@ -4475,6 +4567,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                     return fail(
                         V::IneligibleDonor,
                         format!("reset of {:?} without an owned heap credit", p.alloc),
+                    );
+                }
+                if matches!(self.ledger.check(p)?.count, Some(Count::Root(_))) {
+                    return fail(
+                        V::IneligibleDonor,
+                        format!("reset of {:?}, a Shared root", p.alloc),
                     );
                 }
                 let mask = self.mask(f, live)?;
@@ -5831,6 +5929,48 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
     }
 
+    /// The payload layout of `Shared` root layout `root` and the frozen value's layout in it.
+    fn frozen_layouts(&self, root: LayoutId) -> Checked<(LayoutId, LayoutId)> {
+        if let LayoutKind::Shared { payload } = self.record(root)?.kind
+            && let LayoutKind::Frozen { value } = self.record(payload)?.kind
+        {
+            return Ok((payload, value));
+        }
+        fail(V::TypeConfusion, format!("{root:?} is not a Shared root"))
+    }
+
+    /// Set every counted heap block of the graph frozen in root block `root`
+    /// from `from` to `to`, once each, stopping at static and region blocks and
+    /// at nested roots, as the runtime's freeze and thaw walks do (MEM-11). The
+    /// graph is a tree, frozen from a unique value: a block found at another
+    /// count is either shared or written through a root.
+    fn refreeze(&mut self, root: AllocId, from: Count, to: Count) -> Checked<()> {
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            let targets: Vec<Ptr> = (self.ledger.get(id).extent.cells.values())
+                .filter_map(|c| self.holder_target(c))
+                .collect();
+            for p in targets {
+                let a = self.ledger.check(p)?;
+                if a.owner != Owner::Heap || matches!(a.count, Some(Count::Root(_))) {
+                    continue;
+                }
+                if a.count != Some(from) {
+                    return fail(
+                        V::WriteShared,
+                        format!(
+                            "{:?} in the frozen graph of {root:?} has count {:?}, not {from:?}",
+                            p.alloc, a.count
+                        ),
+                    );
+                }
+                self.ledger.get_mut(p.alloc).count = Some(to);
+                pending.push(p.alloc);
+            }
+        }
+        Ok(())
+    }
+
     /// The headered block a data cell names, borrowed or not: the
     /// cells of a value read through a loan are its holders' views.
     fn block_target(&self, cell: &Cell) -> Option<Ptr> {
@@ -5874,6 +6014,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             _ => return fail(V::Unsupported, "unique copy of a non-block value"),
         };
         let mut copies: BTreeMap<AllocId, Ptr> = BTreeMap::new();
+        // `Shared` roots the graph reaches, which gain a root per new holder
+        // instead of a copy: copying never traverses a frozen graph (MEM-11).
+        let mut kept: std::collections::BTreeSet<AllocId> = Default::default();
         let mut pending: Vec<Ptr> = root.into_iter().collect();
         if let Some(image) = &image {
             pending.extend(image.cells.values().filter_map(|c| self.block_target(c)));
@@ -5883,6 +6026,11 @@ impl<'p, S: Stage> Machine<'p, S> {
                 continue;
             }
             let a = self.ledger.check(p)?;
+            if matches!(a.count, Some(Count::Root(_))) {
+                copies.insert(p.alloc, Ptr { offset: 0, ..p });
+                kept.insert(p.alloc);
+                continue;
+            }
             if !a.extent.resources.is_empty() {
                 return fail(V::TypeConfusion, "unique copy of a resource");
             }
@@ -5896,7 +6044,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         // Every holder cell of a copy names the copy of its target with a
         // credit; a copy held more than once gains one count per extra holder.
         let mut extra: Vec<Ptr> = Vec::new();
-        for copy in copies.values() {
+        for (_, copy) in copies.iter().filter(|(old, _)| !kept.contains(old)) {
             let cells: Vec<(u64, Ptr)> = self
                 .ledger
                 .get(copy.alloc)
@@ -5944,11 +6092,16 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
         }
         // Each copy starts with one holder: the root's is the result, every
-        // other one's is its first holder cell.
+        // other one's is its first holder cell. A kept root gains one per holder.
         let mut seen: std::collections::BTreeSet<AllocId> =
             root.iter().map(|r| copies[&r.alloc].alloc).collect();
+        if let Some(r) = root
+            && kept.contains(&r.alloc)
+        {
+            self.dup(r)?;
+        }
         for p in extra {
-            if !seen.insert(p.alloc) {
+            if kept.contains(&p.alloc) || !seen.insert(p.alloc) {
                 self.dup(p)?;
             }
         }
@@ -7891,6 +8044,19 @@ impl<'p, S: Stage> Machine<'p, S> {
                         if !gated(offset) && !self.environment_absent(base.at(offset))? {
                             self.release_cell(base.at(offset), child_mask, &mut d.work)?;
                         }
+                    }
+                    // The dying root's frozen graph has ordinary unique counts again
+                    // before the following steps release it.
+                    DropStep::Thaw { offset, layout: _ } => {
+                        let a = self.ledger.check(base)?;
+                        if offset != 0
+                            || base.offset != 0
+                            || a.count != Some(Count::Root(0))
+                            || a.state != AllocState::Dying
+                        {
+                            return fail(V::Malformed, "a thaw step outside a dying Shared root");
+                        }
+                        self.refreeze(base.alloc, Count::Frozen, Count::Finite(1))?;
                     }
                     DropStep::Child { offset, layout } => {
                         if !gated(offset) {

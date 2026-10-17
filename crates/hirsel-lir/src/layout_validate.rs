@@ -130,7 +130,10 @@ impl<'a> Validator<'a> {
             | LayoutKind::SoaColumns { element }
             | LayoutKind::Sequence { element }
             | LayoutKind::Sequential { element } => ids.push(*element),
-            LayoutKind::Block { payload } | LayoutKind::Box { payload } => ids.push(*payload),
+            LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } => ids.push(*payload),
+            LayoutKind::Frozen { value } => ids.push(*value),
             LayoutKind::Callable { environment } => ids.extend(*environment),
             _ => {}
         }
@@ -219,6 +222,24 @@ impl<'a> Validator<'a> {
                     );
                 }
             }
+            LayoutKind::Shared { payload } => {
+                self.exact(&s, r, pointer, pointer_align);
+                self.wrapper(
+                    &s,
+                    r,
+                    &[ScanStep::Counted { offset: 0 }],
+                    &[DropStep::Release { offset: 0 }],
+                );
+                self.copy(&s, r, CopyRecipe::Dup);
+                if !matches!(self.get(*payload).kind, LayoutKind::Frozen { .. }) {
+                    self.fail(
+                        s.clone(),
+                        Obligation::Reference,
+                        "a Shared root's payload is a Frozen value",
+                    );
+                }
+            }
+            LayoutKind::Frozen { value } => self.frozen(&s, r, *value),
             LayoutKind::Slice { .. } => {
                 self.exact(&s, r, pointer + 16, pointer_align.max(8));
                 self.wrapper(
@@ -1019,6 +1040,79 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// A `Shared` root block's payload: the value inline at offset 0, thawed
+    /// before its own drop runs, never copied (MEM-11).
+    fn frozen(&mut self, s: &Subject, r: &LayoutRecord, value: LayoutId) {
+        let v = self.get(value).clone();
+        let SizeSpec::Fixed(size) = v.size else {
+            self.fail(
+                s.clone(),
+                Obligation::Size,
+                "a frozen value of dynamic extent",
+            );
+            return;
+        };
+        self.exact(s, r, size, v.align);
+        if r.fields
+            != [FieldLayout {
+                ordinal: 0,
+                offset: 0,
+                layout: value,
+                unaligned: false,
+            }]
+        {
+            self.fail(
+                s.clone(),
+                Obligation::Offset,
+                "a frozen payload holds its value alone at offset 0",
+            );
+        }
+        let scan = if v.scan.is_empty() {
+            Vec::new()
+        } else {
+            vec![ScanStep::Inline {
+                offset: 0,
+                layout: value,
+            }]
+        };
+        if r.scan != scan {
+            self.fail(
+                s.clone(),
+                Obligation::Scan,
+                "a frozen payload scans its value",
+            );
+        }
+        let drop = if v.drop.is_empty() {
+            Vec::new()
+        } else {
+            vec![
+                DropStep::Thaw {
+                    offset: 0,
+                    layout: value,
+                },
+                DropStep::Child {
+                    offset: 0,
+                    layout: value,
+                },
+            ]
+        };
+        if r.drop != drop {
+            self.fail(
+                s.clone(),
+                Obligation::DropOrder,
+                "a frozen payload thaws its value, then drops it",
+            );
+        }
+        if v.finalizer.is_some() || r.finalizer.is_some() {
+            self.fail(
+                s.clone(),
+                Obligation::DropOrder,
+                "a frozen value holds no resource",
+            );
+        }
+        self.copy(s, r, CopyRecipe::NotCopyable);
+    }
+
     fn inline(&mut self, s: &Subject, r: &LayoutRecord, element: LayoutId, count: u64) {
         let e = self.get(element).clone();
         let SizeSpec::Fixed(stride) = e.size else {
@@ -1650,9 +1744,10 @@ impl<'a> Validator<'a> {
                 (_, ParameterPassing::ByValue) => match &layout.kind {
                     LayoutKind::Scalar(k) => Some((vec![slot(*k)], extension_of(*k))),
                     LayoutKind::Unit => Some((Vec::new(), ScalarExtension::None)),
-                    LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Arena => {
-                        Some((vec![pointer], ScalarExtension::None))
-                    }
+                    LayoutKind::Block { .. }
+                    | LayoutKind::Box { .. }
+                    | LayoutKind::Shared { .. }
+                    | LayoutKind::Arena => Some((vec![pointer], ScalarExtension::None)),
                     LayoutKind::Slice { .. } => Some((
                         vec![pointer, slot(ScalarKind::U64), slot(ScalarKind::U64)],
                         ScalarExtension::None,
@@ -1700,7 +1795,7 @@ fn scan_ids(step: &ScanStep, out: &mut Vec<LayoutId>) {
 
 fn drop_ids(step: &DropStep, out: &mut Vec<LayoutId>) {
     match step {
-        DropStep::Child { layout, .. } => out.push(*layout),
+        DropStep::Child { layout, .. } | DropStep::Thaw { layout, .. } => out.push(*layout),
         DropStep::ElementsReverse { element, .. } | DropStep::RepeatReverse { element, .. } => {
             out.push(*element)
         }

@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -142,6 +142,9 @@ pub const LAYOUT_LOGICAL_PER_ELEMENT: u32 = 16;
 /// `logical` of a layout with no logical size (a flat encoding or an environment): a
 /// deep copy of such a block into a bounded arena is an invariant fault.
 pub const LOGICAL_UNSUPPORTED: u64 = u64::MAX;
+/// The payload of a `Shared` root block (MEM-11): the blocks its value reaches are frozen
+/// while the root lives, and a deep copy reaching such a block adds a root instead.
+pub const LAYOUT_FROZEN: u32 = 32;
 pub const STEP_RELEASE: u32 = 1;
 pub const STEP_FINALIZE: u32 = 2;
 pub const STEP_CLOSE_HANDLE: u32 = 3;
@@ -152,6 +155,9 @@ pub const STEP_COLUMN: u32 = 6;
 /// the dataful arm of a null-pointer niche (layout version 2).
 pub const STEP_NONNULL: u32 = 7;
 pub const STEP_LIVE_BIT: u32 = 8;
+/// Restore ordinary counts in the frozen value at `offset`, read through `layout`, before
+/// the steps that release it: the first step of a `Shared` root block's program (MEM-11).
+pub const STEP_THAW: u32 = 9;
 /// Step bits of the logical dead cursor; wide programs preserve forty mixed-radix
 /// bits in the eight-byte header and a reserved four-byte shadow.
 pub const STEP_CURSOR_BITS: u32 = 24;
@@ -342,6 +348,8 @@ pub enum RuntimeEntry {
     UniqueCopy,
     UniqueCopyValue,
     Detach,
+    Freeze,
+    Thaw,
     Finalize,
     FinalizeBegin,
     FinalizeEnd,
@@ -441,7 +449,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 51] = [
+    pub const ALL: [RuntimeEntry; 53] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -464,6 +472,8 @@ impl RuntimeEntry {
         Self::UniqueCopy,
         Self::UniqueCopyValue,
         Self::Detach,
+        Self::Freeze,
+        Self::Thaw,
         Self::Finalize,
         Self::FinalizeBegin,
         Self::FinalizeEnd,
@@ -642,6 +652,8 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::Freeze => ("hirsel_rt_v2_freeze", VOID, const { &[CTX, BLOCK] }),
+            Self::Thaw => ("hirsel_rt_v2_thaw", VOID, const { &[CTX, BLOCK] }),
             Self::Finalize => (
                 "hirsel_rt_v2_finalize",
                 U8,
@@ -860,6 +872,8 @@ snapshot_enum!(RuntimeEntry {
     UniqueCopy,
     UniqueCopyValue,
     Detach,
+    Freeze,
+    Thaw,
     Finalize,
     FinalizeBegin,
     FinalizeEnd,

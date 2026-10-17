@@ -22,6 +22,7 @@ pub mod list;
 pub mod map;
 pub mod net;
 pub mod owners;
+pub mod shared;
 pub mod slots;
 pub mod sorted;
 pub mod value;
@@ -65,6 +66,8 @@ pub const BODIES: &[&LibraryBody] = &[
     &slots::INSERT,
     &slots::GET,
     &slots::REMOVE,
+    &shared::FREEZE,
+    &shared::THAW,
     &failure::CHECK,
     &collection::POP,
     &collection::REMOVE,
@@ -180,7 +183,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 10;
+pub const REVISION: u32 = 11;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

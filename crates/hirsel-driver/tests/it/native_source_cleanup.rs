@@ -123,28 +123,6 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
                     .is_empty()
             );
             assert!(producer.import_native_input(forged).is_err());
-            let unavailable = run_observed_snapshot(
-                &mut producer,
-                &RunConfiguration {
-                    entry: entry_path(&default_context()),
-                    hash_seed: 0,
-                    inputs: vec![],
-                },
-                SimulationConfig::default(),
-            )
-            .unwrap();
-            assert!(matches!(
-                unavailable.outcome,
-                Err(RuntimeError::Query(QueryError::NotImplemented))
-            ));
-            assert!(unavailable.observation.is_none());
-            let runnable = source.replace(
-                "let frozen=shared.freeze(take fresh);send(take frozen)",
-                "send(take fresh)",
-            );
-            let mut producer = engine(&runnable);
-            let input = producer.export_native_input().unwrap();
-            producer.import_native_input(input).unwrap();
             let observed = run_observed_snapshot(
                 &mut producer,
                 &RunConfiguration {

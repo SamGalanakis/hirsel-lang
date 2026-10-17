@@ -225,7 +225,9 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
     fn drop(steps: &mut [DropStep], refs: &mut Vec<LayoutId>) {
         for step in steps {
             match step {
-                DropStep::Child { layout, .. } => take(layout, refs),
+                DropStep::Child { layout, .. } | DropStep::Thaw { layout, .. } => {
+                    take(layout, refs)
+                }
                 DropStep::ElementsReverse { element, .. }
                 | DropStep::RepeatReverse { element, .. } => take(element, refs),
                 DropStep::ActiveVariant { variants, .. } => {
@@ -249,7 +251,10 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
         | LayoutKind::SoaColumns { element }
         | LayoutKind::Sequence { element }
         | LayoutKind::Sequential { element } => take(element, refs),
-        LayoutKind::Block { payload } | LayoutKind::Box { payload } => take(payload, refs),
+        LayoutKind::Block { payload }
+        | LayoutKind::Box { payload }
+        | LayoutKind::Shared { payload } => take(payload, refs),
+        LayoutKind::Frozen { value } => take(value, refs),
         LayoutKind::Callable {
             environment: Some(e),
         } => take(e, refs),

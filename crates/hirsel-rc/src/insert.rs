@@ -120,7 +120,9 @@ impl<'a> Lay<'a> {
     }
     pub fn payload(&self, id: LayoutId) -> Option<LayoutId> {
         match self.get(id)?.kind {
-            LayoutKind::Block { payload } | LayoutKind::Box { payload } => Some(payload),
+            LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } => Some(payload),
             _ => None,
         }
     }
@@ -145,7 +147,9 @@ impl<'a> Lay<'a> {
             return true;
         }
         match layout.kind {
-            LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
+            LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } => {
                 return self.destructible_in(payload, seen);
             }
             LayoutKind::Callable {
@@ -170,6 +174,7 @@ impl<'a> Lay<'a> {
     ) -> bool {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => true,
+            DropStep::Thaw { .. } => false,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..
@@ -757,6 +762,7 @@ fn consumed<S>(unit: &LirUnit<S>, lay: Lay<'_>, inst: &Inst) -> Vec<ValueId> {
         Inst::Recast { result, value } if unit.values[result.index()].holding == Holding::Owned => {
             vec![value]
         }
+        Inst::Freeze { value, .. } | Inst::Thaw { value, .. } => vec![value],
         Inst::Dispose { token } => vec![token],
         Inst::RegionExit { mark, .. } => vec![mark],
         _ => Vec::new(),
@@ -1963,6 +1969,8 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::Reuse { result, .. }
             | Inst::Weaken { result, .. }
             | Inst::Recast { result, .. }
+            | Inst::Freeze { result, .. }
+            | Inst::Thaw { result, .. }
             | Inst::Closure { result, .. } => {
                 for v in consumed(unit, self.lay, inst) {
                     take_credit(&mut st.credits, v);
@@ -3317,7 +3325,9 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             Inst::SeqLen { result, value }
             | Inst::SeqCapacity { result, value }
             | Inst::Hash { result, value, .. }
-            | Inst::Recast { result, value } => {
+            | Inst::Recast { result, value }
+            | Inst::Freeze { result, value }
+            | Inst::Thaw { result, value } => {
                 *result = map(*result);
                 *value = map(*value);
             }

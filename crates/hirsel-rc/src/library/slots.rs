@@ -73,7 +73,7 @@ fn len(b: &mut Body<'_, '_>, address: AddressId) -> R<ValueId> {
     b.end_loan(loan);
     Ok(result)
 }
-fn construct(
+pub(super) fn construct(
     b: &mut Body<'_, '_>,
     layout: LayoutId,
     constructor: ConstructorKind,
@@ -116,7 +116,7 @@ fn construct(
     });
     Ok(result)
 }
-fn nominal(b: &mut Body<'_, '_>, name: &str) -> SymbolId {
+pub(super) fn nominal(b: &mut Body<'_, '_>, name: &str) -> SymbolId {
     b.symbol(Symbol {
         kind: SymbolKind::Type,
         definition: hirsel_syntax::DefPath::core(name),

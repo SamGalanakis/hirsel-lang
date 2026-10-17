@@ -505,3 +505,12 @@ on `failed`. C admits it only in a library body's failure cleanup, with a
 region record to 64 bytes (`REGION_REMAINING_OFFSET`), adds `STATUS_EXHAUSTED` and the
 `arena_bound`, `arena_exhausted` and `arena_recover` entries; layout descriptor version 6 adds
 each payload's `logical` charge (`rt_program::Descriptor::logical`).
+
+LIR revision 27 adds `Shared[T]` (MEM-11): `LayoutKind::Shared { payload }` is a
+counted block reference (`ValueRepr::Block`) whose payload is
+`LayoutKind::Frozen { value }`, the frozen value inline at offset 0. The frozen
+record's drop program leads with `DropStep::Thaw`, lowered to `STEP_THAW`, and its
+descriptor carries `LAYOUT_FROZEN`. `Freeze` and `Thaw` are library-only: `Freeze`
+moves a value into a fresh root and `Thaw` moves the last root's value out. A
+library unit may test the uniqueness of an owned root before RC, since its count
+is the root count. Runtime ABI 8 adds `hirsel_rt_v2_freeze` and `hirsel_rt_v2_thaw`.

@@ -77,7 +77,8 @@ pub(crate) fn covered(layouts: &LayoutTable, layout: LayoutId) -> bool {
 
 fn plain(layouts: &LayoutTable, steps: &[DropStep]) -> bool {
     steps.iter().all(|step| match step {
-        DropStep::Finalize | DropStep::ColumnsReverse(_) => false,
+        // A Shared root's frozen payload thaws in the runtime's walk.
+        DropStep::Finalize | DropStep::ColumnsReverse(_) | DropStep::Thaw { .. } => false,
         DropStep::Release { .. } | DropStep::Environment { .. } | DropStep::CloseHandle { .. } => {
             true
         }
@@ -187,6 +188,7 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
             DropStep::Finalize
             | DropStep::Environment { .. }
             | DropStep::CloseHandle { .. }
+            | DropStep::Thaw { .. }
             | DropStep::ColumnsReverse(_) => false,
         })
     }
@@ -539,6 +541,7 @@ impl<'m, 'g> Walk<'m, 'g> {
                 Ok(())
             }
             DropStep::Finalize => invalid("compiled drop code that reaches a finalizer"),
+            DropStep::Thaw { .. } => invalid("compiled drop code that reaches a frozen value"),
             DropStep::Child { offset, layout } => {
                 let child = self.record(*layout)?;
                 if child.finalizer.is_some() {

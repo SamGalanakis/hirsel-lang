@@ -238,6 +238,17 @@ pub enum LayoutKind {
     Box {
         payload: LayoutId,
     },
+    /// A `Shared[T]` root reference (MEM-11), with the same representation as
+    /// Block: one pointer to a heap root block whose `Frozen` payload holds the
+    /// value. The block's header count is the root count.
+    Shared {
+        payload: LayoutId,
+    },
+    /// The payload of a `Shared` root block: the frozen value inline at offset
+    /// 0. Its drop program thaws the value before releasing it.
+    Frozen {
+        value: LayoutId,
+    },
     /// A slice: backing owner plus start/length, so it never loses its release root.
     Slice {
         element: LayoutId,
@@ -472,6 +483,10 @@ pub enum DropStep {
         stride: u64,
         element: LayoutId,
     },
+    /// Restore ordinary counts in the frozen value at `offset`, whose layout
+    /// is `layout`, before it is released: the first step of a `Frozen`
+    /// payload's program. Nested `Shared` roots stay as they are.
+    Thaw { offset: u64, layout: LayoutId },
     /// Release a callable's environment.
     Environment { offset: u64 },
     /// Close a run-context handle.
@@ -669,6 +684,8 @@ snapshot_enum!(LayoutKind {
     Simd { element, lanes },
     Block { payload },
     Box { payload },
+    Shared { payload },
+    Frozen { value },
     Slice { element },
     Opaque { owner },
     Handle,
@@ -762,6 +779,7 @@ snapshot_enum!(DropStep {
         stride,
         element
     },
+    Thaw { offset, layout },
     Environment { offset },
     CloseHandle { offset },
     RepeatReverse {

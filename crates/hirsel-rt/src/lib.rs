@@ -48,6 +48,7 @@ pub mod measurement;
 mod memcheck;
 pub mod region;
 pub mod release;
+pub mod shared;
 
 pub use alloc::{
     CLASS_COUNT, CLASS_SIZES, CTX_DUP_MAX_OFFSET, CTX_FREE_INLINE_OFFSET, CTX_IDLE_SLABS_OFFSET,
@@ -64,14 +65,14 @@ pub use failure::FailureRecord;
 pub use finalize::{Cleanup, CloseThunk, DropThunk};
 pub use region::{Builder, REGION_POOL_IDLE_CAP, Region, SEGMENT_SIZE};
 pub use release::{
-    LAYOUT_DYNAMIC, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_MAGIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI,
-    LAYOUT_VERSION, LOGICAL_UNSUPPORTED, Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN,
-    STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE,
-    STEP_TAG, Step, WHOLE_VALUE,
+    LAYOUT_DYNAMIC, LAYOUT_FROZEN, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_MAGIC, LAYOUT_NO_EXTENT,
+    LAYOUT_UNSAFE_FFI, LAYOUT_VERSION, LOGICAL_UNSUPPORTED, Layout, NO_OFFSET, STEP_CLOSE_HANDLE,
+    STEP_COLUMN, STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL,
+    STEP_RELEASE, STEP_TAG, STEP_THAW, Step, WHOLE_VALUE,
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

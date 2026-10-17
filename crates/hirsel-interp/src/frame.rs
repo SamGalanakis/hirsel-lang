@@ -437,6 +437,7 @@ impl Frame {
                     work.extend(fields.iter().filter_map(Option::as_ref));
                 }
             }
+            value.acquire_roots();
         }
         let root = self.place(operand.place)?.root;
         let preserve = self.mut_parameters.contains(&root);

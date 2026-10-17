@@ -3,6 +3,14 @@ use super::*;
 impl<'m, 'a> FnEmitter<'m, 'a> {
     // Instructions.
 
+    /// The `Frozen` payload layout of a `Shared` root reference value.
+    fn frozen_payload(&self, value: ValueId) -> Emitted<LayoutId> {
+        match self.layout(self.value_type(value)?.layout)?.kind {
+            LayoutKind::Shared { payload } => Ok(payload),
+            _ => self.invalid("a freeze or thaw of a value that is not a Shared root"),
+        }
+    }
+
     pub(super) fn scalar_kind(&self, value: ValueId) -> Emitted<ScalarKind> {
         match self.value_shape(value)? {
             Shape::Scalar(kind) => Ok(kind),
@@ -87,7 +95,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     pub(super) fn instruction(&mut self, inst: &Inst) -> Emitted {
         // A shallow copy can add a child credit; regional cleanup can run user
         // finalizers. Neither may leave a previously observed uniqueness fact.
-        if matches!(inst, Inst::UniqueCopy { .. } | Inst::RegionExit { .. }) {
+        if matches!(
+            inst,
+            Inst::UniqueCopy { .. }
+                | Inst::RegionExit { .. }
+                | Inst::Freeze { .. }
+                | Inst::Thaw { .. }
+        ) {
             self.invalidate_uniqueness();
         }
         if let Inst::Release { layout, .. } | Inst::Reset { layout, .. } = *inst {
@@ -1107,6 +1121,34 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         .icmp(IntPredicate::Ne, flag, self.module.const_int(i8_ty, 0));
                 self.guard(too_deep, failure)?;
                 self.define(result, hash)
+            }
+            // MEM-11: a fresh root block holding the value, whose blocks the runtime freezes.
+            Inst::Freeze { result, value } => {
+                let payload = self.frozen_payload(result)?;
+                let record = self.layout(payload)?;
+                let SizeSpec::Fixed(size) = record.size else {
+                    return self.invalid("a frozen value of dynamic extent");
+                };
+                let align = record.align;
+                let anchor = self.unit.blocks[self.unit.entry.index()].anchor;
+                let block = self.alloc_block(payload, self.const_u64(size), align, anchor)?;
+                let place = self.payload_of(block, payload)?;
+                self.store(self.value_shape(value)?, self.counted_view(value)?, place);
+                let freeze = self.runtime(RuntimeEntry::Freeze)?;
+                self.builder.call(freeze, &[self.context, block]);
+                self.define(result, block)
+            }
+            // The last root: thaw its value, move it out and free the root block shallowly.
+            Inst::Thaw { result, value } => {
+                let payload = self.frozen_payload(value)?;
+                let block = self.get(value)?;
+                let thaw = self.runtime(RuntimeEntry::Thaw)?;
+                self.builder.call(thaw, &[self.context, block]);
+                let place = self.payload_of(block, payload)?;
+                let thawed = self.load(self.value_shape(result)?, place);
+                let free = self.runtime(RuntimeEntry::Free)?;
+                self.builder.call(free, &[self.context, block]);
+                self.define(result, thawed)
             }
             // The same pointer at another payload layout: no code.
             Inst::Recast { result, value } => {

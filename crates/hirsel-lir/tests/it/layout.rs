@@ -142,6 +142,7 @@ fn run_drop(
             DropStep::Child { offset, layout } => {
                 drop_events(table, *layout, bytes, base + offset, out)
             }
+            DropStep::Thaw { offset, .. } => out.push((base + offset, "thaw")),
             DropStep::ActiveVariant {
                 tag_offset,
                 form,
@@ -1327,7 +1328,6 @@ fn incomplete_and_foreign_types_are_named() {
     for (kind, issue) in [
         (BuiltinType::Ptr, Some(6)),
         (BuiltinType::FnPtr, Some(6)),
-        (BuiltinType::Shared, None),
         (BuiltinType::Mutex, None),
     ] {
         let ty = t.builtin(kind, vec![GenericArgument::Type(u8_)]);
@@ -1538,6 +1538,9 @@ fn golden_corpus(target: &TargetSpec) -> LayoutTable {
     let node = t.named(&tree, vec![]);
     let node = t.boxed(node);
     b.layout(&t.store, node).unwrap();
+    // A `Shared` root over a frozen list of boxes (MEM-11).
+    let shared = t.builtin(BuiltinType::Shared, vec![GenericArgument::Type(list)]);
+    b.layout(&t.store, shared).unwrap();
     b.header();
     for name in c {
         let ty = t.named(&path(name), vec![]);
@@ -1772,7 +1775,10 @@ fn renumber(r: &mut LayoutRecord, map: &impl Fn(&mut LayoutId)) {
         | LayoutKind::SoaColumns { element }
         | LayoutKind::Sequence { element }
         | LayoutKind::Sequential { element } => map(element),
-        LayoutKind::Block { payload } | LayoutKind::Box { payload } => map(payload),
+        LayoutKind::Block { payload }
+        | LayoutKind::Box { payload }
+        | LayoutKind::Shared { payload } => map(payload),
+        LayoutKind::Frozen { value } => map(value),
         LayoutKind::Callable { environment } => environment.iter_mut().for_each(map),
         LayoutKind::Unit
         | LayoutKind::Scalar(_)
@@ -1822,7 +1828,7 @@ fn renumber_scan(s: &mut ScanStep, map: &impl Fn(&mut LayoutId)) {
 
 fn renumber_drop(d: &mut DropStep, map: &impl Fn(&mut LayoutId)) {
     match d {
-        DropStep::Child { layout, .. } => map(layout),
+        DropStep::Child { layout, .. } | DropStep::Thaw { layout, .. } => map(layout),
         DropStep::ActiveVariant { variants, .. } => variants
             .iter_mut()
             .flat_map(|(_, steps)| steps.iter_mut())

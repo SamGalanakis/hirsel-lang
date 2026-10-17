@@ -299,6 +299,10 @@ with it as the budget and calls the callback; the callback's result becomes
 arena's own `OutOfSpace` returns `Error(OutOfSpace())`, every other failure
 propagates.
 
+`shared::FREEZE` moves its parameter into a root (`Freeze`). `shared::THAW` tests its
+owned root's count (`IsUnique`): the last root thaws (`Thaw`) into `Ok`, any other
+root is returned as `Error`. A `Shared` payload is never a reuse donor.
+
 ## Native library (LIR schema revision 7)
 
 `library` holds the core library's generic operations as LIR.

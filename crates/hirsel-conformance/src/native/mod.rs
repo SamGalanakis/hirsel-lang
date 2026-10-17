@@ -229,7 +229,7 @@ pub fn exclusion(outcome: &Outcome) -> Option<Exclusion> {
         Outcome::Unavailable(error) => {
             let text = reason(error);
             let m2 = [
-                "(M2)", "Slots", "Tasks", "Channel", "Mutex", "Atomic", "Shared", "Arena",
+                "(M2)", "Slots", "Tasks", "Channel", "Mutex", "Atomic", "Arena",
             ]
             .iter()
             .any(|m| error.message.contains(m));

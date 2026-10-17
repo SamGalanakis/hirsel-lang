@@ -454,7 +454,7 @@ impl<'a> Layouts<'a> {
             return true;
         }
         match layout.kind {
-            LayoutKind::Block { .. } | LayoutKind::Box { .. } => false,
+            LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } => false,
             LayoutKind::Inline { element, .. } | LayoutKind::Simd { element, .. } => {
                 self.inline_finalizer(element)
             }
@@ -473,6 +473,14 @@ impl<'a> Layouts<'a> {
         match self.get(id)?.kind {
             LayoutKind::Block { payload } | LayoutKind::Box { payload } => Some(payload),
             _ => None,
+        }
+    }
+    /// The payload a release of a block value names: a block reference's, or
+    /// a `Shared` root's frozen record, which no address projects into.
+    pub fn released(&self, id: LayoutId) -> Option<LayoutId> {
+        match self.get(id)?.kind {
+            LayoutKind::Shared { payload } => Some(payload),
+            _ => self.payload(id),
         }
     }
     pub fn fixed_size(&self, id: LayoutId) -> Option<u64> {
@@ -631,7 +639,10 @@ impl<'a> Layouts<'a> {
             }
             // Map, Set and SortedMap compare by their library order.
             LayoutKind::Opaque { .. } => true,
-            LayoutKind::Handle
+            // Shared roots have no equality (GEN-1); a frozen payload is never a value.
+            LayoutKind::Shared { .. }
+            | LayoutKind::Frozen { .. }
+            | LayoutKind::Handle
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }
@@ -669,7 +680,10 @@ impl<'a> Layouts<'a> {
         }
         // A block reference's own drop program releases the reference; what
         // that runs is its payload's destruction.
-        if let LayoutKind::Block { payload } | LayoutKind::Box { payload } = layout.kind {
+        if let LayoutKind::Block { payload }
+        | LayoutKind::Box { payload }
+        | LayoutKind::Shared { payload } = layout.kind
+        {
             return self.destructible_in(payload, seen);
         }
         self.steps_destructible(layout, &layout.drop, seen)
@@ -682,6 +696,8 @@ impl<'a> Layouts<'a> {
     ) -> bool {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => true,
+            // Restoring counts is invisible; the release that follows is a Child.
+            DropStep::Thaw { .. } => false,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..

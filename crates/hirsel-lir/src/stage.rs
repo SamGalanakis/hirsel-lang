@@ -104,6 +104,8 @@ impl StageKind {
             | Opcode::Hash
             | Opcode::Recast
             | Opcode::UniqueCopy
+            | Opcode::Freeze
+            | Opcode::Thaw
             | Opcode::Store
             | Opcode::Replace
             | Opcode::UpdateMask

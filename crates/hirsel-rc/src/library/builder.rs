@@ -8,7 +8,8 @@
 //! or a reuse token: P3 to P6 insert and check those exactly as for a unit
 //! imported from TIR. Consuming cursor
 //! open bodies have one checked exception: they record the source
-//! uniqueness before transferring its credit into their cursor.
+//! uniqueness before transferring its credit into their cursor. `shared.thaw`
+//! tests its owned `Shared` root, whose count is the root count.
 use super::Request;
 use crate::PassError;
 use crate::insert::Editor;
@@ -85,7 +86,9 @@ pub fn repr_of(kind: &LayoutKind) -> ValueRepr {
     match kind {
         LayoutKind::Unit => ValueRepr::Unit,
         LayoutKind::Scalar(k) => ValueRepr::Scalar(*k),
-        LayoutKind::Block { .. } | LayoutKind::Box { .. } => ValueRepr::Block,
+        LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } => {
+            ValueRepr::Block
+        }
         LayoutKind::Callable { .. } => ValueRepr::Callable,
         LayoutKind::Handle => ValueRepr::Handle,
         LayoutKind::Path => ValueRepr::Scalar(ScalarKind::U64),

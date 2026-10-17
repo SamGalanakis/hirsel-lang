@@ -1,0 +1,39 @@
+// rule: MEM-11
+// expect: run
+// stdout: ok
+// Dropping the last root of a value holding another root releases the outer
+// value and gives up its root of the inner one, which then thaws.
+fn output_error[E](take e: E) -> () {}
+
+fn discard[T](take x: T) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let built: String = "inner"
+  let inner: Shared[String] = shared.freeze(take built)
+  let parts: List[Shared[String]] = [copy inner]
+  let outer: Shared[List[Shared[String]]] = shared.freeze(take parts)
+  let refused = match shared.thaw(take inner) {
+    Ok(early) => false,
+    Error(root) => {
+      discard(take outer)
+      match shared.thaw(take root) {
+        Ok(text) => text == "inner",
+        Error(again) => false,
+      }
+    },
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if refused {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
