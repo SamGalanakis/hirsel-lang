@@ -343,6 +343,10 @@ python3 tools/buck2/test_sizes_from_usage.py --usage /tmp/usage-*.log \
 
 A request is part of the test's action key: resizing reruns those tests once.
 
+`pool_usage.py` reports, read-only from the same trace and usage rows, the
+pool's reserved CPU-hours by repository and hirsel's reserved against used
+CPU-hours and GiB-hours per lane and target over the last N hours.
+
 ## Measured compile requests
 
 `action-sizes.json` keeps dev/release budgets per target, with phase timings,
