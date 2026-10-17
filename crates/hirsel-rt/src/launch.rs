@@ -178,7 +178,8 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                     .collect::<Vec<_>>()
                     .join(",")
             ),
-            request => crate::net::tape::render_request(request),
+            request => crate::host_io_tape::render_request(request)
+                .unwrap_or_else(|| crate::net::tape::render_request(request)),
         };
         let completion = match &event.completion {
             Completion::ClockGrant(v) => match v {
@@ -205,7 +206,8 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             ),
             Completion::Checked(v) => format!("checked {}", u8::from(*v)),
             Completion::Refused(id) => format!("refused {id}"),
-            completion => crate::net::tape::render_completion(completion),
+            completion => crate::host_io_tape::render_completion(completion)
+                .unwrap_or_else(|| crate::net::tape::render_completion(completion)),
         };
         let fault = event
             .fault
@@ -378,7 +380,9 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                             .collect::<Result<_, String>>()?
                     },
                 },
-                words => match crate::net::tape::parse_request(words)? {
+                words => match crate::host_io_tape::parse_request(words)?
+                    .or(crate::net::tape::parse_request(words)?)
+                {
                     Some(request) => request,
                     None => return Err("bad tape request".into()),
                 },
@@ -414,7 +418,9 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 })?),
                 ["checked", v] => Completion::Checked(boolean(v)?),
                 ["refused", id] => Completion::Refused(number(id)?),
-                words => match crate::net::tape::parse_completion(words)? {
+                words => match crate::host_io_tape::parse_completion(words)?
+                    .or(crate::net::tape::parse_completion(words)?)
+                {
                     Some(completion) => completion,
                     None => return Err("bad tape completion".into()),
                 },
