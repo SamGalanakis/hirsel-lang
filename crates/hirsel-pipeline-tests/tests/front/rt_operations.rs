@@ -185,6 +185,9 @@ fn inventory_set_equality_and_digest_control() {
         "$intrinsic.InlineConsume_next",
         "shared.freeze",
         "shared.thaw",
+        "task.scope",
+        "task.async",
+        "task.await",
     ] {
         assert_eq!(
             native
@@ -196,7 +199,7 @@ fn inventory_set_equality_and_digest_control() {
             Disposition::Body
         );
     }
-    for name in ["task.async", "channel.open", "mutex.with", "atomic.load"] {
+    for name in ["task.isolate", "channel.open", "mutex.with", "atomic.load"] {
         assert!(matches!(
             native
                 .rows()

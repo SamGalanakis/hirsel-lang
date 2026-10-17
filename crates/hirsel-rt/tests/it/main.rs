@@ -20,6 +20,7 @@ mod regions;
 mod release;
 #[path = "../support/mod.rs"]
 mod support;
+mod tasks;
 mod test_reporting;
 mod text;
 mod tls;

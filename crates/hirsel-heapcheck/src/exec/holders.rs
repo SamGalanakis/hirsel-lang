@@ -348,7 +348,7 @@ impl Physical {
         &mut self,
         ledger: &Ledger,
         actual: &Holders,
-        stack: &[Activity],
+        stack: &[&Activity],
         roots: &BTreeMap<u64, Held>,
         forgotten: &Snapshot<Held>,
         finished: &Option<Finished>,
@@ -741,10 +741,11 @@ impl<S: Stage> Machine<'_, S> {
     /// Independently cross-check every holder, sharing the proof for unchanged
     /// physical storage. The audit does not consume the write journals.
     pub(super) fn refresh_holder_audit(&mut self) {
+        let activities = super::tasks::activities(&self.stack, self.tasks.as_deref());
         self.physical.refresh(
             &self.ledger,
             &self.holders,
-            &self.stack,
+            &activities,
             &self.roots,
             &self.forgotten,
             &self.finished,

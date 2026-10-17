@@ -2083,7 +2083,12 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.write_block(site, st, address, version);
             }
             Inst::Weaken { result, value } => {
-                self.consume(site, st, cr, value);
+                // A borrowed view weakens to a view; only an owned operand is consumed.
+                if self.holding(value) == Holding::Owned {
+                    self.consume(site, st, cr, value);
+                } else {
+                    self.borrow(site, st, cr, value);
+                }
                 self.create(site, st, cr, result);
             }
             Inst::Check { condition, .. } => self.borrow(site, st, cr, condition),

@@ -392,6 +392,11 @@ conformance/CLO/CLO-4-taken-function-needs-global-ok.hir
 conformance/CLO/CLO-4-taken-heap-capture-run.hir
 conformance/CLO/CLO-5-direct-scoped-call.hir
 conformance/CLO/CLO-5-recursive-cycle.hir
+conformance/CONC/CONC-1-pure-child.hir
+conformance/CONC/CONC-2-await.hir
+conformance/CONC/CONC-2-cancel-then-await.hir
+conformance/CONC/CONC-2-detach-joins-before-exit.hir
+conformance/CONC/CONC-2-detach.hir
 conformance/CONC/CONC-2-nested-handle-capture-bad.hir
 conformance/CONC/CONC-2-nested-handle-capture-ok.hir
 conformance/CONC/CONC-2-nested-sender-capture-ok.hir
@@ -400,6 +405,7 @@ conformance/CONC/CONC-2-sizes-example.hir
 conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
 conformance/CONC/CONC-2-unconsumed-handle-ok.hir
+conformance/CONC/CONC-3-canceled-pure-child.hir
 conformance/CONC/CONC-3-child-local-scope.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
 conformance/CONC/CONC-5-channel-in-body-bad.hir
@@ -677,6 +683,9 @@ conformance/FAIL/FAIL-1-contract-evaluation-source.hir
 conformance/FAIL/FAIL-1-contract-source.hir
 conformance/FAIL/FAIL-1-expected-result.hir
 conformance/FAIL/FAIL-1-program-order.hir
+conformance/FAIL/FAIL-2-child-propagates.hir
+conformance/FAIL/FAIL-2-first-spawn-failure.hir
+conformance/FAIL/FAIL-2-scope-propagates.hir
 conformance/FAIL/FAIL-3-call-operand-preparation-run.hir
 conformance/FAIL/FAIL-3-iterator-callback-mut-state-bad.hir
 conformance/FAIL/FAIL-3-iterator-callback-mut-state-ok.hir
@@ -2459,6 +2468,7 @@ conformance/MODE/MODE-4-region.hir
 conformance/MODE/MODE-4-scope-bad.hir
 conformance/MODE/MODE-4-scope-ok.hir
 conformance/MODE/MODE-4-sender.hir
+conformance/MODE/MODE-4-shared-root-child-run.hir
 conformance/MODE/MODE-4-shared.hir
 conformance/MODE/MODE-4-take-parameter-callable-bad.hir
 conformance/MODE/MODE-4-take-parameter-callable-run.hir
@@ -2946,6 +2956,7 @@ conformance/OWN/OWN-6-counted-child-borrow-bad.hir
 conformance/OWN/OWN-6-counted-child-borrow-ok.hir
 conformance/OWN/OWN-6-shared-children.hir
 conformance/OWN/OWN-6-spec-freeze.hir
+conformance/OWN/OWN-6-unique-child-value.hir
 conformance/OWN/OWN-7-cow-loop-resource-replace-run.hir
 conformance/OWN/OWN-7-multiple-holder-preserved.hir
 conformance/OWN/OWN-7-nested-arena-detach.hir

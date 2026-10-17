@@ -298,6 +298,33 @@ fn only_a_many_callable_weakens_to_the_once_callable_of_its_environment() {
     );
 }
 
+/// A borrowed many callable viewed as the once callable of its environment
+/// (`task.scope` borrows its body as `once`); `owned` claims a credit for the view.
+fn weaken_view(owned: bool) -> Vec<K> {
+    let mut t = Lir::<Rc>::new(&[(Passing::Borrow, l::ERASED)], None);
+    let f = t.plain(l::ERASED);
+    t.param(f);
+    let g = if owned {
+        t.owned(l::ERASED_ONCE)
+    } else {
+        t.plain(l::ERASED_ONCE)
+    };
+    t.builder.push(
+        ENTRY,
+        Inst::Weaken {
+            result: g,
+            value: f,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    t.check()
+}
+
+#[test]
+fn a_weakened_view_keeps_its_operands_holding() {
+    pair(weaken_view, |k| *k == K::Holding(ValueId(1)));
+}
+
 #[test]
 fn weakening_consumes_its_operand() {
     pair(

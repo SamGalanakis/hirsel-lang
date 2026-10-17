@@ -256,6 +256,11 @@ pub trait Operations {
     }
 
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome;
+    /// Whether the last `call` was a capability operation, after which the running task
+    /// yields to the next runnable one (CONC-1). Library leaves are not.
+    fn yielded(&mut self) -> bool {
+        false
+    }
     /// Implicit File close/AtomicFile abort or network close, after H has checked its
     /// linear identity. `Some(rule)`: the close raised that language failure, after
     /// appending its report to `output`.

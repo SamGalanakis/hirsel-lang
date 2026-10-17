@@ -37,6 +37,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             physical: self.physical.clone(),
             arena_no_drop: self.arena_no_drop.clone(),
             open_elements: self.open_elements.clone(),
+            tasks: self.tasks.clone(),
             full_recount_due: self.full_recount_due,
         }
     }
@@ -108,7 +109,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     fn campaign_steps(&mut self, injected: &mut Vec<(u64, Run)>) -> Checked<()> {
-        while !self.stack.is_empty() {
+        while !self.stack.is_empty() || self.in_child() {
             let site = self.sites;
             let checkpoint = self.checkpoint_site();
             if checkpoint {

@@ -320,6 +320,18 @@ with environment at word zero, code at word one and a zero reserved third word.
 Storage reads and writes preserve that layout; indirect steps bind capture slots
 to the environment fields and environment drops drain their owned contents.
 
+`exec/tasks.rs` runs structured tasks (CONC-1, CONC-2, FAIL-2) on the runtime scheduler's
+schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place of its fiber:
+
+- A switch an operation requests is made once the running frame is back on its stack.
+- A task blocked in a task operation leaves its call terminator to run again when it resumes.
+- A capability operation (`Operations::yielded`) is a scheduling point.
+- While the scheduler holds a spawned closure it is a harness root. Its environment is
+  released after the child's frame returns.
+- Each task's failure chain is swapped with it, and merged into the parent's at a join or a
+  scope exit.
+- The holder audits read every task's stack.
+
 `exec/views.rs` marshals Unicode cursor operations to `Operations` as slice bytes
 and relative positions, retaining the original checked owner and borrow. Open
 writes an uncounted view; next installs its exclusive position update and returns

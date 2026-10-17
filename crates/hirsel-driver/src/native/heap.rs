@@ -30,6 +30,8 @@ struct Io {
     files: BTreeMap<(u64, String), std::sync::Arc<()>>,
     network: hirsel_rt::io_net_script::ScriptIo,
     network_handles: BTreeMap<u64, u64>,
+    /// The last call was a capability operation (a scheduling point).
+    yielded: bool,
 }
 
 impl Io {
@@ -60,6 +62,7 @@ impl Io {
             files: BTreeMap::new(),
             network: Default::default(),
             network_handles: BTreeMap::new(),
+            yielded: false,
         }
     }
 }
@@ -105,6 +108,9 @@ impl Operations for Io {
             _ => Err(format!("model close of unknown handle {handle}")),
         }
     }
+    fn yielded(&mut self) -> bool {
+        std::mem::take(&mut self.yielded)
+    }
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome {
         let path = &op.definition.0;
         if !path.package.name_is("core") {
@@ -116,6 +122,11 @@ impl Operations for Io {
                 return outcome;
             }
         }
+        if let Some(outcome) = text(module, &path.name, args) {
+            return outcome;
+        }
+        // Everything below is a capability operation, as the runtime's Io entries are.
+        self.yielded = true;
         if let Some(outcome) = self.net(module, &path.name, args) {
             output.extend(self.network.take_report());
             return outcome;
@@ -124,9 +135,6 @@ impl Operations for Io {
             return outcome;
         }
         if let Some(outcome) = self.io(module, &path.name, args) {
-            return outcome;
-        }
-        if let Some(outcome) = text(module, &path.name, args) {
             return outcome;
         }
         match (module, path.name.as_str(), args) {

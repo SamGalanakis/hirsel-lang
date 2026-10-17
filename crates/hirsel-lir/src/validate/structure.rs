@@ -1438,7 +1438,13 @@ impl<S: Stage> Checker<'_, '_, S> {
                 if !ok {
                     self.add(site, K::Type("weakened callable"));
                 }
-                self.fresh_holding(site, result);
+                // A borrowed view weakens to a view under the same loan.
+                let holding = |v: ValueId| self.cx.unit.values[v.index()].holding;
+                match holding(value) {
+                    Holding::Owned => self.fresh_holding(site, result),
+                    view if holding(result) != view => self.add(site, K::Holding(result)),
+                    _ => {}
+                }
             }
             Inst::Check { condition, .. } => {
                 if self.scalar(condition) != Some(ScalarKind::Bool) {

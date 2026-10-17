@@ -251,7 +251,8 @@ pub(crate) struct RegionPool {
     pub(crate) active_count: u64,
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) backing_allocations: u64,
-    active: *mut Region,
+    /// The innermost entered region of the running task (the scheduler swaps it per task).
+    pub(crate) active: *mut Region,
 }
 
 fn segment_layout(size: u64) -> HostLayout {

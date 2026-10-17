@@ -123,6 +123,15 @@ uint8_t hirsel_rt_v2_net_close(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice pem; } hirsel_rt_v2_tls_roots;
 uint8_t hirsel_rt_v2_tls_connect(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_tls_roots*);
 uint8_t hirsel_rt_v2_tls_close(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_result*, const uint64_t*, uint64_t*);
+/* Structured tasks (hirsel-rt src/tasks.rs). Scope and Task are run-local handle words; a
+   task's code is a compiled `once fn() -> ()` closure; results cross as whole Option images. */
+uint8_t hirsel_rt_v2_task_scope_enter(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_task_scope_exit(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t);
+uint8_t hirsel_rt_v2_task_spawn(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, uint8_t (*)(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*), hirsel_rt_v2_header*);
+uint8_t hirsel_rt_v2_task_finish(hirsel_rt_v2_ctx*, uint8_t*, const uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_task_join(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_task_cancel(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_task_detach(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
 #ifdef __cplusplus
 }
 #endif

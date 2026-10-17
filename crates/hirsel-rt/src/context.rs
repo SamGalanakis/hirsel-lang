@@ -127,6 +127,8 @@ pub struct RunCtx {
     pub(crate) region_owners: Option<std::collections::BTreeMap<usize, crate::region::OwnerRecord>>,
     /// The freeze and thaw walks' block stack, kept between walks (MEM-11).
     pub(crate) frozen: Vec<*mut Header>,
+    /// The run's tasks, from its first scope (CONC-2).
+    pub(crate) tasks: Option<Box<crate::tasks::Scheduler>>,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -324,6 +326,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         io_data: ptr::null_mut(),
         region_owners: None,
         frozen: Vec::new(),
+        tasks: None,
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]

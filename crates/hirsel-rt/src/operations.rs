@@ -108,6 +108,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "$intrinsic.InlineConsume_open"
             | "$intrinsic.InlineConsume_next"
             | "net.read_into"
+            | "task.scope"
+            | "task.async"
+            | "task.await"
     ) || MAP_BODIES.contains(&name.as_str())
     {
         row.dispositions.native = Disposition::Body;
@@ -150,6 +153,13 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "tls.close" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // `net.read_into`'s compiled body calls this with its buffer's size.
         "$intrinsic.NetReadInto" => Some("hirsel_rt_v2_net_read_into".into()),
+        // The task runtime (`tasks.rs`) behind the compiled task bodies.
+        "$intrinsic.TaskScopeEnter" => Some("hirsel_rt_v2_task_scope_enter".into()),
+        "$intrinsic.TaskScopeExit" => Some("hirsel_rt_v2_task_scope_exit".into()),
+        "$intrinsic.TaskSpawn" => Some("hirsel_rt_v2_task_spawn".into()),
+        "$intrinsic.TaskFinish" => Some("hirsel_rt_v2_task_finish".into()),
+        "$intrinsic.TaskJoin" => Some("hirsel_rt_v2_task_join".into()),
+        "task.cancel" | "task.detach" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         "$intrinsic.UnicodeScalars_open" => Some("hirsel_rt_v2_unicode_scalars_open".into()),
         "$intrinsic.UnicodeScalars_next" => Some("hirsel_rt_v2_unicode_scalars_next".into()),
         "$intrinsic.ScalarPositions_open" => Some("hirsel_rt_v2_scalar_positions_open".into()),
@@ -306,6 +316,53 @@ pub struct AbiExport {
 }
 
 pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_scope_enter",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_scope_exit",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::I8],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_spawn",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_finish",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_join",
+        destination: false,
+        result: None,
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_cancel",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_detach",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
     AbiExport {
         symbol: "hirsel_rt_v2_tls_connect",
         destination: true,
@@ -937,6 +994,11 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.MapInsertionOrder_next",
     "$intrinsic.MapInsertionOrder_open",
     "$intrinsic.NetReadInto",
+    "$intrinsic.TaskScopeEnter",
+    "$intrinsic.TaskScopeExit",
+    "$intrinsic.TaskSpawn",
+    "$intrinsic.TaskFinish",
+    "$intrinsic.TaskJoin",
     "$intrinsic.OrderCompare_i128",
     "$intrinsic.OrderCompare_i16",
     "$intrinsic.OrderCompare_i32",

@@ -20,3 +20,4 @@ native-tests/regressions/index-let-failure-column.hir
 native-tests/regressions/flat-builder-takeover.hir
 native-tests/regressions/operation-as-value.hir
 native-tests/regressions/noalloc-closure-list-escapes.hir
+conformance/CONC/CONC-2-await.hir

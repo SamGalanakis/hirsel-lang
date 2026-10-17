@@ -1,6 +1,7 @@
-//! Valgrind memcheck client requests, compiled only into the `memcheck` archive the native
-//! memcheck campaign links. Memcheck sees only malloc and free; these requests tell it about
-//! the blocks the runtime carves out of its own backing allocations:
+//! Valgrind client requests. The memory requests are made only by the `memcheck` archive the
+//! native memcheck campaign links; the stack requests describing task fibers are made by every
+//! archive. Memcheck sees only malloc and free; these requests tell it about the blocks the
+//! runtime carves out of its own backing allocations:
 //!
 //! - each slab is a mempool whose chunks are its live class blocks. Its block area starts
 //!   inaccessible, so a free slot, the redzone after every slot ([`SLAB_REDZONE`]) and a reset
@@ -35,6 +36,8 @@ const DESTROY_MEMPOOL: u64 = 0x1304;
 const MEMPOOL_ALLOC: u64 = 0x1305;
 const MEMPOOL_FREE: u64 = 0x1306;
 const MEMPOOL_CHANGE: u64 = 0x1309;
+const STACK_REGISTER: u64 = 0x1501;
+const STACK_DEREGISTER: u64 = 0x1502;
 
 /// One client request: `VALGRIND_DO_CLIENT_REQUEST_EXPR(default, code, a1, a2, a3, a4, 0)`.
 #[inline(always)]
@@ -110,6 +113,18 @@ pub(crate) fn pool_resize(pool: *const u8, address: *const u8, bytes: usize) {
     request(0, MEMPOOL_CHANGE, [pool.addr(), address, address, bytes]);
 }
 
+/// Tell Valgrind that `start .. end` is a stack (a task fiber's), so switching to it is not a
+/// frame of that size. Returns the stack's ID. A core request: every Valgrind tool answers it,
+/// so every archive makes it.
+pub(crate) fn stack_register(start: *const u8, end: *const u8) -> u64 {
+    request(0, STACK_REGISTER, [start.addr(), end.addr(), 0, 0])
+}
+
+/// Forget a stack [`stack_register`] described.
+pub(crate) fn stack_deregister(id: u64) {
+    request(0, STACK_DEREGISTER, [id as usize, 0, 0, 0]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +140,8 @@ mod tests {
         pool_resize(base, base, 48);
         pool_free(base, base);
         destroy_pool(base);
+        assert_eq!(stack_register(base, base.wrapping_add(64)), 0);
+        stack_deregister(0);
         noaccess(base, 64);
         undefined(base, 64);
         defined(base, 64);

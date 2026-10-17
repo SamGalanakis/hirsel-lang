@@ -490,6 +490,48 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         b.signature("$intrinsic.NetReadInto", SignatureKind::Function(f), false),
         &mut out,
     );
+    // The native task runtime's entries (CONC-2), which the compiled bodies of `task.scope`,
+    // `task.async` and `task.await` call. A result crosses tasks as a whole `Option[R]` image
+    // of `size` bytes, so no entry depends on R's layout.
+    for (generics, name, params, result) in [
+        (
+            "",
+            "$intrinsic.TaskScopeEnter",
+            "tasks: Tasks",
+            "Scope in tasks",
+        ),
+        (
+            "",
+            "$intrinsic.TaskScopeExit",
+            "s: Scope, error: bool",
+            "()",
+        ),
+        (
+            "R",
+            "$intrinsic.TaskSpawn",
+            "s: Scope, take main: once fn() -> ()",
+            "Task[R] of s",
+        ),
+        (
+            "R",
+            "$intrinsic.TaskFinish",
+            "mut slot: Option[R], none: Option[R], size: u64",
+            "()",
+        ),
+        (
+            "R",
+            "$intrinsic.TaskJoin",
+            "s: Scope, take h: Task[R] of s, mut slot: Option[R], size: u64",
+            "()",
+        ),
+    ] {
+        let mut b = Builder::new(generics).with_declarations(&out);
+        let f = b.function(params, result, false);
+        publish(
+            b.signature(name, SignatureKind::Function(f), false),
+            &mut out,
+        );
+    }
     // All declaration snapshots exist before deriving structural properties.
     // This replaces the spelling-based plain/sendable allowlists in Builder.
     let declarations = out.clone();

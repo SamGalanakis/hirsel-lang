@@ -42,6 +42,7 @@ pub mod context;
 pub mod copy;
 pub mod count;
 pub mod failure;
+mod fiber;
 pub mod finalize;
 #[cfg(feature = "measurement")]
 pub mod measurement;
@@ -49,6 +50,7 @@ mod memcheck;
 pub mod region;
 pub mod release;
 pub mod shared;
+pub mod tasks;
 
 pub use alloc::{
     CLASS_COUNT, CLASS_SIZES, CTX_DUP_MAX_OFFSET, CTX_FREE_INLINE_OFFSET, CTX_IDLE_SLABS_OFFSET,

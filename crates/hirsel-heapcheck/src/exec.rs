@@ -29,6 +29,7 @@ mod flat;
 mod fork;
 pub(crate) use fork::campaign as fork_campaign;
 mod holders;
+mod tasks;
 mod vector;
 mod versions;
 mod views;
@@ -245,6 +246,8 @@ pub(crate) struct Machine<'p, S> {
     /// Each flat list builder with an open element, and the field its bytes
     /// are built in (LIR schema revision 24).
     open_elements: BTreeMap<AllocId, u32>,
+    /// The structured-task scheduler, from the first scope on (CONC-1).
+    tasks: Option<Box<tasks::Tasks>>,
 }
 
 /// What a resolved address names.
@@ -339,6 +342,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             physical: Default::default(),
             arena_no_drop: Default::default(),
             open_elements: BTreeMap::new(),
+            tasks: None,
             full_recount_due: false,
         }
     }
@@ -2401,7 +2405,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             _ => {}
         };
-        for activity in &self.stack {
+        for activity in self.all_activities() {
             if let Activity::Frame(f) = activity {
                 f.values.iter().flatten().for_each(&mut held);
             }
@@ -2874,6 +2878,11 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     fn step(&mut self) -> Checked<bool> {
         let Some(activity) = self.stack.pop() else {
+            // A child's stack empties once its frame returned and its closure was released.
+            if self.in_child() {
+                self.task_complete()?;
+                return Ok(true);
+            }
             return Ok(false);
         };
         self.steps += 1;
@@ -2915,6 +2924,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
             },
         }
+        self.finish_switch()?;
         if self.config.check_every_step {
             self.check_counts()?;
         }
@@ -6734,6 +6744,9 @@ impl<'p, S: Stage> Machine<'p, S> {
         if views::is_view_operation(&id) {
             return self.view_operation(f, site, op, returning(normal)?, failure);
         }
+        if let Some(name) = tasks::operation(&id) {
+            return self.task_operation(f, site, name, normal, failure);
+        }
         let arguments = self.pool(site.arguments, &u.pools.call_arguments)?.to_vec();
         let mut args = Vec::new();
         for arg in &arguments {
@@ -6838,6 +6851,10 @@ impl<'p, S: Stage> Machine<'p, S> {
             });
         }
         let outcome = self.ops.call(&id, &args, &mut self.output);
+        // Every capability operation is a scheduling point (CONC-1).
+        if self.ops.yielded() {
+            self.task_yield();
+        }
         let outcome = match outcome {
             OpOutcome::Updated {
                 value,
@@ -7686,6 +7703,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 self.stack.push(Activity::Drain(d));
             }
+            None if self.in_child() => {
+                self.task_exited(matches!(exit, Exit::Fail))?;
+            }
             None => {
                 self.finished = Some(match exit {
                     Exit::Fail => Finished::Failed,
@@ -7705,8 +7725,8 @@ impl<'p, S: Stage> Machine<'p, S> {
     fn drain_done(&mut self, d: Drain) -> Checked<()> {
         let mut f = match self.stack.pop() {
             Some(Activity::Frame(f)) => f,
-            // A harness drain: the terminal release of roots.
-            None => return Ok(()),
+            // A harness drain: the terminal release of roots, or of a child's closure.
+            None => return self.task_drained(d.failed),
             Some(Activity::Drain(_)) => {
                 return fail(V::Malformed, "a drain finished above a drain");
             }

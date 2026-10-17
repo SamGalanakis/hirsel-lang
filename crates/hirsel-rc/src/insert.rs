@@ -755,10 +755,12 @@ fn consumed<S>(unit: &LirUnit<S>, lay: Lay<'_>, inst: &Inst) -> Vec<ValueId> {
             .map(|c| c.value)
             .collect(),
         Inst::Replace { value, .. } | Inst::Store { value, .. } => vec![value],
-        Inst::Release { value, .. }
-        | Inst::Reset { value, .. }
-        | Inst::Forget { value }
-        | Inst::Weaken { value, .. } => vec![value],
+        Inst::Release { value, .. } | Inst::Reset { value, .. } | Inst::Forget { value } => {
+            vec![value]
+        }
+        Inst::Weaken { result, value } if unit.values[result.index()].holding == Holding::Owned => {
+            vec![value]
+        }
         Inst::Recast { result, value } if unit.values[result.index()].holding == Holding::Owned => {
             vec![value]
         }

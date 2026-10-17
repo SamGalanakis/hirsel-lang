@@ -1514,23 +1514,36 @@ fn error_word(error: IoError) -> u64 {
     }
 }
 unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
+    let operation = !matches!(request, Request::Close { .. });
     let binding = unsafe { Binding::get(ctx) };
-    match binding.adapter.call(request) {
+    let completion = match binding.adapter.call(request) {
         Ok(value) => value,
         Err(error) => adapter_refusal(binding, error),
+    };
+    if operation {
+        unsafe { crate::tasks::yield_now(ctx) };
     }
+    completion
 }
 /// A refused typed capability is CAP-2. The compiled caller records its anchor.
+///
+/// Every capability operation is a scheduling point (CONC-1): after its effect the running
+/// task yields to the runnable queue. A handle's implicit close at its drop is not one.
 pub(crate) unsafe fn capability_call(
     ctx: *mut crate::RunCtx,
     request: Request,
 ) -> Result<Completion, ()> {
+    let operation = !matches!(request, Request::Close { .. });
     let binding = unsafe { Binding::get(ctx) };
-    match binding.adapter.call(request) {
+    let completion = match binding.adapter.call(request) {
         Ok(value) => Ok(value),
         Err(AdapterError::InvalidHandle(_)) => Err(()),
         Err(error) => adapter_refusal(binding, error),
+    };
+    if operation {
+        unsafe { crate::tasks::yield_now(ctx) };
     }
+    completion
 }
 unsafe fn native_bytes<'a>(data: *const u8, len: u64) -> &'a [u8] {
     let n = usize::try_from(len).unwrap_or_else(|_| crate::fault("Io length overflow"));
@@ -1938,6 +1951,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
         },
     };
     unsafe { out.write(value) };
+    unsafe { crate::tasks::yield_now(ctx) };
     crate::STATUS_OK
 }
 
@@ -1953,6 +1967,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_count(
         return crate::STATUS_FAILURE;
     }
     unsafe { out.write(Binding::get(ctx).arguments.len() as u64) };
+    unsafe { crate::tasks::yield_now(ctx) };
     crate::STATUS_OK
 }
 
@@ -1980,6 +1995,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
         None => result.tag = 1,
     }
     unsafe { out.write(result) };
+    unsafe { crate::tasks::yield_now(ctx) };
     crate::STATUS_OK
 }
 

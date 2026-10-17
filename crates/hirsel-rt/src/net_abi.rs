@@ -601,7 +601,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
     let handle = unsafe { s.read() };
     // Erasing the transferred word makes accidental reuse fail closed.
     unsafe { s.write(0) };
-    match unsafe { call_recording(ctx, Request::Close { handle }) } {
+    let completion = unsafe { call_recording(ctx, Request::Close { handle }) };
+    // An explicit close is an operation, so it yields where an implicit one does not.
+    unsafe { crate::tasks::yield_now(ctx) };
+    match completion {
         Some(Completion::Unit(Ok(()))) => STATUS_OK,
         Some(_) => mismatch(),
         None => STATUS_FAILURE,

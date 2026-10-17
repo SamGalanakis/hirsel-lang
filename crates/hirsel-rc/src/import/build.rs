@@ -236,9 +236,10 @@ impl Importer<'_, '_> {
         self.value(ty, holding)
     }
 
-    /// An owned many-call callable received where TIR expects the once-call callable of
+    /// A many-call callable received where TIR expects the once-call callable of
     /// the same environment (MODE-3: a once binding holds whatever it
-    /// received) is weakened explicitly, so LIR types stay exact.
+    /// received) is weakened explicitly, so LIR types stay exact. An owned one
+    /// is consumed; a borrowed one is viewed under its loan (`task.scope`'s body).
     pub(super) fn weaken(&mut self, value: ValueId, ty: LirTypeId) -> ValueId {
         let from = self.value_type(value);
         let callable = |t: LirTypeId| {
@@ -259,7 +260,11 @@ impl Importer<'_, '_> {
         if !weakens {
             return value;
         }
-        let result = self.fresh(ty);
+        // A borrowed view stays a view under its loan.
+        let result = match self.out.values[value.index()].holding {
+            Holding::Owned => self.fresh(ty),
+            view => self.value(ty, view),
+        };
         self.push(Inst::Weaken { result, value });
         for pending in &mut self.failure.pending {
             if *pending == value {

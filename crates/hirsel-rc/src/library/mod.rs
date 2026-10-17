@@ -25,6 +25,7 @@ pub mod owners;
 pub mod shared;
 pub mod slots;
 pub mod sorted;
+pub mod tasks;
 pub mod value;
 pub mod views;
 
@@ -115,6 +116,11 @@ pub const BODIES: &[&LibraryBody] = &[
     &iter::MAP_STEP,
     // net (net-t2): net.read_into over its fixed runtime entry.
     &net::READ_INTO,
+    // tasks (tasks-native): structured concurrency over the scheduler's entries.
+    &tasks::SCOPE,
+    &tasks::ASYNC,
+    &tasks::AWAIT,
+    &tasks::MAIN,
     // value: an operation used as a function value.
     &value::FORWARD,
     // views (lib-views): none; its cursor protocols are runtime primitives.

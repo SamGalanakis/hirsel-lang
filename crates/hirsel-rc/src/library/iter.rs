@@ -112,7 +112,12 @@ fn from_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     Ok(b.finish())
 }
 
-fn option(b: &mut Body<'_, '_>, layout: LayoutId, variant: u32, values: &[ValueId]) -> ValueId {
+pub(crate) fn option(
+    b: &mut Body<'_, '_>,
+    layout: LayoutId,
+    variant: u32,
+    values: &[ValueId],
+) -> ValueId {
     let definition = b.symbol(Symbol {
         kind: SymbolKind::Type,
         definition: hirsel_syntax::DefPath::core("Option"),

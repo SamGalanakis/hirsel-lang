@@ -3,7 +3,8 @@
 //! The first failure recorded while none is active becomes primary. A failure recorded while one
 //! is active (a finalizer failing during cleanup) extends the cause chain in order; it never
 //! replaces the primary. Nothing unwinds: callers propagate the returned status. Bookkeeping
-//! allocation exhaustion is environmental, never a language failure.
+//! allocation exhaustion is environmental, never a language failure. Each task has its own state
+//! (the scheduler swaps it in with the task); a joined child's failures keep its spawn path.
 
 use crate::context::RunCtx;
 use crate::{STATUS_FAILURE, STATUS_OK};
@@ -22,14 +23,64 @@ pub struct FailureRecord {
 pub(crate) struct FailureState {
     primary: Option<FailureRecord>,
     causes: Vec<FailureRecord>,
+    /// Each record's spawn path, primary first: `None` for a failure of the task this state
+    /// belongs to, the child's path for one a join delivered (FAIL-2).
+    spawns: Vec<Option<Vec<u32>>>,
 }
+
+/// One failure of a completed task's chain, with the spawn path of the task it occurred in.
+pub(crate) type Chained = (FailureRecord, Vec<u32>);
 
 impl FailureState {
     pub(crate) fn record(&mut self, record: FailureRecord) {
+        self.record_from(record, None);
+    }
+
+    fn record_from(&mut self, record: FailureRecord, spawn: Option<Vec<u32>>) {
         if self.primary.is_none() {
             self.primary = Some(record);
         } else {
             self.causes.push(record);
+        }
+        self.spawns.push(spawn);
+    }
+
+    /// The whole chain in order, each record's own failures attributed to `own`; the state is
+    /// left empty.
+    pub(crate) fn take_chain(&mut self, own: &[u32]) -> Vec<Chained> {
+        let state = std::mem::take(self);
+        state
+            .primary
+            .into_iter()
+            .chain(state.causes)
+            .zip(state.spawns)
+            .map(|(record, spawn)| (record, spawn.unwrap_or_else(|| own.to_vec())))
+            .collect()
+    }
+
+    /// Continue the chain with a joined child's failures, in their order.
+    pub(crate) fn append_chain(&mut self, chain: Vec<Chained>) {
+        for (record, spawn) in chain {
+            self.record_from(record, Some(spawn));
+        }
+    }
+
+    /// A scope's join (FAIL-2): the chain whose first failure has the earlier spawn path leads,
+    /// and the other continues it. `own` is the path of this state's task.
+    pub(crate) fn merge_chain(&mut self, own: &[u32], chain: Vec<Chained>) {
+        let Some((_, first)) = chain.first() else {
+            return;
+        };
+        let leading = match self.spawns.first() {
+            None => true,
+            Some(spawn) => first.as_slice() < spawn.as_deref().unwrap_or(own),
+        };
+        if leading {
+            let earlier = std::mem::take(self).take_chain(own);
+            self.append_chain(chain);
+            self.append_chain(earlier);
+        } else {
+            self.append_chain(chain);
         }
     }
 

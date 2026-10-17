@@ -341,7 +341,7 @@ impl Importer<'_, '_> {
                 ArgumentValue::Address { address, version }
             } else {
                 let value = self.operand(&a.value)?;
-                let value = if passing == Passing::Take {
+                let value = if matches!(passing, Passing::Take | Passing::Borrow) {
                     let ty = self.intern(layout);
                     self.weaken(value, ty)
                 } else {

@@ -316,6 +316,43 @@ Launch owns a stable `io::Binding`, installs `io::hirsel_rt_v2_io_close` as Conf
 
 `Map` and `Set` are native LIR bodies in `hirsel-rc::library::map`; the compiled seed law in `hirsel-pipeline-tests/tests/rc/rc_maps_native.rs` replaces the Rust Map model. Sequence consumption is implemented by compiled library bodies in `hirsel-rc`; their C and H checks, native target tests and resource failure campaigns replace the Rust Cursor model. The six consuming open/next manifest rows are Body.
 
+## Tasks
+
+`tasks.rs` is the structured-concurrency scheduler (CONC-1, CONC-2, FAIL-2) and `fiber.rs` its
+stackful fibers: guarded 8 MiB lazily committed stacks, registered with Valgrind, and a
+callee-saved register switch for x86-64 and AArch64. The scheduler is cooperative and
+single-threaded, with the reference interpreter's schedule:
+
+- one FIFO queue of runnable tasks;
+- a yield after every capability operation (`yield_now`, called by the Io entries and the task entries);
+- a join parks until the awaited child completes.
+
+All tasks of a run share its one heap. A value crossing tasks moves by copying its root, and
+the checker's sendability rules keep each counted value owned by one task. What is a task's own
+in `RunCtx` is swapped at each switch:
+
+- its failure chain with spawn paths;
+- its finalizer shield;
+- its release worklist;
+- its innermost region;
+- its measurement site.
+
+A threaded scheduler must reintroduce per-thread heaps and transfer moved graphs between them.
+
+The compiled bodies of `task.scope`, `task.async` and `task.await` (`hirsel-rc::library::tasks`)
+call the `$intrinsic.Task*` entries (`hirsel_rt_v2_task_*`). A result crosses as a whole
+`Option[R]` image, so the runtime never reads a result's layout:
+
+- A child's `$native.task_main` closure calls the spawned function and hands its `Some(r)` slot to
+  `hirsel_rt_v2_task_finish`. The child then stays parked in that call holding the result.
+- A join copies the image into the awaiter's `None` slot and writes `None` back. A discard leaves
+  `Some(r)`.
+- Either way the child's own compiled cleanup drops what its slot holds, and the runtime then
+  releases the closure environment.
+
+`task.cancel` and `task.detach` are runtime primitives. A detached child drops its result when
+it completes, or at the detach if it already has; only live children keep scope rows.
+
 ## Launch and the Hirsel-ABI Io entries
 
 `hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds

@@ -2675,8 +2675,10 @@ impl<'o> LayoutBuilder<'o> {
                 unavailable(Some(6), format!("{} (foreign interop)", builtin_name(kind)))
             }
             BuiltinType::Shape => unavailable(None, "Shape materialization as static data"),
+            // A run-local task-table word (CONC-2); a handle nobody awaited needs no drop:
+            // its scope's exit joins the child.
+            BuiltinType::Task => Ok(self.handle_record(key, false)),
             BuiltinType::Region
-            | BuiltinType::Task
             | BuiltinType::Sender
             | BuiltinType::Receiver
             | BuiltinType::Mutex
