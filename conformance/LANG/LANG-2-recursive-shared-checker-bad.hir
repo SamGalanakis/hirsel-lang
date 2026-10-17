@@ -1,5 +1,5 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 47
+// expect: accept
 // Box reads follow issue #98; implementation is owned by box-read.
 // Both retained roots share the original recursive list throughout mapping.
 type Node {

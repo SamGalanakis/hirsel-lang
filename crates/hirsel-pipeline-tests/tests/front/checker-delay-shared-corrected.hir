@@ -79,7 +79,7 @@ fn hex(n: u64) -> String {
 }
 fn number(n: u64) -> Bytes {
   let mut out: List[u8] = []
-  let s = u64.to_string(n)
+  let s = std@1/u64.to_string(n)
   let b = string.as_bytes(s)
   for i in 0u64..bytes.len(b) { list.push(mut out, b[i]) }
   list.push(mut out, 10u8)
@@ -99,9 +99,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     sum = int.wrapping_add(sum, checksum(output))
     if emit_output {
       let text = string.from_bytes(copy output) ? error
-      out.print(io.stdout(rt), text) ? error
+      out.print(io.stdout(rt) ? error, text) ? error
     }
   }
-  if !emit_output { out.print(io.stdout(rt), hex(sum)) ? error }
+  if !emit_output { out.print(io.stdout(rt) ? error, hex(sum)) ? error }
   Ok(())
 }
