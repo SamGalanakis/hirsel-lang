@@ -1,7 +1,7 @@
 // A supplied path is read strictly; no arguments selects the documented demo.
 pub type Error = Arguments(ArgError) | Files(FileError) | Utf8(Bytes) | Grant(
   GrantError
-) | Output(OutputError) | Invalid
+) | Output(OutputError) | Input(InputError) | Invalid
 
 pub fn input(rt: Io, args: Args, take demo: String) -> Result[String, Error] {
   let p = match arg.path(args, 0) {

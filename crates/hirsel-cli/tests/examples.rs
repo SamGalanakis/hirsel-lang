@@ -628,3 +628,71 @@ fn cli_default_budget_exceeds_the_conformance_budget() {
     assert!(ordinary.stdout.is_empty());
     assert!(ordinary.stderr.is_empty());
 }
+
+#[test]
+fn calculator_stdin_session() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let fixture = Fixture::new(
+        "calculator",
+        include_str!("../../../examples/calculator/main.hir"),
+    );
+    let text = "1 + 2\n1 / 0\n\n7 - 3";
+    let expected = "3\nerror\n4\n";
+    fixture.run(false, Some(serde_json::json!({"grants":["Io","Args"],"projections":["stdout","stdin"],"args":["-"],"stdin":text})), expected, 0);
+    fixture.run(false, Some(serde_json::json!({"grants":["Io","Args"],"projections":["stdout","stdin"],"args":["-"],"stdin":[49,32,43,32,50,10,255]})), "3\n", 1);
+    let manifest = fixture.0.join("hirsel.json");
+    let record = fixture.0.join("host-stdin.json");
+    let exported = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["export", "--run"])
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&record)
+        .output()
+        .unwrap();
+    assert!(
+        exported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    let template: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../examples/calculator/stdin-grants.json"
+    ))
+    .unwrap();
+    config["io"] = template["io"].clone();
+    config["args"] = template["args"].clone();
+    std::fs::write(&record, config.to_string()).unwrap();
+    for native in [false, true] {
+        for (bytes, expected, code) in [
+            (text.as_bytes(), expected, 0),
+            (&b"1 + 2\n\xff"[..], "3\n", 1),
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run");
+            if native {
+                command.arg("--native");
+            }
+            let mut child = command
+                .arg(&manifest)
+                .arg("--run")
+                .arg(&record)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(bytes).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(code),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, expected.as_bytes());
+            assert!(output.stderr.is_empty());
+        }
+    }
+}

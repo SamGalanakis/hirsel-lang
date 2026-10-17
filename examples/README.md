@@ -34,8 +34,17 @@ hirsel run examples/wordscan/hirsel.json --run /tmp/wordscan-run.json
 hirsel run --native examples/wordscan/hirsel.json --run /tmp/wordscan-run.json
 ```
 
-The calculator currently reads an expression file. Interpreted CLI runs default
-to one billion execution steps; `--max-steps <n>` selects an explicit bound.
+The calculator accepts an expression file, or `-` for a stdin session. For example:
+
+```sh
+printf '1 + 2\n9 / 3\n' | hirsel run examples/calculator/hirsel.json --grants examples/calculator/stdin-grants.json
+printf '1 + 2\n9 / 3\n' | hirsel run --native examples/calculator/hirsel.json --grants examples/calculator/stdin-grants.json
+```
+
+Each expression produces a line immediately; blank lines are ignored and malformed
+expressions produce `error`. EOF ends the session, including a final unterminated line.
+Interpreted CLI runs default to one billion execution steps; `--max-steps <n>`
+selects an explicit bound.
 
 | Program | Job and optional second argument |
 | --- | --- |

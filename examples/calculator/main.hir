@@ -1,4 +1,4 @@
-// A file-driven expression session: whitespace-separated i64 terms, left to right.
+// Expression sessions from stdin (-) or a file; i64 terms evaluated left to right.
 fn evaluate(take line: String) -> Result[i64, common.Error] {
   let tokens = std@1/string.split_ascii_whitespace(take line)
   if list.len(tokens) % 2 == 0 {
@@ -34,18 +34,43 @@ fn evaluate(take line: String) -> Result[i64, common.Error] {
   Ok(value)
 }
 
+fn append_result(take line: String, mut builder: List[u8]) -> () {
+  if string.byte_len(std@1/string.trim(line)) == 0 {
+    return ()
+  }
+  match evaluate(take line) {
+    Ok(n) => std@1/i64.format_into(n, mut builder),
+    Error(_) => std@1/text.append(mut builder, "error"),
+  }
+  std@1/text.append(mut builder, "\n")
+}
+
+fn repl(rt: Io) -> Result[(), common.Error] {
+  let stream = io.stdin(rt) ? Grant
+  while true {
+    match std@1/input.read_line(stream) ? Input {
+      None() => return Ok(()),
+      Some(line) => {
+        let mut builder: List[u8] = []
+        append_result(take line, mut builder)
+        common.print(rt, common.finish(take builder)?)?
+      },
+    }
+  }
+  Ok(())
+}
+
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  match arg.path(args, 0) {
+    Ok(p) => if path.text(p) == "-" {
+      return repl(rt)
+    },
+    Error(_) => (),
+  }
   let text = common.input(rt, args, "12 + 7 * 2\n-9 / 2\n100 - 1\n")?
   let mut builder: List[u8] = []
   for line in std@1/string.split(take text, "\n") {
-    if string.byte_len(std@1/string.trim(line)) == 0 {
-      continue
-    }
-    match evaluate(copy line) {
-      Ok(n) => std@1/i64.format_into(n, mut builder),
-      Error(_) => std@1/text.append(mut builder, "error"),
-    }
-    std@1/text.append(mut builder, "\n")
+    append_result(copy line, mut builder)
   }
   common.print(rt, common.finish(take builder)?)
 }
