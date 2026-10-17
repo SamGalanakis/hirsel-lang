@@ -98,7 +98,10 @@ fn source_arg(args: &mut Parser) -> Result<OsString, lexopt::Error> {
 fn execute(args: Vec<OsString>) -> u8 {
     let command = match parse_command(args) {
         Ok(command) => command,
-        Err(_) => return usage(),
+        Err(error) => {
+            eprintln!("{error}");
+            return usage();
+        }
     };
     let (command, flag, file) = match command {
         Command::Help => {

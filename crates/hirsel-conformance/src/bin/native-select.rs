@@ -1,9 +1,12 @@
 //! Inventory and derive native campaign inputs without running any program.
+use hirsel_cli_args::{
+    CommonOption, CommonOptions,
+    lexopt::{Arg::*, Parser, ValueExt},
+    parse_or_exit,
+};
 use std::path::PathBuf;
 
 fn run() -> Result<(), String> {
-    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut args = std::env::args().skip(1);
     let mut program = None;
     let mut derive = None;
     let mut replay = false;
@@ -12,46 +15,30 @@ fn run() -> Result<(), String> {
     let mut inventory_output = None::<PathBuf>;
     let mut filters = Vec::new();
     let mut seed = 1;
-    let mut shard = None;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--root" => root = args.next().ok_or("--root needs a path")?.into(),
-            "--program" => program = Some(args.next().ok_or("--program needs a path")?),
-            "--derive" => derive = Some(args.next().ok_or("--derive needs an output path")?),
-            "--replay-history" => replay = true,
-            "--inventory-input" => {
-                inventory_input = Some(args.next().ok_or("--inventory-input needs a path")?.into())
-            }
-            "--inventory-output" => {
-                inventory_output =
-                    Some(args.next().ok_or("--inventory-output needs a path")?.into())
-            }
-            "--merge" => chunks.push(
-                args.next()
-                    .ok_or("--merge needs an observation path")?
-                    .into(),
-            ),
-            "--filter" => filters.push(args.next().ok_or("--filter needs text")?),
-            "--shard" => {
-                shard = Some(
-                    hirsel_conformance::Shard::parse(&args.next().ok_or("--shard needs I/N")?)
-                        .ok_or("invalid --shard")?,
-                );
-            }
-            "--seed" => {
-                seed = args
-                    .next()
-                    .ok_or("--seed needs an integer")?
-                    .parse()
-                    .map_err(|_| "invalid seed")?
-            }
-            _ => {
-                return Err(format!(
-                    "unknown argument {arg}; usage: native-select [--root PATH]"
-                ));
+    let mut common = CommonOptions::default();
+    parse_or_exit((|| {
+        let mut args = Parser::from_env();
+        while let Some(arg) = args.next()? {
+            match arg {
+                Long("root") => common.parse(CommonOption::Root, &mut args)?,
+                Long("shard") => common.parse(CommonOption::Shard, &mut args)?,
+                Long("program") => program = Some(PathBuf::from(args.value()?)),
+                Long("derive") => derive = Some(PathBuf::from(args.value()?)),
+                Long("replay-history") => replay = true,
+                Long("inventory-input") => inventory_input = Some(args.value()?.into()),
+                Long("inventory-output") => inventory_output = Some(args.value()?.into()),
+                Long("merge") => chunks.push(args.value()?.into()),
+                Long("filter") => filters.push(args.value()?.string()?),
+                Long("seed") => seed = args.value()?.parse()?,
+                _ => return Err(arg.unexpected()),
             }
         }
-    }
+        Ok(())
+    })());
+    let root = common
+        .root
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let shard = common.shard;
     if let Some(output) = inventory_output {
         let inventory = hirsel_conformance::native::diet::inventory(&root)?;
         std::fs::write(output, serde_json::to_vec(&inventory).unwrap())

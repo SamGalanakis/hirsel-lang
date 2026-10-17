@@ -1,3 +1,8 @@
+use hirsel_cli_args::{
+    CommonOption, CommonOptions,
+    lexopt::{Arg::*, Parser, ValueExt},
+    parse_or_exit,
+};
 use std::{path::PathBuf, process::ExitCode};
 const KNOWN: &str = "native-tests/regressions/agree-known.txt";
 fn main() -> ExitCode {
@@ -10,93 +15,55 @@ fn main_on_compiler_thread() -> ExitCode {
         .unwrap_or(0);
     let mut budget = Some(hirsel_conformance::agree::DEFAULT_VARIANTS_PER_PROGRAM);
     let mut exhaustive = false;
-    let mut hash_seed = 0;
     let mut limit = usize::MAX;
-    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut native = None;
     let mut program = None;
     let mut only = vec![];
-    let mut shard = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        let value = match arg.as_str() {
-            "--exhaustive" => {
-                exhaustive = true;
+    let mut common = CommonOptions::default();
+    let help = parse_or_exit((|| {
+        let mut args = Parser::from_env();
+        while let Some(arg) = args.next()? {
+            if let Some(option) = CommonOption::from_arg(&arg) {
+                common.parse(option, &mut args)?;
                 continue;
             }
-            "--help" | "-h" => {
-                println!(
-                    "usage: agree [--seed N] [--hash-seed N] [--limit M] [--root PATH] [--native heap|full] [--program PATH] [--path PREFIX]... [--shard I/N] [--variants-per-program N | --exhaustive]"
-                );
-                return ExitCode::SUCCESS;
+            match arg {
+                Long("exhaustive") => exhaustive = true,
+                Long("help") | Short('h') => return Ok(true),
+                Long("variants-per-program") => {
+                    let n = args.value()?.parse::<usize>()?;
+                    if n == 0 {
+                        return Err("--variants-per-program needs a positive integer".into());
+                    }
+                    budget = Some(n);
+                }
+                Long("program") => program = Some(PathBuf::from(args.value()?)),
+                Long("path") => only.push(args.value()?.string()?),
+                Long("native") => {
+                    let mode = args.value()?.string()?;
+                    if mode != "heap" && mode != "full" {
+                        return Err("--native takes heap or full".into());
+                    }
+                    native = Some(mode);
+                }
+                Long("seed") => seed = args.value()?.parse()?,
+                Long("limit") => limit = args.value()?.parse()?,
+                _ => return Err(arg.unexpected()),
             }
-            "--seed"
-            | "--hash-seed"
-            | "--limit"
-            | "--root"
-            | "--native"
-            | "--program"
-            | "--path"
-            | "--shard"
-            | "--variants-per-program" => match args.next() {
-                Some(v) => v,
-                None => {
-                    eprintln!("{arg} needs a value");
-                    return ExitCode::from(2);
-                }
-            },
-            _ => {
-                eprintln!("unknown argument: {arg}");
-                return ExitCode::from(2);
-            }
-        };
-        match arg.as_str() {
-            "--variants-per-program" => match value.parse::<usize>() {
-                Ok(n) if n > 0 => budget = Some(n),
-                _ => {
-                    eprintln!("--variants-per-program needs a positive integer");
-                    return ExitCode::from(2);
-                }
-            },
-            "--shard" => match hirsel_conformance::Shard::parse(&value) {
-                Some(value) => shard = Some(value),
-                None => {
-                    eprintln!("--shard requires <index>/<count>, 1 <= index <= count");
-                    return ExitCode::from(2);
-                }
-            },
-            "--root" => root = value.into(),
-            "--program" => program = Some(PathBuf::from(value)),
-            "--path" => only.push(value),
-            "--native" if value == "heap" || value == "full" => native = Some(value),
-            "--native" => {
-                eprintln!("--native takes heap or full");
-                return ExitCode::from(2);
-            }
-            "--hash-seed" => match value.parse() {
-                Ok(n) => hash_seed = n,
-                Err(_) => {
-                    eprintln!("invalid hash seed: {value}");
-                    return ExitCode::from(2);
-                }
-            },
-            "--seed" => match value.parse() {
-                Ok(n) => seed = n,
-                Err(_) => {
-                    eprintln!("invalid seed: {value}");
-                    return ExitCode::from(2);
-                }
-            },
-            "--limit" => match value.parse() {
-                Ok(n) => limit = n,
-                Err(_) => {
-                    eprintln!("invalid limit: {value}");
-                    return ExitCode::from(2);
-                }
-            },
-            _ => unreachable!(),
         }
+        Ok(false)
+    })());
+    if help {
+        println!(
+            "usage: agree [--seed N] [--hash-seed N] [--limit M] [--root PATH] [--native heap|full] [--program PATH] [--path PREFIX]... [--shard I/N] [--variants-per-program N | --exhaustive]"
+        );
+        return ExitCode::SUCCESS;
     }
+    let root = common
+        .root
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let hash_seed = common.hash_seed.unwrap_or(0);
+    let shard = common.shard;
     if shard.is_some() && program.is_some() {
         eprintln!("--shard cannot be combined with --program");
         return ExitCode::from(2);

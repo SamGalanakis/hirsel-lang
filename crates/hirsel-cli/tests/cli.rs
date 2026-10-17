@@ -107,9 +107,29 @@ fn command_options_and_operand_counts_remain_specific_to_each_command() {
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         assert!(output.stdout.is_empty(), "{args:?}");
         assert!(
-            String::from_utf8_lossy(&output.stderr).starts_with("usage: hirsel "),
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .nth(1)
+                .is_some_and(|line| line.starts_with("usage: hirsel ")),
             "{args:?}"
         );
+    }
+    // Standard lexopt spelling reaches IO rather than a usage error.
+    for args in [
+        vec!["check", "--", "/missing-hirsel-parser-input.hir"],
+        vec![
+            "export",
+            "--tir",
+            "/missing-hirsel-parser-input.hir",
+            "-ounused.tir",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("usage:"));
     }
 }
 

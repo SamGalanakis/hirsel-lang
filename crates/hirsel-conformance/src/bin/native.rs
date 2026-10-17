@@ -1,7 +1,11 @@
 //! The native differential gate: `--smoke` (per push), `--full` (the versioned
 //! matrix, the set rule, topology and mismatch artifacts), `--replay` and
 //! `--reduce` of a stored artifact.
-use hirsel_conformance::Shard;
+use hirsel_cli_args::{
+    CommonOption, CommonOptions, Shard,
+    lexopt::{Arg::*, Parser, ValueExt},
+    parse_or_exit,
+};
 use hirsel_conformance::native::{self, Case, Class, artifact};
 use hirsel_driver::native::{
     Configuration, Outcome, TargetSpec, Toolchain, full_matrix, smoke_matrix, topology_matrix,
@@ -97,10 +101,7 @@ fn all_agree(what: &str, results: &[native::CaseResult]) -> bool {
 }
 
 fn run() -> Result<bool, String> {
-    let mut hash_seed = 0;
-    let mut hash_seed_explicit = false;
     let mut mode = None;
-    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     // The host is shared: four cases at a time unless told otherwise.
     let mut jobs = 4;
     let mut out = None;
@@ -112,52 +113,56 @@ fn run() -> Result<bool, String> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let mut engine = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        let mut value = || args.next().ok_or(format!("{arg} needs a value\n{USAGE}"));
-        match arg.as_str() {
-            "--smoke" | "--full" | "--sanitize" | "--hash-sweep" => {
-                mode = Some((arg.clone(), PathBuf::new()))
+    let mut common = CommonOptions::default();
+    let help = parse_or_exit((|| {
+        let mut args = Parser::from_env();
+        while let Some(arg) = args.next()? {
+            if let Some(option) = CommonOption::from_arg(&arg) {
+                common.parse(option, &mut args)?;
+                continue;
             }
-            "--replay" | "--reduce" => mode = Some((arg.clone(), value()?.into())),
-            "--bless" => bless = true,
-            "--exhaustive" => exhaustive = true,
-            "--seed" => seed = value()?.parse().map_err(|_| "invalid --seed")?,
-            "--root" => root = value()?.into(),
-            "--out" => out = Some(PathBuf::from(value()?)),
-            "--filter" => filter.0.push(value()?),
-            "--shard" => {
-                filter.1 = Some(Shard::parse(&value()?).ok_or("--shard takes I/N, 1 <= I <= N")?)
+            match arg {
+                Long(name @ ("smoke" | "full" | "sanitize" | "hash-sweep")) => {
+                    mode = Some((format!("--{name}"), PathBuf::new()));
+                }
+                Long(name @ ("replay" | "reduce")) => {
+                    let name = format!("--{name}");
+                    mode = Some((name, args.value()?.into()));
+                }
+                Long("bless") => bless = true,
+                Long("exhaustive") => exhaustive = true,
+                Long("seed") => seed = args.value()?.parse()?,
+                Long("out") => out = Some(PathBuf::from(args.value()?)),
+                Long("filter") => filter.0.push(args.value()?.string()?),
+                Long("engine") => {
+                    use hirsel_driver::native::Runtime;
+                    let (class, runtime) = match args.value()?.string()?.as_str() {
+                        "heap" => (Class::Heap, None),
+                        "llvm" => (Class::Llvm, None),
+                        "diagnostic" => (Class::Llvm, Some(Runtime::Diagnostic)),
+                        "default" => (Class::Llvm, Some(Runtime::Default)),
+                        "system" => (Class::Llvm, Some(Runtime::System)),
+                        _ => return Err("--engine must be heap, llvm, or a runtime archive: diagnostic, default or system".into()),
+                    };
+                    engine = Some(Selected { class, runtime });
+                }
+                Long("jobs") => jobs = args.value()?.parse()?,
+                Long("help") | Short('h') => return Ok(true),
+                _ => return Err(arg.unexpected()),
             }
-            "--hash-seed" => {
-                hash_seed = value()?.parse().map_err(|_| "invalid --hash-seed")?;
-                hash_seed_explicit = true;
-            }
-            "--engine" => {
-                use hirsel_driver::native::Runtime;
-                let (class, runtime) = match value()?.as_str() {
-                    "heap" => (Class::Heap, None),
-                    "llvm" => (Class::Llvm, None),
-                    "diagnostic" => (Class::Llvm, Some(Runtime::Diagnostic)),
-                    "default" => (Class::Llvm, Some(Runtime::Default)),
-                    "system" => (Class::Llvm, Some(Runtime::System)),
-                    _ => {
-                        return Err(
-                            "--engine must be heap, llvm, or a runtime archive: diagnostic, default or system"
-                                .into(),
-                        );
-                    }
-                };
-                engine = Some(Selected { class, runtime });
-            }
-            "--jobs" => jobs = value()?.parse().map_err(|_| "invalid --jobs")?,
-            "--help" | "-h" => {
-                println!("{USAGE}");
-                return Ok(true);
-            }
-            _ => return Err(format!("unknown argument {arg}\n{USAGE}")),
         }
+        Ok(false)
+    })());
+    if help {
+        println!("{USAGE}");
+        return Ok(true);
     }
+    let root = common
+        .root
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let hash_seed = common.hash_seed.unwrap_or(0);
+    let hash_seed_explicit = common.hash_seed.is_some();
+    filter.1 = common.shard;
     let (mode, dir) = mode.ok_or(USAGE)?;
     if engine.is_some() && mode != "--full" {
         return Err("--engine requires --full".into());

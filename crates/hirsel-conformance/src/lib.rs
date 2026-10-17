@@ -506,7 +506,7 @@ pub fn ratchet(existing: &str, tests: &[TestResult], update: bool) -> Result<Str
     ratchet_within(existing, tests, update, None)
 }
 
-pub use hirsel_cli_args::Shard;
+use hirsel_cli_args::Shard;
 fn in_shard(shard: Option<Shard>, path: &str) -> bool {
     shard.is_none_or(|shard| shard.holds(path))
 }

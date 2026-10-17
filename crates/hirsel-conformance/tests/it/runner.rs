@@ -1,6 +1,7 @@
+use hirsel_cli_args::Shard;
 use hirsel_conformance::{
-    Compiler, Driver, Expect, Shard, Status, TestResult, classify, extract_rules, parse_header,
-    ratchet, run_suite, run_suite_shard,
+    Compiler, Driver, Expect, Status, TestResult, classify, extract_rules, parse_header, ratchet,
+    run_suite, run_suite_shard,
 };
 use hirsel_diag::{Diagnostic, RuleId, Severity};
 use hirsel_engine::{CheckOutput, NotImplemented, RunOutcome};

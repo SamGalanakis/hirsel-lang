@@ -14,7 +14,7 @@ Invariants and boundary:
 
 The binaries use `hirsel-cli-args` and pinned lexopt for argument parsing.
 Common `--root`, `--hash-seed` and `--shard` values share validation and
-argument errors print to stderr and exit 2.
+argument errors print to stderr and exit 2. Paths retain OS bytes.
 
 The runner prints `whole corpus` and `in-gate corpus` counts. JSON retains
 `summary` for the whole corpus and adds `in_gate`, plus each test's `in_gate`,

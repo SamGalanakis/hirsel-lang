@@ -124,6 +124,10 @@ mod tests {
         assert_eq!(options.root, Some(PathBuf::from("checkout")));
         assert_eq!(options.hash_seed, Some(0));
         assert_eq!(options.shard, Some(Shard { index: 2, count: 3 }));
+        let options = parse(&["--root=checkout", "--hash-seed=0", "--shard=2/3"]).unwrap();
+        assert_eq!(options.root, Some(PathBuf::from("checkout")));
+        assert_eq!(options.hash_seed, Some(0));
+        assert_eq!(options.shard, Some(Shard { index: 2, count: 3 }));
     }
 
     #[test]
