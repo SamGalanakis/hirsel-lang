@@ -85,6 +85,25 @@ platform properties live only in the gitignored `.buckconfig.local`
 host; native tools remain pinned inputs in either mode. More target names and the filtered native commands are in
 [tools/buck2/README.md](../tools/buck2/README.md).
 
+## Fast loop
+
+While iterating, run the one test that shows the change, by name, then the
+same test through the heaviest crate that reads it, and gate once at the end:
+
+```sh
+T='-c hirsel.tests=focus'
+.buck2/bin/buck2 test $T //:hirsel-types-unittest -- --test-arg=<case> --test-arg=--exact
+.buck2/bin/buck2 test $T //:hirsel-driver-test-it -- --test-arg=<case> --test-arg=--exact
+.buck2/bin/buck2 kill                           # when done: cancels what it still has queued
+```
+
+A crate's own tests are `//:hirsel-<crate>-unittest` and `-test-it`; source
+compiled through the driver is tested in `//:hirsel-pipeline-tests-test-front`
+and `-test-rc`. Focus books one CPU per test run, so it starts at once where a
+whole-shard request waits for a worker to free its CPUs (median edit-to-result
+38 s against 114 s over twelve paired edits). Leave `-c hirsel.full=true` and
+`tools/gate` for the finished change.
+
 ## Gates
 
 `tools/gate` checks a finished change, once. It diffs the worktree against
