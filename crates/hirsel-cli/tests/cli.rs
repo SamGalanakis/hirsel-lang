@@ -2280,3 +2280,56 @@ fn real_host_processes_run_granted_echo_and_false_and_refuse_everything_else() {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(grants).unwrap();
 }
+
+#[test]
+fn host_quiescence_matches_simulation_and_retains_waits_without_cleanup() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for name in ["two-task-channel", "await-channel-cycle", "held-sender"] {
+        for blocked in [true, false] {
+            let suffix = if blocked { "blocked" } else { "run" };
+            let original = root.join(format!("conformance/CONC/CONC-8-{name}-{suffix}.hir"));
+            let source = file(&std::fs::read_to_string(&original).unwrap());
+            let record = run_record(
+                &source,
+                serde_json::json!({"io":{"tasks":"tasks.cooperative@1","stdout":"stdout.bytes@1","dirs":[]},"args":[]}),
+            );
+            for host in [false, true] {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command.arg("run").arg(&source);
+                if host {
+                    command.arg("--run").arg(&record);
+                }
+                let output = command.output().unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(if blocked { 2 } else { 0 }),
+                    "{name} blocked={blocked} host={host}: {output:?}"
+                );
+                assert_eq!(
+                    output.stdout,
+                    if blocked {
+                        b"waiting\n".as_slice()
+                    } else {
+                        b"waiting\ndestroyed\n".as_slice()
+                    },
+                    "{name} host={host}: {output:?}"
+                );
+                if blocked {
+                    let report = String::from_utf8_lossy(&output.stderr);
+                    assert!(
+                        report.starts_with("Blocked: [ObservedWait { spawn_path: []"),
+                        "{report}"
+                    );
+                    assert!(report.contains("channel.receive"), "{report}");
+                    if name != "held-sender" {
+                        assert!(report.contains("task.await"), "{report}");
+                    }
+                } else {
+                    assert!(output.stderr.is_empty(), "{output:?}");
+                }
+            }
+            std::fs::remove_file(source).unwrap();
+            std::fs::remove_file(record).unwrap();
+        }
+    }
+}

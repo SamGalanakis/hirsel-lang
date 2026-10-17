@@ -672,3 +672,34 @@ fn runtime_failure_header_can_name_a_dependency_line_beyond_the_fixture() {
     let zero = runtime.replace("line 99", "line 0");
     assert!(header(&zero).unwrap_err().contains("outside file"));
 }
+
+#[test]
+fn blocked_header_requires_noncompletion_and_the_exact_effect_prefix() {
+    let expect = header("// rule: OWN-6\n// expect: blocked\n// stdout: waiting\nfn main() {}\n")
+        .unwrap()
+        .expect;
+    assert_eq!(
+        expect,
+        Expect::Blocked {
+            stdout: "waiting\n".into()
+        }
+    );
+    let mut driver = fake();
+    driver.stdout = "waiting\n";
+    driver.outcome = Ok(RunOutcome::Blocked(vec![]));
+    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
+    for output in ["", "waiting\ndestroyed\n"] {
+        driver.stdout = output;
+        assert!(matches!(
+            classify(&driver, Path::new("test"), &expect),
+            Status::Fail(_)
+        ));
+    }
+    driver.stdout = "waiting\n";
+    driver.outcome = Ok(RunOutcome::Exit(0));
+    assert!(matches!(
+        classify(&driver, Path::new("test"), &expect),
+        Status::Fail(_)
+    ));
+    assert!(header("// rule: OWN-6\n// expect: blocked\n// exit: 0\nfn main() {}\n").is_err());
+}

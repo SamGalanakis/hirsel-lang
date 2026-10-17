@@ -1,0 +1,26 @@
+// rule: CONC-8
+// expect: run
+// stdout: waiting
+// stdout: destroyed
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "destroyed\n")
+}
+
+fn discard[T](take value: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let guard = Trace(stdout: stdout)
+  let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+  let mut rx = take receiver
+  let _ = out.print(stdout, "waiting\n")
+  discard(take sender)
+  let _ = channel.receive(tasks, mut rx)
+  Ok(())
+}

@@ -544,3 +544,12 @@ spawn counters and empty active-scope stacks are retired at completion too. Scop
 detached failure chains separately, sorted by spawn path, until their ordered join.
 
 Concrete generic type arguments travel with interpreter frames and captured closures, alongside lexical sizes. Named callable values close their actuals before escaping a frame. Type-directed codec operations use these declared type snapshots; ordinary parametric evaluation still uses the same TIR bodies.
+
+The scheduler reports CONC-8 Blocked after polling every parked operation when
+no task is runnable and `Operations::wait` finds no external wakeup source. This
+includes channel and task-join waits, with no user destruction or cancellation.
+Observed waits sort by spawn path, stable source site, kind and logical targets.
+Scripted stdin exhaustion is enabled EOF; live host stdin and sockets retain
+readiness interests and prevent a premature Blocked conclusion. CONC-5 mutex
+bodies are synchronous and hold no authority, so they cannot suspend in this
+cooperative evaluator.

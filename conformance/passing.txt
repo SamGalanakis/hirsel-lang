@@ -435,6 +435,9 @@ conformance/CONC/CONC-7-record-payload-ok.hir
 conformance/CONC/CONC-7-scalar-annotation-ok.hir
 conformance/CONC/CONC-7-sequence-payload-bad.hir
 conformance/CONC/CONC-7-sequence-payload-ok.hir
+conformance/CONC/CONC-8-await-channel-cycle-blocked.hir
+conformance/CONC/CONC-8-held-sender-blocked.hir
+conformance/CONC/CONC-8-two-task-channel-blocked.hir
 conformance/CT/CT-1-arithmetic-constant.hir
 conformance/CT/CT-1-conditional-constant.hir
 conformance/CT/CT-1-contract-failure-bad.hir

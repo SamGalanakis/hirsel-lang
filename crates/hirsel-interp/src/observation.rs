@@ -31,7 +31,7 @@ pub struct FailureRecord {
     pub cause: Option<usize>,
     pub spawn_path: Vec<u32>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SourceSite {
     pub definition: DefPath,
     pub line: u32,
@@ -245,7 +245,7 @@ impl ObservedValue {
         Self { nodes }
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ObservedWait {
     pub spawn_path: Vec<u32>,
     pub site: SourceSite,
@@ -323,19 +323,19 @@ impl Execution {
             _ => (None, None),
         };
         let blocked = if let Outcome::Blocked(waits) = &self.outcome {
-            Some(
-                waits
-                    .iter()
-                    .map(|wait| {
-                        Some(ObservedWait {
-                            spawn_path: wait.spawn_path.clone(),
-                            site: wait.anchor.source_site(sources)?,
-                            kind: wait.kind.clone(),
-                            targets: wait.targets.clone(),
-                        })
+            let mut waits = waits
+                .iter()
+                .map(|wait| {
+                    Some(ObservedWait {
+                        spawn_path: wait.spawn_path.clone(),
+                        site: wait.anchor.source_site(sources)?,
+                        kind: wait.kind.clone(),
+                        targets: wait.targets.clone(),
                     })
-                    .collect::<Option<Vec<_>>>()?,
-            )
+                })
+                .collect::<Option<Vec<_>>>()?;
+            waits.sort();
+            Some(waits)
         } else {
             None
         };

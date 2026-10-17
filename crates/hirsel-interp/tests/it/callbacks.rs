@@ -983,7 +983,7 @@ fn blocked_stop_retains_the_prefix_and_runs_no_language_cleanup() {
     );
     let mut operations = Block { drops: 0 };
     let sources = sources();
-    let e = run_with_runtime(
+    let mut e = run_with_runtime(
         &mut Provider {
             definitions: vec![b.definition("main")],
             queries: vec![],
@@ -1028,4 +1028,20 @@ fn blocked_stop_retains_the_prefix_and_runs_no_language_cleanup() {
     assert_eq!(waits[0].site.definition, path("main"));
     assert_eq!(waits[0].targets, vec![1]);
     assert_eq!(observation.effects.len(), 1);
+    let Outcome::Blocked(original) = &e.outcome else {
+        unreachable!()
+    };
+    let mut later = original[0].clone();
+    later.spawn_path = vec![2];
+    let mut earlier = later.clone();
+    earlier.spawn_path = vec![1];
+    e.outcome = Outcome::Blocked(vec![later, earlier]);
+    let ordered = e.observable(&sources).unwrap().blocked.unwrap();
+    assert_eq!(
+        ordered
+            .iter()
+            .map(|w| w.spawn_path.clone())
+            .collect::<Vec<_>>(),
+        [vec![1], vec![2]]
+    );
 }

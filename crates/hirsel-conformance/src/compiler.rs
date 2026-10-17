@@ -220,6 +220,15 @@ fn evaluate_on_compiler_thread(
     };
     observation.actual = format!("{outcome:?}; stdout {:?}", String::from_utf8_lossy(stdout));
     let status = match (expect, execution.observation.as_ref()) {
+        (Expect::Blocked { stdout: expected }, Some(actual))
+            if matches!(outcome, RunOutcome::Blocked(_))
+                && actual.blocked.is_some()
+                && actual.exit_code.is_none()
+                && actual.failures.is_empty()
+                && expected.as_bytes() == actual.output =>
+        {
+            Status::Pass
+        }
         (
             Expect::Run {
                 stdout: expected,

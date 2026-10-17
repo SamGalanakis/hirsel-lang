@@ -379,7 +379,14 @@ pub fn run_path_on_host(
         Outcome::ToolingLimit(l) => RunOutcome::ToolingLimit(l),
         Outcome::UndefinedBehavior(u) => RunOutcome::UndefinedBehavior(u),
         Outcome::Trapped(t) => RunOutcome::Trapped(t),
-        Outcome::Blocked(_) => RunOutcome::Blocked(vec![]),
+        Outcome::Blocked(_) => RunOutcome::Blocked(
+            execution
+                .observable(&sources)
+                .and_then(|o| o.blocked)
+                .ok_or_else(|| {
+                    ToolError::Runtime("Blocked observation has no stable source sites".into())
+                })?,
+        ),
     })
 }
 pub(crate) fn admission_time() -> Result<i64, ToolError> {

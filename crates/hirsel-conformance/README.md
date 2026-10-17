@@ -380,3 +380,7 @@ Runtime failure token identities are resolved in the selected definition's
 source snapshot, including dependency sources. JSON's `primary_external` marks
 a site outside the case file; formatting that case leaves its dependency line
 expectation unchanged.
+
+`// expect: blocked` requires a CONC-8 Blocked observation with no language failure
+or exit. Its stdout directives match the complete captured output prefix exactly,
+including an empty prefix. Ordinary and checked interpretation must agree.

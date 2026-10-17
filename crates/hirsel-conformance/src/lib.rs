@@ -89,6 +89,9 @@ pub fn spec_rules(root: &Path) -> Result<Rules, String> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expect {
     Accept,
+    Blocked {
+        stdout: String,
+    },
     Reject {
         rule: RuleId,
         line: usize,
@@ -174,6 +177,9 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                     let words: Vec<_> = value_trimmed.split_whitespace().collect();
                     expect = Some(match words.as_slice() {
                         ["accept"] => Expect::Accept,
+                        ["blocked"] => Expect::Blocked {
+                            stdout: String::new(),
+                        },
                         ["run"] => Expect::Run {
                             stdout: String::new(),
                             exit: 0,
@@ -220,8 +226,11 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                     entry = Some(value_trimmed.to_string());
                 }
                 "stdout" => {
-                    if !matches!(expect, Some(Expect::Run { .. } | Expect::Fail { .. })) {
-                        return Err("stdout must follow expect: run or fail".into());
+                    if !matches!(
+                        expect,
+                        Some(Expect::Run { .. } | Expect::Fail { .. } | Expect::Blocked { .. })
+                    ) {
+                        return Err("stdout must follow expect: run, fail or blocked".into());
                     }
                     saw_stdout = true;
                     stdout.push_str(value.strip_prefix(' ').unwrap_or(value));
@@ -268,6 +277,8 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         {
             *output = stdout;
             *code = exit.unwrap_or(0);
+        } else if let Expect::Blocked { stdout: output } = &mut expect {
+            *output = stdout;
         } else if let Expect::Fail { stdout: output, .. } = &mut expect {
             *output = saw_stdout.then_some(stdout);
         } else if saw_stdout || exit.is_some() {
@@ -380,6 +391,11 @@ pub fn classify(driver: &(impl Driver + ?Sized), path: &Path, expect: &Expect) -
         Err(NotImplemented) => return Status::NotImplemented,
     };
     match (expect, &outcome) {
+        (Expect::Blocked { stdout: expected }, RunOutcome::Blocked(_))
+            if expected.as_bytes() == stdout =>
+        {
+            Status::Pass
+        }
         (
             Expect::Run {
                 stdout: expected,

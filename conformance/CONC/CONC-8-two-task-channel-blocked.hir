@@ -1,0 +1,44 @@
+// rule: CONC-8
+// expect: blocked
+// stdout: waiting
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "destroyed\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let guard = Trace(stdout: stdout)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (ta, ra): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let (tb, rb): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let a = task.async(
+        s,
+        fn() {
+          let mut tx = take tb
+          let mut rx = take ra
+          let _ = channel.receive(tasks, mut rx)
+          let _ = channel.send(tasks, mut tx, 1u8)
+        }
+      )
+      let b = task.async(
+        s,
+        fn() {
+          let mut tx = take ta
+          let mut rx = take rb
+          let _ = channel.receive(tasks, mut rx)
+          let _ = channel.send(tasks, mut tx, 1u8)
+        }
+      )
+      let _ = out.print(stdout, "waiting\n")
+      task.await(s, take a)
+      task.await(s, take b)
+    }
+  )
+  Ok(())
+}
