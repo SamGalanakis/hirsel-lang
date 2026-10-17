@@ -843,3 +843,7 @@ writes and `mut` calls renew that collection through ordinary alias detachment,
 while the item's fresh value identity still types position-returning calls.
 The existing mutable-container PROV controls and mutable-item call twins cover
 both assignment and call mutation without weakening their expected diagnostics.
+
+Diagnostic origin names recover a fresh initializer's declaring let when it has
+one. Descriptive owner names keep their prose classification when embedded in
+`of`/`in` qualifiers, so internal rendering markers never become source spelling.

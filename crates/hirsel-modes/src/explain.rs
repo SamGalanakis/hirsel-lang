@@ -22,10 +22,27 @@ pub(crate) enum Qualifier<'a> {
 pub(crate) fn qualifier(q: Qualifier<'_>) -> String {
     match q {
         Qualifier::In([]) => "in env".into(),
-        Qualifier::In([place]) => format!("in {place}"),
-        Qualifier::In(places) => format!("in {{{}}}", places.join(", ")),
+        Qualifier::In([place]) => qualified_name("in", place),
+        Qualifier::In(places) => {
+            let descriptive = places.iter().any(|p| p.starts_with(PROSE));
+            let text = format!(
+                "in {{{}}}",
+                places
+                    .iter()
+                    .map(|p| p.trim_start_matches(PROSE))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if descriptive { prose(&text) } else { text }
+        }
         Qualifier::Heap => "in heap".into(),
-        Qualifier::Brand(owner) => format!("of {owner}"),
+        Qualifier::Brand(owner) => qualified_name("of", owner),
+    }
+}
+fn qualified_name(prefix: &str, name: &str) -> String {
+    match name.strip_prefix(PROSE) {
+        Some(description) => prose(&format!("{prefix} {description}")),
+        None => format!("{prefix} {name}"),
     }
 }
 
@@ -1333,6 +1350,23 @@ mod tests {
         assert_eq!(qualifier(Qualifier::In(&["a"])), "in a");
         assert_eq!(qualifier(Qualifier::Brand("s")), "of s");
         assert_eq!(qualifier(Qualifier::Heap), "in heap");
+    }
+    #[test]
+    fn descriptive_qualifiers_keep_prose_out_of_source_spelling() {
+        let temporary = prose("a temporary");
+        for (qualifier, expected) in [
+            (Qualifier::Brand(&temporary), "requires of a temporary"),
+            (Qualifier::In(&[&temporary]), "requires in a temporary"),
+            (
+                Qualifier::In(&["arena", &temporary]),
+                "requires in {arena, a temporary}",
+            ),
+        ] {
+            assert_eq!(
+                fill("requires `{0}`", &[super::qualifier(qualifier)]),
+                expected
+            );
+        }
     }
     #[test]
     fn different_provided_creation_sites_and_definitions_never_share_a_key() {

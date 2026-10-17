@@ -124,3 +124,17 @@ fn concurrency_boundaries_name_both_causes_and_keep_their_twins() {
 fn constructed_record_placed_by_its_part() {
     insta::assert_snapshot!(rendered("PROV/PROV-4-constructed-part-relation-bad.hir"));
 }
+
+#[test]
+fn for_item_brand_diagnostic_names_the_declared_owner_without_internal_markers() {
+    hirsel_engine::with_compiler_stack(|| {
+        let text = rendered("PROV/PROV-1-for-item-find-reject.hir");
+        assert!(!text.contains('\u{1}'), "{text}");
+        assert!(text.contains("of other"), "{text}");
+        let output = hirsel_driver::check_path(Path::new(
+            "../../conformance/PROV/PROV-1-for-item-find-run.hir",
+        ))
+        .unwrap();
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    });
+}

@@ -161,11 +161,31 @@ impl Checker<'_> {
                 }
                 None => (crate::explain::prose("a local"), None),
             },
-            OriginRoot::Expression(e) => (
-                self.spelled(*e)
-                    .unwrap_or_else(|| crate::explain::prose("a temporary")),
-                Some(self.span(*e)),
-            ),
+            OriginRoot::Expression(e) => {
+                // Fresh value identities are rooted at their initializer, even
+                // after a let names the value. Recover that declared owner for
+                // diagnostics instead of calling its literal/call a temporary.
+                let binding = self.tree.statements.iter().find_map(|s| match s.kind {
+                    StmtKind::Let { pattern, value, .. } if value == *e => self
+                        .out
+                        .body
+                        .bindings
+                        .iter()
+                        .find(|b| b.site == NameSite::Pattern(pattern)),
+                    _ => None,
+                });
+                match binding {
+                    Some(binding) => {
+                        let (name, site) = sites.binding(binding);
+                        (name, Some(site))
+                    }
+                    None => (
+                        self.spelled(*e)
+                            .unwrap_or_else(|| crate::explain::prose("a temporary")),
+                        Some(self.span(*e)),
+                    ),
+                }
+            }
             OriginRoot::Definition(path) => (path.0.name.clone(), None),
             OriginRoot::Sibling(_) => (crate::explain::prose("a sibling field"), None),
         };
