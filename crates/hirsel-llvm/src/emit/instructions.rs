@@ -476,6 +476,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             } => {
                 let site = self.construct_site(construct)?;
                 let ty = self.value_type(value)?;
+                if !deep
+                    && !matches!(
+                        site.placement,
+                        Some(Placement::Fixed(StorageOwner::Heap(_)))
+                    )
+                {
+                    return self.unsupported("a shallow detach outside the heap");
+                }
                 let destination = match site.placement {
                     Some(Placement::Fixed(StorageOwner::Heap(_))) => {
                         self.module.const_zero(self.module.ptr_type())

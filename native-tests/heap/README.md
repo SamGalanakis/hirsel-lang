@@ -20,3 +20,8 @@ these files, decodes the files and runs the decoded programs. Regenerate with
 | borrowed-store | a borrowed parameter is stored into a new block without a credit | BorrowedStore |
 | region-escape | a heap block keeps a reference into a region past its exit | RegionEscape |
 | view-after-detach | a view of `p.a` is used after a sibling write detached `p` | ViewDetached |
+
+The moved String/Bytes variant source regression lives in
+[MEM-1-moved-variant-payload-run.hir](../../conformance/MEM/MEM-1-moved-variant-payload-run.hir).
+It is compiled fresh by conformance and the native matrix; the hand-built
+partial-move controls remain in `hirsel-heapcheck/tests/it/moved_variant.rs`.

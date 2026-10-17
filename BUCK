@@ -1487,10 +1487,7 @@ hirsel_test(
     srcs = glob([
         "crates/hirsel-heapcheck/tests/it/**",
         "crates/hirsel-heapcheck/tests/fixtures/**",
-    ]) + [
-        "native-tests/heap/moved-variant-payload.rc.lir",
-        "native-tests/heap/moved-variant-payload.ready.lir",
-    ],
+    ]),
     features = [],
     manifest_dir = "crates/hirsel-heapcheck",
     package_name = "hirsel-heapcheck",

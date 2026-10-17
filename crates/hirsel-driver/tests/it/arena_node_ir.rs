@@ -117,10 +117,10 @@ fn check_tests_each_tag_once() {
 }
 
 /// The arena token reaches each recursive `tree` call by value, as the callee's own
-/// parameter word, never through a caller stack slot; and no construction tests it for the
-/// heap, since C admits no null `Arena` value.
+/// parameter word, never through a caller stack slot. Construction tests the
+/// distinguished heap token before accessing the arena record.
 #[test]
-fn arena_token_is_a_word_without_a_heap_test() {
+fn arena_token_is_a_word_with_a_heap_test() {
     for ir in function_ir("4tree") {
         let define = ir.lines().next().expect("the define line");
         let (_, parameters) = define.split_once('(').expect("the parameter list");
@@ -140,8 +140,8 @@ fn arena_token_is_a_word_without_a_heap_test() {
                 "{call}\n{ir}"
             );
         }
-        assert!(!ir.contains("icmp eq ptr"), "{ir}");
-        assert!(!ir.contains("@hirsel_rt_v2_alloc("), "{ir}");
+        assert!(ir.contains(&format!("icmp eq ptr {token}, null")), "{ir}");
+        assert!(ir.contains("@hirsel_rt_v2_alloc("), "{ir}");
     }
 }
 

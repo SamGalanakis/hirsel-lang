@@ -280,7 +280,17 @@ fn proved_arena_children_emit_neither_count_loads_nor_scheduling() {
                 !elided,
                 "{ir}"
             );
-            assert_eq!(ir.contains("load i32, ptr"), !elided, "{ir}");
+            // Heap-token branches also load the allocator's slab live count.
+            // A holder read is identified by its immortal-count comparison.
+            let holder_load = ir
+                .lines()
+                .filter_map(|line| {
+                    line.trim()
+                        .split_once(" = load i32, ptr")
+                        .map(|(value, _)| value)
+                })
+                .any(|value| ir.contains(&format!("icmp ne i32 {value}, -1")));
+            assert_eq!(holder_load, !elided, "{ir}");
             emit_object(&p.units(), &inputs).unwrap();
         }
     }

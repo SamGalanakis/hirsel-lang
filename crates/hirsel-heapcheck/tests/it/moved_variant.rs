@@ -4,43 +4,10 @@ use crate::fixtures;
 
 use fixtures::*;
 use hirsel_heapcheck::build::{CLEANUP, Layouts, path};
-use hirsel_heapcheck::{Config, NoOperations, Observed, Program, ViolationKind};
+use hirsel_heapcheck::{Config, Program, ViolationKind};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::TargetSpec;
-use hirsel_lir::stage::{Rc, Ready, Stage};
-
-fn source_repro<S: Stage>(snapshot: &str) {
-    let program: Program<S> = hirsel_codec::from_text(snapshot).unwrap();
-    let entry = program
-        .units
-        .iter()
-        .find(|u| u.header.definition.0.name == "main")
-        .unwrap()
-        .header
-        .definition
-        .clone();
-    let result = run(&program, &entry, &[], &mut NoOperations, &Config::default());
-    let audit = result.result.unwrap_or_else(|v| panic!("{v}"));
-    assert!(audit.observation.failures.is_empty());
-    assert!(matches!(
-        audit.observation.returned,
-        Some(Observed::Integer { bits: 1, .. })
-    ));
-}
-
-#[test]
-fn result_string_and_bytes_payloads_pass_at_rc() {
-    source_repro::<Rc>(include_str!(
-        "../../../../native-tests/heap/moved-variant-payload.rc.lir"
-    ));
-}
-
-#[test]
-fn result_string_and_bytes_payloads_pass_at_ready() {
-    source_repro::<Ready>(include_str!(
-        "../../../../native-tests/heap/moved-variant-payload.ready.lir"
-    ));
-}
+use hirsel_lir::stage::Rc;
 
 /// Retain one owning sibling to prove Drop skips only the moved field. Vary
 /// active ordinals and niche tags; a whole read still retains the moved bytes
