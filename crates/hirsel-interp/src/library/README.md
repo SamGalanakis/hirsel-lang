@@ -52,8 +52,13 @@ Task scopes, cooperative children, joins, cancellation and isolation execute thr
 `tasks.rs` and the evaluator scheduler. `channels.rs` owns moved FIFO buffers,
 independent duplicated sender endpoints and suspended mutable receiver loans.
 Dropping the last receiver schedules buffered finalizers through the evaluator.
-Mutexes, atomics, Shared and arena/region operations report Error::Unavailable
-until their runtime slice. Property traversal and test helpers execute ordinary
+`synchronization.rs` runs mutex bodies synchronously, publishes mutable payload
+updates on every exit, kills failed mutexes with their original cause, and stores
+sequentially consistent scalar atomics. A payload with observable destruction makes
+its mutex noncopyable through the recursive Copyable bound; its single owner drops
+the payload through the evaluator. Copyable payload snapshots may remain in the
+library until the run ends, as with the reference model's other allocation costs.
+Shared, bounded arenas, regions and slots still report Error::Unavailable. Property traversal and test helpers execute ordinary
 std@1 source; core Test check_case reports its recorded seed and the supplied
 case index. Core test.fail records LANG-9 and only fails; std expect_error
 transfers the Error payload and destroys an Ok value before test.fail. Pull iterators own state/callbacks and lazily apply adapters;

@@ -478,3 +478,8 @@ Mutex payloads need a separately owned context entered only for their synchronou
 callback. Native cleanup must finish before publishing task completion, and an
 isolate must save/restore the acquiring context's failure chain. Until those ABI
 and lowering changes exist, native concurrency remains explicitly unavailable.
+
+`Operations::callback_finished` receives mutable callback snapshots on return,
+failure and tooling abandonment before the continuation resumes. Runtime-managed
+owners such as mutexes use it to retain the final payload without rollback;
+abandoned payloads return to the evaluator's explicit cleanup worklist.

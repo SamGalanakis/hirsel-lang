@@ -1120,3 +1120,101 @@ fn configured_projection_denial_records_not_granted_without_a_handle() {
         }
     }
 }
+
+// Safe source cannot retain a non-sendable mutex across isolate (#22). Exercise
+// the runtime boundary directly to inspect dead-state ownership and causes.
+#[test]
+fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
+    let mut h = Harness::new(Default::default());
+    let io = h.root("Io");
+    let tasks = h.project(&io, "tasks");
+    let mutex = h.value("mutex.create", vec![tasks.clone(), u32_value(1)]);
+    let body = Value::Closure {
+        invoked: Default::default(),
+        definition: support::path("body"),
+        body: BodyId(0),
+        captures: vec![],
+        owned_captures: vec![],
+        sizes: Default::default(),
+    };
+    let OperationResult::Call { continuation, .. } = h.call(
+        "mutex.with",
+        vec![tasks.clone(), mutex.clone(), body.clone()],
+        TypeKind::Tuple(vec![].into()),
+    ) else {
+        panic!("mutex acquisition must call its body");
+    };
+    assert!(
+        h.library
+            .callback_finished(continuation, &[(0, u32_value(7))], false)
+            .unwrap()
+            .is_empty()
+    );
+    let anchor = hirsel_interp::observation::Anchor {
+        definition: support::path("body"),
+        body: BodyId(0),
+        cleanup: None,
+        site: support::site(7),
+    };
+    let original = hirsel_interp::observation::FailureRecord {
+        failure: hirsel_interp::Failure {
+            rule: hirsel_diag::RuleId::of("SEM-1"),
+            line: 7,
+            site: support::site(7),
+            kind: "Overflow".into(),
+        },
+        anchor: anchor.clone(),
+        cause: None,
+        spawn_path: vec![],
+    };
+    let mut context = OperationContext {
+        trace_mode: Default::default(),
+        anchor: Some(&anchor),
+        configuration: &h.run,
+        sources: &h.sources,
+        stdout: &mut h.stdout,
+        trace: &mut h.trace,
+    };
+    let OperationResult::FailureChain { failures, released } = h
+        .library
+        .resume(
+            continuation,
+            OperationResult::FailureChain {
+                failures: vec![original.clone()],
+                released: vec![],
+            },
+            &mut context,
+        )
+        .unwrap()
+    else {
+        panic!("mutex failure must propagate");
+    };
+    assert_eq!(failures, vec![original.clone()]);
+    assert_eq!(released, vec![u32_value(7)]);
+    let path = hirsel_syntax::DefPath::core("mutex.with");
+    let result_type = h.types.push(ty(TypeKind::Tuple(vec![].into())));
+    let OperationResult::FailureChain { failures, released } = h
+        .library
+        .call(
+            OperationCall {
+                path: &path,
+                generics: &[],
+                arguments: &[tasks, mutex, body],
+                result_type,
+                types: &h.types,
+                site: support::site(7),
+            },
+            &mut context,
+        )
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("dead mutex must fail without entering its body");
+    };
+    assert!(released.is_empty());
+    assert_eq!(failures.len(), 2);
+    assert_eq!(failures[0].failure.rule.as_str(), "FAIL-4");
+    assert_eq!(failures[0].failure.kind, "DeadMutex");
+    assert_eq!(failures[0].cause, Some(1));
+    assert_eq!(failures[1], original);
+}

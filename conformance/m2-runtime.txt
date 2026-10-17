@@ -1,9 +1,4 @@
 # path	required runtime behavior
-conformance/CONC/CONC-4-sequential-atomic-order.hir	tasks/synchronization
-conformance/CONC/CONC-5-inert-capture-and-update.hir	tasks/synchronization
-conformance/FAIL/FAIL-3-arena-scope-unwind.hir	tasks/synchronization, arena/region runtime
-conformance/FAIL/FAIL-4-mutex-body-failure.hir	tasks/synchronization
-conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir	tasks/synchronization
 conformance/MEM/MEM-11-shared-index-example.hir	Shared runtime
 conformance/MEM/MEM-11-thaw-last-root.hir	Shared runtime
 conformance/MEM/MEM-11-thaw-shared-root.hir	Shared runtime

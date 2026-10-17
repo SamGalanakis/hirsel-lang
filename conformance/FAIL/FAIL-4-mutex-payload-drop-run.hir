@@ -1,0 +1,17 @@
+// rule: FAIL-4
+// expect: run
+// stdout: released
+// Releasing a mutex also releases its owned noncopyable payload.
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "released\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let m = mutex.create(tasks, Trace(stdout: stdout))
+  Ok(())
+}

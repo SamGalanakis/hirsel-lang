@@ -186,6 +186,17 @@ pub struct TaskStart {
 /// already extracted with their explicit use modes. Returning Failed unwinds the
 /// call's cleanup; it must carry the defining operation's rule and source site.
 pub trait Operations {
+    /// Mutable callback state is delivered even when failure/tooling prevents a
+    /// success result. Returned owners join the evaluator's cleanup worklist.
+    fn callback_finished(
+        &mut self,
+        _token: u64,
+        _updates: &[(usize, Value)],
+        _abandoned: bool,
+    ) -> Result<Vec<Value>, Error> {
+        Ok(vec![])
+    }
+
     /// Owners displaced by a handle's runtime cleanup, in creation order.
     fn take_releases(&mut self) -> Vec<Value> {
         vec![]

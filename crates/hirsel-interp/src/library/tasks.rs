@@ -367,7 +367,7 @@ impl Library {
         }
     }
 }
-fn append_chain(primary: &mut Vec<FailureRecord>, mut chain: Vec<FailureRecord>) {
+pub(super) fn append_chain(primary: &mut Vec<FailureRecord>, mut chain: Vec<FailureRecord>) {
     let offset = primary.len();
     if let Some(last) = primary.last_mut() {
         last.cause = Some(offset);

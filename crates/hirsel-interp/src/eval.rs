@@ -1037,6 +1037,17 @@ fn execute_frames(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 writeback_callback(&mut callback, &updates)?;
+                let abandoned = matches!(ending, crate::resources::Ending::Failed)
+                    && execution.failures.get(callback.failure_start).is_none();
+                let released = operations.callback_finished(callback.token, &updates, abandoned)?;
+                let caller = frames.last_mut().unwrap();
+                for value in released.into_iter().rev() {
+                    caller.work.push_back(crate::resources::Work::Release(
+                        value,
+                        callback.state.anchor.clone(),
+                    ));
+                }
+
                 if let Some(check) = &finished.check {
                     if matches!(&ending, crate::resources::Ending::Return(_)) {
                         check

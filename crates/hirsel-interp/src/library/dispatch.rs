@@ -17,6 +17,7 @@ pub struct Library {
     pub simulation: Simulation,
     pub(super) tasks: super::tasks::Tasks,
     pub(super) channels: super::channels::Channels,
+    pub(super) synchronizers: super::synchronization::Synchronizers,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
 }
@@ -26,6 +27,7 @@ impl Library {
             simulation: Simulation::new(run, config)?,
             tasks: Default::default(),
             channels: Default::default(),
+            synchronizers: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
         })
@@ -667,6 +669,15 @@ impl Library {
     }
 }
 impl Operations for Library {
+    fn callback_finished(
+        &mut self,
+        token: u64,
+        updates: &[(usize, Value)],
+        abandoned: bool,
+    ) -> Result<Vec<Value>, Error> {
+        self.synchronization_writeback(token, updates, abandoned)
+    }
+
     fn take_releases(&mut self) -> Vec<Value> {
         std::mem::take(&mut self.channels.released)
     }
@@ -684,7 +695,7 @@ impl Operations for Library {
         std::mem::take(&mut self.tasks.yield_now)
     }
     fn handles_failure(&self, token: u64) -> bool {
-        self.tasks.pending.contains_key(&token)
+        self.tasks.pending.contains_key(&token) || self.synchronizers.pending.contains_key(&token)
     }
     fn poll(
         &mut self,
@@ -704,6 +715,9 @@ impl Operations for Library {
         result: OperationResult,
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
+        if self.synchronizers.pending.contains_key(&token) {
+            return self.resume_synchronization(token, result);
+        }
         if let Some(pending) = self.tasks.pending.remove(&token) {
             self.resume_task(pending, result, context)
         } else {
@@ -716,6 +730,11 @@ impl Operations for Library {
         id: u64,
         context: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
+        if kind == "Mutex" {
+            let released = self.drop_mutex(id);
+            self.channels.released.extend(released);
+            return Ok(());
+        }
         if matches!(kind, "Sender" | "Receiver") {
             self.channels.close(kind, id)?;
             return Ok(());
@@ -843,7 +862,8 @@ primary_operations! { self, call, context, name, a, value;
             },
     Capability: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
     Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { return self.channel_call(name, &call, context).map(Some); },
-    Unavailable: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" | "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Capability: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" => { return self.synchronization_call(name, &call, context).map(Some); },
+    Unavailable: "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" => {
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
         let result = self.simulation.net_call(name, &call, context).map(Some);
