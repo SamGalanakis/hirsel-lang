@@ -384,8 +384,8 @@ fn every_runtime_primitive_row_matches_its_export() {
             }
         }
         assert_eq!(
-            primitives, 57,
-            "Io, Test, text, scalar/position cursors and network streams"
+            primitives, 60,
+            "Io, Args, Test, text, scalar/position cursors, network streams and listeners"
         );
         // Calls of each, with each float family, on both targets.
         let calls = checked(

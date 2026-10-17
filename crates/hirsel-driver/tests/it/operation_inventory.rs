@@ -87,18 +87,8 @@ fn network_operations_publish_their_current_engine_dispositions() {
         CallOwnership, CleanupEffect, Disposition, OperationId, OperationRow, ParameterOwnership,
         Passing, Unavailable,
     };
-    use hirsel_interp::{Error, OperationCall, OperationContext, Operations};
     let registry = BuiltinRegistry::new();
     let records = registry.operation_inventory();
-    let run = hirsel_tir::RunConfiguration {
-        entry: hirsel_syntax::DefPath::core("test.net"),
-        hash_seed: 0,
-        inputs: vec![],
-    };
-    let sources = hirsel_span::SourceMap::default();
-    let mut library = hirsel_interp::library::Library::new(&run, Default::default()).unwrap();
-    let mut stdout = vec![];
-    let mut trace = vec![];
     let names = [
         "net.narrow",
         "net.resolve",
@@ -127,13 +117,7 @@ fn network_operations_publish_their_current_engine_dispositions() {
             .unwrap();
         assert_eq!(
             record.reference,
-            Some(
-                if matches!(name, "net.listen" | "net.accept" | "net.local_addr") {
-                    OperationDisposition::Unavailable
-                } else {
-                    OperationDisposition::Capability
-                }
-            ),
+            Some(OperationDisposition::Capability),
             "{name}"
         );
         let mut row = OperationRow::unclassified(OperationId {
@@ -165,9 +149,7 @@ fn network_operations_publish_their_current_engine_dispositions() {
             result_cleanup: CleanupEffect::NoAlloc,
         });
         let native = hirsel_rt::operations::classify(row).unwrap();
-        // Native entries land per ticket: T2's stream exports are
-        // runtime primitives and read_into a compiled body over its fixed entry; the rest
-        // stay explicitly unavailable until their tickets.
+        // Fixed network entries are runtime primitives; read_into is a compiled body.
         assert_eq!(
             native.dispositions.native,
             if name == "test.net" || hirsel_rt::operations::NET_EXPORTS.contains(&name) {
@@ -179,35 +161,5 @@ fn network_operations_publish_their_current_engine_dispositions() {
             },
             "{name}"
         );
-        let SignatureKind::Function(function) = &record.declaration.kind else {
-            panic!("{name}")
-        };
-        if !matches!(name, "net.listen" | "net.accept" | "net.local_addr") {
-            continue;
-        }
-        // M2 unavailability precedes argument access or any simulated effect.
-        let result = library.call(
-            OperationCall {
-                path: &record.key.definition,
-                generics: &[],
-                arguments: &[],
-                result_type: function.result,
-                types: &record.declaration.types,
-                site: hirsel_span::Span::default(),
-            },
-            &mut OperationContext {
-                trace_mode: Default::default(),
-                anchor: None,
-                configuration: &run,
-                sources: &sources,
-                stdout: &mut stdout,
-                trace: &mut trace,
-            },
-        );
-        assert!(
-            matches!(result, Err(Error::Unavailable(_))),
-            "{name}: {result:?}"
-        );
     }
-    assert!(stdout.is_empty() && trace.is_empty());
 }

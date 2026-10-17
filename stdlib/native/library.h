@@ -89,6 +89,7 @@ typedef struct { uint32_t tag, padding; uint64_t value, rest; } hirsel_rt_v2_net
 typedef struct { uint32_t tag; hirsel_rt_v2_net_error error; } hirsel_rt_v2_net_unit_result;
 typedef struct { uint32_t ip_tag; uint8_t octets[16]; uint16_t port, padding; } hirsel_rt_v2_socket_addr;
 typedef struct { uint32_t tag; hirsel_rt_v2_socket_addr value; } hirsel_rt_v2_net_addr_result;
+typedef struct { uint32_t tag, padding; uint64_t stream; hirsel_rt_v2_socket_addr address; } hirsel_rt_v2_net_accepted_result;
 typedef struct { uint32_t tag, padding; uint64_t nanos; } hirsel_rt_v2_net_timeout;
 uint8_t hirsel_rt_v2_net_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_net_resolve(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint16_t);
@@ -101,6 +102,9 @@ uint8_t hirsel_rt_v2_net_write_all(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_un
 uint8_t hirsel_rt_v2_net_shutdown(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_result*, const uint64_t*, uint64_t*, const uint32_t*);
 uint8_t hirsel_rt_v2_net_set_read_timeout(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_result*, const uint64_t*, uint64_t*, const hirsel_rt_v2_net_timeout*);
 uint8_t hirsel_rt_v2_net_set_write_timeout(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_result*, const uint64_t*, uint64_t*, const hirsel_rt_v2_net_timeout*);
+uint8_t hirsel_rt_v2_net_listen(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, const hirsel_rt_v2_socket_addr*);
+uint8_t hirsel_rt_v2_net_local_addr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_addr_result*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_net_accept(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_accepted_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_net_peer_addr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_addr_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_net_close(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
 /* TLS roots use the ordinary WebPki/Pem sum; only the active Pem slice is read. */
