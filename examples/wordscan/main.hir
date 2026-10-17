@@ -1,0 +1,39 @@
+// Count lines/words/UTF-8 bytes and print lines containing an optional needle.
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(rt, args, "red sheep\nblue sheep\nred fox\n")?
+  let needle = match arg.path(args, 1) {
+    Ok(p) => path.text(p),
+    Error(_) => "red",
+  }
+  let mut lines: u64 = 0
+  let mut words: u64 = 0
+  let mut in_word: bool = false
+  for c in string.scalars(text) {
+    if c == 10u32 {
+      lines += 1
+    }
+    let space = c == 32u32 || c >= 9u32 && c <= 13u32
+    if !space && !in_word {
+      words += 1
+    }
+    in_word = !space
+  }
+  let mut builder: List[u8] = []
+  std@1/text.append(mut builder, "lines=")
+  std@1/u64.format_into(lines, mut builder)
+  std@1/text.append(mut builder, " words=")
+  std@1/u64.format_into(words, mut builder)
+  std@1/text.append(mut builder, " bytes=")
+  std@1/u64.format_into(string.byte_len(text), mut builder)
+  std@1/text.append(mut builder, "\n")
+  for line in std@1/string.split(copy text, "\n") {
+    match std@1/string.find(line, needle) {
+      Some(_) => {
+        std@1/text.append(mut builder, line)
+        std@1/text.append(mut builder, "\n")
+      },
+      None() => (),
+    }
+  }
+  common.print(rt, common.finish(take builder)?)
+}

@@ -1,0 +1,12 @@
+{
+  "grants": [
+    "Io",
+    "Args"
+  ],
+  "projections": [
+    "stdout",
+    "dir"
+  ],
+  "args": [],
+  "files": {}
+}

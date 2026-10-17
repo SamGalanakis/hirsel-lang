@@ -83,7 +83,14 @@ impl Checker<'_, '_> {
             self.report(
                 const { RuleId::of("LANG-2") },
                 span,
-                "literal needs an expected type or numeric suffix",
+                match l {
+                    ast::Literal::Integer(_) | ast::Literal::Float(_) => {
+                        "literal needs an expected type or numeric suffix"
+                    }
+                    ast::Literal::Bool(_) => "boolean literal needs an expected bool type",
+                    ast::Literal::String(_) => "string literal needs an expected String type",
+                    ast::Literal::Bytes(_) => "byte string literal needs an expected Bytes type",
+                },
             );
             return self.error();
         };

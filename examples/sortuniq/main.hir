@@ -1,0 +1,30 @@
+@noalloc
+fn compare(a: String, b: String) -> i32 uses {} {
+  let aa = string.as_bytes(a)
+  let bb = string.as_bytes(b)
+  let mut i: u64 = 0
+  while i < bytes.len(aa) && i < bytes.len(bb) {
+    if aa[i] < bb[i] {
+      return -1
+    }
+    if aa[i] > bb[i] {
+      return 1
+    }
+    i += 1
+  }
+  if bytes.len(aa) < bytes.len(bb) {
+    -1
+  } else if bytes.len(aa) > bytes.len(bb) {
+    1
+  } else {
+    0
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(rt, args, "pear\napple\npear\nbanana\napple")?
+  let mut lines = unique std@1/string.split(take text, "\n")
+  std@1/list.sort(mut lines, compare)
+  let unique_lines = std@1/list.dedup(take lines)
+  common.print(rt, std@1/string.concat(std@1/string.join(unique_lines, "\n"), "\n"))
+}

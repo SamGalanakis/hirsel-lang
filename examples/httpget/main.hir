@@ -1,0 +1,18 @@
+// One-shot HTTP GET; authority is supplied by the launch's exact Net rules.
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let url = path.text(arg.path(args, 0) ? Arguments)
+  let net = io.net(rt) ? Grant
+  let response = match std@1/http.fetch(
+    net,
+    std@1/http.default_config(),
+    Get(),
+    url,
+    [],
+    None()
+  ) {
+    Ok(response) => take response,
+    Error(_) => return Error(Invalid()),
+  }
+  let text = string.from_bytes(copy response.body) ? Utf8
+  common.print(rt, text)
+}

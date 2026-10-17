@@ -1,0 +1,40 @@
+type Room = Meadow | Cave | Home
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let commands = common.input(rt, args, "look\nnorth\ntake key\nsouth\neast\n")?
+  let mut room: Room = Meadow()
+  let mut key: bool = false
+  let mut builder: List[u8] = []
+  for raw in std@1/string.split(take commands, "\n") {
+    let command = std@1/string.trim(raw)
+    if string.byte_len(command) == 0 {
+      continue
+    }
+    let reply: String = match room {
+      Meadow() => if command == "north" {
+        room = Cave()
+        "A dark cave."
+      } else if command == "east" && key {
+        room = Home()
+        "Home. You win!"
+      } else if command == "east" {
+        "The gate is locked."
+      } else {
+        "Meadow: north is a cave, east a gate."
+      },
+      Cave() => if command == "take key" {
+        key = true
+        "Key collected."
+      } else if command == "south" {
+        room = Meadow()
+        "Back in the meadow."
+      } else {
+        "Cave: a key glints on the floor."
+      },
+      Home() => "The adventure is complete.",
+    }
+    std@1/text.append(mut builder, reply)
+    std@1/text.append(mut builder, "\n")
+  }
+  common.print(rt, common.finish(take builder)?)
+}

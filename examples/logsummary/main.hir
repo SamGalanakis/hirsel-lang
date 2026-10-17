@@ -1,0 +1,29 @@
+// Count severity tokens in insertion order; ignore blank lines.
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(
+    rt,
+    args,
+    "INFO boot\nWARN warm\nINFO ready\nERROR disk\nWARN retry\n"
+  )?
+  let mut counts: Map[String, u64] = map.empty()
+  for line in std@1/string.split(take text, "\n") {
+    let fields = std@1/string.split_ascii_whitespace(copy line)
+    if list.len(fields) == 0 {
+      continue
+    }
+    let level = std@1/string.ascii_upper(fields[0])
+    let count = match map.get(counts, level) {
+      Some(n) => n,
+      None() => 0u64,
+    }
+    map.insert(mut counts, level, count + 1)
+  }
+  let mut builder: List[u8] = []
+  for (level, count) in counts {
+    std@1/text.append(mut builder, level)
+    std@1/text.append(mut builder, " ")
+    std@1/u64.format_into(count, mut builder)
+    std@1/text.append(mut builder, "\n")
+  }
+  common.print(rt, common.finish(take builder)?)
+}

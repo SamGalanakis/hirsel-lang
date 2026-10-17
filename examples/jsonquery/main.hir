@@ -1,0 +1,35 @@
+// Inspect a boxed node through patterns while keeping its borrowed provenance.
+fn value_view(item: box std@1/json.Value) -> std@1/json.Value in item {
+  match item {
+    Null() => Null(),
+    Bool(b) => Bool(b),
+    Number(n) => Number(copy n),
+    Text(s) => Text(copy s),
+    Array(xs) => Array(copy xs),
+    Object(fields) => Object(copy fields),
+  }
+}
+
+// Query a top-level object member, preserving JSON number spelling.
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(rt, args, "{\"flock\":[\"ewe\",\"lamb\"],\"count\":2}")?
+  let key = match arg.path(args, 1) {
+    Ok(p) => path.text(p),
+    Error(_) => "flock",
+  }
+  let value = match std@1/json.parse(take text) {
+    Ok(v) => take v,
+    Error(_) => return Error(Invalid()),
+  }
+  let output = match value {
+    Object(object) => match map.get(object, key) {
+      Some(item) => match std@1/json.stringify(value_view(item)) {
+        Ok(s) => copy s,
+        Error(_) => return Error(Invalid()),
+      },
+      None() => return Error(Invalid()),
+    },
+    _ => return Error(Invalid()),
+  }
+  common.print(rt, std@1/string.concat(output, "\n"))
+}

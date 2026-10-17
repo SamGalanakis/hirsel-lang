@@ -1,0 +1,92 @@
+// RFC-style quoted fields, doubled quotes, embedded newlines, and CRLF.
+fn rows(text: String) -> Result[List[List[String]], common.Error] {
+  let data = string.as_bytes(text)
+  let mut records: List[List[String]] = []
+  let mut row: List[String] = []
+  let mut field: List[u8] = []
+  let mut quoted: bool = false
+  let mut closed: bool = false
+  let mut i: u64 = 0
+  while i < bytes.len(data) {
+    let c = data[i]
+    if quoted {
+      if c == 34u8 {
+        if i + 1 < bytes.len(data) && data[i + 1] == 34u8 {
+          list.push(mut field, 34u8)
+          i += 1
+        } else {
+          quoted = false
+          closed = true
+        }
+      } else {
+        list.push(mut field, c)
+      }
+    } else if c == 34u8 && list.len(field) == 0 && !closed {
+      quoted = true
+    } else if c == 44u8 || c == 10u8 || c == 13u8 {
+      list.push(mut row, common.finish(take field)?)
+      field = []
+      closed = false
+      if c != 44u8 {
+        list.push(mut records, take row)
+        row = []
+        if c == 13u8 && i + 1 < bytes.len(data) && data[i + 1] == 10u8 {
+          i += 1
+        }
+      }
+    } else {
+      if closed || c == 34u8 {
+        return Error(Invalid())
+      }
+      list.push(mut field, c)
+    }
+    i += 1
+  }
+  if quoted {
+    return Error(Invalid())
+  }
+  if list.len(field) > 0 || list.len(row) > 0 || closed {
+    list.push(mut row, common.finish(take field)?)
+    list.push(mut records, take row)
+  }
+  Ok(take records)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(
+    rt,
+    args,
+    "name,note\nAda,\"hello, sheep\"\nLin,\"a \"\"quote\"\"\"\n"
+  )?
+  let records = rows(text)?
+  if list.len(records) == 0 {
+    return common.print(rt, "[]\n")
+  }
+  let headers = records[0]
+  let mut names: Map[String, bool] = map.empty()
+  for name in headers {
+    match map.get(names, name) {
+      Some(_) => return Error(Invalid()),
+      None() => (),
+    }
+    map.insert(mut names, name, true)
+  }
+  let mut converted: List[box std@1/json.Value] = []
+  for i in 1u64..list.len(records) {
+    let row = records[i]
+    if list.len(row) != list.len(headers) {
+      return Error(Invalid())
+    }
+    let mut object: Map[String, box std@1/json.Value] = map.empty()
+    for j in 0u64..list.len(headers) {
+      map.insert(mut object, headers[j], box Text(copy row[j]))
+    }
+    list.push(mut converted, box Object(take object))
+  }
+  let value: std@1/json.Value = Array(take converted)
+  let output = match std@1/json.stringify(value) {
+    Ok(s) => take s,
+    Error(_) => return Error(Invalid()),
+  }
+  common.print(rt, std@1/string.concat(output, "\n"))
+}

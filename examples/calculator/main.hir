@@ -1,0 +1,51 @@
+// A file-driven expression session: whitespace-separated i64 terms, left to right.
+fn evaluate(take line: String) -> Result[i64, common.Error] {
+  let tokens = std@1/string.split_ascii_whitespace(take line)
+  if list.len(tokens) % 2 == 0 {
+    return Error(Invalid())
+  }
+  let mut value = match std@1/i64.parse(tokens[0]) {
+    Ok(n) => n,
+    Error(_) => return Error(Invalid()),
+  }
+  let mut i: u64 = 1
+  while i < list.len(tokens) {
+    let rhs = match std@1/i64.parse(tokens[i + 1]) {
+      Ok(n) => n,
+      Error(_) => return Error(Invalid()),
+    }
+    let op = tokens[i]
+    if op == "+" {
+      value += rhs
+    } else if op == "-" {
+      value -= rhs
+    } else if op == "*" {
+      value *= rhs
+    } else if op == "/" {
+      if rhs == 0 || value == -9223372036854775808i64 && rhs == -1 {
+        return Error(Invalid())
+      }
+      value /= rhs
+    } else {
+      return Error(Invalid())
+    }
+    i += 2
+  }
+  Ok(value)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(rt, args, "12 + 7 * 2\n-9 / 2\n100 - 1\n")?
+  let mut builder: List[u8] = []
+  for line in std@1/string.split(take text, "\n") {
+    if string.byte_len(std@1/string.trim(line)) == 0 {
+      continue
+    }
+    match evaluate(copy line) {
+      Ok(n) => std@1/i64.format_into(n, mut builder),
+      Error(_) => std@1/text.append(mut builder, "error"),
+    }
+    std@1/text.append(mut builder, "\n")
+  }
+  common.print(rt, common.finish(take builder)?)
+}

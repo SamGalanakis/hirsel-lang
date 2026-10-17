@@ -1,0 +1,35 @@
+// A supplied path is read strictly; no arguments selects the documented demo.
+pub type Error = Arguments(ArgError) | Files(FileError) | Utf8(Bytes) | Grant(
+  GrantError
+) | Output(OutputError) | Invalid
+
+pub fn input(rt: Io, args: Args, take demo: String) -> Result[String, Error] {
+  let p = match arg.path(args, 0) {
+    Ok(p) => p,
+    Error(_) => return Ok(take demo),
+  }
+  let dir = io.dir(rt, path.of("")) ? Files
+  let data = file.read_bytes(dir, p) ? Files
+  Ok(string.from_bytes(copy data) ? Utf8)
+}
+
+pub fn print(rt: Io, text: String) -> Result[(), Error] {
+  out.print(io.stdout(rt) ? Grant, text) ? Output
+  Ok(())
+}
+
+pub fn slice(text: String, start: u64, end: u64) -> String {
+  let data = string.as_bytes(text)
+  let mut builder: List[u8] = []
+  for i in start..end {
+    list.push(mut builder, data[i])
+  }
+  match std@1/text.finish(take builder) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+}
+
+pub fn finish(take builder: List[u8]) -> Result[String, Error] {
+  Ok(std@1/text.finish(take builder) ? Utf8)
+}
