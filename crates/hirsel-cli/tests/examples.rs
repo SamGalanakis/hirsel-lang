@@ -102,8 +102,7 @@ impl Fixture {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    // The existing native launch boundary accepts explicit Args/root/Net fixture
-    // inputs. Use it for supplied files until CLI run records are wired.
+    // Exercise explicit Args/root/Net through the native fixture boundary.
     fn native_executable(&self) -> PathBuf {
         hirsel_engine::with_compiler_stack(|| {
             use hirsel_driver::native::{
@@ -451,6 +450,33 @@ fn wordscan_utf8_and_ascii_controls() {
     let expected = "lines=1 words=3 bytes=11\nred\n";
     fixture.run(false, Some(input(data, &[])), expected, 0);
     fixture.native_files(&["input.txt"], &[("input.txt", data)], expected);
+    // Exercise the documented production launch as well as the fixture path.
+    std::fs::write(fixture.0.join("input.txt"), data).unwrap();
+    let grants = fixture.0.join("grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"","host":fixture.0,"access":"read"}]},"args":["input.txt"]}).to_string(),
+    ).unwrap();
+    for native in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.arg("run");
+        if native {
+            command.arg("--native");
+        }
+        let output = command
+            .arg(fixture.0.join("hirsel.json"))
+            .arg("--grants")
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, expected.as_bytes());
+        assert!(output.stderr.is_empty());
+    }
 }
 
 #[test]

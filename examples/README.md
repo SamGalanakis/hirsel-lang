@@ -55,4 +55,5 @@ through both CLI backends and additional supplied-file cases, including a
 4,096-line sort input. These examples deliberately use only documented core and
 `std@1` APIs. The HTTP test uses the existing driver simulation and native launch
 fixtures, including an actual local TCP server. File-input native tests also use
-that explicit fixture boundary; the commands above exercise production run records.
+that explicit fixture boundary; wordscan also checks both production CLI engines
+with real host file grants. The commands above exercise bound run records.
