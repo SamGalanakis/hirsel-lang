@@ -180,15 +180,9 @@ impl<'a> Cx<'a> {
 
     /// The layout of a primitive type.
     pub fn primitive(&mut self, primitive: Primitive) -> R<LayoutId> {
-        let ty = self.store.push(Type {
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: hirsel_types::DropAllocation::NoAlloc,
-            kind: TypeKind::Primitive(primitive),
-            modes: hirsel_types::Modes::global(),
-            erased_captures: None,
-            brand: Default::default(),
-        });
+        let ty = self
+            .store
+            .push(Type::with_kind(TypeKind::Primitive(primitive)));
         self.layout(ty)
     }
 

@@ -4,18 +4,10 @@ use hirsel_engine::*;
 use hirsel_interp::Value;
 use hirsel_span::Span;
 use hirsel_tir::{Constant, Constructor, ValueKind};
-use hirsel_types::{Brand, DropAllocation, Modes, Primitive, Type};
 use hirsel_types::{GenericArgument, TypeKind, TypeStore};
+use hirsel_types::{Primitive, Type};
 fn ty(kind: TypeKind) -> Type {
-    Type {
-        kind,
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::NoAlloc,
-    }
+    Type::with_kind(kind)
 }
 #[test]
 fn nominal_reification_uses_declared_generic_fields_and_preserves_identity() {

@@ -1307,15 +1307,7 @@ mod flat_tests {
     use super::*;
     use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
     fn row(kind: TypeKind) -> Type {
-        Type {
-            kind,
-            modes: Modes::global(),
-            sendability_requirement: crate::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
-        }
+        Type::with_kind(kind)
     }
     #[test]
     fn shared_handle_canonicalization_preserves_other_contracts() {

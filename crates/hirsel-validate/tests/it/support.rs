@@ -18,15 +18,7 @@ pub(crate) fn path(name: &str) -> DefPath {
     })
 }
 pub(crate) fn ty(kind: TypeKind) -> Type {
-    Type {
-        kind,
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::NoAlloc,
-    }
+    Type::with_kind(kind)
 }
 pub(crate) fn operand(place: u32, usage: UseKind) -> Operand {
     Operand {

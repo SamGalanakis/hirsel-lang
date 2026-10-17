@@ -279,13 +279,8 @@ impl QueryEngine {
                                     _ => unreachable!("tuple cleanup contains only components"),
                                 });
                             let entry = types.push(hirsel_types::Type {
-                                kind,
-                                modes: hirsel_types::Modes::global(),
-                                brand: hirsel_types::Brand::default(),
                                 drop_allocation,
-                                sendability_requirement: hirsel_types::SendabilityRequirement::None,
-                                allocation_target: None,
-                                erased_captures: None,
+                                ..hirsel_types::Type::with_kind(kind)
                             });
                             let entry = hirsel_types::normalize_type_properties(
                                 types,

@@ -76,15 +76,12 @@ pub fn validate_loop_source(
         .enumerate()
         .map(|(ordinal, g)| match g {
             GenericParameter::Type { .. } => GenericArgument::Type(types.push(Type {
-                sendability_requirement: hirsel_types::SendabilityRequirement::None,
-                kind: TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(ordinal as u32))),
-                modes: Modes::global(),
-                allocation_target: None,
-                erased_captures: None,
-                brand: Brand::default(),
                 drop_allocation: DropAllocation::DependsOn(
                     vec![TypeParameterRef::bound(TypeParamId(ordinal as u32))].into(),
                 ),
+                ..Type::with_kind(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(
+                    ordinal as u32,
+                ))))
             })),
             GenericParameter::Size { .. } => GenericArgument::Size(Size::Parameter(
                 SizeParameterRef::bound(SizeParamId(ordinal as u32)),
@@ -92,16 +89,11 @@ pub fn validate_loop_source(
         })
         .collect();
     let receiver = types.push(Type {
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        kind: TypeKind::Named {
+        drop_allocation: DropAllocation::MayAllocate,
+        ..Type::with_kind(TypeKind::Named {
             definition: signature.definition.clone(),
             arguments,
-        },
-        modes: Modes::global(),
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::MayAllocate,
+        })
     });
     let cursor = specialize(
         &open.types,

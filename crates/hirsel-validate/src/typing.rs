@@ -2687,18 +2687,13 @@ impl<'a> Checker<'a> {
                     Uses::Only(allowed) => function.authority = allowed.clone(),
                 }
                 let derived = store.push(Type {
-                    kind: TypeKind::Function(function),
                     modes: Modes {
                         relation: Relation::global(),
                         uniqueness: Uniqueness::Unique,
                         multiplicity: Multiplicity::Many,
                         sendability: Sendability::Sendable,
                     },
-                    brand: Brand::default(),
-                    drop_allocation: DropAllocation::NoAlloc,
-                    sendability_requirement: hirsel_types::SendabilityRequirement::None,
-                    allocation_target: None,
-                    erased_captures: None,
+                    ..Type::with_kind(TypeKind::Function(function))
                 });
                 if !self.compatible(&mut store, ty, derived, TypeRelation::Value) {
                     self.error(ViolationKind::TypeMismatch {
@@ -3479,13 +3474,8 @@ impl<'a> Checker<'a> {
             _ => unreachable!("tuple cleanup contains only components"),
         });
         let tuple = store.push(Type {
-            kind,
-            modes: Modes::global(),
-            brand: Brand::default(),
             drop_allocation,
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
+            ..Type::with_kind(kind)
         });
         normalize_type_properties(store, tuple, generics, &mut |path| {
             Ok::<_, hirsel_types::QueryError>(

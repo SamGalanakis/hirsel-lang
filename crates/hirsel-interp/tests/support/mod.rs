@@ -30,12 +30,7 @@ pub fn sources() -> SourceMap {
 pub fn ty(kind: TypeKind) -> Type {
     Type {
         drop_allocation: DropAllocation::MayAllocate,
-        kind,
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
+        ..Type::with_kind(kind)
     }
 }
 pub struct Builder {

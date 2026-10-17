@@ -1110,13 +1110,8 @@ impl Normalizer<'_, '_> {
         }
         let id = self.types.push(Type {
             drop_allocation: self.drop_kind(&kind, &mut BTreeSet::new()),
-
-            kind,
             modes,
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
+            ..Type::with_kind(kind)
         });
         let mut adjusted = self.types.get(id).unwrap().clone();
         let generics = self.declarations();

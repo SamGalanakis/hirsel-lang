@@ -17,8 +17,8 @@ use hirsel_rt::{Config, Header, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, RunCtx, St
 use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::{
-    Brand, BuiltinType, DropAllocation, Field, GenericArgument, Layout as Promises, Modes,
-    Primitive, Size, Type, TypeId, TypeKind, TypeStore, Variant,
+    BuiltinType, Field, GenericArgument, Layout as Promises, Primitive, Size, Type, TypeId,
+    TypeKind, TypeStore, Variant,
 };
 
 use super::{Ctx, leak};
@@ -42,15 +42,7 @@ pub struct Ty {
 
 impl Ty {
     pub fn add(&mut self, kind: TypeKind) -> TypeId {
-        self.store.push(Type {
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: DropAllocation::NoAlloc,
-            kind,
-            modes: Modes::global(),
-            erased_captures: None,
-            brand: Brand::default(),
-        })
+        self.store.push(Type::with_kind(kind))
     }
     pub fn p(&mut self, p: Primitive) -> TypeId {
         self.add(TypeKind::Primitive(p))

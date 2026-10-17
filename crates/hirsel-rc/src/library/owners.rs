@@ -12,8 +12,8 @@ use hirsel_lir::layout::{Container, OwnerRepresentation, Owners};
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::{
-    BinderRef, BuiltinType, DropAllocation, Field, GenericArgument, GenericParameter, Layout,
-    Modes, Primitive, SignatureKind, SignatureRef, Type, TypeId, TypeKind, TypeParamId, TypeStore,
+    BinderRef, BuiltinType, Field, GenericArgument, GenericParameter, Layout, Primitive,
+    SignatureKind, SignatureRef, Type, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 use std::collections::BTreeMap;
 
@@ -86,15 +86,7 @@ struct Shape {
 
 impl Shape {
     fn add(&mut self, kind: TypeKind) -> TypeId {
-        self.store.push(Type {
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: DropAllocation::NoAlloc,
-            kind,
-            modes: Modes::global(),
-            erased_captures: None,
-            brand: Default::default(),
-        })
+        self.store.push(Type::with_kind(kind))
     }
     fn primitive(&mut self, p: Primitive) -> TypeId {
         self.add(TypeKind::Primitive(p))

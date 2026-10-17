@@ -44,13 +44,8 @@ pub fn fact_signature(owner: &Signature) -> Result<Signature, QueryError> {
     let mut modes = Modes::global();
     modes.sendability = Sendability::Sendable;
     let boolean = types.push(Type {
-        kind: TypeKind::Primitive(Primitive::Bool),
         modes,
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::NoAlloc,
+        ..Type::with_kind(TypeKind::Primitive(Primitive::Bool))
     });
     let mut helper = Signature {
         definition: fact_path(&owner.definition),

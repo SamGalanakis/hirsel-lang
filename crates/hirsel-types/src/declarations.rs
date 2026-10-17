@@ -277,15 +277,7 @@ fn specialize_authority(
 pub(crate) mod tests {
     use super::*;
     pub(crate) fn row(kind: TypeKind) -> Type {
-        Type {
-            kind,
-            modes: Modes::global(),
-            sendability_requirement: crate::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
-        }
+        Type::with_kind(kind)
     }
     pub(crate) fn path(name: &str) -> DefPath {
         DefPath(hirsel_syntax::ItemPath {

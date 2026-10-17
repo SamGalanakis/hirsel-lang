@@ -444,18 +444,13 @@ mod tests {
 
     #[test]
     fn an_owned_whole_adopts_parts_its_holder_contains_and_only_those() {
-        use crate::{Brand, DropAllocation, Primitive, Type, TypeKind, TypeStore};
+        use crate::{Primitive, Type, TypeKind, TypeStore};
         let row = |kind, relation| Type {
-            kind,
             modes: Modes {
                 relation,
                 ..Modes::global()
             },
-            sendability_requirement: crate::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
+            ..Type::with_kind(kind)
         };
         let pair = |store: &mut TypeStore, part: Relation| {
             let part = store.push(row(TypeKind::Primitive(Primitive::String), part));

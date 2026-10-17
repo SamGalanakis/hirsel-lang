@@ -49,15 +49,7 @@ pub fn origin(n: u32) -> s::Origin {
     }
 }
 pub fn ty(kind: TypeKind) -> Type {
-    Type {
-        kind,
-        modes: Modes::global(),
-        drop_allocation: DropAllocation::NoAlloc,
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-    }
+    Type::with_kind(kind)
 }
 pub fn function(parameters: Vec<hirsel_types::Parameter>, result: TypeId) -> FunctionType {
     FunctionType {

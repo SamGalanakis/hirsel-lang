@@ -89,13 +89,8 @@ mod tests {
     use hirsel_syntax::PassingMode;
     fn row(kind: TypeKind) -> Type {
         Type {
-            kind,
-            modes: Modes::global(),
-            sendability_requirement: crate::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
             drop_allocation: DropAllocation::MayAllocate,
+            ..Type::with_kind(kind)
         }
     }
     fn function(result: TypeId) -> FunctionType {

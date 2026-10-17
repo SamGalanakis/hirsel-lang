@@ -1066,15 +1066,7 @@ pub fn shape_equal(
 mod shape_tests {
     use super::*;
     fn row(kind: TypeKind) -> Type {
-        Type {
-            kind,
-            modes: Modes::global(),
-            sendability_requirement: crate::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
-        }
+        Type::with_kind(kind)
     }
     fn path(name: &str) -> hirsel_syntax::DefPath {
         hirsel_syntax::DefPath(hirsel_syntax::ItemPath {

@@ -169,25 +169,9 @@ fn named_reference_specializations_ignore_arena_layout_and_preserve_argument_ide
     let reference = |primitive, size, padding| {
         let mut types = TypeStore::default();
         for _ in 0..padding {
-            types.push(Type {
-                kind: TypeKind::Primitive(Primitive::Bool),
-                modes: Modes::global(),
-                sendability_requirement: hirsel_types::SendabilityRequirement::None,
-                allocation_target: None,
-                erased_captures: None,
-                brand: Brand::default(),
-                drop_allocation: DropAllocation::NoAlloc,
-            });
+            types.push(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
         }
-        let root = types.push(Type {
-            kind: TypeKind::Primitive(primitive),
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
-        });
+        let root = types.push(Type::with_kind(TypeKind::Primitive(primitive)));
         Value::FunctionReference(NamedFunction {
             definition: hirsel_interp::library::simulation::core_path("target"),
             arguments: vec![
@@ -216,18 +200,9 @@ fn named_reference_specializations_ignore_arena_layout_and_preserve_argument_ide
 fn only_free_lexical_specialization_arguments_are_non_comparable() {
     use hirsel_types::*;
     let mut types = TypeStore::default();
-    let root = types.push(Type {
-        kind: TypeKind::Parameter(TypeParameterRef::body(
-            NameSite::Item(hirsel_syntax::ItemId(7)),
-            TypeParamId(0),
-        )),
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::NoAlloc,
-    });
+    let root = types.push(Type::with_kind(TypeKind::Parameter(
+        TypeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(7)), TypeParamId(0)),
+    )));
     let definition = hirsel_interp::library::simulation::core_path("target");
     let value = Value::FunctionReference(hirsel_interp::value::NamedFunction {
         definition: definition.clone(),

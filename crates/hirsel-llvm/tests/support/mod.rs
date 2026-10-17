@@ -84,13 +84,8 @@ impl Types {
     }
     pub fn add_with(&mut self, kind: TypeKind, modes: Modes) -> TypeId {
         self.store.push(Type {
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: DropAllocation::NoAlloc,
-            kind,
             modes,
-            erased_captures: None,
-            brand: Brand::default(),
+            ..Type::with_kind(kind)
         })
     }
     pub fn p(&mut self, p: Primitive) -> TypeId {

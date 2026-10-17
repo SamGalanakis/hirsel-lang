@@ -130,15 +130,7 @@ mod tests {
     #[test]
     fn replacement_order_and_current_type_index_follow_mutations() {
         let mut store = TypeStore::default();
-        let a = store.push(Type {
-            kind: TypeKind::Primitive(Primitive::U8),
-            modes: Modes::global(),
-            brand: Brand::default(),
-            erased_captures: None,
-            drop_allocation: DropAllocation::NoAlloc,
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-        });
+        let a = store.push(Type::with_kind(TypeKind::Primitive(Primitive::U8)));
         let b = store.push(store.get(a).unwrap().clone());
         let row = |expression, ty| ClosureInfo {
             expression: ExprId(expression),

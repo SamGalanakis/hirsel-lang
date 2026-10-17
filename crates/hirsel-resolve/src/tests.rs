@@ -371,13 +371,7 @@ fn error_at(output: &ResolveOutput, rule: &str, span: Span) {
 fn semantic(kind: ty::TypeKind) -> ty::Type {
     ty::Type {
         drop_allocation: hirsel_types::DropAllocation::MayAllocate,
-
-        kind,
-        modes: ty::Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: ty::Brand::default(),
+        ..ty::Type::with_kind(kind)
     }
 }
 fn constant(d: DefPath, kind: ty::TypeKind) -> ty::Signature {

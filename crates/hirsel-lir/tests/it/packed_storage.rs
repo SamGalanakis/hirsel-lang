@@ -302,17 +302,7 @@ fn derive_packed_list(
     use hirsel_lir::layout::{LayoutBuilder, Owners};
     use hirsel_types::*;
     let mut store = TypeStore::default();
-    let mut add = |kind| {
-        store.push(Type {
-            sendability_requirement: SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: DropAllocation::NoAlloc,
-            kind,
-            modes: Modes::global(),
-            erased_captures: None,
-            brand: Brand::default(),
-        })
-    };
+    let mut add = |kind| store.push(Type::with_kind(kind));
     let u = add(TypeKind::Primitive(Primitive::U64));
     let x = add(TypeKind::Primitive(extra));
     let choice = add(TypeKind::Variant(

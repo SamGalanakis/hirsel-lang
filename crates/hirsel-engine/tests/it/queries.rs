@@ -185,15 +185,7 @@ impl SignaturePhase for Fake {
             _ => unreachable!(),
         };
         let mut types = TypeStore::default();
-        let unit = types.push(Type {
-            drop_allocation: DropAllocation::NoAlloc,
-            kind: TypeKind::Tuple(vec![].into()),
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-        });
+        let unit = types.push(Type::with_kind(TypeKind::Tuple(vec![].into())));
         Ok(out(Signature {
             metadata: Default::default(),
             definition: item.definition.clone(),
@@ -615,13 +607,7 @@ impl SignaturePhase for ContractSignatures {
         let mut types = TypeStore::default();
         let result = types.push(hirsel_types::Type {
             drop_allocation: hirsel_types::DropAllocation::MayAllocate,
-
-            kind: TypeKind::Tuple(vec![].into()),
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
+            ..hirsel_types::Type::with_kind(TypeKind::Tuple(vec![].into()))
         });
         Ok(out(Signature {
             metadata: Default::default(),

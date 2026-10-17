@@ -518,19 +518,13 @@ pub struct Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hirsel_types::{Brand, Modes, Type, TypeKind};
+    use hirsel_types::{Type, TypeKind};
     #[test]
     fn hand_built_unit_body_has_explicit_return_and_cleanup() {
         let mut types = TypeStore::default();
         let unit = types.push(Type {
             drop_allocation: hirsel_types::DropAllocation::MayAllocate,
-
-            kind: TypeKind::Tuple(vec![].into()),
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
+            ..Type::with_kind(TypeKind::Tuple(vec![].into()))
         });
         let span = Span::default();
         let body = Body {

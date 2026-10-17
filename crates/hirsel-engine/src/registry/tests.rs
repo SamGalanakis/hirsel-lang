@@ -282,16 +282,11 @@ fn generic_option_results_derive_sendability_after_substitution() {
     ] {
         let mut target = TypeStore::default();
         let actual = target.push(Type {
-            kind: TypeKind::Primitive(kind),
             modes: Modes {
                 sendability: sendability.clone(),
                 ..Modes::global()
             },
-            drop_allocation: DropAllocation::NoAlloc,
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
+            ..Type::with_kind(TypeKind::Primitive(kind))
         });
         let result = substitute_type(
             &signature.types,

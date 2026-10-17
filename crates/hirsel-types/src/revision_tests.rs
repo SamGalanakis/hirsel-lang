@@ -1,15 +1,7 @@
 use super::*;
 use hirsel_syntax::{ItemId, StmtId};
 fn scalar() -> Type {
-    Type {
-        kind: TypeKind::Primitive(Primitive::U32),
-        modes: Modes::global(),
-        sendability_requirement: crate::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::NoAlloc,
-    }
+    Type::with_kind(TypeKind::Primitive(Primitive::U32))
 }
 fn function(result: TypeId, generics: Vec<GenericParameter>) -> Type {
     Type {

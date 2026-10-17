@@ -365,6 +365,9 @@ with each caller. `Relation::union` and `Modes::join` preserve equal current fac
 including conditional summaries. Authority's joins first widen non-Global locality
 and non-Sendable summaries; adoption must retain that existing normalization.
 
+`Type::with_kind(kind)` constructs an unqualified global row with nonallocating
+cleanup and no crossing requirement, allocator refinement, captures or brand.
+Callers retain responsibility for derived modes and cleanup obligations.
 `Type::unit()` and `Type::boolean()` construct native control rows with Plain,
 sendable, nonallocating metadata and require no declared signature read.
 

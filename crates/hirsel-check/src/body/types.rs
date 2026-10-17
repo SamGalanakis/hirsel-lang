@@ -73,13 +73,8 @@ impl Checker<'_, '_> {
         store: &TypeStore,
     ) -> Result<FunctionType, QueryError> {
         let row = Type {
-            kind: TypeKind::Function(f.clone()),
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
             drop_allocation: DropAllocation::MayAllocate,
+            ..Type::with_kind(TypeKind::Function(f.clone()))
         };
         let start = self.body.types.len();
         let root = import_type_row(store, &row, &mut self.body.types);

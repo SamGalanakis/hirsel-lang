@@ -820,13 +820,7 @@ fn unreachable_nodes_and_stored_fingerprint_do_not_affect_hash() {
     let h = fingerprint(&s, &[]).unwrap();
     s.types.push(Type {
         drop_allocation: hirsel_types::DropAllocation::MayAllocate,
-
-        kind: TypeKind::Error,
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
+        ..Type::with_kind(TypeKind::Error)
     });
     s.fingerprint = ast::ContentHash::of_bytes(b"discard");
     assert_eq!(h, fingerprint(&s, &[]).unwrap());
@@ -1327,29 +1321,19 @@ fn native_constructor_authority_comes_from_the_resolver_selected_declaration() {
     let native = f.dependency("Sender", None, true);
     let mut types = TypeStore::default();
     let payload = types.push(Type {
-        kind: TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
         drop_allocation: DropAllocation::DependsOn(
             vec![TypeParameterRef::bound(TypeParamId(0))].into(),
         ),
+        ..Type::with_kind(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))))
     });
     let repr = types.push(Type {
-        kind: TypeKind::Builtin {
-            kind: BuiltinType::Sender,
-            arguments: vec![GenericArgument::Type(payload)].into(),
-        },
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
         drop_allocation: DropAllocation::DependsOn(
             vec![TypeParameterRef::bound(TypeParamId(0))].into(),
         ),
+        ..Type::with_kind(TypeKind::Builtin {
+            kind: BuiltinType::Sender,
+            arguments: vec![GenericArgument::Type(payload)].into(),
+        })
     });
     let signature = f.provider.signatures.get_mut(&native).unwrap();
     signature.types = types;
@@ -1421,18 +1405,10 @@ fn taken_resource_property_proofs_read_transitive_nominal_declarations() {
         }
         let resource = f.dependency("Resource", None, true);
         let signature = f.provider.signatures.get_mut(&resource).unwrap();
-        let representation = signature.types.push(Type {
-            kind: TypeKind::Named {
-                definition: payload.clone(),
-                arguments: vec![].into(),
-            },
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
-        });
+        let representation = signature.types.push(Type::with_kind(TypeKind::Named {
+            definition: payload.clone(),
+            arguments: vec![].into(),
+        }));
         if let SignatureKind::Type(t) = &mut signature.kind {
             t.representation = Some(representation);
             t.resource = true;
@@ -1632,19 +1608,11 @@ fn recovery_rows_cannot_prove_empty_held_authority() {
         for nested in [false, true] {
             let mut f = Fixture::new();
             let mut types = TypeStore::default();
-            let row = Type {
-                kind: if recovery {
-                    TypeKind::Error
-                } else {
-                    TypeKind::Primitive(Primitive::U32)
-                },
-                modes: Modes::global(),
-                sendability_requirement: hirsel_types::SendabilityRequirement::None,
-                allocation_target: None,
-                erased_captures: None,
-                brand: Brand::default(),
-                drop_allocation: DropAllocation::NoAlloc,
-            };
+            let row = Type::with_kind(if recovery {
+                TypeKind::Error
+            } else {
+                TypeKind::Primitive(Primitive::U32)
+            });
             let mut root = types.push(row.clone());
             if nested {
                 let mut row = row;
@@ -1674,16 +1642,11 @@ fn typed_ambient_heap_has_empty_authority_without_erasing_arena_authority() {
         });
         let mut types = TypeStore::default();
         let root = types.push(Type {
-            kind: TypeKind::Named {
+            allocation_target: heap.then_some(AllocationTarget::Heap),
+            ..Type::with_kind(TypeKind::Named {
                 definition: arena.clone(),
                 arguments: vec![].into(),
-            },
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: heap.then_some(AllocationTarget::Heap),
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
+            })
         });
         assert_eq!(
             f.held_authority(types, root),

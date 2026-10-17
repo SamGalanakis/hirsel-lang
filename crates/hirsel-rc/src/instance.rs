@@ -529,10 +529,8 @@ pub fn instantiate_function(
         None => None,
     };
     let row = Type {
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        drop_allocation: hirsel_types::DropAllocation::NoAlloc,
-        kind: TypeKind::Function(FunctionType {
+        modes,
+        ..Type::with_kind(TypeKind::Function(FunctionType {
             state_promises: function.state_promises.clone(),
             generics: Vec::new().into(),
             parameters: parameters.into(),
@@ -544,10 +542,7 @@ pub fn instantiate_function(
             contracts: Vec::new().into(),
             incomplete: false,
             foreign: function.foreign.clone(),
-        }),
-        modes,
-        erased_captures: None,
-        brand: Default::default(),
+        }))
     };
     Ok(actuals.store.push(row))
 }
@@ -792,11 +787,9 @@ impl Expander<'_, '_, '_> {
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let unit = actuals.store.push(Type::unit());
-        let callable = actuals.store.push(Type {
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: hirsel_types::DropAllocation::NoAlloc,
-            kind: TypeKind::Function(FunctionType {
+        let callable = actuals
+            .store
+            .push(Type::with_kind(TypeKind::Function(FunctionType {
                 state_promises: Default::default(),
                 generics: Vec::new().into(),
                 parameters: vec![hirsel_types::Parameter {
@@ -814,11 +807,7 @@ impl Expander<'_, '_, '_> {
                 contracts: Vec::new().into(),
                 incomplete: false,
                 foreign: None,
-            }),
-            modes: hirsel_types::Modes::global(),
-            erased_captures: None,
-            brand: Default::default(),
-        });
+            })));
         let view = InstanceView {
             key,
             body: definition.entry,
@@ -1561,10 +1550,8 @@ fn instantiate_row(
         None => None,
     };
     Ok(store.push(Type {
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        drop_allocation: hirsel_types::DropAllocation::NoAlloc,
-        kind: TypeKind::Function(FunctionType {
+        modes: modes.clone(),
+        ..Type::with_kind(TypeKind::Function(FunctionType {
             state_promises: Default::default(),
             generics: Vec::new().into(),
             parameters: parameters.into(),
@@ -1576,10 +1563,7 @@ fn instantiate_row(
             contracts: Vec::new().into(),
             incomplete: false,
             foreign: function.foreign.clone(),
-        }),
-        modes: modes.clone(),
-        erased_captures: None,
-        brand: Default::default(),
+        }))
     }))
 }
 

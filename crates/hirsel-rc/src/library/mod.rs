@@ -317,24 +317,13 @@ impl Request {
     /// it takes the resource mut and returns unit; source drop bodies stay borrowed.
     pub fn finalizer(body: usize, path: &DefPath, nominal: &DefPath, actuals: &Actuals) -> Self {
         let mut store = actuals.store.clone();
-        let this = store.push(Type {
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: hirsel_types::DropAllocation::NoAlloc,
-            kind: TypeKind::Named {
-                definition: nominal.clone(),
-                arguments: actuals.arguments.clone().into(),
-            },
-            modes: hirsel_types::Modes::global(),
-            erased_captures: None,
-            brand: Default::default(),
-        });
+        let this = store.push(Type::with_kind(TypeKind::Named {
+            definition: nominal.clone(),
+            arguments: actuals.arguments.clone().into(),
+        }));
         let unit = store.push(Type::unit());
-        let callable = store.push(Type {
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: hirsel_types::DropAllocation::NoAlloc,
-            kind: TypeKind::Function(hirsel_types::FunctionType {
+        let callable = store.push(Type::with_kind(TypeKind::Function(
+            hirsel_types::FunctionType {
                 state_promises: Default::default(),
                 generics: Vec::new().into(),
                 parameters: vec![hirsel_types::Parameter {
@@ -352,11 +341,8 @@ impl Request {
                 contracts: Vec::new().into(),
                 incomplete: false,
                 foreign: None,
-            }),
-            modes: hirsel_types::Modes::global(),
-            erased_captures: None,
-            brand: Default::default(),
-        });
+            },
+        )));
         Self {
             finalizer: true,
             ..Self::native(body, path, store, actuals.arguments.clone(), callable)

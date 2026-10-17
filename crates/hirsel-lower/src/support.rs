@@ -580,15 +580,7 @@ impl Fixture {
     }
 }
 pub fn ty(kind: TypeKind) -> Type {
-    Type {
-        kind,
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::NoAlloc,
-    }
+    Type::with_kind(kind)
 }
 pub struct Provider(pub Vec<Definition>);
 impl TirProvider for Provider {

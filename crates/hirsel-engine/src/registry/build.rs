@@ -654,13 +654,8 @@ impl Builder {
             }
         });
         self.types.push(Type {
-            kind,
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
             drop_allocation,
+            ..Type::with_kind(kind)
         })
     }
     fn record(&mut self, text: &str) -> TypeId {

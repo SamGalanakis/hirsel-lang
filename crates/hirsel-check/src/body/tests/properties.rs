@@ -7,26 +7,13 @@ pub(super) fn transport(s: &Signature, noise: u8) -> Signature {
     let mut source = s.types.clone();
     let mut dest = TypeStore::default();
     for _ in 0..noise {
-        dest.push(Type {
-            kind: TypeKind::Primitive(Primitive::Bool),
-            modes: Modes::global(),
-            sendability_requirement: hirsel_types::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
-            drop_allocation: DropAllocation::NoAlloc,
-        });
+        dest.push(Type::with_kind(TypeKind::Primitive(Primitive::Bool)));
     }
     match &mut result.kind {
         SignatureKind::Function(f) => {
             let root = source.push(Type {
-                kind: TypeKind::Function(f.clone()),
-                modes: Modes::global(),
-                sendability_requirement: hirsel_types::SendabilityRequirement::None,
-                allocation_target: None,
-                erased_captures: None,
-                brand: Brand::default(),
                 drop_allocation: DropAllocation::MayAllocate,
+                ..Type::with_kind(TypeKind::Function(f.clone()))
             });
             let root = import_type(&source, root, &mut dest).unwrap();
             let TypeKind::Function(imported) = dest.get(root).unwrap().kind.clone() else {

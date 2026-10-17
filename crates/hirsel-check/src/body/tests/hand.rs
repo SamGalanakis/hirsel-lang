@@ -34,15 +34,7 @@ fn origin(n: u32) -> ast::Origin {
     }
 }
 fn row(kind: TypeKind) -> Type {
-    Type {
-        kind,
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
-        drop_allocation: DropAllocation::NoAlloc,
-    }
+    Type::with_kind(kind)
 }
 fn function(result: TypeId) -> FunctionType {
     FunctionType {

@@ -12,8 +12,8 @@ use hirsel_lir::layout_types::{CopyRecipe, LayoutId, LayoutKind};
 use hirsel_lir::stage::Value;
 use hirsel_syntax::PassingMode;
 use hirsel_types::{
-    Allocation, AuthoritySummary, BuiltinType, DropAllocation, FunctionType, GenericArgument,
-    Modes, Parameter, Primitive, Type, TypeId, TypeKind, Uses,
+    Allocation, AuthoritySummary, BuiltinType, FunctionType, GenericArgument, Parameter, Primitive,
+    Type, TypeId, TypeKind, Uses,
 };
 
 type R<T> = Result<T, LibraryError>;
@@ -188,15 +188,7 @@ fn unit(b: &mut Body<'_, '_>) {
     b.ret(result);
 }
 fn add_type(store: &mut hirsel_types::TypeStore, kind: TypeKind) -> TypeId {
-    store.push(Type {
-        kind,
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        drop_allocation: DropAllocation::NoAlloc,
-        erased_captures: None,
-        brand: Default::default(),
-    })
+    store.push(Type::with_kind(kind))
 }
 fn builtin(b: &mut Body<'_, '_>, kind: BuiltinType, types: &[TypeId]) -> TypeId {
     add_type(

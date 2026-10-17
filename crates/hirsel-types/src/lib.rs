@@ -206,6 +206,20 @@ pub struct Type {
     pub brand: Brand,
 }
 impl Type {
+    /// An unqualified global row with no crossing requirement, allocator refinement,
+    /// erased capture evidence or brand, and nonallocating cleanup.
+    /// Callers supply any derived modes and cleanup obligations explicitly.
+    pub fn with_kind(kind: TypeKind) -> Self {
+        Self {
+            sendability_requirement: SendabilityRequirement::None,
+            allocation_target: None,
+            drop_allocation: DropAllocation::NoAlloc,
+            kind,
+            modes: Modes::global(),
+            erased_captures: None,
+            brand: Brand::default(),
+        }
+    }
     /// Native unit needs no declaration or provider read.
     pub fn unit() -> Self {
         Self::native_control(TypeKind::Tuple(vec![].into()))
@@ -216,16 +230,11 @@ impl Type {
     }
     fn native_control(kind: TypeKind) -> Self {
         Self {
-            sendability_requirement: crate::SendabilityRequirement::None,
-            allocation_target: None,
-            drop_allocation: DropAllocation::NoAlloc,
-            kind,
             modes: Modes {
                 sendability: Sendability::Sendable,
                 ..Modes::global()
             },
-            erased_captures: None,
-            brand: Brand::default(),
+            ..Self::with_kind(kind)
         }
     }
 }
@@ -901,16 +910,11 @@ mod tests {
         let mut store = TypeStore::default();
         let ty = store.push(Type {
             drop_allocation: DropAllocation::MayAllocate,
-
-            kind: TypeKind::Primitive(Primitive::Bytes),
             modes: Modes {
                 relation: Relation::parameters([ParameterRef::bound(ParamId(0))]),
                 ..Modes::global()
             },
-            sendability_requirement: crate::SendabilityRequirement::None,
-            allocation_target: None,
-            erased_captures: None,
-            brand: Brand::default(),
+            ..Type::with_kind(TypeKind::Primitive(Primitive::Bytes))
         });
         let f = FunctionType {
             state_promises: Default::default(),

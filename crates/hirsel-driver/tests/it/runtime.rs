@@ -41,13 +41,7 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
     let mut types = TypeStore::default();
     let unit = types.push(Type {
         drop_allocation: hirsel_types::DropAllocation::MayAllocate,
-
-        kind: TypeKind::Tuple(vec![].into()),
-        modes: Modes::global(),
-        sendability_requirement: hirsel_types::SendabilityRequirement::None,
-        allocation_target: None,
-        erased_captures: None,
-        brand: Brand::default(),
+        ..Type::with_kind(TypeKind::Tuple(vec![].into()))
     });
     let body = Body {
         parameter_scope: hirsel_types::NameSite::Item(hirsel_syntax::ItemId(0)),
