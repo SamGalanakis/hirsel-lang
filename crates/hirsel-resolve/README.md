@@ -139,3 +139,7 @@ identities without reading operation signatures. Those signatures may name the
 declaring receiver; querying them during header resolution creates a cycle.
 The second declaration stage validates every association after headers publish,
 including associations unused by a loop.
+
+Phase fixtures can select dependency signature snapshots with
+`ManifestFixture::with_dependency_signatures`; their declaration metadata, visibility
+and top-level heads participate in the ordinary resolver index.

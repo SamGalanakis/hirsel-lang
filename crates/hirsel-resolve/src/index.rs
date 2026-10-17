@@ -112,6 +112,40 @@ mod package_view_tests {
 }
 
 impl ManifestFixture {
+    /// Select declared dependency signatures for a phase fixture. Their module
+    /// heads and visibility use the same index as ordinary source declarations.
+    pub fn with_dependency_signatures<'a>(
+        mut self,
+        signatures: impl IntoIterator<Item = &'a hirsel_types::SignatureRef>,
+    ) -> Self {
+        for signature in signatures {
+            let path = &signature.definition;
+            if path.0.package == self.package {
+                continue;
+            }
+            self.definitions.push(DefinitionEntry {
+                definition: path.clone(),
+                namespace: if matches!(signature.kind, hirsel_types::SignatureKind::Type(_)) {
+                    Namespace::Type
+                } else {
+                    Namespace::Value
+                },
+                visibility: signature.metadata.visibility,
+                span: Span::default(),
+            });
+            if let Some(head) = path.0.modules.first()
+                && !head.starts_with('$')
+            {
+                self.exposures.push(DependencyExposure {
+                    head: head.clone(),
+                    package: path.0.package.clone(),
+                    modules: vec![head.clone()],
+                });
+            }
+        }
+        self
+    }
+
     pub fn from_files<'a>(
         package: PackageId,
         files: impl IntoIterator<Item = &'a SyntaxFile>,
