@@ -23,8 +23,16 @@ fn compare(a: String, b: String) -> i32 uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   let text = common.input(rt, args, "pear\napple\npear\nbanana\napple")?
-  let mut lines = unique std@1/string.split(take text, "\n")
-  std@1/list.sort(mut lines, compare)
-  let unique_lines = std@1/list.dedup(take lines)
-  common.print(rt, std@1/string.concat(std@1/string.join(unique_lines, "\n"), "\n"))
+  // Eliminate duplicate comparisons before sorting large repeated inputs.
+  let mut seen: Set[String] = set.empty()
+  let mut lines: List[String] = []
+  for line in std@1/string.split(take text, "\n") {
+    if !set.contains(seen, line) {
+      set.insert(mut seen, copy line)
+      list.push(mut lines, copy line)
+    }
+  }
+  let mut ordered = unique take lines
+  std@1/list.sort(mut ordered, compare)
+  common.print(rt, std@1/string.concat(std@1/string.join(ordered, "\n"), "\n"))
 }

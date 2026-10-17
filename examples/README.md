@@ -27,7 +27,7 @@ separately. Host `--run` records are being wired through the CLI separately.
 | [todo](todo/main.hir) | Execute `init`, `add TEXT`, `done NUMBER`, `list`; use leading `init` to create/reset state, otherwise load and atomically save newline-separated tasks (second argument is state path, default `todo.txt`). |
 | [adventure](adventure/main.hir) | Play a command-file state machine with a key, cave and locked gate. |
 | [httpget](httpget/main.hir) | Fetch a UTF-8 HTTP response from an explicitly granted endpoint; `demo.json` supplies a scripted local peer. |
-| [sortuniq](sortuniq/main.hir) | Sort UTF-8 lines by byte order and remove adjacent duplicates; empty fields, including the final field after a newline, are retained. |
+| [sortuniq](sortuniq/main.hir) | Sort distinct UTF-8 lines by byte order; empty fields, including the final field after a newline, are retained. |
 
 The E2E tests are in `crates/hirsel-cli/tests/examples.rs`. They check exact output
 through both CLI backends and additional supplied-file cases, including a
