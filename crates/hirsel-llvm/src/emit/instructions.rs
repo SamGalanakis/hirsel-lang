@@ -887,11 +887,21 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     let need = self.builder.binary(BinOp::Add, at, self.const_u64(8));
                     let keep = self.builder.binary(BinOp::Add, used, self.const_u64(first));
                     let data = self.sequential_grow(place, payload, old, keep, need)?;
-                    self.builder
-                        .store(self.const_u64(0), self.builder.offset(data, at), 1);
+                    self.preserved_builder_used(data, used)?;
+                    self.builder.store_access(
+                        self.const_u64(0),
+                        self.builder.offset(data, at),
+                        1,
+                        Access::Length,
+                    );
                     return Ok(());
                 }
-                let length = self.load_u64(self.builder.offset(data, at));
+                let length = self.builder.load_access(
+                    self.module.int_type(64),
+                    self.builder.offset(data, at),
+                    1,
+                    Access::Length,
+                );
                 let past = self.builder.binary(BinOp::Add, at, self.const_u64(8));
                 let keep = self.builder.binary(BinOp::Add, past, length);
                 match op {
@@ -906,7 +916,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                             self.get(capacity)?,
                         )
                         .or_else(|e| self.invalid(e))?;
-                        self.sequential_grow(place, payload, old, keep, need)?;
+                        let data = self.sequential_grow(place, payload, old, keep, need)?;
+                        self.preserved_builder_used(data, used)?;
                     }
                     FlatFieldOp::Push { value, spare } => {
                         let data = if spare {
@@ -915,10 +926,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                             let need = self.builder.binary(BinOp::Add, keep, self.const_u64(1));
                             self.sequential_grow(place, payload, old, keep, need)?
                         };
-                        self.builder
-                            .store(self.get(value)?, self.builder.offset(data, keep), 1);
+                        self.builder.store_access(
+                            self.get(value)?,
+                            self.builder.offset(data, keep),
+                            1,
+                            Access::Value,
+                        );
                         let longer = self.builder.binary(BinOp::Add, length, self.const_u64(1));
-                        self.builder.store(longer, self.builder.offset(data, at), 1);
+                        self.builder.store_access(
+                            longer,
+                            self.builder.offset(data, at),
+                            1,
+                            Access::Length,
+                        );
                     }
                 }
                 Ok(())
@@ -938,7 +958,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let (old, data, used) = self.sequential_used(place, payload)?;
                 let start = self.builder.binary(BinOp::Add, used, self.const_u64(first));
                 let at = self.builder.binary(BinOp::Add, start, self.const_u64(word));
-                let length = self.load_u64(self.builder.offset(data, at));
+                let length = self.builder.load_access(
+                    self.module.int_type(64),
+                    self.builder.offset(data, at),
+                    1,
+                    Access::Length,
+                );
                 let site = self.construct_site(construct)?;
                 let parts = self.flat_parts_around(site, Some((field, length)))?;
                 let content = self.flat_extent(&parts)?;

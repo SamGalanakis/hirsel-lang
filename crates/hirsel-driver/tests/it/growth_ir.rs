@@ -676,16 +676,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     }
 }
 
-/// A byte list frozen into a Bytes field of a built element is written where
-/// the element will lie (`Inst::FlatField`, LIR schema revision 24):
-/// records-messages/flat's message loop allocates, grows and frees no payload
-/// block, and its byte loop under the field's reservation (a spare push,
-/// FACT-3) calls nothing. Causal control: reading the payload's length before
-/// its freeze keeps it an ordinary list, whose block is allocated and freed
-/// per message again.
-#[test]
-fn a_byte_list_frozen_into_a_built_element_allocates_nothing_per_element() {
-    let source = "flat type Message { id: u64, kind: u64, payload: Bytes }
+const BYTE_FIELD_BUILDER: &str = "flat type Message { id: u64, kind: u64, payload: Bytes }
 flat type Messages { items: List[Message] }
 fn build(n: u64) -> Messages {
   let mut items: List[Message] = []
@@ -705,6 +696,44 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   Ok(())
 }
 ";
+
+/// A field reservation gives the inner byte loop a fixed builder offset;
+/// its payload stores and field-length stores cannot alias that offset.
+#[test]
+fn a_reserved_flat_byte_field_hoists_the_builder_offset() {
+    for target in targets() {
+        let ir = function_ir(BYTE_FIELD_BUILDER, "5buildI", target);
+        let graph = blocks(&ir);
+        let (_, path) = graph
+            .iter()
+            .filter(|(_, b)| b.lines.iter().any(|l| l.starts_with("store i8 ")))
+            .filter_map(|(name, _)| cycle(&graph, name))
+            .min_by_key(|(cost, _)| *cost)
+            .expect("a loop stores a byte");
+        let loads: usize = path.iter().map(|n| graph[n].loads()).sum();
+        // The field length may still be read around the arithmetic failure
+        // edge; the builder's offset must not add a second memory dependency.
+        assert!(loads <= 1, "byte loop {path:?}\n{ir}");
+        assert!(
+            path.iter().all(|n| graph[n]
+                .lines
+                .iter()
+                .all(|l| { !l.contains("load ") || !l.contains("builder used bytes") })),
+            "byte loop {path:?}\n{ir}"
+        );
+    }
+}
+
+/// A byte list frozen into a Bytes field of a built element is written where
+/// the element will lie (`Inst::FlatField`, LIR schema revision 24):
+/// records-messages/flat's message loop allocates, grows and frees no payload
+/// block, and its byte loop under the field's reservation (a spare push,
+/// FACT-3) calls nothing. Causal control: reading the payload's length before
+/// its freeze keeps it an ordinary list, whose block is allocated and freed
+/// per message again.
+#[test]
+fn a_byte_list_frozen_into_a_built_element_allocates_nothing_per_element() {
+    let source = BYTE_FIELD_BUILDER;
     let ordinary = source.replace(
         "    list.push(mut items, Message(",
         "    failure.check(list.len(payload) == length, TextInvariant())\n    list.push(mut items, Message(",

@@ -102,6 +102,11 @@ Invariants:
   accesses within proved block payloads. Unknown pointer accesses stay unclassified. Element addresses start after their length; scalar source projections
   cannot reach either header. `SeqSetLen` and glue's count stores keep the matching
   tag, while aggregates, copies and arbitrary runtime calls remain conservative.
+  Sequential builders give their used-byte word a separate tag; an open flat
+  byte field's length prefix uses the length tag, and its bytes use the scalar
+  tag. After growth, the emitter exposes the preserved used-byte word through
+  `llvm.assume`, so a checked byte loop hoists its builder offset. These are
+  ordinary mutable loads, and representation-changing stores remain unclassified.
 - Status edges: every Hirsel entry returns a `u8` status. A failure edge that starts a rule
   calls `hirsel_rt_v2_failure_begin(ctx, kind, rule, site)` with the driver-assigned codes
   and the anchor's site code, disposes of its listed tokens and enters its cleanup block;

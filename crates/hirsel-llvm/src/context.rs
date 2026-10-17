@@ -244,6 +244,9 @@ impl MemoryEffects {
 
 /// Disjoint storage classes, not source scalar types. A sequence header's
 /// length and capacity precede its elements; the count precedes its payload.
+/// An open flat field's length prefix precedes its bytes, and a sequential
+/// builder's used-byte word precedes every element. Representation-changing
+/// copies and stores stay unclassified.
 /// Validated scalar accesses within proved payloads cannot name either header.
 /// Copies and arbitrary runtime calls stay unclassified and may alias every class.
 #[derive(Clone, Copy, Debug)]
@@ -251,6 +254,7 @@ pub(crate) enum Access {
     Count,
     Length,
     Capacity,
+    Used,
     Value,
 }
 
@@ -260,6 +264,7 @@ impl Access {
             Self::Count => "holder count",
             Self::Length => "sequence length",
             Self::Capacity => "sequence capacity",
+            Self::Used => "builder used bytes",
             Self::Value => "scalar value",
         }
     }
@@ -828,7 +833,7 @@ impl<'context> Module<'context> {
         unsafe { LLVMAddCallSiteAttribute(call.raw, slot.index(), attribute) };
     }
 
-    /// The three scalar TBAA siblings describe storage that cannot overlap in
+    /// The scalar TBAA siblings describe storage that cannot overlap in
     /// validated LIR. These nodes are context-uniqued; nothing is marked constant
     /// (SeqSetLen, Dup and Release must invalidate their own class normally).
     fn access(&self, instruction: Value<'_>, access: Access) {

@@ -378,7 +378,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     ) -> Emitted<(Value<'m>, Value<'m>, Value<'m>)> {
         let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
         let data = self.payload_of(old, payload)?.ptr;
-        let used = self.load_u64(self.builder.offset(data, self.const_u64(8)));
+        let used = self.builder.load_access(
+            self.module.int_type(64),
+            self.builder.offset(data, self.const_u64(8)),
+            8,
+            Access::Used,
+        );
         Ok((old, data, used))
     }
 
@@ -422,6 +427,20 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(self.payload_of(block, payload)?.ptr)
     }
 
+    /// Growth copies the initialized header unchanged. The returned pointer
+    /// may differ, so LLVM needs this fact again after the opaque runtime call.
+    pub(super) fn preserved_builder_used(&self, data: Value<'m>, used: Value<'m>) -> Emitted {
+        let after = self.builder.load_access(
+            self.module.int_type(64),
+            self.builder.offset(data, self.const_u64(8)),
+            8,
+            Access::Used,
+        );
+        self.builder
+            .assume(self.builder.icmp(IntPredicate::Eq, after, used))
+            .or_else(|e| self.invalid(e))
+    }
+
     /// Where the length word of the open element's field `field` lies in a
     /// builder's element of layout `element` (LIR schema revision 24): past
     /// the prefix and the fixed fields before it.
@@ -449,8 +468,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let count = self.builder.binary(BinOp::Add, count, self.const_u64(1));
         self.builder.store(count, data, 8);
         let used = self.builder.binary(BinOp::Add, used, bytes);
-        self.builder
-            .store(used, self.builder.offset(data, self.const_u64(8)), 8);
+        self.builder.store_access(
+            used,
+            self.builder.offset(data, self.const_u64(8)),
+            8,
+            Access::Used,
+        );
     }
 
     /// The FlatFormatV0 parts of a flat construction in field order: a fixed field's value,
