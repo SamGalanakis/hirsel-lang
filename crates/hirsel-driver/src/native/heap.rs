@@ -32,7 +32,7 @@ struct Io {
 }
 
 impl Io {
-    fn for_launch(kind: super::link::LaunchKind, test_seed: u64) -> Self {
+    fn for_launch(kind: &super::link::LaunchKind, test_seed: u64) -> Self {
         let mut io = Self::new();
         io.test_seed = test_seed;
         io.network = hirsel_rt::io_net_script::ScriptIo::new(
@@ -43,7 +43,7 @@ impl Io {
             super::link::LaunchKind::Test => {
                 io.grants.insert(IO_HANDLE, IoGrant::Test);
             }
-            super::link::LaunchKind::Main => {}
+            super::link::LaunchKind::Main(_) => {}
         }
         io
     }
@@ -814,15 +814,16 @@ pub struct HeapRun {
     pub counters: Counters,
 }
 
-fn config(inject: Option<u64>, kind: super::link::LaunchKind) -> Config {
+fn config(inject: Option<u64>, kind: &super::link::LaunchKind) -> Config {
     Config {
         inject,
         context_handles: match kind {
             super::link::LaunchKind::Zero => vec![],
             super::link::LaunchKind::Test => vec![(IO_HANDLE, "Test".into())],
-            super::link::LaunchKind::Main => {
-                vec![(IO_HANDLE, "Io".into()), (ARGS_HANDLE, "Args".into())]
-            }
+            super::link::LaunchKind::Main(roots) => roots
+                .iter()
+                .map(|root| (super::link::root_handle(*root), format!("{root:?}")))
+                .collect(),
         },
         ..Config::default()
     }
@@ -886,14 +887,17 @@ pub fn run_heap(
     sites: &Sites<'_>,
 ) -> Result<HeapRun, NativeError> {
     let heap = heap_program(program);
-    let kind = *program
+    let kind = program
         .launches
         .get(entry)
         .ok_or_else(|| NativeError::new(StageName::Launch, "no typed launch kind"))?;
     let args = match kind {
         super::link::LaunchKind::Zero => vec![],
         super::link::LaunchKind::Test => vec![Arg::Handle(IO_HANDLE)],
-        super::link::LaunchKind::Main => vec![Arg::Handle(IO_HANDLE), Arg::Handle(ARGS_HANDLE)],
+        super::link::LaunchKind::Main(roots) => roots
+            .iter()
+            .map(|root| Arg::Handle(super::link::root_handle(*root)))
+            .collect(),
     };
     let run = hirsel_heapcheck::run_ready(
         &heap,
@@ -918,14 +922,17 @@ pub fn heap_campaign(
     sites: &Sites<'_>,
 ) -> Result<HeapRun, NativeError> {
     let heap = heap_program(program);
-    let kind = *program
+    let kind = program
         .launches
         .get(entry)
         .ok_or_else(|| NativeError::new(StageName::Launch, "no typed launch kind"))?;
     let args = match kind {
         super::link::LaunchKind::Zero => vec![],
         super::link::LaunchKind::Test => vec![Arg::Handle(IO_HANDLE)],
-        super::link::LaunchKind::Main => vec![Arg::Handle(IO_HANDLE), Arg::Handle(ARGS_HANDLE)],
+        super::link::LaunchKind::Main(roots) => roots
+            .iter()
+            .map(|root| Arg::Handle(super::link::root_handle(*root)))
+            .collect(),
     };
     let campaign = hirsel_heapcheck::fault_campaign_ready(
         &heap,

@@ -10,6 +10,65 @@ coding agent. Its fixed goals:
 - reference counting with no lifetime variables;
 - deterministic behaviour outside capabilities.
 
+## Build and launch a program
+
+```sh
+hirsel build hello.hir -o hello                 # LLVM O2, production runtime
+hirsel build app/manifest.json --release -o app # LLVM O3
+hirsel build hello.hir --debug -o hello-debug   # O0 with DWARF source line tables
+hirsel build hello.hir --target aarch64-linux -o hello-arm64
+```
+
+`build` accepts a source file (and its `.hir.json` sidecar, when present) or a
+launch manifest. The default target is `x86_64-linux`; `aarch64-linux` uses the
+pinned cross compiler and runtime archive. The executable contains the production
+runtime and compiler support libraries statically; its only shared dependencies are
+libc and the platform ELF loader. It runs independently of Hirsel and the source checkout.
+
+Grants are supplied at launch, using the same schema-1 RunConfig as
+`hirsel run --run`. Export an empty record bound to the selected program:
+
+```sh
+hirsel export --run hello.hir -o /absolute/path/run.json
+./hello --hirsel-run /absolute/path/run.json argument-one argument-two
+```
+
+Edit that record to grant the roots the entry requests. For an entry receiving
+`Io`, this `io` value grants only standard output:
+
+```json
+{"stdout":"stdout.bytes@1","tasks":null,"monotonic_clock":null,
+ "wall_clock":null,"random":null,"dirs":[],"net":null}
+```
+
+To read files, add a directory mount to `io.dirs`, for example
+`{"path":"data","host":"/absolute/host/directory","access":"read"}`.
+A program can acquire `io.dir(rt, path.of("data"))` and read relative paths within
+that grant. Use `read_write` only when writes are intended. No working directory,
+standard stream, environment key, clock or network authority is implicit.
+
+The run record path must be absolute. The launcher validates the record, checks
+its semantic program revision, entry and launch kind, checks required roots and
+admission conditions, then pins host grants before entry. The same binary can
+accept different grants and seeds on subsequent launches. Unknown or unsupported
+policy refuses launch. Environment variables never supply a grant fallback.
+
+Arguments after `--hirsel-run <path>` replace the record's `args` with the exact
+UTF-8 process snapshot, including an empty snapshot, before admission. A record
+may therefore omit Args. Without a run record, `./program -- args...` explicitly
+grants only Args. `./program` grants no external roots: a root-free entry can
+run, and an entry requiring Io, Args, Env or Unsafe refuses before entry. Invalid
+UTF-8 arguments refuse launch. These snapshots contribute to run identity.
+
+A directly run executable exits 0 for `Ok(())`, 1 for a returned `Error`, 2 for a
+language failure and 3 for a refused launch. On an x86-64 host, test an AArch64
+artifact with the pinned qemu and cross sysroot:
+
+```sh
+"$HIRSEL_QEMU_AARCH64" -L "$HIRSEL_AARCH64_SYSROOT" ./hello-arm64 \
+  --hirsel-run /absolute/path/run.json
+```
+
 ## Layout
 
 - `docs/spec/` is the specification, starting at `docs/spec/index.md`. Rule IDs

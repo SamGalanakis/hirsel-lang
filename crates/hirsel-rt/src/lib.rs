@@ -26,6 +26,7 @@ pub mod net_abi;
 pub mod net_host;
 pub mod net_tls;
 pub mod operations;
+mod standalone;
 pub mod test_net_abi;
 pub mod text;
 pub mod tls_abi;

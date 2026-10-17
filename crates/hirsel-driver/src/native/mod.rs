@@ -8,6 +8,7 @@ mod adapt;
 mod coverage;
 mod differential;
 mod emit;
+mod executable;
 mod heap;
 mod link;
 mod observe;
@@ -23,6 +24,7 @@ pub use differential::{
     real_io_replay, real_io_replay_with_config, runtime_builds, smoke_matrix, topology_matrix,
 };
 pub use emit::{KIND_BUG, check_runtime_calls, emit, emit_ir, failure_codes, failure_rules};
+pub use executable::{BuildProfile, build_path_native};
 pub use heap::{HeapRun, heap_campaign, run_heap};
 pub use hirsel_lir::layout_types::TargetSpec;
 pub use hirsel_llvm::{OptLevel, ProfileSource, ProfileSources, c_call};

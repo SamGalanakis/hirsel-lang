@@ -64,3 +64,10 @@ the interpreter has no host effects. Pure calls and recorded Args/Env snapshots 
 ordinary Library. `run_path`, `run_path_with_simulation` and `run_file` are the fake-provider
 entry points for semantic fixtures. Production native runs pass the same validated record
 to linking and launch; explicit host runs have streaming stdout and no harness wall-time limit.
+
+
+`native::build_path_native` checks a source or manifest and writes a standalone
+executable. Its entry adapter forwards nominal roots in source parameter order,
+derived from the engine's shared `entry_roots` validation. The executable embeds
+semantic program revision and entry identity; fresh launch grants and argv are
+validated and admitted by the runtime, independently of compiler profile.

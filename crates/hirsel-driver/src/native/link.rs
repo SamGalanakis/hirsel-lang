@@ -330,67 +330,57 @@ fn aarch64(target: &TargetSpec) -> bool {
     target.triple.starts_with("aarch64")
 }
 
-/// The size of the entry's inline `Result`, after checking the launch
-/// contract: `fn(rt: Io, args: Args) -> Result[(), E]` at the Hirsel ABI v1.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Validated native entry roots, preserving source parameter order.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LaunchKind {
     Zero,
-    Main,
+    Main(Vec<hirsel_run_config::Root>),
     Test,
 }
+impl LaunchKind {
+    pub(crate) fn roots(&self) -> &[hirsel_run_config::Root] {
+        match self {
+            Self::Zero => &[],
+            Self::Main(roots) => roots,
+            Self::Test => &[hirsel_run_config::Root::Test],
+        }
+    }
+    fn mask(&self) -> u8 {
+        self.roots()
+            .iter()
+            .fold(0, |mask, root| mask | (1 << root_index(*root)))
+    }
+}
+pub(crate) fn root_index(root: hirsel_run_config::Root) -> usize {
+    use hirsel_run_config::Root;
+    match root {
+        Root::Io => 0,
+        Root::Args => 1,
+        Root::Env => 2,
+        Root::Unsafe => 3,
+        Root::Test => 4,
+    }
+}
+pub(crate) fn root_handle(root: hirsel_run_config::Root) -> u64 {
+    [
+        hirsel_rt::launch::IO_HANDLE,
+        hirsel_rt::launch::ARGS_HANDLE,
+        u64::MAX,
+        0,
+        hirsel_rt::launch::IO_HANDLE,
+    ][root_index(root)]
+}
 pub(crate) fn launch_kind(signature: &hirsel_types::Signature) -> Option<LaunchKind> {
-    use hirsel_types::{GenericArgument, SignatureKind, TypeKind};
-    let SignatureKind::Function(f) = &signature.kind else {
-        return None;
-    };
-    if signature.metadata.visibility != hirsel_syntax::Visibility::Public
-        || !f.generics.is_empty()
-        || f.incomplete
-        || f.foreign.is_some()
-    {
-        return None;
+    use hirsel_run_config::LaunchKind as Kind;
+    if hirsel_engine::entry_roots(signature, Kind::Test).is_ok() {
+        return Some(LaunchKind::Test);
     }
-    let TypeKind::Named {
-        definition,
-        arguments,
-    } = &signature.types.get(f.result)?.kind
-    else {
-        return None;
-    };
-    if !definition.package_is("core", "1")
-        || !definition.0.modules.is_empty()
-        || definition.0.name != "Result"
-    {
-        return None;
-    }
-    let [GenericArgument::Type(ok), GenericArgument::Type(_)] = arguments.as_ref() else {
-        return None;
-    };
-    if !matches!(&signature.types.get(*ok)?.kind, TypeKind::Tuple(fields) if fields.is_empty()) {
-        return None;
-    }
-    let names: Option<Vec<_>> = f
-        .parameters
-        .iter()
-        .map(|p| match &signature.types.get(p.ty)?.kind {
-            TypeKind::Named {
-                definition,
-                arguments,
-            } if arguments.is_empty()
-                && definition.package_is("core", "1")
-                && definition.0.modules.is_empty() =>
-            {
-                Some(definition.0.name.as_str())
-            }
-            _ => None,
-        })
-        .collect();
-    match names?.as_slice() {
-        [] => Some(LaunchKind::Zero),
-        ["Io", "Args"] => Some(LaunchKind::Main),
-        ["Test"] => Some(LaunchKind::Test),
-        _ => None,
-    }
+    let roots = hirsel_engine::entry_roots(signature, Kind::Main).ok()?;
+    Some(if roots.is_empty() {
+        LaunchKind::Zero
+    } else {
+        LaunchKind::Main(roots)
+    })
 }
 fn entry_result(program: &ReadyProgram, entry: &DefPath) -> Result<(String, u64), NativeError> {
     let refuse = |what: &str| NativeError {
@@ -426,13 +416,11 @@ fn entry_result(program: &ReadyProgram, entry: &DefPath) -> Result<(String, u64)
             "hidden arguments other than context and destination",
         ));
     }
-    let parameter_count = match kind {
-        LaunchKind::Zero => 0,
-        LaunchKind::Main => 2,
-        LaunchKind::Test => 1,
-    };
+    let parameter_count = kind.roots().len();
     if abi.parameters.len() != parameter_count || !abi.parameters.iter().all(handle) {
-        return Err(refuse("parameters other than (rt: Io, args: Args)"));
+        return Err(refuse(
+            "parameters do not match the selected root capabilities",
+        ));
     }
     let size = abi
         .result
@@ -695,6 +683,28 @@ pub(crate) fn link_objects_with_run(
     dir: &Path,
     requested: Option<&hirsel_run_config::ValidatedRun>,
 ) -> Result<PathBuf, NativeError> {
+    link_objects_impl(program, entry, objects, toolchain, dir, requested, false)
+}
+
+pub(crate) fn link_standalone(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+) -> Result<PathBuf, NativeError> {
+    link_objects_impl(program, entry, objects, toolchain, dir, None, true)
+}
+
+fn link_objects_impl(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    standalone: bool,
+) -> Result<PathBuf, NativeError> {
     let (symbol, result_size) = entry_result(program, entry)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
@@ -712,36 +722,22 @@ pub(crate) fn link_objects_with_run(
         })
         .collect();
     let target = &program.target;
-    let kind = program.launches[entry];
-    let (declaration, launcher, call) = match kind {
-        LaunchKind::Zero => (
-            format!("declare i8 @\"{symbol}\"(ptr, ptr, ptr)"),
-            "declare i32 @hirsel_rt_v2_launch_zero(ptr, i64, ptr, i32, ptr)".to_owned(),
-            format!(
-                "call i32 @hirsel_rt_v2_launch_zero(ptr @\"{symbol}\", i64 {result_size}, ptr @\"{}\", i32 {}, ptr @hirsel.launch.config)",
-                registry.symbol(),
-                registry.external_count()
-            ),
-        ),
-        LaunchKind::Main => (
-            format!("declare i8 @\"{symbol}\"(ptr, ptr, ptr, ptr, ptr)"),
-            "declare i32 @hirsel_rt_v2_launch(ptr, i64, ptr, i32, ptr)".to_owned(),
-            format!(
-                "call i32 @hirsel_rt_v2_launch(ptr @\"{symbol}\", i64 {result_size}, ptr @\"{}\", i32 {}, ptr @hirsel.launch.config)",
-                registry.symbol(),
-                registry.external_count()
-            ),
-        ),
-        LaunchKind::Test => (
-            format!("declare i8 @\"{symbol}\"(ptr, ptr, ptr, ptr)"),
-            "declare i32 @hirsel_rt_v2_launch_test(ptr, i64, ptr, i32, ptr)".to_owned(),
-            format!(
-                "call i32 @hirsel_rt_v2_launch_test(ptr @\"{symbol}\", i64 {result_size}, ptr @\"{}\", i32 {}, ptr @hirsel.launch.config)",
-                registry.symbol(),
-                registry.external_count()
-            ),
-        ),
-    };
+    let kind = &program.launches[entry];
+    let roots = kind.roots();
+    let parameters = roots.iter().map(|_| ", ptr").collect::<String>();
+    let mut loads = String::new();
+    let mut arguments = String::new();
+    for (index, root) in roots.iter().enumerate() {
+        loads.push_str(&format!(
+            " %root{index} = getelementptr i64, ptr %roots, i64 {}\n",
+            root_index(*root)
+        ));
+        arguments.push_str(&format!(", ptr %root{index}"));
+    }
+    let declaration = format!(
+        "declare i8 @\"{symbol}\"(ptr, ptr, ptr{parameters})\ndefine private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{\n{loads} %s = call i8 @\"{symbol}\"(ptr %ctx, ptr %dest, ptr %out{arguments})\n ret i8 %s\n}}"
+    );
+    let mask = kind.mask();
     let registry_declaration = format!(
         "@\"{}\" = external constant [{} x ptr]",
         registry.symbol(),
@@ -753,7 +749,7 @@ pub(crate) fn link_objects_with_run(
             "missing checked semantic program revision",
         )
     })?;
-    let launch = if kind == LaunchKind::Test {
+    let launch = if *kind == LaunchKind::Test {
         hirsel_run_config::LaunchKind::Test
     } else {
         hirsel_run_config::LaunchKind::Main
@@ -762,7 +758,7 @@ pub(crate) fn link_objects_with_run(
     record.inputs = program.launch.clone();
     // The existing conformance launcher supplies this explicit fixture profile.
     // Standalone admission will consume the record at the C entry boundary.
-    if kind == LaunchKind::Main {
+    if matches!(kind, LaunchKind::Main(_)) && !standalone {
         use hirsel_run_config::{Access, IoGrants, Mount, ProviderContract};
         let root = std::fs::canonicalize(dir)
             .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?
@@ -791,8 +787,10 @@ pub(crate) fn link_objects_with_run(
     let run = requested.unwrap_or(&default);
     run.check_revision(revision, launch)
         .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
-    std::fs::write(dir.join("run.json"), run.canonical())
-        .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
+    if !standalone {
+        std::fs::write(dir.join("run.json"), run.canonical())
+            .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
+    }
     let config = run.config();
     let identity = config
         .run_identity()
@@ -806,8 +804,46 @@ pub(crate) fn link_objects_with_run(
         config.random_seed(),
         config.test_seed()
     );
+    let (launcher, call, binding) = if standalone {
+        let digest = revision
+            .digest()
+            .iter()
+            .map(|b| format!("i8 {b}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let name = revision.entry().as_bytes();
+        let name_bytes = name
+            .iter()
+            .map(|b| format!("i8 {b}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (
+            "declare i32 @hirsel_rt_v2_launch_standalone(ptr, i64, ptr, i32, ptr, ptr, i64, i8)"
+                .to_string(),
+            format!(
+                "call i32 @hirsel_rt_v2_launch_standalone(ptr @hirsel.entry, i64 {result_size}, ptr @\"{}\", i32 {}, ptr @hirsel.program, ptr @hirsel.entry.name, i64 {}, i8 {mask})",
+                registry.symbol(),
+                registry.external_count(),
+                name.len()
+            ),
+            format!(
+                "@hirsel.program = private constant [32 x i8] [{digest}]\n@hirsel.entry.name = private constant [{} x i8] [{name_bytes}]",
+                name.len()
+            ),
+        )
+    } else {
+        (
+            "declare i32 @hirsel_rt_v2_launch_roots(ptr, i64, ptr, i32, ptr, i8)".to_string(),
+            format!(
+                "call i32 @hirsel_rt_v2_launch_roots(ptr @hirsel.entry, i64 {result_size}, ptr @\"{}\", i32 {}, ptr @hirsel.launch.config, i8 {mask})",
+                registry.symbol(),
+                registry.external_count()
+            ),
+            launch_config,
+        )
+    };
     let shim = format!(
-        "target triple = \"{}\"\n{registry_declaration}\n{launch_config}\n{declaration}\n{launcher}\ndeclare ptr @signal(i32, ptr)\ndefine i32 @main() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = {call}\n ret i32 %r\n}}\n",
+        "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\ndeclare ptr @signal(i32, ptr)\ndefine i32 @main() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = {call}\n ret i32 %r\n}}\n",
         target.triple
     );
     let main = hirsel_llvm::compile_ir(&shim, target, OptLevel::None)
@@ -863,23 +899,30 @@ pub(crate) fn link_objects_with_run(
     } else {
         &toolchain.clang
     });
-    command.args(toolchain.loader_flags(target));
+    if !standalone {
+        command.args(toolchain.loader_flags(target));
+    }
     command.arg(write("main.o", &main.bytes)?);
     for (index, object) in objects.iter().enumerate() {
         command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
     }
-    command
-        .arg(archive)
-        .args([
-            "-lgcc_s",
-            "-lutil",
-            "-lrt",
-            "-lpthread",
+    command.arg(archive);
+    if standalone {
+        // Bundle compiler support and math objects as well as the Rust runtime.
+        // On glibc Linux the remaining system interfaces are supplied by libc.
+        command.args([
+            "-static-libgcc",
+            "-Wl,--as-needed",
+            "-Wl,-Bstatic",
             "-lm",
+            "-Wl,-Bdynamic",
             "-ldl",
-            "-o",
-        ])
-        .arg(&executable);
+            "-lpthread",
+        ]);
+    } else {
+        command.args(["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"]);
+    }
+    command.arg("-o").arg(&executable);
     checked(StageName::Link, &mut command)?;
     Ok(executable)
 }

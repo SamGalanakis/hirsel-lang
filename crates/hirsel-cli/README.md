@@ -1,6 +1,6 @@
 # hirsel-cli
 
-Expose check, run, fmt and JSON through the compiler driver.
+Expose check, run, build, fmt and JSON through the compiler driver.
 
 Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag and shared span/syntax types as needed; no phase internals.
 
@@ -84,3 +84,9 @@ and cannot combine with `--run` or `--native`.
 `hirsel export --run <source|manifest> -o run.json` writes the current semantic binding
 with empty grants. A launcher can explicitly fill its Io projections and Args/Env
 snapshots before supplying that record; selecting the source grants no authority.
+
+`hirsel build [--release | --debug] [--target x86_64-linux | aarch64-linux]
+<source|manifest.json> -o <exe>` writes a standalone executable linked with the
+production runtime. Default builds use LLVM O2, release O3, debug O0 with source
+line tables. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
+records deny external roots. `-- [args...]` explicitly supplies only Args.

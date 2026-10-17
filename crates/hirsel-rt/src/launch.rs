@@ -54,10 +54,24 @@ pub(crate) const TEST_HANDLE: u64 = 1;
 pub type TestEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8, *const u64) -> u8;
 /// A root-free entry, with only the ordinary hidden context and result addresses.
 pub type ZeroEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8) -> u8;
+/// Uniform compiler-generated adapter: roots are [Io, Args, Env, Unsafe, Test].
+pub type RootsEntry = unsafe extern "C" fn(*mut RunCtx, *mut u8, *mut u8, *mut u64) -> u8;
 enum Launch {
     Zero(ZeroEntry),
     Main(Entry),
     Test(TestEntry),
+    Roots(RootsEntry, u8),
+}
+impl Launch {
+    fn is_test(&self) -> bool {
+        matches!(
+            self,
+            Self::Test(_) | Self::Roots(_, crate::standalone::ROOT_TEST)
+        )
+    }
+    fn is_zero(&self) -> bool {
+        matches!(self, Self::Zero(_) | Self::Roots(_, 0))
+    }
 }
 /// The largest inline result an entry may return.
 pub const RESULT_MAX: u64 = 64;
@@ -677,6 +691,85 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_test(
         )
     }
 }
+/// Launch the compiler's root-order adapter with a fixed conformance/run binding.
+/// # Safety
+/// `entry` has RootsEntry ABI; config and layouts are live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
+    entry: RootsEntry,
+    result_size: u64,
+    layouts: *const *const Layout,
+    layout_count: u32,
+    config: *const Config,
+    roots: u8,
+) -> i32 {
+    unsafe {
+        launch(
+            Launch::Roots(entry, roots),
+            result_size,
+            layouts,
+            layout_count,
+            config,
+        )
+    }
+}
+
+/// Launch an executable bound to semantic code, accepting fresh grants at each launch.
+/// # Safety
+/// `entry` has RootsEntry ABI. program points to 32 bytes, name to name_len UTF-8
+/// bytes, and layouts to layout_count live descriptor pointers for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
+    entry: RootsEntry,
+    result_size: u64,
+    layouts: *const *const Layout,
+    layout_count: u32,
+    program: *const [u8; 32],
+    name: *const u8,
+    name_len: u64,
+    roots: u8,
+) -> i32 {
+    let Some(program) = (unsafe { program.as_ref() }) else {
+        return refuse("missing program binding");
+    };
+    let Ok(name_len) = usize::try_from(name_len) else {
+        return refuse("invalid entry name length");
+    };
+    if name.is_null() {
+        return refuse("missing entry name");
+    }
+    let Ok(name) = std::str::from_utf8(unsafe { std::slice::from_raw_parts(name, name_len) })
+    else {
+        return refuse("invalid entry name");
+    };
+    let run = match crate::standalone::select_run(
+        std::env::args_os().skip(1).collect(),
+        *program,
+        name,
+        roots,
+    ) {
+        Ok(run) => run,
+        Err(error) => return refuse(&error.to_string()),
+    };
+    let config = run.config();
+    let config = Config {
+        hash_seed: config.hash_seed(),
+        random_seed: config.random_seed(),
+        test_seed: config.test_seed(),
+        run_identity: config.run_identity(),
+    };
+    unsafe {
+        execute(
+            Launch::Roots(entry, roots),
+            result_size,
+            layouts,
+            layout_count,
+            &config,
+            Some(&run),
+        )
+    }
+}
+
 unsafe fn launch(
     entry: Launch,
     result_size: u64,
@@ -699,7 +792,6 @@ unsafe fn launch(
     } else {
         None
     };
-    let mut production_io = None;
     if let Some(run) = &requested {
         if run.identity() != launch_config.run_identity
             || run.config().hash_seed() != launch_config.hash_seed
@@ -707,6 +799,38 @@ unsafe fn launch(
             || run.config().test_seed() != launch_config.test_seed
         {
             return refuse("run record binding mismatch");
+        }
+    }
+    unsafe {
+        execute(
+            entry,
+            result_size,
+            layouts,
+            layout_count,
+            launch_config,
+            requested.as_ref(),
+        )
+    }
+}
+
+unsafe fn execute(
+    entry: Launch,
+    result_size: u64,
+    layouts: *const *const Layout,
+    layout_count: u32,
+    launch_config: &Config,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+) -> i32 {
+    let mut production_io = None;
+    if let Some(run) = requested {
+        if let Launch::Roots(_, roots) = &entry {
+            let roots = match crate::standalone::required_roots(*roots) {
+                Ok(roots) => roots,
+                Err(e) => return refuse(&e.to_string()),
+            };
+            if let Err(e) = run.require_roots(&roots) {
+                return refuse(&e.to_string());
+            }
         }
         let mut host = crate::host_launch::HostGrants::new(RawStdout);
         let now = match std::time::SystemTime::now()
@@ -734,9 +858,9 @@ unsafe fn launch(
         .iter()
         .map(|(name, file)| (*name, file))
         .collect();
-    let mut arguments = if let Some(run) = &requested {
+    let mut arguments = if let Some(run) = requested {
         run.record().args.clone().unwrap_or_default()
-    } else if matches!(entry, Launch::Zero(_)) {
+    } else if entry.is_zero() {
         vec![]
     } else {
         match std::env::args_os()
@@ -749,14 +873,18 @@ unsafe fn launch(
             Err(index) => return refuse(&format!("argument {index} is not UTF-8")),
         }
     };
-    let net = match std::env::var("HIRSEL_RT_NET") {
-        Ok(text) => match hirsel_run_config::validate_net_grant(text.as_bytes()) {
-            Ok(grant) => Some(grant),
-            Err(error) => return refuse(&format!("the network grant: {error}")),
-        },
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return refuse("the network grant is not UTF-8");
+    let net = if requested.is_some() {
+        None
+    } else {
+        match std::env::var("HIRSEL_RT_NET") {
+            Ok(text) => match hirsel_run_config::validate_net_grant(text.as_bytes()) {
+                Ok(grant) => Some(grant),
+                Err(error) => return refuse(&format!("the network grant: {error}")),
+            },
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return refuse("the network grant is not UTF-8");
+            }
         }
     };
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
@@ -767,6 +895,9 @@ unsafe fn launch(
     let mut zero_recording = None;
     let mut replay = None;
     let adapter: Box<dyn Adapter> = if let Some(mut io) = production_io {
+        if entry.is_test() {
+            io.test_context(seed);
+        }
         io.discard_history();
         let io = Rc::new(RefCell::new(io));
         real = Some(io.clone());
@@ -796,14 +927,14 @@ unsafe fn launch(
                 {
                     return refuse(&format!("the network script: {error:?}"));
                 }
-                if matches!(entry, Launch::Test(_)) {
+                if entry.is_test() {
                     io.test_context(seed);
                 }
                 let io = Rc::new(RefCell::new(io));
                 replay = Some(io.clone());
                 Box::new(Shared(io))
             }
-            None if matches!(entry, Launch::Zero(_)) => {
+            None if entry.is_zero() => {
                 if let Some(path) = std::env::var_os("HIRSEL_RT_TAPE") {
                     let record = Recording {
                         arguments: vec![],
@@ -876,7 +1007,7 @@ unsafe fn launch(
                             Err(error) => return refuse(&format!("the Io tape: {error}")),
                         }
                     }
-                    if matches!(entry, Launch::Test(_)) {
+                    if entry.is_test() {
                         io.test_context(seed);
                     }
                     io.discard_history();
@@ -958,6 +1089,7 @@ unsafe fn launch(
     // Zeroed and 16-aligned: the entry writes a result of any supported alignment.
     let mut result = [0u128; RESULT_MAX as usize / 16];
     let (mut rt, mut args) = (IO_HANDLE, ARGS_HANDLE);
+    let mut roots = [IO_HANDLE, ARGS_HANDLE, u64::MAX, 0, TEST_HANDLE];
     let status = unsafe {
         match entry {
             Launch::Zero(entry) => entry(ctx, std::ptr::null_mut(), result.as_mut_ptr().cast()),
@@ -973,6 +1105,12 @@ unsafe fn launch(
                 std::ptr::null_mut(),
                 result.as_mut_ptr().cast(),
                 &TEST_HANDLE,
+            ),
+            Launch::Roots(entry, _) => entry(
+                ctx,
+                std::ptr::null_mut(),
+                result.as_mut_ptr().cast(),
+                roots.as_mut_ptr(),
             ),
         }
     };

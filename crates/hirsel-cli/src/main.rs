@@ -2,13 +2,19 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
 
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))
 }
 enum Command {
     Help,
+    Build {
+        source: OsString,
+        output: OsString,
+        target: hirsel_driver::native::TargetSpec,
+        profile: hirsel_driver::native::BuildProfile,
+    },
     Export {
         run: bool,
         entry: OsString,
@@ -35,6 +41,35 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
     let command = match args.next()? {
         Some(Long("help")) => Command::Help,
         Some(Value(command)) if command == "help" => Command::Help,
+        Some(Value(command)) if command == "build" => {
+            use hirsel_driver::native::{BuildProfile, TargetSpec};
+            let (mut source, mut output, mut target, mut profile) = (None, None, None, None);
+            while let Some(arg) = args.next()? {
+                match arg {
+                    Long("release") if profile.is_none() => profile = Some(BuildProfile::Release),
+                    Long("debug") if profile.is_none() => profile = Some(BuildProfile::Debug),
+                    Long("target") if target.is_none() => {
+                        let value = args.value()?;
+                        target = Some(match value.to_str() {
+                            Some("x86_64-linux") => TargetSpec::x86_64_unknown_linux_gnu(),
+                            Some("aarch64-linux") => TargetSpec::aarch64_unknown_linux_gnu(),
+                            _ => return Err("unsupported build target".into()),
+                        });
+                    }
+                    Short('o') if output.is_none() => output = Some(args.value()?),
+                    Value(file) if source.is_none() && !file.to_string_lossy().starts_with('-') => {
+                        source = Some(file)
+                    }
+                    arg => return Err(arg.unexpected()),
+                }
+            }
+            Command::Build {
+                source: source.ok_or("build requires a source or manifest")?,
+                output: output.ok_or("build requires -o")?,
+                target: target.unwrap_or_else(TargetSpec::x86_64_unknown_linux_gnu),
+                profile: profile.unwrap_or_default(),
+            }
+        }
         Some(Value(command)) if command == "export" => {
             let run = match args.next()? {
                 Some(Long("tir")) => false,
@@ -144,6 +179,26 @@ fn execute(args: Vec<OsString>) -> u8 {
         Command::Help => {
             println!("{USAGE}");
             return 0;
+        }
+        Command::Build {
+            source,
+            output,
+            target,
+            profile,
+        } => {
+            return match hirsel_driver::native::build_path_native(
+                Path::new(&source),
+                Path::new(&output),
+                target,
+                profile,
+            ) {
+                Ok(Ok(())) => 0,
+                Ok(Err(error)) => {
+                    eprintln!("hirsel: {error}");
+                    2
+                }
+                Err(error) => tool_error(error, false),
+            };
         }
         Command::Export { run, entry, output } => {
             if run {

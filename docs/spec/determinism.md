@@ -52,14 +52,18 @@ failures.
 
 ## Run configuration
 
-A native program is launched as `program --hirsel-run /absolute/run.json`; a source run is
-`hirsel run launch.json --run /absolute/run.json`. The file is the canonical run record.
-There are no environment-variable fallbacks for roots, seeds or grants, no build-mode
-grants and no search of parent directories. The launcher consumes this one option, and the
-program's `Args` come only from the record. Without the option the run uses the fully
-specified empty-grant record with all seeds zero. An explicit record may grant empty `Args`
-or empty `Env`, which differs from omitting the root. A requested but absent root is a
-launch refusal under [PROG-3](programs.md#prog-3-entry), not a language failure.
+A native program is launched as `program --hirsel-run /absolute/run.json [args...]`; a
+source run is `hirsel run launch.json --run /absolute/run.json`. The file selects the run
+record. There are no environment-variable fallbacks for roots, seeds or grants, no
+build-mode grants and no search of parent directories. For a source run, the program's
+`Args` come only from the record. For a standalone executable, arguments following the
+record path replace its Args snapshot, including an empty snapshot, before validation and
+admission; the record may omit Args. Without a record, `program -- [args...]` explicitly
+supplies only Args. These process snapshots contribute to the admitted run identity like
+any other input. Without either option the run uses the fully specified empty-grant record
+with all seeds zero. An explicit record may grant empty `Args` or empty `Env`, which differs
+from omitting the root. A requested but absent root is a launch refusal under
+[PROG-3](programs.md#prog-3-entry), not a language failure.
 
 | Field | Meaning |
 |---|---|

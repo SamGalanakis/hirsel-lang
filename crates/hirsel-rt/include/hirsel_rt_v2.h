@@ -290,6 +290,17 @@ int32_t hirsel_rt_v2_launch(uint8_t (*entry)(hirsel_rt_v2_ctx *, uint8_t *, uint
                                              const uint64_t *, const uint64_t *),
                             uint64_t result_size, const hirsel_rt_v2_layout *const *layouts, uint32_t layout_count, const hirsel_rt_v2_launch_config *config);
 
+/* Compiler root-order adapters receive [Io, Args, Env, Unsafe, Test].
+ * roots uses bits 0..4 in that order. Standalone admission binds semantic code,
+ * then acquires fresh grants selected by --hirsel-run before invoking entry. */
+typedef uint8_t (*hirsel_rt_v2_roots_entry)(hirsel_rt_v2_ctx *, uint8_t *, uint8_t *, uint64_t *);
+int32_t hirsel_rt_v2_launch_roots(hirsel_rt_v2_roots_entry entry, uint64_t result_size,
+    const hirsel_rt_v2_layout *const *layouts, uint32_t layout_count,
+    const hirsel_rt_v2_launch_config *config, uint8_t roots);
+int32_t hirsel_rt_v2_launch_standalone(hirsel_rt_v2_roots_entry entry, uint64_t result_size,
+    const hirsel_rt_v2_layout *const *layouts, uint32_t layout_count,
+    const uint8_t program[32], const uint8_t *name, uint64_t name_len, uint8_t roots);
+
 /* Allocation and counts. */
 hirsel_rt_v2_header *hirsel_rt_v2_alloc(hirsel_rt_v2_ctx *ctx, uint32_t index, uint64_t extent,
                                         uint64_t align, uint8_t destination, uint64_t site);

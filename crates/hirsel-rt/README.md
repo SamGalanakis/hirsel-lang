@@ -490,3 +490,11 @@ consume `--hirsel-run /absolute/run.json`, verify its embedded identity and seed
 admit it before entry. Args come from that record. The differential harness retains its
 explicit fixture launch profile. Listener listen/accept/local_addr exports use the same
 Net policy path as streams, including the listener's brand on accepted streams.
+
+Standalone launch uses `hirsel_rt_v2_launch_standalone`, bound to semantic code
+and the exact entry. `--hirsel-run /absolute/run.json [args...]` selects the shared
+RunConfig parser; trailing process Args replace the record snapshot before fresh
+admission. `-- [args...]` supplies only Args; no record or delimiter grants no
+external roots. Compiler adapters receive the root table [Io, Args, Env, Unsafe,
+Test] and forward only declared parameters, in source order. The standalone path
+always uses admitted host grants and never the conformance fixture profile.

@@ -13,7 +13,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
+            b"usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -769,5 +769,308 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
         }
     }
     std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_file(source).unwrap();
+}
+
+fn build_executable(source: &std::path::Path, profile: &[&str]) -> std::path::PathBuf {
+    let executable = source.with_extension(format!("{}-exe", profile.join("-")));
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("build")
+        .args(profile)
+        .arg(source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    executable
+}
+fn build_run_record(source: &std::path::Path) -> serde_json::Value {
+    let mut loaded = hirsel_driver::load_program(source).unwrap();
+    loaded.check_for_execution().unwrap();
+    let revision = loaded
+        .engine
+        .semantic_program_revision(&loaded.entry)
+        .unwrap();
+    serde_json::json!({
+        "schema":1,"program":revision.digest().iter().map(|b|format!("{b:02x}")).collect::<String>(),
+        "entry":revision.entry(),"launch":"main",
+        "inputs":{"hash_seed":0,"random_seed":0,"test_seed":0,"scheduler":null},
+        "io":null,"args":null,"env":null,"unsafe":false,"admission":null
+    })
+}
+fn stdout_grant() -> serde_json::Value {
+    serde_json::json!({"stdout":"stdout.bytes@1","tasks":null,"monotonic_clock":null,
+        "wall_clock":null,"random":null,"dirs":[],"net":null})
+}
+#[test]
+fn standalone_hello_runs_directly_with_fresh_grants_and_only_libc() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = file(
+            "pub fn main(rt: Io) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"hello, world\\n\"); Ok(()) }",
+        );
+        let exe = build_executable(&source, &[]);
+        let mut record = build_run_record(&source);
+        record["io"] = stdout_grant();
+        let run = source.with_extension("run.json");
+        std::fs::write(&run, record.to_string()).unwrap();
+        let output = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"hello, world\n");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let denied = Command::new(&exe)
+            .env("HIRSEL_RT_ROOT", "/")
+            .env("HIRSEL_RT_NET", "invalid")
+            .output()
+            .unwrap();
+        assert_eq!(denied.status.code(), Some(3), "{denied:?}");
+        assert!(denied.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&denied.stderr).contains("not_granted"),
+            "{denied:?}"
+        );
+        // A fresh config can change grants and inputs without rebuilding the executable.
+        record["io"]["stdout"] = serde_json::Value::Null;
+        record["inputs"]["hash_seed"] = 42.into();
+        std::fs::write(&run, record.to_string()).unwrap();
+        let denied = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .output()
+            .unwrap();
+        assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+        assert!(denied.stdout.is_empty());
+        record["io"] = stdout_grant();
+        record["admission"] = serde_json::json!({"not_before":null,"expires":0,"revocation":null});
+        std::fs::write(&run, record.to_string()).unwrap();
+        let expired = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .output()
+            .unwrap();
+        assert_eq!(expired.status.code(), Some(3), "{expired:?}");
+        assert!(expired.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&expired.stderr).contains("expired"),
+            "{expired:?}"
+        );
+        record["admission"] = serde_json::Value::Null;
+        record["program"] = "00".repeat(32).into();
+        std::fs::write(&run, record.to_string()).unwrap();
+        let wrong = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .output()
+            .unwrap();
+        assert_eq!(wrong.status.code(), Some(3), "{wrong:?}");
+        assert!(
+            String::from_utf8_lossy(&wrong.stderr).contains("binding"),
+            "{wrong:?}"
+        );
+        let readobj = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
+            .join("bin/llvm-readobj");
+        let dynamic = Command::new(readobj)
+            .arg("--needed-libs")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(dynamic.status.success(), "{dynamic:?}");
+        let text = String::from_utf8(dynamic.stdout).unwrap();
+        let libs: Vec<_> = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.ends_with(".so.6") || line.contains(".so."))
+            .collect();
+        assert_eq!(libs, ["ld-linux-x86-64.so.2", "libc.so.6"], "{text}");
+        for path in [source, exe, run] {
+            std::fs::remove_file(path).unwrap();
+        }
+    });
+}
+#[test]
+fn standalone_reads_a_granted_file_using_process_args_in_source_root_order() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = file(
+            "pub type Error = Usage(ArgError) | Files(FileError) | Grant(GrantError)\npub fn main(args: Args, rt: Io) -> Result[(), Error] { let root = arg.path(args, 0) ? Usage; let dir = io.dir(rt, root) ? Files; let bytes = file.read_bytes(dir, path.of(\"hello.txt\")) ? Files; let _ = out.print(io.stdout(rt) ? Grant, if bytes == b\"from disk\" { \"file ok\\n\" } else { \"wrong\\n\" }); Ok(()) }",
+        );
+        let exe = build_executable(&source, &["--release"]);
+        let root = source.with_extension("files");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("hello.txt"), "from disk").unwrap();
+        let mut record = build_run_record(&source);
+        record["io"] = stdout_grant();
+        record["io"]["dirs"] = serde_json::json!([{"path":"data","host":root,"access":"read"}]);
+        // A record's Args are replaced by the explicit process snapshot at admission.
+        record["args"] = serde_json::json!(["ignored"]);
+        let run = source.with_extension("run.json");
+        std::fs::write(&run, record.to_string()).unwrap();
+        let output = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .arg("data")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"file ok\n");
+        record["io"]["dirs"] = serde_json::json!([]);
+        std::fs::write(&run, record.to_string()).unwrap();
+        let denied = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .arg("data")
+            .output()
+            .unwrap();
+        assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+        assert!(denied.stdout.is_empty());
+        for path in [source, exe, run] {
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    });
+}
+#[test]
+fn standalone_cross_target_runs_under_pinned_qemu_and_debug_has_line_tables() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
+        let cross = build_executable(&source, &["--target", "aarch64-linux"]);
+        let output = Command::new(std::env::var_os("HIRSEL_QEMU_AARCH64").unwrap())
+            .arg("-L")
+            .arg(std::env::var_os("HIRSEL_AARCH64_SYSROOT").unwrap())
+            .arg(&cross)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let manifest = source.with_extension("manifest.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"standalone","version":"0"},"entry":{"module":[],"name":"main"},"sources":[{"path":source,"module":[]}],"dependencies":[]}).to_string()).unwrap();
+        let debug = build_executable(&manifest, &["--debug"]);
+        let output = Command::new(&debug).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let dwarf = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
+            .join("bin/llvm-dwarfdump");
+        let lines = Command::new(dwarf)
+            .arg("--debug-line")
+            .arg(&debug)
+            .output()
+            .unwrap();
+        assert!(lines.status.success(), "{lines:?}");
+        assert!(
+            String::from_utf8_lossy(&lines.stdout)
+                .contains(source.file_name().unwrap().to_str().unwrap()),
+            "{lines:?}"
+        );
+        for path in [source, cross, debug, manifest] {
+            std::fs::remove_file(path).unwrap();
+        }
+    });
+}
+
+#[test]
+fn standalone_admits_selected_roots_and_explicit_argv_without_ambient_grants() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = file(
+            "pub fn main(environment: Env, args: Args, rt: Io, permit: Unsafe) -> Result[(), ()] { Ok(()) }",
+        );
+        let exe = build_executable(&source, &[]);
+        let run = source.with_extension("run.json");
+        let mut record = build_run_record(&source);
+        record["io"] = serde_json::json!({"stdout":null,"tasks":null,"monotonic_clock":null,"wall_clock":null,"random":null,"dirs":[],"net":null});
+        record["env"] = serde_json::json!({});
+        record["unsafe"] = true.into();
+        std::fs::write(&run, record.to_string()).unwrap();
+        let output = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        record["env"] = serde_json::Value::Null;
+        std::fs::write(&run, record.to_string()).unwrap();
+        let denied = Command::new(&exe)
+            .arg("--hirsel-run")
+            .arg(&run)
+            .output()
+            .unwrap();
+        assert_eq!(denied.status.code(), Some(3), "{denied:?}");
+        assert!(
+            String::from_utf8_lossy(&denied.stderr).contains("Env"),
+            "{denied:?}"
+        );
+        for path in [source, exe, run] {
+            std::fs::remove_file(path).unwrap();
+        }
+        let source = file(
+            "pub fn main(args: Args) -> Result[(), ()] { match arg.path(args, 0) { Ok(_) => Ok(()), Error(_) => Error(()) } }",
+        );
+        let exe = build_executable(&source, &[]);
+        let accepted = Command::new(&exe)
+            .args(["--", "argument"])
+            .output()
+            .unwrap();
+        assert_eq!(accepted.status.code(), Some(0), "{accepted:?}");
+        let empty = Command::new(&exe).arg("--").output().unwrap();
+        assert_eq!(empty.status.code(), Some(1), "{empty:?}");
+        let absent = Command::new(&exe).output().unwrap();
+        assert_eq!(absent.status.code(), Some(3), "{absent:?}");
+        use std::os::unix::ffi::OsStringExt;
+        let invalid = Command::new(&exe)
+            .arg("--")
+            .arg(std::ffi::OsString::from_vec(vec![0xff]))
+            .output()
+            .unwrap();
+        assert_eq!(invalid.status.code(), Some(3), "{invalid:?}");
+        for path in [source, exe] {
+            std::fs::remove_file(path).unwrap();
+        }
+    });
+}
+
+#[test]
+fn build_rejects_invalid_options_and_source_before_writing_an_executable() {
+    for args in [
+        vec!["build", "source.hir"],
+        vec![
+            "build",
+            "--debug",
+            "--release",
+            "source.hir",
+            "-o",
+            "unused",
+        ],
+        vec!["build", "--target", "unknown", "source.hir", "-o", "unused"],
+        vec!["build", "source.hir", "extra.hir", "-o", "unused"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+    }
+    let source = file("pub fn main() -> Result[(), ()] { let n: u64 = true; Ok(()) }");
+    let exe = source.with_extension("exe");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(!exe.exists());
+    std::fs::write(
+        &source,
+        "pub fn main() -> Result[(), ()] { let n: u64 = 1u64; Ok(()) }",
+    )
+    .unwrap();
+    let accepted = build_executable(&source, &[]);
+    let output = Command::new(&accepted).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    std::fs::remove_file(accepted).unwrap();
     std::fs::remove_file(source).unwrap();
 }
