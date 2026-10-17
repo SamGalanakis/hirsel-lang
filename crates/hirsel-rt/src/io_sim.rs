@@ -109,6 +109,9 @@ impl SimIo {
     }
 }
 impl Adapter for SimIo {
+    fn replay_stderr(&self) -> Vec<u8> {
+        self.state.stderr.clone()
+    }
     fn replay_stdout(&self) -> Vec<u8> {
         self.state.stdout.clone()
     }

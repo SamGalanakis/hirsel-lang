@@ -212,13 +212,7 @@ impl<'a> HostLibrary<'a> {
             projections: admitted.io_projections(),
             mounts: Default::default(),
             args: record.args.clone().unwrap_or_default(),
-            env: record
-                .env
-                .as_ref()
-                .into_iter()
-                .flatten()
-                .filter_map(|(k, v)| v.clone().map(|v| (k.clone(), v)))
-                .collect(),
+            env: record.env.clone().unwrap_or_default(),
             random_seed: record.inputs.random_seed,
             test_seed: record.inputs.test_seed,
             ..Default::default()
@@ -247,6 +241,121 @@ impl<'a> HostLibrary<'a> {
             kind: kind.into(),
             id: h,
         }
+    }
+    fn host_input(
+        &mut self,
+        name: &str,
+        call: OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        use hirsel_interp::library::simulation::Fault;
+        use hirsel_rt::io::{ENV_HANDLE, InputError, IoError};
+        let a = call.arguments;
+        if matches!(name, "io.stdin" | "io.stderr") {
+            // The library validates the root and records the semantic projection once.
+            let result = self.library.call(call, cx)?;
+            let completion = self
+                .io
+                .call(if name == "io.stdin" {
+                    R::Stdin { io: 1 }
+                } else {
+                    R::Stderr { io: 1 }
+                })
+                .map_err(|e| Error::Unavailable(format!("host projection: {e:?}")))?;
+            match (&result, completion) {
+                (
+                    Some(OperationResult::Complete {
+                        value: Value::Variant { variant: 0, fields },
+                        ..
+                    }),
+                    C::Handle(Ok(host)),
+                ) => {
+                    let Some(Some(Value::Handle { id, .. })) = fields.first() else {
+                        return Err(invalid());
+                    };
+                    self.handles.insert(*id, host);
+                }
+                (
+                    Some(OperationResult::Complete {
+                        value: Value::Variant { variant: 1, .. },
+                        ..
+                    }),
+                    C::Handle(Err(IoError::NotGranted)),
+                ) => {}
+                _ => return Err(invalid()),
+            }
+            return Ok(result);
+        }
+        if name == "env.get" {
+            let result = self.library.call(call, cx)?;
+            let completion = self
+                .io
+                .call(R::EnvGet {
+                    env: ENV_HANDLE,
+                    name: text(&a[1])?,
+                })
+                .map_err(|e| Error::Unavailable(format!("host Env read: {e:?}")))?;
+            let C::Env(value) = completion else {
+                return Err(invalid());
+            };
+            let expected = match value {
+                Ok(Some(value)) => ok(variant(1, vec![Value::String(value)])),
+                Ok(None) => ok(variant(0, vec![])),
+                Err(hirsel_rt::io::EnvError::NotGranted) => error(variant(0, vec![])),
+                Err(hirsel_rt::io::EnvError::InvalidUtf8) => error(variant(1, vec![])),
+            };
+            if !matches!(&result, Some(OperationResult::Complete { value, .. }) if value == &expected)
+            {
+                return Err(invalid());
+            }
+            return Ok(result);
+        }
+        let request = match name {
+            "stdin.read" => R::ReadStdin {
+                stdin: self.id(&a[0])?,
+                max: word(&a[2])?,
+            },
+            "err.print" => R::PrintStderr {
+                stderr: self.id(&a[0])?,
+                bytes: bytes(&a[1])?,
+            },
+            _ => return Err(invalid()),
+        };
+        let completion = self
+            .io
+            .call(request)
+            .map_err(|e| Error::Unavailable(format!("host input: {e:?}")))?;
+        let fault = match completion {
+            C::Input(Ok(bytes)) => {
+                self.library.simulation.supply_stdin(bytes);
+                None
+            }
+            C::Input(Err(InputError::Fault(code))) => Some(Fault::Fault { code, partial: 0 }),
+            C::Input(Err(InputError::Canceled(cause))) => Some(Fault::Canceled(cause)),
+            C::Input(Err(InputError::InvalidInput)) => None,
+            C::Unit(Ok(())) => None,
+            C::Unit(Err(IoError::Fault(code))) => Some(Fault::Fault {
+                code,
+                partial: self
+                    .io
+                    .tape()
+                    .last()
+                    .and_then(|e| e.fault.as_ref())
+                    .map_or(0, |f| f.partial),
+            }),
+            C::Unit(Err(IoError::Canceled(cause))) => Some(Fault::Canceled(cause)),
+            _ => return Err(invalid()),
+        };
+        if let Some(fault) = fault {
+            self.library
+                .simulation
+                .config
+                .faults
+                .entry(name.into())
+                .or_default()
+                .push_back(fault);
+        }
+        self.library.call(call, cx)
     }
     fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
         let path = |v: &Value| text(fields(v)?[0]);
@@ -602,6 +711,12 @@ impl Operations for HostLibrary<'_> {
                 .chain([call.path.0.name.clone()])
                 .collect::<Vec<_>>()
                 .join(".");
+            if matches!(
+                name.as_str(),
+                "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get"
+            ) {
+                return self.host_input(&name, call, cx);
+            }
             if name == "io.dir" || name == "io.monotonic_clock" || name == "io.wall_clock" {
                 if !matches!(call.arguments.first(),Some(Value::Handle {kind,..}) if kind=="Io") {
                     return Err(invalid());

@@ -1065,6 +1065,9 @@ pub trait Adapter {
     fn replay_stdout(&self) -> Vec<u8> {
         vec![]
     }
+    fn replay_stderr(&self) -> Vec<u8> {
+        vec![]
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
 }
 
@@ -2128,6 +2131,11 @@ fn adapter_refusal(binding: &mut Binding, error: AdapterError) -> ! {
     let output = binding.adapter.replay_stdout();
     if let Err(output_error) = stdout.write_all(&output).and_then(|()| stdout.flush()) {
         eprintln!("hirsel-rt: replay output: {output_error}");
+    }
+    let mut stderr = std::io::stderr();
+    let output = binding.adapter.replay_stderr();
+    if let Err(output_error) = stderr.write_all(&output).and_then(|()| stderr.flush()) {
+        eprintln!("hirsel-rt: replay stderr: {output_error}");
     }
     eprintln!("hirsel-rt: Io refused: {error:?}");
     std::process::exit(crate::launch::EXIT_LAUNCH)

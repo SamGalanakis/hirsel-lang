@@ -157,6 +157,12 @@ pub enum ObservedGrant {
     },
 }
 impl Simulation {
+    /// Supply the next provider chunk without changing any grant or replay state.
+    /// Host adapters use this after a typed read; ordinary simulations supply the whole snapshot.
+    pub fn supply_stdin(&mut self, bytes: Vec<u8>) {
+        self.config.stdin = bytes;
+        self.stdin_position = 0;
+    }
     pub fn observed_state(&self) -> ObservedSimulation {
         let handles = self
             .grants

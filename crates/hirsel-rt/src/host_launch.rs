@@ -37,6 +37,21 @@ impl HostAuthority for HostGrants {
         // Use the sole validator even for callers admitting already-built data.
         let run = record.validated()?;
         io.set_projections(run.io_projections());
+        if record
+            .io
+            .as_ref()
+            .is_some_and(|grants| grants.stdin.is_some())
+        {
+            io.set_stdin(std::io::stdin());
+        }
+        if record
+            .io
+            .as_ref()
+            .is_some_and(|grants| grants.stderr.is_some())
+        {
+            io.set_stderr(std::io::stderr());
+        }
+        io.set_env(record.env.clone().unwrap_or_default());
         let (monotonic, wall) = run.clock_grants();
         io.clock_grants(monotonic, wall);
         if let Some(grant) = run.net_grant() {

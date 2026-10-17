@@ -95,6 +95,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn tls_roots(&mut self, pem: &[u8]) {
         self.0.borrow_mut().tls_roots(pem);
     }
+    fn replay_stderr(&self) -> Vec<u8> {
+        self.0.borrow().replay_stderr()
+    }
     fn replay_stdout(&self) -> Vec<u8> {
         self.0.borrow().replay_stdout()
     }
@@ -1191,6 +1194,9 @@ unsafe fn execute(
         let io = io.borrow();
         if let Err(error) = std::io::Write::write_all(&mut std::io::stdout(), io.stdout()) {
             return refuse(&format!("standard output: {error}"));
+        }
+        if let Err(error) = std::io::Write::write_all(&mut std::io::stderr(), io.stderr()) {
+            return refuse(&format!("standard error: {error}"));
         }
         if let Err(error) = io.finish() {
             let _ = std::io::Write::flush(&mut std::io::stdout());

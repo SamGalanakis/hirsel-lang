@@ -163,7 +163,12 @@ pub fn run_path_with_config(
 ) -> Result<RunOutcome, ToolError> {
     use hirsel_interp::Outcome;
     if record.is_none() {
-        return run_path(path, stdout);
+        return run_path_with_simulation(
+            path,
+            SimulationConfig::default(),
+            stdout,
+            &mut std::io::stderr().lock(),
+        );
     }
     let mut program = load_program(path)?;
     program.check_for_execution()?;

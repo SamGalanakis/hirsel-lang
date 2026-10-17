@@ -1214,3 +1214,69 @@ fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
     std::fs::remove_file(&source).unwrap();
     std::fs::remove_file(format!("{}.json", source.display())).unwrap();
 }
+
+#[test]
+fn host_io_records_use_piped_stdin_distinct_stderr_and_exact_environment_snapshots() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let source = file(include_str!(
+        "../../../conformance/CAP/CAP-1-host-inputs-run.hir"
+    ));
+    for native in [false, true] {
+        for stdin_granted in [false, true] {
+            let mut grants = serde_json::json!({
+                "io": { "stderr":"stderr.bytes@1", "dirs":[] },
+                "args":["","λ","--flag"],
+                "env": { "SET":"value", "UNSET":null }
+            });
+            if stdin_granted {
+                grants["io"]["stdin"] = "stdin.bytes@1".into();
+            }
+            let record = run_record(&source, grants);
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .arg("run")
+                .arg("--run")
+                .arg(&record)
+                .env("SECRET", "must remain unreadable")
+                .env("SET", "ambient value is not the admitted snapshot")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if native {
+                command.arg("--native");
+            }
+            command.arg(&source);
+            let mut child = command.spawn().unwrap();
+            if stdin_granted {
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(&[0xce, 0xbb, 10, 0, 255])
+                    .unwrap();
+            } else {
+                drop(child.stdin.take());
+            }
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(if stdin_granted { 0 } else { 1 }),
+                "native={native}, stdin={stdin_granted}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                output.stderr,
+                if stdin_granted {
+                    "λ--flag".as_bytes()
+                } else {
+                    b""
+                }
+            );
+            std::fs::remove_file(record).unwrap();
+        }
+    }
+    std::fs::remove_file(&source).unwrap();
+    std::fs::remove_file(format!("{}.json", source.display())).unwrap();
+}
