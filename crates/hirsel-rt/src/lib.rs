@@ -13,6 +13,7 @@
 //! lists the entries. `tests/it/model.rs` runs the model's `rc-trace v1` vectors on the runtime.
 
 pub mod handles;
+pub mod host_launch;
 pub mod host_paths;
 pub mod io;
 pub mod io_net_script;
