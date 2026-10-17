@@ -76,6 +76,8 @@ pub enum Counter {
     AuditSourceRows,
     /// Source declaration inspections while composing module inputs.
     ModuleDeclarationRows,
+    /// Row transfers while solving and replaying cleanup version inputs.
+    RcCleanupVersionRows,
     /// Cached dependency-node inspections.
     CacheValidationRows,
 }

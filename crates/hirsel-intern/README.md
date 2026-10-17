@@ -29,3 +29,6 @@ work measurements instead of per-crate thread-local counters.
 `OwnershipFlowSteps` and `OwnershipValueJoins` measure ownership solver transfers
 and value joins for machine-independent scaling gates.
 They are instrumentation only; counter ordinals are not semantic encodings.
+
+`RcCleanupVersionRows` counts instruction and terminator rows transferred while
+solving and replaying cleanup version inputs, for the driver's native scaling probes.
