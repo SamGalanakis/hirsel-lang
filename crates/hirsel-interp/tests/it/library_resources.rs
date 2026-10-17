@@ -21,6 +21,7 @@ fn nominal(name: &str) -> TypeKind {
 }
 fn closure(name: &str) -> Value {
     Value::Closure {
+        invoked: Default::default(),
         sizes: Default::default(),
         definition: support::path(name),
         body: BodyId(0),

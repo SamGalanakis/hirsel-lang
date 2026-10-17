@@ -105,6 +105,11 @@ impl Library {
     ) -> OperationResult {
         let token = self.next_callback;
         self.next_callback += 1;
+        let consumed = if matches!(pending, Pending::Isolate) {
+            vec![1]
+        } else {
+            vec![]
+        };
         self.tasks.pending.insert(token, pending);
         OperationResult::Call {
             callee,
@@ -113,7 +118,7 @@ impl Library {
             writebacks: vec![],
             updates: vec![],
             owned: vec![],
-            consumed: vec![],
+            consumed,
             continuation: token,
         }
     }
@@ -148,14 +153,7 @@ impl Library {
         self.simulation.record(
             "Tasks",
             name,
-            format!(
-                "{}:{:?}",
-                self.tasks.current,
-                a.iter()
-                    .map(crate::observation::ObservedValue::from_value)
-                    .collect::<Vec<_>>()
-            )
-            .into_bytes(),
+            super::channels::request(self.tasks.current, a),
             vec![],
             context,
         )?;
@@ -199,7 +197,6 @@ impl Library {
                 self.tasks.starts.push(TaskStart {
                     id: task,
                     callee: arg(a, 1)?.clone(),
-                    anchor: context.anchor().unwrap().clone(),
                 });
                 OperationResult::returned(handle("Task", task)).transferring([1])
             }

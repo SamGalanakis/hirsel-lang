@@ -1,0 +1,22 @@
+// rule: CONC-6
+// expect: run
+// stdout: buffered
+// Closing the last receiver destroys its queued payloads.
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "buffered\n")
+}
+
+fn discard[T](take value: T) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let (sender, receiver): (Sender[Trace], Receiver[Trace]) = channel.open(tasks)
+  let mut tx = take sender
+  let status = channel.send(tasks, mut tx, Trace(stdout: stdout))
+  discard(take receiver)
+  Ok(())
+}

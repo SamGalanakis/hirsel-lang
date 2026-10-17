@@ -16,6 +16,7 @@ use hirsel_types::{BuiltinType, GenericArgument, Primitive, TypeKind};
 pub struct Library {
     pub simulation: Simulation,
     pub(super) tasks: super::tasks::Tasks,
+    pub(super) channels: super::channels::Channels,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
 }
@@ -24,6 +25,7 @@ impl Library {
         Ok(Self {
             simulation: Simulation::new(run, config)?,
             tasks: Default::default(),
+            channels: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
         })
@@ -665,6 +667,10 @@ impl Library {
     }
 }
 impl Operations for Library {
+    fn take_releases(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.channels.released)
+    }
+
     fn take_tasks(&mut self) -> Vec<crate::TaskStart> {
         self.tasks.take_starts()
     }
@@ -685,7 +691,11 @@ impl Operations for Library {
         token: u64,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        self.poll_task(token, context)
+        if self.channels.waits.contains_key(&token) {
+            self.poll_channel(token, context)
+        } else {
+            self.poll_task(token, context)
+        }
     }
 
     fn resume(
@@ -706,6 +716,10 @@ impl Operations for Library {
         id: u64,
         context: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
+        if matches!(kind, "Sender" | "Receiver") {
+            self.channels.close(kind, id)?;
+            return Ok(());
+        }
         if kind == "Stream" {
             if self.simulation.net_streams.contains_key(&id) {
                 self.simulation.record(
@@ -828,7 +842,8 @@ primary_operations! { self, call, context, name, a, value;
             return self.capability(name, &call, context);
             },
     Capability: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
-    Unavailable: "mutex.create" | "mutex.with" | "channel.open" | "channel.send" | "channel.receive" | "atomic.create" | "atomic.load" | "atomic.store" | "sender.dup" | "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { return self.channel_call(name, &call, context).map(Some); },
+    Unavailable: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" | "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" => {
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
         let result = self.simulation.net_call(name, &call, context).map(Some);
@@ -1499,6 +1514,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 captures,
                 owned_captures,
                 sizes,
+                ..
             } => {
                 out.push(15);
                 path(&mut out, definition);

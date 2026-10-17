@@ -82,6 +82,7 @@ fn values_preserve_width_and_float_bits_and_name_function_disposition() {
     execution.failures.clear();
     execution.outcome = Outcome::Returned {
         value: Value::Closure {
+            invoked: Default::default(),
             definition: hirsel_syntax::DefPath::core("f"),
             body: BodyId(2),
             captures: vec![],

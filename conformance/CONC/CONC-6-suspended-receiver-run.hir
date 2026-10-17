@@ -1,0 +1,32 @@
+// rule: CONC-6
+// expect: run
+// A child waiting on an empty channel resumes after its parent sends.
+@noalloc
+fn check(n: u32) -> ()
+  requires n == 7 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() -> u32 {
+          let mut r = take receiver
+          match channel.receive(tasks, mut r) {
+            Ok(n) => n,
+            Error(_) => 0,
+          }
+        }
+      )
+      let mut tx = take sender
+      let status = channel.send(tasks, mut tx, 7)
+      check(task.await(s, take h))
+    }
+  )
+  Ok(())
+}

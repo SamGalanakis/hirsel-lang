@@ -176,16 +176,21 @@ pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidTir(message.into())
 }
 
+/// A transferred task environment, entered on its own evaluator stack.
+pub struct TaskStart {
+    pub id: u64,
+    pub callee: Value,
+}
 /// Extension boundary for the library: names and signatures come from its registry.
 /// Return None for an ordinary TIR definition. Arguments are in parameter order,
 /// already extracted with their explicit use modes. Returning Failed unwinds the
 /// call's cleanup; it must carry the defining operation's rule and source site.
-pub struct TaskStart {
-    pub id: u64,
-    pub callee: Value,
-    pub anchor: observation::Anchor,
-}
 pub trait Operations {
+    /// Owners displaced by a handle's runtime cleanup, in creation order.
+    fn take_releases(&mut self) -> Vec<Value> {
+        vec![]
+    }
+
     fn take_tasks(&mut self) -> Vec<TaskStart> {
         vec![]
     }

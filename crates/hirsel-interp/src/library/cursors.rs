@@ -66,6 +66,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 }
             }
             Ok(Some(OperationResult::returned(Value::Closure {
+                invoked: Default::default(),
                 definition: hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_cursor")),
                 body: BodyId(0),
                 captures: vec![Some(source.clone()), Some(u64_value(0))],
@@ -80,6 +81,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 captures,
                 owned_captures,
                 sizes,
+                ..
             } = source
             else {
                 return Err(invalid("expected intrinsic cursor"));
@@ -112,6 +114,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 index + 1
             };
             let cursor = Value::Closure {
+                invoked: Default::default(),
                 definition: definition.clone(),
                 body: *body,
                 captures: vec![Some(source.clone()), Some(u64_value(next as u64))],
@@ -167,6 +170,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
             }
             Ok(Some(
                 OperationResult::returned(Value::Closure {
+                    invoked: Default::default(),
                     definition: hirsel_syntax::DefPath::core(&format!(
                         "$intrinsic.{protocol}_cursor"
                     )),
@@ -185,6 +189,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                 captures,
                 owned_captures,
                 sizes,
+                ..
             } = argument
             else {
                 return Err(invalid("expected owning cursor"));
@@ -230,6 +235,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                 arguments: vec![(
                     0,
                     Value::Closure {
+                        invoked: Default::default(),
                         definition: definition.clone(),
                         body: *body,
                         captures,

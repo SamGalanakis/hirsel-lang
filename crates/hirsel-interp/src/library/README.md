@@ -49,8 +49,11 @@ structural depth limit as a hash would: a key past it is MEM-3 Depth whatever
 the container holds. `map.get` returns a semantic copy of the stored value.
 
 Task scopes, cooperative children, joins, cancellation and isolation execute through
-`tasks.rs` and the evaluator scheduler. Channels, mutexes, atomics, Shared and
-arena/region operations report Error::Unavailable until their runtime slice. Property traversal and test helpers execute ordinary
+`tasks.rs` and the evaluator scheduler. `channels.rs` owns moved FIFO buffers,
+independent duplicated sender endpoints and suspended mutable receiver loans.
+Dropping the last receiver schedules buffered finalizers through the evaluator.
+Mutexes, atomics, Shared and arena/region operations report Error::Unavailable
+until their runtime slice. Property traversal and test helpers execute ordinary
 std@1 source; core Test check_case reports its recorded seed and the supplied
 case index. Core test.fail records LANG-9 and only fails; std expect_error
 transfers the Error payload and destroys an Ok value before test.fail. Pull iterators own state/callbacks and lazily apply adapters;

@@ -159,7 +159,11 @@ literal (including negative/wide integer), tuple, nullary/payload constructor,
 labelled/rest and guarded patterns. Captures initialize `Storage::Capture` locals
 in declaration order, independently of ordinary parameters. Scoped captures borrow,
 escaping captures copy/take, and Indirect invokes the specified definition/body.
-Owned captures release with their closure. Frames retain Arc DefinitionRef snapshots.
+Owned captures release with their closure until invocation moves them into the
+callee frame. Once-environment snapshots share an invocation cell, so a scoped
+once callback can consume its captures without its saved environment releasing
+them again. This cell is interpreter ownership metadata, not program storage;
+many-use environments have no cell. Frames retain Arc DefinitionRef snapshots.
 
 Cleanup runs its list in emitted order; fields, active variant payloads, sequence
 entries and closure environments release in reverse order (v20 DROP-2). Each release

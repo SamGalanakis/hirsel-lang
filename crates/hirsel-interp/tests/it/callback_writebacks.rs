@@ -273,6 +273,7 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
             })
         } else {
             Value::Closure {
+                invoked: Default::default(),
                 definition: path("step"),
                 body: BodyId(0),
                 captures: vec![],

@@ -1,11 +1,6 @@
 # path	required runtime behavior
 conformance/CONC/CONC-4-sequential-atomic-order.hir	tasks/synchronization
 conformance/CONC/CONC-5-inert-capture-and-update.hir	tasks/synchronization
-conformance/CONC/CONC-6-all-duplicated-senders-drop.hir	tasks/synchronization
-conformance/CONC/CONC-6-buffer-drains.hir	tasks/synchronization
-conformance/CONC/CONC-6-last-receiver-closes-send.hir	tasks/synchronization
-conformance/CONC/CONC-6-last-sender-closes-receive.hir	tasks/synchronization
-conformance/CONC/CONC-6-receiver-child-capture.hir	tasks/synchronization
 conformance/FAIL/FAIL-3-arena-scope-unwind.hir	tasks/synchronization, arena/region runtime
 conformance/FAIL/FAIL-4-mutex-body-failure.hir	tasks/synchronization
 conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir	tasks/synchronization

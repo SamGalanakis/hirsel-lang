@@ -1,0 +1,29 @@
+// rule: CONC-2
+// expect: run
+// stdout: released
+// A task transfers its captured resource into its frame and drops it once.
+resource type Trace {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "released\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let trace = Trace(stdout: stdout)
+      let h = task.async(
+        s,
+        fn() {
+          let held = take trace
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+  Ok(())
+}

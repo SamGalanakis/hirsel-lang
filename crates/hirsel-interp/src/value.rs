@@ -83,6 +83,9 @@ pub enum Value {
         fields: Vec<Option<Value>>,
     },
     Closure {
+        /// Once-environment snapshots share the fact that invocation moved its
+        /// owners into a frame. Many-use environments have no invocation state.
+        invoked: Option<std::sync::Arc<std::sync::OnceLock<()>>>,
         definition: DefPath,
         body: BodyId,
         captures: Vec<Option<Value>>,
@@ -98,6 +101,15 @@ pub enum Value {
 }
 
 impl Value {
+    pub(crate) fn begin_call(&self) {
+        if let Self::Closure {
+            invoked: Some(invoked),
+            ..
+        } = self
+        {
+            let _ = invoked.set(());
+        }
+    }
     pub(crate) fn fields_mut(&mut self) -> Option<&mut Vec<Option<Value>>> {
         match self {
             Self::Map(f)
@@ -275,12 +287,14 @@ impl Clone for Value {
                     elements: vec![None; elements.len()],
                 },
                 Value::Closure {
+                    invoked,
                     definition,
                     body,
                     captures,
                     owned_captures,
                     sizes,
                 } => Value::Closure {
+                    invoked: invoked.clone(),
                     definition: definition.clone(),
                     body: *body,
                     captures: vec![None; captures.len()],
@@ -307,6 +321,10 @@ impl Clone for Value {
 impl Value {
     pub(crate) fn fields(&self) -> Option<&[Option<Value>]> {
         match self {
+            Self::Closure {
+                invoked: Some(invoked),
+                ..
+            } if invoked.get().is_some() => Some(&[]),
             Self::Map(f)
             | Self::Set(f)
             | Self::Tuple(f)

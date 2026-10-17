@@ -123,6 +123,7 @@ fn fixture(failing: bool, mutating: bool) -> Definition {
 fn run_repeat(failing: bool, mutating: bool, limits: Limits) -> (Execution, u64) {
     let mut operations = Repeat {
         callback: Value::Closure {
+            invoked: Default::default(),
             sizes: Default::default(),
             definition: path("main"),
             body: BodyId(1),

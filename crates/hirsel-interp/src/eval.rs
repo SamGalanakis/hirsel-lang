@@ -221,7 +221,8 @@ fn execute_frames(
                         });
                 child.check = Some(enter_checked(&parent.state, &child, vec![], callee));
             }
-            child.loop_owned.push((start.callee, start.anchor));
+            start.callee.begin_call();
+            start.callee.discard();
             runnable.push_back((start.id, vec![child], vec![]));
         }
         // Poll each runtime-owned wait once after a scheduling transition. There
@@ -395,6 +396,7 @@ fn execute_frames(
                     transfer_operation(&mut state, consumed)?;
                     update_operation(&mut state, updates)?;
                     state.owned = owned;
+                    callee.begin_call();
                     let (definition, body, captures, sizes) = match callee {
                         Value::Closure {
                             definition,
@@ -402,6 +404,7 @@ fn execute_frames(
                             captures,
                             owned_captures,
                             sizes,
+                            ..
                         } => {
                             if captures.len() != owned_captures.len() {
                                 return Err(invalid("capture ownership count"));
@@ -866,6 +869,11 @@ fn execute_frames(
                                 anchor: Some(&anchor),
                             },
                         )?;
+                        for value in operations.take_releases() {
+                            frame
+                                .work
+                                .push_front(crate::resources::Work::Release(value, anchor.clone()));
+                        }
                         continue;
                     }
                     if let Some(check) = &frame.check {
@@ -1669,6 +1677,7 @@ fn release_fields(
     if let Value::Closure {
         captures,
         owned_captures,
+        invoked,
         ..
     } = value
     {
@@ -1677,7 +1686,7 @@ fn release_fields(
         }
         for (capture, owned) in captures.iter_mut().zip(owned_captures) {
             if let Some(v) = capture.take() {
-                if *owned {
+                if *owned && !invoked.as_ref().is_some_and(|v| v.get().is_some()) {
                     frame
                         .work
                         .push_front(crate::resources::Work::Release(v, anchor.clone()));
@@ -2007,6 +2016,12 @@ fn rvalue(
                 };
             }
             Value::Closure {
+                invoked: frame
+                    .definition
+                    .types
+                    .get(frame.place(destination)?.ty)
+                    .is_some_and(|t| t.modes.multiplicity == hirsel_types::Multiplicity::Once)
+                    .then(|| std::sync::Arc::new(std::sync::OnceLock::new())),
                 definition: frame.definition.path.clone(),
                 body,
                 captures,
@@ -2374,6 +2389,7 @@ fn execute_terminator(
                 } => {
                     let (value, shadow) = frame.operand_shadow(&operand)?;
                     let check = callee_lifetime(frame, operand.place, &value, shadow)?;
+                    value.begin_call();
                     match value {
                         Value::FunctionReference(reference) => RuntimeCallee::Definition {
                             path: reference.definition,
@@ -2386,6 +2402,7 @@ fn execute_terminator(
                             captures,
                             owned_captures,
                             sizes,
+                            ..
                         } => {
                             if captures.len() != owned_captures.len() {
                                 return Err(invalid("capture ownership count").into());
@@ -2587,6 +2604,7 @@ fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
             captures,
             owned_captures,
             sizes,
+            ..
         },
     ] = <[Value; 1]>::try_from(std::mem::take(arguments))
         .map_err(|_| invalid("arena.with takes one callback"))?
