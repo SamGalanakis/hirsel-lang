@@ -141,11 +141,10 @@ refuses a change `tools/gate` has not passed, and stops on a rebase conflict
 (resolve it, gate the result, land again).
 
 Changes to native code also run the filtered native matrix for the programs
-they add or touch, one native campaign at a time across lanes:
+they add or touch on the pool. Focus runs book one CPU at lane priority:
 
 ```sh
-flock /workspace/code/hirsel-briefs/locks/native-campaign.lock \
-  .buck2/bin/buck2 test -c hirsel.full=true //:gate-native-full -- --test-arg=--filter --test-arg=<program> --timeout 14400
+.buck2/bin/buck2 test -c hirsel.full=true -c hirsel.tests=focus //:gate-native-full -- --test-arg=--filter --test-arg=<program>
 ```
 
 Tests that execute the full native matrix or take about a minute or longer
