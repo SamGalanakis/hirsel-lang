@@ -680,7 +680,6 @@ trait Inline {
     fn place_address(&mut self, place: tir::PlaceId) -> R<(AddressId, ValueId)>;
     fn tir_layout(&mut self, ty: TypeId) -> R<LayoutId>;
     fn place_layout(&mut self, place: tir::PlaceId) -> R<LayoutId>;
-    fn value_layout(&self, value: ValueId) -> LayoutId;
     fn layout_record(&self, layout: LayoutId) -> &hirsel_lir::layout_types::LayoutRecord;
     fn new_value(&mut self, layout: LayoutId, holding: Option<Holding>) -> ValueId;
     fn literal(&mut self, layout: LayoutId, value: ConstantValue) -> ValueId;
@@ -689,16 +688,6 @@ trait Inline {
     fn pend(&mut self, value: ValueId);
     fn failure(&mut self, rule: Option<String>) -> R<FailureId>;
     fn finish(&mut self, destination: tir::PlaceId, next: tir::BlockId, value: ValueId) -> R<()>;
-    fn require_library(
-        &mut self,
-        request: crate::library::Request,
-    ) -> R<crate::library::builder::Direct>;
-    fn operation_request(
-        &mut self,
-        body: usize,
-        path: &DefPath,
-        generics: &[GenericArgument],
-    ) -> R<crate::library::Request>;
     fn intern_symbol(&mut self, symbol: &Symbol) -> SymbolId;
     fn iterator_closure(
         &mut self,
@@ -854,9 +843,6 @@ impl Inline for Importer<'_, '_> {
         };
         self.tir_layout(p.ty)
     }
-    fn value_layout(&self, value: ValueId) -> LayoutId {
-        self.layout_of(self.value_type(value))
-    }
     fn layout_record(&self, layout: LayoutId) -> &hirsel_lir::layout_types::LayoutRecord {
         self.layouts.record(layout)
     }
@@ -895,20 +881,6 @@ impl Inline for Importer<'_, '_> {
         let e = self.enter(next);
         self.terminate(Terminator::Jump(e));
         Ok(())
-    }
-    fn require_library(
-        &mut self,
-        request: crate::library::Request,
-    ) -> R<crate::library::builder::Direct> {
-        self.require(request)
-    }
-    fn operation_request(
-        &mut self,
-        body: usize,
-        path: &DefPath,
-        generics: &[GenericArgument],
-    ) -> R<crate::library::Request> {
-        self.library_request(body, path, generics)
     }
     fn intern_symbol(&mut self, symbol: &Symbol) -> SymbolId {
         self.symbol(symbol.kind, &symbol.definition, symbol.instance)
@@ -1114,17 +1086,9 @@ impl ImportCx<'_> {
     pub fn place_address(&mut self, place: tir::PlaceId) -> R<(AddressId, ValueId)> {
         self.im.place_address(place)
     }
-    /// The layout of a type of the calling definition (a generic argument
-    /// of the call) under the instance's actuals.
-    pub fn layout(&mut self, ty: TypeId) -> R<LayoutId> {
-        self.im.tir_layout(ty)
-    }
     /// The layout of a TIR place: the call's destination, say.
     pub fn place_layout(&mut self, place: tir::PlaceId) -> R<LayoutId> {
         self.im.place_layout(place)
-    }
-    pub fn value_layout(&self, value: ValueId) -> LayoutId {
-        self.im.value_layout(value)
     }
     pub fn record(&self, layout: LayoutId) -> &hirsel_lir::layout_types::LayoutRecord {
         self.im.layout_record(layout)
@@ -1164,23 +1128,6 @@ impl ImportCx<'_> {
     pub fn finish(&mut self, call: &crate::library::CallShape<'_>, value: ValueId) -> R<()> {
         self.im.finish(call.destination, call.next, value)
     }
-    /// The instance request of the library body of operation `path` under
-    /// the call's generic arguments.
-    pub fn operation(
-        &mut self,
-        body: usize,
-        path: &DefPath,
-        generics: &[GenericArgument],
-    ) -> R<crate::library::Request> {
-        self.im.operation_request(body, path, generics)
-    }
-    /// Require a library instance: its symbol and `FnAbi`.
-    pub fn require(
-        &mut self,
-        request: crate::library::Request,
-    ) -> R<crate::library::builder::Direct> {
-        self.im.require_library(request)
-    }
     pub fn symbol(&mut self, symbol: &Symbol) -> SymbolId {
         self.im.intern_symbol(symbol)
     }
@@ -1210,17 +1157,6 @@ impl ImportCx<'_> {
     /// Advance the exclusive iterator place with one indirect step call.
     pub fn iterator_next(&mut self, call: &crate::library::CallShape<'_>) -> R<()> {
         self.im.iterator_next(call)
-    }
-    /// A direct call at the call site, failing into the call's cleanup.
-    /// The lowering continues in the block after it; the result, if the
-    /// ABI has one, is pending until stored.
-    pub fn call(
-        &mut self,
-        symbol: SymbolId,
-        abi: FnAbiId,
-        arguments: Vec<CallArgument>,
-    ) -> R<Option<ValueId>> {
-        self.im.direct_call(symbol, abi, arguments)
     }
 }
 
