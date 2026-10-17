@@ -462,6 +462,8 @@ fn byte_invalid_snapshot_inputs_refuse_with_the_item_and_utf8_twins_pass() {
 fn known_provider_contracts_are_shared_by_live_and_replayed_runs() {
     let mut record = empty();
     record.io = Some(IoGrants {
+        stdin: Some(ProviderContract::StdinBytes.name().into()),
+        stderr: Some(ProviderContract::StderrBytes.name().into()),
         stdout: Some(ProviderContract::StdoutBytes.name().into()),
         random: Some(ProviderContract::RandomSplitMix64.name().into()),
         monotonic_clock: Some(ProviderContract::MonotonicNanoseconds.name().into()),
@@ -493,6 +495,8 @@ fn known_provider_contracts_are_shared_by_live_and_replayed_runs() {
 #[test]
 fn unknown_versions_and_wrong_projection_contracts_refuse_with_supported_twins() {
     for (field, contract) in [
+        ("io.stdin", ProviderContract::StdinBytes),
+        ("io.stderr", ProviderContract::StderrBytes),
         ("io.stdout", ProviderContract::StdoutBytes),
         ("io.random", ProviderContract::RandomSplitMix64),
         ("io.monotonic_clock", ProviderContract::MonotonicNanoseconds),
@@ -508,6 +512,8 @@ fn unknown_versions_and_wrong_projection_contracts_refuse_with_supported_twins()
             let mut record = empty();
             let mut io = IoGrants::default();
             let slot = match field {
+                "io.stdin" => &mut io.stdin,
+                "io.stderr" => &mut io.stderr,
                 "io.stdout" => &mut io.stdout,
                 "io.random" => &mut io.random,
                 "io.monotonic_clock" => &mut io.monotonic_clock,
@@ -523,6 +529,8 @@ fn unknown_versions_and_wrong_projection_contracts_refuse_with_supported_twins()
                 })
             );
             let slot = match field {
+                "io.stdin" => &mut io.stdin,
+                "io.stderr" => &mut io.stderr,
                 "io.stdout" => &mut io.stdout,
                 "io.random" => &mut io.random,
                 "io.monotonic_clock" => &mut io.monotonic_clock,

@@ -5,6 +5,7 @@ pub fn main(e: Env, args: Args, rt: Io) -> Result[(), GrantError] {
   let mut buffer: List[u8] = [7]
   failure.check(stdin.read(s, mut buffer, 0) == Error(InvalidInput()), Bounds())
   failure.check(buffer == [7], Bounds())
+  let original = copy buffer
   let dest = io.stderr(rt)?
   let mut i: u64 = 0
   while i < arg.count(args) {
@@ -23,12 +24,13 @@ pub fn main(e: Env, args: Args, rt: Io) -> Result[(), GrantError] {
     failure.check(line == Ok(None()), Bounds())
   } else {
     failure.check(line == Ok(Some("λ\n")), Bounds())
-    failure.check(stdin.read(s, mut buffer, 2) == Ok(2), Bounds())
-    failure.check(buffer == [7, 0, 255], Bounds())
-    failure.check(std@1/input.read_all(s) == Ok(b""), Bounds())
+    failure.check(stdin.read(s, mut buffer, 1) == Ok(1), Bounds())
+    failure.check(buffer == [7, 0], Bounds())
+    failure.check(std@1/input.read_all(s) == Ok(b"\xff"), Bounds())
     failure.check(env.get(e, "SET") == Ok(Some("value")), Bounds())
     failure.check(env.get(e, "UNSET") == Ok(None()), Bounds())
   }
+  failure.check(original == [7], Bounds())
   failure.check(env.get(e, "SECRET") == Error(NotGranted()), Bounds())
   Ok(())
 }
