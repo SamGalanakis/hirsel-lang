@@ -543,6 +543,7 @@ impl Parser<'_> {
         let literal = match &self.token(0)?.kind {
             TokenKind::Integer => Literal::Integer(text),
             TokenKind::Float => Literal::Float(text),
+            TokenKind::Character => Literal::Character(text),
             TokenKind::String => Literal::String(text),
             TokenKind::Bytes => Literal::Bytes(text),
             TokenKind::Keyword(Keyword::True) => Literal::Bool(true),

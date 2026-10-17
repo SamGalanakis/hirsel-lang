@@ -153,8 +153,7 @@ impl<'a> Scanner<'a> {
         };
         self.emit(start, kind);
     }
-    // Character literals are excluded. Retain one invalid token through the
-    // closing quote so the unsupported spelling does not cause quote/escape cascades.
+    // Keep malformed spellings together through a quote or physical newline.
     fn character_literal(&mut self) -> TokenKind {
         let start = self.pos;
         self.pos += 1;
@@ -175,19 +174,18 @@ impl<'a> Scanner<'a> {
                 self.pos += 1;
             }
         }
-        self.error(
-            const { RuleId::of("LANG-1") },
-            start,
-            self.pos,
-            "character literals are unsupported",
-        );
-        self.output
-            .diagnostics
-            .last_mut()
-            .unwrap()
-            .notes
-            .push("help: use a u32 scalar value, for example 10u32 for a newline".into());
-        TokenKind::Invalid
+        let value = std::str::from_utf8(&self.bytes[start..self.pos])
+            .ok()
+            .and_then(hirsel_syntax::character_value);
+        if value.is_none() {
+            self.error(
+                const { RuleId::of("LANG-1") },
+                start,
+                self.pos,
+                "character literal must denote exactly one Unicode scalar with a valid escape",
+            );
+        }
+        TokenKind::Character
     }
     // Validate a source scalar while traversing a comment, including bare CR.
     fn comment_scalar(&mut self) {

@@ -112,6 +112,15 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
         assert_eq!(
             checked,
             [
+                "ascii.is_digit",
+                "ascii.is_alpha",
+                "ascii.is_alnum",
+                "ascii.is_space",
+                "ascii.is_upper",
+                "ascii.is_lower",
+                "ascii.to_upper",
+                "ascii.to_lower",
+                "ascii.digit_value",
                 "path.normalize",
                 "path.join",
                 "path.parent",

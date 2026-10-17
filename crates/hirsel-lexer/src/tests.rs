@@ -395,8 +395,8 @@ fn escaped_newline_reports_one_error_and_recovers_through_the_quote() {
 }
 
 #[test]
-fn character_literals_suggest_numeric_scalars_and_recover_as_one_token() {
-    for literal in ["'a'", "'\\n'", "'é'", "'\\''"] {
+fn malformed_character_literals_recover_as_one_token() {
+    for literal in ["'ab'", "''", "'\\u{d800}'", "'\\x41'"] {
         let (sources, _, output) = fixture(&format!("let scalar = {literal}\nfn later() {{}}"));
         assert_eq!(
             output.diagnostics.len(),
@@ -407,11 +407,7 @@ fn character_literals_suggest_numeric_scalars_and_recover_as_one_token() {
         let diagnostic = &output.diagnostics[0];
         assert_eq!(diagnostic.rule.as_str(), "LANG-1");
         assert!(
-            diagnostic.message.contains("character literals"),
-            "{diagnostic:?}"
-        );
-        assert!(
-            diagnostic.notes.iter().any(|n| n.contains("10u32")),
+            diagnostic.message.contains("character literal"),
             "{diagnostic:?}"
         );
         let invalid: Vec<_> = output
@@ -427,5 +423,23 @@ fn character_literals_suggest_numeric_scalars_and_recover_as_one_token() {
                 .iter()
                 .any(|t| sources.slice(t.span) == Some("later"))
         );
+    }
+}
+
+#[test]
+fn character_literals_preserve_source_spellings() {
+    for literal in [
+        "'a'",
+        "'é'",
+        "'🐑'",
+        "'\\n'",
+        "'\\t'",
+        "'\\r'",
+        "'\\0'",
+        "'\\\\'",
+        "'\\''",
+        "'\\u{10ffff}'",
+    ] {
+        single(literal, TokenKind::Character);
     }
 }

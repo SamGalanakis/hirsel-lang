@@ -24,12 +24,29 @@ unclassified host error code; it is not an application input-validation error.
 See the [file I/O tour](../tour.md)
 for reading and atomic write-then-commit replacement.
 
+`ascii` accepts the `u32` scalars produced by string iteration and character
+literals. Digits are `'0'`–`'9'`, letters are `'A'`–`'Z'` and `'a'`–`'z'`,
+and alphanumeric is their union. Space means ASCII space or U+0009–U+000D,
+including vertical tab and form feed. Predicates are false outside ASCII;
+case conversion preserves every nonletter, including non-ASCII values.
+`digit_value` returns `Some(0)` through `Some(9)` for decimal digits and `None()`
+otherwise. These are pure, nonallocating algorithms adapted from Zig's ASCII module.
+
 ## The catalogue
 
 These declarations are normative: the source package must declare exactly these
 signatures. `N` keeps the ledger's meaning of an explicit `@noalloc` promise.
 
 ```text
+N fn ascii.is_digit(c: u32) -> bool uses {}
+N fn ascii.is_alpha(c: u32) -> bool uses {}
+N fn ascii.is_alnum(c: u32) -> bool uses {}
+N fn ascii.is_space(c: u32) -> bool uses {}
+N fn ascii.is_upper(c: u32) -> bool uses {}
+N fn ascii.is_lower(c: u32) -> bool uses {}
+N fn ascii.to_upper(c: u32) -> u32 uses {}
+N fn ascii.to_lower(c: u32) -> u32 uses {}
+N fn ascii.digit_value(c: u32) -> Option[u32] uses {}
 fn path.normalize(p: Path) -> Result[Path, path.PathError] uses {}
 fn path.join(base: Path, child: Path) -> Result[Path, path.PathError] uses {}
 fn path.parent(p: Path) -> Option[Path] uses {}

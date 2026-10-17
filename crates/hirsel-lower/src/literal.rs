@@ -44,6 +44,10 @@ pub(super) fn signed_min(s: &str, ty: &TypeKind) -> Option<u128> {
 pub(super) fn constant(literal: &Literal, ty: &TypeKind, span: Span) -> Result<Constant> {
     Ok(match literal {
         Literal::Bool(value) => Constant::Bool(*value),
+        Literal::Character(spelling) => Constant::Integer(
+            hirsel_syntax::character_value(spelling)
+                .ok_or_else(|| bad(span, "invalid checked character"))? as u128,
+        ),
         Literal::Integer(spelling) => {
             // Negative literals occur in patterns; expression negatives are Unary.
             let negative = spelling.starts_with('-');

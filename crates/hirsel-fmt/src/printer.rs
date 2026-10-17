@@ -907,9 +907,11 @@ impl<'a> Printer<'a> {
 fn literal(l: &Literal) -> Doc {
     match l {
         Literal::Integer(s) if s.starts_with('-') => cat([token("-"), token(&s[1..])]),
-        Literal::Integer(s) | Literal::Float(s) | Literal::String(s) | Literal::Bytes(s) => {
-            token(s)
-        }
+        Literal::Integer(s)
+        | Literal::Float(s)
+        | Literal::Character(s)
+        | Literal::String(s)
+        | Literal::Bytes(s) => token(s),
         Literal::Bool(b) => token(b.to_string()),
     }
 }

@@ -39,6 +39,13 @@ literal spelling outside its type's finite range rounds to infinity.
 
 ### SEM-3: Strings
 
+A character literal (`'a'`, `'é'`, `'\u{1f411}'`) denotes its Unicode scalar
+value as `u32`, the same type yielded by `string.scalars`. It is an integer
+constant in both interpreted and native execution; it does not allocate a string.
+The escapes `\n`, `\t`, `\r`, `\0`, `\\`, `\'` and `\u{...}` denote one scalar.
+Character literal patterns match that scalar value. Lexical validity is defined
+in [syntax](syntax.md); there is no implicit conversion to a narrower integer.
+
 `String` is always valid UTF-8; `Bytes` is arbitrary. There is no `length`: there is
 `byte_len`, plus built-in views over a borrowed string (`string.scalars(s)`,
 `string.positions(s)` yielding `StrPos of s`, `unicode.graphemes(s)`), which are loop

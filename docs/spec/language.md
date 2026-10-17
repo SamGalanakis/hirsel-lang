@@ -12,8 +12,9 @@ arguments are never written in expressions, so a postfix `[` is always indexing.
 `shape(T)` is reserved syntax for future type-shape reflection
 ([CT-3](compile-time.md#ct-3-shapes)), not an executable API.
 
-Boolean, byte-string and string literals intrinsically have types `bool`, `Bytes` and
-`String`. A numeric literal without a suffix or a bare variant takes its type from the
+Boolean, byte-string, string and character literals intrinsically have types `bool`,
+`Bytes`, `String` and `u32`. A character literal such as `'a'` has type `u32` even
+without an expected type; an incompatible expected type is LANG-2. A numeric literal without a suffix or a bare variant takes its type from the
 expected type or, in `a..b`, a binary operator or `==`, from the other operand; with neither,
 it is an error. A size parameter
 used as a value is a `u64`. Parameters are in scope only after their declaration, and

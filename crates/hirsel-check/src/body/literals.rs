@@ -30,6 +30,7 @@ pub(super) fn suffix(text: &str) -> Option<Primitive> {
 pub(super) fn fixed_primitive(l: &ast::Literal) -> Option<Primitive> {
     match l {
         ast::Literal::Integer(s) | ast::Literal::Float(s) => suffix(s),
+        ast::Literal::Character(_) => Some(Primitive::U32),
         ast::Literal::String(_) => Some(Primitive::String),
         ast::Literal::Bytes(_) => Some(Primitive::Bytes),
         ast::Literal::Bool(_) => Some(Primitive::Bool),
@@ -143,6 +144,24 @@ impl Checker<'_, '_> {
                         span,
                         "float literal requires f32 or f64",
                     );
+                    return self.error();
+                }
+            }
+            ast::Literal::Character(s) => {
+                if let Some(expected) = expected {
+                    let scalar = self.primitive(Primitive::U32);
+                    if !self.compatible(scalar, expected) {
+                        self.report(
+                            const { RuleId::of("LANG-2") },
+                            span,
+                            "character literal has type u32",
+                        );
+                        return self.error();
+                    }
+                }
+                if hirsel_syntax::character_value(s).is_none() {
+                    self.report(const { RuleId::of("LANG-1") }, span,
+                        "character literal must denote exactly one Unicode scalar with a valid escape");
                     return self.error();
                 }
             }

@@ -150,6 +150,10 @@ impl Normalizer<'_, '_> {
                         e.tag("float");
                         e.tag(&s.replace('_', ""));
                     }
+                    ast::Literal::Character(s) => {
+                        e.tag("character");
+                        e.tag(s);
+                    }
                     ast::Literal::String(s) => {
                         e.tag("string");
                         e.tag(s);
@@ -479,6 +483,10 @@ impl Normalizer<'_, '_> {
                     ast::Literal::Float(s) => {
                         e.tag("float");
                         e.tag(&s.replace('_', ""));
+                    }
+                    ast::Literal::Character(s) => {
+                        e.tag("character");
+                        e.tag(s);
                     }
                     ast::Literal::String(s) => {
                         e.tag("string");

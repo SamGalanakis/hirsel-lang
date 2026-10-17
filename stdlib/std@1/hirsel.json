@@ -12,6 +12,12 @@
       ]
     },
     {
+      "path": "ascii.hir",
+      "module": [
+        "ascii"
+      ]
+    },
+    {
       "path": "list.hir",
       "module": [
         "list"

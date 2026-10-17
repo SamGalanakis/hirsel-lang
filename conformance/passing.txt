@@ -907,8 +907,16 @@ conformance/GEN/GEN-5-self-growth-ok.hir
 conformance/GEN/GEN-5-shrinking-edge.hir
 conformance/LANG/LANG-1-angle-generics-bad.hir
 conformance/LANG/LANG-1-angle-generics-ok.hir
+conformance/LANG/LANG-1-character-empty-bad.hir
+conformance/LANG/LANG-1-character-empty-ok.hir
+conformance/LANG/LANG-1-character-escape-bad.hir
+conformance/LANG/LANG-1-character-escape-ok.hir
 conformance/LANG/LANG-1-character-literal-bad.hir
 conformance/LANG/LANG-1-character-literal-ok.hir
+conformance/LANG/LANG-1-character-surrogate-bad.hir
+conformance/LANG/LANG-1-character-surrogate-ok.hir
+conformance/LANG/LANG-1-character-too-large-bad.hir
+conformance/LANG/LANG-1-character-too-large-ok.hir
 conformance/LANG/LANG-1-conditional-operator-bad.hir
 conformance/LANG/LANG-1-conditional-operator-ok.hir
 conformance/LANG/LANG-1-contract-syntax.hir
@@ -1114,6 +1122,8 @@ conformance/LANG/LANG-2-branch-prefix-if-ok.hir
 conformance/LANG/LANG-2-branch-prefix-match-ok.hir
 conformance/LANG/LANG-2-branch-prefix-nested-if-ok.hir
 conformance/LANG/LANG-2-branch-prefix-run.hir
+conformance/LANG/LANG-2-character-type-bad.hir
+conformance/LANG/LANG-2-character-type-ok.hir
 conformance/LANG/LANG-2-expected-holder-modes-ok.hir
 conformance/LANG/LANG-2-expected-local-result-callback-ok.hir
 conformance/LANG/LANG-2-expected-tuple.hir
@@ -3712,6 +3722,7 @@ conformance/SEM/SEM-2-wave2-oracle-018.hir
 conformance/SEM/SEM-2-wave2-oracle-019.hir
 conformance/SEM/SEM-2-wave2-oracle-020.hir
 conformance/SEM/SEM-2-wave2-oracle-021.hir
+conformance/SEM/SEM-3-ascii-run.hir
 conformance/SEM/SEM-3-ascii-scalars.hir
 conformance/SEM/SEM-3-bidi-source-bad.hir
 conformance/SEM/SEM-3-bidi-source-ok.hir
@@ -3720,6 +3731,7 @@ conformance/SEM/SEM-3-byte-len-empty.hir
 conformance/SEM/SEM-3-byte-len-unicode.hir
 conformance/SEM/SEM-3-bytes-freeze-run.hir
 conformance/SEM/SEM-3-bytewise-order.hir
+conformance/SEM/SEM-3-character-literals-run.hir
 conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
 conformance/SEM/SEM-3-empty-graphemes.hir

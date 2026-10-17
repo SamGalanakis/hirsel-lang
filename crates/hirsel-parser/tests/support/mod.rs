@@ -44,6 +44,19 @@ pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> 
                 .take_while(|b| matches!(b, b' ' | b'\t'))
                 .count();
             TokenKind::Trivia(TriviaKind::Space)
+        } else if rest.starts_with('\'') {
+            pos += 1;
+            while pos < source.len() {
+                let c = source[pos..].chars().next().unwrap();
+                pos += c.len_utf8();
+                if c == '\'' {
+                    break;
+                }
+                if c == '\\' && pos < source.len() {
+                    pos += source[pos..].chars().next().unwrap().len_utf8();
+                }
+            }
+            TokenKind::Character
         } else if rest.starts_with('"') || rest.starts_with("b\"") {
             let bytes = rest.starts_with('b');
             pos += if bytes { 2 } else { 1 };

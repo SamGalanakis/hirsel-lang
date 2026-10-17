@@ -119,15 +119,23 @@ string       = '"', { string-scalar | escape }, '"' ;      (* SEM-3 *)
 bytes        = 'b"', { ascii-string-scalar | byte-escape }, '"' ; (* SEM-3 *)
 byte-escape  = "\\", ( "\\" | '"' | "n" | "r" | "t" | "0" )
              | "\\x", hex-digit, hex-digit ;               (* SEM-3 *)
-literal      = integer | float | string | bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
+character    = "'", ( character-scalar | character-escape ), "'" ;
+character-escape = "\\", ( "n" | "t" | "r" | "0" | "\\" | "'" )
+                 | "\\u{", hex-digit, { hex-digit }, "}" ;
+literal      = integer | float | character | string | bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
 ```
 
 `string-scalar` excludes the quote, backslash, raw controls U+0000–U+001F and U+007F,
 newlines and `Bidi_Control`; `ascii-string-scalar` also excludes non-ASCII. A string
 `\xNN` is limited to 00–7F, so no escape produces invalid UTF-8; bytes permit 00–FF.
 `\u{...}` has one to six hex digits and must denote a Unicode scalar value (no surrogates,
-nothing above 10FFFF). There are no escape line continuations, interpolation, character
-literals, raw or triple-quoted strings, hexadecimal floats, leading or trailing decimal
+nothing above 10FFFF). A character literal denotes exactly one Unicode scalar;
+`character-scalar` excludes apostrophe, backslash, raw controls U+0000–U+001F
+and U+007F, newlines and `Bidi_Control`. Its Unicode escape has the same one-to-six
+hex-digit scalar restriction. Malformed, unterminated, empty or multi-scalar
+character literals are LANG-1. Character literals have no suffix.
+There are no escape line continuations, interpolation, raw or triple-quoted
+strings, hexadecimal floats, leading or trailing decimal
 points, or underscores immediately before a suffix.
 
 Integers have no sign: `-128i8` is unary minus applied to a magnitude token, and the

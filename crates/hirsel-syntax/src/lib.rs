@@ -230,6 +230,7 @@ pub enum TokenKind {
     Punct(Punct),
     Integer,
     Float,
+    Character,
     String,
     Bytes,
     Trivia(TriviaKind),
@@ -299,10 +300,61 @@ pub struct AssignOp(pub Option<BinaryOp>);
 pub enum Literal {
     Integer(String),
     Float(String),
+    Character(String),
     String(String),
     Bytes(String),
     Bool(bool),
 }
+/// Decode a single-quoted Unicode scalar spelling, retaining no source state.
+/// Invalid delimiters, escapes and scalar counts return None.
+pub fn character_value(spelling: &str) -> Option<char> {
+    let body = spelling.strip_prefix('\'')?.strip_suffix('\'')?;
+    let mut chars = body.chars();
+    let first = chars.next()?;
+    let value = if first == '\\' {
+        match chars.next()? {
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            '0' => '\0',
+            '\\' => '\\',
+            '\'' => '\'',
+            'u' => {
+                if chars.next()? != '{' {
+                    return None;
+                }
+                let mut value = 0u32;
+                let mut count = 0;
+                loop {
+                    let c = chars.next()?;
+                    if c == '}' {
+                        break;
+                    }
+                    count += 1;
+                    if count > 6 || !c.is_ascii_hexdigit() {
+                        return None;
+                    }
+                    value = value.checked_mul(16)?.checked_add(c.to_digit(16)?)?;
+                }
+                if count == 0 {
+                    return None;
+                }
+                char::from_u32(value)?
+            }
+            _ => return None,
+        }
+    } else {
+        if first <= '\u{1f}'
+            || first == '\u{7f}'
+            || matches!(first, '\'' | '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        {
+            return None;
+        }
+        first
+    };
+    chars.next().is_none().then_some(value)
+}
+
 /// A labelled or positional argument; labels precede ownership expressions (LANG-12).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Argument {

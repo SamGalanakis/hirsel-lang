@@ -47,6 +47,7 @@ Run `cargo test -p hirsel-lexer`; the conformance integration test prints its fi
 count and every reject whose first lexer diagnostic matches its rule and line
 with `cargo test -p hirsel-lexer --test conformance -- --nocapture`.
 
-Unsupported single-quoted character literals recover through their closing quote
-or the next physical newline as one Invalid token and one LANG-1 diagnostic, with
-a numeric u32 scalar suggestion. The complete original tape is retained.
+Single-quoted character literals denote one Unicode scalar and produce a Character
+token retaining its source spelling. Malformed spellings recover through their
+closing quote or the next physical newline as one Invalid token and one LANG-1
+diagnostic. The complete original tape is retained.

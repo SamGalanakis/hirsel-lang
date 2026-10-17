@@ -1,0 +1,57 @@
+// Adapted from Zig lib/std/ascii.zig; see third-party/NOTICES.md.
+@noalloc
+pub fn is_digit(c: u32) -> bool uses {} {
+  c >= '0' && c <= '9'
+}
+
+@noalloc
+pub fn is_alpha(c: u32) -> bool uses {} {
+  is_upper(c) || is_lower(c)
+}
+
+@noalloc
+pub fn is_alnum(c: u32) -> bool uses {} {
+  is_alpha(c) || is_digit(c)
+}
+
+@noalloc
+pub fn is_space(c: u32) -> bool uses {} {
+  c == ' ' || c >= '\t' && c <= '\r'
+}
+
+@noalloc
+pub fn is_upper(c: u32) -> bool uses {} {
+  c >= 'A' && c <= 'Z'
+}
+
+@noalloc
+pub fn is_lower(c: u32) -> bool uses {} {
+  c >= 'a' && c <= 'z'
+}
+
+@noalloc
+pub fn to_upper(c: u32) -> u32 uses {} {
+  if is_lower(c) {
+    c - ('a' - 'A')
+  } else {
+    c
+  }
+}
+
+@noalloc
+pub fn to_lower(c: u32) -> u32 uses {} {
+  if is_upper(c) {
+    c + ('a' - 'A')
+  } else {
+    c
+  }
+}
+
+@noalloc
+pub fn digit_value(c: u32) -> Option[u32] uses {} {
+  if is_digit(c) {
+    Some(c - '0')
+  } else {
+    None()
+  }
+}

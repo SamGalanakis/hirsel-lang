@@ -230,6 +230,18 @@ fn tape(source: &str, file: FileId, names: &mut Interner) -> Vec<Token> {
                 i += 1;
             }
             TokenKind::Trivia(TriviaKind::Space)
+        } else if rest.starts_with('\'') {
+            i += 1;
+            while i < source.len() {
+                let b = source.as_bytes()[i];
+                i += 1;
+                if b == b'\\' {
+                    i += 1;
+                } else if b == b'\'' {
+                    break;
+                }
+            }
+            TokenKind::Character
         } else if rest.starts_with('"') || rest.starts_with("b\"") {
             let bytes = rest.starts_with('b');
             i += if bytes { 2 } else { 1 };
@@ -397,6 +409,8 @@ fn tape(source: &str, file: FileId, names: &mut Interner) -> Vec<Token> {
 #[test]
 fn literal_spellings_unit_and_sequences() {
     for (s, l) in [
+        ("'é'", Literal::Character("'é'".into())),
+        ("'\\u{1f411}'", Literal::Character("'\\u{1f411}'".into())),
         ("0xffu8", Literal::Integer("0xffu8".into())),
         ("1.25f32", Literal::Float("1.25f32".into())),
         ("\"é\\n\"", Literal::String("\"é\\n\"".into())),
