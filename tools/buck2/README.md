@@ -308,18 +308,30 @@ bundled`, and delete `prelude_overlay.py`, its pins, its test `tools/tests/prelu
 
 ## Measured test requests
 
-A pool test binary reserves what it measured using, not a fixed 4 CPUs and
-4 GiB: `test_sizes.bzl` (`TEST_REQUESTS`, evidence in `test-sizes.json`) gives
-each binary, shared by its shards, one CPU while its p95 core use is at most
-1.6 (a one-CPU action already runs up to the worker's slot share), otherwise
-`clamp(ceil(p95), 2, 4)`, and its anonymous memory peak (p99) times 1.5,
-rounded up to 256 MiB, at least 512 MiB. The launcher runs as many test
-threads as the request's whole CPUs. A binary without a row reserves 1 CPU and
-2 GiB. The pool workers' usage logs tag each test run with its `TEST_TARGET`;
-copy each worker's `actions.log` and `actions.log.1`, then:
+A pool test binary reserves what it measured using: `test_sizes.bzl`
+(`TEST_REQUESTS`, evidence in `test-sizes.json`) gives each binary, shared by
+its shards, one CPU while its p95 core use is at most 1.6 (a one-CPU action
+already runs up to the worker's slot share), otherwise `clamp(ceil(p95), 2,
+4)`, but two where its measured parallelism predicts at most 30% more wall
+time at two: the pool holds its one reservation for a blocked multi-CPU
+action, so three or four CPUs can wait minutes where two start in seconds.
+The agreement shards keep their count for their timeouts. The launcher runs
+as many test threads as the request's whole CPUs.
+
+Memory follows the worker's kill rule: it samples an action's process-group
+PSS, shared libraries and mapped binaries included, and kills it past twice its
+`memory_kb`. A binary reserves its largest PSS peak / 2 * 1.2, rounded up to
+256 MiB, at least 512 MiB, and at least 1.75 times the request of any run of it
+killed for memory. A binary without a row reserves 1 CPU and 2 GiB.
+
+The inputs are read-only copies: each worker's `actions.log` and
+`actions.log.1` (`TEST_TARGET` and CPU per test run), the scheduler's usage
+events (`trace/*.jsonl` of kiln-resource-hints on the cache host: PSS peaks by
+operation) and the workers' `kiln-executor` journal lines for memory kills:
 
 ```sh
-python3 tools/buck2/test_sizes_from_usage.py /tmp/usage-*.log
+python3 tools/buck2/test_sizes_from_usage.py --usage /tmp/usage-*.log \
+  --pss /tmp/trace-*.jsonl --kills /tmp/kills.txt
 ```
 
 A request is part of the test's action key: resizing reruns those tests once.
