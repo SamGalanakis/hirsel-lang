@@ -3,8 +3,9 @@
 use crate::support;
 
 use hirsel_core_contract::Passing;
+use hirsel_lir::emission::{EmitInputs, OptLevel};
 use hirsel_lir::{descriptor_registry::DescriptorRegistry, ir::*, layout_types::ScalarKind};
-use hirsel_llvm::{EmitInputs, OptLevel, emit_object};
+use hirsel_llvm::emit_object;
 use support::{native::*, programs::Program, ready::ready_program, *};
 
 fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {

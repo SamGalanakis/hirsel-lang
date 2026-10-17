@@ -12,6 +12,10 @@ check-removal plan (TIR sites by definition, each with its removal form), and
 import: their failure-site inventories by anchor, opcode and rule may differ in
 exactly the planned sites. `hirsel-graph` supplies pure traversal, dominance and loop-forest algorithms;
 the validators derive their own normal and failure graph from the IR.
+`emission.rs` is the backend-neutral emission interface both native backends
+implement: `EmitInputs`, failure codes, link names, site codes, descriptor names,
+the immortal prefix, the register-result rule, the receipt check and the object
+manifest; `object.rs` reads an emitted ELF object's symbol interface.
 `persistent.rs` is the structure-sharing vector that
 dataflow states are built from, here and in `hirsel-rc`: a state costs what it
 changes, so an analysis stays near-linear in the size of a function.

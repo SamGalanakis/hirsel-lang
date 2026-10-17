@@ -13,10 +13,10 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use hirsel_lir::emission::symbol_name;
 use hirsel_lir::layout::evaluate_size;
 use hirsel_lir::layout_types::{DropStep, LayoutRecord, ScanStep, SizeSpec, TagForm};
 use hirsel_lir::rt_program;
-use hirsel_llvm::symbol_name;
 
 use super::programs::Program;
 use super::*;

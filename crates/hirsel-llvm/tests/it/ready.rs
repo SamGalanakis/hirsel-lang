@@ -9,10 +9,11 @@ use crate::support;
 use std::fmt::Write as _;
 
 use hirsel_heapcheck::{Arg, Config, NoOperations, Observed};
+use hirsel_lir::emission::{EmitInputs, OptLevel, site_code};
 use hirsel_lir::ir::SiteRange;
 use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
 use hirsel_lir::stage::Ready;
-use hirsel_llvm::{EmitInputs, OptLevel, emit_object, site_code};
+use hirsel_llvm::emit_object;
 use support::native::*;
 use support::programs::Program;
 use support::ready::*;

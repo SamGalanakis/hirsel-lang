@@ -4,8 +4,8 @@ use super::emit::{check_runtime_calls, failure_rules};
 use super::observe::{Observation, Sites, site_codes};
 use super::stages::{NativeError, ReadyProgram, StageName};
 use hirsel_lir::abi_types::{ParameterPassing, PhysicalType};
+use hirsel_lir::emission::OptLevel;
 use hirsel_lir::layout_types::{SizeSpec, TargetSpec};
-use hirsel_llvm::OptLevel;
 use hirsel_syntax::DefPath;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -432,7 +432,10 @@ fn entry_result(program: &ReadyProgram, entry: &DefPath) -> Result<(String, u64)
         })
         .filter(|n| (4..=hirsel_rt::launch::RESULT_MAX).contains(n))
         .ok_or_else(|| refuse("a result that is not an inline Result"))?;
-    Ok((hirsel_llvm::symbol_name(entry, Some(instance)), size))
+    Ok((
+        hirsel_lir::emission::symbol_name(entry, Some(instance)),
+        size,
+    ))
 }
 
 /// How a program's units are divided into objects (PROG-5): the division is
@@ -718,7 +721,10 @@ fn link_objects_impl(
                 || program.inline_instances.contains(&u.unit().header.instance)
         })
         .map(|u| {
-            hirsel_llvm::symbol_name(&u.unit().header.definition, Some(&u.unit().header.instance))
+            hirsel_lir::emission::symbol_name(
+                &u.unit().header.definition,
+                Some(&u.unit().header.instance),
+            )
         })
         .collect();
     let target = &program.target;
@@ -869,7 +875,7 @@ fn link_objects_impl(
     for import in objects.iter().flat_map(|o| &o.imports) {
         let declared = matches!(import.kind, hirsel_lir::stage::ObjectSymbolKind::Runtime)
             || exported.contains(import.name.as_str())
-            || hirsel_llvm::TOOLCHAIN_IMPORTS.contains(&import.name.as_str());
+            || hirsel_lir::emission::TOOLCHAIN_IMPORTS.contains(&import.name.as_str());
         if !declared {
             return Err(NativeError::new(
                 StageName::Link,

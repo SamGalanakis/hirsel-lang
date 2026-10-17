@@ -23,7 +23,8 @@ use crate::context::{
     Attribute, AttributeSlot, BasicBlock, Builder, Cast, FloatPredicate, Function, IntPredicate,
     MemoryEffects, Module, Value,
 };
-use crate::emit::{load_tag, slice_storage};
+use crate::emit::load_tag;
+use hirsel_lir::emission::slice_storage;
 
 /// The pair is equal.
 pub(crate) const ORDER_EQUAL: u8 = 0;

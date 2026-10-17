@@ -10,8 +10,8 @@ use super::link::{
 use super::observe::{Observation, Sites};
 use super::stages::{NativeError, Options, ReadyProgram, StageName, build};
 use hirsel_engine::ValidatedNativeInput;
+use hirsel_lir::emission::OptLevel;
 use hirsel_lir::layout_types::TargetSpec;
-use hirsel_llvm::OptLevel;
 use hirsel_syntax::DefPath;
 use std::path::Path;
 

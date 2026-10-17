@@ -2,8 +2,9 @@
 //! along the failure edge, and only a zero status is unreachable.
 use crate::support;
 
+use hirsel_lir::emission::{EmitInputs, OptLevel, symbol_name};
 use hirsel_lir::{descriptor_registry::DescriptorRegistry, ir::*, layout_types::TargetSpec};
-use hirsel_llvm::{EmitInputs, OptLevel, emit_ir, symbol_name};
+use hirsel_llvm::emit_ir;
 use hirsel_types::Primitive;
 use support::{programs::Program, *};
 

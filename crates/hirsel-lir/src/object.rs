@@ -1,11 +1,10 @@
-//! Reading the symbol interface of an emitted object, independently of LLVM.
+//! Reading the symbol interface of an emitted object, independently of the backend that
+//! emitted it.
 //!
-//! The symbol and relocation tables are read from the ELF bytes here, after every LLVM handle
-//! is gone, so an artifact's imports and exports can be compared with its manifest.
+//! The symbol and relocation tables are read from the ELF bytes here, after every backend
+//! handle is gone, so an artifact's imports and exports can be compared with its manifest.
 
-use hirsel_lir::layout_types::TargetSpec;
-
-use crate::CodegenError;
+use crate::layout_types::TargetSpec;
 
 /// The ELF `e_machine` of a target's objects, or None for a triple this crate cannot read.
 fn elf_machine(target: &TargetSpec) -> Option<u16> {
@@ -17,7 +16,7 @@ fn elf_machine(target: &TargetSpec) -> Option<u16> {
 }
 
 /// A relocatable ELF object's bytes and linkage interface. It owns its bytes and borrows
-/// nothing from LLVM or from the input it was compiled from.
+/// nothing from the backend or from the input it was compiled from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectFile {
     pub bytes: Vec<u8>,
@@ -40,12 +39,10 @@ pub struct ImportRelocation {
 
 impl ObjectFile {
     /// Checks that `bytes` is a little-endian ELF64 relocatable object for `target` and reads
-    /// its symbol interface.
-    pub fn read(target: &TargetSpec, bytes: Vec<u8>) -> Result<Self, CodegenError> {
+    /// its symbol interface; the error says what is malformed.
+    pub fn read(target: &TargetSpec, bytes: Vec<u8>) -> Result<Self, String> {
         let (mut exports, mut imports, relocations) =
-            symbols(target, &bytes).map_err(|message| CodegenError::Object {
-                message: message.to_owned(),
-            })?;
+            symbols(target, &bytes).map_err(str::to_owned)?;
         exports.sort();
         exports.dedup();
         imports.sort();
@@ -306,7 +303,7 @@ mod tests {
 
     fn rejection(target: TargetSpec, bytes: Vec<u8>) -> String {
         match ObjectFile::read(&target, bytes) {
-            Err(CodegenError::Object { message }) => message,
+            Err(message) => message,
             other => panic!("expected a malformed-object error, got {other:?}"),
         }
     }

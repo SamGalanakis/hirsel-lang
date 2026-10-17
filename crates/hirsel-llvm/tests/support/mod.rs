@@ -20,10 +20,10 @@ use hirsel_lir::abi_types::{CallableShape, FnAbiId};
 use hirsel_lir::effect::Effects;
 use hirsel_lir::ir::*;
 
+use hirsel_lir::emission::{FailureCode, FailureCodes};
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, TargetSpec};
 use hirsel_lir::stage::{InputIdentity, Ready, StageKind, ValidatedUnit};
 use hirsel_lir::validate::{self, Inputs};
-use hirsel_llvm::{FailureCode, FailureCodes};
 use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId, PassingMode};
 use hirsel_tir::RepresentationRecord;
 use hirsel_types::*;

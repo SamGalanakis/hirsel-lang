@@ -7,11 +7,10 @@ use crate::support;
 
 use std::fmt::Write as _;
 
+use hirsel_lir::emission::{EmitInputs, OptLevel, site_code, symbol_name};
 use hirsel_lir::ir::{BinaryOp, UnaryOp};
 use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
-use hirsel_llvm::{
-    EmitInputs, OptLevel, c_definition, compile_ir, emit_object, site_code, symbol_name,
-};
+use hirsel_llvm::{c_definition, compile_ir, emit_object};
 use support::native::*;
 use support::programs::*;
 use support::*;

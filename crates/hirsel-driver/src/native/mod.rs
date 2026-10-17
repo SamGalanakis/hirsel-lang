@@ -27,8 +27,9 @@ pub use differential::{
 pub use emit::{KIND_BUG, check_runtime_calls, emit, emit_ir, failure_codes, failure_rules};
 pub use executable::{BuildProfile, build_path_native};
 pub use heap::{HeapRun, heap_campaign, run_heap};
+pub use hirsel_lir::emission::OptLevel;
 pub use hirsel_lir::layout_types::TargetSpec;
-pub use hirsel_llvm::{OptLevel, ProfileSource, ProfileSources, c_call};
+pub use hirsel_llvm::{ProfileSource, ProfileSources, c_call};
 pub use hirsel_proof_export::sidecar::Checker;
 pub use hirsel_run_config::Inputs as LaunchInputs;
 pub use link::{

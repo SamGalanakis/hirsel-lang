@@ -2,8 +2,8 @@
 //! immutable inputs only; failure codes are assigned here, from the rules the
 //! program's failure edges start.
 use super::stages::{NativeError, ReadyProgram, StageName};
+use hirsel_lir::emission::{EmitInputs, FailureCode, FailureCodes, OptLevel};
 use hirsel_lir::stage::ObjectArtifact;
-use hirsel_llvm::{EmitInputs, FailureCode, FailureCodes, OptLevel};
 use std::collections::BTreeSet;
 
 /// The failure category code of every language failure (`kind` of
@@ -37,7 +37,7 @@ pub fn failure_rules(program: &ReadyProgram) -> Vec<String> {
             .iter()
             .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
     }) {
-        rules.insert(hirsel_llvm::BOUNDED_RULE);
+        rules.insert(hirsel_lir::emission::BOUNDED_RULE);
     }
     rules.into_iter().map(str::to_string).collect()
 }

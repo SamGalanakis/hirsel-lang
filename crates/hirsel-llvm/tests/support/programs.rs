@@ -44,7 +44,7 @@ impl Program {
     /// The C wrapper `wrapper` of the ABI v1 signature calling the unit `name`'s entry
     /// (`hirsel_llvm::c_call`).
     pub fn c_call(&self, name: &str, wrapper: &str) -> String {
-        let symbol = hirsel_llvm::symbol_name(&path(name), Some(&instance(name)));
+        let symbol = hirsel_lir::emission::symbol_name(&path(name), Some(&instance(name)));
         hirsel_llvm::c_call(&self.table.table, self.abi_of(name), &symbol, wrapper)
     }
 }

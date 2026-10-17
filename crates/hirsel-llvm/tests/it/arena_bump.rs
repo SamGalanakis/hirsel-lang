@@ -3,12 +3,13 @@
 //! fixed-layout block and diagnostics.
 use crate::support;
 use hirsel_layout::layout::OwnerRepresentation;
+use hirsel_lir::emission::{EmitInputs, OptLevel};
 use hirsel_lir::{
     descriptor_registry::DescriptorRegistry,
     ir::*,
     layout_types::{ScalarKind, TargetSpec},
 };
-use hirsel_llvm::{EmitInputs, OptLevel, emit_object, emit_optimized_ir};
+use hirsel_llvm::{emit_object, emit_optimized_ir};
 use hirsel_syntax::PassingMode;
 use hirsel_types::Primitive;
 use support::{
@@ -78,7 +79,7 @@ fn program(target: &TargetSpec) -> Program {
 fn inputs<'a>(
     p: &'a Program,
     input: &'a hirsel_lir::stage::InputIdentity,
-    failures: &'a hirsel_llvm::FailureCodes,
+    failures: &'a hirsel_lir::emission::FailureCodes,
     opt: OptLevel,
 ) -> EmitInputs<'a> {
     static INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =

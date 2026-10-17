@@ -293,10 +293,13 @@ fn capture_masks_agree_on_both_native_targets() {
         for (called, weakened) in [(false, false), (true, false), (true, true)] {
             let p = program(&target, called, weakened);
             heap(&p).result.unwrap();
-            for opt in [hirsel_llvm::OptLevel::None, hirsel_llvm::OptLevel::Speed] {
+            for opt in [
+                hirsel_lir::emission::OptLevel::None,
+                hirsel_lir::emission::OptLevel::Speed,
+            ] {
                 let codes = failure_codes();
                 let id = input();
-                let inputs = hirsel_llvm::EmitInputs {
+                let inputs = hirsel_lir::emission::EmitInputs {
                     input: &id,
                     target: &target,
                     layouts: &p.table.table,
@@ -505,7 +508,7 @@ fn initialization_masks_share_the_named_live_word_limit() {
         let codes = failure_codes();
         let id = input();
         let finalizers = Default::default();
-        let inputs = hirsel_llvm::EmitInputs {
+        let inputs = hirsel_lir::emission::EmitInputs {
             input: &id,
             target: &table.target,
             layouts: &table.table,
@@ -519,7 +522,7 @@ fn initialization_masks_share_the_named_live_word_limit() {
                 &table.table,
                 &finalizers,
             ),
-            opt: hirsel_llvm::OptLevel::None,
+            opt: hirsel_lir::emission::OptLevel::None,
             measurement: false,
         };
         let result = hirsel_llvm::emit_object(&[&sealed], &inputs);

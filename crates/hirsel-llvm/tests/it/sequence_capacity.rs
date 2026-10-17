@@ -1,10 +1,11 @@
 //! A sequence capacity is its header word (runtime ABI 5), which the runtime leaves exact.
 use crate::support;
 
+use hirsel_lir::emission::{EmitInputs, OptLevel};
 use hirsel_lir::layout::sequence_elements_offset;
 use hirsel_lir::layout_types::{LayoutKind, SizeSpec, TargetSpec};
 use hirsel_lir::{descriptor_registry::DescriptorRegistry, ir::*};
-use hirsel_llvm::{EmitInputs, OptLevel, emit_object};
+use hirsel_llvm::emit_object;
 use hirsel_syntax::PassingMode;
 use hirsel_types::Primitive;
 use support::{native::*, programs::Program, *};

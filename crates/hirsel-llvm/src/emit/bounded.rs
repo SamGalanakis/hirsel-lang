@@ -4,10 +4,7 @@
 //! construction's failure edge. A program with no `Recover` opens no bounded arena, so
 //! its failure codes carry no MEM-6 and its constructions are not charged.
 use super::*;
-use crate::FailureCode;
-
-/// The rule a bounded arena's exhaustion fails with.
-pub const BOUNDED_RULE: &str = "MEM-6";
+use hirsel_lir::emission::{BOUNDED_RULE, FailureCode};
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
     /// MEM-6's failure code, present when the program opens a bounded arena.

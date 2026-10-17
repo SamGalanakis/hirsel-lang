@@ -14,15 +14,16 @@ the pinned install; an environment value wins, for example a local
 Interface:
 
 - `emit_object(&[&ValidatedUnit<Ready>], &EmitInputs) -> Result<ObjectArtifact, CodegenError>`.
-  `EmitInputs` is immutable: the front-end `InputIdentity`, `TargetSpec`, `LayoutTable`,
+  `EmitInputs` (`hirsel_lir::emission`, shared with `hirsel-cranelift`) is immutable: the front-end `InputIdentity`, `TargetSpec`, `LayoutTable`,
   operation `Manifest`, `FailureCodes` and `OptLevel`. No provider, query engine or linker.
 - `check_target(&TargetSpec)`: the loaded libLLVM is the pin and LLVM's DataLayout agrees
   with the target spec.
 - `compile_ir(&str, &TargetSpec, OptLevel) -> ObjectFile`: the toolchain smoke path for
   textual IR, through the same verifier, optimization and object stages.
-- `symbol_name(DefPath, Option<instance>)`: the injective, C-identifier-safe link name of a
-  definition instance. `site_code(DefPath, revision, SiteRange)`: the `u64` source site a
-  failure passes to `hirsel_rt_v2_failure_begin`.
+- The names and codes emission uses are backend-neutral and live in `hirsel_lir::emission`:
+  `symbol_name(DefPath, Option<instance>)`, the injective, C-identifier-safe link name of a
+  definition instance; `site_code(DefPath, revision, SiteRange)`, the `u64` source site a
+  failure passes to `hirsel_rt_v2_failure_begin`; the receipt check and the object manifest.
 
 Invariants:
 
@@ -150,7 +151,7 @@ Invariants:
 - `OptLevel::Speed` runs LLVM `default<O3>` with Aggressive code generation;
   `None` remains O0. The LLVM verifier runs before and after the optimization pipeline; each failure reports
   its stage. `Unreachable` traps rather than letting the optimizer assume.
-- The object's ELF symbol and relocation tables are read by `object.rs`, independently of
+- The object's ELF symbol and relocation tables are read by `hirsel_lir::object`, independently of
   LLVM, after every LLVM handle is dropped. Exports must be exactly the declared source entries,
   excluding replicated library and known callable bodies;
   imports must be declared callees, runtime entries, or `TOOLCHAIN_IMPORTS` (C library and
@@ -225,8 +226,8 @@ is block 0, any other result is loaded from its payload. String/Bytes literals a
 (`COUNT_IMMORTAL`, `DOMAIN_STATIC`), and a literal slice's owner is its sequence block.
 Every immortal block (static, region owner, arena block) lays out its prefix, the extent
 `{ capacity, align }` and the counted header, from `IMMORTAL_PREFIX` and `PrefixWord::bytes`;
-`IMMORTAL_PREFIX_BYTES` is derived from them and `the_immortal_prefix_is_the_runtime_extent_then_header`
-pins each word to the runtime ABI.
+`IMMORTAL_PREFIX_BYTES` is derived from them (all in `hirsel_lir::emission`) and
+`the_immortal_prefix_is_the_runtime_extent_then_header` pins each word to the runtime ABI.
 `Compare` calls a private generated comparator per layout (`compare.rs`), which follows the
 interpreter's order and fails MEM-3 past `COMPARE_MAX_DEPTH`. Path equality and hashing
 use its inert intern ID; ordered comparisons resolve UTF-8 text with

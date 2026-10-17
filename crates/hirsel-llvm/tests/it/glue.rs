@@ -7,8 +7,9 @@ use crate::support;
 
 use std::collections::BTreeMap;
 
+use hirsel_lir::emission::{EmitInputs, OptLevel};
 use hirsel_lir::layout_types::TargetSpec;
-use hirsel_llvm::{EmitInputs, OptLevel, emit_object};
+use hirsel_llvm::emit_object;
 use support::glue::*;
 use support::native::*;
 use support::*;

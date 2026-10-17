@@ -4,11 +4,10 @@
 use crate::support;
 
 use hirsel_core_contract::Manifest;
+use hirsel_lir::emission::{EmitInputs, FailureCodes, OptLevel, function_thunk_name, symbol_name};
 use hirsel_lir::layout_types::TargetSpec;
 use hirsel_lir::stage::{InputIdentity, ObjectArtifact, ObjectSymbolKind};
-use hirsel_llvm::{
-    CodegenError, EmitInputs, FailureCodes, OptLevel, emit_object, function_thunk_name, symbol_name,
-};
+use hirsel_llvm::{CodegenError, emit_object};
 use support::programs::*;
 use support::*;
 
@@ -79,7 +78,8 @@ fn the_scalar_program_exports_every_case_on_every_target() {
             for import in &object.imports {
                 let runtime = import.name == "hirsel_rt_v2_failure_begin";
                 assert!(
-                    runtime || hirsel_llvm::TOOLCHAIN_IMPORTS.contains(&import.name.as_str()),
+                    runtime
+                        || hirsel_lir::emission::TOOLCHAIN_IMPORTS.contains(&import.name.as_str()),
                     "{}",
                     import.name
                 );

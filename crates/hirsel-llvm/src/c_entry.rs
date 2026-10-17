@@ -11,7 +11,8 @@ use std::fmt::Write as _;
 use hirsel_lir::abi_types::{FnAbi, ParameterPassing, PhysicalType, ScalarExtension};
 use hirsel_lir::layout_types::{LayoutTable, ScalarKind};
 
-use crate::emit::{PairField, PairWord, REGISTER_PAIR, register_result};
+use crate::emit::{PairField, PairWord, REGISTER_PAIR};
+use hirsel_lir::emission::register_result;
 
 /// The C type of a register pair field holding `word`.
 fn word(word: PairWord) -> String {

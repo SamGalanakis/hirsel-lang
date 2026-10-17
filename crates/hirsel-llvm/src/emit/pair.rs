@@ -1,36 +1,5 @@
 use super::*;
 
-/// The scalar a value of this layout kind is held as in SSA form, if it is one.
-pub(super) fn scalar_shape(kind: &LayoutKind) -> Option<ScalarKind> {
-    match kind {
-        LayoutKind::Scalar(kind) => Some(*kind),
-        LayoutKind::Path => Some(ScalarKind::U64),
-        LayoutKind::Block { .. }
-        | LayoutKind::Box { .. }
-        | LayoutKind::Header
-        | LayoutKind::Arena => Some(ScalarKind::Pointer),
-        _ => None,
-    }
-}
-
-/// The scalar a Hirsel entry of `abi` returns in a register word, when its result is a
-/// plain scalar of at most 64 bits. Every other result keeps its result pointer.
-///
-/// Register result invariant (ABI v1 lowering): such an entry returns the two-field
-/// struct `{ i8 status, word }`, where the word is `ptr` for a pointer result and `i64`
-/// otherwise. On success the word holds the value's bits in its low bits (Bool as one
-/// byte, floats by bit pattern); emitted code zero-extends them and never assumes a
-/// caller or callee did. On failure the word is zero and meaningless. Both targets
-/// return the two fields in registers (RAX/AL and RDX, W0 and X1), which is also the C
-/// struct `{ uint8_t status; uint64_t value; }` (or `void *value`). Definitions,
-/// function-reference thunks, closure and iterator bodies follow it alike, so a direct,
-/// a private and an indirect call agree; runtime primitives keep their result pointer.
-pub fn register_result(layouts: &LayoutTable, abi: &FnAbi) -> Option<ScalarKind> {
-    let result = abi.result.as_ref()?;
-    let kind = scalar_shape(&layouts.layout(result.layout)?.kind)?;
-    (!matches!(kind, ScalarKind::U128 | ScalarKind::I128)).then_some(kind)
-}
-
 /// A field of the register pair a plain scalar result returns as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PairField {

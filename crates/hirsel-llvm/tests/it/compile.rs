@@ -1,10 +1,11 @@
 //! In-process checks of the pinned binding and the textual smoke path: no linking, no
 //! execution (those are in `native.rs`).
 
+use hirsel_lir::emission::OptLevel;
 use hirsel_lir::layout_types::TargetSpec;
+use hirsel_lir::object::ObjectFile;
 use hirsel_llvm::{
-    CodegenError, ObjectFile, OptLevel, PINNED_LLVM, VerifyStage, check_target, compile_ir,
-    loaded_llvm_version,
+    CodegenError, PINNED_LLVM, VerifyStage, check_target, compile_ir, loaded_llvm_version,
 };
 
 const SMOKE: &str = include_str!("../../../../tools/native-toolchain/fixtures/smoke.ll");

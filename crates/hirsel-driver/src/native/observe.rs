@@ -135,7 +135,11 @@ pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)>
             .chain(unit.tables.cleanup_anchors.iter().map(|a| a.site));
         for site in sites {
             codes.insert(
-                hirsel_llvm::site_code(&header.definition, &header.implementation_revision, site),
+                hirsel_lir::emission::site_code(
+                    &header.definition,
+                    &header.implementation_revision,
+                    site,
+                ),
                 (header.definition.clone(), site),
             );
         }
