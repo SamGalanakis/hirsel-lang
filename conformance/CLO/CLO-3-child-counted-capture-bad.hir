@@ -1,0 +1,20 @@
+// rule: CLO-3
+// expect: reject CLO-3 at line 12
+// A copied counted value is still not sendable into a child.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let items: List[u32] = [0]
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          let owned = copy items
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+  Ok(())
+}

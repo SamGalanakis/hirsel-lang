@@ -129,7 +129,7 @@ fn redundant(
         || matches!(
             row.kind,
             TypeKind::Builtin {
-                kind: BuiltinType::Shared | BuiltinType::Sender,
+                kind: BuiltinType::Shared | BuiltinType::Sender | BuiltinType::Mutex,
                 ..
             }
         )

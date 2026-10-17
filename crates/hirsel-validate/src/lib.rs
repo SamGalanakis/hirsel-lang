@@ -1217,12 +1217,15 @@ mod internal_tests;
 #[allow(dead_code)] // the unit tests use a few of the builders
 mod support;
 
-/// A `Shared[T]` root row.
-pub(crate) fn shared_root(store: &TypeStore, ty: TypeId) -> bool {
+/// A row whose copy is an independent global handle: a `Shared[T]` root
+/// (MEM-11) or a run-owned `Mutex` or `Atomic` table entry (MODE-4).
+pub(crate) fn handle_root(store: &TypeStore, ty: TypeId) -> bool {
     matches!(
         store.get(ty).map(|row| &row.kind),
         Some(TypeKind::Builtin {
-            kind: hirsel_types::BuiltinType::Shared,
+            kind: hirsel_types::BuiltinType::Shared
+                | hirsel_types::BuiltinType::Mutex
+                | hirsel_types::BuiltinType::Atomic,
             ..
         })
     )

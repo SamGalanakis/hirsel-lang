@@ -301,8 +301,7 @@ MODE/MODE-4-mut-handback-sendable-run.hir
 MODE/MODE-4-mut-handback-sendable-storage-bad.hir
 MODE/MODE-4-mut-parameter-write-bad.hir
 MODE/MODE-4-mutable-function-binding-written-mode-run.hir
-MODE/MODE-4-mutex-handle-bad.hir
-MODE/MODE-4-mutex-handle-ok.hir
+MODE/MODE-4-mutex-handle.hir
 MODE/MODE-4-nested-generic-bound-bad.hir
 MODE/MODE-4-nested-generic-bound-ok.hir
 MODE/MODE-4-plain-function-pointer-send-ok.hir

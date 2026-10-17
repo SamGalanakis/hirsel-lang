@@ -38,7 +38,8 @@ fn sizes(tasks: Tasks, dir: Dir, a: Path, b: Path) -> Result[(u64, u64), FileErr
 ```
 
 A child capturing a borrowed `List[u64]` instead is CLO-3: a counted value that is not
-unique is not sendable.
+unique is not sendable. A child may copy its parent's `Mutex` or `Atomic` handle, or take a
+Sender, since those handles are run-owned ([MODE-4](ownership.md#mode-4-sendable)).
 
 ### CONC-3: Cancellation
 

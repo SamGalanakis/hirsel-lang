@@ -1,0 +1,27 @@
+// rule: CLO-3
+// expect: run
+// A child closure copies its parent's Atomic handle.
+@noalloc
+fn check(x: u32) -> ()
+  requires x == 1 {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let a: Atomic[u32] = atomic.create(tasks, 0)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let h = task.async(
+        s,
+        fn() {
+          atomic.store(tasks, a, 1)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+  check(atomic.load(tasks, a))
+  Ok(())
+}

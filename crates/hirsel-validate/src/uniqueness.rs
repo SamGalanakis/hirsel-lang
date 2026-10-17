@@ -15,7 +15,7 @@ impl Checker<'_> {
         if value.usage != UseKind::Copy {
             return ty;
         }
-        if super::shared_root(store, ty) {
+        if super::handle_root(store, ty) {
             // MEM-11: a copied Shared root is an independently counted handle
             // on an immutable root that is never region-placed: it is global.
             let mut row = store.get(ty).unwrap().clone();

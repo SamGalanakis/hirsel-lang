@@ -2869,14 +2869,16 @@ impl Checker<'_> {
                 let row = ty.modes.relation.clone();
                 ty.modes = part.modes.clone();
                 if usage == UseKind::Copy {
-                    let shared = matches!(
+                    // A copied Shared root, Mutex or Atomic is an independent
+                    // global handle (MEM-11, MODE-4).
+                    let handle = matches!(
                         ty.kind,
                         TypeKind::Builtin {
-                            kind: BuiltinType::Shared,
+                            kind: BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic,
                             ..
                         }
                     );
-                    if plain || shared {
+                    if plain || handle {
                         ty.modes.relation = Relation::global();
                     }
                     if flat {

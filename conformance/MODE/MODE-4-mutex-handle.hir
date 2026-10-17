@@ -1,6 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 11
-// "... mutex ... handles."
+// expect: accept
+// Mutex handles are run-owned and sendable within their scheduling domain.
 fn cross[T: sendable](take x: T) -> () {
   ()
 }

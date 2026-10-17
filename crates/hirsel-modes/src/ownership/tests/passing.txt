@@ -728,7 +728,7 @@ MODE/MODE-4-local-result-send-ok.hir
 MODE/MODE-4-local-sendable-storage-run.hir
 MODE/MODE-4-mut-handback-sendable-run.hir
 MODE/MODE-4-mutable-function-binding-written-mode-run.hir
-MODE/MODE-4-mutex-handle-ok.hir
+MODE/MODE-4-mutex-handle.hir
 MODE/MODE-4-nested-generic-bound-ok.hir
 MODE/MODE-4-plain-function-pointer-send-ok.hir
 MODE/MODE-4-plain-pointer-send-ok.hir

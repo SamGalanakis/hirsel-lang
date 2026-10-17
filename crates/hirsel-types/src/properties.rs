@@ -542,8 +542,8 @@ fn prove(
                         }
                     }
                     Bound::Sendable => match kind {
-                        BuiltinType::Shared | BuiltinType::Sender => continue,
-                        BuiltinType::Receiver | BuiltinType::Mutex | BuiltinType::Task => {
+                        BuiltinType::Shared | BuiltinType::Sender | BuiltinType::Mutex => continue,
+                        BuiltinType::Receiver | BuiltinType::Task => {
                             return Ok(Sendability::NotSendable);
                         }
                         BuiltinType::Iter => {

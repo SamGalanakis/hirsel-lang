@@ -97,7 +97,6 @@ MODE/MODE-4-local-sendable-storage-bad.hir # outside ownership operative-rule sc
 MODE/MODE-4-mut-handback-plain-storage-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-mut-handback-sendable-storage-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-mut-parameter-write-bad.hir # outside ownership operative-rule scope
-MODE/MODE-4-mutex-handle-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-nested-generic-bound-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-receiver-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-record-field-callable-bad.hir # outside ownership operative-rule scope

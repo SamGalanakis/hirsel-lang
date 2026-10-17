@@ -55,7 +55,9 @@ Resources and handles do not replace the governing capability their operations r
 `file.write_all(dir, mut f, data)` takes the `Dir` as well as the file. An explicitly
 sealed resource capability is itself a capability under [CAP-5](#cap-5-capability-sealing).
 Handles of tasks, mutexes, atomics and channels carry run-time scheduling-domain affinity;
-an operation with another domain's capability fails CAP-2 before any effect.
+an operation with another domain's capability fails CAP-2 before any effect. Mutex,
+Atomic and Sender handles live in run-owned tables, so they are sendable within their
+domain and may be captured by the children of a scope in the same run.
 
 Every type has a value-authority summary. A capability contributes its own nominal type;
 aggregates join their parts, resources include the authority their declared destruction

@@ -211,10 +211,12 @@ complete once actual.
 ### MODE-4: Sendable
 
 A value may cross tasks only if it is sendable: plain values; `flat` values (copied);
-unique values whose contents are sendable (moved); `Shared[T]`; Senders; regions with
-sendable roots; and global capabilities whose complete represented value meets these
-rules. Not sendable: counted values that are not unique, Receivers (they cross only as
-task-closure captures), local values, scoped capabilities, and mutex and task handles.
+unique values whose contents are sendable (moved); `Shared[T]`; Senders, Mutexes and
+Atomics, which name run-owned handles and cross only within their scheduling domain
+([CAP-2](capabilities.md#cap-2-charged-at-use)); regions with sendable roots; and global
+capabilities whose complete represented value meets these rules. Not sendable: counted
+values that are not unique, Receivers (they cross only as task-closure captures), local
+values, scoped capabilities, and task handles.
 Locality wins even for flat values: a local value never crosses.
 
 A written `sendable T` is a receiving requirement for the complete value of `T`, for every
