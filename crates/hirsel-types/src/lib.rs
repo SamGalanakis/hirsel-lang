@@ -1007,6 +1007,8 @@ pub use relation::{
 mod nominal;
 pub use nominal::*;
 
+pub mod logical;
+
 /// Shared fixture builders, available only with the `testing` feature.
 #[cfg(feature = "testing")]
 pub mod testing;
