@@ -82,44 +82,27 @@ fn error_json(message: String) -> String uses {} {
   }
 }
 
-fn member(fields: Map[String, box std@1/json.Value], key: String) -> Option[
-  std@1/json.Value
-] uses {} {
-  let item = match map.get(fields, key) {
-    Some(item) => item,
-    None() => return None(),
-  }
-  let value: std@1/json.Value = match item {
-    Null() => Null(),
-    Bool(b) => Bool(b),
-    Number(n) => Number(unique n),
-    Text(s) => Text(unique s),
-    Array(xs) => Array(unique xs),
-    Object(xs) => Object(unique xs),
-  }
-  Some(take value)
-}
-
-fn as_u64(value: Option[std@1/json.Value]) -> Option[u64] uses {} {
-  match value {
-    Some(Number(n)) => match std@1/u64.parse(n) {
-      Ok(v) => Some(v),
-      Error(_) => None(),
-    },
-    _ => None(),
-  }
-}
-
-fn as_text(value: Option[std@1/json.Value]) -> Option[String] uses {} {
-  match value {
+// Patterns look through each member's box, so a field reads without unboxing.
+fn text_field(fields: Map[String, box std@1/json.Value], key: String) -> Option[String] uses {} {
+  match map.get(fields, key) {
     Some(Text(s)) => Some(unique s),
     _ => None(),
   }
 }
 
-fn as_bool(value: Option[std@1/json.Value]) -> Option[bool] uses {} {
-  match value {
+fn bool_field(fields: Map[String, box std@1/json.Value], key: String) -> Option[bool] uses {} {
+  match map.get(fields, key) {
     Some(Bool(b)) => Some(b),
+    _ => None(),
+  }
+}
+
+fn u64_field(fields: Map[String, box std@1/json.Value], key: String) -> Option[u64] uses {} {
+  match map.get(fields, key) {
+    Some(Number(n)) => match std@1/u64.parse(n) {
+      Ok(v) => Some(v),
+      Error(_) => None(),
+    },
     _ => None(),
   }
 }
@@ -140,11 +123,11 @@ fn parse_store(take text: String) -> Result[Store, ServerError] uses {} {
     Ok(Object(fields)) => copy fields,
     _ => return Error(Corrupt("state is not a JSON object")),
   }
-  let next_id = match as_u64(member(fields, "next_id")) {
+  let next_id = match u64_field(fields, "next_id") {
     Some(n) => n,
     None() => return Error(Corrupt("next_id")),
   }
-  let items = match member(fields, "todos") {
+  let items = match map.get(fields, "todos") {
     Some(Array(xs)) => copy xs,
     _ => return Error(Corrupt("todos")),
   }
@@ -154,15 +137,15 @@ fn parse_store(take text: String) -> Result[Store, ServerError] uses {} {
       Object(xs) => copy xs,
       _ => return Error(Corrupt("todo")),
     }
-    let id = match as_u64(member(entry, "id")) {
+    let id = match u64_field(entry, "id") {
       Some(n) => n,
       None() => return Error(Corrupt("todo id")),
     }
-    let title = match as_text(member(entry, "title")) {
+    let title = match text_field(entry, "title") {
       Some(s) => take s,
       None() => return Error(Corrupt("todo title")),
     }
-    let done = match as_bool(member(entry, "done")) {
+    let done = match bool_field(entry, "done") {
       Some(b) => b,
       None() => return Error(Corrupt("todo done")),
     }
@@ -320,38 +303,23 @@ fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
   }
 }
 
+// `application/json`, in any case and with or without parameters such as a charset.
 fn json_content(request: std@1/http.ServerRequest) -> bool uses {} {
-  match std@1/http.header(request.headers, "content-type") {
-    Some(value) => {
-      let lower = std@1/string.ascii_lower(value)
-      let media = match std@1/string.find(lower, ";") {
-        Some(pos) => string.slice(
-          lower,
-          match string.position(lower, 0) {
-            Some(start) => start,
-            None() => return false,
-          },
-          pos
-        ),
-        None() => lower,
-      }
-      std@1/string.trim(media) == "application/json"
-    },
-    None() => false,
+  let value = match std@1/http.header(request.headers, "content-type") {
+    Some(v) => std@1/string.ascii_lower(v),
+    None() => return false,
   }
+  let media = match std@1/string.split_once(value, ";") {
+    Some((media, _)) => media,
+    None() => value,
+  }
+  std@1/string.trim(media) == "application/json"
 }
 
 // Decide the action from method, path and body; an error is the reply to send.
 fn route(request: std@1/http.ServerRequest) -> Result[Action, Reply] uses {} {
-  let target = match std@1/string.find(request.target, "?") {
-    Some(pos) => string.slice(
-      request.target,
-      match string.position(request.target, 0) {
-        Some(start) => start,
-        None() => return Error(not_found()),
-      },
-      pos
-    ),
+  let target = match std@1/string.split_once(request.target, "?") {
+    Some((target_path, _)) => target_path,
     None() => request.target,
   }
   let parts = std@1/string.split(unique target, "/")
@@ -372,7 +340,7 @@ fn route(request: std@1/http.ServerRequest) -> Result[Action, Reply] uses {} {
       Some(f) => copy f,
       None() => return Error(bad_request("body must be a JSON object")),
     }
-    return match as_text(member(fields, "title")) {
+    return match text_field(fields, "title") {
       Some(title) => if string.byte_len(title) == 0 {
         Error(bad_request("title must not be empty"))
       } else {
@@ -401,7 +369,7 @@ fn route(request: std@1/http.ServerRequest) -> Result[Action, Reply] uses {} {
     Some(f) => copy f,
     None() => return Error(bad_request("body must be a JSON object")),
   }
-  match as_bool(member(fields, "done")) {
+  match bool_field(fields, "done") {
     Some(done) => Ok(Update(id, done)),
     None() => Error(bad_request("done must be a boolean")),
   }
