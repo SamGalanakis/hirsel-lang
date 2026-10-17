@@ -1,6 +1,6 @@
 use crate::support;
 use hirsel_interp::{
-    library::{collection, simulation::core_path, *},
+    library::{collection, *},
     *,
 };
 use hirsel_tir::*;
@@ -35,7 +35,7 @@ impl Harness {
         self.library
             .call(
                 OperationCall {
-                    path: &core_path(name),
+                    path: &hirsel_syntax::DefPath::core(name),
                     arguments: args,
                     generics: &[],
                     result_type,
@@ -120,7 +120,7 @@ fn unicode_view_protocols_keep_scalars_and_positions() {
             let Value::Record { definition, fields } = v else {
                 panic!()
             };
-            assert_eq!(*definition, core_path("StrPos"));
+            assert_eq!(*definition, hirsel_syntax::DefPath::core("StrPos"));
             assert_eq!(fields[0], Some(Value::String(source.into())));
             fields[1].clone().unwrap()
         })

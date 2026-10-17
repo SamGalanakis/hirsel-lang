@@ -8,7 +8,7 @@ pub mod review;
 #[cfg(test)]
 mod tests;
 use hirsel_intern::Interner;
-use hirsel_syntax::{ContentHash, DefPath, FileContext, ItemPath, PackageId, Path};
+use hirsel_syntax::{ContentHash, DefPath, FileContext, Path};
 use hirsel_types::*;
 use std::{
     collections::BTreeMap,
@@ -23,28 +23,15 @@ pub const OMITTED: &[(&str, u32)] = &[
     ("comptime step-budget API", 7),
     ("frame/arena/scratch charge and depth constants", 16),
 ];
-/// Stable identity agreed with the milestone owner; see spec issue #36.
-pub fn core_path(name: &str) -> DefPath {
-    let mut parts: Vec<_> = name.split('.').map(str::to_owned).collect();
-    let name = parts.pop().expect("core name");
-    DefPath(ItemPath {
-        package: PackageId {
-            name: "core".into(),
-            version: "1".into(),
-        },
-        modules: parts,
-        name,
-    })
-}
 pub fn nominal_roles() -> NominalRoles {
     NominalRoles {
-        unsafe_capability: Some(core_path("Unsafe")),
-        result_type: Some(core_path("Result")),
-        tasks_capability: Some(core_path("Tasks")),
-        scope_capability: Some(core_path("Scope")),
+        unsafe_capability: Some(hirsel_syntax::DefPath::core("Unsafe")),
+        result_type: Some(hirsel_syntax::DefPath::core("Result")),
+        tasks_capability: Some(hirsel_syntax::DefPath::core("Tasks")),
+        scope_capability: Some(hirsel_syntax::DefPath::core("Scope")),
         heap: Some(HeapRole {
-            arena: core_path("Arena"),
-            operation: core_path("$intrinsic.heap"),
+            arena: hirsel_syntax::DefPath::core("Arena"),
+            operation: hirsel_syntax::DefPath::core("$intrinsic.heap"),
         }),
     }
 }
@@ -90,7 +77,7 @@ impl BuiltinRegistry {
         if path
             .package
             .as_ref()
-            .is_some_and(|p| p.name != "core" || p.version != "1")
+            .is_some_and(|p| !p.package_is("core", "1"))
         {
             return None;
         }
@@ -100,7 +87,7 @@ impl BuiltinRegistry {
             .map(|s| symbols.resolve(*s))
             .collect::<Option<Vec<_>>>()?
             .join(".");
-        let path = core_path(&name);
+        let path = hirsel_syntax::DefPath::core(&name);
         if path.0.modules.iter().any(|m| m.starts_with('$')) {
             return None;
         }

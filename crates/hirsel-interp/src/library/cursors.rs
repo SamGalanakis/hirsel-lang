@@ -1,5 +1,5 @@
 //! Compiler-only borrowed and consuming loop state with explicit capture ownership.
-use super::{collection, none, simulation::core_path, some, u64_value};
+use super::{collection, none, some, u64_value};
 use crate::{Error, OperationResult, Value, invalid};
 use hirsel_tir::BodyId;
 use hirsel_types::{BuiltinType, Primitive};
@@ -57,7 +57,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                         matches!(v,Value::Integer(n) if n.kind()==Primitive::U32 && char::from_u32(n.bits() as u32).is_some())
                     }
                     "ScalarPositions" => {
-                        matches!(v,Value::Record {definition,..} if *definition==core_path("StrPos"))
+                        matches!(v,Value::Record {definition,..} if *definition==hirsel_syntax::DefPath::core("StrPos"))
                     }
                     _ => true,
                 };
@@ -66,7 +66,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 }
             }
             Ok(Some(OperationResult::returned(Value::Closure {
-                definition: core_path(&format!("$intrinsic.{protocol}_cursor")),
+                definition: hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_cursor")),
                 body: BodyId(0),
                 captures: vec![Some(source.clone()), Some(u64_value(0))],
                 owned_captures: vec![false, true],
@@ -84,7 +84,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
             else {
                 return Err(invalid("expected intrinsic cursor"));
             };
-            if *definition != core_path(&format!("$intrinsic.{protocol}_cursor"))
+            if *definition != hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_cursor"))
                 || *body != BodyId(0)
                 || captures.len() != 2
                 || owned_captures != &vec![false, true]
@@ -167,7 +167,9 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
             }
             Ok(Some(
                 OperationResult::returned(Value::Closure {
-                    definition: core_path(&format!("$intrinsic.{protocol}_cursor")),
+                    definition: hirsel_syntax::DefPath::core(&format!(
+                        "$intrinsic.{protocol}_cursor"
+                    )),
                     body: BodyId(0),
                     captures: vec![Some(argument.clone()), Some(u64_value(0))],
                     owned_captures: vec![true, true],
@@ -187,7 +189,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
             else {
                 return Err(invalid("expected owning cursor"));
             };
-            if *definition != core_path(&format!("$intrinsic.{protocol}_cursor"))
+            if *definition != hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_cursor"))
                 || *body != BodyId(0)
                 || captures.len() != 2
                 || owned_captures != &[true, true]
@@ -244,7 +246,7 @@ fn source_elements(source: &Value, kind: BuiltinType) -> Result<&[Option<Value>]
     match (kind, source) {
         (BuiltinType::Map, Value::Map(entries)) => Ok(entries),
         (BuiltinType::SortedMap, Value::Record { definition, fields })
-            if *definition == core_path("SortedMap")
+            if *definition == hirsel_syntax::DefPath::core("SortedMap")
                 && fields.len() == 2
                 && fields[0].is_some() =>
         {
@@ -265,7 +267,10 @@ fn owned_elements(source: &mut Value, kind: BuiltinType) -> Result<&mut Vec<Opti
         let Value::Record { definition, fields } = source else {
             return Err(invalid("SortedMap entry storage"));
         };
-        if *definition != core_path("SortedMap") || fields.len() != 2 || fields[0].is_none() {
+        if *definition != hirsel_syntax::DefPath::core("SortedMap")
+            || fields.len() != 2
+            || fields[0].is_none()
+        {
             return Err(invalid("SortedMap entry storage"));
         }
         return match &mut fields[1] {

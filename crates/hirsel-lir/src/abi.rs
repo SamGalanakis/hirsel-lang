@@ -300,8 +300,7 @@ impl<'o> LayoutBuilder<'o> {
                 _ => Class::Aggregate,
             },
             TypeKind::Named { definition, .. }
-                if definition.0.package.name == "core"
-                    && definition.0.package.version == "1"
+                if definition.package_is("core", "1")
                     && definition.0.modules.is_empty()
                     && matches!(definition.0.name.as_str(), "ScalarView" | "PositionView") =>
             {

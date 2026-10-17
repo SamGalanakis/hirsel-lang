@@ -73,7 +73,7 @@ pub fn replay_interpreter_with_fixture(
             },
             _ => None,
         });
-    use hirsel_interp::library::simulation::{ObservedGrant, core_path};
+    use hirsel_interp::library::simulation::ObservedGrant;
     use hirsel_interp::{
         OperationCall, OperationContext, OperationResult, Operations, Value, library as reference,
     };
@@ -82,7 +82,7 @@ pub fn replay_interpreter_with_fixture(
     let mut recorded = vec![];
     for replay in [false, true] {
         let run = RunConfiguration {
-            entry: core_path("main"),
+            entry: hirsel_syntax::DefPath::core("main"),
             hash_seed: 42,
             inputs: if replay { recorded.clone() } else { vec![] },
         };
@@ -313,7 +313,7 @@ pub fn replay_interpreter_with_fixture(
                     .or_default()
                     .push_back(fault);
             }
-            let path = core_path(name);
+            let path = hirsel_syntax::DefPath::core(name);
             let result = library
                 .call(
                     OperationCall {

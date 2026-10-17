@@ -2811,17 +2811,9 @@ impl Checker<'_> {
                     if self.out.diagnostics.len() > before {
                         if let Some(path) = seal {
                             let diagnostic = self.out.diagnostics.last_mut().unwrap();
-                            diagnostic.notes.push(format!(
-                                "capability declaration: {}@{}/{}{}",
-                                path.0.package.name,
-                                path.0.package.version,
-                                if path.0.modules.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!("{}.", path.0.modules.join("."))
-                                },
-                                path.0.name
-                            ));
+                            diagnostic
+                                .notes
+                                .push(format!("capability declaration: {path}"));
                             if let Some(declaration) =
                                 self.tree.items.iter().find(|item| item.definition == path)
                             {

@@ -952,7 +952,7 @@ fn flat_sequences_materialize_with_ordinary_construction_and_a_linear_walk() {
         // Materialization reserves the count, so its pushes are proved to
         // fit (FACT-3) and append without a capacity test.
         assert!(unit.tables.calls.iter().any(|c| {
-            matches!(c.callee, Callee::Direct(s) if [hirsel_rc::library::core_path("list.push"), hirsel_rc::spare_push::spare_path()].contains(&unit.tables.symbols[s.index()].definition))
+            matches!(c.callee, Callee::Direct(s) if [hirsel_syntax::DefPath::core("list.push"), hirsel_rc::spare_push::spare_path()].contains(&unit.tables.symbols[s.index()].definition))
         }));
     }
 }

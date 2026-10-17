@@ -7,7 +7,7 @@ use super::{
     dispatch::{
         arg, bytes, encode_arguments, encode_value, error, index, ok, text, u64_value, variant,
     },
-    simulation::{Fault, Grant, Simulation, core_path},
+    simulation::{Fault, Grant, Simulation},
 };
 use crate::{Error, Integer, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
@@ -179,7 +179,7 @@ fn variant_fields(v: &Value) -> Result<(u32, &[Option<Value>]), Error> {
 }
 fn fields<'a>(v: &'a Value, name: &str, len: usize) -> Result<Vec<&'a Value>, Error> {
     if let Value::Record { definition, fields } = v
-        && *definition == core_path(name)
+        && *definition == hirsel_syntax::DefPath::core(name)
         && fields.len() == len
     {
         return fields
@@ -235,7 +235,7 @@ fn ip_value(ip: IpAddr) -> Value {
 }
 fn addr_value(ip: IpAddr, port: u16) -> Value {
     Value::Record {
-        definition: core_path("SocketAddr"),
+        definition: hirsel_syntax::DefPath::core("SocketAddr"),
         fields: vec![
             Some(ip_value(ip)),
             Some(Value::Integer(

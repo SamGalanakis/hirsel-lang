@@ -5,8 +5,7 @@ use hirsel_core_contract::{OperationId, Passing};
 
 pub(super) fn is_view_operation(id: &OperationId) -> bool {
     let p = &id.definition.0;
-    p.package.name == "core"
-        && p.package.version == "1"
+    p.package.package_is("core", "1")
         && p.modules == ["$intrinsic"]
         && matches!(
             p.name.as_str(),

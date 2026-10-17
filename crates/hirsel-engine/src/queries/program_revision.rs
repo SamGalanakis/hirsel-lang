@@ -13,17 +13,6 @@ fn operational(message: impl Into<String>) -> QueryError {
     })
 }
 
-/// The versioned entry spelling used by the closed RunConfig schema.
-pub fn semantic_entry_name(path: &DefPath) -> String {
-    let item = &path.0;
-    let mut result = format!("{}@{}", item.package.name, item.package.version);
-    for part in item.modules.iter().chain(std::iter::once(&item.name)) {
-        result.push('/');
-        result.push_str(part);
-    }
-    result
-}
-
 #[derive(Clone)]
 pub(crate) struct SemanticProgram {
     nodes: Vec<ProgramNode>,
@@ -33,7 +22,7 @@ pub(crate) struct SemanticProgram {
 
 impl SemanticProgram {
     pub(crate) fn revision(&self, entry: &DefPath) -> Result<ProgramRevision, QueryError> {
-        ProgramRevision::encode(&semantic_entry_name(entry), self.nodes.clone())
+        ProgramRevision::encode(&entry.to_string(), self.nodes.clone())
             .map_err(|e| operational(e.to_string()))
     }
 }
@@ -143,10 +132,10 @@ impl QueryEngine {
                 dependencies.extend(declaration.drop.iter().cloned());
             }
             pending.extend(dependencies.iter().cloned());
-            let mut dependencies: Vec<_> = dependencies.iter().map(semantic_entry_name).collect();
+            let mut dependencies: Vec<_> = dependencies.iter().map(ToString::to_string).collect();
             dependencies.push("$hirsel/runtime@1".into());
             nodes.push(ProgramNode {
-                identity: semantic_entry_name(&path),
+                identity: path.to_string(),
                 content,
                 dependencies,
             });

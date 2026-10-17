@@ -9,11 +9,7 @@ impl Checker<'_, '_> {
         let CallTarget::Definition(path) = target else {
             return Ok(true);
         };
-        if path.0.package.name != "core"
-            || path.0.package.version != "1"
-            || !path.0.modules.is_empty()
-            || path.0.name != "forget"
-        {
+        if !path.package_is("core", "1") || !path.0.modules.is_empty() || path.0.name != "forget" {
             return Ok(true);
         }
         let resource = match arguments.first() {

@@ -1,25 +1,25 @@
 //! Ownership-moving List primitives. Every bounds check precedes mutation.
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError, core_path};
+use super::{LibraryBody, LibraryError};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutKind;
 use hirsel_lir::runtime_abi::EXTENT_MAX;
 use hirsel_lir::stage::Value;
 
 pub static POP: LibraryBody = LibraryBody {
-    path: || core_path("list.pop"),
+    path: || hirsel_syntax::DefPath::core("list.pop"),
     build: pop,
 };
 pub static REMOVE: LibraryBody = LibraryBody {
-    path: || core_path("list.remove"),
+    path: || hirsel_syntax::DefPath::core("list.remove"),
     build: remove,
 };
 pub static SWAP: LibraryBody = LibraryBody {
-    path: || core_path("list.swap"),
+    path: || hirsel_syntax::DefPath::core("list.swap"),
     build: swap,
 };
 pub static RESERVE: LibraryBody = LibraryBody {
-    path: || core_path("list.reserve"),
+    path: || hirsel_syntax::DefPath::core("list.reserve"),
     build: reserve,
 };
 
@@ -123,7 +123,7 @@ fn option(b: &mut Body<'_, '_>, value: Option<ValueId>) -> ValueId {
     let result = b.fresh(layout);
     let definition = b.symbol(Symbol {
         kind: SymbolKind::Type,
-        definition: core_path("Option"),
+        definition: hirsel_syntax::DefPath::core("Option"),
         instance: None,
     });
     let fields = PoolRange::push(

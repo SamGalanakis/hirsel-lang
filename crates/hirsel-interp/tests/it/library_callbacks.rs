@@ -1,8 +1,5 @@
 use crate::support;
-use hirsel_interp::{
-    library::{simulation::core_path, *},
-    *,
-};
+use hirsel_interp::{library::*, *};
 use hirsel_span::SourceMap;
 use hirsel_tir::*;
 use hirsel_types::*;
@@ -43,7 +40,7 @@ impl Harness {
         self.library
             .call(
                 OperationCall {
-                    path: &core_path(name),
+                    path: &hirsel_syntax::DefPath::core(name),
                     arguments: args,
                     generics: &[],
                     result_type,

@@ -1,7 +1,7 @@
 //! Operations own their generated/pulled temporaries; callback parameters borrow.
 use crate::support;
 use hirsel_interp::{
-    library::{collection, simulation::core_path, *},
+    library::{collection, *},
     *,
 };
 use hirsel_tir::*;
@@ -133,7 +133,7 @@ fn mapper_cases(materialized: bool) {
         let r_ty = next.body.places[r.0 as usize].ty;
         let result = next.local(
             TypeKind::Named {
-                definition: core_path("Option"),
+                definition: hirsel_syntax::DefPath::core("Option"),
                 arguments: vec![GenericArgument::Type(r_ty)].into(),
             },
             Storage::Temporary,
@@ -142,7 +142,7 @@ fn mapper_cases(materialized: bool) {
             result,
             Rvalue::Construct {
                 constructor: Constructor::Variant {
-                    definition: core_path("Option"),
+                    definition: hirsel_syntax::DefPath::core("Option"),
                     variant: 1,
                 },
                 fields: vec![ConstructField {
@@ -161,7 +161,7 @@ fn mapper_cases(materialized: bool) {
             let OperationResult::Complete { value: it, .. } = library
                 .call(
                     OperationCall {
-                        path: &core_path("iter.from"),
+                        path: &hirsel_syntax::DefPath::core("iter.from"),
                         arguments: &[u64_value(0), closure("next")],
                         generics: &[],
                         result_type: dummy,
@@ -187,7 +187,7 @@ fn mapper_cases(materialized: bool) {
         let OperationResult::Complete { value: it, .. } = library
             .call(
                 OperationCall {
-                    path: &core_path("iter.map"),
+                    path: &hirsel_syntax::DefPath::core("iter.map"),
                     arguments: &[it, closure("mapper")],
                     generics: &[],
                     result_type: dummy,
@@ -217,7 +217,7 @@ fn mapper_cases(materialized: bool) {
         let cleanup = b.cleanup(vec![support::drop(it_slot)]);
         let result = b.local(
             TypeKind::Named {
-                definition: core_path("Option"),
+                definition: hirsel_syntax::DefPath::core("Option"),
                 arguments: vec![GenericArgument::Type(n)].into(),
             },
             Storage::Temporary,
@@ -225,7 +225,7 @@ fn mapper_cases(materialized: bool) {
         b.block(
             Terminator::Call {
                 callee: Callee::Definition {
-                    path: core_path("iter.next"),
+                    path: hirsel_syntax::DefPath::core("iter.next"),
                     arguments: vec![],
                 },
                 arguments: vec![CallArgument {
@@ -252,7 +252,7 @@ fn mapper_cases(materialized: bool) {
         );
         let mut runtime = runtime();
         runtime.nominals.push(aggregate::Nominal {
-            definition: core_path("Option"),
+            definition: hirsel_syntax::DefPath::core("Option"),
             resource: false,
             distinct: false,
             finalizer: None,

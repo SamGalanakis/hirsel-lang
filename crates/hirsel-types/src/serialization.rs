@@ -182,8 +182,7 @@ fn schema_inner(
                 // SER-1 enumerates these transparent core data constructors;
                 // their ordinary generic declarations must still accept File,
                 // resources, etc. Eligibility is proved after substitution.
-                let builtin = definition.0.package.name == "core"
-                    && definition.0.package.version == "1"
+                let builtin = definition.package_is("core", "1")
                     && definition.0.modules.is_empty()
                     && matches!(definition.0.name.as_str(), "Option" | "Result");
                 let data_authority = d.authority == AuthoritySummary::inert()

@@ -1,6 +1,6 @@
 //! hirsel-rt's native operation dispositions checked against the driver's registry inventory.
 use hirsel_core_contract::*;
-use hirsel_engine::registry::{BuiltinRegistry, core_path};
+use hirsel_engine::registry::BuiltinRegistry;
 use hirsel_rt::operations;
 use hirsel_types::{DropAllocation, PassingMode};
 use std::collections::BTreeSet;
@@ -65,14 +65,14 @@ fn inventory_set_equality_and_digest_control() {
     assert_eq!(native.unclassified(Engine::Native).count(), 0);
     let native_paths: BTreeSet<_> = operations::NATIVE_PATHS
         .iter()
-        .map(|n| core_path(n))
+        .map(|n| hirsel_syntax::DefPath::core(n))
         .collect();
     assert_eq!(
         native_paths,
         rows.iter().map(|r| r.id.definition.clone()).collect()
     );
     let mut new = OperationRow::unclassified(OperationId {
-        definition: core_path("new.operation"),
+        definition: hirsel_syntax::DefPath::core("new.operation"),
         declaration_digest: Default::default(),
     });
     assert!(operations::manifest(rows.iter().cloned().chain([new.clone()])).is_err());
@@ -90,7 +90,7 @@ fn inventory_set_equality_and_digest_control() {
     );
     let narrow = native
         .rows()
-        .find(|r| r.id.definition == core_path("file.narrow"))
+        .find(|r| r.id.definition == hirsel_syntax::DefPath::core("file.narrow"))
         .unwrap();
     assert_eq!(
         narrow.ownership.as_ref().unwrap().parameters[1].passing,
@@ -116,7 +116,7 @@ fn inventory_set_equality_and_digest_control() {
     ] {
         let row = native
             .rows()
-            .find(|r| r.id.definition == core_path(name))
+            .find(|r| r.id.definition == hirsel_syntax::DefPath::core(name))
             .unwrap();
         assert_eq!(
             row.failure.as_ref().map(|r| r.0.as_str()),
@@ -158,7 +158,7 @@ fn inventory_set_equality_and_digest_control() {
         assert_eq!(
             native
                 .rows()
-                .find(|r| r.id.definition == core_path(name))
+                .find(|r| r.id.definition == hirsel_syntax::DefPath::core(name))
                 .unwrap()
                 .dispositions
                 .native,
@@ -184,7 +184,7 @@ fn inventory_set_equality_and_digest_control() {
         assert_eq!(
             native
                 .rows()
-                .find(|r| r.id.definition == core_path(name))
+                .find(|r| r.id.definition == hirsel_syntax::DefPath::core(name))
                 .unwrap()
                 .dispositions
                 .native,
@@ -202,7 +202,7 @@ fn inventory_set_equality_and_digest_control() {
         assert!(matches!(
             native
                 .rows()
-                .find(|r| r.id.definition == core_path(name))
+                .find(|r| r.id.definition == hirsel_syntax::DefPath::core(name))
                 .unwrap()
                 .dispositions
                 .native,
@@ -217,7 +217,7 @@ fn inventory_set_equality_and_digest_control() {
     {
         let row = native
             .rows()
-            .find(|r| r.id.definition == core_path(name))
+            .find(|r| r.id.definition == hirsel_syntax::DefPath::core(name))
             .unwrap();
         assert_eq!(
             row.dispositions.native,
@@ -227,7 +227,7 @@ fn inventory_set_equality_and_digest_control() {
     assert_eq!(
         native
             .rows()
-            .find(|r| r.id.definition == core_path("list.push"))
+            .find(|r| r.id.definition == hirsel_syntax::DefPath::core("list.push"))
             .unwrap()
             .dispositions
             .native,
@@ -240,7 +240,7 @@ fn inventory_set_equality_and_digest_control() {
     ] {
         let row = native
             .rows()
-            .find(|r| r.id.definition == core_path(name))
+            .find(|r| r.id.definition == hirsel_syntax::DefPath::core(name))
             .unwrap();
         assert_eq!(row.dispositions.native, Disposition::Body);
     }
@@ -259,7 +259,7 @@ fn inventory_set_equality_and_digest_control() {
     );
     let mut altered = rows
         .iter()
-        .find(|r| r.id.definition == core_path("file.narrow"))
+        .find(|r| r.id.definition == hirsel_syntax::DefPath::core("file.narrow"))
         .unwrap()
         .clone();
     altered.ownership.as_mut().unwrap().parameters[1].passing = Passing::Borrow;

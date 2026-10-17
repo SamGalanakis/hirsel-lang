@@ -1,8 +1,6 @@
 //! Growing lists and consuming sequences, built as ordinary monomorphic LIR.
 use super::builder::{Body, Cx};
-use super::{
-    CallShape, InlineLowering, LibraryBody, LibraryError, R, Request, core_path, native_path,
-};
+use super::{CallShape, InlineLowering, LibraryBody, LibraryError, R, Request, native_path};
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::*;
@@ -10,7 +8,7 @@ use hirsel_lir::stage::Value;
 use hirsel_types::{TypeKind, UseKind};
 
 pub static PUSH: LibraryBody = LibraryBody {
-    path: || core_path("list.push"),
+    path: || hirsel_syntax::DefPath::core("list.push"),
     build: push,
 };
 /// `list.push` where `spare_push` proved the count below the capacity.
@@ -23,7 +21,7 @@ pub static GROW: LibraryBody = LibraryBody {
     build: grow,
 };
 pub static FORGET: InlineLowering = InlineLowering {
-    path: || core_path("forget"),
+    path: || hirsel_syntax::DefPath::core("forget"),
     lower: forget,
 };
 
@@ -209,27 +207,27 @@ fn grow(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     Ok(b.finish())
 }
 pub static LIST_OPEN: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.ListConsume_open"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.ListConsume_open"),
     build: open,
 };
 pub static ARRAY_OPEN: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.ArrayConsume_open"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.ArrayConsume_open"),
     build: open,
 };
 pub static INLINE_OPEN: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.InlineConsume_open"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.InlineConsume_open"),
     build: open,
 };
 pub static LIST_NEXT: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.ListConsume_next"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.ListConsume_next"),
     build: next,
 };
 pub static ARRAY_NEXT: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.ArrayConsume_next"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.ArrayConsume_next"),
     build: next,
 };
 pub static INLINE_NEXT: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.InlineConsume_next"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.InlineConsume_next"),
     build: next,
 };
 pub static CURSOR_DROP: LibraryBody = LibraryBody {
@@ -358,7 +356,10 @@ fn open(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
         (array, unique)
     };
     let zero = b.u64(0)?;
-    let symbol = record_symbol(&mut b, core_path("$intrinsic.OwnedCursor"));
+    let symbol = record_symbol(
+        &mut b,
+        hirsel_syntax::DefPath::core("$intrinsic.OwnedCursor"),
+    );
     let cursor = construct(
         &mut b,
         cursor_layout,
@@ -384,7 +385,7 @@ fn next(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     let item = b.block(BlockKind::Body, &[]);
     b.branch(done, exhausted, item);
     let option_layout = b.cx.fn_abi().result.unwrap().layout;
-    let option_symbol = record_symbol(&mut b, core_path("Option"));
+    let option_symbol = record_symbol(&mut b, hirsel_syntax::DefPath::core("Option"));
     b.at(exhausted);
     let none = construct(
         &mut b,

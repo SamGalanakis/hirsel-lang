@@ -2329,7 +2329,7 @@ fn checked_callee(
         return Ok((callee, None));
     };
     let Some(check) = &frame.check else {
-        if *path != crate::library::simulation::core_path(crate::library::ARENA_WITH_OPERATION) {
+        if *path != hirsel_syntax::DefPath::core(crate::library::ARENA_WITH_OPERATION) {
             return Ok((callee, None));
         }
         let (definition, body, captures, _, sizes) = arena_callback(arguments)?;

@@ -373,18 +373,7 @@ impl<'a> Audit<'a, '_> {
                     let signature = self.snapshot(&definition)?;
                     if matches!(&signature.kind, SignatureKind::Type(d) if d.resource && d.destructor_allocation != Allocation::NoAlloc)
                     {
-                        let p = &definition.0;
-                        let name = p
-                            .modules
-                            .iter()
-                            .chain(std::iter::once(&p.name))
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join("/");
-                        notes.push(format!(
-                            "destructor {}@{}/{} permits allocation",
-                            p.package.name, p.package.version, name
-                        ));
+                        notes.push(format!("destructor {definition} permits allocation"));
                     }
                     let (repr, _) = self.representation(ty)?;
                     if repr != ty {

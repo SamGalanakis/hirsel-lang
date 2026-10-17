@@ -7,9 +7,7 @@
 mod obligations;
 pub mod wire;
 
-pub use obligations::{
-    Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition, path_text,
-};
+pub use obligations::{Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition};
 pub use wire::{Cx, Locator};
 
 use hirsel_codec::{DecodeError, Observe, Reader, Snapshot, Writer, line_column, snapshot_struct};
@@ -321,7 +319,7 @@ fn digest_definition(
                     definition: path.clone(),
                     fingerprint: s.public.fingerprint,
                 })
-                .ok_or_else(|| format!("names {} without an exported signature", path_text(path)))
+                .ok_or_else(|| format!("names {path} without an exported signature"))
         })
         .collect::<Result<_, _>>()?;
     Ok(Digested {
@@ -340,7 +338,7 @@ pub fn checksum(
     let id = id.to_string();
     let paths: Vec<String> = references
         .iter()
-        .map(|r| path_text(&r.definition))
+        .map(|r| r.definition.to_string())
         .collect();
     let mut parts: Vec<&[u8]> = vec![id.as_bytes(), tir_digest.0.as_slice()];
     for (path, reference) in paths.iter().zip(references) {
@@ -580,7 +578,7 @@ pub fn import(text: &str, expected: &Environment) -> Result<Export, ImportError>
         .chain(export.skipped.iter().map(|s| &s.name))
         .collect();
     for stored in &export.definitions {
-        let at = path_text(&stored.path);
+        let at = stored.path.to_string();
         let rebuilt = section(&stored.tir, &locator, &signatures, &bodies)
             .map_err(|reason| refuse(&at, reason))?;
         if rebuilt.tir_digest != stored.tir_digest {
@@ -624,7 +622,7 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
         .map(|s| (&s.path, s.public.fingerprint))
         .collect();
     for section in &export.signatures {
-        let at = path_text(&section.path);
+        let at = section.path.to_string();
         if section.public.definition != section.path {
             return Err(refuse(format!("{at}.public"), "names another definition"));
         }
@@ -642,7 +640,7 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
             {
                 return Err(refuse(
                     format!("{at}.dependencies"),
-                    format!("{} is stale", path_text(&dependency.definition)),
+                    format!("{} is stale", dependency.definition),
                 ));
             }
         }
@@ -656,7 +654,7 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
         }
     }
     for definition in &export.definitions {
-        let at = path_text(&definition.path);
+        let at = definition.path.to_string();
         if definition.tir.path != definition.path {
             return Err(refuse(format!("{at}.tir"), "names another definition"));
         }
@@ -693,7 +691,7 @@ fn validate(export: &Export) -> Result<(), ImportError> {
         let validation = view.validate(&definition.tir);
         if let Some(violation) = validation.violations.first() {
             return Err(refuse(
-                path_text(&definition.path),
+                definition.path.to_string(),
                 format!("V rejects the definition: {violation:?}"),
             ));
         }

@@ -9,7 +9,6 @@ mod package_snapshot;
 mod positions;
 mod program_revision;
 pub(crate) use program_revision::SemanticProgram;
-pub use program_revision::semantic_entry_name;
 mod signature_input;
 pub(crate) use dependencies::ExecutionReads;
 use hirsel_diag::Severity;
@@ -1078,7 +1077,7 @@ impl QueryEngine {
     ) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
         let mut runtime = self.runtime_types()?;
         let mut checked = hirsel_interp::checked::CheckedRuntime {
-            arena_with: Some(registry::core_path("arena.with")),
+            arena_with: Some(hirsel_syntax::DefPath::core("arena.with")),
             ..Default::default()
         };
         let library: Vec<_> = self.registry.signatures().cloned().collect();
@@ -1125,7 +1124,7 @@ impl QueryEngine {
     ) -> Result<hirsel_interp::aggregate::RuntimeTypes, QueryError> {
         let mut runtime = hirsel_interp::aggregate::RuntimeTypes {
             trace_mode: hirsel_interp::TraceMode::Effects,
-            forget: Some(registry::core_path(
+            forget: Some(hirsel_syntax::DefPath::core(
                 hirsel_interp::library::FORGET_OPERATION,
             )),
             ..Default::default()

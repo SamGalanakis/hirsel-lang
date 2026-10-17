@@ -362,7 +362,7 @@ impl<'m> Generator<'m, '_> {
         let LayoutKind::Opaque { owner } = &record.kind else {
             return Err(CompareError::Invalid("container payload".into()));
         };
-        if owner.0.package.name != "core" || !matches!(owner.0.name.as_str(), "Map" | "Set") {
+        if !owner.0.package.name_is("core") || !matches!(owner.0.name.as_str(), "Map" | "Set") {
             return Err(CompareError::Unsupported(format!(
                 "comparison of opaque {owner:?}"
             )));
@@ -1035,7 +1035,7 @@ impl<'m> HashGenerator<'m, '_> {
         let LayoutKind::Opaque { owner } = &record.kind else {
             return Err(CompareError::Invalid("container payload".into()));
         };
-        if owner.0.package.name != "core" || !matches!(owner.0.name.as_str(), "Map" | "Set") {
+        if !owner.0.package.name_is("core") || !matches!(owner.0.name.as_str(), "Map" | "Set") {
             return Err(CompareError::Unsupported(format!(
                 "hash of opaque {owner:?}"
             )));

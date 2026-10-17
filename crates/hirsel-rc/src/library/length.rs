@@ -3,28 +3,28 @@
 //! String slice. A `list.len` of a list
 //! inside a flat value never reaches here: the importer reads its encoding's
 //! count first (`FlatLength`, LIR schema revision 4).
-use super::{CallShape, InlineLowering, R, core_path};
+use super::{CallShape, InlineLowering, R};
 use crate::import::ImportCx;
 use hirsel_lir::ir::{Holding, Inst};
 use hirsel_types::UseKind;
 
 pub static BYTES_LEN: InlineLowering = InlineLowering {
-    path: || core_path("bytes.len"),
+    path: || hirsel_syntax::DefPath::core("bytes.len"),
     lower: length,
 };
 
 pub static LIST_LEN: InlineLowering = InlineLowering {
-    path: || core_path("list.len"),
+    path: || hirsel_syntax::DefPath::core("list.len"),
     lower: length,
 };
 
 pub static ARRAY_LEN: InlineLowering = InlineLowering {
-    path: || core_path("array.len"),
+    path: || hirsel_syntax::DefPath::core("array.len"),
     lower: length,
 };
 
 pub static STRING_BYTE_LEN: InlineLowering = InlineLowering {
-    path: || core_path("string.byte_len"),
+    path: || hirsel_syntax::DefPath::core("string.byte_len"),
     lower: length,
 };
 

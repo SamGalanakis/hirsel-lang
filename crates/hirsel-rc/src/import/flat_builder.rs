@@ -307,9 +307,10 @@ impl Importer<'_, '_> {
                     let list = argument(0)
                         .filter(|a| a.usage == UseKind::Mut && returns.is_some())
                         .and_then(|a| on(a.place).map(|w| (w, a)));
-                    let push = path.is_some_and(|p| *p == crate::library::core_path("list.push"));
+                    let push =
+                        path.is_some_and(|p| *p == hirsel_syntax::DefPath::core("list.push"));
                     let reserve =
-                        path.is_some_and(|p| *p == crate::library::core_path("list.reserve"));
+                        path.is_some_and(|p| *p == hirsel_syntax::DefPath::core("list.reserve"));
                     match (list, argument(1)) {
                         (Some((w, l)), Some(e))
                             if push

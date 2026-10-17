@@ -512,7 +512,7 @@ Ok(())
         .units
         .iter_mut()
         .find(|u| {
-            u.header.definition == hirsel_rc::library::core_path("$intrinsic.SortedMapOrder_open")
+            u.header.definition == hirsel_syntax::DefPath::core("$intrinsic.SortedMapOrder_open")
         })
         .unwrap();
     let and = open

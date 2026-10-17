@@ -12,7 +12,8 @@ use hirsel_types::SignatureKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-fn module_text(path: &DefPath) -> String {
+/// Source locations use a module identity, deliberately excluding the item name.
+fn module_identity(path: &DefPath) -> String {
     let item = &path.0;
     let mut text = format!("{}@{}", item.package.name, item.package.version);
     for module in &item.modules {
@@ -92,7 +93,7 @@ impl QueryEngine {
                 continue;
             };
             for (file, item) in items {
-                modules.insert(file.file, module_text(path));
+                modules.insert(file.file, module_identity(path));
                 match &file.tree.items[item.0 as usize].kind {
                     ItemKind::Function { body: Some(_), .. }
                     | ItemKind::Const { .. }

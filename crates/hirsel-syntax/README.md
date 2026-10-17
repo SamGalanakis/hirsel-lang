@@ -11,6 +11,11 @@ Invariants and boundary:
 - Origin ranges cover significant syntax. Item.owned_tokens includes leading trivia and trailing same-line comments; the file owns leftover EOF trivia.
 - A top-level item's text_hash hashes the exact bytes covered by owned_tokens, including attributes, contracts and drop; no newline normalization.
 - DefPath uses package/version/module/item spellings supplied by FileContext; never spans, file names, hashes or Symbols (PROG-1/5).
+  `DefPath::core` constructs core@1 from dot-separated module/item names;
+  `is_core` compares the same identity without allocation. `package_is` matches
+  both package name and version. `PackageId::name_is` explicitly ignores versions.
+  Display is `package@version/module/item`, shared by diagnostics and tooling;
+  binary fingerprints and the engine's module-only proof key remain separate.
 - Duplicate paths are errors, not position-disambiguated identities. SyntaxFile roots preserve source order.
 - Path/constructor classification, pattern refutability, labels and generic argument kinds need no parser type lookup (LANG-1/2).
 

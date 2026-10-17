@@ -732,7 +732,7 @@ impl Operations for Library {
         call: OperationCall<'_>,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        if call.path.0.package.name != "core" || call.path.0.package.version != "1" {
+        if !call.path.package_is("core", "1") {
             return Ok(None);
         }
         let name = call
@@ -925,7 +925,7 @@ primary_operations! { self, call, context, name, a, value;
                 collection::sequence(
                     BuiltinType::Array,
                     string::positions(s).map(|i| Value::Record {
-                        definition: simulation::core_path("StrPos"),
+                        definition: hirsel_syntax::DefPath::core("StrPos"),
                         fields: vec![Some(Value::String(s.into())), Some(u64_value(i as u64))],
                     }),
                 )
@@ -1016,7 +1016,7 @@ primary_operations! { self, call, context, name, a, value;
         let s = text(arg(a, 0)?)?;
         let offset = index(arg(a, 1)?)?;
         if s.is_char_boundary(offset) {
-            some(Value::Record { definition: simulation::core_path("StrPos"), fields: vec![Some(Value::String(s.into())), Some(u64_value(offset as u64))] })
+            some(Value::Record { definition: hirsel_syntax::DefPath::core("StrPos"), fields: vec![Some(Value::String(s.into())), Some(u64_value(offset as u64))] })
         } else { none() }
     },
     Primitive: "string.byte_offset" => u64_value(position(arg(a, 1)?, text(arg(a, 0)?)?)? as u64),
@@ -1171,13 +1171,13 @@ pub(super) fn index(v: &Value) -> Result<usize, Error> {
 }
 pub fn path(s: &str) -> Value {
     Value::Record {
-        definition: simulation::core_path("Path"),
+        definition: hirsel_syntax::DefPath::core("Path"),
         fields: vec![Some(Value::String(s.into()))],
     }
 }
 fn path_text(v: &Value) -> Result<&str, Error> {
     if let Value::Record { definition, fields } = v
-        && *definition == simulation::core_path("Path")
+        && *definition == hirsel_syntax::DefPath::core("Path")
         && fields.len() == 1
     {
         text(fields[0].as_ref().ok_or_else(|| invalid("dead Path"))?)
@@ -1187,7 +1187,7 @@ fn path_text(v: &Value) -> Result<&str, Error> {
 }
 fn position(v: &Value, s: &str) -> Result<usize, Error> {
     if let Value::Record { definition, fields } = v
-        && *definition == simulation::core_path("StrPos")
+        && *definition == hirsel_syntax::DefPath::core("StrPos")
         && fields.len() == 2
         && fields[0].as_ref() == Some(&Value::String(s.into()))
     {
@@ -1206,7 +1206,7 @@ fn destination(call: &OperationCall<'_>) -> Result<Primitive, Error> {
         arguments,
     } = &t.kind
         && definition.0.name == "Option"
-        && *definition == simulation::core_path("Option")
+        && *definition == hirsel_syntax::DefPath::core("Option")
     {
         if let GenericArgument::Type(id) = arguments[0] {
             t = call

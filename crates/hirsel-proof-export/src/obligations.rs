@@ -72,25 +72,12 @@ impl fmt::Display for ObligationId {
         write!(
             f,
             "{}#{}/{}/{}",
-            path_text(&self.definition),
+            self.definition,
             self.rule,
             self.kind.as_str(),
             self.ordinal
         )
     }
-}
-
-/// `pkg@ver/mod/name`.
-pub fn path_text(path: &DefPath) -> String {
-    let p = &path.0;
-    let mut text = format!("{}@{}", p.package.name, p.package.version);
-    for module in &p.modules {
-        text.push('/');
-        text.push_str(module);
-    }
-    text.push('/');
-    text.push_str(&p.name);
-    text
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

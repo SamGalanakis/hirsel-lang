@@ -55,7 +55,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 .unwrap();
             let qualified = text.split(['[', '(']).next().unwrap();
             let name = qualified.strip_prefix("std@1/").unwrap();
-            let mut path = core_path(name);
+            let mut path = hirsel_syntax::DefPath::core(name);
             path.0.package.name = "std".into();
             let context = FileContext {
                 package: path.0.package.clone(),
@@ -104,7 +104,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "{qualified}"
             );
             assert!(
-                registry.get(&core_path(name)).is_none(),
+                registry.get(&hirsel_syntax::DefPath::core(name)).is_none(),
                 "core alias: {name}"
             );
             checked.push(qualified.to_owned());
@@ -168,7 +168,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         {
             continue;
         }
-        let path = core_path(name);
+        let path = hirsel_syntax::DefPath::core(name);
         let source = format!(
             "{}pub fn {}{}\n",
             if noalloc { "@noalloc\n" } else { "" },
@@ -293,7 +293,9 @@ fn builtin_print_result_agrees_with_the_same_written_source_result() {
     path.0.name = "forward".into();
     let source = engine.item_signature(&path).unwrap().value;
     let registry = BuiltinRegistry::new();
-    let builtin = registry.get(&core_path("out.print")).unwrap();
+    let builtin = registry
+        .get(&hirsel_syntax::DefPath::core("out.print"))
+        .unwrap();
     let SignatureKind::Function(a) = &source.kind else {
         panic!()
     };
@@ -344,7 +346,7 @@ fn declaration_body_and_builtin_cleanup_agree_on_owned_aggregate_results() {
             "{body}"
         );
         let builtin = BuiltinRegistry::new()
-            .get(&core_path(builtin_name))
+            .get(&hirsel_syntax::DefPath::core(builtin_name))
             .unwrap();
         let SignatureKind::Function(function) = &builtin.kind else {
             panic!()

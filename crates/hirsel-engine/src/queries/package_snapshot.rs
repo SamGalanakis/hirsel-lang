@@ -96,7 +96,7 @@ impl QueryEngine {
         }
         let inside = |p: &DefPath| {
             closure.contains(&p.0.package)
-                || p.0.package == crate::registry::core_path("Result").0.package
+                || p.0.package == hirsel_syntax::DefPath::core("Result").0.package
         };
         let safe = |reads: &DependencyReads, executed: &ExecutionReads| {
             reads.operational_failure.is_none()

@@ -498,7 +498,7 @@ fn nested_physical_mounts_share_publications_and_keep_their_own_confinement() {
 fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
     use hirsel_interp::{
         OperationCall, OperationContext, OperationResult, Operations, Value,
-        library::{Library as Reference, SimulationConfig, path, simulation::core_path},
+        library::{Library as Reference, SimulationConfig, path},
     };
     use hirsel_span::{SourceMap, Span};
     use hirsel_tir::RunConfiguration;
@@ -534,7 +534,7 @@ fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
     assert_eq!(collision.handles(), &handles);
 
     let run = RunConfiguration {
-        entry: core_path("main"),
+        entry: hirsel_syntax::DefPath::core("main"),
         hash_seed: 0,
         inputs: vec![],
     };
@@ -555,7 +555,7 @@ fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
     let Some(OperationResult::Complete { value, .. }) = reference
         .call(
             OperationCall {
-                path: &core_path("io.dir"),
+                path: &hirsel_syntax::DefPath::core("io.dir"),
                 generics: &[],
                 arguments: &[io, path("work")],
                 result_type,

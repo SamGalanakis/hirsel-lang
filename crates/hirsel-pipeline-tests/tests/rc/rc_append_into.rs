@@ -67,7 +67,7 @@ fn named(program: &Program, name: &str) -> Option<DefPath> {
     program
         .definitions
         .keys()
-        .find(|p| p.0.name == name && p.0.package.name != "std")
+        .find(|p| p.0.name == name && !p.0.package.name_is("std"))
         .cloned()
 }
 

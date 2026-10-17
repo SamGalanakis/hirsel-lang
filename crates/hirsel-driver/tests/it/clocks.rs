@@ -162,7 +162,7 @@ fn signed_differences_and_comparisons_execute_source_units_without_wrapper_alloc
         )
         .unwrap();
         for unit in &ready.units {
-            if unit.unit().header.definition.0.package.name == "std"
+            if unit.unit().header.definition.0.package.name_is("std")
                 && unit.unit().header.definition.0.modules == ["time"]
             {
                 assert_eq!(

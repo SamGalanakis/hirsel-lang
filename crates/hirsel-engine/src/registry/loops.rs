@@ -224,7 +224,7 @@ pub(super) fn signatures() -> Vec<Signature> {
     }
     for signature in &mut out {
         signature.metadata.visibility =
-            if signature.definition == core_path("$intrinsic.ViewCursor") {
+            if signature.definition == hirsel_syntax::DefPath::core("$intrinsic.ViewCursor") {
                 Visibility::PublicOpaque
             } else {
                 Visibility::Private

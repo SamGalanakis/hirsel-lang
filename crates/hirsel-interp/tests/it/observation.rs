@@ -6,7 +6,7 @@ use hirsel_types::Primitive;
 fn fixture() -> (SourceMap, Execution) {
     let mut sources = SourceMap::default();
     let file = sources.add("input.hir", "one\ntwo\n".into()).unwrap();
-    let path = hirsel_interp::library::simulation::core_path("fixture");
+    let path = hirsel_syntax::DefPath::core("fixture");
     let anchor = Anchor {
         definition: path,
         body: BodyId(7),
@@ -37,7 +37,7 @@ fn fixture() -> (SourceMap, Execution) {
             trace: vec![TraceEvent::Effect(OrderedEffect {
                 anchor,
                 effect: Effect::Forgotten {
-                    definition: hirsel_interp::library::simulation::core_path("Resource"),
+                    definition: hirsel_syntax::DefPath::core("Resource"),
                 },
             })],
             steps: 19,
@@ -82,7 +82,7 @@ fn values_preserve_width_and_float_bits_and_name_function_disposition() {
     execution.failures.clear();
     execution.outcome = Outcome::Returned {
         value: Value::Closure {
-            definition: hirsel_interp::library::simulation::core_path("f"),
+            definition: hirsel_syntax::DefPath::core("f"),
             body: BodyId(2),
             captures: vec![],
             owned_captures: vec![],
@@ -173,7 +173,7 @@ fn named_reference_specializations_ignore_arena_layout_and_preserve_argument_ide
         }
         let root = types.push(Type::with_kind(TypeKind::Primitive(primitive)));
         Value::FunctionReference(NamedFunction {
-            definition: hirsel_interp::library::simulation::core_path("target"),
+            definition: hirsel_syntax::DefPath::core("target"),
             arguments: vec![
                 GenericArgument::Type(root),
                 GenericArgument::Size(Size::Constant(size)),
@@ -203,7 +203,7 @@ fn only_free_lexical_specialization_arguments_are_non_comparable() {
     let root = types.push(Type::with_kind(TypeKind::Parameter(
         TypeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(7)), TypeParamId(0)),
     )));
-    let definition = hirsel_interp::library::simulation::core_path("target");
+    let definition = hirsel_syntax::DefPath::core("target");
     let value = Value::FunctionReference(hirsel_interp::value::NamedFunction {
         definition: definition.clone(),
         arguments: vec![

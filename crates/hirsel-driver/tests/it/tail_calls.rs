@@ -48,7 +48,7 @@ impl hirsel_interp::Operations for RecordingLibrary {
         context: &mut hirsel_interp::OperationContext<'_>,
     ) -> Result<Option<hirsel_interp::OperationResult>, hirsel_interp::Error> {
         // The std formatter executes source, so observe its conversion leaf.
-        if call.path == &registry::core_path("string.from_bytes") {
+        if call.path == &hirsel_syntax::DefPath::core("string.from_bytes") {
             if let Some(Value::Bytes(bytes)) = call.arguments.first() {
                 let text = std::str::from_utf8(bytes).expect("numeric finalizer marker is ASCII");
                 self.finalizer_values.push(

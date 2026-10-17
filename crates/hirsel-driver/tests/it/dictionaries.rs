@@ -15,7 +15,7 @@ fn named_integer_dictionaries_materialize_declared_typed_records_on_compiler_thr
     for name in [
         "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
     ] {
-        let path = registry::core_path(&format!("{name}.order"));
+        let path = hirsel_syntax::DefPath::core(&format!("{name}.order"));
         let declared = registry.get(&path).unwrap();
         let SignatureKind::Const(root) = declared.kind else {
             panic!()
@@ -29,7 +29,7 @@ fn named_integer_dictionaries_materialize_declared_typed_records_on_compiler_thr
         else {
             panic!("expected declared record")
         };
-        assert_eq!(*owner, registry::core_path("Order"));
+        assert_eq!(*owner, hirsel_syntax::DefPath::core("Order"));
         let [compare] = fields.as_slice() else {
             panic!()
         };
@@ -48,7 +48,7 @@ fn named_integer_dictionaries_materialize_declared_typed_records_on_compiler_thr
         };
         assert_eq!(
             *helper,
-            registry::core_path(&format!("$intrinsic.OrderCompare_{name}"))
+            hirsel_syntax::DefPath::core(&format!("$intrinsic.OrderCompare_{name}"))
         );
         let helper_signature = registry.get(helper).unwrap();
         let SignatureKind::Function(helper_function) = &helper_signature.kind else {
@@ -61,7 +61,7 @@ fn named_integer_dictionaries_materialize_declared_typed_records_on_compiler_thr
         );
     }
     // Same spelling in another package is never an implicitly derived dictionary.
-    let mut foreign = registry::core_path("u32.order");
+    let mut foreign = hirsel_syntax::DefPath::core("u32.order");
     foreign.0.package.name = "foreign".into();
     assert!(engine.materialize_value(&foreign).is_err());
 }

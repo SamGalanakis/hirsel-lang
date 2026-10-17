@@ -97,8 +97,7 @@ pub fn program(input: &NativeInput) -> Program {
                         }),
                     );
                 } else if let SignatureKind::Type(t) = &input.signatures[path].kind
-                    && (t.capability.is_some()
-                        || *path == hirsel_engine::registry::core_path("Instant"))
+                    && (t.capability.is_some() || *path == hirsel_syntax::DefPath::core("Instant"))
                 {
                     owners.nominals.insert(
                         path.clone(),

@@ -208,7 +208,7 @@ impl Frame {
                     // SortedMap's logical indexed payload is its physical map
                     // field. Value access and shadow access use the same path.
                     if matches!(value, Some(Value::Record { definition, .. })
-                        if *definition == crate::library::simulation::core_path("SortedMap"))
+                        if *definition == hirsel_syntax::DefPath::core("SortedMap"))
                     {
                         steps.push(AccessStep::Field(1));
                         value = value

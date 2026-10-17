@@ -1,5 +1,6 @@
 use super::review::*;
 use super::*;
+use hirsel_syntax::PackageId;
 use hirsel_types::core_roles::{intrinsic_roles, loop_protocols};
 #[test]
 fn registry_has_canonical_signatures() {
@@ -59,7 +60,10 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
         let name = head.split(['[', '(']).next().unwrap();
         assert!(
             matches!(
-                registry.get(&core_path(name)).unwrap().kind,
+                registry
+                    .get(&hirsel_syntax::DefPath::core(name))
+                    .unwrap()
+                    .kind,
                 SignatureKind::Function(_)
             ),
             "{name}"
@@ -82,7 +86,10 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
         modules: vec![],
     };
     let lookup = registry.lookup(&context, &path, &symbols);
-    assert_eq!(lookup.result.unwrap(), core_path("out.print"));
+    assert_eq!(
+        lookup.result.unwrap(),
+        hirsel_syntax::DefPath::core("out.print")
+    );
     assert_eq!(lookup.manifest, registry.revision());
     let mut foreign = path.clone();
     foreign.package = Some(context.package.clone());
@@ -92,7 +99,9 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
             .result
             .is_err()
     );
-    let role = registry.get(&core_path("Unsafe")).unwrap();
+    let role = registry
+        .get(&hirsel_syntax::DefPath::core("Unsafe"))
+        .unwrap();
     assert_eq!(role.metadata.roles, nominal_roles());
     for (path, _) in intrinsic_roles() {
         assert!(registry.get(&path).is_some());
@@ -178,7 +187,7 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
             _ => "$intrinsic.Cursor",
         };
         assert!(
-            matches!(&result.kind,TypeKind::Named {definition,arguments} if *definition==core_path(cursor_name) && arguments.len()==if map {2} else {1})
+            matches!(&result.kind,TypeKind::Named {definition,arguments} if *definition==hirsel_syntax::DefPath::core(cursor_name) && arguments.len()==if map {2} else {1})
         );
         let next = r.get(&next).unwrap();
         let SignatureKind::Function(f) = &next.kind else {
@@ -188,16 +197,20 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
         assert_eq!(f.parameters[0].passing, PassingMode::Mut);
         assert_eq!(f.allocation, Allocation::NoAlloc);
         assert!(
-            matches!(&next.types.get(f.result).unwrap().kind,TypeKind::Named {definition,arguments} if *definition==core_path("Option") && arguments.len()==1)
+            matches!(&next.types.get(f.result).unwrap().kind,TypeKind::Named {definition,arguments} if *definition==hirsel_syntax::DefPath::core("Option") && arguments.len()==1)
         );
     }
-    let cursor = r.get(&core_path("$intrinsic.Cursor")).unwrap();
+    let cursor = r
+        .get(&hirsel_syntax::DefPath::core("$intrinsic.Cursor"))
+        .unwrap();
     let SignatureKind::Type(cursor) = &cursor.kind else {
         panic!()
     };
     assert!(cursor.representation.is_none());
     assert_eq!(cursor.bounds, vec![Bound::NoallocDrop]);
-    let owned = r.get(&core_path("$intrinsic.OwnedCursor")).unwrap();
+    let owned = r
+        .get(&hirsel_syntax::DefPath::core("$intrinsic.OwnedCursor"))
+        .unwrap();
     let SignatureKind::Type(owner) = &owned.kind else {
         panic!()
     };
@@ -226,7 +239,7 @@ fn generic_variant_cleanup_retains_conditional_owned_payload_obligations() {
             ],
         ),
     ] {
-        let s = registry.get(&core_path(name)).unwrap();
+        let s = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Type(t) = &s.kind else {
             panic!()
         };
@@ -243,7 +256,9 @@ fn generic_variant_cleanup_retains_conditional_owned_payload_obligations() {
 #[test]
 fn slot_id_results_are_plain_even_with_an_unbounded_payload_parameter() {
     let registry = BuiltinRegistry::new();
-    let signature = registry.get(&core_path("slots.insert")).unwrap();
+    let signature = registry
+        .get(&hirsel_syntax::DefPath::core("slots.insert"))
+        .unwrap();
     let SignatureKind::Function(function) = &signature.kind else {
         panic!()
     };
@@ -262,7 +277,9 @@ fn slot_id_results_are_plain_even_with_an_unbounded_payload_parameter() {
 #[test]
 fn generic_option_results_derive_sendability_after_substitution() {
     let registry = BuiltinRegistry::new();
-    let signature = registry.get(&core_path("slots.get")).unwrap();
+    let signature = registry
+        .get(&hirsel_syntax::DefPath::core("slots.get"))
+        .unwrap();
     let SignatureKind::Function(function) = &signature.kind else {
         panic!()
     };
@@ -314,7 +331,9 @@ fn generic_option_results_derive_sendability_after_substitution() {
 #[test]
 fn forget_is_the_declared_noalloc_consuming_resource_intrinsic() {
     let registry = BuiltinRegistry::new();
-    let signature = registry.get(&core_path("forget")).unwrap();
+    let signature = registry
+        .get(&hirsel_syntax::DefPath::core("forget"))
+        .unwrap();
     let SignatureKind::Function(function) = &signature.kind else {
         panic!()
     };
@@ -420,7 +439,9 @@ fn schema_cleanup_uses_declared_ordinals_instead_of_metavariable_spelling() {
 
 #[test]
 fn schema_constraints_participate_in_signature_fingerprints() {
-    let signature = BuiltinRegistry::new().get(&core_path("int.widen")).unwrap();
+    let signature = BuiltinRegistry::new()
+        .get(&hirsel_syntax::DefPath::core("int.widen"))
+        .unwrap();
     let mut changed = signature.as_ref().clone();
     changed.metadata.schema.clear();
     assert_ne!(
@@ -441,7 +462,7 @@ fn schema_constraints_participate_in_signature_fingerprints() {
 fn a_schema_domain_diagnostic_identity_changes_its_fingerprint() {
     let registry = BuiltinRegistry::new();
     let mut signature = registry
-        .get(&core_path("simd.add"))
+        .get(&hirsel_syntax::DefPath::core("simd.add"))
         .unwrap()
         .as_ref()
         .clone();
@@ -459,7 +480,9 @@ fn a_schema_domain_diagnostic_identity_changes_its_fingerprint() {
 #[test]
 fn shared_authority_retains_the_payload_promise() {
     let registry = BuiltinRegistry::new();
-    let signature = registry.get(&core_path("Shared")).unwrap();
+    let signature = registry
+        .get(&hirsel_syntax::DefPath::core("Shared"))
+        .unwrap();
     let SignatureKind::Type(declaration) = &signature.kind else {
         panic!();
     };
@@ -472,7 +495,9 @@ fn shared_authority_retains_the_payload_promise() {
             .into()
         )
     );
-    let freeze = registry.get(&core_path("shared.freeze")).unwrap();
+    let freeze = registry
+        .get(&hirsel_syntax::DefPath::core("shared.freeze"))
+        .unwrap();
     let SignatureKind::Function(freeze) = &freeze.kind else {
         panic!();
     };
@@ -524,20 +549,35 @@ fn library_declarations_obey_the_named_source_and_part_locality_rules() {
 fn clocks_have_independent_nominal_authority_and_instant_has_no_public_representation_or_data_bounds()
  {
     let registry = BuiltinRegistry::new();
-    assert!(registry.get(&core_path("Clock")).is_none());
-    assert!(registry.get(&core_path("io.clock")).is_none());
+    assert!(
+        registry
+            .get(&hirsel_syntax::DefPath::core("Clock"))
+            .is_none()
+    );
+    assert!(
+        registry
+            .get(&hirsel_syntax::DefPath::core("io.clock"))
+            .is_none()
+    );
     for name in ["MonotonicClock", "WallClock"] {
-        let signature = registry.get(&core_path(name)).unwrap();
+        let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Type(definition) = &signature.kind else {
             panic!()
         };
         assert_eq!(definition.capability, Some(CapabilityKind::Global));
         assert_eq!(
             definition.authority,
-            AuthoritySummary::Known(vec![AuthorityTerm::Capability(core_path(name))].into())
+            AuthoritySummary::Known(
+                vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                    name
+                ))]
+                .into()
+            )
         );
     }
-    let signature = registry.get(&core_path("Instant")).unwrap();
+    let signature = registry
+        .get(&hirsel_syntax::DefPath::core("Instant"))
+        .unwrap();
     let SignatureKind::Type(definition) = &signature.kind else {
         panic!()
     };
@@ -555,7 +595,9 @@ fn clocks_have_independent_nominal_authority_and_instant_has_no_public_represent
     for bound in [Bound::Data, Bound::Key, Bound::Flat, Bound::Serializable] {
         assert!(!definition.bounds.contains(&bound));
     }
-    let sample = registry.get(&core_path("clock.monotonic")).unwrap();
+    let sample = registry
+        .get(&hirsel_syntax::DefPath::core("clock.monotonic"))
+        .unwrap();
     let SignatureKind::Function(function) = &sample.kind else {
         panic!()
     };
@@ -580,7 +622,9 @@ fn ledger_never_is_the_primitive_and_core_names_have_providers() {
     // A ledger `Never` read as the nominal core@1/Never had no provider: every std body
     // calling test.fail stopped checking, and every std-dependent program with it.
     let registry = BuiltinRegistry::new();
-    let signature = registry.get(&core_path("test.fail")).unwrap();
+    let signature = registry
+        .get(&hirsel_syntax::DefPath::core("test.fail"))
+        .unwrap();
     let SignatureKind::Function(function) = &signature.kind else {
         panic!()
     };
@@ -591,7 +635,7 @@ fn ledger_never_is_the_primitive_and_core_names_have_providers() {
     for signature in registry.signatures() {
         for (_, t) in signature.types.iter() {
             if let TypeKind::Named { definition, .. } = &t.kind {
-                if definition.0.package.name == "core" {
+                if definition.0.package.name_is("core") {
                     assert!(registry.get(definition).is_some(), "{definition:?}");
                 }
             }
@@ -641,7 +685,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
             "Send(Bytes)|Expect(Bytes)|Stall()|Close()|Reset()|Truncate()",
         ),
     ] {
-        let signature = registry.get(&core_path(name)).unwrap();
+        let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Type(declaration) = &signature.kind else {
             panic!("{name}")
         };
@@ -657,7 +701,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
 fn network_resources_are_sendable_noncopyable_and_close_without_allocation() {
     let registry = BuiltinRegistry::new();
     for name in ["Stream", "Listener"] {
-        let signature = registry.get(&core_path(name)).unwrap();
+        let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Type(declaration) = &signature.kind else {
             panic!("{name}")
         };
@@ -671,14 +715,19 @@ fn network_resources_are_sendable_noncopyable_and_close_without_allocation() {
         assert_eq!(declaration.destructor_allocation, Allocation::NoAlloc);
         assert_eq!(
             declaration.authority,
-            AuthoritySummary::Known(vec![AuthorityTerm::Capability(core_path("Net"))].into())
+            AuthoritySummary::Known(
+                vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                    "Net"
+                ))]
+                .into()
+            )
         );
-        assert_eq!(declaration.drop, Some(core_path(name)));
+        assert_eq!(declaration.drop, Some(hirsel_syntax::DefPath::core(name)));
     }
     // Counted script/certificate data must not receive the Plain/Sendable promises
     // used by the scalar error variants above.
     for name in ["TlsRoots", "PeerTls", "NetConnection", "NetStep"] {
-        let signature = registry.get(&core_path(name)).unwrap();
+        let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Type(declaration) = &signature.kind else {
             panic!("{name}")
         };
@@ -697,7 +746,7 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         "net.accept",
         "tls.connect",
     ] {
-        let signature = registry.get(&core_path(name)).unwrap();
+        let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Function(function) = &signature.kind else {
             panic!("{name}")
         };
@@ -725,7 +774,7 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         );
     }
     for name in ["net.close", "tls.connect", "tls.close"] {
-        let signature = registry.get(&core_path(name)).unwrap();
+        let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Function(function) = &signature.kind else {
             panic!("{name}")
         };

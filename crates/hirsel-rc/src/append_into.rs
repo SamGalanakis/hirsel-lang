@@ -89,18 +89,10 @@ struct Fuser {
     builders: HashMap<DefPath, bool>,
 }
 
-fn core_path(name: &str) -> DefPath {
-    crate::library::core_path(name)
-}
-
-fn is_core(path: &DefPath, name: &str) -> bool {
-    *path == core_path(name)
-}
-
 /// std@1's `T.format_into` for std@1's `T.to_string`, when both are present.
 fn std_appender(program: &Program, path: &DefPath) -> Option<DefPath> {
     let p = &path.0;
-    if p.package.name != "std" || p.package.version != "1" || p.name != "to_string" {
+    if !p.package.package_is("std", "1") || p.name != "to_string" {
         return None;
     }
     let into = DefPath(ItemPath {
@@ -114,7 +106,7 @@ fn std_appender(program: &Program, path: &DefPath) -> Option<DefPath> {
 
 fn is_std_format_into(path: &DefPath) -> bool {
     let p = &path.0;
-    p.package.name == "std" && p.package.version == "1" && p.name == "format_into"
+    p.package.package_is("std", "1") && p.name == "format_into"
 }
 
 fn into_path(path: &DefPath) -> DefPath {
@@ -528,7 +520,7 @@ fn copy_loop(body: &Body, refs: &Refs, header: usize) -> Option<CopyLoop> {
     else {
         return None;
     };
-    if !is_core(path, "list.push") || arguments.len() != 2 {
+    if !path.is_core("list.push") || arguments.len() != 2 {
         return None;
     }
     let (list, element) = (argument(arguments, 0)?, argument(arguments, 1)?);
@@ -695,7 +687,7 @@ fn copy_loop(body: &Body, refs: &Refs, header: usize) -> Option<CopyLoop> {
     else {
         return None;
     };
-    if !is_core(path, "bytes.len") || arguments.len() != 1 {
+    if !path.is_core("bytes.len") || arguments.len() != 1 {
         return None;
     }
     let measured_source = argument(arguments, 0)?;
@@ -867,7 +859,7 @@ impl Fuser {
             "string.as_bytes",
         ]
         .iter()
-        .any(|n| is_core(path, n))
+        .any(|n| path.is_core(n))
             || is_std_format_into(path)
         {
             return true;
@@ -1043,7 +1035,7 @@ impl Fuser {
                         ..
                     } if string
                         && callee_path(&body.blocks[*b].terminator)
-                            .is_some_and(|p| is_core(p, "string.as_bytes"))
+                            .is_some_and(|p| p.is_core("string.as_bytes"))
                         && view_call.replace(*b).is_none() => {}
                     _ => return None,
                 }
@@ -1114,7 +1106,7 @@ impl Fuser {
                         ..
                     } => {
                         let callee = callee_path(&body.blocks[*b].terminator)?;
-                        if is_core(callee, "bytes.len") {
+                        if callee.is_core("bytes.len") {
                             // A copy loop's measurement.
                             if !loops
                                 .values()
@@ -1210,7 +1202,7 @@ impl Fuser {
                     arguments,
                     returns: Some(r),
                     ..
-                } if (is_core(path, "string.as_bytes") || is_core(path, "bytes.len"))
+                } if (path.is_core("string.as_bytes") || path.is_core("bytes.len"))
                     && arguments
                         .iter()
                         .all(|a| root(body, a.value.place) != dest_root) =>
@@ -1449,7 +1441,7 @@ fn builder(program: &Program, path: &DefPath, fuser: &mut Fuser) -> Option<Shape
         .blocks
         .iter()
         .enumerate()
-        .filter(|(_, b)| callee_path(&b.terminator).is_some_and(|p| is_core(p, "bytes.from_list")))
+        .filter(|(_, b)| callee_path(&b.terminator).is_some_and(|p| p.is_core("bytes.from_list")))
         .map(|(i, _)| i)
         .collect();
     let [freeze] = freezes[..] else { return None };
@@ -1517,7 +1509,7 @@ fn builder(program: &Program, path: &DefPath, fuser: &mut Fuser) -> Option<Shape
                 } => {
                     let callee = callee_path(&body.blocks[*block].terminator)?;
                     let appending = (*parameter == 0
-                        && (is_core(callee, "list.push") || is_core(callee, "list.reserve")))
+                        && (callee.is_core("list.push") || callee.is_core("list.reserve")))
                         || (is_std_format_into(callee) && *parameter == 1)
                         || (callee.0.name.ends_with(INTO_SUFFIX)
                             && Some(*parameter as usize + 1)

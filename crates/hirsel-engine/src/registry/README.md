@@ -3,7 +3,7 @@
 `BuiltinRegistry` is immutable declaration data served through SignatureProvider.
 `section22.txt` transcribes the function ledger of docs/spec/core-library.md verbatim. Type/error and
 record declarations are explicit data in build.rs. No runtime implementation is
-consulted. Every signature carries the canonical v7 fingerprint. `core_path`
+consulted. Every signature carries the canonical v7 fingerprint. `DefPath::core`
 and `nominal_roles` provide nominal identities to adapters, with
 `hirsel_types::core_roles::intrinsic_roles`;
 core@1 is provisional under #36. The driver must first honor own-package lookup,

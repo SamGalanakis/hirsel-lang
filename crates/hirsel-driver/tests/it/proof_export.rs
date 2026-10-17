@@ -4,9 +4,7 @@
 //! obligation ids are stable exactly as PS-4..PS-6 promise.
 use hirsel_driver::*;
 use hirsel_engine::*;
-use hirsel_proof_export::{
-    DefinitionSection, Detail, Export, ImportError, ObligationKind, path_text,
-};
+use hirsel_proof_export::{DefinitionSection, Detail, Export, ImportError, ObligationKind};
 use std::path::{Path, PathBuf};
 
 fn named(name: &str) -> DefPath {
@@ -60,7 +58,9 @@ fn table(export: &Export, name: &str) -> String {
             Detail::Site => String::new(),
             Detail::Call { callee, clause } => format!(
                 " call={} clause={clause}",
-                callee.as_ref().map_or("indirect".into(), path_text)
+                callee
+                    .as_ref()
+                    .map_or("indirect".into(), ToString::to_string)
             ),
             Detail::Clause { clause, .. } => format!(" clause={clause}"),
         };

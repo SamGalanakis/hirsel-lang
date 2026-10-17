@@ -35,7 +35,7 @@ use hirsel_lir::ir::{InstanceKey, InstanceView, LirUnit};
 use hirsel_lir::layout::{LayoutBuilder, LayoutError};
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
-use hirsel_syntax::{ContentHash, DefPath, ItemId, ItemPath, PackageId};
+use hirsel_syntax::{ContentHash, DefPath, ItemId};
 use hirsel_tir as tir;
 use hirsel_types::{GenericArgument, NameSite, SignatureKind, Type, TypeId, TypeKind};
 
@@ -168,24 +168,10 @@ impl From<InstanceError> for LibraryError {
     }
 }
 
-/// `core@1/<module>.<name>`, the registry's stable identity (spec #36).
-pub fn core_path(name: &str) -> DefPath {
-    let mut parts: Vec<_> = name.split('.').map(str::to_owned).collect();
-    let name = parts.pop().expect("core name");
-    DefPath(ItemPath {
-        package: PackageId {
-            name: "core".into(),
-            version: "1".into(),
-        },
-        modules: parts,
-        name,
-    })
-}
-
 /// `core@1/$native.<name>`: a helper or finalizer no registry row names.
 /// `$` cannot occur in a source identifier.
 pub fn native_path(name: &str) -> DefPath {
-    core_path(&format!("$native.{name}"))
+    hirsel_syntax::DefPath::core(&format!("$native.{name}"))
 }
 
 /// The `BODIES` row of `path`.

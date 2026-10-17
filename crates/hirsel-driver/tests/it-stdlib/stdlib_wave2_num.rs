@@ -196,7 +196,7 @@ fn every_numeric_catalogue_function_compiles_as_an_ordinary_source_unit() {
         let mut found = BTreeSet::new();
         for unit in &ready.units {
             let header = &unit.unit().header;
-            if header.definition.0.package.name == "std" {
+            if header.definition.0.package.name_is("std") {
                 assert_eq!(header.origin, UnitOrigin::Source);
                 found.insert((
                     header.definition.0.modules.join("/"),

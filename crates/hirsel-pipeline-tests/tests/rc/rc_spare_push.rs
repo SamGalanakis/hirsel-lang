@@ -19,7 +19,6 @@ use hirsel_rc::cleanup::Finalizers;
 use hirsel_rc::import::Lowered;
 use hirsel_rc::insert::Proofs;
 use hirsel_rc::instance::InstanceId;
-use hirsel_rc::library::core_path;
 use hirsel_rc::placement::Options;
 
 use support::*;
@@ -60,7 +59,7 @@ fn pushes(lowered: &Lowered) -> (usize, usize) {
     };
     (
         named(&hirsel_rc::spare_push::spare_path()),
-        named(&core_path("list.push")),
+        named(&hirsel_syntax::DefPath::core("list.push")),
     )
 }
 
@@ -451,7 +450,7 @@ fn forge(lowered: &mut Lowered, small: u128) {
             _ => None,
         })
         .expect("the small constant");
-    let reserve = core_path("list.reserve");
+    let reserve = hirsel_syntax::DefPath::core("list.reserve");
     let call = u
         .terminators
         .iter()

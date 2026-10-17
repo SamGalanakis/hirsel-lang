@@ -2,7 +2,7 @@
 //! name the size `k`, so one body per `k` calls `$intrinsic.NetReadInto[k]`, the
 //! fixed runtime entry `hirsel_rt_v2_net_read_into`, with the buffer's address and `k`.
 use super::builder::{Body, Cx};
-use super::{BINDER, LibraryBody, LibraryError, core_path};
+use super::{BINDER, LibraryBody, LibraryError};
 use crate::instance::{Actuals, InstanceError, instantiate_function};
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
@@ -13,13 +13,13 @@ use hirsel_types::SignatureKind;
 type R<T> = Result<T, LibraryError>;
 
 pub static READ_INTO: LibraryBody = LibraryBody {
-    path: || core_path("net.read_into"),
+    path: || hirsel_syntax::DefPath::core("net.read_into"),
     build: read_into,
 };
 
 fn read_into(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let k = cx.size_actual(0)?;
-    let path = core_path("$intrinsic.NetReadInto");
+    let path = hirsel_syntax::DefPath::core("$intrinsic.NetReadInto");
     let operation = cx
         .program
         .operations

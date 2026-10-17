@@ -1,5 +1,5 @@
 //! PROG-3 launch validation happens before the entry executes or any capability effect.
-use super::{Library, SimulationConfig, simulation::core_path};
+use super::{Library, SimulationConfig};
 use crate::{Error, Execution, Limits, Outcome, Value, invalid, run_with_runtime};
 use hirsel_span::SourceMap;
 use hirsel_syntax::{DefPath, Visibility};
@@ -57,7 +57,7 @@ impl Library {
                 "entry must return core Result[(),E]".into(),
             ));
         };
-        if *definition != core_path("Result") || arguments.len() != 2 {
+        if *definition != hirsel_syntax::DefPath::core("Result") || arguments.len() != 2 {
             return Err(LaunchError::InvalidEntry(
                 "entry must return core Result[(),E]".into(),
             ));
@@ -92,7 +92,7 @@ impl Library {
                     definition.0.name.as_str(),
                     "Io" | "Args" | "Env" | "Unsafe" | "Test"
                 )
-                || *definition != core_path(&definition.0.name)
+                || *definition != hirsel_syntax::DefPath::core(&definition.0.name)
             {
                 return Err(LaunchError::InvalidEntry(
                     "entry parameters must be nominal root capabilities".into(),
@@ -111,7 +111,7 @@ impl Library {
             .map(|r| {
                 self.simulation
                     .grant_root(r)
-                    .map_err(|_| LaunchError::CannotGrant(core_path(r)))
+                    .map_err(|_| LaunchError::CannotGrant(hirsel_syntax::DefPath::core(r)))
             })
             .collect()
     }
@@ -139,7 +139,7 @@ pub fn core_runtime_types() -> crate::aggregate::RuntimeTypes {
     crate::aggregate::RuntimeTypes {
         trace_mode: Default::default(),
         nominals: vec![crate::aggregate::Nominal {
-            definition: core_path("Result"),
+            definition: hirsel_syntax::DefPath::core("Result"),
             resource: false,
             distinct: false,
             finalizer: None,

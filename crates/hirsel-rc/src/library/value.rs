@@ -8,7 +8,7 @@
 //! here, the `SeqLen` of their borrowed argument (`length.rs`); the others
 //! are unsupported as values.
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError, core_path, native_path};
+use super::{LibraryBody, LibraryError, native_path};
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::*;
 use hirsel_lir::operation::OperationArgument;
@@ -28,7 +28,9 @@ pub static FORWARD: LibraryBody = LibraryBody {
 const LENGTHS: [&str; 4] = ["list.len", "array.len", "string.byte_len", "bytes.len"];
 
 fn length(path: &DefPath) -> bool {
-    LENGTHS.iter().any(|name| core_path(name) == *path)
+    LENGTHS
+        .iter()
+        .any(|name| hirsel_syntax::DefPath::core(name) == *path)
 }
 
 /// Whether the value of operation `path`, which has no library body, is this

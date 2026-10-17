@@ -4,7 +4,7 @@
 //! region entry and token, and closes that region on every return and
 //! propagation, before the result leaves the frame.
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError, core_path};
+use super::{LibraryBody, LibraryError};
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
@@ -12,7 +12,7 @@ use hirsel_lir::stage::Value;
 use hirsel_types::TypeKind;
 
 pub static WITH: LibraryBody = LibraryBody {
-    path: || core_path("arena.with"),
+    path: || hirsel_syntax::DefPath::core("arena.with"),
     build: with,
 };
 

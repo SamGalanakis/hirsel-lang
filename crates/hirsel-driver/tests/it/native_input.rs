@@ -641,7 +641,7 @@ fn borrowed_associations_and_scoped_promises_are_checked_at_native_import() {
     .into();
     assert!(engine.import_native_input(bad).is_err());
     let mut bad = base;
-    let nominal = bad.signatures.values_mut().find(|s| matches!(&s.kind,SignatureKind::Type(t) if t.loop_source.is_some() && s.definition.0.package.name != "core")).unwrap();
+    let nominal = bad.signatures.values_mut().find(|s| matches!(&s.kind,SignatureKind::Type(t) if t.loop_source.is_some() && !s.definition.0.package.name_is("core"))).unwrap();
     let SignatureKind::Type(t) = &mut Arc::make_mut(nominal).kind else {
         panic!()
     };

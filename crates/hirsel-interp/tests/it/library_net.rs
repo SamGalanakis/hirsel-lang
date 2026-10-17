@@ -1,8 +1,5 @@
 //! Boundary tests for frozen scripted-network semantics, independent of source lowering.
-use hirsel_interp::{
-    library::{simulation::core_path, *},
-    *,
-};
+use hirsel_interp::{library::*, *};
 use hirsel_run_config::{NetConnection, NetGrant, NetPeer, NetRule, NetStep, PeerTls};
 use hirsel_span::{SourceMap, Span};
 use hirsel_tir::RunConfiguration;
@@ -19,7 +16,7 @@ struct Harness {
 impl Harness {
     fn new(peers: Vec<NetPeer>, rules: Vec<NetRule>) -> Self {
         let run = RunConfiguration {
-            entry: core_path("main"),
+            entry: hirsel_syntax::DefPath::core("main"),
             hash_seed: 0,
             inputs: vec![],
         };
@@ -45,7 +42,7 @@ impl Harness {
         self.library
             .call(
                 OperationCall {
-                    path: &core_path(name),
+                    path: &hirsel_syntax::DefPath::core(name),
                     arguments: &args,
                     generics: &[],
                     types: &self.types,
@@ -127,7 +124,7 @@ fn rule(operation: &str) -> NetRule {
 }
 fn rule_value(host: &str, port: u16, op: u32) -> Value {
     Value::Record {
-        definition: core_path("NetRule"),
+        definition: hirsel_syntax::DefPath::core("NetRule"),
         fields: vec![
             Some(Value::String(host.into())),
             Some(p(port)),
@@ -461,7 +458,7 @@ fn replay_rejects_changed_written_bytes_and_rolls_back() {
     let mut call = |name: &str, args: &[Value]| {
         library.call(
             OperationCall {
-                path: &core_path(name),
+                path: &hirsel_syntax::DefPath::core(name),
                 arguments: args,
                 generics: &[],
                 types: &h.types,
@@ -677,7 +674,7 @@ fn return_cleanup_records_real_stream_closes_in_the_requested_reverse_order() {
     });
     let mut b = support::Builder::new();
     let resource = || TypeKind::Named {
-        definition: core_path("Stream"),
+        definition: hirsel_syntax::DefPath::core("Stream"),
         arguments: vec![].into(),
     };
     let one = b.parameter(resource());

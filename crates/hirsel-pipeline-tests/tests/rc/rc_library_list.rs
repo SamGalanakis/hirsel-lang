@@ -16,7 +16,6 @@ use hirsel_lir::validate::Inputs;
 use hirsel_rc::cleanup::Finalizers;
 use hirsel_rc::insert::Proofs;
 use hirsel_rc::instance::InstanceId;
-use hirsel_rc::library::core_path;
 use hirsel_rc::placement::Options;
 
 use support::*;
@@ -327,7 +326,7 @@ fn list_push_body_writes_through_slots_and_p4_detaches_it() {
     );
     let probe = library_units(&b)
         .into_iter()
-        .find(|u| u.header.definition == core_path("list.push"))
+        .find(|u| u.header.definition == hirsel_syntax::DefPath::core("list.push"))
         .unwrap();
     let insts = &probe.instructions;
     assert!(library_units(&b).iter().any(|u| {
@@ -353,7 +352,7 @@ fn list_push_body_writes_through_slots_and_p4_detaches_it() {
     let direct = caller.terminators.iter().any(|t| match *t {
         Terminator::Call { call, .. } => matches!(
             caller.tables.calls[call.index()].callee,
-            Callee::Direct(s) if caller.tables.symbols[s.index()].definition == core_path("list.push")
+            Callee::Direct(s) if caller.tables.symbols[s.index()].definition == hirsel_syntax::DefPath::core("list.push")
         ),
         _ => false,
     });
@@ -736,7 +735,7 @@ fn consuming_cursors_record_uniqueness_where_their_transfer_needs_it() {
         ("OwnedSortedMapCursor", 3),
     ] {
         let OwnerRepresentation::Defined(record) =
-            &owners.nominals[&core_path(&format!("$intrinsic.{name}"))]
+            &owners.nominals[&hirsel_syntax::DefPath::core(&format!("$intrinsic.{name}"))]
         else {
             panic!("cursor representation")
         };

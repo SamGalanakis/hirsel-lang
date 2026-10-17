@@ -146,8 +146,12 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
         .unwrap()
         .value;
     let registry = registry::BuiltinRegistry::new();
-    let output = registry.get(&registry::core_path("out.print")).unwrap();
-    let stdout_signature = registry.get(&registry::core_path("io.stdout")).unwrap();
+    let output = registry
+        .get(&hirsel_syntax::DefPath::core("out.print"))
+        .unwrap();
+    let stdout_signature = registry
+        .get(&hirsel_syntax::DefPath::core("io.stdout"))
+        .unwrap();
     let SignatureKind::Function(print) = &output.kind else {
         panic!()
     };
@@ -250,7 +254,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
                     }],
                     terminator: Terminator::Call {
                         callee: Callee::Definition {
-                            path: registry::core_path("io.stdout"),
+                            path: hirsel_syntax::DefPath::core("io.stdout"),
                             arguments: vec![],
                         },
                         arguments: vec![argument(0, UseKind::Borrow)],
@@ -275,7 +279,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
                     }],
                     terminator: Terminator::Call {
                         callee: Callee::Definition {
-                            path: registry::core_path("out.print"),
+                            path: hirsel_syntax::DefPath::core("out.print"),
                             arguments: vec![],
                         },
                         arguments: vec![
@@ -378,7 +382,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
                     MatchPattern {
                         place: PlaceId(2),
                         kind: MatchPatternKind::Variant {
-                            definition: registry::core_path("Result"),
+                            definition: hirsel_syntax::DefPath::core("Result"),
                             variant: 0,
                             fields: vec![(0, MatchPatternId(0))],
                         },

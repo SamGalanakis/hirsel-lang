@@ -558,7 +558,7 @@ impl State {
             definition: self
                 .definition
                 .clone()
-                .unwrap_or_else(|| crate::library::simulation::core_path("checked.execution")),
+                .unwrap_or_else(|| hirsel_syntax::DefPath::core("checked.execution")),
             site: self.site,
             line: 0,
             detail: detail.into(),
@@ -1066,7 +1066,7 @@ mod tests {
             definition,
             fields: vec![Some(string.clone()), Some(Value::Unit)],
         };
-        let core = crate::library::simulation::core_path;
+        let core = hirsel_syntax::DefPath::core;
         for plain in ["StrPos", "Path"] {
             assert_eq!(
                 Shadow::of(vec![1]).for_value(&record(core(plain))),

@@ -1,6 +1,6 @@
 //! Sorted maps: comparison-before-write insertion and owned entry cursors.
 use super::builder::{Body, Cx};
-use super::{CallShape, InlineLowering, LibraryBody, LibraryError, R, core_path, native_path};
+use super::{CallShape, InlineLowering, LibraryBody, LibraryError, R, native_path};
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
@@ -10,23 +10,23 @@ use hirsel_lir::stage::Value;
 use hirsel_types::{Primitive, SignatureKind, Substitution, TypeKind, UseKind};
 
 pub static EMPTY: InlineLowering = InlineLowering {
-    path: || core_path("sorted_map.empty"),
+    path: || hirsel_syntax::DefPath::core("sorted_map.empty"),
     lower: empty,
 };
 pub static LEN: InlineLowering = InlineLowering {
-    path: || core_path("$intrinsic.SortedMapOrder_len"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.SortedMapOrder_len"),
     lower: len,
 };
 pub static INSERT: LibraryBody = LibraryBody {
-    path: || core_path("sorted_map.insert"),
+    path: || hirsel_syntax::DefPath::core("sorted_map.insert"),
     build: insert,
 };
 pub static OPEN: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.SortedMapOrder_open"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.SortedMapOrder_open"),
     build: open,
 };
 pub static NEXT: LibraryBody = LibraryBody {
-    path: || core_path("$intrinsic.SortedMapOrder_next"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.SortedMapOrder_next"),
     build: next,
 };
 pub static CURSOR_DROP: LibraryBody = LibraryBody {
@@ -35,7 +35,7 @@ pub static CURSOR_DROP: LibraryBody = LibraryBody {
 };
 macro_rules! orders {
     ($($row:ident : $name:literal),* $(,)?) => { $(pub static $row: LibraryBody = LibraryBody {
-        path: || core_path(concat!("$intrinsic.OrderCompare_", $name)), build: order,
+        path: || hirsel_syntax::DefPath::core(concat!("$intrinsic.OrderCompare_", $name)), build: order,
     };)* };
 }
 orders! { U8:"u8", U16:"u16", U32:"u32", U64:"u64", U128:"u128",
@@ -67,7 +67,7 @@ fn empty(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     )?;
     let symbol = cx.symbol(&Symbol {
         kind: SymbolKind::Type,
-        definition: core_path("SortedMap"),
+        definition: hirsel_syntax::DefPath::core("SortedMap"),
         instance: None,
     });
     let result = cx.construct(layout, payload, ConstructorKind::Record(symbol), &[entries])?;
@@ -148,7 +148,7 @@ fn construct(
 fn record_symbol(b: &mut Body<'_, '_>, name: &str) -> SymbolId {
     b.symbol(Symbol {
         kind: SymbolKind::Type,
-        definition: core_path(name),
+        definition: hirsel_syntax::DefPath::core(name),
         instance: None,
     })
 }
@@ -181,7 +181,11 @@ fn order(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     Ok(b.finish())
 }
 fn comparator_abi(cx: &mut Cx<'_>) -> Result<hirsel_lir::abi_types::FnAbiId, LibraryError> {
-    let signature = cx.program.signatures.get(&core_path("Order")).unwrap();
+    let signature = cx
+        .program
+        .signatures
+        .get(&hirsel_syntax::DefPath::core("Order"))
+        .unwrap();
     let SignatureKind::Type(order) = &signature.kind else {
         unreachable!()
     };

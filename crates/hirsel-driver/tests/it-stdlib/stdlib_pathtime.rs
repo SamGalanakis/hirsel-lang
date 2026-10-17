@@ -176,7 +176,7 @@ fn full_gate_path_and_time_public_functions_compile_as_source_units() {
             .unwrap();
             for unit in &ready.units {
                 let header = &unit.unit().header;
-                if header.definition.0.package.name == "std" {
+                if header.definition.0.package.name_is("std") {
                     assert_eq!(header.origin, UnitOrigin::Source);
                     found.insert((
                         header.definition.0.modules.join("/"),
@@ -207,7 +207,7 @@ fn full_gate_path_and_time_public_functions_compile_as_source_units() {
                 );
                 assert!(
                     registry::BuiltinRegistry::new()
-                        .get(&registry::core_path(&format!("{module}.{name}")))
+                        .get(&hirsel_syntax::DefPath::core(&format!("{module}.{name}")))
                         .is_none()
                 );
             }

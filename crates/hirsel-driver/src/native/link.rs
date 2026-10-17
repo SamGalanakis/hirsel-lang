@@ -357,8 +357,7 @@ pub(crate) fn launch_kind(signature: &hirsel_types::Signature) -> Option<LaunchK
     else {
         return None;
     };
-    if definition.0.package.name != "core"
-        || definition.0.package.version != "1"
+    if !definition.package_is("core", "1")
         || !definition.0.modules.is_empty()
         || definition.0.name != "Result"
     {
@@ -378,8 +377,7 @@ pub(crate) fn launch_kind(signature: &hirsel_types::Signature) -> Option<LaunchK
                 definition,
                 arguments,
             } if arguments.is_empty()
-                && definition.0.package.name == "core"
-                && definition.0.package.version == "1"
+                && definition.package_is("core", "1")
                 && definition.0.modules.is_empty() =>
             {
                 Some(definition.0.name.as_str())

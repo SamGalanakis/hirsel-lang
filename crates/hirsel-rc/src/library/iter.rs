@@ -1,6 +1,6 @@
 //! SEM-4 pull iterators: owned environments and ordinary indirect step calls.
 use super::builder::{Body, Parameter};
-use super::{CallShape, Cx, InlineLowering, LibraryBody, LibraryError, R, core_path, native_path};
+use super::{CallShape, Cx, InlineLowering, LibraryBody, LibraryError, R, native_path};
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::{CallableShape, FnAbiId};
@@ -10,15 +10,15 @@ use hirsel_lir::stage::Value;
 use hirsel_types::{TypeKind, UseKind};
 
 pub static FROM: InlineLowering = InlineLowering {
-    path: || core_path("iter.from"),
+    path: || hirsel_syntax::DefPath::core("iter.from"),
     lower: from,
 };
 pub static MAP: InlineLowering = InlineLowering {
-    path: || core_path("iter.map"),
+    path: || hirsel_syntax::DefPath::core("iter.map"),
     lower: map,
 };
 pub static NEXT: InlineLowering = InlineLowering {
-    path: || core_path("iter.next"),
+    path: || hirsel_syntax::DefPath::core("iter.next"),
     lower: next,
 };
 pub static FROM_STEP: LibraryBody = LibraryBody {
@@ -114,7 +114,7 @@ fn from_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
 fn option(b: &mut Body<'_, '_>, layout: LayoutId, variant: u32, values: &[ValueId]) -> ValueId {
     let definition = b.symbol(Symbol {
         kind: SymbolKind::Type,
-        definition: core_path("Option"),
+        definition: hirsel_syntax::DefPath::core("Option"),
         instance: None,
     });
     let fields = PoolRange::push(
@@ -205,7 +205,7 @@ fn map_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     let mut request = super::Request::operation(
         b.cx.program,
         body,
-        &core_path("iter.next"),
+        &hirsel_syntax::DefPath::core("iter.next"),
         b.cx.store.clone(),
         generics,
     )?;

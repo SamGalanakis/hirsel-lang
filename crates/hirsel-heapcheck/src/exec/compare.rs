@@ -192,7 +192,7 @@ impl<S: Stage> Machine<'_, S> {
                     }
                 }
                 LayoutKind::Opaque { owner }
-                    if owner.0.package.name == "core"
+                    if owner.0.package.name_is("core")
                         && matches!(owner.0.name.as_str(), "Map" | "Set") =>
                 {
                     let entries = &record.fields[0];
@@ -423,7 +423,7 @@ impl<S: Stage> Machine<'_, S> {
                     fold(&bytes);
                 }
                 LayoutKind::Opaque { ref owner }
-                    if owner.0.package.name == "core"
+                    if owner.0.package.name_is("core")
                         && matches!(owner.0.name.as_str(), "Map" | "Set") =>
                 {
                     let field = &record.fields[0];

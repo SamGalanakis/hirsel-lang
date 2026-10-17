@@ -42,8 +42,7 @@ pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root
         return Err(invalid("expected core@1/Result[(), E]"));
     };
     let nominal = |definition: &hirsel_syntax::DefPath, name: &str| {
-        definition.0.package.name == "core"
-            && definition.0.package.version == "1"
+        definition.package_is("core", "1")
             && definition.0.modules.is_empty()
             && definition.0.name == name
     };
@@ -101,7 +100,7 @@ pub fn admit_run(
     now: i64,
 ) -> Result<AdmittedRun, RunRefusal> {
     let roots = entry_roots(signature, launch)?;
-    if crate::semantic_entry_name(&signature.definition) != revision.entry() {
+    if signature.definition.to_string() != revision.entry() {
         return Err(RunRefusal::Binding {
             field: "entry.signature".into(),
         });

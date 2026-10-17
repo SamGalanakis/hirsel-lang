@@ -528,15 +528,15 @@ fn lower<T>(
                 || inputs.inline_instances.contains(&unit.header.instance)
             {
                 module.make_linkonce_odr(function);
-                let attribute = if unit.header.definition == core_library_path("list.push")
-                    || unit.header.definition == core_library_path("$native.list_push_spare")
+                let attribute = if unit.header.definition.is_core("list.push")
+                    || unit.header.definition.is_core("$native.list_push_spare")
                 {
                     Attribute::AlwaysInline
                 } else {
                     Attribute::InlineHint
                 };
                 module.add_attribute(function, AttributeSlot::Function, attribute);
-                if unit.header.definition == core_library_path("$native.list_grow") {
+                if unit.header.definition.is_core("$native.list_grow") {
                     module.add_attribute(function, AttributeSlot::Function, Attribute::Cold);
                     module.add_attribute(function, AttributeSlot::Function, Attribute::NoInline);
                 }
@@ -596,7 +596,7 @@ fn lower<T>(
                 let scope = debug.function(
                     function,
                     &source.path.to_string_lossy(),
-                    &crate::path(&unit.header.definition),
+                    &unit.header.definition.to_string(),
                     line,
                 );
                 emitter.profile = Some((debug, scope, source));
@@ -816,19 +816,6 @@ fn define_root_adapter<'m>(
     let status = signature.status(&builder, returned);
     let value = signature.result(&builder, returned);
     builder.ret(external.returned(&builder, module.const_zero(external.returns), status, value));
-}
-
-fn core_library_path(name: &str) -> DefPath {
-    let mut parts: Vec<_> = name.split('.').map(str::to_owned).collect();
-    let name = parts.pop().expect("core declaration name");
-    DefPath(hirsel_syntax::ItemPath {
-        package: hirsel_syntax::PackageId {
-            name: "core".into(),
-            version: "1".into(),
-        },
-        modules: parts,
-        name,
-    })
 }
 
 fn fn_abi<'a>(
@@ -2744,7 +2731,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             for (index, text) in [
                 self.unit.header.definition.0.package.name.as_str(),
                 &source.path.to_string_lossy(),
-                &crate::path(&self.unit.header.definition),
+                &self.unit.header.definition.to_string(),
                 operation,
             ]
             .into_iter()
@@ -7948,8 +7935,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     // cold body stays out of line, so LLVM cannot recover this
                     // fact from the tagged aggregate return at the call site.
                     let reserved = matches!(site.callee, Callee::Direct(symbol)
-                        if self.unit.tables.symbols[symbol.index()].definition
-                            == core_library_path("$native.list_grow"));
+                        if self.unit.tables.symbols[symbol.index()].definition.is_core("$native.list_grow"));
                     let unique = if reserved {
                         succeeded
                     } else {

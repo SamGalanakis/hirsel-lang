@@ -2420,12 +2420,13 @@ impl<'o> LayoutBuilder<'o> {
         let record = match owner {
             OwnerRepresentation::Handle { revision, resource } => {
                 let mut handle = self.handle_record(key, *resource);
-                if !resource && definition.0.package.name == "core" && definition.0.name == "Path" {
+                if !resource && definition.0.package.name_is("core") && definition.0.name == "Path"
+                {
                     handle.kind = LayoutKind::Path;
                     handle.scan.clear();
                 }
                 // An arena token is a record address, never a run-context ID.
-                if !resource && definition.0.package.name == "core" && definition.0.name == "Arena"
+                if !resource && definition.0.package.name_is("core") && definition.0.name == "Arena"
                 {
                     let (size, align) = self.pointer();
                     handle = self.blank(key, LayoutKind::Arena, SizeSpec::Fixed(size), align);

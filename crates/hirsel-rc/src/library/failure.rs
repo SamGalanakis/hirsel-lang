@@ -1,11 +1,11 @@
 //! failure.check uses the ordinary call anchor and checked failure edges.
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError, core_path};
+use super::{LibraryBody, LibraryError};
 use hirsel_lir::ir::*;
 use hirsel_lir::stage::Value;
 
 pub static CHECK: LibraryBody = LibraryBody {
-    path: || core_path("failure.check"),
+    path: || hirsel_syntax::DefPath::core("failure.check"),
     build: check,
 };
 

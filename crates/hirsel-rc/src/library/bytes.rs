@@ -1,5 +1,5 @@
 //! Freeze a typed byte list by transferring its owner into a whole Bytes slice.
-use super::{CallShape, InlineLowering, R, core_path};
+use super::{CallShape, InlineLowering, R};
 use crate::import::ImportCx;
 use hirsel_lir::ir::{ConstantValue, ConstructorKind, Holding, Inst};
 use hirsel_lir::layout::sequence_slice_start;
@@ -7,7 +7,7 @@ use hirsel_lir::layout_types::LayoutKind;
 use hirsel_types::UseKind;
 
 pub static FROM_LIST: InlineLowering = InlineLowering {
-    path: || core_path("bytes.from_list"),
+    path: || hirsel_syntax::DefPath::core("bytes.from_list"),
     lower: from_list,
 };
 

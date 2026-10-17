@@ -45,7 +45,7 @@ pub struct Proven {
 /// Every `list.push` call of `u` proven to append into spare capacity.
 /// `layout` answers the record of a layout id (the table may be unsealed).
 pub fn prove(u: &LirUnit<Value>, layout: &dyn Fn(LayoutId) -> LayoutKind) -> Vec<Proven> {
-    let push = crate::library::core_path("list.push");
+    let push = hirsel_syntax::DefPath::core("list.push");
     let pushes: Vec<(usize, CallId)> = u
         .terminators
         .iter()
@@ -66,7 +66,7 @@ pub fn prove(u: &LirUnit<Value>, layout: &dyn Fn(LayoutId) -> LayoutKind) -> Vec
         defs: definitions(u),
         def_block: def_blocks(u),
         forward,
-        reserve: crate::library::core_path("list.reserve"),
+        reserve: hirsel_syntax::DefPath::core("list.reserve"),
         empty: crate::import::empty_sequence(),
     };
     pushes
@@ -102,7 +102,7 @@ pub fn prove_fields(u: &LirUnit<Value>) -> Vec<usize> {
         defs: definitions(u),
         def_block: def_blocks(u),
         forward,
-        reserve: crate::library::core_path("list.reserve"),
+        reserve: hirsel_syntax::DefPath::core("list.reserve"),
         empty: crate::import::empty_sequence(),
     };
     pushes

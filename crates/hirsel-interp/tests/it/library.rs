@@ -1,11 +1,7 @@
 //! Boundary oracles for every implemented core library operation, using shared data only.
 use crate::support;
 use hirsel_interp::{
-    library::{
-        collection, float, integer,
-        simulation::{Fault, core_path},
-        *,
-    },
+    library::{collection, float, integer, simulation::Fault, *},
     *,
 };
 use hirsel_span::{SourceMap, Span};
@@ -49,7 +45,7 @@ impl Harness {
         result: TypeKind,
     ) -> Result<OperationResult, Error> {
         let result = self.types.push(ty(result));
-        let path = core_path(name);
+        let path = hirsel_syntax::DefPath::core(name);
         let operation = self
             .library
             .call(
@@ -582,7 +578,7 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
     let mut lib = Library::new(&run, Default::default()).unwrap();
     let io = lib.simulation.grant_root("Io").unwrap();
     let t = h.types.push(ty(TypeKind::Tuple(vec![].into())));
-    let path = core_path("io.stdout");
+    let path = hirsel_syntax::DefPath::core("io.stdout");
     lib.call(
         OperationCall {
             path: &path,
@@ -609,7 +605,7 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
 fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
     let mut h = Harness::new(Default::default());
     let t = h.types.push(ty(TypeKind::Tuple(vec![].into())));
-    let path = core_path("task.scope");
+    let path = hirsel_syntax::DefPath::core("task.scope");
     let mut context = OperationContext {
         trace_mode: Default::default(),
         anchor: None,
@@ -666,7 +662,7 @@ fn replay_mismatch_cannot_publish_stdout_or_consume_fault_configuration() {
     let mut library = Library::new(&run, Default::default()).unwrap();
     let io = library.simulation.grant_root("Io").unwrap();
     let ty = h.types.push(ty(TypeKind::Tuple(vec![].into())));
-    let path = core_path("io.stdout");
+    let path = hirsel_syntax::DefPath::core("io.stdout");
     assert!(matches!(
         library.call(
             OperationCall {
@@ -780,7 +776,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
         .library
         .call(
             OperationCall {
-                path: &core_path("simd.splat"),
+                path: &hirsel_syntax::DefPath::core("simd.splat"),
                 generics: &[
                     GenericArgument::Type(lane),
                     GenericArgument::Size(Size::Constant(3)),
@@ -828,7 +824,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
         let args = vec![Value::String("invalid scalar".into())];
         let err = h.library.call(
             OperationCall {
-                path: &core_path("simd.splat"),
+                path: &hirsel_syntax::DefPath::core("simd.splat"),
                 generics: &[GenericArgument::Size(Size::Constant(width))],
                 arguments: &args,
                 result_type: result,
@@ -882,7 +878,10 @@ fn unchecked_add_detects_overflow_without_inventing_a_language_failure() {
         panic!("{detected:?}")
     };
     assert_eq!(detected.kind, "undefined behaviour detected");
-    assert_eq!(detected.operation, core_path("int.unchecked_add"));
+    assert_eq!(
+        detected.operation,
+        hirsel_syntax::DefPath::core("int.unchecked_add")
+    );
     assert_eq!(detected.site, support::site(7));
     assert_eq!(detected.line, 7);
     assert!(detected.contract.contains("sum must fit"));

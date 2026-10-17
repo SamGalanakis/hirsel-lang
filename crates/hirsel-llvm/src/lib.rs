@@ -106,18 +106,6 @@ pub enum CodegenError {
     Manifest { problem: String },
 }
 
-fn path(definition: &DefPath) -> String {
-    let p = &definition.0;
-    let mut text = format!("{}@{}", p.package.name, p.package.version);
-    for module in &p.modules {
-        text.push_str("::");
-        text.push_str(module);
-    }
-    text.push_str("::");
-    text.push_str(&p.name);
-    text
-}
-
 impl fmt::Display for CodegenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -147,24 +135,20 @@ impl fmt::Display for CodegenError {
                 definition,
                 problem,
             } => {
-                write!(f, "{}: {problem}", path(definition))
+                write!(f, "{}: {problem}", definition)
             }
             CodegenError::Invalid { definition, what } => {
-                write!(f, "{}: invalid Ready unit: {what}", path(definition))
+                write!(f, "{}: invalid Ready unit: {what}", definition)
             }
             CodegenError::Unsupported { definition, what } => {
                 write!(
                     f,
                     "{}: native emission does not support {what} yet",
-                    path(definition)
+                    definition
                 )
             }
             CodegenError::UnknownRule { definition, rule } => {
-                write!(
-                    f,
-                    "{}: no runtime failure code for {rule}",
-                    path(definition)
-                )
+                write!(f, "{}: no runtime failure code for {rule}", definition)
             }
             CodegenError::DuplicateSymbol { name } => write!(f, "two units are named `{name}`"),
             CodegenError::Verify { stage, message } => {

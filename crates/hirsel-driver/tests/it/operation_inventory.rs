@@ -23,19 +23,19 @@ fn registry_and_dispatch_have_exact_bidirectional_callable_coverage() {
     check_operation_coverage(declarations.clone(), dispatch.keys().cloned()).unwrap();
     assert!(records.values().all(|r| r.reference.is_some()));
     assert_eq!(
-        dispatch[&core_path("task.async")],
+        dispatch[&hirsel_syntax::DefPath::core("task.async")],
         OperationDisposition::Unavailable
     );
     assert_eq!(
-        dispatch[&core_path("forget")],
+        dispatch[&hirsel_syntax::DefPath::core("forget")],
         OperationDisposition::Evaluator
     );
-    let inserted = core_path("new.declaration.without.implementation");
+    let inserted = hirsel_syntax::DefPath::core("new.declaration.without.implementation");
     let mut extra_row = declarations.clone();
     extra_row.insert(inserted.clone());
     let missing = check_operation_coverage(extra_row, dispatch.keys().cloned()).unwrap_err();
     assert_eq!(missing.missing_implementations, BTreeSet::from([inserted]));
-    let inserted = core_path("new.implementation.without.declaration");
+    let inserted = hirsel_syntax::DefPath::core("new.implementation.without.declaration");
     let mut extra_dispatch: BTreeSet<_> = dispatch.keys().cloned().collect();
     extra_dispatch.insert(inserted.clone());
     let missing = check_operation_coverage(declarations, extra_dispatch).unwrap_err();
@@ -49,7 +49,7 @@ fn operation_identity_retains_typed_modes_cleanup_and_the_declaration_digest() {
     let records = BuiltinRegistry::new().operation_inventory();
     let record = records
         .values()
-        .find(|r| r.key.definition == core_path("file.narrow"))
+        .find(|r| r.key.definition == hirsel_syntax::DefPath::core("file.narrow"))
         .unwrap();
     assert_eq!(
         record.key.declaration_digest,
@@ -91,7 +91,7 @@ fn network_operations_publish_their_current_engine_dispositions() {
     let registry = BuiltinRegistry::new();
     let records = registry.operation_inventory();
     let run = hirsel_tir::RunConfiguration {
-        entry: core_path("test.net"),
+        entry: hirsel_syntax::DefPath::core("test.net"),
         hash_seed: 0,
         inputs: vec![],
     };
@@ -123,7 +123,7 @@ fn network_operations_publish_their_current_engine_dispositions() {
     for name in names {
         let record = records
             .values()
-            .find(|r| r.key.definition == core_path(name))
+            .find(|r| r.key.definition == hirsel_syntax::DefPath::core(name))
             .unwrap();
         assert_eq!(
             record.reference,

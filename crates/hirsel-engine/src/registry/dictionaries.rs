@@ -29,7 +29,7 @@ impl BuiltinRegistry {
     ) -> Result<Option<Materialized>, QueryError> {
         let Some(name) = INTEGERS
             .iter()
-            .find(|name| *path == core_path(&format!("{name}.order")))
+            .find(|name| *path == hirsel_syntax::DefPath::core(&format!("{name}.order")))
         else {
             return Ok(None);
         };
@@ -74,7 +74,7 @@ impl BuiltinRegistry {
         };
         let compare = ValueNode {
             ty: compare.ty,
-            kind: ValueKind::FunctionReference(core_path(&format!(
+            kind: ValueKind::FunctionReference(hirsel_syntax::DefPath::core(&format!(
                 "$intrinsic.OrderCompare_{name}"
             ))),
         };

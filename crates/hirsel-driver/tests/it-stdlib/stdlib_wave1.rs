@@ -59,7 +59,7 @@ fn std_algorithms_are_ordinary_source_native_units(name: &str, functions: &[(&st
         .unwrap();
         for unit in &ready.units {
             let header = &unit.unit().header;
-            if header.definition.0.package.name == "std" {
+            if header.definition.0.package.name_is("std") {
                 assert_eq!(header.origin, UnitOrigin::Source);
                 found.insert((
                     header.definition.0.modules.join("/"),

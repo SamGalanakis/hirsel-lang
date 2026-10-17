@@ -669,7 +669,7 @@ impl Graph {
             return Err(invalid("package schema must be 1"));
         }
         let package = package_value(required(object, "package")?)?;
-        if package.name == "core" && package.version == "1" {
+        if package.package_is("core", "1") {
             return Err(invalid("core@1 is compiler-owned"));
         }
         if expected.is_some_and(|e| e != &package) {

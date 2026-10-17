@@ -126,7 +126,7 @@ pub fn legalize(
 fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
     use ScalarOp as S;
     let path = &definition.0;
-    if path.package.name != "core" {
+    if !path.package.name_is("core") {
         return None;
     }
     Some(match (path.modules.as_slice(), path.name.as_str()) {
@@ -163,7 +163,7 @@ fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
 
 fn simd_op(definition: &hirsel_syntax::DefPath) -> Option<SimdOp> {
     let path = &definition.0;
-    if path.package.name != "core" || path.modules.as_slice() != ["simd"] {
+    if !path.package.name_is("core") || path.modules.as_slice() != ["simd"] {
         return None;
     }
     match path.name.as_str() {

@@ -1,9 +1,7 @@
 //! Native insertion-ordered maps and sets. Field 0 is dense entries; field 1
 //! is an optional open-addressing index. Keyed reads never mutate either.
 use super::builder::{Body, Cx, Direct};
-use super::{
-    CallShape, InlineLowering, LibraryBody, LibraryError, Request, core_path, native_path,
-};
+use super::{CallShape, InlineLowering, LibraryBody, LibraryError, Request, native_path};
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::effect::Effects;
@@ -20,7 +18,7 @@ type R<T> = Result<T, LibraryError>;
 macro_rules! body {
     ($row:ident, $name:literal, $build:ident) => {
         pub static $row: LibraryBody = LibraryBody {
-            path: || core_path($name),
+            path: || hirsel_syntax::DefPath::core($name),
             build: $build,
         };
     };
@@ -39,15 +37,15 @@ pub static SET_PROBE: LibraryBody = LibraryBody {
 };
 
 pub static EMPTY_MAP: InlineLowering = InlineLowering {
-    path: || core_path("map.empty"),
+    path: || hirsel_syntax::DefPath::core("map.empty"),
     lower: empty,
 };
 pub static EMPTY_SET: InlineLowering = InlineLowering {
-    path: || core_path("set.empty"),
+    path: || hirsel_syntax::DefPath::core("set.empty"),
     lower: empty,
 };
 pub static MAP_LEN: InlineLowering = InlineLowering {
-    path: || core_path("$intrinsic.MapInsertionOrder_len"),
+    path: || hirsel_syntax::DefPath::core("$intrinsic.MapInsertionOrder_len"),
     lower: length,
 };
 
@@ -163,7 +161,7 @@ fn construct(
 fn nominal(b: &mut Body<'_, '_>, name: &str) -> SymbolId {
     b.symbol(Symbol {
         kind: SymbolKind::Type,
-        definition: core_path(name),
+        definition: hirsel_syntax::DefPath::core(name),
         instance: None,
     })
 }
@@ -238,7 +236,7 @@ fn helper(
         }),
     );
     let path = if name == "list.push" {
-        core_path(name)
+        hirsel_syntax::DefPath::core(name)
     } else {
         native_path(name)
     };
@@ -362,7 +360,7 @@ fn hash(b: &mut Body<'_, '_>, a: AddressId) -> R<ValueId> {
 }
 fn probe_call(b: &mut Body<'_, '_>) -> R<ValueId> {
     let k = b.cx.type_actual(0)?;
-    let types = if b.parameters.len() == 3 || b.cx.path == core_path("map.get") {
+    let types = if b.parameters.len() == 3 || b.cx.path == hirsel_syntax::DefPath::core("map.get") {
         vec![k, b.cx.type_actual(1)?]
     } else {
         vec![k]

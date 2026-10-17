@@ -218,9 +218,9 @@ impl Importer<'_, '_> {
             tir::Callee::Indirect { .. } => None,
         };
         let (push, reserve, freeze) = (
-            crate::library::core_path("list.push"),
-            crate::library::core_path("list.reserve"),
-            crate::library::core_path("bytes.from_list"),
+            hirsel_syntax::DefPath::core("list.push"),
+            hirsel_syntax::DefPath::core("list.reserve"),
+            hirsel_syntax::DefPath::core("bytes.from_list"),
         );
         // Webs: lists and their Bytes joined by whole moves and the freeze.
         let mut parent: Vec<usize> = (0..n).collect();

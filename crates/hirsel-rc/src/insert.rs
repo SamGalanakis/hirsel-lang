@@ -87,7 +87,7 @@ impl Proofs {
                 .filter(|(_, p)| {
                     // An arena block is never written in place: its header is
                     // immortal, so the write detaches it.
-                    let arena = crate::library::core_path("Arena");
+                    let arena = hirsel_syntax::DefPath::core("Arena");
                     store.get(p.ty).is_some_and(|t| {
                         t.modes.uniqueness == hirsel_types::Uniqueness::Unique
                             && t.modes

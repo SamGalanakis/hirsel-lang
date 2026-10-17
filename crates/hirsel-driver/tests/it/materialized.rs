@@ -55,7 +55,7 @@ fn nominal_reification_uses_declared_generic_fields_and_preserves_identity() {
 fn capability_materialization_is_a_language_error_without_hiding_malformed_values() {
     let mut types = TypeStore::default();
     let capability = types.push(ty(TypeKind::Named {
-        definition: registry::core_path("Io"),
+        definition: hirsel_syntax::DefPath::core("Io"),
         arguments: vec![].into(),
     }));
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());

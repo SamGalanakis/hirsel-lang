@@ -78,8 +78,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 Bound::NoallocDrop,
             ]
         };
-        t.authority =
-            AuthoritySummary::Known(vec![AuthorityTerm::Capability(core_path(name))].into());
+        t.authority = AuthoritySummary::Known(
+            vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                name,
+            ))]
+            .into(),
+        );
         publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
     }
     // These inert, plain views/positions have intrinsic loop/brand rules (docs/spec/core-library.md).
@@ -109,9 +113,9 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             _ => None,
         } {
             t.loop_source = Some(LoopSourceDeclaration {
-                open: core_path(&format!("$intrinsic.{protocol}_open")),
-                next: core_path(&format!("$intrinsic.{protocol}_next")),
-                option: core_path("Option"),
+                open: hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_open")),
+                next: hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_next")),
+                option: hirsel_syntax::DefPath::core("Option"),
             });
         }
         publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
@@ -262,9 +266,13 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         t.resource = true;
         t.bounds = vec![Bound::NoallocDrop];
         t.destructor_allocation = Allocation::NoAlloc;
-        t.authority =
-            AuthoritySummary::Known(vec![AuthorityTerm::Capability(core_path("Dir"))].into());
-        t.drop = Some(core_path(name));
+        t.authority = AuthoritySummary::Known(
+            vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                "Dir",
+            ))]
+            .into(),
+        );
+        t.drop = Some(hirsel_syntax::DefPath::core(name));
         publish(
             b.signature(name, SignatureKind::Type(t), fields.is_empty()),
             &mut out,
@@ -277,9 +285,13 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         t.resource = true;
         t.bounds = vec![Bound::Sendable, Bound::NoallocDrop];
         t.destructor_allocation = Allocation::NoAlloc;
-        t.authority =
-            AuthoritySummary::Known(vec![AuthorityTerm::Capability(core_path("Net"))].into());
-        t.drop = Some(core_path(name));
+        t.authority = AuthoritySummary::Known(
+            vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                "Net",
+            ))]
+            .into(),
+        );
+        t.drop = Some(hirsel_syntax::DefPath::core(name));
         publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
     }
     for (name, generic) in [
@@ -599,7 +611,7 @@ impl Builder {
     }
     pub fn signature(self, name: &str, kind: SignatureKind, opaque: bool) -> Signature {
         Signature {
-            definition: core_path(name),
+            definition: hirsel_syntax::DefPath::core(name),
             types: self.types,
             kind,
             fingerprint: ContentHash::default(),
@@ -763,7 +775,7 @@ impl Builder {
             TypeKind::Named {
                 definition,
                 arguments,
-            } if *definition == core_path("Result") => match &arguments[1] {
+            } if *definition == hirsel_syntax::DefPath::core("Result") => match &arguments[1] {
                 GenericArgument::Type(t) => Some(*t),
                 _ => None,
             },
@@ -797,7 +809,7 @@ impl Builder {
             .iter()
             .map(|n| {
                 self.parameter(n).map_or_else(
-                    || AuthorityTerm::Capability(core_path(n)),
+                    || AuthorityTerm::Capability(hirsel_syntax::DefPath::core(n)),
                     AuthorityTerm::Parameter,
                 )
             })
@@ -919,7 +931,7 @@ impl Builder {
                     TypeKind::Builtin { kind, arguments }
                 } else {
                     TypeKind::Named {
-                        definition: core_path(name),
+                        definition: hirsel_syntax::DefPath::core(name),
                         arguments,
                     }
                 }

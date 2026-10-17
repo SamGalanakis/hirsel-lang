@@ -214,7 +214,7 @@ impl Importer<'_, '_> {
         address: AddressId,
         value: ValueId,
     ) -> R<()> {
-        let path = crate::library::core_path(name);
+        let path = hirsel_syntax::DefPath::core(name);
         let body = crate::library::body_index(&path).expect("list construction body");
         let request = crate::library::Request::operation(
             self.program,

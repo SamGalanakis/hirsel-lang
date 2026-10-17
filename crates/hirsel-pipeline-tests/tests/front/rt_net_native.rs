@@ -417,7 +417,7 @@ fn read_into_body_calls_its_fixed_entry_and_validation_refuses_forged_calls() {
             layouts: &ready.table,
             manifest: &ready.manifest,
         };
-        let path = |name: &str| hirsel_rc::library::core_path(name);
+        let path = |name: &str| hirsel_syntax::DefPath::core(name);
         let bodies: Vec<_> = ready
             .units
             .iter()

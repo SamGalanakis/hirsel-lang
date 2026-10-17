@@ -356,7 +356,7 @@ pub fn fixture_signatures(
                 AuthoritySummary::inert(),
             )
         };
-        let path = hirsel_interp::library::simulation::core_path(name);
+        let path = hirsel_syntax::DefPath::core(name);
         signatures.insert(
             path.clone(),
             snapshot(
@@ -383,7 +383,7 @@ pub fn fixture_signatures(
     }
     // Explicit global capability declarations used by the simulated-print tests.
     for name in ["Io", "Stdout"] {
-        let path = hirsel_interp::library::simulation::core_path(name);
+        let path = hirsel_syntax::DefPath::core(name);
         let declaration = TypeDefinition {
             loop_source: None,
             destructor_allocation: Allocation::MayAllocate,

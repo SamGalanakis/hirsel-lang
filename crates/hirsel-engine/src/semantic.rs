@@ -149,7 +149,7 @@ impl CompilerState {
                 if !heads.iter().any(|e| &e.head == head) {
                     heads.push(hirsel_resolve::DependencyExposure {
                         head: head.clone(),
-                        package: crate::registry::core_path("Result").0.package,
+                        package: hirsel_syntax::DefPath::core("Result").0.package,
                         modules: vec![head.clone()],
                     });
                 }

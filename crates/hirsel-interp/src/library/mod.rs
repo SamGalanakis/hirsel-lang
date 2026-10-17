@@ -50,7 +50,9 @@ pub fn operation_dispatch()
         ]);
     for (name, kind) in entries {
         assert!(
-            result.insert(simulation::core_path(&name), kind).is_none(),
+            result
+                .insert(hirsel_syntax::DefPath::core(&name), kind)
+                .is_none(),
             "duplicate dispatch operation {name}"
         );
     }

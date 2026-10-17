@@ -217,7 +217,7 @@ pub fn lower_with_options(
 /// The definition of every static empty sequence; its instance names the
 /// sequence's payload layout.
 pub fn empty_sequence() -> DefPath {
-    crate::library::core_path("$intrinsic.EmptySequence")
+    hirsel_syntax::DefPath::core("$intrinsic.EmptySequence")
 }
 
 /// The instance of the static empty sequence of the payload `record`.
@@ -893,7 +893,7 @@ impl Inline for Importer<'_, '_> {
         let body = crate::library::body_index(helper).expect("registered iterator thunk");
         let mut request = self.library_request(
             body,
-            &crate::library::core_path("iter.next"),
+            &hirsel_syntax::DefPath::core("iter.next"),
             &call.generics[1..],
         )?;
         request.path = helper.clone();
@@ -1728,7 +1728,7 @@ pub(crate) fn repr_of(kind: &LayoutKind) -> ValueRepr {
 /// Whether `path` is the core library's `module.name`.
 fn core_operation(path: &DefPath, module: &str, name: &str) -> bool {
     let item = &path.0;
-    item.package.name == "core" && item.modules == [module] && item.name == name
+    item.package.name_is("core") && item.modules == [module] && item.name == name
 }
 
 /// A length-prefixed FlatFormatV0 encoding: a dynamic-size Flat record whose
@@ -2779,7 +2779,7 @@ impl Importer<'_, '_> {
             }
             // A container's public element place is entries[i], in its private record.
             if matches!(p, tir::Projection::Index(_))
-                && matches!(&self.layouts.record(layout).kind, LayoutKind::Opaque { owner } if ["Map", "Set", "SortedMap"].iter().any(|name| *owner == crate::library::core_path(name)))
+                && matches!(&self.layouts.record(layout).kind, LayoutKind::Opaque { owner } if ["Map", "Set", "SortedMap"].iter().any(|name| *owner == hirsel_syntax::DefPath::core(name)))
             {
                 steps.push(Step::Field(0));
                 lowered.push(ProjectionStep::Field(0));
@@ -4740,7 +4740,7 @@ impl Importer<'_, '_> {
                         constructor: tir::Constructor::Record(record),
                         fields,
                     } = &value.root.kind
-                    && *record == crate::library::core_path("Order")
+                    && *record == hirsel_syntax::DefPath::core("Order")
                     && let [field] = fields.as_slice()
                     && let tir::ValueKind::FunctionReference(function) = &field.kind
                     && crate::library::body_index(function).is_some()
@@ -5306,7 +5306,7 @@ impl Importer<'_, '_> {
         }
         let symbol = self.symbol(
             SymbolKind::Type,
-            &crate::library::core_path(if is_map { "Map" } else { "Set" }),
+            &hirsel_syntax::DefPath::core(if is_map { "Map" } else { "Set" }),
             None,
         );
         let empty = self.construct(
@@ -5361,7 +5361,7 @@ impl Importer<'_, '_> {
         }
         let actuals = actuals
             .ok_or_else(|| ImportError::Unsupported("container constructor actuals".into()))?;
-        let path = crate::library::core_path(if is_map { "map.insert" } else { "set.insert" });
+        let path = hirsel_syntax::DefPath::core(if is_map { "map.insert" } else { "set.insert" });
         let body = crate::library::body_index(&path).expect("registered insertion");
         let request = crate::library::Request::operation(
             self.program,

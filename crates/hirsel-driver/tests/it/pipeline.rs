@@ -216,7 +216,7 @@ fn registry_fallback_records_reads_and_respects_program_definitions_on_compiler_
             .unwrap()
             .signatures
             .iter()
-            .any(|d| d.definition == registry::core_path("io.stdout"))
+            .any(|d| d.definition == hirsel_syntax::DefPath::core("io.stdout"))
     );
     edit(
         &mut engine,
@@ -1830,7 +1830,7 @@ fn match_payload_projections_keep_the_physical_type_and_validate_it_independentl
                 engine.signature(&path(name)).unwrap().as_ref().clone(),
             );
         }
-        let result = registry::core_path("Result");
+        let result = hirsel_syntax::DefPath::core("Result");
         signatures.insert(
             result.clone(),
             engine.signature(&result).unwrap().as_ref().clone(),

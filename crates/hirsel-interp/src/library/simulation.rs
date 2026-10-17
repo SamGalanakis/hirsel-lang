@@ -1,30 +1,17 @@
 //! Explicit deterministic capability implementations; no host I/O or entropy.
 use crate::{Error, OperationContext, TraceEvent, Value, invalid};
 use hirsel_run_config::Access;
-use hirsel_syntax::{DefPath, ItemPath, PackageId};
+use hirsel_syntax::DefPath;
 use hirsel_tir::{CapabilityEvent, RunConfiguration};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub fn core_path(name: &str) -> DefPath {
-    let mut parts: Vec<_> = name.split('.').map(str::to_owned).collect();
-    let name = parts.pop().unwrap();
-    DefPath(ItemPath {
-        package: PackageId {
-            name: "core".into(),
-            version: "1".into(),
-        },
-        modules: parts,
-        name,
-    })
-}
 /// Core types declared Plain whose interpreter value keeps its evidence as a
 /// string: a `Path` its text, a `StrPos` its source. That string is the
 /// interpreter's own check, not program storage, so the value is never
 /// local (MODE-1: plain values hold identity loans only).
 pub(crate) fn plain_evidence(definition: &DefPath) -> bool {
     let path = &definition.0;
-    path.package.name == "core"
-        && path.package.version == "1"
+    path.package.package_is("core", "1")
         && path.modules.is_empty()
         && matches!(path.name.as_str(), "Path" | "StrPos")
 }
@@ -506,7 +493,7 @@ impl Simulation {
         context: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
         let event = CapabilityEvent {
-            capability: core_path(capability),
+            capability: hirsel_syntax::DefPath::core(capability),
             operation: operation.into(),
             input,
             output,
@@ -622,7 +609,7 @@ mod tests {
     #[test]
     fn rejected_random_event_preserves_seed_and_replay_position() {
         let mut run = RunConfiguration {
-            entry: core_path("main"),
+            entry: hirsel_syntax::DefPath::core("main"),
             hash_seed: 42,
             inputs: vec![],
         };
@@ -692,7 +679,7 @@ mod semantic_events {
     #[test]
     fn accepted_capability_events_have_source_anchors_and_rejected_replay_has_no_effect() {
         let run = RunConfiguration {
-            entry: core_path("main"),
+            entry: hirsel_syntax::DefPath::core("main"),
             hash_seed: 0,
             inputs: vec![],
         };

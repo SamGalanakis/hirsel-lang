@@ -64,7 +64,7 @@ pub fn trial(t: Test) -> Result[(), ()] {
             .iter()
             .filter_map(|unit| {
                 let header = &unit.unit().header;
-                if header.definition.0.package.name == "std"
+                if header.definition.0.package.name_is("std")
                     && header.definition.0.modules == ["test"]
                 {
                     assert_eq!(header.origin, UnitOrigin::Source);
@@ -78,7 +78,7 @@ pub fn trial(t: Test) -> Result[(), ()] {
             assert!(found.contains(name), "missing {name}: {found:?}");
             assert!(
                 registry::BuiltinRegistry::new()
-                    .get(&registry::core_path(&format!("test.{name}")))
+                    .get(&hirsel_syntax::DefPath::core(&format!("test.{name}")))
                     .is_none()
             );
         }

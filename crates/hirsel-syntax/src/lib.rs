@@ -27,6 +27,17 @@ pub struct PackageId {
     pub name: String,
     pub version: String,
 }
+impl PackageId {
+    /// Match only the package name, preserving callers that ignore versions.
+    pub fn name_is(&self, name: &str) -> bool {
+        self.name == name
+    }
+
+    /// Match the exact package name and version.
+    pub fn package_is(&self, name: &str, version: &str) -> bool {
+        self.name_is(name) && self.version == version
+    }
+}
 /// Canonical name; module components come from the definition manifest, not files (PROG-1).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct ItemPath {
@@ -38,6 +49,34 @@ pub struct ItemPath {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DefPath(pub ItemPath);
 impl DefPath {
+    /// The reserved core@1 identity, with dot-separated module and item names.
+    pub fn core(name: &str) -> Self {
+        let mut modules: Vec<_> = name.split('.').map(str::to_owned).collect();
+        let name = modules.pop().expect("core name");
+        Self(ItemPath {
+            package: PackageId {
+                name: "core".into(),
+                version: "1".into(),
+            },
+            modules,
+            name,
+        })
+    }
+    /// Compare a core@1 identity without constructing or allocating a path.
+    pub fn is_core(&self, name: &str) -> bool {
+        self.package_is("core", "1")
+            && self
+                .0
+                .modules
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(self.0.name.as_str()))
+                .eq(name.split('.'))
+    }
+    /// Match a complete package identity, independent of modules and item name.
+    pub fn package_is(&self, name: &str, version: &str) -> bool {
+        self.0.package.package_is(name, version)
+    }
     pub fn fingerprint(&self) -> ContentHash {
         let p = &self.0;
         let parts = std::iter::once(p.package.name.as_bytes())
@@ -45,6 +84,17 @@ impl DefPath {
             .chain(p.modules.iter().map(String::as_bytes))
             .chain(std::iter::once(p.name.as_bytes()));
         ContentHash::of_parts("hirsel.defpath.v1", parts)
+    }
+}
+/// The canonical definition spelling used by semantic entries and proof exports.
+impl std::fmt::Display for DefPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let item = &self.0;
+        write!(f, "{}@{}", item.package.name, item.package.version)?;
+        for part in item.modules.iter().chain(std::iter::once(&item.name)) {
+            write!(f, "/{part}")?;
+        }
+        Ok(())
     }
 }
 macro_rules! ids { ($($name:ident),* $(,)?) => {$(
@@ -664,6 +714,33 @@ mod tests {
             modules: vec![],
             name: name.into(),
         })
+    }
+    #[test]
+    fn core_identity_and_display_preserve_package_versions_and_module_boundaries() {
+        for (name, spelling) in [
+            ("Option", "core@1/Option"),
+            ("list.push", "core@1/list/push"),
+            ("a.b.c", "core@1/a/b/c"),
+        ] {
+            let path = DefPath::core(name);
+            assert!(path.is_core(name));
+            assert_eq!(path.to_string(), spelling);
+            assert!(path.package_is("core", "1"));
+            assert!(!path.is_core("other"));
+        }
+        let mut path = DefPath::core("list.push");
+        path.0.package.version = "2".into();
+        assert!(path.0.package.name_is("core"));
+        assert!(!path.package_is("core", "1"));
+        assert!(!path.is_core("list.push"));
+        path.0.package.name = "sample".into();
+        assert!(!path.0.package.name_is("core"));
+        assert_eq!(path.to_string(), "sample@2/list/push");
+        path.0.modules.clear();
+        path.0.name = "list.push".into();
+        path.0.package.name = "core".into();
+        path.0.package.version = "1".into();
+        assert!(!path.is_core("list.push"));
     }
     #[test]
     fn hand_built_unit_function_has_no_pointer_edges() {

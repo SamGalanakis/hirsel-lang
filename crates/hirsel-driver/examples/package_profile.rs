@@ -127,7 +127,7 @@ fn main() {
         ] {
             let std_recomputes: usize = roots
                 .iter()
-                .filter(|(p, _)| p.0.package.name == "std")
+                .filter(|(p, _)| p.0.package.name_is("std"))
                 .map(|(p, _)| warm.engine.recompute_count(p, kind))
                 .sum();
             eprintln!("reused std {kind:?} computations: {std_recomputes}");

@@ -73,9 +73,7 @@ pub fn program(validated: &ValidatedNativeInput) -> Program {
             Some(record) => OwnerRepresentation::Defined(record.clone()),
             // Primitive capabilities are logical run-context handles. Instant uses
             // the same opaque one-word layout for ticks, with no handle allocation.
-            None if t.capability.is_some()
-                || *path == hirsel_engine::registry::core_path("Instant") =>
-            {
+            None if t.capability.is_some() || *path == hirsel_syntax::DefPath::core("Instant") => {
                 OwnerRepresentation::Handle {
                     revision: signature.fingerprint,
                     resource: t.resource,

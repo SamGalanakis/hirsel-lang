@@ -6,7 +6,7 @@
 //! step. No production replay protocol is changed.
 use hirsel_interp::{
     Integer, Value,
-    library::{self, collection, simulation::core_path},
+    library::{self, collection},
 };
 use hirsel_rt::{
     io::{Completion as C, Event, Request as R},
@@ -219,7 +219,7 @@ fn variant(tag: u32, values: Vec<Value>) -> Value {
 }
 fn record(name: &str, values: Vec<Value>) -> Value {
     Value::Record {
-        definition: core_path(name),
+        definition: hirsel_syntax::DefPath::core(name),
         fields: values.into_iter().map(Some).collect(),
     }
 }

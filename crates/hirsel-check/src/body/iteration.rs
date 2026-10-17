@@ -231,7 +231,7 @@ impl Checker<'_, '_> {
                 } else {
                     "list"
                 };
-                let definition = core_path(Some(module), "len");
+                let definition = ast::DefPath::core(&format!("{module}.len"));
                 let TypeKind::Builtin { arguments, .. } = self.kind(source_type) else {
                     unreachable!()
                 };
@@ -260,7 +260,7 @@ impl Checker<'_, '_> {
                 }
             }
             ForProtocol::Iterator => {
-                let definition = core_path(Some("iter"), "next");
+                let definition = ast::DefPath::core("iter.next");
                 let result =
                     self.loop_call(source, &definition, vec![GenericArgument::Type(element)])?;
                 let step = self.option_layout(result, element)?;
@@ -291,7 +291,7 @@ impl Checker<'_, '_> {
                 } else {
                     "SortedMapOrder"
                 };
-                let definition = core_path(Some("$intrinsic"), &format!("{protocol}_len"));
+                let definition = ast::DefPath::core(&format!("$intrinsic.{protocol}_len"));
                 let TypeKind::Builtin { arguments, .. } = self.kind(source_type) else {
                     unreachable!()
                 };
@@ -356,7 +356,7 @@ impl Checker<'_, '_> {
                 "loop advance does not return a nominal Option",
             ));
         };
-        if definition != core_path(None, "Option")
+        if definition != ast::DefPath::core("Option")
             || !matches!(arguments.as_slice(),[GenericArgument::Type(t)] if self.compatible(*t,item))
         {
             return Err(protocol_error(
@@ -386,18 +386,6 @@ impl Checker<'_, '_> {
             some_variant: VariantId(some as u32),
         })
     }
-}
-/// Registry identity from the provisional core@1 decision (#36), never a lookup
-/// of a same-spelled source name. Every referenced operation goes through provider.
-fn core_path(module: Option<&str>, name: &str) -> ast::DefPath {
-    ast::DefPath(ast::ItemPath {
-        package: ast::PackageId {
-            name: "core".into(),
-            version: "1".into(),
-        },
-        modules: module.into_iter().map(str::to_owned).collect(),
-        name: name.into(),
-    })
 }
 fn protocol_error(message: &str) -> QueryError {
     QueryError::Operational(OperationalFailure {

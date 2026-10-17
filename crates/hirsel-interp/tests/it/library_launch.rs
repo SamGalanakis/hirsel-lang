@@ -1,8 +1,5 @@
 use crate::support;
-use hirsel_interp::{
-    library::{simulation::core_path, *},
-    *,
-};
+use hirsel_interp::{library::*, *};
 use hirsel_syntax::{ContentHash, Visibility};
 use hirsel_tir::*;
 use hirsel_types::*;
@@ -15,7 +12,7 @@ fn signature(name: &str, parameters: &[&str]) -> Signature {
         arguments: vec![].into(),
     }));
     let result = types.push(ty(TypeKind::Named {
-        definition: core_path("Result"),
+        definition: hirsel_syntax::DefPath::core("Result"),
         arguments: vec![GenericArgument::Type(unit), GenericArgument::Type(error)].into(),
     }));
     let parameters = parameters
@@ -25,7 +22,7 @@ fn signature(name: &str, parameters: &[&str]) -> Signature {
             label: None,
             passing: PassingMode::Borrow,
             ty: types.push(ty(TypeKind::Named {
-                definition: core_path(name),
+                definition: hirsel_syntax::DefPath::core(name),
                 arguments: vec![].into(),
             })),
         })

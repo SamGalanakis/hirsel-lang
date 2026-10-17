@@ -4163,8 +4163,7 @@ fn early_unique_cursor<S>(cx: &Cx<'_, S>, mut source: ValueId, answer: ValueId) 
                     return false;
                 };
                 let finalizer = &finalizer.definition.0;
-                if finalizer.package.name != "core"
-                    || finalizer.package.version != "1"
+                if !finalizer.package.package_is("core", "1")
                     || finalizer.modules != ["$native"]
                     || !matches!(finalizer.name.as_str(), "owned_cursor_drop")
                 {
@@ -4172,8 +4171,7 @@ fn early_unique_cursor<S>(cx: &Cx<'_, S>, mut source: ValueId, answer: ValueId) 
                 }
                 let path = &unit.tables.symbols[symbol.index()].definition.0;
                 let fields = site.fields.get(&unit.pools.fields).unwrap_or(&[]);
-                return path.package.name == "core"
-                    && path.package.version == "1"
+                return path.package.package_is("core", "1")
                     && path.modules == ["$intrinsic"]
                     && matches!(
                         (path.name.as_str(), finalizer.name.as_str()),
@@ -4194,10 +4192,7 @@ fn early_unique_cursor<S>(cx: &Cx<'_, S>, mut source: ValueId, answer: ValueId) 
 fn early_unique_collection_cursor<S>(cx: &Cx<'_, S>, queried: ValueId, answer: ValueId) -> bool {
     let unit = cx.unit;
     let identity = |path: &hirsel_syntax::DefPath, module: &str, name: &str| {
-        path.0.package.name == "core"
-            && path.0.package.version == "1"
-            && path.0.modules == [module]
-            && path.0.name == name
+        path.package_is("core", "1") && path.0.modules == [module] && path.0.name == name
     };
     let source_path = |mut address: AddressId| {
         let mut fields = 0;
@@ -4268,7 +4263,7 @@ fn early_unique_collection_cursor<S>(cx: &Cx<'_, S>, queried: ValueId, answer: V
         else {
             continue;
         };
-        if !matches!(&payload.kind, LayoutKind::Opaque { owner } if owner.0.package.name == "core" && owner.0.package.version == "1" && owner.0.modules.is_empty() && owner.0.name == container_owner)
+        if !matches!(&payload.kind, LayoutKind::Opaque { owner } if owner.package_is("core", "1") && owner.0.modules.is_empty() && owner.0.name == container_owner)
         {
             continue;
         }

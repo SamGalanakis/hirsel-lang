@@ -10,7 +10,7 @@ use hirsel_core_contract::{
 /// Runtime ABI emission for aggregate wrappers awaits I/K; those rows explicitly say unavailable.
 pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
     let path = &row.id.definition.0;
-    if path.package.name != "core" || path.package.version != "1" {
+    if !path.package.package_is("core", "1") {
         return Err("foreign native operation identity".into());
     }
     let name = path

@@ -55,7 +55,7 @@ versions/checksums. It uses the same shared graph encoder and only repository-
 relative component names. All engines use this identical bundle, independent of
 target/profile/topology. Runtime implementation or comment-only edits can
 conservatively change it. Launch never reads checkout files to compute identity.
-`semantic_entry_name` emits the versioned path bound by `ValidatedRun`.
+`DefPath` display emits the versioned path bound by `ValidatedRun`.
 This identity is separate from `native::input_identity` and artifact provenance.
 
 Allowed dependencies: the shared data crates, check-protocol, run-config, validate, interp, resolve, parser, lexer and fmt. Never signature, check, modes, lower, the native backends, the CLI or the conformance runner.

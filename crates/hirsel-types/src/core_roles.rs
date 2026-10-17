@@ -2,7 +2,7 @@
 //! checker plans and the authority intrinsics the mode checker dispatches on. The
 //! driver's registry declares the operations; these tables are the single source of
 //! their roles, which checker tests read without the driver.
-use hirsel_syntax::{DefPath, ItemPath, PackageId};
+use hirsel_syntax::DefPath;
 
 /// These labels match the checker's ForPlan protocols. `$` cannot occur in a
 /// source identifier; consumers use these paths directly, never source lookup.
@@ -22,8 +22,8 @@ pub fn loop_protocols() -> Vec<(&'static str, DefPath, DefPath)> {
         .map(|&protocol| {
             (
                 protocol,
-                core_path(&format!("$intrinsic.{protocol}_open")),
-                core_path(&format!("$intrinsic.{protocol}_next")),
+                hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_open")),
+                hirsel_syntax::DefPath::core(&format!("$intrinsic.{protocol}_next")),
             )
         })
         .collect()
@@ -75,20 +75,6 @@ pub fn intrinsic_roles() -> Vec<(DefPath, Intrinsic)> {
         ("file.commit", HandleOperation),
     ]
     .into_iter()
-    .map(|(name, role)| (core_path(name), role))
+    .map(|(name, role)| (hirsel_syntax::DefPath::core(name), role))
     .collect()
-}
-
-/// `core@1` paths, as the registry spells them (`module.name`).
-fn core_path(name: &str) -> DefPath {
-    let mut modules: Vec<_> = name.split('.').map(str::to_owned).collect();
-    let name = modules.pop().expect("core name");
-    DefPath(ItemPath {
-        package: PackageId {
-            name: "core".into(),
-            version: "1".into(),
-        },
-        modules,
-        name,
-    })
 }

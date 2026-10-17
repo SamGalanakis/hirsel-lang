@@ -285,7 +285,7 @@ impl Encoder<'_, '_> {
                     constructor,
                     fields,
                 },
-            ) if owner.0.package.name == "core"
+            ) if owner.0.package.name_is("core")
                 && matches!(
                     (owner.0.name.as_str(), constructor),
                     ("Map", Constructor::Map) | ("Set", Constructor::Set)

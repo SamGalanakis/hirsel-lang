@@ -7,7 +7,7 @@
 //! never written by hand. What other code may rely on: field 0 of
 //! a container is `entries`; a `Cursor` is three words; a consuming cursor
 //! is `{ source, next: u64 }`.
-use super::{REVISION, core_path, native_path};
+use super::{REVISION, native_path};
 use hirsel_lir::layout::{Container, OwnerRepresentation, Owners};
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{BodyId, RepresentationRecord};
@@ -38,7 +38,7 @@ impl LibraryOwners {
 
 /// `core@1/$intrinsic.Cursor`, the borrowed loop cursor.
 pub fn cursor() -> DefPath {
-    core_path("$intrinsic.Cursor")
+    hirsel_syntax::DefPath::core("$intrinsic.Cursor")
 }
 
 /// The consuming cursors: the nominal, the container or sequence it
@@ -196,9 +196,9 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         ("Stream", true),
         ("Listener", true),
     ] {
-        if let Some(signature) = signatures.get(&core_path(name)) {
+        if let Some(signature) = signatures.get(&hirsel_syntax::DefPath::core(name)) {
             out.nominals.insert(
-                core_path(name),
+                hirsel_syntax::DefPath::core(name),
                 OwnerRepresentation::Handle {
                     resource,
                     revision: signature.fingerprint,
@@ -216,7 +216,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     out.containers.insert(
         Container::Map,
         record(
-            core_path("Map"),
+            hirsel_syntax::DefPath::core("Map"),
             "Map",
             None,
             type_parameters(&["K", "V"]),
@@ -232,7 +232,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     out.containers.insert(
         Container::Set,
         record(
-            core_path("Set"),
+            hirsel_syntax::DefPath::core("Set"),
             "Set",
             None,
             type_parameters(&["T"]),
@@ -246,7 +246,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     out.containers.insert(
         Container::SortedMap,
         record(
-            core_path("SortedMap"),
+            hirsel_syntax::DefPath::core("SortedMap"),
             "SortedMap",
             None,
             type_parameters(&["K", "V"]),
@@ -266,7 +266,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         );
     }
 
-    let path = core_path("$intrinsic.ViewCursor");
+    let path = hirsel_syntax::DefPath::core("$intrinsic.ViewCursor");
     if let Some(signature) = signatures.get(&path) {
         out.nominals.insert(
             path,
@@ -279,7 +279,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     // The consuming cursors: a resource over its source and a position,
     // whose finalizer is a library body.
     for (name, source, finalizer) in CONSUMING {
-        let path = core_path(name);
+        let path = hirsel_syntax::DefPath::core(name);
         let Some(signature) = signatures.get(&path) else {
             continue;
         };
@@ -324,10 +324,12 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
     // The string views have the layout of `String`; `StrPos` is a byte
     // offset from the slice's start (its brand is static).
     for name in VIEWS {
-        out.nominals
-            .insert(core_path(name), OwnerRepresentation::StringView);
+        out.nominals.insert(
+            hirsel_syntax::DefPath::core(name),
+            OwnerRepresentation::StringView,
+        );
     }
-    let path = core_path("StrPos");
+    let path = hirsel_syntax::DefPath::core("StrPos");
     if let Some(signature) = signatures.get(&path) {
         let mut s = Shape::default();
         let private_shape = s.primitive(Primitive::U64);

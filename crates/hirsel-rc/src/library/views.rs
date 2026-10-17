@@ -1,15 +1,15 @@
 //! SEM-3 string views retain the String slice and one holder credit.
-use super::{CallShape, InlineLowering, R, core_path};
+use super::{CallShape, InlineLowering, R};
 use crate::import::ImportCx;
 use hirsel_lir::ir::Inst;
 use hirsel_types::UseKind;
 
 pub static SCALARS: InlineLowering = InlineLowering {
-    path: || core_path("string.scalars"),
+    path: || hirsel_syntax::DefPath::core("string.scalars"),
     lower: view,
 };
 pub static POSITIONS: InlineLowering = InlineLowering {
-    path: || core_path("string.positions"),
+    path: || hirsel_syntax::DefPath::core("string.positions"),
     lower: view,
 };
 

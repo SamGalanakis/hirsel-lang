@@ -97,7 +97,7 @@ impl Operations for Io {
     }
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome {
         let path = &op.definition.0;
-        if path.package.name != "core" {
+        if !path.package.name_is("core") {
             return OpOutcome::Unsupported;
         }
         let module = path.modules.first().map(String::as_str);
