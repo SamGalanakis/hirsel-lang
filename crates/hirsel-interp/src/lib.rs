@@ -229,6 +229,8 @@ operation_boundary! {
     fn choose_task(&self, _runnable: &[u64]) -> Result<usize, Error> {
         Ok(0)
     }
+    /// A detached result is destroyed on the child's stack before completion.
+    fn discard_task_result(&self, _id: u64) -> bool { false }
     fn handles_failure(&self, _token: u64) -> bool {
         false
     }

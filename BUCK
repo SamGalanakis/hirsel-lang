@@ -111,6 +111,7 @@ hirsel_test(
     srcs = glob(["crates/hirsel-cli/tests/**"]) + [
         "conformance/CAP/CAP-1-host-inputs-run.hir",
         "conformance/CONC/CONC-2-await.hir",
+        "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
         "conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir",
         "examples/adventure/demo.json",
         "examples/adventure/hirsel.json",
@@ -178,6 +179,7 @@ hirsel_test(
     srcs = glob(["crates/hirsel-cli/tests/**"]) + [
         "conformance/CAP/CAP-1-host-inputs-run.hir",
         "conformance/CONC/CONC-2-await.hir",
+        "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
         "conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir",
         "examples/adventure/demo.json",
         "examples/adventure/hirsel.json",

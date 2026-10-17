@@ -903,6 +903,9 @@ impl Operations for Library {
             context,
         )
     }
+    fn discard_task_result(&self, id: u64) -> bool {
+        self.tasks.detached(id)
+    }
     fn task_finished(
         &mut self,
         id: u64,

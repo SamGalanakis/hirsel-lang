@@ -24,7 +24,10 @@ once and may take owned values; children cannot outlive it. A normal exit waits 
 unawaited children; an error or failure exit cancels them, then joins. A child may start
 inline, but then runs only until its first suspension. Every task handle is awaited or
 explicitly detached; detaching discards the result but never lets the child outlive its
-scope. `task.all` and `task.select` are library functions built on these. Foreign functions
+scope. Detached completion releases its result and scheduling metadata without waiting
+for scope exit; an already-completed result is discarded by `detach`. A detached child's
+failure still belongs to the scope and is ordered with other child failures by spawn
+order. `task.all` and `task.select` are library functions built on these. Foreign functions
 declared `@blocking` run on a bounded synchronous pool.
 
 ```hirsel

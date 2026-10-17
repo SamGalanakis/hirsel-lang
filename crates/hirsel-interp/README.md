@@ -515,3 +515,9 @@ layers override only intercepted hooks. `Operations::wait` is called only after 
 runnable work is exhausted. The simulation returns false (CONC-8); a host adapter may
 wait for external readiness and ask the scheduler to poll again. Parked operations are
 polled only at suspension points, so pure code does not issue readiness syscalls.
+
+Detached task results are released on the child's evaluator stack before completion;
+an already-completed result is released by detach's ordinary Complete.released work.
+Completed detached children leave neither task rows nor scope child entries. Per-task
+spawn counters and empty active-scope stacks are retired at completion too. Scopes keep
+detached failure chains separately, sorted by spawn path, until their ordered join.

@@ -1668,3 +1668,32 @@ fn real_host_canceled_stdin_and_stderr_have_no_effects() {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }
+
+#[test]
+fn real_host_detached_results_drop_before_scope_exit() {
+    let source = file(include_str!(
+        "../../../conformance/CONC/CONC-2-detached-result-cleanup-run.hir"
+    ));
+    let record = run_record(
+        &source,
+        serde_json::json!({"io": {
+        "tasks":"tasks.cooperative@1", "dirs":[]
+    }, "args":[]}),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--run")
+        .arg(&record)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
+}

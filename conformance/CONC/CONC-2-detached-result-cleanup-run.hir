@@ -1,0 +1,45 @@
+// rule: CONC-2
+// expect: run
+// Detached results drop before scope exit, whether detach precedes completion or follows it.
+resource type Signal {
+  tasks: Tasks,
+  done: Atomic[u32],
+}
+drop(x) {
+  atomic.store(x.tasks, x.done, 1u32)
+}
+
+fn check_detach(tasks: Tasks, early: bool) {
+  let done: Atomic[u32] = atomic.create(tasks, 0u32)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() -> Signal {
+          let mut rx = take receiver
+          if early {
+            let _ = channel.receive(tasks, mut rx)
+          }
+          Signal(tasks: tasks, done: copy done)
+        }
+      )
+      task.detach(s, take child)
+      let mut tx = take sender
+      if early {
+        let _ = channel.send(tasks, mut tx, 1u8)
+      }
+      let barrier = task.async(s, fn() {})
+      task.await(s, take barrier)
+      failure.check(atomic.load(tasks, done) == 1u32, Arithmetic())
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  check_detach(tasks, false)
+  check_detach(tasks, true)
+  Ok(())
+}

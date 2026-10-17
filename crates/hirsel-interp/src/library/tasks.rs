@@ -18,14 +18,22 @@ pub(super) struct Tasks {
     next: u64,
     starts: Vec<TaskStart>,
     tasks: BTreeMap<u64, Child>,
-    scopes: BTreeMap<u64, Vec<u64>>,
+    scopes: BTreeMap<u64, ScopeState>,
     pub pending: BTreeMap<u64, Pending>,
+}
+#[derive(Default)]
+struct ScopeState {
+    children: Vec<u64>,
+    // Completed detached failures still belong to the scope. Keep each child's
+    // chain separately so completion order cannot change spawn-order reporting.
+    failures: BTreeMap<Vec<u32>, Vec<FailureRecord>>,
 }
 struct Child {
     scope: u64,
     path: Vec<u32>,
     canceled: Option<u32>,
     finished: bool,
+    detached: bool,
     result: Option<OperationResult>,
 }
 pub(super) enum Pending {
@@ -92,6 +100,49 @@ impl Tasks {
             }
         }
     }
+    pub fn detached(&self, task: u64) -> bool {
+        self.tasks.get(&task).is_some_and(|child| child.detached)
+    }
+    fn detach(&mut self, task: u64) -> Result<Vec<Value>, Error> {
+        let child = self
+            .tasks
+            .get_mut(&task)
+            .ok_or_else(|| invalid("unknown detached task"))?;
+        child.detached = true;
+        if child.finished {
+            self.retire(task)
+        } else {
+            Ok(vec![])
+        }
+    }
+    fn retire(&mut self, task: u64) -> Result<Vec<Value>, Error> {
+        let child = self
+            .tasks
+            .remove(&task)
+            .ok_or_else(|| invalid("unknown retired task"))?;
+        let scope = self
+            .scopes
+            .get_mut(&child.scope)
+            .ok_or_else(|| invalid("expired child scope"))?;
+        scope.children.retain(|id| *id != task);
+        match child.result {
+            Some(OperationResult::Complete {
+                value,
+                mut released,
+                ..
+            }) => {
+                if value != Value::Unit {
+                    released.push(value);
+                }
+                Ok(released)
+            }
+            Some(OperationResult::FailureChain { failures, released }) => {
+                scope.failures.insert(child.path, failures);
+                Ok(released)
+            }
+            _ => Err(invalid("retired task has no completed result")),
+        }
+    }
     pub fn finished(&mut self, task: u64, mut result: OperationResult) -> Result<(), Error> {
         let child = self
             .tasks
@@ -105,7 +156,7 @@ impl Tasks {
             }
             let scope = child.scope;
             self.scope_canceled.entry(scope).or_insert(2);
-            let siblings = self.scopes[&scope].clone();
+            let siblings = self.scopes[&scope].children.clone();
             for sibling in siblings {
                 if sibling != task {
                     self.cancel(sibling, 2);
@@ -115,6 +166,14 @@ impl Tasks {
         let child = self.tasks.get_mut(&task).unwrap();
         child.finished = true;
         child.result = Some(result);
+        let detached = child.detached;
+        self.spawn_counts.remove(&task);
+        self.active_scopes.remove(&task);
+        if detached && !self.retire(task)?.is_empty() {
+            return Err(invalid(
+                "detached task completed before disposing its result",
+            ));
+        }
         Ok(())
     }
 }
@@ -187,7 +246,7 @@ impl Library {
             "task.scope" => {
                 self.simulation.id(arg(a, 0)?, "Tasks")?;
                 let scope = self.tasks.fresh();
-                self.tasks.scopes.insert(scope, vec![]);
+                self.tasks.scopes.insert(scope, ScopeState::default());
                 self.tasks
                     .active_scopes
                     .entry(self.tasks.current)
@@ -233,7 +292,7 @@ impl Library {
                     .or_default();
                 path.push(*ordinal);
                 *ordinal += 1;
-                children.push(task);
+                children.children.push(task);
                 let canceled = self.tasks.canceled().map(|_| 1);
                 self.tasks.tasks.insert(
                     task,
@@ -242,6 +301,7 @@ impl Library {
                         path,
                         canceled,
                         finished: false,
+                        detached: false,
                         result: None,
                     },
                 );
@@ -261,7 +321,12 @@ impl Library {
                     self.tasks.cancel(task, 0);
                     OperationResult::returned(Value::Unit)
                 } else if name == "task.detach" {
-                    OperationResult::returned(Value::Unit).transferring([1])
+                    OperationResult::Complete {
+                        value: Value::Unit,
+                        arguments: vec![],
+                        consumed: vec![1],
+                        released: self.tasks.detach(task)?,
+                    }
                 } else if let Some(result) = self.tasks.tasks.get_mut(&task).unwrap().result.take()
                 {
                     self.record_join(task, &result, context)?;
@@ -324,7 +389,7 @@ impl Library {
                 if matches!(&result, OperationResult::FailureChain { .. })
                     || error_value && is_result == Some(true)
                 {
-                    for child in self.tasks.scopes[&scope].clone() {
+                    for child in self.tasks.scopes[&scope].children.clone() {
                         self.tasks.cancel(child, 1);
                     }
                 }
@@ -351,7 +416,7 @@ impl Library {
         else {
             return Err(invalid("invalid scope join"));
         };
-        let children = self.tasks.scopes[&scope].clone();
+        let children = self.tasks.scopes[&scope].children.clone();
         if children.iter().any(|id| !self.tasks.tasks[id].finished) {
             return Ok(self.task_wait(
                 Pending::Join {
@@ -364,41 +429,59 @@ impl Library {
                 children,
             ));
         }
-        for id in children {
-            if let Some(child) = self.tasks.tasks.remove(&id).unwrap().result {
-                match child {
-                    OperationResult::Complete { value, .. } => released.push(value),
+        let scope_state = self.tasks.scopes.remove(&scope).unwrap();
+        let mut completed: Vec<_> = scope_state
+            .failures
+            .into_iter()
+            .map(|(path, failures)| {
+                (
+                    path,
                     OperationResult::FailureChain {
-                        failures: chain, ..
-                    } => {
-                        if let OperationResult::FailureChain {
-                            failures: primary, ..
-                        } = &mut result
-                        {
-                            if chain.first().map(|f| &f.spawn_path)
-                                < primary.first().map(|f| &f.spawn_path)
-                            {
-                                let mut earlier = chain;
-                                append_chain(&mut earlier, std::mem::take(primary));
-                                *primary = earlier;
-                            } else {
-                                append_chain(primary, chain);
-                            }
-                        } else {
-                            if let OperationResult::Complete { value, .. } = result {
-                                released.push(value);
-                            }
-                            result = OperationResult::FailureChain {
-                                failures: chain,
-                                released: vec![],
-                            };
-                        }
-                    }
-                    _ => return Err(invalid("unfinished child result")),
-                }
+                        failures,
+                        released: vec![],
+                    },
+                )
+            })
+            .collect();
+        for id in children {
+            let child = self.tasks.tasks.remove(&id).unwrap();
+            if let Some(result) = child.result {
+                completed.push((child.path, result));
             }
         }
-        self.tasks.scopes.remove(&scope);
+        completed.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, child) in completed {
+            match child {
+                OperationResult::Complete { value, .. } => released.push(value),
+                OperationResult::FailureChain {
+                    failures: chain, ..
+                } => {
+                    if let OperationResult::FailureChain {
+                        failures: primary, ..
+                    } = &mut result
+                    {
+                        if chain.first().map(|f| &f.spawn_path)
+                            < primary.first().map(|f| &f.spawn_path)
+                        {
+                            let mut earlier = chain;
+                            append_chain(&mut earlier, std::mem::take(primary));
+                            *primary = earlier;
+                        } else {
+                            append_chain(primary, chain);
+                        }
+                    } else {
+                        if let OperationResult::Complete { value, .. } = result {
+                            released.push(value);
+                        }
+                        result = OperationResult::FailureChain {
+                            failures: chain,
+                            released: vec![],
+                        };
+                    }
+                }
+                _ => return Err(invalid("unfinished child result")),
+            }
+        }
         self.tasks.scope_canceled.remove(&scope);
         match &mut result {
             OperationResult::Complete {
@@ -461,6 +544,7 @@ impl Library {
             Pending::Join { scope, .. }
                 if scope != 0
                     && self.tasks.scopes[&scope]
+                        .children
                         .iter()
                         .any(|id| !self.tasks.tasks[id].finished) =>
             {
@@ -541,4 +625,201 @@ fn failure_value(chain: &[FailureRecord], context: &OperationContext<'_>) -> Res
         .pop()
         .flatten()
         .ok_or_else(|| invalid("invalid failure value"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Operations, TraceMode, observation::Anchor};
+    use hirsel_span::{SourceMap, Span};
+    use hirsel_syntax::DefPath;
+    use hirsel_tir::{BodyId, RunConfiguration};
+    use hirsel_types::{Type, TypeKind, TypeStore};
+
+    fn call(
+        library: &mut Library,
+        name: &str,
+        arguments: &[Value],
+        cx: &mut OperationContext<'_>,
+    ) -> OperationResult {
+        let mut types = TypeStore::default();
+        let unit = types.push(Type::with_kind(TypeKind::Tuple(vec![].into())));
+        library
+            .task_call(
+                name,
+                &OperationCall {
+                    path: &DefPath::core(name),
+                    arguments,
+                    generics: &[],
+                    types: &types,
+                    result_type: unit,
+                    site: Span::default(),
+                },
+                cx,
+            )
+            .unwrap()
+    }
+
+    // A corpus program cannot inspect the runtime's private child tables. Exercise
+    // the real spawn/detach/completion hooks with both possible completion orders.
+    #[test]
+    fn detached_children_leave_bounded_scope_tables() {
+        let run = RunConfiguration {
+            entry: DefPath::core("main"),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let sources = SourceMap::default();
+        let anchor = Anchor {
+            definition: run.entry.clone(),
+            body: BodyId(0),
+            cleanup: None,
+            site: Span::default(),
+        };
+        let mut stdout = vec![];
+        let mut trace = vec![];
+        let mut cx = OperationContext {
+            configuration: &run,
+            sources: &sources,
+            stdout: &mut stdout,
+            trace: &mut trace,
+            trace_mode: TraceMode::Effects,
+            anchor: Some(&anchor),
+        };
+        let mut library = Library::new(&run, Default::default()).unwrap();
+        let scope = library.tasks.fresh();
+        library.tasks.scopes.insert(scope, Default::default());
+        for ordinal in 0..4096 {
+            let closure = Value::Closure {
+                definition: DefPath::core("child"),
+                body: BodyId(0),
+                invoked: Some(Default::default()),
+                captures: vec![],
+                owned_captures: vec![],
+                sizes: Default::default(),
+            };
+            let OperationResult::Complete { value: child, .. } = call(
+                &mut library,
+                "task.async",
+                &[handle("Scope", scope), closure],
+                &mut cx,
+            ) else {
+                panic!("spawn")
+            };
+            let task = id(&child, "Task").unwrap();
+            assert_eq!(library.take_tasks().len(), 1);
+            assert_eq!(library.tasks.tasks[&task].path, vec![ordinal]);
+            if ordinal % 2 == 0 {
+                call(
+                    &mut library,
+                    "task.detach",
+                    &[handle("Scope", scope), child],
+                    &mut cx,
+                );
+                library
+                    .task_finished(task, OperationResult::returned(Value::Unit), &mut cx)
+                    .unwrap();
+            } else {
+                library
+                    .task_finished(task, OperationResult::returned(Value::Unit), &mut cx)
+                    .unwrap();
+                call(
+                    &mut library,
+                    "task.detach",
+                    &[handle("Scope", scope), child],
+                    &mut cx,
+                );
+            }
+            assert!(
+                library.tasks.tasks.is_empty(),
+                "completed detached child retained at {ordinal}"
+            );
+            assert!(
+                library.tasks.scopes[&scope].children.is_empty(),
+                "scope child row retained at {ordinal}"
+            );
+            assert!(library.tasks.spawn_counts.len() <= 1);
+            assert!(library.tasks.active_scopes.len() <= 1);
+        }
+
+        // Failures survive row retirement and are joined in spawn order even
+        // when detached children finish in a different order.
+        let mut ids = vec![];
+        for _ in 0..3 {
+            let closure = Value::Closure {
+                definition: DefPath::core("child"),
+                body: BodyId(0),
+                invoked: Some(Default::default()),
+                captures: vec![],
+                owned_captures: vec![],
+                sizes: Default::default(),
+            };
+            let OperationResult::Complete { value: child, .. } = call(
+                &mut library,
+                "task.async",
+                &[handle("Scope", scope), closure],
+                &mut cx,
+            ) else {
+                panic!("spawn")
+            };
+            ids.push(id(&child, "Task").unwrap());
+            library.take_tasks();
+            call(
+                &mut library,
+                "task.detach",
+                &[handle("Scope", scope), child],
+                &mut cx,
+            );
+        }
+        for index in [2, 0, 1] {
+            let failure = FailureRecord {
+                failure: crate::Failure {
+                    rule: hirsel_diag::RuleId::of("SEM-1"),
+                    site: Span::default(),
+                    line: 1,
+                    kind: "Arithmetic".into(),
+                },
+                anchor: anchor.clone(),
+                spawn_path: vec![],
+                cause: None,
+            };
+            library
+                .task_finished(
+                    ids[index],
+                    OperationResult::FailureChain {
+                        failures: vec![failure],
+                        released: vec![],
+                    },
+                    &mut cx,
+                )
+                .unwrap();
+        }
+        assert!(library.tasks.tasks.is_empty());
+        assert!(library.tasks.scopes[&scope].children.is_empty());
+        let joined = library
+            .join_scope(
+                Pending::Join {
+                    scope,
+                    result: OperationResult::returned(Value::Unit),
+                    released: vec![],
+                },
+                &cx,
+            )
+            .unwrap();
+        let OperationResult::FailureChain { failures, .. } = joined else {
+            panic!("detached failure lost")
+        };
+        assert_eq!(
+            failures
+                .iter()
+                .map(|f| f.spawn_path.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![4096], vec![4097], vec![4098]]
+        );
+        assert_eq!(
+            failures.iter().map(|f| f.cause).collect::<Vec<_>>(),
+            vec![Some(1), Some(2), None]
+        );
+        assert!(library.tasks.scopes.is_empty());
+    }
 }

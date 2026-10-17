@@ -997,6 +997,22 @@ fn execute_frames(
             }
             continue;
         }
+        // A detached result has no acquiring owner. Dispose it through ordinary
+        // shielded cleanup before ending the child's frame or publishing completion.
+        // A finalizer failure then belongs to this child and its scope's chain.
+        if task != 0 && frames.len() == 1 && operations.discard_task_result(task) {
+            let frame = frames.last_mut().unwrap();
+            if let Some(crate::resources::Ending::Return(value)) = &mut frame.ending
+                && *value != Value::Unit
+            {
+                let value = std::mem::replace(value, Value::Unit);
+                let site = site_of(frame)?;
+                frame
+                    .work
+                    .push_back(crate::resources::Work::Release(value, anchor(frame, site)));
+                continue;
+            }
+        }
         if let Some(ending) = frames.last_mut().unwrap().ending.take() {
             let mut finished = frames.pop().unwrap();
             // Map the result and mut write-backs into the caller's lifetimes, then
