@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "bounds",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "api.hir",
+      "module": [
+        "api"
+      ]
+    }
+  ],
+  "dependencies": []
+}

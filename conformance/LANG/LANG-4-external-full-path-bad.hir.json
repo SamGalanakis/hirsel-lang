@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "client",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "probe"
+  },
+  "sources": [
+    {
+      "path": "LANG-4-external-full-path-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/fixtures/json@1/hirsel.json",
+      "package": {
+        "name": "json",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "value",
+          "module": [
+            "value"
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": "../../packages/fixtures/json@2/hirsel.json",
+      "package": {
+        "name": "json",
+        "version": "2"
+      },
+      "expose": [
+        {
+          "head": "value",
+          "module": [
+            "value"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+// rule: LANG-4
+// expect: accept
+fn probe(vendor: u64) -> u64 {
+  vendor
+}

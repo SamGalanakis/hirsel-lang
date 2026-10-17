@@ -473,7 +473,7 @@ impl Report {
             "prefixes": self.prefixes.iter().map(|(p,c)| (p.clone(), c.json())).collect::<BTreeMap<_,_>>(),
             "tests": self.tests.iter().map(|t| {
                 let (status, reason) = match &t.status { Status::Pass => ("pass", None), Status::Fail(reason) => ("fail", Some(reason)), Status::NotImplemented => ("not_implemented", None) };
-                serde_json::json!({"path": t.path, "prefix": t.prefix, "status": status, "reason": reason, "exclusions": self.exclusions.get(&t.path).cloned().unwrap_or_default(), "in_gate": !self.exclusions.contains_key(&t.path), "actual": self.observations.get(&t.path).map(|o| &o.actual), "primary": self.observations.get(&t.path).and_then(|o| o.primary.as_ref()).map(|p| p.json()), "phase": self.observations.get(&t.path).map(|o| &o.phase), "unchecked": self.observations.get(&t.path).map(|_| 0)})
+                serde_json::json!({"path": t.path, "prefix": t.prefix, "status": status, "reason": reason, "exclusions": self.exclusions.get(&t.path).cloned().unwrap_or_default(), "in_gate": !self.exclusions.contains_key(&t.path), "actual": self.observations.get(&t.path).map(|o| &o.actual), "primary_external": self.observations.get(&t.path).map(|o| o.primary_external), "primary": self.observations.get(&t.path).and_then(|o| o.primary.as_ref()).map(|p| p.json()), "phase": self.observations.get(&t.path).map(|o| &o.phase), "unchecked": self.observations.get(&t.path).map(|_| 0)})
             }).collect::<Vec<_>>(),
             "errors": self.errors, "success": self.success()
         })

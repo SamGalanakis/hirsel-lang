@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn need[T: sendable](take value: T) {}
+
+fn probe(take value: vendor.Hidden) {
+  need(take value)
+}

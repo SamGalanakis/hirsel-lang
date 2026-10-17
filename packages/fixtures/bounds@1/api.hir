@@ -1,0 +1,16 @@
+pub opaque type Exported: plain + flat + key + sendable + inert + noalloc_drop uses {} {
+  value: u64,
+}
+
+pub opaque type Hidden: () uses {} {
+  value: u64,
+}
+
+pub opaque type Effect: plain + sendable uses {Stdout} {
+  output: Stdout,
+}
+
+@serializable
+pub type Schema {
+  value: u64,
+}

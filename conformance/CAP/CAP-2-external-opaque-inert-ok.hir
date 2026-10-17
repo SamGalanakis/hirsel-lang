@@ -1,0 +1,7 @@
+// rule: CAP-2
+// expect: accept
+fn need[T: inert](take value: T) {}
+
+fn probe(take value: vendor.Exported) {
+  need(take value)
+}

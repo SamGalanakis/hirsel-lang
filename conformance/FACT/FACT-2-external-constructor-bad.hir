@@ -1,0 +1,13 @@
+// rule: FACT-2
+// expect: fail FACT-2 at line 4
+pub fn main() -> Result[(), ()] {
+  let value = vendor.Percent(101)
+  let Percent(n) = value
+  if n == 100 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}
+
+type Percent = vendor.Percent

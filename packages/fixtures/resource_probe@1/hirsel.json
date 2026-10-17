@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "resource_probe",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "../resource/token.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": []
+}

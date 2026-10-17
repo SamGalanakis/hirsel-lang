@@ -1,0 +1,5 @@
+// rule: LANG-4
+// expect: accept
+fn probe() -> u64 {
+  json@1/value.parse()
+}

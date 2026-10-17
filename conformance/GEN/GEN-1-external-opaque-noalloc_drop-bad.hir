@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 6
+fn need[T: noalloc_drop](take value: T) {}
+
+fn probe(take value: vendor.Hidden) {
+  need(take value)
+}

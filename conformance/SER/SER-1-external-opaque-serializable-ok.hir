@@ -1,0 +1,7 @@
+// rule: SER-1
+// expect: accept
+fn need[T: serializable](take value: T) {}
+
+fn probe(take value: vendor.Schema) {
+  need(take value)
+}

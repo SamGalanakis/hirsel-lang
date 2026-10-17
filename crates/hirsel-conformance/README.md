@@ -375,3 +375,8 @@ Feature coverage, pairwise coverage and historical/mutation replay are
 finite evidence, not a guarantee of identical findings for arbitrary bugs.
 Higher-order interactions are covered only by seed rotation over time and
 by the explicit exhaustive run.
+
+Runtime failure token identities are resolved in the selected definition's
+source snapshot, including dependency sources. JSON's `primary_external` marks
+a site outside the case file; formatting that case leaves its dependency line
+expectation unchanged.

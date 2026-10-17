@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+fn need[T: sendable](take value: T) {}
+
+fn probe(take value: vendor.Exported) {
+  need(take value)
+}

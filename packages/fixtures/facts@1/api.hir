@@ -1,0 +1,19 @@
+pub distinct type Percent(value: u8) where value <= 100
+
+pub opaque type Range: plain + data uses {} {
+  lower: u8,
+  upper: u8,
+}
+
+pub fn range(lower: u8, upper: u8) -> Range
+  requires lower <= upper {
+  Range(lower: lower, upper: upper)
+}
+
+pub fn first(value: Range) -> u8 {
+  value.lower
+}
+
+pub fn last(value: Range) -> u8 {
+  value.upper
+}

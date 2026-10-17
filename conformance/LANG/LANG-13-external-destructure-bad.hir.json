@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "client",
+    "version": "1"
+  },
+  "entry": {
+    "module": [
+      "owner"
+    ],
+    "name": "probe"
+  },
+  "sources": [
+    {
+      "path": "LANG-13-external-destructure-bad.hir",
+      "module": [
+        "owner"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../packages/fixtures/resource_probe@1/hirsel.json",
+      "package": {
+        "name": "resource_probe",
+        "version": "1"
+      },
+      "expose": [
+        {
+          "head": "vendor",
+          "module": [
+            "owner"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+// rule: FACT-2
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let value = vendor.range(10, 20)
+  if vendor.first(value) <= vendor.last(value) {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

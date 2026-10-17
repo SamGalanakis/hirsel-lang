@@ -9,6 +9,8 @@ pub struct Observation {
     pub checked: Option<String>,
     /// First diagnostic/failure's token identity, independent of formatted lines.
     pub primary: Option<crate::corpus_format::Primary>,
+    /// Its coordinates belong to a dependency, so formatting this case cannot move them.
+    pub primary_external: bool,
 }
 pub fn evaluate(path: &Path, expect: &Expect) -> (Status, Observation) {
     evaluate_with_hash_seed(path, expect, 0)
@@ -73,6 +75,7 @@ fn evaluate_on_compiler_thread(
         crate::selected_entry(&text, &context)
     };
     let checked = program.check().map_err(|e| format!("{e:?}"));
+    let primary_file = program.primary;
     let mut engine = program.engine;
     let mut observation = Observation {
         phase: engine
@@ -90,6 +93,7 @@ fn evaluate_on_compiler_thread(
         }
     };
     if let Some(d) = output.diagnostics.first() {
+        observation.primary_external = d.primary.file != primary_file;
         observation.primary =
             crate::corpus_format::primary_at_span(&mut engine, d.rule.as_str(), d.primary);
         let line = output
@@ -168,13 +172,20 @@ fn evaluate_on_compiler_thread(
         .as_ref()
         .and_then(|o| o.failures.first())
     {
-        observation.primary = crate::corpus_format::primary_at_site(
-            &mut engine,
-            path,
-            failure.rule.as_str(),
-            failure.stable_site.line as usize,
-            failure.stable_site.column as usize,
-        );
+        if let Some(file) = engine
+            .definition_items(&failure.stable_site.definition)
+            .ok()
+            .and_then(|items| items.first().map(|(syntax, _)| syntax.file))
+        {
+            observation.primary_external = file != primary_file;
+            observation.primary = crate::corpus_format::primary_at_site(
+                &mut engine,
+                file,
+                failure.rule.as_str(),
+                failure.stable_site.line as usize,
+                failure.stable_site.column as usize,
+            );
+        }
     }
     let outcome = match execution.outcome {
         Ok(outcome) => outcome,

@@ -408,12 +408,12 @@ pub(crate) fn primary_at_span(engine: &mut QueryEngine, rule: &str, span: Span) 
 }
 pub(crate) fn primary_at_site(
     engine: &mut QueryEngine,
-    path: &Path,
+    file: FileId,
     rule: &str,
     line: usize,
     column: usize,
 ) -> Option<Primary> {
-    let text = fs::read_to_string(path).ok()?;
+    let text = engine.sources.file(file)?.text().to_owned();
     let offset = site_offset(&text, line, column)?;
     let syntax = parsed(engine, &text).ok();
     let limit = syntax.as_ref().and_then(|syntax| {
@@ -425,9 +425,6 @@ pub(crate) fn primary_at_site(
             .map(|e| e.origin.span.end as usize)
             .max()
     });
-    let file = syntax
-        .map(|s| s.file)
-        .or_else(|| engine.sources.add(path, text))?;
     primary(engine, file, rule, offset, limit)
 }
 fn site_offset(source: &str, line: usize, column: usize) -> Option<usize> {
@@ -522,6 +519,9 @@ pub fn rewrite(
     verify_tree(old, formatted)?;
     let (old_tokens, new_tokens) = (tokens(old)?, tokens(formatted)?);
     let mapping = align(&old_tokens, &new_tokens)?;
+    if observed.primary_external {
+        return Ok(formatted.into());
+    }
     let line = match expect {
         Expect::Reject { line, .. } | Expect::Fail { line, .. } => *line,
         _ => return Ok(formatted.into()),
@@ -566,6 +566,7 @@ pub fn rewrite(
 }
 fn equivalent(before: &Observation, after: &Observation) -> bool {
     before.primary.as_ref().map(Primary::pair) == after.primary.as_ref().map(Primary::pair)
+        && before.primary_external == after.primary_external
         && before.checked == after.checked
         && (before.primary.is_some() || before.actual == after.actual)
 }

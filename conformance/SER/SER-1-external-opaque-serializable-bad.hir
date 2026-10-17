@@ -1,0 +1,7 @@
+// rule: SER-1
+// expect: reject SER-1 at line 6
+fn need[T: serializable](take value: T) {}
+
+fn probe(take value: vendor.Exported) {
+  need(take value)
+}

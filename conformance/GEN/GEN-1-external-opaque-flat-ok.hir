@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: accept
+fn need[T: flat](take value: T) {}
+
+fn probe(take value: vendor.Exported) {
+  need(take value)
+}

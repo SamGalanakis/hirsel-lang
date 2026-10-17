@@ -1697,3 +1697,50 @@ fn real_host_detached_results_drop_before_scope_exit() {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }
+
+#[test]
+fn source_sidecars_and_explicit_manifests_select_the_same_dependency_graph() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (case, check, run, rule) in [
+        ("FACT/FACT-2-external-constructor-ok", 0, Some(0), None),
+        (
+            "FACT/FACT-2-external-constructor-bad",
+            0,
+            Some(1),
+            Some("FACT-2"),
+        ),
+        (
+            "LANG/LANG-4-external-full-path-bad",
+            1,
+            None,
+            Some("LANG-4"),
+        ),
+    ] {
+        let source = root.join(format!("conformance/{case}.hir"));
+        let manifest = source.with_extension("hir.json");
+        for path in [&source, &manifest] {
+            let checked = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("check")
+                .arg(path)
+                .output()
+                .unwrap();
+            assert_eq!(checked.status.code(), Some(check), "{path:?}: {checked:?}");
+            assert!(checked.stdout.is_empty(), "{path:?}: {checked:?}");
+            if check != 0 {
+                assert!(String::from_utf8_lossy(&checked.stderr).contains(rule.unwrap()));
+            }
+            if let Some(exit) = run {
+                let ran = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                    .arg("run")
+                    .arg(path)
+                    .output()
+                    .unwrap();
+                assert_eq!(ran.status.code(), Some(exit), "{path:?}: {ran:?}");
+                assert!(ran.stdout.is_empty(), "{path:?}: {ran:?}");
+                if let Some(rule) = rule {
+                    assert!(String::from_utf8_lossy(&ran.stderr).contains(rule));
+                }
+            }
+        }
+    }
+}
