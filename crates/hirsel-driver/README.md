@@ -75,3 +75,7 @@ validated and admitted by the runtime, independently of compiler profile.
 `LaunchConfig` selects either a bound record or a grants template. Both source
 engines resolve it against the checked semantic revision before host admission;
 templates never pass through a temporary exported record.
+
+Native live launches inherit stdin only under the admitted stdin projection.
+Their two output pipes drain concurrently into separate caller-owned writers,
+while retaining the same bytes for native observations and launch diagnostics.

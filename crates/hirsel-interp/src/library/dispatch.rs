@@ -297,8 +297,16 @@ impl Library {
                     },
                 )?;
                 let text = text(arg(a, 1)?)?;
-                let fault = self.tasks.canceled().map(Fault::Canceled).or_else(|| self.simulation.fault(name));
-                let output = if name == "err.print" { &mut self.simulation.stderr } else { &mut *context.stdout };
+                let fault = self
+                    .tasks
+                    .canceled()
+                    .map(Fault::Canceled)
+                    .or_else(|| self.simulation.fault(name));
+                let output = if name == "err.print" {
+                    &mut self.simulation.stderr
+                } else {
+                    &mut *context.stdout
+                };
                 match fault {
                     Some(Fault::Canceled(cause)) => error(variant(1, vec![variant(cause, vec![])])),
                     Some(Fault::Fault { code, partial }) => {

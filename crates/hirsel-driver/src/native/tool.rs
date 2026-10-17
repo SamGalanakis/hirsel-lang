@@ -80,6 +80,7 @@ pub fn run_path_native_with_config(
         &entry,
         admitted.as_ref().map(|run| run.run()),
         stdout,
+        stderr,
     )
     .and_then(|observation| {
         let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
@@ -116,6 +117,7 @@ fn run(
     entry: &hirsel_engine::DefPath,
     run: Option<&hirsel_run_config::ValidatedRun>,
     stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
 ) -> Result<Observation, NativeError> {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let program = build(validated, &Options::new(target.clone()))?;
@@ -133,7 +135,15 @@ fn run(
             &program, entry, &objects, &toolchain, &scratch, run,
         )?;
         let launched = if let Some(run) = run {
-            super::link::launch_live(&executable, &target, &toolchain, &scratch, run, stdout)?
+            super::link::launch_live(
+                &executable,
+                &target,
+                &toolchain,
+                &scratch,
+                run,
+                stdout,
+                stderr,
+            )?
         } else {
             let launched = super::link::launch(&executable, &target, &toolchain, &scratch, false)?;
             stdout.write_all(&launched.stdout).map_err(io)?;

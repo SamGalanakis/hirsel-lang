@@ -56,6 +56,8 @@ pub fn run_path_with_simulation(
 ) -> Result<RunOutcome, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
+    // Tool launches classify an absent entry before requesting a rich observation.
+    launch_signature(&mut program)?;
     let run = hirsel_tir::RunConfiguration {
         entry: program.entry.clone(),
         hash_seed: 0,

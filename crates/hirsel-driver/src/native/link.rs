@@ -1032,7 +1032,16 @@ fn launch_impl(
         }
     }
     let output = if let Some(live) = live {
-        run_live(&mut command, live.stdout)?
+        run_live(
+            &mut command,
+            live.run
+                .record()
+                .io
+                .as_ref()
+                .is_some_and(|io| io.stdin.is_some()),
+            live.stdout,
+            live.stderr,
+        )?
     } else {
         bounded(&mut command, toolchain.launch_timeout)?
     };
@@ -1048,6 +1057,7 @@ fn launch_impl(
 struct LiveRun<'a> {
     run: &'a hirsel_run_config::ValidatedRun,
     stdout: &'a mut dyn std::io::Write,
+    stderr: &'a mut dyn std::io::Write,
 }
 
 /// A user's server runs until it exits or is interrupted; harness timeouts remain tooling.
@@ -1058,6 +1068,7 @@ pub(crate) fn launch_live(
     dir: &Path,
     run: &hirsel_run_config::ValidatedRun,
     stdout: &mut dyn std::io::Write,
+    stderr: &mut dyn std::io::Write,
 ) -> Result<Launched, NativeError> {
     launch_impl(
         executable,
@@ -1066,52 +1077,99 @@ pub(crate) fn launch_live(
         dir,
         false,
         Tape::None,
-        Some(LiveRun { run, stdout }),
+        Some(LiveRun {
+            run,
+            stdout,
+            stderr,
+        }),
     )
 }
 fn run_live(
     command: &mut Command,
+    stdin_granted: bool,
     stdout: &mut dyn std::io::Write,
+    stderr: &mut dyn std::io::Write,
 ) -> Result<std::process::Output, NativeError> {
     use std::io::Read;
     use std::process::Stdio;
     let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(if stdin_granted {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(io)?;
-    let mut err = child.stderr.take().expect("stderr pipe");
-    let stderr = std::thread::spawn(move || {
-        let mut bytes = vec![];
-        let _ = err.read_to_end(&mut bytes);
-        bytes
-    });
-    let mut out = child.stdout.take().expect("stdout pipe");
-    let mut captured = vec![];
-    let mut buffer = [0; 8192];
-    let read_result = (|| -> Result<(), std::io::Error> {
-        loop {
-            let n = out.read(&mut buffer)?;
-            if n == 0 {
-                break;
+    let pipes: [Box<dyn Read + Send>; 2] = [
+        Box::new(child.stdout.take().expect("stdout pipe")),
+        Box::new(child.stderr.take().expect("stderr pipe")),
+    ];
+    // Drain both pipes concurrently. The caller's writers stay on this thread,
+    // so a borrowed writer need not be Send and neither stream can fill its pipe.
+    let (send, receive) = std::sync::mpsc::sync_channel(2);
+    let readers = pipes
+        .into_iter()
+        .enumerate()
+        .map(|(stream, mut pipe)| {
+            let send = send.clone();
+            std::thread::spawn(move || {
+                let mut buffer = [0; 8192];
+                loop {
+                    let chunk = match pipe.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(n) => Ok(buffer[..n].to_vec()),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => Err(error),
+                    };
+                    let failed = chunk.is_err();
+                    if send.send((stream, chunk)).is_err() || failed {
+                        break;
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    drop(send);
+    let mut captured = [Vec::new(), Vec::new()];
+    let mut result = Ok(());
+    for (stream, chunk) in receive {
+        let forwarded = match chunk {
+            Ok(bytes) => {
+                captured[stream].extend_from_slice(&bytes);
+                if result.is_ok() {
+                    if stream == 0 {
+                        stdout.write_all(&bytes).and_then(|()| stdout.flush())
+                    } else {
+                        stderr.write_all(&bytes).and_then(|()| stderr.flush())
+                    }
+                } else {
+                    Ok(())
+                }
             }
-            stdout.write_all(&buffer[..n])?;
-            stdout.flush()?;
-            captured.extend_from_slice(&buffer[..n]);
+            Err(error) => Err(error),
+        };
+        if result.is_ok()
+            && let Err(error) = forwarded
+        {
+            result = Err(error);
+            let _ = child.kill();
         }
-        Ok(())
-    })();
-    if read_result.is_err() {
-        let _ = child.kill();
+    }
+    for reader in readers {
+        if reader.join().is_err() && result.is_ok() {
+            result = Err(std::io::Error::other("native output reader panicked"));
+            let _ = child.kill();
+        }
     }
     let status = child.wait().map_err(io)?;
-    let stderr = stderr.join().unwrap_or_default();
-    read_result.map_err(io)?;
+    result.map_err(io)?;
+    let [stdout, stderr] = captured;
     Ok(std::process::Output {
         status,
-        stdout: captured,
+        stdout,
         stderr,
     })
 }
