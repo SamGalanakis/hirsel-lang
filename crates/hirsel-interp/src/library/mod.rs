@@ -7,6 +7,7 @@ pub mod string;
 pub use simulation::{Simulation, SimulationConfig};
 mod dictionaries;
 mod dispatch;
+mod file;
 mod net;
 pub use dispatch::{Library, error, i32_value, none, ok, path, some, u32_value, u64_value};
 mod launch;

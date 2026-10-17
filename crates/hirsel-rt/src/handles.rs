@@ -37,6 +37,8 @@ pub enum Grant {
     File {
         path: String,
         directory: u64,
+        position: u64,
+        writable: bool,
     },
     AtomicFile {
         temporary: String,

@@ -1,0 +1,46 @@
+// rule: DET-1
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("message"), b"old")])
+  let mut f = file.create(d, path.of("message"))?
+  test.check(t, file.read_bytes(d, path.of("message"))? == b"")
+  test.check(t, file.write(d, mut f, b"ten-")? == 4u64)
+  file.seek(d, mut f, 0u64)?
+  file.append(d, mut f, b"four")?
+  file.append(d, mut f, b"")?
+  test.check(t, file.read_bytes(d, path.of("message"))? == b"ten-four")
+  let mut buffer: List[u8] = [9u8]
+  test.check(
+    t,
+    match file.read(d, mut f, mut buffer, 4u64) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(t, buffer == [9u8])
+  let mut r = file.open(d, path.of("message"))?
+  test.check(
+    t,
+    match file.write(d, mut r, b"bad") {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.append(d, mut r, b"bad") {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  file.write_bytes(d, path.of("message"), b"replacement")?
+  test.check(t, file.read(d, mut r, mut buffer, 100u64)? == 8u64)
+  test.check(t, bytes.from_list(take buffer) == b"\tten-four")
+  file.append(d, mut f, b"!")?
+  test.check(t, file.read_bytes(d, path.of("message"))? == b"replacement")
+  let mut new = file.create(d, path.of("new"))?
+  file.append(d, mut new, b"created")?
+  test.check(t, file.read_bytes(d, path.of("new"))? == b"created")
+  Ok(())
+}

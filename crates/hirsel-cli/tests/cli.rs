@@ -1280,3 +1280,89 @@ fn host_io_records_use_piped_stdin_distinct_stderr_and_exact_environment_snapsho
     std::fs::remove_file(&source).unwrap();
     std::fs::remove_file(format!("{}.json", source.display())).unwrap();
 }
+
+#[test]
+fn file_stream_cli_reads_multiple_buffers_and_appends_under_explicit_host_grants() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = file(
+            r#"
+pub type Error = Files(FileError) | Grant(GrantError) | Wrong()
+pub fn main(rt: Io) -> Result[(), Error] {
+  let d = io.dir(rt, path.of("data")) ? Files
+  let mut f = file.open(d, path.of("large.bin")) ? Files
+  let mut total = 0u64
+  let mut calls = 0u64
+  while true {
+    let mut buffer: List[u8] = []
+    let count = file.read(d, mut f, mut buffer, 4096u64) ? Files
+    if count == 0u64 { break }
+    if list.len(buffer) != count { return Error(Wrong()) }
+    if buffer[0u64] != 65u8 || buffer[count - 1u64] != 65u8 { return Error(Wrong()) }
+    total = total + count
+    calls = calls + 1u64
+  }
+  if total != 150003u64 || calls < 2u64 { return Error(Wrong()) }
+  file.seek(d, mut f, 150000u64) ? Files
+  let mut tail: List[u8] = []
+  if file.read(d, mut f, mut tail, 20u64) ? Files != 3u64 { return Error(Wrong()) }
+  let mut writer = file.create(d, path.of("copy.txt")) ? Files
+  if file.write(d, mut writer, b"first") ? Files != 5u64 { return Error(Wrong()) }
+  file.seek(d, mut writer, 0u64) ? Files
+  file.append(d, mut writer, b" second") ? Files
+  let _ = out.print(io.stdout(rt) ? Grant, "stream ok\n")
+  Ok(())
+}
+"#,
+        );
+        let root = source.with_extension("files");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("large.bin"), vec![b'A'; 150003]).unwrap();
+        let mut record = build_run_record(&source);
+        record["io"] = stdout_grant();
+        let run = source.with_extension("run.json");
+        let exe = build_executable(&source, &[]);
+        // The same source exercises the real host interpreter and standalone LLVM binary.
+        for native in [false, true] {
+            record["io"]["dirs"] =
+                serde_json::json!([{"path":"data","host":root,"access":"read_write"}]);
+            std::fs::write(&run, record.to_string()).unwrap();
+            let mut command = if native {
+                Command::new(&exe)
+            } else {
+                let mut c = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                c.arg("run").arg(&source);
+                c
+            };
+            command
+                .arg(if native { "--hirsel-run" } else { "--run" })
+                .arg(&run);
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(0), "native={native}: {output:?}");
+            assert_eq!(output.stdout, b"stream ok\n");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            assert_eq!(
+                std::fs::read(root.join("copy.txt")).unwrap(),
+                b"first second"
+            );
+            // A read grant permits all incremental reads but denies creation before truncation.
+            record["io"]["dirs"][0]["access"] = "read".into();
+            std::fs::write(&run, record.to_string()).unwrap();
+            let denied = command.output().unwrap();
+            assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+            assert!(denied.stdout.is_empty());
+            assert_eq!(
+                std::fs::read(root.join("copy.txt")).unwrap(),
+                b"first second"
+            );
+            record["io"]["dirs"] = serde_json::json!([]);
+            std::fs::write(&run, record.to_string()).unwrap();
+            let denied = command.output().unwrap();
+            assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+            assert!(denied.stdout.is_empty());
+        }
+        for path in [source, exe, run] {
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    });
+}

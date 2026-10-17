@@ -80,6 +80,8 @@ conformance/CAP/CAP-2-drop-authority-explicit-union-bad.hir
 conformance/CAP/CAP-2-drop-authority-explicit-union-ok.hir
 conformance/CAP/CAP-2-file-operation-authority-bad.hir
 conformance/CAP/CAP-2-file-operation-authority-ok.hir
+conformance/CAP/CAP-2-file-stream-dir-bad.hir
+conformance/CAP/CAP-2-file-stream-dir-ok.hir
 conformance/CAP/CAP-2-flat-inert-bad.hir
 conformance/CAP/CAP-2-flat-inert-ok.hir
 conformance/CAP/CAP-2-inert-data.hir
@@ -467,6 +469,8 @@ conformance/CT/CT-4-mutual-cycle-ok.hir
 conformance/CT/CT-4-self-cycle-bad.hir
 conformance/CT/CT-4-self-cycle-ok.hir
 conformance/DET/DET-1-explicit-output.hir
+conformance/DET/DET-1-file-stream-read-run.hir
+conformance/DET/DET-1-file-stream-write-run.hir
 conformance/DET/DET-1-http-fetch-repeat-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
 conformance/DET/DET-2-first-failure-site.hir
@@ -2990,6 +2994,8 @@ conformance/PROV/PROV-1-field-owner-while-bad.hir
 conformance/PROV/PROV-1-field-owner-while-ok.hir
 conformance/PROV/PROV-1-field-path-bad.hir
 conformance/PROV/PROV-1-field-path-ok.hir
+conformance/PROV/PROV-1-file-stream-dir-bad.hir
+conformance/PROV/PROV-1-file-stream-dir-ok.hir
 conformance/PROV/PROV-1-for-mut-container-bad.hir
 conformance/PROV/PROV-1-for-mut-container-ok.hir
 conformance/PROV/PROV-1-frame-temporary-result-bad.hir

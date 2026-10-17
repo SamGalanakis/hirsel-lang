@@ -148,6 +148,30 @@ pub enum Request {
         directory: u64,
         path: String,
     },
+    Create {
+        directory: u64,
+        path: String,
+    },
+    FileRead {
+        directory: u64,
+        file: u64,
+        max: u64,
+    },
+    FileSeek {
+        directory: u64,
+        file: u64,
+        offset: u64,
+    },
+    FileWrite {
+        directory: u64,
+        file: u64,
+        bytes: Vec<u8>,
+    },
+    FileAppend {
+        directory: u64,
+        file: u64,
+        bytes: Vec<u8>,
+    },
     NarrowFile {
         directory: u64,
         file: u64,
@@ -394,6 +418,9 @@ pub(crate) trait Storage {
     fn activate(&mut self, _id: u64, _root: &str) {}
     fn file_fits(&mut self, id: u64, path: &str) -> bool;
     fn open_file(&mut self, path: &str, id: u64) -> Result<(), IoError>;
+    fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError>;
+    fn read_file(&mut self, id: u64, offset: u64, max: u64) -> Result<Vec<u8>, IoError>;
+    fn write_file(&mut self, id: u64, bytes: &[u8], all: bool) -> Result<u64, IoError>;
     fn transfer_file(&mut self, _from: u64, _to: Option<u64>) {}
     fn directory(&mut self, path: &str, id: u64) -> Result<(), IoError>;
     fn read(&mut self, path: &str) -> Result<Vec<u8>, IoError>;
@@ -477,6 +504,9 @@ impl State {
             Request::Directory { path, .. } if self.mount(path).is_none() => return true,
             Request::Write { directory, .. }
             | Request::Remove { directory, .. }
+            | Request::Create { directory, .. }
+            | Request::FileWrite { directory, .. }
+            | Request::FileAppend { directory, .. }
             | Request::CreateAtomic { directory, .. }
             | Request::WriteAll { directory, .. }
             | Request::Commit { directory, .. } => {
@@ -543,12 +573,17 @@ impl State {
         let directory = match request {
             Request::NarrowDir { directory, .. }
             | Request::Open { directory, .. }
+            | Request::FileRead { directory, .. }
+            | Request::FileSeek { directory, .. }
             | Request::NarrowFile { directory, .. }
             | Request::Walk { directory }
             | Request::Size { directory, .. }
             | Request::Read { directory, .. }
             | Request::Write { directory, .. }
             | Request::Remove { directory, .. }
+            | Request::Create { directory, .. }
+            | Request::FileWrite { directory, .. }
+            | Request::FileAppend { directory, .. }
             | Request::CreateAtomic { directory, .. }
             | Request::WriteAll { directory, .. }
             | Request::Commit { directory, .. } => *directory,
@@ -886,6 +921,8 @@ impl State {
                 let Some(Grant::File {
                     path,
                     directory: owner,
+                    position,
+                    writable,
                 }) = self.handles.rows.get(file).cloned()
                 else {
                     return Err(AdapterError::InvalidHandle(*file));
@@ -901,10 +938,119 @@ impl State {
                     self.handles.insert(Grant::File {
                         path,
                         directory: *directory,
+                        position,
+                        writable,
                     })
                 });
                 storage.transfer_file(*file, new);
                 Ok(C::OptionalFile(new))
+            }
+            R::FileRead {
+                directory,
+                file,
+                max,
+            } => {
+                self.directory(*directory)?;
+                let Some(Grant::File {
+                    directory: owner,
+                    position,
+                    writable,
+                    ..
+                }) = self.handles.rows.get(file).cloned()
+                else {
+                    return Err(AdapterError::InvalidHandle(*file));
+                };
+                if owner != *directory {
+                    return Err(AdapterError::InvalidHandle(*file));
+                }
+                let result = if writable {
+                    Err(IoError::Fault(1))
+                } else if let Some(e) = error {
+                    Err(e)
+                } else {
+                    storage.read_file(*file, position, *max)
+                };
+                if let Ok(bytes) = &result {
+                    if bytes.len() as u64 > *max {
+                        return Err(AdapterError::InvalidCompletion);
+                    }
+                    let Some(Grant::File { position, .. }) = self.handles.rows.get_mut(file) else {
+                        unreachable!()
+                    };
+                    *position = position
+                        .checked_add(bytes.len() as u64)
+                        .ok_or(AdapterError::InvalidCompletion)?;
+                }
+                Ok(C::Bytes(result))
+            }
+            R::FileSeek {
+                directory,
+                file,
+                offset,
+            } => {
+                self.directory(*directory)?;
+                let Some(Grant::File {
+                    directory: owner,
+                    position,
+                    ..
+                }) = self.handles.rows.get_mut(file)
+                else {
+                    return Err(AdapterError::InvalidHandle(*file));
+                };
+                if owner != directory {
+                    return Err(AdapterError::InvalidHandle(*file));
+                }
+                let result = if let Some(e) = error {
+                    Err(e)
+                } else if *offset > i64::MAX as u64 {
+                    Err(IoError::Fault(1))
+                } else {
+                    *position = *offset;
+                    Ok(())
+                };
+                Ok(C::Unit(result))
+            }
+            R::FileWrite {
+                directory,
+                file,
+                bytes,
+            }
+            | R::FileAppend {
+                directory,
+                file,
+                bytes,
+            } => {
+                self.directory(*directory)?;
+                let all = matches!(request, R::FileAppend { .. });
+                let Some(Grant::File {
+                    directory: owner,
+                    writable,
+                    ..
+                }) = self.handles.rows.get(file)
+                else {
+                    return Err(AdapterError::InvalidHandle(*file));
+                };
+                if owner != directory {
+                    return Err(AdapterError::InvalidHandle(*file));
+                }
+                let result = if self.access(*directory)? == Access::Read {
+                    Err(IoError::NotGranted)
+                } else if !writable {
+                    Err(IoError::Fault(1))
+                } else if matches!(error, Some(IoError::Canceled(_)))
+                    || (error.is_some() && prefix(bytes).is_empty())
+                {
+                    Err(error.unwrap())
+                } else {
+                    storage
+                        .write_file(*file, &prefix(bytes), all)
+                        .and_then(|n| error.map_or(Ok(n), Err))
+                };
+                Ok(if all {
+                    C::Unit(result.map(|_| ()))
+                } else {
+                    C::Size(result)
+                })
             }
             R::WriteAll {
                 directory, file, ..
@@ -966,6 +1112,7 @@ impl State {
             _ => {
                 let (directory, path) = match request {
                     R::Open { directory, path }
+                    | R::Create { directory, path }
                     | R::Size { directory, path }
                     | R::Read { directory, path }
                     | R::Write {
@@ -981,19 +1128,31 @@ impl State {
                         R::Write { .. } | R::Remove { .. } => {
                             return Ok(C::Unit(Err(IoError::NotGranted)));
                         }
-                        R::CreateAtomic { .. } => return Ok(C::Handle(Err(IoError::NotGranted))),
+                        R::Create { .. } | R::CreateAtomic { .. } => {
+                            return Ok(C::Handle(Err(IoError::NotGranted)));
+                        }
                         _ => {}
                     }
                 }
                 storage.activate(directory, &root);
                 let path = relative(&root, path).ok_or(IoError::Fault(1));
                 match request {
-                    R::Open { .. } => Ok(C::Handle(if let Some(e) = error {
+                    R::Open { .. } | R::Create { .. } => Ok(C::Handle(if let Some(e) = error {
                         Err(e)
                     } else {
                         path.and_then(|path| {
-                            storage.open_file(&path, self.handles.next())?;
-                            Ok(self.handles.insert(Grant::File { path, directory }))
+                            let writable = matches!(request, R::Create { .. });
+                            if writable {
+                                storage.create_file(&path, self.handles.next())?;
+                            } else {
+                                storage.open_file(&path, self.handles.next())?;
+                            }
+                            Ok(self.handles.insert(Grant::File {
+                                path,
+                                directory,
+                                position: 0,
+                                writable,
+                            }))
                         })
                     })),
                     R::Size { .. } => Ok(C::Size(if let Some(e) = error {
@@ -1373,6 +1532,14 @@ path_export!(
     HandleResult::of
 );
 path_export!(
+    hirsel_rt_v2_file_create,
+    Create,
+    directory,
+    Handle,
+    HandleResult,
+    HandleResult::of
+);
+path_export!(
     hirsel_rt_v2_file_create_atomic,
     CreateAtomic,
     directory,
@@ -1477,6 +1644,106 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_commit(
     unsafe { out.write(UnitResult::of(value)) };
     crate::STATUS_OK
 }
+
+/// Append delivered file bytes through the caller's mutable List[u8] slot.
+/// # Safety
+/// Context bound, directory/file live, buffer exclusive and out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_read(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut HandleResult,
+    directory: *const u64,
+    file: *mut u64,
+    buffer: *mut *mut crate::Header,
+    max: u64,
+) -> u8 {
+    let request = Request::FileRead {
+        directory: unsafe { directory.read() },
+        file: unsafe { file.read() },
+        max,
+    };
+    let Ok(Completion::Bytes(value)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let value = value.map(|bytes| {
+        unsafe { append_byte_list(ctx, buffer, &bytes) };
+        bytes.len() as u64
+    });
+    unsafe { out.write(HandleResult::of(value)) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound, directory/file live, out writable; file is exclusively borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_seek(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    directory: *const u64,
+    file: *mut u64,
+    offset: u64,
+) -> u8 {
+    let request = Request::FileSeek {
+        directory: unsafe { directory.read() },
+        file: unsafe { file.read() },
+        offset,
+    };
+    let Ok(Completion::Unit(value)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(UnitResult::of(value)) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound, directory/file live, Bytes borrowed, out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_write(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut HandleResult,
+    directory: *const u64,
+    file: *mut u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    let request = Request::FileWrite {
+        directory: unsafe { directory.read() },
+        file: unsafe { file.read() },
+        bytes: unsafe { slice_bytes(owner, start, len) }.to_vec(),
+    };
+    let Ok(Completion::Size(value)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(HandleResult::of(value)) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound, directory/file live, Bytes borrowed, out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_append(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    directory: *const u64,
+    file: *mut u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    let request = Request::FileAppend {
+        directory: unsafe { directory.read() },
+        file: unsafe { file.read() },
+        bytes: unsafe { slice_bytes(owner, start, len) }.to_vec(),
+    };
+    let Ok(Completion::Unit(value)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(UnitResult::of(value)) };
+    crate::STATUS_OK
+}
+
 /// # Safety
 /// Directory/Path are borrowed, the slice transfers one owner credit, out is writable.
 #[unsafe(no_mangle)]

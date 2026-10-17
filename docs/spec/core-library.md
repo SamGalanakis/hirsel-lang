@@ -50,8 +50,13 @@ N fn test.fail(t: Test) -> Never
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer]) -> Net
 
-// CAP-1/2, PROV-1/2, DROP-2/4
+// CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
+fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]
+fn file.seek(d: Dir, mut f: File of d, offset: u64) -> Result[(), FileError]
+fn file.create(d: Dir, p: Path) -> Result[File of d, FileError]
+fn file.write(d: Dir, mut f: File of d, data: Bytes) -> Result[u64, FileError]
+fn file.append(d: Dir, mut f: File of d, data: Bytes) -> Result[(), FileError]
 fn file.narrow(d: Dir, take f: File) -> Option[File of d]
 fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]
 fn file.size(d: Dir, p: Path) -> Result[u64, FileError]
@@ -286,6 +291,27 @@ either outcome. Directory paths are relative; absolute paths, traversal outside 
 (resolved links included) and inaccessible paths return `FileFault` without granting
 authority. `file.walk` yields relative paths in UTF-8 byte order and ends after its first
 `Error`.
+
+`file.open` opens a read-only `File` at position 0; `file.create` opens an
+append-only `File`, creating a missing file and truncating an existing file to zero
+bytes. Both use the same `File` type, with no source mode flags. Providers return
+`FileFault` for reads on a created handle or writes on an opened handle. A read-only
+`Dir` denies create and writes with `NotGranted`.
+
+`file.read` appends up to `max` bytes to `buffer` and returns the appended count;
+0 means end of file when `max` is positive. With `max` 0 it succeeds without changing
+the buffer or position. Reads may return a short prefix. `file.seek` sets an absolute
+byte position, including beyond the end (a subsequent read returns 0), without
+changing file contents. An unrepresentable position returns `FileFault`. Writes
+always append regardless of the seek position. `file.write` returns the accepted
+byte count, possibly a prefix; `file.append` accepts all bytes on success.
+`file.write_all` remains the all-bytes operation for `AtomicFile`. Empty writes
+succeed with no effect. Interrupted provider calls retry internally. Reads, seek
+outcomes and handle acquisitions are run inputs recorded for DET-1 replay; create
+and writes are recorded effects, like the whole-file operations. Read errors leave
+the buffer and position unchanged; non-canceled write errors may follow a prefix.
+Narrowing preserves a File's mode and position. An opened handle continues to refer
+to its file after unlink or replacement; it does not reopen the stored path.
 
 `test.check(t, false)` fails LANG-9. `test.check_case` behaves like `test.check`; on false
 it first reports `test failure: seed=S case=C` and a newline through Test reporting, using

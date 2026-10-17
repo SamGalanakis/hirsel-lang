@@ -26,8 +26,13 @@ N fn test.fail(t: Test) -> Never
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer]) -> Net
 
-// CAP-1/2, PROV-1/2, DROP-2/4
+// CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
+fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]
+fn file.seek(d: Dir, mut f: File of d, offset: u64) -> Result[(), FileError]
+fn file.create(d: Dir, p: Path) -> Result[File of d, FileError]
+fn file.write(d: Dir, mut f: File of d, data: Bytes) -> Result[u64, FileError]
+fn file.append(d: Dir, mut f: File of d, data: Bytes) -> Result[(), FileError]
 fn file.narrow(d: Dir, take f: File) -> Option[File of d]
 fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]
 fn file.size(d: Dir, p: Path) -> Result[u64, FileError]

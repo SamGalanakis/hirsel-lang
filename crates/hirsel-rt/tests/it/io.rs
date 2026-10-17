@@ -1457,3 +1457,175 @@ fn host_input_tape_rechecks_exact_grants_and_never_reads_the_provider_on_replay(
     );
     assert_eq!(denied.position(), 0);
 }
+
+#[test]
+fn file_stream_records_pinned_reads_seek_append_prefixes_and_replays_without_host() {
+    let (temp, mut real) = setup();
+    let initial = initial();
+    let directory = match real
+        .call(Request::Directory {
+            io: 1,
+            path: "".into(),
+        })
+        .unwrap()
+    {
+        Completion::Handle(Ok(id)) => id,
+        other => panic!("{other:?}"),
+    };
+    let file = match real
+        .call(Request::Open {
+            directory,
+            path: "old".into(),
+        })
+        .unwrap()
+    {
+        Completion::Handle(Ok(id)) => id,
+        other => panic!("{other:?}"),
+    };
+    let read = |max| Request::FileRead {
+        directory,
+        file,
+        max,
+    };
+    assert_eq!(
+        real.call(read(2)),
+        Ok(Completion::Bytes(Ok(b"ol".to_vec())))
+    );
+    let seek = Request::FileSeek {
+        directory,
+        file,
+        offset: 1,
+    };
+    assert_eq!(real.call(seek), Ok(Completion::Unit(Ok(()))));
+    real.inject(Fault {
+        error: IoError::Canceled(0),
+        partial: 99,
+    });
+    assert_eq!(
+        real.call(read(2)),
+        Ok(Completion::Bytes(Err(IoError::Canceled(0))))
+    );
+    real.call(Request::Write {
+        directory,
+        path: "old".into(),
+        bytes: b"replacement".to_vec(),
+    })
+    .unwrap();
+    assert_eq!(
+        real.call(read(8)),
+        Ok(Completion::Bytes(Ok(b"ld".to_vec())))
+    );
+    assert_eq!(real.call(read(8)), Ok(Completion::Bytes(Ok(vec![]))));
+    let writer = match real
+        .call(Request::Create {
+            directory,
+            path: "saved".into(),
+        })
+        .unwrap()
+    {
+        Completion::Handle(Ok(id)) => id,
+        other => panic!("{other:?}"),
+    };
+    real.inject(Fault {
+        error: IoError::Fault(71),
+        partial: 2,
+    });
+    assert_eq!(
+        real.call(Request::FileAppend {
+            directory,
+            file: writer,
+            bytes: b"first".to_vec()
+        }),
+        Ok(Completion::Unit(Err(IoError::Fault(71))))
+    );
+    assert_eq!(
+        real.call(Request::FileWrite {
+            directory,
+            file: writer,
+            bytes: b"nal".to_vec()
+        }),
+        Ok(Completion::Size(Ok(3)))
+    );
+    let reader = match real
+        .call(Request::Open {
+            directory,
+            path: "saved".into(),
+        })
+        .unwrap()
+    {
+        Completion::Handle(Ok(id)) => id,
+        other => panic!("{other:?}"),
+    };
+    // Truncation changes the same inode, including another already-open reader.
+    let trunc = match real
+        .call(Request::Create {
+            directory,
+            path: "saved".into(),
+        })
+        .unwrap()
+    {
+        Completion::Handle(Ok(id)) => id,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        real.call(Request::FileRead {
+            directory,
+            file: reader,
+            max: 9
+        }),
+        Ok(Completion::Bytes(Ok(vec![])))
+    );
+    real.call(Request::FileAppend {
+        directory,
+        file: trunc,
+        bytes: b"new".to_vec(),
+    })
+    .unwrap();
+    for handle in [file, writer, reader, trunc] {
+        real.call(Request::Close { handle }).unwrap();
+    }
+    let tree = real.snapshot().unwrap();
+    assert_eq!(tree.files["saved"], b"new");
+    let tape = real.tape().to_vec();
+    let encoded = hirsel_rt::launch::render_tape(&tape).unwrap();
+    assert_eq!(hirsel_rt::launch::parse_tape(&encoded).unwrap(), tape);
+    let mut sim = SimIo::new(initial.clone(), tape.clone());
+    std::fs::remove_file(temp.path().join("saved")).unwrap();
+    for event in &tape {
+        assert_eq!(
+            sim.call(event.request.clone()),
+            Ok(event.completion.clone())
+        );
+    }
+    sim.finish().unwrap();
+    assert_eq!(sim.tree(), &tree);
+    replay_interpreter(
+        &tape,
+        &initial,
+        &tree,
+        real.handles().observed(),
+        real.stdout(),
+    );
+    let mut forged = tape.clone();
+    let event = forged
+        .iter_mut()
+        .find(|e| {
+            matches!(e.request, Request::FileRead { .. })
+                && matches!(e.completion, Completion::Bytes(Ok(_)))
+        })
+        .unwrap();
+    event.completion = Completion::Bytes(Ok(b"XX".to_vec()));
+    let mut sim = SimIo::new(initial, forged.clone());
+    for event in &forged {
+        let position = sim.position();
+        if matches!(event.request, Request::FileRead { .. }) {
+            assert_eq!(
+                sim.call(event.request.clone()),
+                Err(AdapterError::ReplayMismatch(position))
+            );
+            assert_eq!(sim.position(), position);
+            break;
+        }
+        sim.call(event.request.clone()).unwrap();
+    }
+}

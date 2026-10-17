@@ -136,6 +136,29 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Request::Open { directory, path } => {
                 format!("open {directory} {}", hex(path.as_bytes()))
             }
+            Request::Create { directory, path } => {
+                format!("create {directory} {}", hex(path.as_bytes()))
+            }
+            Request::FileRead {
+                directory,
+                file,
+                max,
+            } => format!("file_read {directory} {file} {max}"),
+            Request::FileSeek {
+                directory,
+                file,
+                offset,
+            } => format!("file_seek {directory} {file} {offset}"),
+            Request::FileWrite {
+                directory,
+                file,
+                bytes,
+            } => format!("file_write {directory} {file} {}", hex(bytes)),
+            Request::FileAppend {
+                directory,
+                file,
+                bytes,
+            } => format!("file_append {directory} {file} {}", hex(bytes)),
             Request::NarrowFile { directory, file } => format!("narrow_file {directory} {file}"),
             Request::Walk { directory } => format!("walk {directory}"),
             Request::Size { directory, path } => {
@@ -320,6 +343,30 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["open", d, p] => Request::Open {
                     directory: number(d)?,
                     path: string(p)?,
+                },
+                ["create", d, p] => Request::Create {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["file_read", d, f, n] => Request::FileRead {
+                    directory: number(d)?,
+                    file: number(f)?,
+                    max: number(n)?,
+                },
+                ["file_seek", d, f, n] => Request::FileSeek {
+                    directory: number(d)?,
+                    file: number(f)?,
+                    offset: number(n)?,
+                },
+                ["file_write", d, f, b] => Request::FileWrite {
+                    directory: number(d)?,
+                    file: number(f)?,
+                    bytes: bytes(b)?,
+                },
+                ["file_append", d, f, b] => Request::FileAppend {
+                    directory: number(d)?,
+                    file: number(f)?,
+                    bytes: bytes(b)?,
                 },
                 ["narrow_file", d, f] => Request::NarrowFile {
                     directory: number(d)?,

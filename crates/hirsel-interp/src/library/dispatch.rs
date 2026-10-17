@@ -115,6 +115,12 @@ impl Library {
     ) -> Result<Option<OperationResult>, Error> {
         self.tasks.yield_now = true;
         let a = call.arguments;
+        if matches!(
+            name,
+            "file.read" | "file.seek" | "file.write" | "file.append"
+        ) {
+            return self.file_stream(name, a, context).map(Some);
+        }
         let op = name.split_once('.').unwrap().1;
         let value = match name {
             "io.stdin" | "io.stderr" | "io.stdout" | "io.random" | "io.net" | "io.tasks" => {
@@ -457,7 +463,8 @@ impl Library {
         if !self.simulation.writable(dir)
             && matches!(
                 name,
-                "file.write_bytes"
+                "file.create"
+                    | "file.write_bytes"
                     | "file.remove"
                     | "file.create_atomic"
                     | "file.write_all"
@@ -531,6 +538,7 @@ impl Library {
                             .get_mut(&temp)
                             .unwrap()
                             .extend_from_slice(&b[..(*partial).min(b.len())]);
+                        self.simulation.refresh_file(tree, &temp);
                     }
                     _ => {}
                 }
@@ -574,6 +582,8 @@ impl Library {
                 tree: t,
                 path: p,
                 identity,
+                position,
+                writable,
                 ..
             }) = self.simulation.grants.remove(&id)
             else {
@@ -595,6 +605,8 @@ impl Library {
                         path: p,
                         dir,
                         identity,
+                        position,
+                        writable,
                     },
                 ))
             } else {
@@ -662,6 +674,7 @@ impl Library {
                     .get_mut(&temp)
                     .ok_or_else(|| invalid("dead atomic temporary"))?
                     .extend_from_slice(data);
+                self.simulation.refresh_file(tree, &temp);
             } else {
                 let data = files
                     .remove(&temp)
@@ -688,6 +701,8 @@ impl Library {
                         "File",
                         Grant::File {
                             tree,
+                            position: 0,
+                            writable: false,
                             path: logical,
                             dir,
                             identity: self
@@ -699,6 +714,37 @@ impl Library {
                 } else {
                     Ok(file_fault(self.simulation.config.missing_path_code))
                 }
+            }
+            "file.create" => {
+                if !self.simulation.trees[&tree].0.contains(parent(&p))
+                    || self.simulation.trees[&tree].0.contains(&p)
+                {
+                    return Ok(file_fault(self.simulation.config.missing_path_code));
+                }
+                self.simulation
+                    .trees
+                    .get_mut(&tree)
+                    .unwrap()
+                    .1
+                    .insert(p.clone(), vec![]);
+                let identity = if let Some(id) = self.simulation.file_identity(tree, &p) {
+                    self.simulation.file_contents.insert(id, vec![]);
+                    id
+                } else {
+                    self.simulation.replace_identity(tree, &p);
+                    self.simulation.file_identity(tree, &p).unwrap()
+                };
+                Ok(ok(self.simulation.handle(
+                    "File",
+                    Grant::File {
+                        tree,
+                        path: logical,
+                        dir,
+                        identity,
+                        position: 0,
+                        writable: true,
+                    },
+                )))
             }
             "file.size" => Ok(self.simulation.trees[&tree]
                 .1
@@ -1023,7 +1069,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();
@@ -1494,10 +1540,10 @@ pub fn u32_value(n: u32) -> Value {
 pub fn i32_value(n: i32) -> Value {
     Value::Integer(Integer::new(Primitive::I32, n as u32 as u128).unwrap())
 }
-fn file_fault(code: u32) -> Value {
+pub(super) fn file_fault(code: u32) -> Value {
     error(variant(0, vec![u32_value(code)]))
 }
-fn fault_result(f: Fault) -> Value {
+pub(super) fn fault_result(f: Fault) -> Value {
     match f {
         Fault::Canceled(c) => error(variant(1, vec![variant(c, vec![])])),
         Fault::Fault { code, .. } => file_fault(code),

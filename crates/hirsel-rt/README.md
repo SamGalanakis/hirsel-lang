@@ -513,3 +513,10 @@ a reader and rechecks their handle and maximum. Env reads use the exact admitted
 name-to-optional-value snapshot: missing keys are denied, null keys are unset.
 Host input tape forms live in host_io_tape.rs; fixed ABI thunks share ordinary
 byte-list COW growth with network reads.
+
+Incremental File requests keep a read position and provider mode in the logical
+handle. Host reads use bounded pread on the pinned descriptor; create truncates a
+regular file and pins an O_APPEND writer. Replay retains inode contents across
+unlink/replacement, checks delivered byte prefixes, and publishes cursor changes
+only after tape agreement. File read grows the caller's List[u8] with the existing
+sequence allocator; LLVM uses the fixed operation ABI declarations.

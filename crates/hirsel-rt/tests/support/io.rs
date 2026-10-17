@@ -201,6 +201,62 @@ pub fn replay_interpreter_with_fixture(
                     "file.open",
                     vec![handle("Dir", *directory), reference::path(path)],
                 ),
+                Request::Create { directory, path } => (
+                    "file.create",
+                    vec![handle("Dir", *directory), reference::path(path)],
+                ),
+                Request::FileRead {
+                    directory,
+                    file,
+                    max,
+                } => (
+                    "file.read",
+                    vec![
+                        handle("Dir", *directory),
+                        handle("File", *file),
+                        Value::Sequence {
+                            kind: hirsel_types::BuiltinType::List,
+                            elements: vec![],
+                        },
+                        reference::u64_value(*max),
+                    ],
+                ),
+                Request::FileSeek {
+                    directory,
+                    file,
+                    offset,
+                } => (
+                    "file.seek",
+                    vec![
+                        handle("Dir", *directory),
+                        handle("File", *file),
+                        reference::u64_value(*offset),
+                    ],
+                ),
+                Request::FileWrite {
+                    directory,
+                    file,
+                    bytes,
+                } => (
+                    "file.write",
+                    vec![
+                        handle("Dir", *directory),
+                        handle("File", *file),
+                        Value::Bytes(bytes.clone()),
+                    ],
+                ),
+                Request::FileAppend {
+                    directory,
+                    file,
+                    bytes,
+                } => (
+                    "file.append",
+                    vec![
+                        handle("Dir", *directory),
+                        handle("File", *file),
+                        Value::Bytes(bytes.clone()),
+                    ],
+                ),
                 Request::NarrowFile { directory, file } => (
                     "file.narrow",
                     vec![handle("Dir", *directory), handle("File", *file)],
@@ -348,6 +404,27 @@ pub fn replay_interpreter_with_fixture(
             else {
                 panic!("unexpected reference failure")
             };
+            let value = if name == "file.read" && matches!(value, Value::Variant { variant: 0, .. })
+            {
+                let (_, buffer) = arguments
+                    .iter()
+                    .find(|(index, _)| *index == 2)
+                    .expect("file read buffer");
+                let Value::Sequence { elements, .. } = buffer else {
+                    panic!("file read list")
+                };
+                reference::ok(Value::Bytes(
+                    elements
+                        .iter()
+                        .map(|b| match b {
+                            Some(Value::Integer(n)) => n.bits() as u8,
+                            _ => panic!("file read byte"),
+                        })
+                        .collect(),
+                ))
+            } else {
+                value
+            };
             let decoded = match event.completion {
                 Completion::NetHandle(_)
                 | Completion::NetBytes(_)
@@ -407,13 +484,18 @@ pub fn replay_interpreter_with_fixture(
                                 access: *access,
                             }
                         }
-                        hirsel_rt::handles::Grant::File { path, directory } => {
-                            ObservedGrant::File {
-                                tree: 0,
-                                path: path.clone(),
-                                directory: *directory,
-                            }
-                        }
+                        hirsel_rt::handles::Grant::File {
+                            path,
+                            directory,
+                            position,
+                            writable,
+                        } => ObservedGrant::File {
+                            tree: 0,
+                            path: path.clone(),
+                            directory: *directory,
+                            position: *position,
+                            writable: *writable,
+                        },
                         hirsel_rt::handles::Grant::AtomicFile {
                             temporary,
                             destination,

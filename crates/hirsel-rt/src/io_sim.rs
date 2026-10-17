@@ -132,6 +132,14 @@ impl Adapter for SimIo {
             roots: &mut roots,
             active: Default::default(),
             identities: &mut identities,
+            read_limit: match (&request, &event.completion) {
+                (Request::FileRead { .. }, Completion::Bytes(Ok(b))) => Some(b.len() as u64),
+                _ => None,
+            },
+            write_limit: match (&request, &event.completion) {
+                (Request::FileWrite { .. }, Completion::Size(Ok(n))) => Some(*n),
+                _ => None,
+            },
         };
         let result = if matches!(
             request,
@@ -169,12 +177,16 @@ pub(crate) struct FileIdentities {
     reachable: std::collections::BTreeMap<String, u64>,
     opened: std::collections::BTreeMap<u64, u64>,
     prepared: std::collections::BTreeMap<String, u64>,
+    contents: std::collections::BTreeMap<u64, Vec<u8>>,
 }
 impl FileIdentities {
     pub(crate) fn new(tree: &Tree) -> Self {
         let mut files = Self::default();
         for path in tree.files.keys() {
             files.publish(path);
+            files
+                .contents
+                .insert(files.serial, tree.files[path].clone());
         }
         files
     }
@@ -193,6 +205,20 @@ pub(crate) struct MemoryTree<'a> {
     pub(crate) tree: &'a mut Tree,
     pub(crate) identities: &'a mut FileIdentities,
 }
+impl MemoryTree<'_> {
+    fn sync_contents(&mut self, identity: u64) {
+        if let Some((path, _)) = self
+            .identities
+            .reachable
+            .iter()
+            .find(|(_, id)| **id == identity)
+        {
+            self.tree
+                .files
+                .insert(path.clone(), self.identities.contents[&identity].clone());
+        }
+    }
+}
 impl Storage for MemoryTree<'_> {
     fn open_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
         let identity = self
@@ -203,6 +229,36 @@ impl Storage for MemoryTree<'_> {
             .ok_or(IoError::Fault(2))?;
         self.identities.opened.insert(id, identity);
         Ok(())
+    }
+    fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
+        self.destination(path)?;
+        let identity = if let Some(identity) = self.identities.reachable.get(path) {
+            *identity
+        } else {
+            self.identities.publish(path);
+            self.identities.serial
+        };
+        self.identities.contents.insert(identity, vec![]);
+        self.tree.files.insert(path.into(), vec![]);
+        self.identities.opened.insert(id, identity);
+        Ok(())
+    }
+    fn read_file(&mut self, id: u64, offset: u64, max: u64) -> Result<Vec<u8>, IoError> {
+        let identity = self.identities.opened.get(&id).ok_or(IoError::Fault(1))?;
+        let bytes = &self.identities.contents[identity];
+        let start = offset.min(bytes.len() as u64) as usize;
+        let n = max.min(65536).min((bytes.len() - start) as u64) as usize;
+        Ok(bytes[start..start + n].to_vec())
+    }
+    fn write_file(&mut self, id: u64, bytes: &[u8], _all: bool) -> Result<u64, IoError> {
+        let identity = *self.identities.opened.get(&id).ok_or(IoError::Fault(1))?;
+        self.identities
+            .contents
+            .get_mut(&identity)
+            .unwrap()
+            .extend_from_slice(bytes);
+        self.sync_contents(identity);
+        Ok(bytes.len() as u64)
     }
     fn file_fits(&mut self, id: u64, path: &str) -> bool {
         self.identities
@@ -264,6 +320,10 @@ impl Storage for MemoryTree<'_> {
                     .insert(path.into(), self.identities.serial);
             }
         }
+        let identity = self.identities.reachable[path];
+        self.identities
+            .contents
+            .insert(identity, self.tree.files[path].clone());
         Ok(())
     }
     fn remove(&mut self, path: &str) -> Result<(), IoError> {
@@ -310,6 +370,8 @@ impl Storage for MemoryTree<'_> {
 /// A replay storage view keeps each issued directory's resolved root. Link
 /// expansion is scoped to that pinned root rather than the launch tree.
 struct LinkedTree<'a> {
+    read_limit: Option<u64>,
+    write_limit: Option<u64>,
     tree: &'a mut Tree,
     roots: &'a mut std::collections::BTreeMap<u64, String>,
     active: (String, String),
@@ -338,6 +400,21 @@ impl Storage for LinkedTree<'_> {
     fn open_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
         let path = self.path(path, true)?;
         self.memory().open_file(&path, id)
+    }
+    fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
+        let path = self.path(path, true)?;
+        self.memory().create_file(&path, id)
+    }
+    fn read_file(&mut self, id: u64, offset: u64, max: u64) -> Result<Vec<u8>, IoError> {
+        let max = self.read_limit.unwrap_or(max).min(max);
+        self.memory().read_file(id, offset, max)
+    }
+    fn write_file(&mut self, id: u64, bytes: &[u8], all: bool) -> Result<u64, IoError> {
+        let n = self
+            .write_limit
+            .unwrap_or(bytes.len() as u64)
+            .min(bytes.len() as u64) as usize;
+        self.memory().write_file(id, &bytes[..n], all)
     }
     fn file_fits(&mut self, id: u64, path: &str) -> bool {
         self.path(path, true)

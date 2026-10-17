@@ -372,6 +372,30 @@ impl<'a> HostLibrary<'a> {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
             },
+            "file.create" => R::Create {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
+            "file.read" => R::FileRead {
+                directory: self.id(&a[0])?,
+                file: self.id(&a[1])?,
+                max: word(&a[3])?,
+            },
+            "file.seek" => R::FileSeek {
+                directory: self.id(&a[0])?,
+                file: self.id(&a[1])?,
+                offset: word(&a[2])?,
+            },
+            "file.write" => R::FileWrite {
+                directory: self.id(&a[0])?,
+                file: self.id(&a[1])?,
+                bytes: bytes(&a[2])?,
+            },
+            "file.append" => R::FileAppend {
+                directory: self.id(&a[0])?,
+                file: self.id(&a[1])?,
+                bytes: bytes(&a[2])?,
+            },
             "file.narrow" => R::NarrowFile {
                 directory: self.id(&a[0])?,
                 file: self.id(&a[1])?,
@@ -423,12 +447,13 @@ impl<'a> HostLibrary<'a> {
             .io
             .call(request)
             .map_err(|e| Error::Unavailable(format!("host operation {name}: {e:?}")))?;
+        let mut updates = vec![];
         let value = match completion {
             C::Handle(r) => match r {
                 Ok(id) => ok(self.handle(
                     id,
                     match name {
-                        "file.open" => "File",
+                        "file.open" | "file.create" => "File",
                         "file.create_atomic" => "AtomicFile",
                         _ => "Dir",
                     },
@@ -448,6 +473,16 @@ impl<'a> HostLibrary<'a> {
                 Err(e) => file_error(e),
             },
             C::Bytes(r) => match r {
+                Ok(b) if name == "file.read" => {
+                    let n = b.len() as u64;
+                    let mut buffer = a[2].clone();
+                    let Value::Sequence { elements, .. } = &mut buffer else {
+                        return Err(invalid());
+                    };
+                    elements.extend(b.into_iter().map(|b| Some(int(Primitive::U8, b))));
+                    updates.push((2, buffer));
+                    ok(u64_value(n))
+                }
                 Ok(b) => ok(Value::Bytes(b)),
                 Err(e) => file_error(e),
             },
@@ -492,7 +527,12 @@ impl<'a> HostLibrary<'a> {
         } else {
             vec![]
         };
-        Ok(OperationResult::returned(value).transferring(consumed))
+        Ok(OperationResult::Complete {
+            value,
+            arguments: updates,
+            consumed,
+            released: vec![],
+        })
     }
     fn network(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
         let request = match name {

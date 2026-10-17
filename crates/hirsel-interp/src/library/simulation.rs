@@ -94,6 +94,8 @@ pub(crate) enum Grant {
         path: String,
         dir: u64,
         identity: u64,
+        position: u64,
+        writable: bool,
     },
     Atomic {
         tree: u64,
@@ -116,6 +118,7 @@ pub struct Simulation {
     pub(crate) resolved_directories: BTreeMap<u64, String>,
     file_identities: BTreeMap<(u64, String), u64>,
     next_file_identity: u64,
+    pub(crate) file_contents: BTreeMap<u64, Vec<u8>>,
     pub(crate) next_id: u64,
     state: u64,
     replay: Vec<CapabilityEvent>,
@@ -148,6 +151,8 @@ pub enum ObservedGrant {
         tree: u64,
         path: String,
         directory: u64,
+        position: u64,
+        writable: bool,
     },
     AtomicFile {
         tree: u64,
@@ -183,11 +188,18 @@ impl Simulation {
                             access: *access,
                         },
                         Grant::File {
-                            tree, path, dir, ..
+                            tree,
+                            path,
+                            dir,
+                            position,
+                            writable,
+                            ..
                         } => ObservedGrant::File {
                             tree: *tree,
                             path: path.clone(),
                             directory: *dir,
+                            position: *position,
+                            writable: *writable,
                         },
                         Grant::Atomic {
                             tree,
@@ -278,6 +290,7 @@ impl Simulation {
             resolved_directories: BTreeMap::new(),
             file_identities: BTreeMap::new(),
             next_file_identity: 1,
+            file_contents: BTreeMap::new(),
             next_id: 1,
             state: random_seed,
             replay: run.inputs.clone(),
@@ -302,6 +315,23 @@ impl Simulation {
         let identity = self.next_file_identity;
         self.next_file_identity = identity.checked_add(1).expect("file identities exhausted");
         self.file_identities.insert((tree, path.into()), identity);
+        self.file_contents
+            .insert(identity, self.trees[&tree].1[path].clone());
+    }
+    pub(crate) fn sync_file(&mut self, tree: u64, identity: u64) {
+        if let Some(((t, path), _)) = self.file_identities.iter().find(|(_, id)| **id == identity) {
+            assert_eq!(*t, tree);
+            self.trees
+                .get_mut(&tree)
+                .unwrap()
+                .1
+                .insert(path.clone(), self.file_contents[&identity].clone());
+        }
+    }
+    pub(crate) fn refresh_file(&mut self, tree: u64, path: &str) {
+        let identity = self.file_identity(tree, path).expect("file identity");
+        self.file_contents
+            .insert(identity, self.trees[&tree].1[path].clone());
     }
     pub(crate) fn unlink_identity(&mut self, tree: u64, path: &str) {
         self.file_identities.remove(&(tree, path.into()));

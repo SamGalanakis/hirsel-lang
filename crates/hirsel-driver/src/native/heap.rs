@@ -178,6 +178,10 @@ enum IoGrant {
     File {
         tree: u64,
         path: String,
+        directory: u64,
+        position: u64,
+        writable: bool,
+        contents: Vec<u8>,
         identity: std::sync::Arc<()>,
     },
     Atomic {
@@ -236,6 +240,22 @@ impl Io {
         self.next += 1;
         self.grants.insert(id, grant);
         id
+    }
+    fn update_files(&mut self, identity: &std::sync::Arc<()>, bytes: &[u8], append: bool) {
+        for grant in self.grants.values_mut() {
+            if let IoGrant::File {
+                identity: opened,
+                contents,
+                ..
+            } = grant
+                && std::sync::Arc::ptr_eq(identity, opened)
+            {
+                if !append {
+                    contents.clear();
+                }
+                contents.extend_from_slice(bytes);
+            }
+        }
     }
     fn path(&mut self, path: &str) -> u64 {
         if let Some(i) = self.paths.iter().position(|p| p == path) {
@@ -398,6 +418,150 @@ impl Io {
                     io_not_granted()
                 }
             }
+            (
+                Some("file"),
+                "read",
+                [
+                    OpValue::Handle(directory),
+                    OpValue::Handle(file),
+                    buffer,
+                    OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: max,
+                    },
+                ],
+            ) => {
+                if !matches!(self.grants.get(directory), Some(IoGrant::Dir { .. })) {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                let Some(IoGrant::File {
+                    directory: owner,
+                    position,
+                    writable,
+                    contents,
+                    ..
+                }) = self.grants.get_mut(file)
+                else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                if owner != directory {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                if *writable {
+                    return Some(OpOutcome::Value(io_error(1)));
+                }
+                let mut bytes = match buffer {
+                    OpValue::Elements {
+                        scalar: ScalarKind::U8,
+                        bits,
+                    } => bits.clone(),
+                    OpValue::Bytes(bytes) => bytes.iter().copied().map(u128::from).collect(),
+                    _ => return Some(OpOutcome::Unsupported),
+                };
+                let start = (*position).min(contents.len() as u64) as usize;
+                let n = (*max).min(65536).min((contents.len() - start) as u128) as usize;
+                bytes.extend(contents[start..start + n].iter().copied().map(u128::from));
+                *position += n as u64;
+                return Some(OpOutcome::Updated {
+                    value: io_ok(OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: n as u128,
+                    }),
+                    arguments: vec![(
+                        2,
+                        OpValue::Elements {
+                            scalar: ScalarKind::U8,
+                            bits: bytes,
+                        },
+                    )],
+                });
+            }
+            (
+                Some("file"),
+                "seek",
+                [
+                    OpValue::Handle(directory),
+                    OpValue::Handle(file),
+                    OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: offset,
+                    },
+                ],
+            ) => {
+                if !matches!(self.grants.get(directory), Some(IoGrant::Dir { .. })) {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                let Some(IoGrant::File {
+                    directory: owner,
+                    position,
+                    ..
+                }) = self.grants.get_mut(file)
+                else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                if owner != directory {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                if *offset > i64::MAX as u128 {
+                    io_error(1)
+                } else {
+                    *position = *offset as u64;
+                    io_ok(OpValue::Unit)
+                }
+            }
+            (
+                Some("file"),
+                name @ ("write" | "append"),
+                [
+                    OpValue::Handle(directory),
+                    OpValue::Handle(file),
+                    OpValue::Bytes(bytes),
+                ],
+            ) => {
+                let Some(IoGrant::Dir { tree, access, .. }) = self.grants.get(directory).cloned()
+                else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                let Some(IoGrant::File {
+                    tree: owner_tree,
+                    directory: owner,
+                    writable,
+                    identity,
+                    contents,
+                    ..
+                }) = self.grants.get(file).cloned()
+                else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                if tree != owner_tree || owner != *directory {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                if access == Access::Read {
+                    io_not_granted()
+                } else if !writable {
+                    io_error(1)
+                } else {
+                    let path = self
+                        .files
+                        .iter()
+                        .find(|(_, id)| std::sync::Arc::ptr_eq(id, &identity))
+                        .map(|((_, path), _)| path.clone());
+                    let mut data = contents;
+                    data.extend_from_slice(bytes);
+                    if let Some(path) = path {
+                        self.trees.get_mut(&tree).unwrap().1.insert(path, data);
+                    }
+                    self.update_files(&identity, bytes, true);
+                    io_ok(if name == "write" {
+                        OpValue::Bits {
+                            scalar: ScalarKind::U64,
+                            bits: bytes.len() as u128,
+                        }
+                    } else {
+                        OpValue::Unit
+                    })
+                }
+            }
             (Some("file"), "narrow", [OpValue::Handle(directory), OpValue::Handle(file)]) => {
                 let old = self.grants.remove(file);
                 let result = match (self.grants.get(directory).cloned(), old) {
@@ -407,6 +571,10 @@ impl Io {
                             tree: old,
                             path,
                             identity,
+                            position,
+                            writable,
+                            contents,
+                            ..
                         }),
                     ) => {
                         let fits = tree == old
@@ -422,6 +590,10 @@ impl Io {
                                     tree,
                                     path,
                                     identity,
+                                    directory: *directory,
+                                    position,
+                                    writable,
+                                    contents,
                                 }))),
                             }
                         } else {
@@ -508,6 +680,7 @@ impl Io {
                     .1
                     .get_mut(&temporary)?
                     .extend_from_slice(bytes);
+                self.update_files(&identity, bytes, true);
                 io_ok(OpValue::Unit)
             }
             (Some("file"), "walk", [OpValue::Handle(directory)]) => {
@@ -532,8 +705,8 @@ impl Io {
             }
             (
                 Some("file"),
-                kind
-                @ ("open" | "size" | "read_bytes" | "write_bytes" | "remove" | "create_atomic"),
+                kind @ ("open" | "create" | "size" | "read_bytes" | "write_bytes" | "remove"
+                | "create_atomic"),
                 [OpValue::Handle(directory), OpValue::Handle(path), rest @ ..],
             ) => {
                 let Some(IoGrant::Dir { tree, root, access }) = self.grants.get(directory).cloned()
@@ -541,7 +714,7 @@ impl Io {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 };
                 if access == Access::Read
-                    && matches!(kind, "write_bytes" | "remove" | "create_atomic")
+                    && matches!(kind, "create" | "write_bytes" | "remove" | "create_atomic")
                 {
                     return Some(OpOutcome::Value(io_not_granted()));
                 }
@@ -553,9 +726,42 @@ impl Io {
                     "open" if self.trees[&tree].1.contains_key(&path) => {
                         io_ok(OpValue::OpenHandle(self.grant(IoGrant::File {
                             identity: self.files[&(tree, path.clone())].clone(),
+                            directory: *directory,
+                            position: 0,
+                            writable: false,
+                            contents: self.trees[&tree].1[&path].clone(),
                             tree,
                             path,
                         })))
+                    }
+                    "create" => {
+                        let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
+                        if self.trees[&tree].0.contains(&path)
+                            || !self.trees[&tree].0.contains(parent)
+                        {
+                            io_error(2)
+                        } else {
+                            let identity = self
+                                .files
+                                .entry((tree, path.clone()))
+                                .or_insert_with(|| std::sync::Arc::new(()))
+                                .clone();
+                            self.trees
+                                .get_mut(&tree)
+                                .unwrap()
+                                .1
+                                .insert(path.clone(), vec![]);
+                            self.update_files(&identity, &[], false);
+                            io_ok(OpValue::OpenHandle(self.grant(IoGrant::File {
+                                tree,
+                                path,
+                                directory: *directory,
+                                position: 0,
+                                writable: true,
+                                contents: vec![],
+                                identity,
+                            })))
+                        }
                     }
                     "size" => self.trees[&tree]
                         .1
@@ -1184,6 +1390,10 @@ mod mount_rights {
             let file = io.grant(IoGrant::File {
                 tree: 0,
                 path: "work/sub/a".into(),
+                directory: parent,
+                position: 0,
+                writable: false,
+                contents: vec![],
                 identity: identity.clone(),
             });
             let Some(OpOutcome::Complete {

@@ -1,0 +1,39 @@
+// rule: DET-1
+// expect: run
+// entry: exercise
+// Rust std fs incremental-read and absolute-seek vectors, with append-buffer semantics.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("message"), b"ten-four")])
+  let mut f = file.open(d, path.of("message"))?
+  let mut buffer: List[u8] = [33u8]
+  test.check(t, file.read(d, mut f, mut buffer, 0u64)? == 0u64)
+  test.check(t, file.read(d, mut f, mut buffer, 4u64)? == 4u64)
+  let held = copy buffer
+  test.check(t, file.read(d, mut f, mut buffer, 100u64)? == 4u64)
+  test.check(t, held == [33u8, 116u8, 101u8, 110u8, 45u8])
+  test.check(t, bytes.from_list(take buffer) == b"!ten-four")
+  let mut tail: List[u8] = []
+  test.check(t, file.read(d, mut f, mut tail, 4u64)? == 0u64)
+  test.check(t, file.read(d, mut f, mut tail, 4u64)? == 0u64)
+  file.seek(d, mut f, 4u64)?
+  test.check(t, file.read(d, mut f, mut tail, 4u64)? == 4u64)
+  test.check(t, bytes.from_list(take tail) == b"four")
+  file.seek(d, mut f, 1000u64)?
+  let mut end: List[u8] = [9u8]
+  test.check(t, file.read(d, mut f, mut end, 10u64)? == 0u64)
+  test.check(t, end == [9u8])
+  file.seek(d, mut f, 0u64)?
+  test.check(
+    t,
+    match file.seek(d, mut f, 18446744073709551615u64) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(t, file.read(d, mut f, mut end, 1u64)? == 1u64)
+  test.check(t, end == [9u8, 116u8])
+  file.remove(d, path.of("message"))?
+  test.check(t, file.read(d, mut f, mut end, 1u64)? == 1u64)
+  test.check(t, end == [9u8, 116u8, 101u8])
+  Ok(())
+}

@@ -7,7 +7,7 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::rc::Rc;
 pub struct RealIo {
@@ -525,7 +525,9 @@ impl Adapter for RealIo {
             fault = error.map(|error| Fault { error, partial: 0 });
         }
         match (&request, &completion) {
-            (Request::Open { .. }, Completion::Handle(Ok(id))) if !fake => {
+            (Request::Open { .. } | Request::Create { .. }, Completion::Handle(Ok(id)))
+                if !fake =>
+            {
                 self.disk
                     .files
                     .insert(*id, self.disk.last_open.take().expect("opened descriptor"));
@@ -713,6 +715,58 @@ impl Storage for Disk {
         }
         self.last_open = Some(fd);
         Ok(())
+    }
+    fn create_file(&mut self, path: &str, _id: u64) -> Result<(), IoError> {
+        // Open and check before truncating: special files never receive writes.
+        let fd = self.open(
+            path,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NONBLOCK,
+            0o600,
+        )?;
+        if !fd.metadata().map_err(error)?.is_file() {
+            return Err(IoError::Fault(2));
+        }
+        fd.set_len(0).map_err(error)?;
+        self.last_open = Some(fd);
+        Ok(())
+    }
+    fn read_file(&mut self, id: u64, offset: u64, max: u64) -> Result<Vec<u8>, IoError> {
+        let file = self.files.get(&id).ok_or(IoError::Fault(1))?;
+        let mut bytes = vec![0; max.min(65536) as usize];
+        let n = loop {
+            match file.read_at(&mut bytes, offset) {
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                other => break other.map_err(error)?,
+            }
+        };
+        bytes.truncate(n);
+        Ok(bytes)
+    }
+    fn write_file(&mut self, id: u64, bytes: &[u8], all: bool) -> Result<u64, IoError> {
+        let file = self.files.get_mut(&id).ok_or(IoError::Fault(1))?;
+        let mut written = 0;
+        while written < bytes.len() {
+            match file.write(&bytes[written..]) {
+                Ok(0) => {
+                    let e = IoError::Fault(1);
+                    self.partial = Some((e.clone(), written));
+                    return Err(e);
+                }
+                Ok(n) => {
+                    written += n;
+                    if !all {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    let e = error(e);
+                    self.partial = Some((e.clone(), written));
+                    return Err(e);
+                }
+            }
+        }
+        Ok(written as u64)
     }
     fn read(&mut self, path: &str) -> Result<Vec<u8>, IoError> {
         let mut fd = self.open(path, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;

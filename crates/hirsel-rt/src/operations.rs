@@ -118,7 +118,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "string.from_bytes" | "string.slice" | "io.stdout" | "string.as_bytes"
         | "string.position" | "string.byte_offset" | "bytes.slice" | "path.text" | "out.print"
         | "io.dir" | "dir.narrow" | "path.of" | "arg.path" | "arg.count" | "arg.text"
-        | "file.open" | "file.narrow" | "file.create_atomic" | "file.commit" | "file.size"
+        | "file.open" | "file.read" | "file.seek" | "file.create" | "file.write"
+        | "file.append" | "file.narrow" | "file.create_atomic" | "file.commit" | "file.size"
         | "file.remove" | "file.write_bytes" | "file.write_all" | "io.monotonic_clock"
         | "io.wall_clock" | "clock.monotonic" | "clock.wall" | "instant.ticks" | "io.random"
         | "io.tasks" | "io.net" | "test.check" | "test.check_case" | "test.fail" | "test.dir"
@@ -175,6 +176,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "test.dir"
             | "test.net"
             | "file.open"
+            | "file.read"
+            | "file.seek"
+            | "file.create"
+            | "file.write"
+            | "file.append"
             | "file.narrow"
             | "file.create_atomic"
             | "file.commit"
@@ -603,6 +609,53 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
+        symbol: "hirsel_rt_v2_file_create",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_read",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_seek",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_write",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_append",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
         symbol: "hirsel_rt_v2_file_open",
         destination: true,
         result: Some((16, 8)),
@@ -883,14 +936,19 @@ pub const NATIVE_PATHS: &[&str] = &[
     "channel.send",
     "copy_to",
     "dir.narrow",
+    "file.append",
     "file.commit",
+    "file.create",
     "file.create_atomic",
     "file.narrow",
     "file.open",
+    "file.read",
     "file.read_bytes",
     "file.remove",
+    "file.seek",
     "file.size",
     "file.walk",
+    "file.write",
     "file.write_all",
     "file.write_bytes",
     "f32.bits",
