@@ -1058,6 +1058,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 // Validate the Io operand through the ordinary library before projecting it.
                 self.library.call(
                     OperationCall {
+                        runtime: call.runtime,
                         path: call.path,
                         generics: call.generics,
                         arguments: call.arguments,

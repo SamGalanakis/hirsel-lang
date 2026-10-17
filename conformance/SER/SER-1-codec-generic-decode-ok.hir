@@ -1,0 +1,5 @@
+// rule: SER-1
+// expect: accept
+fn use_codec[T: serializable](data: Bytes) -> Result[T, DecodeError] {
+  codec.decode(data)
+}

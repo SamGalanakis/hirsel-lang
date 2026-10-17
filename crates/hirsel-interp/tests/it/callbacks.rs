@@ -125,6 +125,7 @@ fn run_repeat(failing: bool, mutating: bool, limits: Limits) -> (Execution, u64)
         callback: Value::Closure {
             invoked: Default::default(),
             sizes: Default::default(),
+            type_arguments: Default::default(),
             definition: path("main"),
             body: BodyId(1),
             captures: vec![],

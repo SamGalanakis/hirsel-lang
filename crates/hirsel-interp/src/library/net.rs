@@ -987,6 +987,7 @@ impl super::Library {
         let result = self.simulation.net_call(
             &wait.name,
             &OperationCall {
+                runtime: &Default::default(),
                 path: &wait.path,
                 arguments: &wait.arguments,
                 generics: &wait.generics,

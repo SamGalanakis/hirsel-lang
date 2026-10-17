@@ -746,6 +746,7 @@ impl Checker<'_, '_> {
         let ordinals = c.ordinals.clone();
         let parameters = c.function.parameters.clone();
         let missing_capabilities = c.missing_capabilities;
+        let generics = c.function.generics.clone();
         if !bad && inferred.iter().any(Option::is_none) {
             self.report(
                 const { RuleId::of("LANG-2") },
@@ -753,6 +754,22 @@ impl Checker<'_, '_> {
                 "generic call arguments cannot be inferred from its prefix and expected type",
             );
             bad = true;
+        }
+        // Result-directed inference can bind a parameter absent from every
+        // operand (codec.decode). Prove SER-1 on the complete actuals before
+        // generic value normalization can erase a source brand.
+        if !bad {
+            for (parameter, actual) in generics.iter().zip(&inferred) {
+                if let (GenericParameter::Type { bounds, .. }, Some(GenericArgument::Type(actual))) =
+                    (parameter, actual)
+                    && bounds.contains(&ast::Bound::Serializable)
+                    && !self.bound(*actual, ast::Bound::Serializable)?
+                {
+                    self.report(const { RuleId::of("SER-1") }, self.span(id),
+                        "actual generic argument needs a transparent serializable schema without brands or authority");
+                    bad = true;
+                }
+            }
         }
         let args: Vec<_> = inferred
             .into_iter()

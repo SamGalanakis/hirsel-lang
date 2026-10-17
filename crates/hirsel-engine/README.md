@@ -733,3 +733,5 @@ explicit manifest aliases, scoped to the importing package. Core and std heads m
 through the resolver's ordinary declaration index. Parsing std rejects a definition
 whose module and name duplicate core, including unused and private declarations;
 versioned DefPaths and signature identities remain unchanged.
+
+RuntimeTypes retains the checked nominal signature snapshots needed to specialize SER-2 schemas. These declarations come from the registry and source program, independently of incoming bytes.

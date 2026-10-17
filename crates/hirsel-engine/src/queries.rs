@@ -1134,6 +1134,10 @@ impl QueryEngine {
             let public = self.item_signature(&path)?.value;
             signatures.push(self.body_signature(&path.0.package, public)?.0);
         }
+        runtime.serialization = signatures
+            .iter()
+            .map(|s| (s.definition.clone(), s.clone()))
+            .collect();
         for signature in signatures {
             let hirsel_types::SignatureKind::Type(t) = &signature.kind else {
                 continue;

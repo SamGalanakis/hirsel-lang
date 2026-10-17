@@ -88,6 +88,7 @@ fn values_preserve_width_and_float_bits_and_name_function_disposition() {
             captures: vec![],
             owned_captures: vec![],
             sizes: Default::default(),
+            type_arguments: Default::default(),
         },
         exit_code: 0,
     };

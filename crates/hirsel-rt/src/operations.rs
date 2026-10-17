@@ -865,6 +865,8 @@ pub fn manifest(rows: impl IntoIterator<Item = OperationRow>) -> Result<Manifest
 
 /// Explicit identities: additions to the registry fail coverage until reviewed here.
 pub const NATIVE_PATHS: &[&str] = &[
+    "codec.encode",
+    "codec.decode",
     "net.narrow",
     "net.resolve",
     "net.connect",

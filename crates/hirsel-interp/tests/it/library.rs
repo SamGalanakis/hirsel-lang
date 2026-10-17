@@ -50,6 +50,7 @@ impl Harness {
             .library
             .call(
                 OperationCall {
+                    runtime: &Default::default(),
                     path: &path,
                     generics: &[],
                     arguments: &args,
@@ -580,6 +581,7 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
     let path = hirsel_syntax::DefPath::core("io.stdout");
     lib.call(
         OperationCall {
+            runtime: &Default::default(),
             path: &path,
             generics: &[],
             arguments: &[io],
@@ -616,6 +618,7 @@ fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
     assert!(matches!(
         h.library.call(
             OperationCall {
+                runtime: &Default::default(),
                 path: &path,
                 generics: &[],
                 arguments: &[],
@@ -632,6 +635,7 @@ fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
         h.library
             .call(
                 OperationCall {
+                    runtime: &Default::default(),
                     path: &path,
                     generics: &[],
                     arguments: &[],
@@ -665,6 +669,7 @@ fn replay_mismatch_cannot_publish_stdout_or_consume_fault_configuration() {
     assert!(matches!(
         library.call(
             OperationCall {
+                runtime: &Default::default(),
                 path: &path,
                 generics: &[],
                 arguments: &[io],
@@ -774,6 +779,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
         .library
         .call(
             OperationCall {
+                runtime: &Default::default(),
                 path: &hirsel_syntax::DefPath::core("simd.splat"),
                 generics: &[
                     GenericArgument::Type(lane),
@@ -822,6 +828,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
         let args = vec![Value::String("invalid scalar".into())];
         let err = h.library.call(
             OperationCall {
+                runtime: &Default::default(),
                 path: &hirsel_syntax::DefPath::core("simd.splat"),
                 generics: &[GenericArgument::Size(Size::Constant(width))],
                 arguments: &args,
@@ -1135,6 +1142,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
         captures: vec![],
         owned_captures: vec![],
         sizes: Default::default(),
+        type_arguments: Default::default(),
     };
     let OperationResult::Call { continuation, .. } = h.call(
         "mutex.with",
@@ -1199,6 +1207,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
         .library
         .call(
             OperationCall {
+                runtime: &Default::default(),
                 path: &path,
                 generics: &[],
                 arguments: &[tasks, mutex, body],

@@ -23,6 +23,7 @@ fn closure(name: &str) -> Value {
     Value::Closure {
         invoked: Default::default(),
         sizes: Default::default(),
+        type_arguments: Default::default(),
         definition: support::path(name),
         body: BodyId(0),
         captures: vec![],
@@ -55,6 +56,7 @@ fn runtime() -> aggregate::RuntimeTypes {
         }],
         forget: None,
         checked: None,
+        serialization: Default::default(),
     }
 }
 fn callback(name: &str, end: Ending, boolean: bool) -> Definition {
@@ -163,6 +165,7 @@ fn mapper_cases(materialized: bool) {
             let OperationResult::Complete { value: it, .. } = library
                 .call(
                     OperationCall {
+                        runtime: &Default::default(),
                         path: &hirsel_syntax::DefPath::core("iter.from"),
                         arguments: &[u64_value(0), closure("next")],
                         generics: &[],
@@ -189,6 +192,7 @@ fn mapper_cases(materialized: bool) {
         let OperationResult::Complete { value: it, .. } = library
             .call(
                 OperationCall {
+                    runtime: &Default::default(),
                     path: &hirsel_syntax::DefPath::core("iter.map"),
                     arguments: &[it, closure("mapper")],
                     generics: &[],

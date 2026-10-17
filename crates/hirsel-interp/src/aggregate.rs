@@ -18,6 +18,8 @@ pub struct Nominal {
 }
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeTypes {
+    /// Declared snapshots used to prove and specialize codec schemas.
+    pub serialization: std::collections::BTreeMap<DefPath, hirsel_types::SignatureRef>,
     /// Full for diagnostic clients; Effects for ordinary observed execution.
     pub trace_mode: crate::TraceMode,
     pub nominals: Vec<Nominal>,

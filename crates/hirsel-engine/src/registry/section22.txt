@@ -1,3 +1,7 @@
+// SER-1/2
+fn codec.encode[T: serializable](value: T) -> Bytes
+fn codec.decode[T: serializable](data: Bytes) -> Result[T, DecodeError]
+
 // CAP-1/2/4, LANG-9, CONC-3
 N fn io.stdin(rt: Io) -> Result[Stdin, GrantError]
 N fn io.stderr(rt: Io) -> Result[Stderr, GrantError]

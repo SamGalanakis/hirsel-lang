@@ -72,6 +72,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 captures: vec![Some(source.clone()), Some(u64_value(0))],
                 owned_captures: vec![false, true],
                 sizes: Default::default(),
+                type_arguments: Default::default(),
             })))
         }
         Step::Next => {
@@ -81,6 +82,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 captures,
                 owned_captures,
                 sizes,
+                type_arguments,
                 ..
             } = source
             else {
@@ -120,6 +122,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 captures: vec![Some(source.clone()), Some(u64_value(next as u64))],
                 owned_captures: owned_captures.clone(),
                 sizes: sizes.clone(),
+                type_arguments: type_arguments.clone(),
             };
             Ok(Some(OperationResult::Complete {
                 consumed: vec![],
@@ -178,6 +181,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                     captures: vec![Some(argument.clone()), Some(u64_value(0))],
                     owned_captures: vec![true, true],
                     sizes: Default::default(),
+                    type_arguments: Default::default(),
                 })
                 .transferring([0]),
             ))
@@ -189,6 +193,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                 captures,
                 owned_captures,
                 sizes,
+                type_arguments,
                 ..
             } = argument
             else {
@@ -241,6 +246,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                         captures,
                         owned_captures: owned_captures.clone(),
                         sizes: sizes.clone(),
+                        type_arguments: type_arguments.clone(),
                     },
                 )],
             }))

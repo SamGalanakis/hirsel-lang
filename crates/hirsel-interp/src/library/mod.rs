@@ -5,6 +5,7 @@ pub mod integer;
 pub mod simulation;
 pub mod string;
 pub use simulation::{Simulation, SimulationConfig};
+mod codec;
 mod dictionaries;
 mod dispatch;
 mod file;

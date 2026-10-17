@@ -1,0 +1,10 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type Row {
+  x: u8,
+}
+
+fn use_codec(data: Bytes) -> Result[Row, DecodeError] {
+  codec.decode(data)
+}

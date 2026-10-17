@@ -400,6 +400,7 @@ pub fn replay_interpreter_with_fixture(
             let result = library
                 .call(
                     OperationCall {
+                        runtime: &Default::default(),
                         path: &path,
                         generics: &[],
                         arguments: &args,

@@ -14,6 +14,7 @@ mod checked_execution;
 mod clause_bodies;
 mod clocks;
 mod closure_loop_rc;
+mod codec;
 mod comptime;
 mod contract_diagnostics;
 mod contracts;

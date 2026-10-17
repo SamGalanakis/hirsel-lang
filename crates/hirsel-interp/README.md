@@ -278,8 +278,9 @@ hidden behind borrowed parameters or captures (MODE-7). Opaque Shared handle ide
 Resources and once values retain the existing copy rejection.
 
 Generic size reads use explicit per-frame bindings keyed by declaring NameSite
-and SizeParamId. Type arguments need no runtime entry. Direct calls bind constant
-sizes and resolve forwarded symbolic sizes in the caller before dispatch.
+and SizeParamId. Concrete type arguments travel as declaration-owned graphs for
+type-directed operations. Direct calls bind constant sizes and resolve forwarded
+symbolic sizes in the caller before dispatch.
 `Rvalue::Size` returns a u64; absent bindings are InvalidTir, never zero.
 Closure values retain lexical size bindings, including native callback transport
 and copying; a generic callable adds its own scoped bindings to captured outer
@@ -532,3 +533,5 @@ an already-completed result is released by detach's ordinary Complete.released w
 Completed detached children leave neither task rows nor scope child entries. Per-task
 spawn counters and empty active-scope stacks are retired at completion too. Scopes keep
 detached failure chains separately, sorted by spawn path, until their ordered join.
+
+Concrete generic type arguments travel with interpreter frames and captured closures, alongside lexical sizes. Named callable values close their actuals before escaping a frame. Type-directed codec operations use these declared type snapshots; ordinary parametric evaluation still uses the same TIR bodies.

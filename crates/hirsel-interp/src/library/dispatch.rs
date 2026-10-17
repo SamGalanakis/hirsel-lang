@@ -1083,6 +1083,7 @@ macro_rules! primary_operations {
 }
 
 primary_operations! { self, call, context, name, a, value;
+    Primitive: "codec.encode" | "codec.decode" => super::codec::call(name, &call)?,
     Primitive: "$intrinsic.heap" => {
         if !a.is_empty() { return Err(invalid("heap operation arity")); }
         Value::Handle { kind: "$Heap".into(), id: 0 }

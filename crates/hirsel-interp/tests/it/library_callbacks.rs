@@ -40,6 +40,7 @@ impl Harness {
         self.library
             .call(
                 OperationCall {
+                    runtime: &Default::default(),
                     path: &hirsel_syntax::DefPath::core(name),
                     arguments: args,
                     generics: &[],

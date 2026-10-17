@@ -162,29 +162,54 @@ fn execute_frames(
     operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
     loop {
         for start in operations.take_tasks() {
+            let mut invocation_types = Default::default();
             let (definition, body, captures, sizes) = match &start.callee {
                 Value::Closure {
                     definition,
                     body,
                     captures,
                     sizes,
+                    type_arguments,
                     ..
-                } => (
-                    provider.definition(definition).map_err(Error::Query)?,
-                    *body,
-                    captures.clone(),
-                    sizes.clone(),
-                ),
+                } => {
+                    invocation_types = type_arguments.clone();
+                    (
+                        provider.definition(definition).map_err(Error::Query)?,
+                        *body,
+                        captures.clone(),
+                        sizes.clone(),
+                    )
+                }
                 Value::FunctionReference(reference) => {
                     let definition = provider
                         .definition(&reference.definition)
                         .map_err(Error::Query)?;
                     let body = definition.entry;
-                    (definition, body, vec![], Default::default())
+                    crate::type_arguments::bind(
+                        &mut invocation_types,
+                        definition.bodies[body.0 as usize].parameter_scope,
+                        crate::type_arguments::Actuals {
+                            types: reference.types.clone(),
+                            arguments: reference.arguments.clone(),
+                        },
+                    );
+                    let mut sizes = Default::default();
+                    Frame::bind_sizes(
+                        &mut sizes,
+                        definition.bodies[body.0 as usize].parameter_scope,
+                        reference.arguments.iter().map(|a| match a {
+                            hirsel_types::GenericArgument::Size(hirsel_types::Size::Constant(
+                                n,
+                            )) => Some(*n),
+                            _ => None,
+                        }),
+                    );
+                    (definition, body, vec![], sizes)
                 }
                 _ => return Err(invalid("task body requires a callable")),
             };
             let mut child = Frame::new_body(definition, body, vec![], captures, sizes)?;
+            child.type_arguments = invocation_types;
             if let Some(parent) = frames.last().and_then(|f| f.check.as_ref()) {
                 let callee =
                     frames
@@ -426,6 +451,7 @@ fn execute_frames(
                     update_operation(&mut state, updates)?;
                     state.owned = owned;
                     callee.begin_call();
+                    let mut invocation_types = Default::default();
                     let (definition, body, captures, sizes) = match callee {
                         Value::Closure {
                             definition,
@@ -433,11 +459,13 @@ fn execute_frames(
                             captures,
                             owned_captures,
                             sizes,
+                            type_arguments,
                             ..
                         } => {
                             if captures.len() != owned_captures.len() {
                                 return Err(invalid("capture ownership count"));
                             }
+                            invocation_types = type_arguments;
                             (
                                 provider.definition(&definition).map_err(Error::Query)?,
                                 body,
@@ -502,6 +530,7 @@ fn execute_frames(
                             }
                             if let Some(result) = operations.call(
                                 OperationCall {
+                                    runtime,
                                     path: &reference.definition,
                                     generics: &reference.arguments,
                                     arguments: &arguments,
@@ -573,6 +602,14 @@ fn execute_frames(
                                     _ => None,
                                 }),
                             );
+                            crate::type_arguments::bind(
+                                &mut invocation_types,
+                                definition.bodies[body.0 as usize].parameter_scope,
+                                crate::type_arguments::Actuals {
+                                    types: reference.types.clone(),
+                                    arguments: reference.arguments.clone(),
+                                },
+                            );
                             (definition, body, vec![], sizes)
                         }
                         _ => return Err(invalid("operation callback requires function value")),
@@ -580,6 +617,7 @@ fn execute_frames(
                     let path = definition.path.clone();
                     let mut callback =
                         Frame::new_body(definition, body, arguments, captures, sizes)?;
+                    callback.type_arguments = invocation_types;
                     if let Some(check) = &frame.check {
                         callback.check = Some(enter_checked(
                             &check.state,
@@ -1458,6 +1496,7 @@ fn execute_frames(
                 let (callee, closes_arena, bounded) =
                     checked_callee(frame, callee, &mut arguments, &mut checks, &mut budgets)?;
                 let mut closure_check = None;
+                let mut invocation_types = Default::default();
                 let (definition, body, captures, sizes) = match callee {
                     RuntimeCallee::Closure {
                         definition,
@@ -1465,10 +1504,20 @@ fn execute_frames(
                         captures,
                         mut sizes,
                         generic_sizes,
+                        actuals,
+                        type_arguments,
                         check,
                     } => {
+                        invocation_types = type_arguments;
                         closure_check = check;
                         let definition = provider.definition(&definition).map_err(Error::Query)?;
+                        if !actuals.arguments.is_empty() {
+                            crate::type_arguments::bind(
+                                &mut invocation_types,
+                                definition.bodies[body.0 as usize].parameter_scope,
+                                actuals,
+                            );
+                        }
                         Frame::bind_sizes(
                             &mut sizes,
                             definition.bodies[body.0 as usize].parameter_scope,
@@ -1492,6 +1541,13 @@ fn execute_frames(
                             }
                             call_types = Some(merged);
                         }
+                        let concrete = crate::type_arguments::concrete(
+                            call_types.as_ref().unwrap_or(&frame.definition.types),
+                            &generics,
+                            &frame.type_arguments,
+                        )?;
+                        generics = concrete.arguments.clone();
+                        call_types = Some((*concrete.types).clone());
                         let tail = frame
                             .body()
                             .tail_sites
@@ -1533,6 +1589,11 @@ fn execute_frames(
                                     ) => Some(*n),
                                     _ => None,
                                 }),
+                            );
+                            crate::type_arguments::bind(
+                                &mut frame.type_arguments,
+                                scope,
+                                concrete.clone(),
                             );
                             frame.restart_tail(arguments)?;
                             if let Some(old) = frame.check.take() {
@@ -1614,6 +1675,7 @@ fn execute_frames(
                         } else {
                             operations.call(
                                 OperationCall {
+                                    runtime,
                                     path: &path,
                                     generics: &generics,
                                     arguments: &arguments,
@@ -1680,11 +1742,17 @@ fn execute_frames(
                             d.bodies[entry.0 as usize].parameter_scope,
                             actuals,
                         );
+                        crate::type_arguments::bind(
+                            &mut invocation_types,
+                            d.bodies[entry.0 as usize].parameter_scope,
+                            concrete,
+                        );
                         (d, entry, vec![], sizes)
                     }
                 };
                 let path = definition.path.clone();
                 let mut callee = Frame::new_body(definition, body, arguments, captures, sizes)?;
+                callee.type_arguments = invocation_types;
                 if let Some(check) = &frame.check {
                     let mut entered = enter_checked(&check.state, &callee, checks, closure_check);
                     entered.closes_arena = closes_arena;
@@ -1962,10 +2030,15 @@ fn rvalue(
                     other => Ok(other),
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
+            let concrete = crate::type_arguments::concrete(
+                &frame.definition.types,
+                &arguments,
+                &frame.type_arguments,
+            )?;
             Value::FunctionReference(crate::value::NamedFunction {
                 definition,
-                arguments,
-                types: std::sync::Arc::new(frame.definition.types.clone()),
+                arguments: concrete.arguments,
+                types: concrete.types,
                 ty: frame.place(destination)?.ty,
             })
         }
@@ -2203,6 +2276,7 @@ fn rvalue(
                 captures,
                 owned_captures,
                 sizes: frame.sizes.clone(),
+                type_arguments: frame.type_arguments.clone(),
             }
         }
         _ => {
@@ -2599,6 +2673,7 @@ fn execute_terminator(
                             captures,
                             owned_captures,
                             sizes,
+                            type_arguments,
                             ..
                         } => {
                             if captures.len() != owned_captures.len() {
@@ -2622,6 +2697,12 @@ fn execute_terminator(
                                 captures,
                                 sizes,
                                 generic_sizes,
+                                actuals: crate::type_arguments::concrete(
+                                    &frame.definition.types,
+                                    &arguments,
+                                    &frame.type_arguments,
+                                )?,
+                                type_arguments,
                                 check,
                             }
                         }
@@ -2713,6 +2794,8 @@ enum RuntimeCallee {
         captures: Vec<Option<Value>>,
         sizes: crate::value::SizeBindings,
         generic_sizes: Vec<Option<u64>>,
+        actuals: crate::type_arguments::Actuals,
+        type_arguments: crate::type_arguments::Bindings,
         check: Option<crate::checked::Callee>,
     },
 }
@@ -2738,7 +2821,7 @@ fn checked_callee(
             return Ok((callee, None, None));
         }
         let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
-        let (definition, body, captures, _, sizes) = arena_callback(arguments)?;
+        let (definition, body, captures, _, sizes, type_arguments) = arena_callback(arguments)?;
         let id = if bounded { budgets.issue() } else { 0 };
         *arguments = vec![Value::Handle {
             kind: crate::checked::ARENA_HANDLE.into(),
@@ -2750,6 +2833,8 @@ fn checked_callee(
             captures,
             sizes,
             generic_sizes: vec![],
+            actuals: Default::default(),
+            type_arguments,
             check: None,
         };
         return Ok((callee, None, cap.map(|cap| (id, cap))));
@@ -2765,7 +2850,8 @@ fn checked_callee(
         return Ok((callee, None, None));
     }
     let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
-    let (definition, body, captures, owned_captures, sizes) = arena_callback(arguments)?;
+    let (definition, body, captures, owned_captures, sizes, type_arguments) =
+        arena_callback(arguments)?;
     let arena = state.arena();
     let shadow = checks.pop().unwrap_or_default().shadow;
     let check = crate::checked::Callee {
@@ -2787,6 +2873,8 @@ fn checked_callee(
         captures,
         sizes,
         generic_sizes: vec![],
+        actuals: Default::default(),
+        type_arguments,
         check: Some(check),
     };
     Ok((callee, Some(arena), cap.map(|cap| (arena.into(), cap))))
@@ -2809,6 +2897,7 @@ type Callback = (
     Vec<Option<Value>>,
     Vec<bool>,
     crate::value::SizeBindings,
+    crate::type_arguments::Bindings,
 );
 /// The one closure argument of `arena.with`.
 fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
@@ -2819,6 +2908,7 @@ fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
             captures,
             owned_captures,
             sizes,
+            type_arguments,
             ..
         },
     ] = <[Value; 1]>::try_from(std::mem::take(arguments))
@@ -2826,7 +2916,14 @@ fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
     else {
         return Err(invalid("arena.with callback must be a closure"));
     };
-    Ok((definition, body, captures, owned_captures, sizes))
+    Ok((
+        definition,
+        body,
+        captures,
+        owned_captures,
+        sizes,
+        type_arguments,
+    ))
 }
 /// What a closure call's environment is bounded by, under checked execution.
 fn callee_lifetime(

@@ -136,3 +136,5 @@ conditions, with a committed prefix for write errors; generic Fault/Canceled
 scripts remain available. Confinement failures retain the explicit invalid-path
 code, while missing entries use NotFound. File-specific faults are rejected by
 the stdin, stdout and network script domains.
+
+`codec.encode` and `codec.decode` prove concrete schemas from driver-supplied checked declarations and convert values iteratively through hirsel-types::wire. All format validation stays in that shared codec; only complete decoded values become evaluator data. Malformed input returns DecodeError, while codec budgets remain operational refusal.

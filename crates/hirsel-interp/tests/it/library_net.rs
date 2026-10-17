@@ -42,6 +42,7 @@ impl Harness {
         self.library
             .call(
                 OperationCall {
+                    runtime: &Default::default(),
                     path: &hirsel_syntax::DefPath::core(name),
                     arguments: &args,
                     generics: &[],
@@ -482,6 +483,7 @@ fn replay_rejects_changed_written_bytes_and_rolls_back() {
     let mut call = |name: &str, args: &[Value]| {
         library.call(
             OperationCall {
+                runtime: &Default::default(),
                 path: &hirsel_syntax::DefPath::core(name),
                 arguments: args,
                 generics: &[],

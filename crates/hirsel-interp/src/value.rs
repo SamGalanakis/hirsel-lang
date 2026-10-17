@@ -93,6 +93,7 @@ pub enum Value {
         owned_captures: Vec<bool>,
         /// Lexical size bindings travel with the environment, including callbacks.
         sizes: SizeBindings,
+        type_arguments: crate::type_arguments::Bindings,
     },
     Variant {
         variant: u32,
@@ -293,6 +294,7 @@ impl Clone for Value {
                     captures,
                     owned_captures,
                     sizes,
+                    type_arguments,
                 } => Value::Closure {
                     invoked: invoked.clone(),
                     definition: definition.clone(),
@@ -300,6 +302,7 @@ impl Clone for Value {
                     captures: vec![None; captures.len()],
                     owned_captures: owned_captures.clone(),
                     sizes: sizes.clone(),
+                    type_arguments: type_arguments.clone(),
                 },
             }
         }

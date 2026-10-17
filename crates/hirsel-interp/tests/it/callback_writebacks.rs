@@ -280,6 +280,7 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
                 captures: vec![],
                 owned_captures: vec![],
                 sizes: Default::default(),
+                type_arguments: Default::default(),
             }
         },
         native,

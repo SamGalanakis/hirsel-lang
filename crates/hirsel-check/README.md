@@ -330,3 +330,5 @@ This lets one T describe both a generator result and its borrowed consumer input
 Literal kinds with a single type (bool, String and Bytes) supply that intrinsic
 type, including the first branch of a match or conditional. Numeric literals and
 bare variants remain contextual under LANG-2.
+
+Call completion proves Serializable for every inferred actual before generic value normalization, including actuals inferred solely from the expected result (codec.decode). Parameter occurrence checks alone cannot cover this case.

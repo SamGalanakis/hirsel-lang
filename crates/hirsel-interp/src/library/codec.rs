@@ -1,0 +1,436 @@
+//! Source values cross SER-2 through the shared, schema-directed Rust codec.
+use crate::{Error, Integer, OperationCall, Value, invalid};
+use hirsel_types::serialization::{
+    SchemaArgument, SchemaId, SchemaNode, SerializableSchema, serializable_schema,
+};
+use hirsel_types::wire::{self, Codec, ValueId, ValueNode};
+use hirsel_types::{BuiltinType, GenericArgument, GenericDeclarations, Primitive};
+
+type R<T> = Result<T, Error>;
+
+pub(super) fn call(name: &str, call: &OperationCall<'_>) -> R<Value> {
+    let [GenericArgument::Type(ty)] = call.generics else {
+        return Err(invalid("codec type actual"));
+    };
+    let schema = serializable_schema(
+        call.types,
+        *ty,
+        &GenericDeclarations::default(),
+        &mut |path| Ok(call.runtime.serialization.get(path).cloned()),
+    )
+    .map_err(Error::Query)?
+    .ok_or_else(|| invalid("codec requires a checked concrete serializable schema"))?;
+    let codec = Codec::new(&schema).map_err(|e| invalid(format!("codec schema: {e:?}")))?;
+    let [value] = call.arguments else {
+        return Err(invalid("codec arity"));
+    };
+    if name == "codec.encode" {
+        let value = to_wire(&schema, value)?;
+        return codec
+            .encode(&value, wire::Limits::default())
+            .map(Value::Bytes)
+            .map_err(codec_error);
+    }
+    let Value::Bytes(bytes) = value else {
+        return Err(invalid("codec.decode expects Bytes"));
+    };
+    match codec.decode(bytes, wire::Limits::default()) {
+        Ok(value) => Ok(super::ok(from_wire(&schema, value, call.runtime)?)),
+        Err(error @ (wire::Error::Schema | wire::Error::Value | wire::Error::Limit)) => {
+            Err(codec_error(error))
+        }
+        Err(error) => Ok(super::error(Value::Variant {
+            variant: error_ordinal(error)?,
+            fields: vec![],
+        })),
+    }
+}
+
+fn codec_error(error: wire::Error) -> Error {
+    if error == wire::Error::Limit {
+        Error::Query(hirsel_types::QueryError::Operational(
+            hirsel_types::OperationalFailure {
+                operation: "codec-budget".into(),
+                message: "codec operational budget exhausted".into(),
+            },
+        ))
+    } else {
+        invalid(format!("invalid checked codec value: {error:?}"))
+    }
+}
+fn error_ordinal(error: wire::Error) -> R<u32> {
+    Ok(match error {
+        wire::Error::Version => 0,
+        wire::Error::SchemaMismatch => 1,
+        wire::Error::Truncated => 2,
+        wire::Error::Trailing => 3,
+        wire::Error::Scalar => 4,
+        wire::Error::Utf8 => 5,
+        wire::Error::Tag => 6,
+        wire::Error::Length => 7,
+        wire::Error::Duplicate => 8,
+        wire::Error::Order => 9,
+        other => return Err(codec_error(other)),
+    })
+}
+fn fields(value: &Value) -> R<Vec<&Value>> {
+    if matches!(value, Value::Unit) {
+        return Ok(vec![]);
+    }
+    value
+        .fields()
+        .ok_or_else(|| invalid("codec aggregate"))?
+        .iter()
+        .map(|v| v.as_ref().ok_or_else(|| invalid("codec moved field")))
+        .collect()
+}
+fn element(arguments: &[SchemaArgument], ordinal: usize) -> R<SchemaId> {
+    match arguments.get(ordinal) {
+        Some(SchemaArgument::Type(t)) => Ok(*t),
+        _ => Err(invalid("codec schema argument")),
+    }
+}
+
+fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
+    let mut nodes = vec![ValueNode::Fields(vec![])];
+    let mut pending = vec![(schema.root, root, ValueId(0))];
+    while let Some((ty, value, id)) = pending.pop() {
+        let mut children: Vec<(SchemaId, &Value)> = vec![];
+        let mut node = match (&schema.nodes[ty.0 as usize], value) {
+            (SchemaNode::Scalar(Primitive::Bool), Value::Bool(v)) => ValueNode::Bool(*v),
+            (SchemaNode::Scalar(_), Value::Integer(v)) if v.is_signed() => {
+                ValueNode::Signed(v.signed())
+            }
+            (SchemaNode::Scalar(_), Value::Integer(v)) => ValueNode::Unsigned(v.bits()),
+            (SchemaNode::Scalar(Primitive::F32), Value::F32(v)) => ValueNode::F32(*v),
+            (SchemaNode::Scalar(Primitive::F64), Value::F64(v)) => ValueNode::F64(*v),
+            (SchemaNode::Scalar(Primitive::String), Value::String(v)) => {
+                ValueNode::String(v.clone())
+            }
+            (SchemaNode::Scalar(Primitive::Bytes), Value::Bytes(v)) => ValueNode::Bytes(v.clone()),
+            (SchemaNode::Tuple(ts), _) => {
+                let values = fields(value)?;
+                if values.len() != ts.len() {
+                    return Err(invalid("codec tuple arity"));
+                }
+                children.extend(ts.iter().copied().zip(values));
+                ValueNode::Fields(vec![])
+            }
+            (SchemaNode::Record(fs), _) => {
+                let values = fields(value)?;
+                if values.len() != fs.len() {
+                    return Err(invalid("codec record arity"));
+                }
+                children.extend(fs.iter().map(|f| f.1).zip(values));
+                ValueNode::Fields(vec![])
+            }
+            (SchemaNode::Variant(arms), Value::Variant { variant, .. }) => {
+                let (_, fs) = arms
+                    .get(*variant as usize)
+                    .ok_or_else(|| invalid("codec variant ordinal"))?;
+                let values = fields(value)?;
+                if values.len() != fs.len() {
+                    return Err(invalid("codec variant arity"));
+                }
+                children.extend(fs.iter().map(|f| f.1).zip(values));
+                ValueNode::Variant {
+                    ordinal: *variant,
+                    fields: vec![],
+                }
+            }
+            (SchemaNode::Nominal { representation, .. }, _) => {
+                let inner = if let Value::Distinct { fields, .. } = value
+                    && !matches!(
+                        schema.nodes[representation.0 as usize],
+                        SchemaNode::Record(_) | SchemaNode::Variant(_)
+                    ) {
+                    if fields.len() != 1 {
+                        return Err(invalid("codec distinct payload"));
+                    }
+                    fields[0]
+                        .as_ref()
+                        .ok_or_else(|| invalid("codec distinct moved"))?
+                } else {
+                    value
+                };
+                children.push((*representation, inner));
+                ValueNode::Wrapper(ValueId(0))
+            }
+            (SchemaNode::Box(t), Value::Box(_)) => {
+                let values = fields(value)?;
+                if values.len() != 1 {
+                    return Err(invalid("codec box arity"));
+                }
+                children.push((*t, values[0]));
+                ValueNode::Wrapper(ValueId(0))
+            }
+            (
+                SchemaNode::Builtin {
+                    kind: BuiltinType::Packed,
+                    arguments,
+                },
+                _,
+            ) => {
+                children.push((element(arguments, 0)?, value));
+                ValueNode::Wrapper(ValueId(0))
+            }
+            (
+                SchemaNode::Builtin {
+                    kind: BuiltinType::Map,
+                    arguments,
+                },
+                Value::Map(_),
+            ) => {
+                let key = element(arguments, 0)?;
+                let val = element(arguments, 1)?;
+                for entry in fields(value)? {
+                    let pair = fields(entry)?;
+                    if pair.len() != 2 {
+                        return Err(invalid("codec map entry"));
+                    }
+                    children.extend([(key, pair[0]), (val, pair[1])]);
+                }
+                ValueNode::Map(vec![])
+            }
+            (
+                SchemaNode::Builtin {
+                    kind: BuiltinType::Set,
+                    arguments,
+                },
+                Value::Set(_),
+            ) => {
+                children.extend(
+                    fields(value)?
+                        .into_iter()
+                        .map(|v| Ok((element(arguments, 0)?, v)))
+                        .collect::<R<Vec<_>>>()?,
+                );
+                ValueNode::Set(vec![])
+            }
+            (SchemaNode::Builtin { kind, arguments }, Value::Sequence { kind: actual, .. })
+                if kind == actual =>
+            {
+                let t = element(arguments, 0)?;
+                children.extend(fields(value)?.into_iter().map(|v| (t, v)));
+                ValueNode::Sequence(vec![])
+            }
+            _ => return Err(invalid("codec schema/value mismatch")),
+        };
+        let ids: Vec<_> = children
+            .into_iter()
+            .map(|(t, v)| {
+                let child = ValueId(nodes.len());
+                nodes.push(ValueNode::Fields(vec![]));
+                pending.push((t, v, child));
+                child
+            })
+            .collect();
+        match &mut node {
+            ValueNode::Fields(fs)
+            | ValueNode::Sequence(fs)
+            | ValueNode::Set(fs)
+            | ValueNode::Variant { fields: fs, .. } => *fs = ids,
+            ValueNode::Map(fs) => {
+                *fs = ids
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|p| (p[0], p[1]))
+                    .collect()
+            }
+            ValueNode::Wrapper(t) => *t = ids[0],
+            _ => (),
+        }
+        nodes[id.0] = node;
+    }
+    Ok(wire::Value {
+        root: ValueId(0),
+        nodes,
+    })
+}
+
+fn from_wire(
+    schema: &SerializableSchema,
+    value: wire::Value,
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> R<Value> {
+    enum Job {
+        Visit(SchemaId, ValueId),
+        Finish(SchemaId, usize, Option<u32>),
+    }
+    let mut pending = vec![Job::Visit(schema.root, value.root)];
+    let mut values: Vec<Value> = vec![];
+    while let Some(job) = pending.pop() {
+        match job {
+            Job::Finish(ty, n, ordinal) => {
+                let mut fs: Vec<_> = values
+                    .split_off(values.len() - n)
+                    .into_iter()
+                    .map(Some)
+                    .collect();
+                let node = match &schema.nodes[ty.0 as usize] {
+                    SchemaNode::Tuple(_) | SchemaNode::Record(_) => {
+                        if fs.is_empty() {
+                            Value::Unit
+                        } else {
+                            Value::Tuple(fs)
+                        }
+                    }
+                    SchemaNode::Variant(_) => Value::Variant {
+                        variant: ordinal.unwrap(),
+                        fields: fs,
+                    },
+                    SchemaNode::Box(_) => Value::Box(fs),
+                    SchemaNode::Nominal {
+                        definition,
+                        representation,
+                    } => {
+                        let child = fs
+                            .pop()
+                            .flatten()
+                            .ok_or_else(|| invalid("codec nominal payload"))?;
+                        if runtime.get(definition).is_some_and(|n| n.distinct) {
+                            let fields = if matches!(
+                                schema.nodes[representation.0 as usize],
+                                SchemaNode::Record(_)
+                            ) {
+                                match child {
+                                    Value::Tuple(fields) => fields,
+                                    Value::Unit => vec![],
+                                    _ => return Err(invalid("codec distinct record")),
+                                }
+                            } else {
+                                vec![Some(child)]
+                            };
+                            Value::Distinct {
+                                definition: definition.clone(),
+                                fields,
+                            }
+                        } else {
+                            match child {
+                                Value::Tuple(fields) => Value::Record {
+                                    definition: definition.clone(),
+                                    fields,
+                                },
+                                Value::Unit => Value::Record {
+                                    definition: definition.clone(),
+                                    fields: vec![],
+                                },
+                                other => other,
+                            }
+                        }
+                    }
+                    SchemaNode::Builtin {
+                        kind: BuiltinType::Packed,
+                        ..
+                    } => fs.pop().flatten().unwrap(),
+                    SchemaNode::Builtin {
+                        kind: BuiltinType::Map,
+                        ..
+                    } => Value::Map(
+                        fs.chunks_mut(2)
+                            .map(|p| Some(Value::Tuple(p.iter_mut().map(Option::take).collect())))
+                            .collect(),
+                    ),
+                    SchemaNode::Builtin {
+                        kind: BuiltinType::Set,
+                        ..
+                    } => Value::Set(fs),
+                    SchemaNode::Builtin { kind, .. } => Value::Sequence {
+                        kind: *kind,
+                        elements: fs,
+                    },
+                    _ => return Err(invalid("codec finish schema")),
+                };
+                values.push(node);
+            }
+            Job::Visit(ty, id) => {
+                let node = &value.nodes[id.0];
+                let shape = &schema.nodes[ty.0 as usize];
+                let mut children = vec![];
+                let mut ordinal = None;
+                match (shape, node) {
+                    (SchemaNode::Scalar(p), node) => {
+                        let scalar = match node {
+                            ValueNode::Bool(v) => Value::Bool(*v),
+                            ValueNode::Unsigned(v) => Value::Integer(Integer::new(*p, *v).unwrap()),
+                            ValueNode::Signed(v) => {
+                                let width = crate::value::integer_layout(*p).unwrap().0;
+                                Value::Integer(
+                                    Integer::new(*p, *v as u128 & crate::value::mask(width))
+                                        .unwrap(),
+                                )
+                            }
+                            ValueNode::F32(v) => Value::F32(*v),
+                            ValueNode::F64(v) => Value::F64(*v),
+                            ValueNode::String(v) => Value::String(v.clone()),
+                            ValueNode::Bytes(v) => Value::Bytes(v.clone()),
+                            _ => return Err(invalid("codec scalar node")),
+                        };
+                        values.push(scalar);
+                        continue;
+                    }
+                    (SchemaNode::Tuple(ts), ValueNode::Fields(fs)) => {
+                        children.extend(ts.iter().copied().zip(fs.iter().copied()))
+                    }
+                    (SchemaNode::Record(ts), ValueNode::Fields(fs)) => {
+                        children.extend(ts.iter().map(|f| f.1).zip(fs.iter().copied()))
+                    }
+                    (
+                        SchemaNode::Variant(arms),
+                        ValueNode::Variant {
+                            ordinal: arm,
+                            fields,
+                        },
+                    ) => {
+                        ordinal = Some(*arm);
+                        children.extend(
+                            arms[*arm as usize]
+                                .1
+                                .iter()
+                                .map(|f| f.1)
+                                .zip(fields.iter().copied()),
+                        );
+                    }
+                    (SchemaNode::Nominal { representation, .. }, ValueNode::Wrapper(t))
+                    | (SchemaNode::Box(representation), ValueNode::Wrapper(t)) => {
+                        children.push((*representation, *t))
+                    }
+                    (
+                        SchemaNode::Builtin {
+                            kind: BuiltinType::Packed,
+                            arguments,
+                        },
+                        ValueNode::Wrapper(t),
+                    ) => children.push((element(arguments, 0)?, *t)),
+                    (
+                        SchemaNode::Builtin {
+                            kind: BuiltinType::Map,
+                            arguments,
+                        },
+                        ValueNode::Map(entries),
+                    ) => {
+                        for (k, v) in entries {
+                            children.extend([
+                                (element(arguments, 0)?, *k),
+                                (element(arguments, 1)?, *v),
+                            ]);
+                        }
+                    }
+                    (
+                        SchemaNode::Builtin { arguments, .. },
+                        ValueNode::Sequence(fs) | ValueNode::Set(fs),
+                    ) => children.extend(
+                        fs.iter()
+                            .map(|t| Ok((element(arguments, 0)?, *t)))
+                            .collect::<R<Vec<_>>>()?,
+                    ),
+                    _ => return Err(invalid("codec decoded shape")),
+                }
+                pending.push(Job::Finish(ty, children.len(), ordinal));
+                pending.extend(children.into_iter().rev().map(|(t, v)| Job::Visit(t, v)));
+            }
+        }
+    }
+    values.pop().ok_or_else(|| invalid("codec empty value"))
+}

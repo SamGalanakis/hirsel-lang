@@ -1,0 +1,107 @@
+// rule: SER-2
+// expect: run
+// Scalars, nested schemas and fresh decoded ownership use one canonical codec.
+@serializable
+type Row {
+  x: u8,
+  y: bool,
+}
+
+@serializable
+type Choice = Empty | Item(String)
+
+@serializable
+distinct type Count(v: u64)
+
+@serializable
+flat type FlatRow {
+  n: u16,
+  flag: bool,
+}
+
+@serializable
+type NumericChoice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn round[T: serializable](t: Test, x: T) -> () {
+  let encoded = codec.encode(x)
+  let again = fn() {
+    codec.encode(x)
+  }
+  test.check(t, again() == encoded)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: Result[T, DecodeError] = read()
+  match take decoded {
+    Ok(y) => test.check(t, codec.encode(y) == encoded),
+    Error(_) => test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // RFC 8949 Appendix A numeric controls, represented at fixed SER-2 widths.
+  round(t, f32.from_bits(2147483648u32))
+  round(t, f32.from_bits(1u32))
+  round(t, f32.from_bits(2139095040u32))
+  round(t, f64.from_bits(18442240474082181120u64))
+  round(t, true)
+  round(t, false)
+  round(t, 255u8)
+  round(t, 65535u16)
+  round(t, 4294967295u32)
+  round(t, 18446744073709551615u64)
+  round(t, 340282366920938463463374607431768211455u128)
+  round(t, -128i8)
+  round(t, -32768i16)
+  round(t, -2147483648i32)
+  round(t, -9223372036854775808i64)
+  round(t, -170141183460469231731687303715884105728i128)
+  round(t, f32.from_bits(2143289345u32))
+  round(t, f64.from_bits(9221120237041090561u64))
+  round(t, "é\0😀")
+  round(t, b"\0\xff\x80")
+  round(t, ())
+  round(t, (42u8, true, "tuple"))
+  round(t, Row(x: 7, y: false))
+  let sum: Choice = Item("sum")
+  round(t, sum)
+  let empty: Choice = Empty()
+  round(t, empty)
+  round(t, Count(17))
+  round(t, FlatRow(n: 4660, flag: true))
+  let heap_value: box Row = box Row(x: 19, y: false)
+  round(t, heap_value)
+  let array: Array[u16] = [1, 2, 3]
+  round(t, array)
+  let fixed: Inline[u16, 2] = [1, 258]
+  round(t, fixed)
+  let zero: Inline[u8, 0] = []
+  round(t, zero)
+  let lanes: Simd[u16, 2] = simd.splat(258u16)
+  round(t, lanes)
+  let packed: Packed[NumericChoice] = Small(value: 9)
+  round(t, packed)
+  let seq: List[String] = ["a", "", "é"]
+  round(t, seq)
+  let units: List[()] = [(), (), ()]
+  round(t, units)
+  let nested: List[List[u8]] = [[1u8, 2u8], [], [3u8]]
+  round(t, nested)
+  let option: Option[Row] = Some(Row(x: 1, y: true))
+  round(t, option)
+  let absent: Option[Row] = None
+  round(t, absent)
+  let outcome: Result[u8, String] = Error("expected")
+  round(t, outcome)
+  let success: Result[u8, String] = Ok(7)
+  round(t, success)
+  let mut mapping: Map[u8, bool] = map.empty()
+  map.insert(mut mapping, 2, true)
+  map.insert(mut mapping, 1, false)
+  round(t, mapping)
+  let mut members: Set[u16] = set.empty()
+  set.insert(mut members, 1)
+  set.insert(mut members, 256)
+  round(t, members)
+  Ok(())
+}

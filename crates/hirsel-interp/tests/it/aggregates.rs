@@ -213,6 +213,7 @@ fn forget_suppresses_outer_finalizer_and_all_owned_fields() {
         nominals: vec![nominal("A", 0, true), nominal("Outer", 1, true)],
         forget: Some(path("forget")),
         checked: None,
+        serialization: Default::default(),
     };
     let e = run_runtime(vec![b.finish("main", result)], &runtime, vec![]);
     assert!(finalizers(&e).is_empty());

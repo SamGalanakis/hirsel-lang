@@ -648,6 +648,7 @@ mod tests {
             .task_call(
                 name,
                 &OperationCall {
+                    runtime: &Default::default(),
                     path: &DefPath::core(name),
                     arguments,
                     generics: &[],
@@ -697,6 +698,7 @@ mod tests {
                 captures: vec![],
                 owned_captures: vec![],
                 sizes: Default::default(),
+                type_arguments: Default::default(),
             };
             let OperationResult::Complete { value: child, .. } = call(
                 &mut library,
@@ -753,6 +755,7 @@ mod tests {
                 captures: vec![],
                 owned_captures: vec![],
                 sizes: Default::default(),
+                type_arguments: Default::default(),
             };
             let OperationResult::Complete { value: child, .. } = call(
                 &mut library,

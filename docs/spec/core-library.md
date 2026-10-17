@@ -22,6 +22,10 @@ syntax needs no library call.
 ## The ledger
 
 ```text
+// SER-1/2
+fn codec.encode[T: serializable](value: T) -> Bytes
+fn codec.decode[T: serializable](data: Bytes) -> Result[T, DecodeError]
+
 // CAP-1/2/4, LANG-9, CONC-3
 N fn io.stdin(rt: Io) -> Result[Stdin, GrantError]
 N fn io.stderr(rt: Io) -> Result[Stderr, GrantError]
@@ -617,3 +621,8 @@ reservations.insert(tx: Tx, value: Reservation) -> Result[Reservation, StockErro
 
 They grant no ambient database authority. The overview's `CliError` is
 `Usage(ArgError) | Files(FileError) | Output(OutputError)`.
+
+`codec.encode` and `codec.decode` use the [canonical codec](serialization.md#ser-2-canonical-codec).
+`DecodeError` is the nullary variant `Version | SchemaMismatch | Truncated |
+Trailing | Scalar | Utf8 | Tag | Length | Duplicate | Order`; these are expected
+validation failures with no partially decoded value. Operational refusal is separate.

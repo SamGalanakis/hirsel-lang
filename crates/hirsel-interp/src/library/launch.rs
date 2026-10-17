@@ -148,6 +148,7 @@ pub fn core_runtime_types() -> crate::aggregate::RuntimeTypes {
         }],
         forget: None,
         checked: None,
+        serialization: Default::default(),
     }
 }
 pub fn launch_with_runtime(

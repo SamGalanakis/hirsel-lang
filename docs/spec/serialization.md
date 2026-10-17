@@ -41,6 +41,23 @@ nominal type equality or live authority. Identical canonical values at a fixed s
 version encode identically. Malformed bytes are an expected decode error, not a
 diagnostic.
 
+## Source operations
+
+`codec.encode[T: serializable](value: T) -> Bytes` borrows a valid value and
+encodes one version-1 envelope. `codec.decode[T: serializable](data: Bytes) ->
+Result[T, DecodeError]` borrows the input and validates it against the concrete
+schema of `T` before returning fresh owned data. Both operations require the
+whole SER-1 schema, including explicit opt-in for user nominal types.
+
+`DecodeError` has nullary cases: `Version` (magic or codec version),
+`SchemaMismatch` (descriptor differs from the expected schema), `Truncated`
+(incomplete input), `Trailing` (extra payload or envelope bytes), `Scalar`
+(noncanonical bool or NaN), `Utf8` (invalid String encoding), `Tag` (invalid
+variant ordinal), `Length` (invalid or overflowing extent), `Duplicate`
+(repeated Map key or Set element), and `Order` (descending Set encodings). Schema or valid
+source-value inconsistencies are compiler errors; operational budget exhaustion
+is separate from `DecodeError`.
+
 ## Canonical data codec version 1
 
 All multibyte integers are fixed-width little-endian. Concatenation has no alignment,

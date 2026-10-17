@@ -11,6 +11,7 @@ pub mod observation;
 mod resources;
 pub mod scalar;
 pub mod structural;
+pub mod type_arguments;
 pub mod value;
 
 pub use eval::{run, run_with_operations, run_with_runtime};
@@ -292,6 +293,8 @@ operation_boundary! {
     }
 }
 pub struct OperationCall<'a> {
+    /// Checked nominal declarations; incoming bytes can never supply these.
+    pub runtime: &'a aggregate::RuntimeTypes,
     pub path: &'a DefPath,
     pub generics: &'a [GenericArgument],
     pub arguments: &'a [Value],

@@ -125,6 +125,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     }
     for (name, generic, variants) in [
         ("Result", "T,E", "Ok(T)|Error(E)"),
+        (
+            "DecodeError",
+            "",
+            "Version()|SchemaMismatch()|Truncated()|Trailing()|Scalar()|Utf8()|Tag()|Length()|Duplicate()|Order()",
+        ),
         ("Option", "T", "None()|Some(T)"),
         ("CheckRule", "", "Arithmetic()|TextInvariant()|Bounds()"),
         ("CancelCause", "", "Requested()|Parent()|ChildFailed()"),
@@ -600,6 +605,7 @@ impl Builder {
                                 "copyable" => Bound::Copyable,
                                 "data" => Bound::Data,
                                 "key" => Bound::Key,
+                                "serializable" => Bound::Serializable,
                                 _ => panic!("unknown bound {b}"),
                             })
                             .collect(),

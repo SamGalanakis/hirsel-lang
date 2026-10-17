@@ -54,6 +54,7 @@ pub(crate) struct Frame {
     pub loop_owned: Vec<(Value, crate::observation::Anchor)>,
     pub slots: Vec<Option<Value>>,
     pub sizes: crate::value::SizeBindings,
+    pub type_arguments: crate::type_arguments::Bindings,
     pub block: BlockId,
     pub instruction: usize,
     pub continuation: Option<Continuation>,
@@ -159,6 +160,7 @@ impl Frame {
         }
         let block = body.entry;
         Ok(Self {
+            type_arguments: Default::default(),
             sizes,
             definition,
             body_id,
