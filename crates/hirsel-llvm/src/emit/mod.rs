@@ -180,11 +180,11 @@ fn toolchain() -> String {
     format!("llvm {PINNED_LLVM}")
 }
 
-/// Undefined symbols LLVM's own lowering may introduce: C library functions for `llvm.fma` on
-/// a target without fused multiply-add, `frem` and memory intrinsics, and the 128-bit
+/// C library symbols for byte comparisons and those LLVM's lowering may introduce for
+/// `llvm.fma` on a target without fused multiply-add, `frem` and memory intrinsics, and the 128-bit
 /// division and integer-to-float conversion routines every C toolchain's support
 /// library (libgcc, compiler-rt) provides.
-pub const TOOLCHAIN_IMPORTS: [&str; 15] = [
+pub const TOOLCHAIN_IMPORTS: [&str; 17] = [
     "__divti3",
     "__floattidf",
     "__floattisf",
@@ -193,10 +193,12 @@ pub const TOOLCHAIN_IMPORTS: [&str; 15] = [
     "__modti3",
     "__udivti3",
     "__umodti3",
+    "bcmp",
     "fma",
     "fmaf",
     "fmod",
     "fmodf",
+    "memcmp",
     "memcpy",
     "memmove",
     "memset",

@@ -6,6 +6,7 @@ mod alias_diagnostics;
 mod alloc_elision_ir;
 mod arena_node_ir;
 mod builder_takeover;
+mod byte_compare_ir;
 mod callable_results;
 mod callsite_identity;
 mod canonical_tir;

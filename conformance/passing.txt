@@ -3612,6 +3612,7 @@ conformance/SEM/SEM-4-wave1-collections-run.hir
 conformance/SEM/SEM-4-wave1-counted-run.hir
 conformance/SEM/SEM-4-wave1-floor-run.hir
 conformance/SEM/SEM-4-wave1-primitives-run.hir
+conformance/SEM/SEM-5-byte-slice-comparison-run.hir
 conformance/SEM/SEM-5-equality-order-sensitive.hir
 conformance/SEM/SEM-5-equality-same-order.hir
 conformance/SEM/SEM-5-float-key-bad.hir

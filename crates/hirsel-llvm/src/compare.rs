@@ -20,7 +20,8 @@ use hirsel_lir::layout_types::{
 };
 
 use crate::context::{
-    BasicBlock, Builder, Cast, FloatPredicate, Function, IntPredicate, Module, Value,
+    Attribute, AttributeSlot, BasicBlock, Builder, Cast, FloatPredicate, Function, IntPredicate,
+    MemoryEffects, Module, Value,
 };
 use crate::emit::{load_tag, slice_storage};
 
@@ -314,13 +315,23 @@ impl<'m> Generator<'m, '_> {
                 }
                 let (lp, ll) = self.slice(&record, *element, left)?;
                 let (rp, rl) = self.slice(&record, *element, right)?;
-                let fewer = self.builder.icmp(IntPredicate::Ult, ll, rl);
-                let count = self.builder.select(fewer, ll, rl);
-                self.bytes(lp, rp, count);
                 let less = self.builder.icmp(IntPredicate::Ult, ll, rl);
                 let greater = self.builder.icmp(IntPredicate::Ugt, ll, rl);
-                let code = self.order(less, greater);
-                self.decide(code);
+                let lengths = self.order(less, greater);
+                if self.equality {
+                    // Slices have no child depth check or observable byte reads.
+                    // Unequal lengths therefore decide equality before any bytes.
+                    self.decide(lengths);
+                }
+                let count = if self.equality {
+                    ll
+                } else {
+                    self.builder.select(less, ll, rl)
+                };
+                self.bytes(lp, rp, count)?;
+                if !self.equality {
+                    self.decide(lengths);
+                }
             }
             LayoutKind::Opaque { .. } => self.container(layout, left, right, deeper)?,
             LayoutKind::Packed
@@ -571,19 +582,47 @@ impl<'m> Generator<'m, '_> {
         Ok((data, length))
     }
 
-    /// Compares `count` bytes at `left` and `right`, returning at the first unequal pair.
-    fn bytes(&self, left: Value<'m>, right: Value<'m>, count: Value<'m>) {
-        let i8_ty = self.module.int_type(8);
-        self.each(count, |g, i| {
-            let l = g.builder.load(i8_ty, g.builder.offset(left, i), 1);
-            let r = g.builder.load(i8_ty, g.builder.offset(right, i), 1);
-            let less = g.builder.icmp(IntPredicate::Ult, l, r);
-            let greater = g.builder.icmp(IntPredicate::Ugt, l, r);
-            let code = g.order(less, greater);
-            g.decide(code);
-            Ok(())
-        })
-        .unwrap_or_else(|_| unreachable!("the byte loop body cannot fail"));
+    /// Compare the readable byte intervals through the target's unsigned-byte order.
+    /// Empty slices do not call libc; no address outside either interval is read.
+    fn bytes(&self, left: Value<'m>, right: Value<'m>, count: Value<'m>) -> Compared<()> {
+        let work = self.block();
+        let done = self.block();
+        let nonempty = self.builder.icmp(IntPredicate::Ne, count, self.u64(0));
+        self.builder.cond_br(nonempty, work, done);
+        self.builder.position(work);
+        let ptr = self.module.ptr_type();
+        let int = self.module.int_type(32);
+        let function = self
+            .module
+            .function(
+                "memcmp",
+                self.module
+                    .function_type(int, &[ptr, ptr, self.module.int_type(64)]),
+            )
+            .map_err(|_| CompareError::Invalid("memcmp type".into()))?;
+        for attribute in [
+            Attribute::NoUnwind,
+            Attribute::WillReturn,
+            Attribute::Memory(MemoryEffects::ArgumentRead),
+        ] {
+            self.module
+                .add_attribute(function, AttributeSlot::Function, attribute);
+        }
+        for parameter in [0, 1] {
+            self.module.add_attribute(
+                function,
+                AttributeSlot::Parameter(parameter),
+                Attribute::CapturesNone,
+            );
+        }
+        let compared = self.builder.call(function, &[left, right, count]);
+        let zero = self.module.const_int(int, 0);
+        let less = self.builder.icmp(IntPredicate::Slt, compared, zero);
+        let greater = self.builder.icmp(IntPredicate::Sgt, compared, zero);
+        self.decide(self.order(less, greater));
+        self.builder.br(done);
+        self.builder.position(done);
+        Ok(())
     }
 
     /// A loop over `0..count` (an `i64`), running `body` with the index in the loop block.

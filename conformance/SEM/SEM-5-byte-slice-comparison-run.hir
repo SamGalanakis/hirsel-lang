@@ -1,0 +1,35 @@
+// rule: SEM-5
+// expect: run
+// Byte comparison keeps slice offsets, unsigned bytes, embedded zeroes and prefixes.
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let data: Bytes = b"xx0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\0\xffyy"
+  for length in 0u64..65u64 {
+    let left = bytes.slice(data, 2u64, 2u64 + length)
+    let mut copied: List[u8] = []
+    for i in 0u64..length {
+      list.push(mut copied, left[i])
+    }
+    let right = bytes.from_list(take copied)
+    failure.check(left == right && !(left != right), TextInvariant())
+    failure.check(left <= right && left >= right, TextInvariant())
+    if length != 0u64 {
+      let shorter = bytes.slice(data, 2u64, 1u64 + length)
+      failure.check(
+        left != shorter && shorter < left && left > shorter,
+        TextInvariant()
+      )
+    }
+  }
+  let high: Bytes = b"\0\xff"
+  let low: Bytes = b"\0\x7f"
+  let near: Bytes = b"\0\xfe"
+  let empty: Bytes = b""
+  let zero: Bytes = b"\0"
+  let acute: String = "café"
+  let acute_again: String = "café"
+  let circumflex: String = "cafê"
+  failure.check(high > low && high != near, TextInvariant())
+  failure.check(empty < zero && empty != zero, TextInvariant())
+  failure.check(acute == acute_again && acute < circumflex, TextInvariant())
+  Ok(())
+}
