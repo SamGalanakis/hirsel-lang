@@ -371,7 +371,6 @@ fn an_escape_onto_an_existing_file_is_refused_as_invalid() {
         .into_iter()
         .collect(),
         invalid_path_code: 71,
-        missing_path_code: 72,
         ..Default::default()
     };
     let mut h = Harness::new(config);
@@ -692,7 +691,6 @@ fn cleanup_closes_files_aborts_atomic_temporaries_and_records_drop_order() {
     let mut h = Harness::new(SimulationConfig {
         files: [("keep".into(), b"old".to_vec())].into_iter().collect(),
         invalid_path_code: 71,
-        missing_path_code: 72,
         ..Default::default()
     });
     let io = h.root("Io");
@@ -707,8 +705,8 @@ fn cleanup_closes_files_aborts_atomic_temporaries_and_records_drop_order() {
     assert_eq!(
         h.value("file.open", vec![dir.clone(), path("missing")]),
         error(Value::Variant {
-            variant: 0,
-            fields: vec![Some(u32_value(72))]
+            variant: 3,
+            fields: vec![]
         })
     );
     let file = unok(h.value("file.open", vec![dir.clone(), path("keep")]));

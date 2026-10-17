@@ -1,0 +1,28 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("leaf"), b"x")])
+  test.check(
+    t,
+    match file.open(d, path.of("leaf/child")) {
+      Error(NotDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match dir.narrow(d, path.of("leaf")) {
+      Error(NotDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.create(d, path.of("leaf/child")) {
+      Error(NotDirectory()) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

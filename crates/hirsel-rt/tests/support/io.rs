@@ -356,6 +356,26 @@ pub fn replay_interpreter_with_fixture(
                     },
                     IoError::Canceled(c) => reference::simulation::Fault::Canceled(c),
                     IoError::NotGranted => panic!("grant denial is policy, not an injected fault"),
+                    IoError::NotFound => reference::simulation::Fault::File {
+                        error: reference::simulation::FileError::NotFound,
+                        partial: fault.partial,
+                    },
+                    IoError::PermissionDenied => reference::simulation::Fault::File {
+                        error: reference::simulation::FileError::PermissionDenied,
+                        partial: fault.partial,
+                    },
+                    IoError::AlreadyExists => reference::simulation::Fault::File {
+                        error: reference::simulation::FileError::AlreadyExists,
+                        partial: fault.partial,
+                    },
+                    IoError::IsDirectory => reference::simulation::Fault::File {
+                        error: reference::simulation::FileError::IsDirectory,
+                        partial: fault.partial,
+                    },
+                    IoError::NotDirectory => reference::simulation::Fault::File {
+                        error: reference::simulation::FileError::NotDirectory,
+                        partial: fault.partial,
+                    },
                 };
                 library
                     .simulation
@@ -533,7 +553,15 @@ fn decode(schema: &Completion, value: hirsel_interp::Value) -> Completion {
         } else {
             let (tag, mut payload) = fields(value);
             if payload.is_empty() {
-                return Err(IoError::NotGranted);
+                return Err(match tag {
+                    2 => IoError::NotGranted,
+                    3 => IoError::NotFound,
+                    4 => IoError::PermissionDenied,
+                    5 => IoError::AlreadyExists,
+                    6 => IoError::IsDirectory,
+                    7 => IoError::NotDirectory,
+                    _ => panic!("invalid nullary file error"),
+                });
             }
             let value = payload.remove(0);
             Err(if tag == 0 {

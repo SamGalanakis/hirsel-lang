@@ -221,12 +221,13 @@ impl MemoryTree<'_> {
 }
 impl Storage for MemoryTree<'_> {
     fn open_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
+        self.destination(path)?;
         let identity = self
             .identities
             .reachable
             .get(path)
             .copied()
-            .ok_or(IoError::Fault(2))?;
+            .ok_or(IoError::NotFound)?;
         self.identities.opened.insert(id, identity);
         Ok(())
     }
@@ -275,8 +276,15 @@ impl Storage for MemoryTree<'_> {
     }
     fn destination(&mut self, path: &str) -> Result<(), IoError> {
         let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
-        if self.tree.directories.contains(path) || !self.tree.directories.contains(parent) {
-            Err(IoError::Fault(2))
+        self.tree.resolve("", path, false)?;
+        if self.tree.directories.contains(path) {
+            Err(IoError::IsDirectory)
+        } else if !self.tree.directories.contains(parent) {
+            Err(if self.tree.files.contains_key(parent) {
+                IoError::NotDirectory
+            } else {
+                IoError::NotFound
+            })
         } else {
             Ok(())
         }
@@ -285,11 +293,17 @@ impl Storage for MemoryTree<'_> {
         if self.tree.directories.contains(path) {
             Ok(())
         } else {
-            Err(IoError::Fault(1))
+            self.tree.resolve("", path, true)?;
+            Err(if self.tree.files.contains_key(path) {
+                IoError::NotDirectory
+            } else {
+                IoError::NotFound
+            })
         }
     }
     fn read(&mut self, path: &str) -> Result<Vec<u8>, IoError> {
-        self.tree.files.get(path).cloned().ok_or(IoError::Fault(2))
+        self.destination(path)?;
+        self.tree.files.get(path).cloned().ok_or(IoError::NotFound)
     }
     fn write(
         &mut self,
@@ -298,18 +312,16 @@ impl Storage for MemoryTree<'_> {
         append: bool,
         exclusive: bool,
     ) -> Result<(), IoError> {
-        let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
-        if !self.tree.directories.contains(parent) || self.tree.directories.contains(path) {
-            return Err(IoError::Fault(2));
+        if exclusive && (self.tree.files.contains_key(path) || self.tree.directories.contains(path))
+        {
+            return Err(IoError::AlreadyExists);
         }
-        if exclusive && self.tree.files.contains_key(path) {
-            return Err(IoError::Fault(3));
-        }
+        self.destination(path)?;
         if append {
             self.tree
                 .files
                 .get_mut(path)
-                .ok_or(IoError::Fault(2))?
+                .ok_or(IoError::NotFound)?
                 .extend_from_slice(bytes);
         } else {
             self.tree.files.insert(path.into(), bytes.to_vec());
@@ -327,21 +339,22 @@ impl Storage for MemoryTree<'_> {
         Ok(())
     }
     fn remove(&mut self, path: &str) -> Result<(), IoError> {
-        self.tree.files.remove(path).ok_or(IoError::Fault(2))?;
+        self.destination(path)?;
+        self.tree.files.remove(path).ok_or(IoError::NotFound)?;
         self.identities.reachable.remove(path);
         self.identities.prepared.remove(path);
         Ok(())
     }
     fn rename(&mut self, from: &str, to: &str) -> Result<(), IoError> {
         if self.tree.directories.contains(to) {
-            return Err(IoError::Fault(2));
+            return Err(IoError::IsDirectory);
         }
         if self.identities.prepared.get(from).is_none()
             || self.identities.prepared.get(from) != self.identities.reachable.get(from)
         {
             return Err(IoError::Fault(1));
         }
-        let bytes = self.tree.files.remove(from).ok_or(IoError::Fault(2))?;
+        let bytes = self.tree.files.remove(from).ok_or(IoError::NotFound)?;
         self.tree.files.insert(to.into(), bytes);
         let identity = self
             .identities
@@ -457,7 +470,7 @@ impl Storage for LinkedTree<'_> {
     ) -> Result<(), IoError> {
         let path = self.path(path, append)?;
         if exclusive && self.tree.links.contains_key(&path) {
-            return Err(IoError::Fault(3));
+            return Err(IoError::AlreadyExists);
         }
         self.memory().write(&path, bytes, append, exclusive)?;
         if !append {

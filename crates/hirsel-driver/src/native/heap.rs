@@ -206,6 +206,14 @@ fn io_error(code: u32) -> OpValue {
         value: Box::new(OpValue::Plain(bytes)),
     }
 }
+fn io_portable(ordinal: u32) -> OpValue {
+    let mut bytes = vec![0; 8];
+    bytes[..4].copy_from_slice(&ordinal.to_le_bytes());
+    OpValue::Variant {
+        tag: 1,
+        value: Box::new(OpValue::Plain(bytes)),
+    }
+}
 fn io_not_granted() -> OpValue {
     let mut bytes = vec![0; 8];
     bytes[..4].copy_from_slice(&2u32.to_le_bytes());
@@ -412,7 +420,12 @@ impl Io {
                                 access,
                             })))
                         }
-                        _ => io_error(1),
+                        Some(root) => io_portable(if self.trees[&tree].1.contains_key(&root) {
+                            7
+                        } else {
+                            3
+                        }),
+                        None => io_error(1),
                     }
                 } else {
                     io_not_granted()
@@ -722,6 +735,23 @@ impl Io {
                 let Some(path) = io_relative(&root, text) else {
                     return Some(OpOutcome::Value(io_error(1)));
                 };
+                let mut prefix = String::new();
+                let parts: Vec<_> = path.split('/').filter(|p| !p.is_empty()).collect();
+                for part in parts.iter().take(parts.len().saturating_sub(1)) {
+                    if !prefix.is_empty() {
+                        prefix.push('/');
+                    }
+                    prefix.push_str(part);
+                    if !self.trees[&tree].0.contains(&prefix) {
+                        return Some(OpOutcome::Value(io_portable(
+                            if self.trees[&tree].1.contains_key(&prefix) {
+                                7
+                            } else {
+                                3
+                            },
+                        )));
+                    }
+                }
                 match kind {
                     "open" if self.trees[&tree].1.contains_key(&path) => {
                         io_ok(OpValue::OpenHandle(self.grant(IoGrant::File {
@@ -739,7 +769,11 @@ impl Io {
                         if self.trees[&tree].0.contains(&path)
                             || !self.trees[&tree].0.contains(parent)
                         {
-                            io_error(2)
+                            io_portable(if self.trees[&tree].0.contains(&path) {
+                                6
+                            } else {
+                                3
+                            })
                         } else {
                             let identity = self
                                 .files
@@ -772,18 +806,34 @@ impl Io {
                                 bits: bytes.len() as u128,
                             })
                         })
-                        .unwrap_or_else(|| io_error(2)),
+                        .unwrap_or_else(|| {
+                            io_portable(if self.trees[&tree].0.contains(&path) {
+                                6
+                            } else {
+                                3
+                            })
+                        }),
                     "read_bytes" => self.trees[&tree]
                         .1
                         .get(&path)
                         .map(|bytes| io_ok(OpValue::ByteSequence(bytes.clone())))
-                        .unwrap_or_else(|| io_error(2)),
+                        .unwrap_or_else(|| {
+                            io_portable(if self.trees[&tree].0.contains(&path) {
+                                6
+                            } else {
+                                3
+                            })
+                        }),
                     "remove" => {
                         if self.trees.get_mut(&tree).unwrap().1.remove(&path).is_some() {
                             self.files.remove(&(tree, path));
                             io_ok(OpValue::Unit)
                         } else {
-                            io_error(2)
+                            io_portable(if self.trees[&tree].0.contains(&path) {
+                                6
+                            } else {
+                                3
+                            })
                         }
                     }
                     "write_bytes" | "create_atomic" => {
@@ -791,7 +841,11 @@ impl Io {
                         if self.trees[&tree].0.contains(&path)
                             || !self.trees[&tree].0.contains(parent)
                         {
-                            io_error(2)
+                            io_portable(if self.trees[&tree].0.contains(&path) {
+                                6
+                            } else {
+                                3
+                            })
                         } else if kind == "write_bytes" {
                             let [OpValue::Bytes(bytes)] = rest else {
                                 return Some(OpOutcome::Unsupported);
@@ -807,7 +861,9 @@ impl Io {
                             let mut serial = self.next;
                             let temporary = loop {
                                 let p = format!("{path}.hirsel-tmp-{serial}");
-                                if !self.trees[&tree].1.contains_key(&p) {
+                                if !self.trees[&tree].1.contains_key(&p)
+                                    && !self.trees[&tree].0.contains(&p)
+                                {
                                     break p;
                                 }
                                 serial += 1;
@@ -828,7 +884,11 @@ impl Io {
                             })))
                         }
                     }
-                    _ => io_error(2),
+                    _ => io_portable(if self.trees[&tree].0.contains(&path) {
+                        6
+                    } else {
+                        3
+                    }),
                 }
             }
             (Some("test"), "dir", [OpValue::Handle(test), OpValue::Sequence(entries)])

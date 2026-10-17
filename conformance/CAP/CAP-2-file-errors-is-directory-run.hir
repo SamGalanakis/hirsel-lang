@@ -1,0 +1,50 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(
+    t,
+    [(path.of("sub/value"), b"x"), (path.of("out.hirsel-tmp-3/child"), b"keep")]
+  )
+  test.check(
+    t,
+    match file.open(d, path.of("sub")) {
+      Error(IsDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.create(d, path.of("sub")) {
+      Error(IsDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.read_bytes(d, path.of("sub")) {
+      Error(IsDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.write_bytes(d, path.of(""), b"bad") {
+      Error(IsDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.remove(d, path.of("")) {
+      Error(IsDirectory()) => true,
+      _ => false,
+    }
+  )
+  let mut atomic = file.create_atomic(d, path.of("out"))?
+  file.write_all(d, mut atomic, b"written")?
+  file.commit(d, take atomic)?
+  test.check(t, file.read_bytes(d, path.of("out"))? == b"written")
+  test.check(t, file.read_bytes(d, path.of("out.hirsel-tmp-3/child"))? == b"keep")
+  Ok(())
+}

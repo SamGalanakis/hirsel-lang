@@ -129,3 +129,9 @@ contents. File grants preserve position and read/write mode across narrowing;
 create truncates the current inode, while replacement/unlink leaves already-open
 handles on their prior inode. Read events record delivered bytes and publish the
 caller's list through an explicit mutable writeback.
+
+File path failures use typed portable conditions. `Fault::File` injects the same
+conditions, with a committed prefix for write errors; generic Fault/Canceled
+scripts remain available. Confinement failures retain the explicit invalid-path
+code, while missing entries use NotFound. File-specific faults are rejected by
+the stdin, stdout and network script domains.

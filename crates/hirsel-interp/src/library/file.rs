@@ -36,7 +36,10 @@ impl Library {
         let fault = if denied {
             None
         } else {
-            self.simulation.fault(name)
+            self.tasks
+                .canceled()
+                .map(Fault::Canceled)
+                .or_else(|| self.simulation.fault(name))
         };
         let mut updates = vec![];
         let value = if denied {
@@ -47,7 +50,9 @@ impl Library {
             let bytes = bytes(arg(a, 2)?)?;
             let n = match &fault {
                 Some(Fault::Canceled(_)) => 0,
-                Some(Fault::Fault { partial, .. }) => (*partial).min(bytes.len()),
+                Some(Fault::Fault { partial, .. } | Fault::File { partial, .. }) => {
+                    (*partial).min(bytes.len())
+                }
                 None => bytes.len(),
             };
             if n > 0 {

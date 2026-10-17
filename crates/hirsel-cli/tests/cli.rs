@@ -1366,3 +1366,55 @@ pub fn main(rt: Io) -> Result[(), Error] {
         std::fs::remove_dir_all(root).unwrap();
     });
 }
+
+#[test]
+fn file_errors_cli_reports_permission_denied_for_a_chmod_zero_host_file() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    hirsel_engine::with_compiler_stack(|| {
+        let source = file(
+            r#"pub fn main(rt: Io) -> Result[(), FileError] {
+  let d = io.dir(rt, path.of("data"))?
+  match file.open(d, path.of("secret")) { Error(PermissionDenied()) => Ok(()), _ => Error(FileFault(99u32)) }
+}
+"#,
+        );
+        if std::fs::metadata(&source).unwrap().uid() == 0 {
+            eprintln!("skipped chmod permission test: running as root");
+            std::fs::remove_file(source).unwrap();
+            return;
+        }
+        let root = source.with_extension("files");
+        std::fs::create_dir(&root).unwrap();
+        let secret = root.join("secret");
+        std::fs::write(&secret, b"denied").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let mut record = build_run_record(&source);
+        record["io"] = stdout_grant();
+        record["io"]["dirs"] = serde_json::json!([{"path":"data","host":root,"access":"read"}]);
+        let run = source.with_extension("run.json");
+        std::fs::write(&run, record.to_string()).unwrap();
+        let exe = build_executable(&source, &[]);
+        for native in [false, true] {
+            let mut command = if native {
+                Command::new(&exe)
+            } else {
+                let mut c = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                c.arg("run").arg(&source);
+                c
+            };
+            let output = command
+                .arg(if native { "--hirsel-run" } else { "--run" })
+                .arg(&run)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(0), "native={native}: {output:?}");
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty(), "{output:?}");
+        }
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        for path in [source, exe, run] {
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    });
+}

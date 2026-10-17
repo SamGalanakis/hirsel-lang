@@ -132,7 +132,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "FileError",
             "",
-            "FileFault(u32)|Canceled(CancelCause)|NotGranted()",
+            "FileFault(u32)|Canceled(CancelCause)|NotGranted()|NotFound()|PermissionDenied()|AlreadyExists()|IsDirectory()|NotDirectory()",
         ),
         ("IpAddr", "", "V4(Inline[u8, 4])|V6(Inline[u8, 16])"),
         ("NetOperation", "", "Connect()|ConnectTls()|Listen()"),

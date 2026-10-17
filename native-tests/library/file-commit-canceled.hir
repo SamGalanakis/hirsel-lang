@@ -17,6 +17,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Error(Canceled(_)) => (),
     Error(FileFault(_)) => require(false),
     Error(NotGranted()) => require(false),
+    Error(NotFound()) => require(false),
+    Error(PermissionDenied()) => require(false),
+    Error(AlreadyExists()) => require(false),
+    Error(IsDirectory()) => require(false),
+    Error(NotDirectory()) => require(false),
     Ok(_) => require(false),
   }
   match file.open(d, p) {

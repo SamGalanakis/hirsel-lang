@@ -355,11 +355,12 @@ fn rules(v: &Value) -> Result<Vec<NetRule>, Error> {
         })
         .collect()
 }
-fn injected(fault: Fault) -> NetFault {
-    match fault {
+fn injected(fault: Fault) -> Result<NetFault, Error> {
+    Ok(match fault {
         Fault::Canceled(cause) => NetFault::Canceled(cause),
         Fault::Fault { code, .. } => NetFault::Fault(code),
-    }
+        Fault::File { .. } => return Err(invalid("file error supplied to network")),
+    })
 }
 fn result(value: NetResult<Value>) -> Result<Value, NetFault> {
     value.map(ok).or_else(|e| match e {
@@ -484,7 +485,7 @@ impl Simulation {
                             .map(Fault::Canceled)
                             .or_else(|| self.fault(name))
                         {
-                            break 'operation Err(injected(fault));
+                            break 'operation Err(injected(fault)?);
                         }
                         let peer_idx = self.net_worlds.get(&world).and_then(|w| {
                             w.peers
@@ -665,7 +666,7 @@ impl Simulation {
                             self.net_streams.remove(&id);
                             self.grants.remove(&id);
                         }
-                        break 'operation Err(injected(fault));
+                        break 'operation Err(injected(fault)?);
                     }
                     let s = self.net_streams.get_mut(&id).unwrap();
                     match name {

@@ -16,7 +16,17 @@ pub(crate) fn plain_evidence(definition: &DefPath) -> bool {
         && matches!(path.name.as_str(), "Path" | "StrPos")
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileError {
+    Fault(u32),
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    IsDirectory,
+    NotDirectory,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Fault {
+    File { error: FileError, partial: usize },
     Canceled(u32),
     Fault { code: u32, partial: usize },
 }
@@ -39,9 +49,8 @@ pub struct SimulationConfig {
     pub links: BTreeMap<String, String>,
     pub monotonic: u64,
     pub wall: i64,
-    /// Codes for invalid/confinement and absent paths are capability inputs.
+    /// Codes for invalid/confinement paths are capability inputs.
     pub invalid_path_code: u32,
-    pub missing_path_code: u32,
     /// Fault queues are consumed by operation name, in order, never host errno.
     pub faults: BTreeMap<String, VecDeque<Fault>>,
 }
@@ -69,7 +78,6 @@ impl Default for SimulationConfig {
             monotonic: 0,
             wall: 0,
             invalid_path_code: 1,
-            missing_path_code: 2,
             faults: BTreeMap::new(),
         }
     }
@@ -343,7 +351,28 @@ impl Simulation {
             .expect("atomic identity");
         self.file_identities.insert((tree, to.into()), identity);
     }
-    pub(crate) fn resolve_mount(&self, selector: &str, path: &str) -> Result<String, u32> {
+    pub(crate) fn file_bytes(&self, tree: u64, path: &str) -> Result<&Vec<u8>, FileError> {
+        if self.trees[&tree].0.contains(path) {
+            return Err(FileError::IsDirectory);
+        }
+        self.trees[&tree].1.get(path).ok_or(FileError::NotFound)
+    }
+    pub(crate) fn file_destination(&self, tree: u64, path: &str) -> Result<(), FileError> {
+        if self.trees[&tree].0.contains(path) {
+            return Err(FileError::IsDirectory);
+        }
+        let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
+        if self.trees[&tree].0.contains(parent) {
+            Ok(())
+        } else {
+            Err(if self.trees[&tree].1.contains_key(parent) {
+                FileError::NotDirectory
+            } else {
+                FileError::NotFound
+            })
+        }
+    }
+    pub(crate) fn resolve_mount(&self, selector: &str, path: &str) -> Result<String, FileError> {
         let physical = self.resolve_path(0, "", selector, true)?;
         self.resolve_path(0, &physical, path, true)
     }
@@ -356,7 +385,7 @@ impl Simulation {
         logical_root: &str,
         path: &str,
         follow_leaf: bool,
-    ) -> Result<String, u32> {
+    ) -> Result<String, FileError> {
         let root = self
             .resolved_directories
             .get(&directory)
@@ -370,10 +399,10 @@ impl Simulation {
         root: &str,
         path: &str,
         follow_leaf: bool,
-    ) -> Result<String, u32> {
-        let invalid = self.config.invalid_path_code;
+    ) -> Result<String, FileError> {
+        let invalid = FileError::Fault(self.config.invalid_path_code);
         if path.starts_with('/') || path.contains(['\\', '\0']) {
-            return Err(invalid);
+            return Err(invalid.clone());
         }
         let mut physical: Vec<_> = root
             .split('/')
@@ -389,7 +418,7 @@ impl Simulation {
             }
             if component == ".." {
                 if physical.len() == floor {
-                    return Err(invalid);
+                    return Err(invalid.clone());
                 }
                 physical.pop();
                 continue;
@@ -402,14 +431,18 @@ impl Simulation {
             {
                 followed += 1;
                 if followed > 40 || target.starts_with('/') || target.contains(['\\', '\0']) {
-                    return Err(invalid);
+                    return Err(invalid.clone());
                 }
                 physical.pop();
                 for component in target.split('/').rev() {
                     components.push_front(component.into());
                 }
             } else if !components.is_empty() && !self.trees[&tree].0.contains(&name) {
-                return Err(self.config.missing_path_code);
+                return Err(if self.trees[&tree].1.contains_key(&name) {
+                    FileError::NotDirectory
+                } else {
+                    FileError::NotFound
+                });
             }
         }
         Ok(physical.join("/"))
@@ -420,15 +453,15 @@ impl Simulation {
         directory: u64,
         path: &str,
         follow_leaf: bool,
-    ) -> Result<String, u32> {
+    ) -> Result<String, FileError> {
         let Some(Grant::Dir { root, .. }) = self.grants.get(&directory) else {
-            return Err(self.config.invalid_path_code);
+            return Err(FileError::Fault(self.config.invalid_path_code));
         };
         let local = if root.is_empty() {
             path
         } else {
             path.strip_prefix(&format!("{root}/"))
-                .ok_or(self.config.invalid_path_code)?
+                .ok_or(FileError::Fault(self.config.invalid_path_code))?
         };
         self.resolve_in(tree, directory, root, local, follow_leaf)
     }
@@ -437,7 +470,7 @@ impl Simulation {
         tree: u64,
         directory: u64,
         logical_root: &str,
-    ) -> Result<Vec<String>, u32> {
+    ) -> Result<Vec<String>, FileError> {
         let root = self.resolve_in(tree, directory, logical_root, "", true)?;
         let mut work = vec![(root.clone(), String::new(), vec![root.clone()])];
         let mut result = Vec::new();
@@ -463,7 +496,7 @@ impl Simulation {
                 let resolved = self.resolve_path(tree, &root, &relative, true)?;
                 if self.trees[&tree].0.contains(&resolved) {
                     if ancestry.contains(&resolved) {
-                        return Err(self.config.invalid_path_code);
+                        return Err(FileError::Fault(self.config.invalid_path_code));
                     }
                     let mut ancestry = ancestry.clone();
                     ancestry.push(resolved.clone());
@@ -471,7 +504,7 @@ impl Simulation {
                 } else if self.trees[&tree].1.contains_key(&resolved) {
                     result.push(relative);
                 } else {
-                    return Err(self.config.invalid_path_code);
+                    return Err(FileError::Fault(self.config.invalid_path_code));
                 }
             }
         }

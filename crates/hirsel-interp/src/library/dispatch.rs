@@ -1,7 +1,7 @@
 //! Definition-path dispatch; unknown ordinary definitions leave context unchanged.
 use super::{
     Simulation, SimulationConfig, collection, float, integer,
-    simulation::{self, Fault, Grant},
+    simulation::{self, Fault, FileError, Grant},
     string,
 };
 use crate::{
@@ -63,6 +63,7 @@ impl Library {
             None => match self.simulation.fault("stdin.read") {
                 Some(Fault::Canceled(cause)) => Err((1, cause)),
                 Some(Fault::Fault { code, .. }) => Err((0, code)),
+                Some(Fault::File { .. }) => return Err(invalid("file error supplied to stdin")),
                 None => {
                     let position = self.simulation.stdin_position;
                     let remaining = &self.simulation.config.stdin[position..];
@@ -256,7 +257,14 @@ impl Library {
                                     self.simulation.resolved_directories.insert(*id, physical);
                                     ok(handle)
                                 }
-                                _ => file_fault(self.simulation.config.invalid_path_code),
+                                Ok(physical) => file_error(
+                                    if self.simulation.trees[&tree].1.contains_key(&physical) {
+                                        FileError::NotDirectory
+                                    } else {
+                                        FileError::NotFound
+                                    },
+                                ),
+                                Err(error) => file_error(error),
                             }
                         }
                     }
@@ -318,6 +326,9 @@ impl Library {
                     Some(Fault::Fault { code, partial }) => {
                         output.extend_from_slice(&text.as_bytes()[..partial.min(text.len())]);
                         error(variant(0, vec![u32_value(code)]))
+                    }
+                    Some(Fault::File { .. }) => {
+                        return Err(invalid("file error supplied to output"));
                     }
                     None => {
                         output.extend_from_slice(text.as_bytes());
@@ -481,7 +492,7 @@ impl Library {
             .or_else(|| self.simulation.fault(name))
         {
             // Cancellation has no effects. Other faults may commit a prefix.
-            if let Fault::Fault { partial, .. } = &f
+            if let Fault::Fault { partial, .. } | Fault::File { partial, .. } = &f
                 && *partial > 0
             {
                 match name {
@@ -573,7 +584,7 @@ impl Library {
                     BuiltinType::Iter,
                     paths.into_iter().map(|p| ok(path(&p))).collect::<Vec<_>>(),
                 )),
-                Err(code) => file_fault(code),
+                Err(error) => file_error(error),
             });
         }
         if name == "file.narrow" {
@@ -640,14 +651,14 @@ impl Library {
                 .resolve_in(tree, dir, &root, &local(&temp), false)
             {
                 Ok(p) => p,
-                Err(code) => return Ok(file_fault(code)),
+                Err(error) => return Ok(file_error(error)),
             };
             let dst = match self
                 .simulation
                 .resolve_in(tree, dir, &root, &local(&dst), false)
             {
                 Ok(p) => p,
-                Err(code) => return Ok(file_fault(code)),
+                Err(error) => return Ok(file_error(error)),
             };
             if name == "file.commit" && self.simulation.file_identity(tree, &temp) != Some(identity)
             {
@@ -692,11 +703,13 @@ impl Library {
         let follow = !matches!(name, "file.write_bytes" | "file.remove");
         let p = match self.simulation.resolve_in(tree, dir, &root, p, follow) {
             Ok(p) => p,
-            Err(code) => return Ok(file_fault(code)),
+            Err(error) => return Ok(file_error(error)),
         };
         match name {
             "file.open" => {
-                if self.simulation.trees[&tree].1.contains_key(&p) {
+                if let Err(error) = self.simulation.file_bytes(tree, &p) {
+                    Ok(file_error(error))
+                } else {
                     Ok(ok(self.simulation.handle(
                         "File",
                         Grant::File {
@@ -711,15 +724,11 @@ impl Library {
                                 .expect("opened identity"),
                         },
                     )))
-                } else {
-                    Ok(file_fault(self.simulation.config.missing_path_code))
                 }
             }
             "file.create" => {
-                if !self.simulation.trees[&tree].0.contains(parent(&p))
-                    || self.simulation.trees[&tree].0.contains(&p)
-                {
-                    return Ok(file_fault(self.simulation.config.missing_path_code));
+                if let Err(error) = self.simulation.file_destination(tree, &p) {
+                    return Ok(file_error(error));
                 }
                 self.simulation
                     .trees
@@ -746,21 +755,19 @@ impl Library {
                     },
                 )))
             }
-            "file.size" => Ok(self.simulation.trees[&tree]
-                .1
-                .get(&p)
+            "file.size" => Ok(self
+                .simulation
+                .file_bytes(tree, &p)
                 .map(|b| ok(u64_value(b.len() as u64)))
-                .unwrap_or_else(|| file_fault(self.simulation.config.missing_path_code))),
-            "file.read_bytes" => Ok(self.simulation.trees[&tree]
-                .1
-                .get(&p)
+                .unwrap_or_else(file_error)),
+            "file.read_bytes" => Ok(self
+                .simulation
+                .file_bytes(tree, &p)
                 .map(|b| ok(Value::Bytes(b.clone())))
-                .unwrap_or_else(|| file_fault(self.simulation.config.missing_path_code))),
+                .unwrap_or_else(file_error)),
             "file.write_bytes" => {
-                if !self.simulation.trees[&tree].0.contains(parent(&p))
-                    || self.simulation.trees[&tree].0.contains(&p)
-                {
-                    return Ok(file_fault(self.simulation.config.missing_path_code));
+                if let Err(error) = self.simulation.file_destination(tree, &p) {
+                    return Ok(file_error(error));
                 }
                 let data = bytes(arg(a, 2)?)?.to_vec();
                 if tree == 0 {
@@ -791,19 +798,22 @@ impl Library {
                     self.simulation.unlink_identity(tree, &p);
                     ok(Value::Unit)
                 } else {
-                    file_fault(self.simulation.config.missing_path_code)
+                    file_error(if self.simulation.trees[&tree].0.contains(&p) {
+                        FileError::IsDirectory
+                    } else {
+                        FileError::NotFound
+                    })
                 },
             ),
             "file.create_atomic" => {
-                if !self.simulation.trees[&tree].0.contains(parent(&p))
-                    || self.simulation.trees[&tree].0.contains(&p)
-                {
-                    return Ok(file_fault(self.simulation.config.missing_path_code));
+                if let Err(error) = self.simulation.file_destination(tree, &p) {
+                    return Ok(file_error(error));
                 }
                 let mut serial = self.simulation.next_id;
                 let temp = loop {
                     let candidate = format!("{}.hirsel-tmp-{serial}", p);
                     if !self.simulation.trees[&tree].1.contains_key(&candidate)
+                        && !self.simulation.trees[&tree].0.contains(&candidate)
                         && !(tree == 0 && self.simulation.config.links.contains_key(&candidate))
                     {
                         break candidate;
@@ -1543,10 +1553,22 @@ pub fn i32_value(n: i32) -> Value {
 pub(super) fn file_fault(code: u32) -> Value {
     error(variant(0, vec![u32_value(code)]))
 }
+pub(super) fn file_error(f: FileError) -> Value {
+    let ordinal = match f {
+        FileError::Fault(code) => return file_fault(code),
+        FileError::NotFound => 3,
+        FileError::PermissionDenied => 4,
+        FileError::AlreadyExists => 5,
+        FileError::IsDirectory => 6,
+        FileError::NotDirectory => 7,
+    };
+    error(variant(ordinal, vec![]))
+}
 pub(super) fn fault_result(f: Fault) -> Value {
     match f {
         Fault::Canceled(c) => error(variant(1, vec![variant(c, vec![])])),
         Fault::Fault { code, .. } => file_fault(code),
+        Fault::File { error, .. } => file_error(error),
     }
 }
 /// A key past the structural depth limit fails the keyed operation (MEM-3).

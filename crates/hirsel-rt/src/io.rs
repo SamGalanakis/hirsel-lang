@@ -37,6 +37,11 @@ pub(crate) fn mount_access(
 pub enum IoError {
     Fault(u32),
     Canceled(u32),
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    IsDirectory,
+    NotDirectory,
     NotGranted,
 }
 /// Ordinals follow core InputError; host errno is translated to the existing fault input.
@@ -404,7 +409,11 @@ impl Tree {
                     pending.push_front(part.into());
                 }
             } else if !pending.is_empty() && !self.directories.contains(&current) {
-                return Err(IoError::Fault(2));
+                return Err(if self.files.contains_key(&current) {
+                    IoError::NotDirectory
+                } else {
+                    IoError::NotFound
+                });
             }
         }
         Ok(parts.join("/"))
@@ -619,6 +628,20 @@ impl State {
         // Policy denial is independently derived, never an injected tape fault.
         if fault.is_some_and(|f| f.error == IoError::NotGranted)
             || (self.denied_projection(request) && fault.is_some())
+        {
+            return Err(AdapterError::InvalidCompletion);
+        }
+        if matches!(request, Request::Print { .. })
+            && fault.is_some_and(|f| {
+                matches!(
+                    f.error,
+                    IoError::NotFound
+                        | IoError::PermissionDenied
+                        | IoError::AlreadyExists
+                        | IoError::IsDirectory
+                        | IoError::NotDirectory
+                )
+            })
         {
             return Err(AdapterError::InvalidCompletion);
         }
@@ -1192,7 +1215,7 @@ impl State {
                                     let candidate = format!("{destination}.hirsel-tmp-{serial}");
                                     match storage.write(&candidate, &[], false, true) {
                                         Ok(()) => break candidate,
-                                        Err(IoError::Fault(3)) => {
+                                        Err(IoError::AlreadyExists) => {
                                             serial = serial
                                                 .checked_add(1)
                                                 .expect("temporary names exhausted")
@@ -1337,9 +1360,9 @@ impl UnitResult {
                 error: 1,
                 code,
             },
-            Err(IoError::NotGranted) => Self {
+            Err(other) => Self {
                 tag: 1,
-                error: 2,
+                error: error_word(other) as u32,
                 code: 0,
             },
         }
@@ -1436,6 +1459,11 @@ fn error_word(error: IoError) -> u64 {
         IoError::Fault(code) => u64::from(code) << 32,
         IoError::Canceled(cause) => 1 | (u64::from(cause) << 32),
         IoError::NotGranted => 2,
+        IoError::NotFound => 3,
+        IoError::PermissionDenied => 4,
+        IoError::AlreadyExists => 5,
+        IoError::IsDirectory => 6,
+        IoError::NotDirectory => 7,
     }
 }
 unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {

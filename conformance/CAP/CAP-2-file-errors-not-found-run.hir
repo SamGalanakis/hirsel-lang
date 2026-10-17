@@ -1,0 +1,28 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [])
+  test.check(
+    t,
+    match file.open(d, path.of("missing")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.read_bytes(d, path.of("missing")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.remove(d, path.of("missing")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

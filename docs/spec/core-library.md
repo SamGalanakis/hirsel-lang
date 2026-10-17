@@ -199,6 +199,7 @@ CancelError   = Canceled(CancelCause)
 ChannelError  = Closed | Canceled(CancelCause)
 GrantError    = NotGranted()
 FileError     = FileFault(u32) | Canceled(CancelCause) | NotGranted()
+              | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory()
 InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
 EnvError      = NotGranted() | InvalidUtf8()
@@ -209,7 +210,14 @@ OutOfSpace    = OutOfSpace()
 
 A missing configured projection returns `GrantError::NotGranted`; a missing mount, or an
 operation outside the granted file rights, returns `FileError::NotGranted` before any host
-effect. File and output fault codes are capability inputs, not inferred OS error numbers.
+effect. File providers report portable `NotFound`, `PermissionDenied`, `AlreadyExists`,
+`IsDirectory` and `NotDirectory` errors for those conditions. The host maps ENOENT,
+EACCES/EPERM, EEXIST, EISDIR and ENOTDIR respectively; the simulated directory produces
+the corresponding path/type errors. Permission and existence faults can also be explicit
+provider inputs. Path-confinement refusals retain `FileFault` and never masquerade as OS
+permission errors. Other file errors retain `FileFault(u32)`; file and output fault codes
+are capability inputs, not inferred OS error numbers. Every variant is recorded and
+replayed as a run input; injected non-canceled errors can follow partial write effects.
 
 ## Network types
 
@@ -288,7 +296,7 @@ currently reachable through the target `Dir`, the original `Dir` included; unlin
 replacing that directory entry makes `file.narrow` return `None`. A `File` closes on drop;
 an `AtomicFile` aborts and removes its temporary on drop, and `file.commit` consumes it on
 either outcome. Directory paths are relative; absolute paths, traversal outside the root
-(resolved links included) and inaccessible paths return `FileFault` without granting
+(resolved links included) return `FileFault` without granting
 authority. `file.walk` yields relative paths in UTF-8 byte order and ends after its first
 `Error`.
 

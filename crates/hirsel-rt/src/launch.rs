@@ -115,6 +115,11 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Err(IoError::Fault(code)) => format!("fault {code}"),
             Err(IoError::Canceled(code)) => format!("canceled {code}"),
             Err(IoError::NotGranted) => "not-granted".into(),
+            Err(IoError::NotFound) => "NotFound".into(),
+            Err(IoError::PermissionDenied) => "PermissionDenied".into(),
+            Err(IoError::AlreadyExists) => "AlreadyExists".into(),
+            Err(IoError::IsDirectory) => "IsDirectory".into(),
+            Err(IoError::NotDirectory) => "NotDirectory".into(),
         }
     }
     let mut text = format!("{TAPE_HEADER}\n");
@@ -242,6 +247,11 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 IoError::Fault(code) => format!(" ! fault {code} {}", f.partial),
                 IoError::Canceled(code) => format!(" ! canceled {code} {}", f.partial),
                 IoError::NotGranted => " ! not-granted 0 0".into(),
+                IoError::NotFound => format!(" ! NotFound 0 {}", f.partial),
+                IoError::PermissionDenied => format!(" ! PermissionDenied 0 {}", f.partial),
+                IoError::AlreadyExists => format!(" ! AlreadyExists 0 {}", f.partial),
+                IoError::IsDirectory => format!(" ! IsDirectory 0 {}", f.partial),
+                IoError::NotDirectory => format!(" ! NotDirectory 0 {}", f.partial),
             })
             .unwrap_or_default();
         let _ = writeln!(text, "{request} -> {completion}{fault}");
@@ -281,6 +291,11 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
         match words {
             ["ok", v] => Ok(Ok(ok(v)?)),
             ["not-granted"] => Ok(Err(IoError::NotGranted)),
+            ["NotFound"] => Ok(Err(IoError::NotFound)),
+            ["PermissionDenied"] => Ok(Err(IoError::PermissionDenied)),
+            ["AlreadyExists"] => Ok(Err(IoError::AlreadyExists)),
+            ["IsDirectory"] => Ok(Err(IoError::IsDirectory)),
+            ["NotDirectory"] => Ok(Err(IoError::NotDirectory)),
             ["fault", code] => Ok(Err(IoError::Fault(number(code)?))),
             ["canceled", code] => Ok(Err(IoError::Canceled(number(code)?))),
             _ => Err("bad tape result".into()),
@@ -304,6 +319,11 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                                 "fault" => IoError::Fault(number(code)?),
                                 "canceled" => IoError::Canceled(number(code)?),
                                 "not-granted" if *code == "0" => IoError::NotGranted,
+                                "NotFound" if *code == "0" => IoError::NotFound,
+                                "PermissionDenied" if *code == "0" => IoError::PermissionDenied,
+                                "AlreadyExists" if *code == "0" => IoError::AlreadyExists,
+                                "IsDirectory" if *code == "0" => IoError::IsDirectory,
+                                "NotDirectory" if *code == "0" => IoError::NotDirectory,
                                 _ => return Err("bad tape fault".into()),
                             },
                             partial: number(partial)?,

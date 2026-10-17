@@ -16,6 +16,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Error(FileFault(code)) => require(code == 71u32),
     Error(Canceled(_)) => require(false),
     Error(NotGranted()) => require(false),
+    Error(NotFound()) => require(false),
+    Error(PermissionDenied()) => require(false),
+    Error(AlreadyExists()) => require(false),
+    Error(IsDirectory()) => require(false),
+    Error(NotDirectory()) => require(false),
     Ok(_) => require(false),
   }
   require(file.read_bytes(d, p) ? error == b"ab")

@@ -520,3 +520,9 @@ regular file and pins an O_APPEND writer. Replay retains inode contents across
 unlink/replacement, checks delivered byte prefixes, and publishes cursor changes
 only after tape agreement. File read grows the caller's List[u8] with the existing
 sequence allocator; LLVM uses the fixed operation ABI declarations.
+
+FileError's portable conditions map from host ErrorKind and are derived independently
+by the memory tree and checked-heap model. Tape result/fault records preserve each
+condition and committed write prefix. FileFault remains the fallback and confinement
+refusal; output and stdin keep their own fault domains. The Result ABI keeps the
+existing FileFault/Canceled/NotGranted ordinals and appends five nullary variants.

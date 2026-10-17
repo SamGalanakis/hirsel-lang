@@ -102,7 +102,7 @@ fn actions(real: &mut Library<RealIo>) {
         partial: 99,
     });
     assert_eq!(real.commit(root, atomic), Ok(Err(IoError::Canceled(2))));
-    assert_eq!(real.read(root, "missing"), Ok(Err(IoError::Fault(2))));
+    assert_eq!(real.read(root, "missing"), Ok(Err(IoError::NotFound)));
     real.remove(sub, "a").unwrap().unwrap();
 }
 #[test]
@@ -1216,7 +1216,7 @@ fn atomic_commit_rejects_identical_replacement_of_its_prepared_temporary_in_each
             .unwrap()
             .unwrap();
         assert_eq!(real.commit(dir, atomic), Ok(Err(IoError::Fault(1))));
-        assert_eq!(real.read(dir, "saved"), Ok(Err(IoError::Fault(2))));
+        assert_eq!(real.read(dir, "saved"), Ok(Err(IoError::NotFound)));
         let mut tape = identity_tape(real.0.tape());
         // This refusal also follows from the prepared identity, without a host fault input.
         for event in &mut tape {
@@ -1628,4 +1628,128 @@ fn file_stream_records_pinned_reads_seek_append_prefixes_and_replays_without_hos
         }
         sim.call(event.request.clone()).unwrap();
     }
+}
+
+#[test]
+fn portable_file_errors_round_trip_provider_faults_tapes_and_result_abi() {
+    let (_temp, mut real) = setup();
+    let directory = match real
+        .call(Request::Directory {
+            io: 1,
+            path: "".into(),
+        })
+        .unwrap()
+    {
+        Completion::Handle(Ok(id)) => id,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        real.call(Request::Open {
+            directory,
+            path: "sub".into()
+        }),
+        Ok(Completion::Handle(Err(IoError::IsDirectory)))
+    );
+    assert_eq!(
+        real.call(Request::NarrowDir {
+            directory,
+            path: "old".into()
+        }),
+        Ok(Completion::Handle(Err(IoError::NotDirectory)))
+    );
+    assert_eq!(
+        real.call(Request::Open {
+            directory,
+            path: "old/child".into()
+        }),
+        Ok(Completion::Handle(Err(IoError::NotDirectory)))
+    );
+    assert_eq!(
+        real.call(Request::Read {
+            directory,
+            path: "missing".into()
+        }),
+        Ok(Completion::Bytes(Err(IoError::NotFound)))
+    );
+    for (ordinal, error) in [
+        (3, IoError::NotFound),
+        (4, IoError::PermissionDenied),
+        (5, IoError::AlreadyExists),
+        (6, IoError::IsDirectory),
+        (7, IoError::NotDirectory),
+    ] {
+        assert_eq!(
+            UnitResult::of(Err(error.clone())),
+            UnitResult {
+                tag: 1,
+                error: ordinal,
+                code: 0
+            }
+        );
+        assert_eq!(
+            HandleResult::of(Err(error.clone())),
+            HandleResult {
+                tag: 1,
+                padding: 0,
+                value: u64::from(ordinal)
+            }
+        );
+        real.inject(Fault {
+            error: error.clone(),
+            partial: 0,
+        });
+        assert_eq!(
+            real.call(Request::Read {
+                directory,
+                path: "old".into()
+            }),
+            Ok(Completion::Bytes(Err(error)))
+        );
+    }
+    let writer = match real
+        .call(Request::Create {
+            directory,
+            path: "saved".into(),
+        })
+        .unwrap()
+    {
+        Completion::Handle(Ok(id)) => id,
+        other => panic!("{other:?}"),
+    };
+    real.inject(Fault {
+        error: IoError::PermissionDenied,
+        partial: 2,
+    });
+    assert_eq!(
+        real.call(Request::FileAppend {
+            directory,
+            file: writer,
+            bytes: b"abcd".to_vec()
+        }),
+        Ok(Completion::Unit(Err(IoError::PermissionDenied)))
+    );
+    real.call(Request::Close { handle: writer }).unwrap();
+    let final_tree = real.snapshot().unwrap();
+    assert_eq!(final_tree.files["saved"], b"ab");
+    let tape = real.tape().to_vec();
+    assert_eq!(
+        hirsel_rt::launch::parse_tape(&hirsel_rt::launch::render_tape(&tape).unwrap()).unwrap(),
+        tape
+    );
+    let mut sim = SimIo::new(initial(), tape.clone());
+    for event in &tape {
+        assert_eq!(
+            sim.call(event.request.clone()),
+            Ok(event.completion.clone())
+        );
+    }
+    sim.finish().unwrap();
+    assert_eq!(sim.tree(), &final_tree);
+    replay_interpreter(
+        &tape,
+        &initial(),
+        &final_tree,
+        real.handles().observed(),
+        real.stdout(),
+    );
 }

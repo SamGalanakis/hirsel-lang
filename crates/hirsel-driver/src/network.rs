@@ -156,6 +156,11 @@ fn file_error(e: hirsel_rt::io::IoError) -> Value {
         IoError::Fault(c) => variant(0, vec![hirsel_interp::library::u32_value(c)]),
         IoError::Canceled(c) => variant(1, vec![variant(c, vec![])]),
         IoError::NotGranted => variant(2, vec![]),
+        IoError::NotFound => variant(3, vec![]),
+        IoError::PermissionDenied => variant(4, vec![]),
+        IoError::AlreadyExists => variant(5, vec![]),
+        IoError::IsDirectory => variant(6, vec![]),
+        IoError::NotDirectory => variant(7, vec![]),
     })
 }
 fn clock_error(e: hirsel_rt::io::ClockError) -> Value {

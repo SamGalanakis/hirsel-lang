@@ -373,7 +373,7 @@ impl Adapter for RealIo {
                             match fault.error {
                                 IoError::Fault(code) => Err(InputError::Fault(code)),
                                 IoError::Canceled(cause) => Err(InputError::Canceled(cause)),
-                                IoError::NotGranted => return Err(AdapterError::InvalidCompletion),
+                                _ => return Err(AdapterError::InvalidCompletion),
                             }
                         } else {
                             let len = usize::try_from(*max).unwrap_or(usize::MAX).min(64 * 1024);
@@ -388,7 +388,7 @@ impl Adapter for RealIo {
                                         continue;
                                     }
                                     Err(e) => {
-                                        let IoError::Fault(code) = error(e) else {
+                                        let IoError::Fault(code) = stream_error(e) else {
                                             unreachable!()
                                         };
                                         break Err(InputError::Fault(code));
@@ -468,7 +468,7 @@ impl Adapter for RealIo {
                     Ok(n) => written += n,
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(e) => {
-                        let e = error(e);
+                        let e = stream_error(e);
                         completion = Completion::Unit(Err(e.clone()));
                         fault = Some(Fault {
                             error: e,
@@ -481,7 +481,7 @@ impl Adapter for RealIo {
             // Completion means acceptance at the provider boundary, including
             // flushing any private buffer before its success enters the tape.
             if let Err(e) = output.flush() {
-                let e = error(e);
+                let e = stream_error(e);
                 completion = Completion::Unit(Err(e.clone()));
                 fault = Some(Fault {
                     error: e,
@@ -565,13 +565,20 @@ struct Disk {
     prepared: BTreeMap<(u64, String), File>,
 }
 fn error(e: std::io::Error) -> IoError {
-    // Stable capability codes, never expose host errno as language data.
-    IoError::Fault(match e.kind() {
-        std::io::ErrorKind::NotFound => 2,
-        std::io::ErrorKind::AlreadyExists => 3,
-        _ => 1,
-    })
+    // Portable conditions, never expose host errno as language data.
+    match e.kind() {
+        std::io::ErrorKind::NotFound => IoError::NotFound,
+        std::io::ErrorKind::PermissionDenied => IoError::PermissionDenied,
+        std::io::ErrorKind::AlreadyExists => IoError::AlreadyExists,
+        std::io::ErrorKind::IsADirectory => IoError::IsDirectory,
+        std::io::ErrorKind::NotADirectory => IoError::NotDirectory,
+        _ => IoError::Fault(1),
+    }
 }
+fn stream_error(_: std::io::Error) -> IoError {
+    IoError::Fault(1)
+}
+
 impl Disk {
     fn base(&self) -> Result<&File, IoError> {
         if self.active_id == 0 {
@@ -670,16 +677,19 @@ impl Disk {
 }
 impl Storage for Disk {
     fn destination(&mut self, path: &str) -> Result<(), IoError> {
+        if self.local(path)?.is_empty() {
+            return Err(IoError::IsDirectory);
+        }
         self.parent(path)?;
         match self.open(path, libc::O_PATH, 0) {
             Ok(fd) => {
                 if fd.metadata().map_err(error)?.is_file() {
                     Ok(())
                 } else {
-                    Err(IoError::Fault(2))
+                    Err(IoError::IsDirectory)
                 }
             }
-            Err(IoError::Fault(2)) => Ok(()),
+            Err(IoError::NotFound) => Ok(()),
             Err(e) => Err(e),
         }
     }
@@ -688,9 +698,7 @@ impl Storage for Disk {
         self.active_id = id;
     }
     fn directory(&mut self, path: &str, id: u64) -> Result<(), IoError> {
-        let fd = self
-            .open(path, libc::O_RDONLY | libc::O_DIRECTORY, 0)
-            .map_err(|_| IoError::Fault(1))?;
+        let fd = self.open(path, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
         self.directories.insert(id, fd);
         Ok(())
     }
@@ -711,7 +719,7 @@ impl Storage for Disk {
     fn open_file(&mut self, path: &str, _id: u64) -> Result<(), IoError> {
         let fd = self.open(path, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
         if !fd.metadata().map_err(error)?.is_file() {
-            return Err(IoError::Fault(2));
+            return Err(IoError::IsDirectory);
         }
         self.last_open = Some(fd);
         Ok(())
@@ -724,7 +732,7 @@ impl Storage for Disk {
             0o600,
         )?;
         if !fd.metadata().map_err(error)?.is_file() {
-            return Err(IoError::Fault(2));
+            return Err(IoError::IsDirectory);
         }
         fd.set_len(0).map_err(error)?;
         self.last_open = Some(fd);
@@ -771,7 +779,7 @@ impl Storage for Disk {
     fn read(&mut self, path: &str) -> Result<Vec<u8>, IoError> {
         let mut fd = self.open(path, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
         if !fd.metadata().map_err(error)?.is_file() {
-            return Err(IoError::Fault(2));
+            return Err(IoError::IsDirectory);
         }
         let mut bytes = vec![];
         fd.read_to_end(&mut bytes).map_err(error)?;
@@ -806,7 +814,7 @@ impl Storage for Disk {
                 };
                 match self.open(&name, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o600) {
                     Ok(fd) => break Some((name, fd)),
-                    Err(IoError::Fault(3)) => {}
+                    Err(IoError::AlreadyExists) => {}
                     Err(e) => return Err(e),
                 }
             }
@@ -831,7 +839,7 @@ impl Storage for Disk {
             ),
         };
         if !fd.metadata().map_err(error)?.is_file() {
-            return Err(IoError::Fault(2));
+            return Err(IoError::IsDirectory);
         }
         if !append {
             let name = temporary.as_deref().unwrap_or(path);
@@ -873,6 +881,9 @@ impl Storage for Disk {
         }
     }
     fn remove(&mut self, path: &str) -> Result<(), IoError> {
+        if self.local(path)?.is_empty() {
+            return Err(IoError::IsDirectory);
+        }
         self.prepared.remove(&(self.active_id, path.into()));
         let (dir, name) = self.parent(path)?;
         // SAFETY: live directory fd and NUL-terminated local leaf. unlink never follows links.
@@ -917,7 +928,7 @@ fn open_beneath(fd: RawFd, path: &str, flags: i32, mode: u64) -> Result<File, Io
 }
 
 /// docs/spec/core-library.md: "Directory paths are relative; absolute paths, traversal outside the
-/// root (including resolved links) and inaccessible paths return FileFault
+/// root (including resolved links) return FileFault
 /// without granting authority." Parent steps pop only already pinned in-root
 /// descriptors. An O_PATH descriptor pins each classified inode before use.
 fn resolve_beneath(
@@ -1015,10 +1026,10 @@ fn resolve_beneath(
             return Err(IoError::Fault(1));
         } else if pending.is_empty() {
             if flags & libc::O_EXCL != 0 && flags & libc::O_CREAT != 0 {
-                return Err(IoError::Fault(3));
+                return Err(IoError::AlreadyExists);
             }
             if flags & libc::O_DIRECTORY != 0 && !meta.is_dir() {
-                return Err(IoError::Fault(1));
+                return Err(IoError::NotDirectory);
             }
             if flags & libc::O_PATH != 0 {
                 return Ok((pin, parents));
@@ -1042,7 +1053,7 @@ fn resolve_beneath(
         } else if meta.is_dir() {
             parents.push(Rc::new(pin));
         } else {
-            return Err(IoError::Fault(1));
+            return Err(IoError::NotDirectory);
         }
     }
     let current = parents.pop().expect("pinned root");
