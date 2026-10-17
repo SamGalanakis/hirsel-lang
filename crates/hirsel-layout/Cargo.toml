@@ -1,0 +1,14 @@
+[package]
+name = "hirsel-layout"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-lir = { path = "../hirsel-lir" }
+hirsel-types = { path = "../hirsel-types" }
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-codec = { path = "../hirsel-codec" }

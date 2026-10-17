@@ -221,7 +221,7 @@ impl Inline for Importer<'_, '_> {
             .collect();
         request.environment = Some(
             self.layouts
-                .environment(&hirsel_lir::layout::EnvironmentShape {
+                .environment(&hirsel_layout::layout::EnvironmentShape {
                     definition: helper,
                     body: 0,
                     store: &request.actuals.store,

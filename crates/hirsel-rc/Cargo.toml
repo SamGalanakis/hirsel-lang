@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+hirsel-layout = { path = "../hirsel-layout" }
 hirsel-graph = { path = "../hirsel-graph" }
 hirsel-intern = { path = "../hirsel-intern" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }

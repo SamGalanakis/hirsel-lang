@@ -271,7 +271,8 @@ fn repeated_directory_grants_keep_distinct_inodes_and_narrow_refuses_a_replaced_
 use crate::support;
 #[test]
 fn io_result_records_match_derived_layouts_on_both_targets() {
-    use hirsel_lir::layout::{LayoutBuilder, OwnerRepresentation, Owners};
+    use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
+
     use hirsel_lir::layout_types::{SizeSpec, TargetSpec};
     use hirsel_types::Primitive;
     use std::mem::{align_of, offset_of, size_of};

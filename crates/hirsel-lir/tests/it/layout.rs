@@ -2,6 +2,9 @@
 //! representation family, scan/drop order, dynamic extents, unavailable
 //! attribute combinations, validator mutations, golden vectors and C probes.
 use hirsel_codec as snapshot;
+use hirsel_layout::layout::{
+    Container, EnvironmentShape, LayoutBuilder, OwnerRepresentation, Owners,
+};
 use hirsel_lir::layout::*;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::layout_validate::{Obligation, validate_table};

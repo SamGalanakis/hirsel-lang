@@ -1,5 +1,6 @@
 //! Equality evidence for the conservative FlatFormatV0/SER-2 common subset.
-use hirsel_lir::layout::{LayoutBuilder, Owners};
+use hirsel_layout::layout::{LayoutBuilder, Owners};
+
 use hirsel_lir::layout_types::{LayoutKind, SizeSpec, TargetSpec};
 use hirsel_lir::layout_validate::validate_table;
 use hirsel_types::wire::{Codec, Error, Limits, Value, ValueId, ValueNode};

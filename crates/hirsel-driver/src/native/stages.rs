@@ -136,7 +136,7 @@ impl std::error::Error for NativeError {}
 /// A whole program at Ready: every unit sealed by the Ready validator against
 /// this table, target, manifest and input.
 pub struct ReadyProgram {
-    pub operations: hirsel_lir::operation::OperationRegistry,
+    pub operations: hirsel_layout::operation::OperationRegistry,
     pub launch: hirsel_run_config::Inputs,
     pub input: InputIdentity,
     pub target: TargetSpec,

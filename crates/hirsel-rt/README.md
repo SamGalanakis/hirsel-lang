@@ -6,7 +6,7 @@ the MEM-3 release worklist, compiler-local regions, failure state and finalizers
 rlib (for tests) and a static library (for linking with generated code).
 
 Allowed dependencies: std, the data-only core-contract and run-config, the shared pure LeafKernel crate, libc (OS syscall declarations), rustls 0.23 (ring/std/tls12), webpki-roots 1 and sha2 (PEM tape identity) in production. No other implementation crate; the driver wires them. Test-only: the interpreter for independent replay oracles (the registry inventory check and the compiled-program tests are in `hirsel-pipeline-tests`, `rt_*`), plus the data crates `hirsel-lir`,
-`hirsel-types`, `hirsel-syntax` and `hirsel-tir`, so the tests release values whose layouts `hirsel-lir`
+`hirsel-types`, `hirsel-syntax` and `hirsel-tir`, so the tests release values whose layouts `hirsel-layout`
 derives and `hirsel_lir::rt_program` lowers.
 
 Invariants and boundary:
@@ -474,3 +474,5 @@ production allocation/count/drop helpers or acquires host network authority.
 
 Type-store test fixtures use `hirsel_types::testing::Types` through the test-only
 `testing` feature; layout derivation and validation remain in this suite.
+
+Type-store test fixtures use `hirsel-layout` for type-to-layout and ABI derivation.

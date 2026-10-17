@@ -13,6 +13,7 @@ use super::{LibraryError, Request};
 use crate::insert::Editor;
 use crate::instance::{InstanceId, Instances, Program};
 use hirsel_core_contract::Passing;
+use hirsel_layout::layout::{EnvironmentShape, LayoutBuilder, Owners};
 use hirsel_lir::abi_types::{CallableShape, FnAbi, FnAbiId};
 use hirsel_lir::ir::{
     AddressBase, AddressId, AddressInfo, ArithMode, BinaryOp, BlockId, BlockKind, CallArgument,
@@ -22,7 +23,7 @@ use hirsel_lir::ir::{
     SiteRange, SlotId, SlotInfo, SlotKind, SourceAnchor, SourceAnchorId, Symbol, SymbolId,
     SymbolKind, Terminator, UnitHeader, UnitOrigin, ValueId, ValueRepr,
 };
-use hirsel_lir::layout::{EnvironmentShape, LayoutBuilder, LayoutError, Owners};
+use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind};
 use hirsel_lir::operation::OperationArgument;
 use hirsel_lir::stage::{StageKind, Value};

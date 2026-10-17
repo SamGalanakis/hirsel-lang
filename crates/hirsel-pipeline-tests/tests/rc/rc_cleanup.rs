@@ -721,8 +721,8 @@ pub fn main() -> u64 {{
     // A token nothing consumes. Tokens are header storage, so the table
     // gains the header layout and every unit names the extended table.
     let token = {
-        let owners = hirsel_lir::layout::Owners::default();
-        let mut builder = hirsel_lir::layout::LayoutBuilder::new(&target(), &owners);
+        let owners = hirsel_layout::layout::Owners::default();
+        let mut builder = hirsel_layout::layout::LayoutBuilder::new(&target(), &owners);
         let id = builder.header();
         let built = builder.table();
         let mut header = built.layout(id).unwrap().clone();

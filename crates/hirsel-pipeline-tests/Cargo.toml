@@ -12,6 +12,7 @@ test = false
 doctest = false
 
 [dev-dependencies]
+hirsel-layout = { path = "../hirsel-layout" }
 hirsel-codec = { path = "../hirsel-codec" }
 sha2 = "0.10"
 hirsel-core-contract = { path = "../hirsel-core-contract" }

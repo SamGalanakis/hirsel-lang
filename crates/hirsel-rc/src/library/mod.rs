@@ -30,9 +30,11 @@ use crate::import::{ImportCx, ImportError};
 use crate::instance::{
     Actuals, InstanceError, InstanceId, InstanceRole, Instances, Program, instantiate_function,
 };
+use hirsel_layout::instance::{InstanceKey, InstanceView};
+use hirsel_layout::layout::LayoutBuilder;
 use hirsel_lir::abi_types::CallableShape;
-use hirsel_lir::ir::{InstanceKey, InstanceView, LirUnit};
-use hirsel_lir::layout::{LayoutBuilder, LayoutError};
+use hirsel_lir::ir::LirUnit;
+use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
 use hirsel_syntax::{ContentHash, DefPath, ItemId};

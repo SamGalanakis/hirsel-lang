@@ -220,7 +220,6 @@ name = "hirsel-codec"
 version = "0.1.0"
 dependencies = [
  "hirsel-syntax",
- "hirsel-types",
 ]
 
 [[package]]
@@ -266,6 +265,7 @@ dependencies = [
  "hirsel-heapcheck",
  "hirsel-intern",
  "hirsel-interp",
+ "hirsel-layout",
  "hirsel-lexer",
  "hirsel-lir",
  "hirsel-llvm",
@@ -360,6 +360,18 @@ name = "hirsel-kernels"
 version = "0.1.0"
 
 [[package]]
+name = "hirsel-layout"
+version = "0.1.0"
+dependencies = [
+ "hirsel-codec",
+ "hirsel-core-contract",
+ "hirsel-lir",
+ "hirsel-syntax",
+ "hirsel-tir",
+ "hirsel-types",
+]
+
+[[package]]
 name = "hirsel-lexer"
 version = "0.1.0"
 dependencies = [
@@ -377,6 +389,7 @@ dependencies = [
  "hirsel-core-contract",
  "hirsel-diag",
  "hirsel-graph",
+ "hirsel-layout",
  "hirsel-lir",
  "hirsel-syntax",
  "hirsel-tir",
@@ -392,6 +405,7 @@ dependencies = [
  "hirsel-graph",
  "hirsel-heapcheck",
  "hirsel-interp",
+ "hirsel-layout",
  "hirsel-lir",
  "hirsel-span",
  "hirsel-syntax",
@@ -469,6 +483,7 @@ dependencies = [
  "hirsel-heapcheck",
  "hirsel-intern",
  "hirsel-interp",
+ "hirsel-layout",
  "hirsel-lir",
  "hirsel-rc",
  "hirsel-rt",
@@ -505,6 +520,7 @@ dependencies = [
  "hirsel-graph",
  "hirsel-heapcheck",
  "hirsel-intern",
+ "hirsel-layout",
  "hirsel-lir",
  "hirsel-span",
  "hirsel-syntax",
@@ -531,6 +547,7 @@ dependencies = [
  "hirsel-core-contract",
  "hirsel-interp",
  "hirsel-kernels",
+ "hirsel-layout",
  "hirsel-lir",
  "hirsel-rt",
  "hirsel-run-config",
@@ -594,6 +611,7 @@ dependencies = [
 name = "hirsel-types"
 version = "0.1.0"
 dependencies = [
+ "hirsel-codec",
  "hirsel-diag",
  "hirsel-intern",
  "hirsel-run-config",

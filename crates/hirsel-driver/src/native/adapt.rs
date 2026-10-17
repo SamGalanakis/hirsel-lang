@@ -6,7 +6,8 @@ use hirsel_core_contract::{
     SemanticEffects,
 };
 use hirsel_engine::{InstanceKind, NativeInput, ValidatedNativeInput};
-use hirsel_lir::layout::{OwnerRepresentation, Owners};
+use hirsel_layout::layout::{OwnerRepresentation, Owners};
+
 use hirsel_lir::stage::InputIdentity;
 use hirsel_rc::instance::{Program, Requirement, RequirementKind};
 use hirsel_syntax::ContentHash;

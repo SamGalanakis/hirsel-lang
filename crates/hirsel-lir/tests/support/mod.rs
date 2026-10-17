@@ -10,6 +10,7 @@ use hirsel_lir::abi_types::*;
 use hirsel_lir::effect::Effects;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::*;
+use hirsel_lir::operation::OperationDeclarations;
 use hirsel_lir::runtime_abi::{HEADER_SIZE, HEADER_V2};
 use hirsel_lir::stage::*;
 use hirsel_lir::testing::UnitBuilder;
@@ -495,7 +496,7 @@ pub struct Lir<S> {
     pub builder: UnitBuilder<S>,
     pub table: LayoutTable,
     pub manifest: Manifest,
-    pub operations: hirsel_lir::operation::OperationRegistry,
+    pub operations: hirsel_layout::operation::OperationRegistry,
     types: Vec<((ValueRepr, LayoutId), LirTypeId)>,
     own: (Vec<(Passing, LayoutId)>, Option<LayoutId>),
     anchor: SourceAnchorId,
@@ -555,14 +556,14 @@ impl<S: Stage> Lir<S> {
     pub fn declare_operation(
         &mut self,
         signature: hirsel_types::SignatureRef,
-        owners: hirsel_lir::layout::Owners,
+        owners: hirsel_layout::layout::Owners,
         abi: FnAbiId,
     ) {
         let operation = OperationId {
             definition: signature.definition.clone(),
             declaration_digest: signature.fingerprint,
         };
-        self.operations = hirsel_lir::operation::OperationRegistry {
+        self.operations = hirsel_layout::operation::OperationRegistry {
             signatures: [(operation.clone(), signature)].into(),
             owners,
         };

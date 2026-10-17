@@ -1,7 +1,7 @@
 # hirsel-types
 
 Own semantic types, complete signatures, checked decisions and shared query data.
-Allowed dependencies: syntax, intern, span, diag; no implementation crates.
+Allowed dependencies: syntax, intern, span, diag, codec; no implementation crates.
 Wire tests use run-config's shared `hex` formatter as a dev dependency.
 
 - `TypeStore` owns immutable rows. TypeIds have ephemeral provenance, checked by
@@ -452,3 +452,6 @@ driver.
 
 The opt-in `testing` feature exports `testing::Types`, the hand-built type-store
 fixture used by the LIR, LLVM and runtime test suites. It derives no property evidence.
+
+`snapshot` owns the canonical Primitive and BuiltinType encodings through
+hirsel-codec; the codec itself never depends on semantic types.

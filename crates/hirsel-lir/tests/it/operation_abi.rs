@@ -2,11 +2,13 @@
 //! and validates when the operation-declaration ABI check is removed.
 use super::support::{self, ENTRY, Lir};
 use hirsel_core_contract::{Manifest, OperationId, Passing};
+use hirsel_layout::layout::{OwnerRepresentation, Owners};
 use hirsel_lir::abi_types::FnAbiId;
 use hirsel_lir::ir::*;
-use hirsel_lir::layout::{OwnerRepresentation, Owners};
+
+use hirsel_layout::operation::OperationRegistry;
 use hirsel_lir::layout_types::*;
-use hirsel_lir::operation::{NativeType, OperationArgument as A, OperationRegistry};
+use hirsel_lir::operation::{NativeType, OperationArgument as A, OperationDeclarations};
 use hirsel_lir::stage::{Stage, Value};
 use hirsel_lir::validate::{Inputs, ViolationKind as K};
 use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId, PassingMode};
@@ -478,10 +480,14 @@ fn a_type_generic_operation_cannot_use_another_instances_abi() {
     let (mut unit, table) = fixture(
         &registry,
         &operation,
-        vec![A::Type(NativeType::Primitive(Primitive::I64))],
+        vec![A::Type(NativeType::Primitive(
+            hirsel_lir::operation::Primitive::I64,
+        ))],
     );
     assert_eq!(check(&unit, &table, &registry), []);
-    unit.tables.calls[0].operation_arguments = vec![A::Type(NativeType::Primitive(Primitive::U64))];
+    unit.tables.calls[0].operation_arguments = vec![A::Type(NativeType::Primitive(
+        hirsel_lir::operation::Primitive::U64,
+    ))];
     assert_eq!(
         check(&unit, &table, &registry),
         [K::CallShape("operation declaration ABI")]
@@ -492,18 +498,33 @@ fn a_type_generic_operation_cannot_use_another_instances_abi() {
 fn concrete_actuals_round_trip_without_type_store_indices() {
     use hirsel_codec::{from_text, to_text};
     let types = vec![
-        NativeType::Tuple(vec![NativeType::Primitive(Primitive::U64)]),
-        NativeType::Record(vec![(false, NativeType::Primitive(Primitive::Bytes))]),
-        NativeType::Variant(vec![vec![], vec![NativeType::Primitive(Primitive::I32)]]),
-        NativeType::Box(Box::new(NativeType::Primitive(Primitive::U8))),
+        NativeType::Tuple(vec![NativeType::Primitive(
+            hirsel_lir::operation::Primitive::U64,
+        )]),
+        NativeType::Record(vec![(
+            false,
+            NativeType::Primitive(hirsel_lir::operation::Primitive::Bytes),
+        )]),
+        NativeType::Variant(vec![
+            vec![],
+            vec![NativeType::Primitive(hirsel_lir::operation::Primitive::I32)],
+        ]),
+        NativeType::Box(Box::new(NativeType::Primitive(
+            hirsel_lir::operation::Primitive::U8,
+        ))),
         NativeType::Function(hirsel_lir::abi_types::CallMultiplicity::Once),
         NativeType::Named(
             path("Result"),
-            vec![A::Type(NativeType::Primitive(Primitive::U64))],
+            vec![A::Type(NativeType::Primitive(
+                hirsel_lir::operation::Primitive::U64,
+            ))],
         ),
         NativeType::Builtin(
-            BuiltinType::Inline,
-            vec![A::Type(NativeType::Primitive(Primitive::U8)), A::Size(6)],
+            hirsel_lir::operation::BuiltinType::Inline,
+            vec![
+                A::Type(NativeType::Primitive(hirsel_lir::operation::Primitive::U8)),
+                A::Size(6),
+            ],
         ),
     ];
     let arguments: Vec<_> = types.into_iter().map(A::Type).chain([A::Size(7)]).collect();

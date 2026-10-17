@@ -3,18 +3,19 @@
 Native data schemas: the staged LIR family, target
 descriptors, the physical layout table, the cross-unit ABI, `hirsel_rt_v2`
 declarations, effect flags and deterministic snapshots.
-`layout.rs` derives layouts, `abi.rs` derives `FnAbi`s and `layout_validate.rs`
-checks both independently. `validate/` holds the independent stage
-validators. `hirsel-graph` supplies pure traversal, dominance and loop-forest algorithms;
+`layout.rs` holds physical arithmetic, `abi.rs` holds physical ABI operations,
+and `layout_validate.rs` checks layouts and ABIs independently. The type-to-layout
+bridge, instance keys/views and declaration ABI derivation live in
+`hirsel-layout`. `validate/` holds the independent stage validators. `hirsel-graph` supplies pure traversal, dominance and loop-forest algorithms;
 the validators derive their own normal and failure graph from the IR.
 `persistent.rs` is the structure-sharing vector that
 dataflow states are built from, here and in `hirsel-rc`: a state costs what it
 changes, so an analysis stays near-linear in the size of a function.
 
-Allowed dependencies: the dependency-free `hirsel-graph` utility and shared data crates (`hirsel-syntax`, `hirsel-types`,
-`hirsel-tir`, `hirsel-core-contract`, `hirsel-codec`); no external production
+Allowed dependencies: the dependency-free `hirsel-graph` utility and shared data crates (`hirsel-syntax`, `hirsel-core-contract`, `hirsel-codec`); no external production
 dependency. Never an implementation crate or `hirsel-driver`: the driver will
-depend on the native implementation crates, which depend on this crate. Test-only: `hirsel-diag`,
+depend on the native implementation crates, which depend on this crate. Production and build dependencies on hirsel-types, hirsel-tir or hirsel-layout
+are forbidden. Test-only: `hirsel-layout`, `hirsel-types`, `hirsel-tir`, `hirsel-diag`,
 `serde_json` (`cargo metadata`). The manifest checks against the driver's
 registry inventory and interface version live in the driver's
 `tests/it/lir_schema.rs`. `tests/it/dependencies.rs` enforces the crate layering for the
@@ -42,8 +43,7 @@ Invariants:
   to the layout table whose digest the unit header names.
   `LirUnit::check_identity` rejects a wrong stage, stale versions or digests,
   and any index or pool range outside its arena. It is referential integrity
-  only, never a substitute for a stage validator. LIR holds no `TypeId`;
-  `InstanceView` keeps TypeIds only inside its own substitution store.
+  only, never a substitute for a stage validator. LIR holds no `TypeId`; the bridge owns the substitution stores.
 - Rows. An instruction row is at most 32 bytes on 64-bit hosts (asserted at
   compile time; currently 28). Variable operands live in typed `PoolRange`s and
   call, construction, closure, constant and failure data in side tables.
@@ -79,9 +79,9 @@ Invariants:
   it lowers each LayoutRecord's nested drop program to the flat `hirsel_rt_v2`
   step program, which emission writes as static data.
 - Native schemas never read `OwnershipFacts`.
-- Layout authority. `layout::LayoutBuilder` is the only producer of
+- Layout authority. `hirsel_layout::layout::LayoutBuilder` is the only producer of
   `LayoutRecord`s and `FnAbi`s. It reads type structure, size actuals and
-  `layout::Owners`: one `hirsel_tir::RepresentationRecord` per source nominal,
+  `hirsel_layout::layout::Owners`: one `hirsel_tir::RepresentationRecord` per source nominal,
   handle owners, and the library's container records (Map, Set, SortedMap,
   Slots, SlotId). The key encoding never writes a relation, brand, uniqueness
   or sendability; a callable's multiplicity stays because it selects the copy
@@ -460,3 +460,7 @@ Type-store test fixtures use `hirsel_types::testing::Types` through the test-onl
 The opt-in `hirsel_lir::testing::UnitBuilder` buffers hand-built LIR blocks,
 instructions and terminators for validator and backend tests. Suite-specific
 layout tables, identities, cleanup recipes and assertions remain in test support.
+
+Operation actuals use LIR-owned Primitive/BuiltinType tags. Validators receive
+`operation::OperationDeclarations` and compare the derived declaration ABI
+with the candidate call, including the rooted layout graph.

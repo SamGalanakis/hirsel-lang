@@ -97,7 +97,7 @@ impl Importer<'_, '_> {
                     arguments: a,
                 } => {
                     arguments(a, &mut todo);
-                    if let Some(hirsel_lir::layout::OwnerRepresentation::Defined(record)) =
+                    if let Some(hirsel_layout::layout::OwnerRepresentation::Defined(record)) =
                         self.layouts.owners().nominals.get(definition)
                         && let Some((finalizer, _)) = &record.finalizer
                         && let Some(body) = crate::library::body_index(finalizer)

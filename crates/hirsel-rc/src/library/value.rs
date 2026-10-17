@@ -58,7 +58,7 @@ fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .get(&path)
         .cloned()
         .ok_or_else(|| LibraryError::Malformed(format!("{path:?} is not an operation")))?;
-    let operation_arguments = OperationArgument::collect(&cx.store, &cx.arguments)
+    let operation_arguments = hirsel_layout::operation::collect_arguments(&cx.store, &cx.arguments)
         .map_err(|e| LibraryError::Layout(path.clone(), e))?;
     let abi = cx.abi;
     let sources: Vec<u32> = cx.fn_abi().parameters.iter().map(|p| p.source).collect();

@@ -975,7 +975,8 @@ fn the_compiled_extent_bound_is_the_runtimes() {
 /// alignment.
 #[test]
 fn sequence_elements_start_where_the_layout_places_them() {
-    use hirsel_lir::layout::{LayoutBuilder, Owners};
+    use hirsel_layout::layout::{LayoutBuilder, Owners};
+
     use hirsel_lir::layout_types::TargetSpec;
     use hirsel_types::Primitive;
     let target = TargetSpec::x86_64_unknown_linux_gnu();

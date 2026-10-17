@@ -267,7 +267,7 @@ Tests:
   `TargetSpec` agrees with LLVM, receipt and failure-code rejections, the object manifest,
   reproducible owned artifacts, parse and verifier errors, triple and DataLayout mismatches,
   and malformed objects. Fixtures (`tests/support/`) derive layouts and `FnAbi`s with
-  `hirsel_lir::layout::LayoutBuilder` and seal every unit with `hirsel_lir::validate`.
+  `hirsel_layout::layout::LayoutBuilder` and seal every unit with `hirsel_lir::validate`.
 - `tools/check-native.sh` adds `--include-ignored`: `tests/it/native.rs` links emitted objects with
   C harnesses and the `hirsel_rt_v2` archive and runs them on x86-64 and under
   the pinned static AArch64 qemu: the smoke fixture, the scalar boundary matrix against an
@@ -476,3 +476,5 @@ Type-store test fixtures use `hirsel_types::testing::Types` through the test-onl
 The opt-in `hirsel_lir::testing::UnitBuilder` buffers hand-built LIR blocks,
 instructions and terminators for validator and backend tests. Suite-specific
 layout tables, identities, cleanup recipes and assertions remain in test support.
+
+Type-store test fixtures use `hirsel-layout` for type-to-layout and ABI derivation.

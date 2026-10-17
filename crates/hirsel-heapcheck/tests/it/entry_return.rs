@@ -182,7 +182,7 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
         let violations = hirsel_lir::validate::check(
             &unit,
             &hirsel_lir::validate::Inputs {
-                operations: &Default::default(),
+                operations: &(),
                 target: &target,
                 layouts: &table,
                 manifest: &manifest,
@@ -264,7 +264,7 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
     let violations = hirsel_lir::validate::check(
         &caller,
         &hirsel_lir::validate::Inputs {
-            operations: &Default::default(),
+            operations: &(),
             target: &target,
             layouts: &table,
             manifest: &manifest,

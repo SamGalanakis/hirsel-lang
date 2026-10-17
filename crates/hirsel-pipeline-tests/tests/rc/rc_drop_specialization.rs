@@ -379,7 +379,7 @@ fn manifest() -> Manifest {
 fn violations<S: Stage>(f: &Fixture, units: &[LirUnit<S>]) -> Vec<K> {
     let manifest = manifest();
     let inputs = Inputs {
-        operations: &Default::default(),
+        operations: &(),
         target: &f.target,
         layouts: &f.table,
         manifest: &manifest,

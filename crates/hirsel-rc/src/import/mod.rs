@@ -29,6 +29,7 @@
 use crate::instance::{Actuals, InstanceError, InstanceId, Instances, Program, substitute};
 use crate::normalize::{Declined, Facts, Home, LoopPlan, LoopSite, NormalizeError};
 use hirsel_core_contract::{OperationId, Passing};
+use hirsel_layout::layout::LayoutBuilder;
 use hirsel_lir::abi_types::{CallableShape, FnAbiId};
 use hirsel_lir::effect::Effects;
 use hirsel_lir::ir::{
@@ -41,7 +42,7 @@ use hirsel_lir::ir::{
     SourceAnchor, SourceAnchorId, SwitchArm, Symbol, SymbolId, SymbolKind, Terminator, UnaryOp,
     UnitHeader, UnitOrigin, ValueId, ValueInfo, ValueRepr,
 };
-use hirsel_lir::layout::{LayoutBuilder, LayoutError};
+use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::{
     CopyRecipe, LayoutId, LayoutKind, LayoutTable, SizeSpec, TargetSpec,
 };

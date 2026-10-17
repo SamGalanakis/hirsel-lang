@@ -36,6 +36,7 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-validate", Class::Data),
     ("hirsel-proof-export", Class::Data),
     ("hirsel-lir", Class::Data),
+    ("hirsel-layout", Class::Data),
     ("hirsel-core-contract", Class::Data),
     ("hirsel-run-config", Class::Data),
     ("hirsel-lexer", Class::Implementation),
@@ -75,6 +76,7 @@ const ENGINE_IMPLEMENTATIONS: &[&str] = &[
 const NO_EXTERNAL_PRODUCTION: &[&str] = &[
     "hirsel-graph",
     "hirsel-lir",
+    "hirsel-layout",
     "hirsel-core-contract",
     "hirsel-codec",
     "hirsel-proof-export",
@@ -108,6 +110,11 @@ fn check_edge(from: &str, to: &str, kind: Kind) -> Result<(), String> {
         return Ok(());
     }
     let allowed = match (source, target) {
+        _ if matches!(from, "hirsel-lir" | "hirsel-codec")
+            && matches!(to, "hirsel-types" | "hirsel-tir" | "hirsel-layout") =>
+        {
+            false
+        }
         (Class::LeafUtility, _) => false,
         (_, Class::LeafUtility) => true,
         (Class::LeafKernel, Class::Data) => to == "hirsel-core-contract",
@@ -281,7 +288,16 @@ fn layering_controls() {
     // Implementation crates may use shared data crates.
     assert!(check_edge("hirsel-rc", "hirsel-lir", Kind::Production).is_ok());
     assert!(check_edge("hirsel-heapcheck", "hirsel-core-contract", Kind::Production).is_ok());
-    assert!(check_edge("hirsel-lir", "hirsel-tir", Kind::Production).is_ok());
+    for from in ["hirsel-lir", "hirsel-codec"] {
+        for to in ["hirsel-types", "hirsel-tir", "hirsel-layout"] {
+            assert!(check_edge(from, to, Kind::Production).is_err());
+            assert!(check_edge(from, to, Kind::Build).is_err());
+            assert!(check_edge(from, to, Kind::Dev).is_ok());
+        }
+    }
+    assert!(check_edge("hirsel-types", "hirsel-codec", Kind::Production).is_ok());
+    assert!(check_edge("hirsel-layout", "hirsel-types", Kind::Production).is_ok());
+    assert!(check_edge("hirsel-layout", "hirsel-lir", Kind::Production).is_ok());
     // Only the driver wires implementations; data crates stay data.
     assert!(check_edge("hirsel-driver", "hirsel-rc", Kind::Production).is_ok());
     assert!(check_edge("hirsel-lir", "hirsel-rc", Kind::Production).is_err());

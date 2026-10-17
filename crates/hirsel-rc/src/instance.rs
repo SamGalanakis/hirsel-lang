@@ -14,12 +14,14 @@
 //! so two call sites that differ only there name
 //! one instance.
 use hirsel_core_contract::{OperationId, Passing};
-use hirsel_lir::abi_types::{CallMultiplicity, CallableShape, FnAbiId};
-use hirsel_lir::ir::{
-    ActualBinder, CallableConvention, CaptureUse, CaptureView, InstanceKey, InstanceKeyError,
-    InstanceView, ParameterView, Substitution,
+use hirsel_layout::instance::{
+    ActualBinder, CallableConvention, CaptureView, InstanceKey, InstanceKeyError, InstanceView,
+    ParameterView, Substitution,
 };
-use hirsel_lir::layout::{LayoutBuilder, LayoutError, Owners};
+use hirsel_layout::layout::{LayoutBuilder, Owners};
+use hirsel_lir::abi_types::{CallMultiplicity, CallableShape, FnAbiId};
+use hirsel_lir::ir::CaptureUse;
+use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::InputIdentity;
 use hirsel_span::Span;
@@ -86,8 +88,8 @@ pub struct Program {
 
 impl Program {
     /// Independent declaration input for C, separate from the lowered units.
-    pub fn operation_registry(&self) -> hirsel_lir::operation::OperationRegistry {
-        hirsel_lir::operation::OperationRegistry {
+    pub fn operation_registry(&self) -> hirsel_layout::operation::OperationRegistry {
+        hirsel_layout::operation::OperationRegistry {
             signatures: self
                 .operations
                 .values()
@@ -747,7 +749,7 @@ impl Expander<'_, '_, '_> {
         self.follow(path, &actuals, None)?;
         // A library resource's drop body is a library body named by its
         // owner's native representation.
-        if let Some(hirsel_lir::layout::OwnerRepresentation::Defined(record)) =
+        if let Some(hirsel_layout::layout::OwnerRepresentation::Defined(record)) =
             self.layouts.owners().nominals.get(path)
             && let Some((finalizer, _)) = &record.finalizer
             && let Some(body) = crate::library::body_index(finalizer)

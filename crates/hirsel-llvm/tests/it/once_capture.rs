@@ -450,7 +450,7 @@ fn closure_construction_initializes_every_declared_capture() {
     let p = program(&TargetSpec::x86_64_unknown_linux_gnu(), true, false);
     let mut raw = p.units[0].unit().clone();
     let inputs = hirsel_lir::validate::Inputs {
-        operations: &Default::default(),
+        operations: &(),
         target: &p.table.target,
         layouts: &p.table.table,
         manifest: &p.manifest,

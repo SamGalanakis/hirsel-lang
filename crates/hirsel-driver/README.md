@@ -53,3 +53,5 @@ Memcheck executables select the input libc loader and library directory at
 link time; matching debug symbols sit in each object's adjacent `.debug/`
 directory, so mandatory
 Valgrind redirects do not depend on the worker image's stripped loader.
+
+Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.

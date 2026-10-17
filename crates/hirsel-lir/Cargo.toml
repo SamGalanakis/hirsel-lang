@@ -13,10 +13,10 @@ hirsel-graph = { path = "../hirsel-graph" }
 hirsel-codec = { path = "../hirsel-codec" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-syntax = { path = "../hirsel-syntax" }
-hirsel-tir = { path = "../hirsel-tir" }
-hirsel-types = { path = "../hirsel-types" }
 
 [dev-dependencies]
+hirsel-tir = { path = "../hirsel-tir" }
+hirsel-layout = { path = "../hirsel-layout" }
 hirsel-lir = { path = ".", features = ["testing"] }
 hirsel-types = { path = "../hirsel-types", features = ["testing"] }
 hirsel-diag = { path = "../hirsel-diag" }

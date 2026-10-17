@@ -70,6 +70,7 @@ CRATE_CAMPAIGNS = {
     # The backend, the runtime and LLVM.
     'hirsel-core-contract': frozenset({NATIVE_SMOKE}),
     'hirsel-lir': frozenset({NATIVE_SMOKE}),
+    'hirsel-layout': frozenset({NATIVE_SMOKE}),
     'hirsel-rc': frozenset({NATIVE_SMOKE}),
     'hirsel-heapcheck': frozenset({NATIVE_SMOKE}),
     'hirsel-llvm': frozenset({NATIVE_SMOKE}),

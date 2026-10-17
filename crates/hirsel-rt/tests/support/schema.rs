@@ -7,7 +7,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use hirsel_lir::layout::{LayoutBuilder, OwnerRepresentation, Owners, evaluate_size};
+use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
+use hirsel_lir::layout::evaluate_size;
 use hirsel_lir::layout_types::{
     DropStep, LayoutId, LayoutKind, LayoutTable, SizeSpec, TagForm, TargetSpec,
 };

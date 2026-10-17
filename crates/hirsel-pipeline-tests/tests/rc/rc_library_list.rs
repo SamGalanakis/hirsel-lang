@@ -721,7 +721,7 @@ int32_t __wrap_hirsel_rt_v2_launch(entry_fn entry, uint64_t result_size, const h
 
 #[test]
 fn consuming_cursors_record_uniqueness_where_their_transfer_needs_it() {
-    use hirsel_lir::layout::OwnerRepresentation;
+    use hirsel_layout::layout::OwnerRepresentation;
     use hirsel_types::{Primitive, TypeKind};
     let registry = hirsel_engine::registry::BuiltinRegistry::new();
     let signatures = registry
@@ -996,7 +996,7 @@ fn handmade_finalizer(library: bool, wrong_convention: bool) {
     let manifest = hirsel_core_contract::Manifest::skeleton([]);
     let target = target();
     let inputs = Inputs {
-        operations: &Default::default(),
+        operations: &(),
         target: &target,
         layouts: &table,
         manifest: &manifest,

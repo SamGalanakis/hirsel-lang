@@ -7,6 +7,10 @@ use hirsel_core_contract::{
     OperationId, OperationRow, ParameterOwnership, Passing, SemanticEffects, TestVectorId,
     Unavailable,
 };
+use hirsel_layout::instance::{
+    ActualBinder, CallableConvention, CaptureView, InstanceKey, InstanceKeyError, InstanceView,
+    ParameterView, Substitution,
+};
 use hirsel_lir::abi_types::*;
 use hirsel_lir::effect::{Effects, Opcode};
 use hirsel_lir::ir::*;

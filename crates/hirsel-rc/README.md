@@ -525,3 +525,5 @@ required to supply header or alignment bytes.
 and ordinary construction, with start zero and the exact owner length. C checks
 the byte payload and interval; no descriptor query, allocation, retain or runtime
 call is needed.
+
+Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.

@@ -677,7 +677,7 @@ fn a_tag_inside_one_arm_may_share_a_sibling_arms_reference_word() {
 
 mod schema_release {
     use super::*;
-    use hirsel_lir::layout::Owners;
+    use hirsel_layout::layout::Owners;
     use hirsel_lir::layout_types::LayoutId;
     use hirsel_lir::rt_program::StepKind;
     use hirsel_types::Primitive::{F64, String as Str, U32, U64};

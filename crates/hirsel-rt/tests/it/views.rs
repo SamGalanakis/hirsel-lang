@@ -38,7 +38,8 @@ fn release(ctx: &Ctx, owner: *mut Header) {
 
 #[test]
 fn cursor_and_option_records_match_derived_layouts_on_both_targets() {
-    use hirsel_lir::layout::{LayoutBuilder, OwnerRepresentation, Owners};
+    use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
+
     use hirsel_lir::layout_types::{LayoutKind, ScanStep, SizeSpec, TargetSpec};
     use hirsel_types::{GenericArgument, Primitive, TypeKind};
     use std::mem::{align_of, offset_of, size_of};

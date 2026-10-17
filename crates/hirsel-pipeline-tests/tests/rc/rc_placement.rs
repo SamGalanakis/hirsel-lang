@@ -443,7 +443,7 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     let rows = hirsel_core_contract::Manifest::skeleton([]);
     let target = target();
     let inputs = Inputs {
-        operations: &Default::default(),
+        operations: &(),
         target: &target,
         layouts: &table,
         manifest: &rows,

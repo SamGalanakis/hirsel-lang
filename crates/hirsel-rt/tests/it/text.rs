@@ -30,7 +30,8 @@ unsafe fn release(ctx: &Ctx, owner: *mut Header) {
 
 #[test]
 fn byte_descriptor_and_text_records_match_derivation_on_both_targets() {
-    use hirsel_lir::layout::{LayoutBuilder, Owners};
+    use hirsel_layout::layout::{LayoutBuilder, Owners};
+
     use hirsel_lir::layout_types::{LayoutKind, ScalarKind, SizeSpec, TargetSpec};
     use hirsel_types::Primitive;
     use std::mem::{align_of, offset_of, size_of};

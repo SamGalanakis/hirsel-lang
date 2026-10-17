@@ -2,6 +2,7 @@
 //! hidden slots, relation erasure, defining/public agreement and validator
 //! mutations.
 use hirsel_core_contract::Passing;
+use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
 use hirsel_lir::abi::abi_digest;
 use hirsel_lir::abi_types::*;
 use hirsel_lir::layout::*;

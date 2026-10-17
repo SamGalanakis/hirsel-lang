@@ -8,7 +8,8 @@
 //! a container is `entries`; a `Cursor` is three words; a consuming cursor
 //! is `{ source, next: u64 }`.
 use super::{REVISION, native_path};
-use hirsel_lir::layout::{Container, OwnerRepresentation, Owners};
+use hirsel_layout::layout::{Container, OwnerRepresentation, Owners};
+
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::{

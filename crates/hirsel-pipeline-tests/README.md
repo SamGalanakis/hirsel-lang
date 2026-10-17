@@ -43,3 +43,5 @@ After the server exits, the runtime tape helper independently executes its
 scripted fixture in the interpreter, compares every completion and final state,
 and strictly replays the interpreter tape. An altered reply byte must fail this
 comparison while the original recording passes.
+
+Type-store test fixtures use `hirsel-layout` for type-to-layout and ABI derivation.

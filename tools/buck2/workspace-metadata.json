@@ -154,13 +154,6 @@
           "path": "crates/hirsel-syntax",
           "req": "*",
           "uses_default_features": true
-        },
-        {
-          "kind": null,
-          "name": "hirsel-types",
-          "path": "crates/hirsel-types",
-          "req": "*",
-          "uses_default_features": true
         }
       ],
       "name": "hirsel-codec"
@@ -309,6 +302,13 @@
           "kind": null,
           "name": "hirsel-interp",
           "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-layout",
+          "path": "crates/hirsel-layout",
           "req": "*",
           "uses_default_features": true
         },
@@ -751,6 +751,53 @@
       "dependencies": [
         {
           "kind": null,
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-layout"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
           "name": "hirsel-diag",
           "path": "crates/hirsel-diag",
           "req": "*",
@@ -811,20 +858,6 @@
           "uses_default_features": true
         },
         {
-          "kind": null,
-          "name": "hirsel-tir",
-          "path": "crates/hirsel-tir",
-          "req": "*",
-          "uses_default_features": true
-        },
-        {
-          "kind": null,
-          "name": "hirsel-types",
-          "path": "crates/hirsel-types",
-          "req": "*",
-          "uses_default_features": true
-        },
-        {
           "kind": "dev",
           "name": "hirsel-diag",
           "path": "crates/hirsel-diag",
@@ -833,8 +866,22 @@
         },
         {
           "kind": "dev",
+          "name": "hirsel-layout",
+          "path": "crates/hirsel-layout",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
           "name": "hirsel-lir",
           "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-tir",
+          "path": "crates/hirsel-tir",
           "req": "*",
           "uses_default_features": true
         },
@@ -908,6 +955,13 @@
           "kind": "dev",
           "name": "hirsel-interp",
           "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-layout",
+          "path": "crates/hirsel-layout",
           "req": "*",
           "uses_default_features": true
         },
@@ -1241,6 +1295,13 @@
         },
         {
           "kind": "dev",
+          "name": "hirsel-layout",
+          "path": "crates/hirsel-layout",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
           "name": "hirsel-lir",
           "path": "crates/hirsel-lir",
           "req": "*",
@@ -1408,6 +1469,13 @@
         },
         {
           "kind": null,
+          "name": "hirsel-layout",
+          "path": "crates/hirsel-layout",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
           "name": "hirsel-lir",
           "path": "crates/hirsel-lir",
           "req": "*",
@@ -1554,6 +1622,13 @@
           "kind": "dev",
           "name": "hirsel-interp",
           "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-layout",
+          "path": "crates/hirsel-layout",
           "req": "*",
           "uses_default_features": true
         },
@@ -1743,6 +1818,13 @@
     },
     {
       "dependencies": [
+        {
+          "kind": null,
+          "name": "hirsel-codec",
+          "path": "crates/hirsel-codec",
+          "req": "*",
+          "uses_default_features": true
+        },
         {
           "kind": null,
           "name": "hirsel-diag",

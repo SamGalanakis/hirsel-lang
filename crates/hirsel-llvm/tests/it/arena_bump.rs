@@ -2,10 +2,10 @@
 //! native probes cover empty/full segments, exact fit, alignment, the extent-free
 //! fixed-layout block and diagnostics.
 use crate::support;
+use hirsel_layout::layout::OwnerRepresentation;
 use hirsel_lir::{
     descriptor_registry::DescriptorRegistry,
     ir::*,
-    layout::OwnerRepresentation,
     layout_types::{ScalarKind, TargetSpec},
 };
 use hirsel_llvm::{EmitInputs, OptLevel, emit_object, emit_optimized_ir};

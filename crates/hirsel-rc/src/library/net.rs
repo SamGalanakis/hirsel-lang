@@ -1,6 +1,7 @@
 //! `net.read_into`. A runtime symbol cannot
 //! name the size `k`, so one body per `k` calls `$intrinsic.NetReadInto[k]`, the
 //! fixed runtime entry `hirsel_rt_v2_net_read_into`, with the buffer's address and `k`.
+
 use super::builder::{Body, Cx};
 use super::{BINDER, LibraryBody, LibraryError};
 use crate::instance::{Actuals, InstanceError, instantiate_function};

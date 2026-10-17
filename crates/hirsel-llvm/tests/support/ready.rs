@@ -325,7 +325,7 @@ impl Unit<'_> {
 }
 
 /// The nominal recursive `Chain = Nil | Cons(i64, Box<Chain>)`.
-fn chain_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn chain_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     let definition = path("Chain");
     let mut t = Types::default();
     let i64_ = t.p(Primitive::I64);
@@ -334,7 +334,7 @@ fn chain_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
     let shape = t.variant(&[&[], &[i64_, link]]);
     owners.nominals.insert(
         definition.clone(),
-        hirsel_lir::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
+        hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Chain revision"),
             generics: Vec::new(),
@@ -350,14 +350,14 @@ fn chain_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
 }
 
 /// The resource `Res { i64 }` whose drop body `Res_drop` fails LANG-9 on a zero field.
-fn resource_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn resource_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     let definition = path("Res");
     let mut t = Types::default();
     let i64_ = t.p(Primitive::I64);
     let shape = t.record(&[i64_]);
     owners.nominals.insert(
         definition.clone(),
-        hirsel_lir::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
+        hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Res revision"),
             generics: Vec::new(),
@@ -375,7 +375,7 @@ fn resource_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
 /// `resource type Trace { text: String, count: Box<Rec1> }` (DROP-2-reverse-fields' shape
 /// with counted fields): its drop body `Trace_drop` fails LANG-9 when count.0 is zero, and
 /// its fields are released after it, last first.
-fn trace_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn trace_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     let definition = path("Trace");
     let mut t = Types::default();
     let i64_ = t.p(Primitive::I64);
@@ -385,7 +385,7 @@ fn trace_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
     let shape = t.record(&[text, count]);
     owners.nominals.insert(
         definition.clone(),
-        hirsel_lir::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
+        hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash("Trace revision"),
             generics: Vec::new(),
@@ -402,7 +402,7 @@ fn trace_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
 
 /// A flat nominal record of `fields`: FlatFormatV0 bytes (`flat type`).
 fn flat_owner(
-    owners: &mut hirsel_lir::layout::Owners,
+    owners: &mut hirsel_layout::layout::Owners,
     name: &str,
     fields: impl FnOnce(&mut Types) -> Vec<hirsel_types::TypeId>,
 ) -> DefPath {
@@ -412,7 +412,7 @@ fn flat_owner(
     let shape = t.record(&fields);
     owners.nominals.insert(
         definition.clone(),
-        hirsel_lir::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
+        hirsel_layout::layout::OwnerRepresentation::Defined(hirsel_tir::RepresentationRecord {
             definition: definition.clone(),
             representation_revision: hash(&format!("{name} revision")),
             generics: Vec::new(),
@@ -431,14 +431,14 @@ fn flat_owner(
 }
 
 /// `flat type Item { text: String, n: i64 }`.
-fn item_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn item_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     flat_owner(owners, "Item", |t| {
         vec![t.p(Primitive::String), t.p(Primitive::I64)]
     })
 }
 
 /// `flat type Items { items: List[Item] }`.
-fn items_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn items_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     flat_owner(owners, "Items", |t| {
         let item = t.named(&path("Item"), Vec::new());
         vec![t.list(item)]
@@ -446,24 +446,24 @@ fn items_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
 }
 
 /// `flat type Point { a: i64, b: i64 }`: fixed, so an inline value.
-fn point_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn point_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     flat_owner(owners, "Point", |t| {
         vec![t.p(Primitive::I64), t.p(Primitive::I64)]
     })
 }
 
 /// `flat type Outer { item: Item, k: i64 }`: a variable flat record inside another.
-fn outer_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn outer_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     flat_owner(owners, "Outer", |t| {
         vec![t.named(&path("Item"), Vec::new()), t.p(Primitive::I64)]
     })
 }
 
 /// The run-context handle type `File`, closed through the Io adapter when dropped.
-fn file_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
+fn file_owner(owners: &mut hirsel_layout::layout::Owners) -> DefPath {
     owners.nominals.insert(
         path("File"),
-        hirsel_lir::layout::OwnerRepresentation::Handle {
+        hirsel_layout::layout::OwnerRepresentation::Handle {
             revision: hash("File revision"),
             resource: true,
         },

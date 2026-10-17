@@ -68,7 +68,7 @@ pub struct Inputs<'a> {
     pub target: &'a TargetSpec,
     pub layouts: &'a LayoutTable,
     pub manifest: &'a Manifest,
-    pub operations: &'a crate::operation::OperationRegistry,
+    pub operations: &'a dyn crate::operation::OperationDeclarations,
 }
 
 /// A rejected unit, returned with every violation found.
@@ -378,7 +378,7 @@ pub(crate) struct Cx<'a, S> {
     pub manifest: &'a Manifest,
     pub stage: StageKind,
     pub target: &'a TargetSpec,
-    pub operations: &'a crate::operation::OperationRegistry,
+    pub operations: &'a dyn crate::operation::OperationDeclarations,
 }
 
 impl<S> Cx<'_, S> {

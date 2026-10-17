@@ -514,7 +514,7 @@ impl Importer<'_, '_> {
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let arguments =
-            hirsel_lir::operation::OperationArgument::collect(&callee.store, &callee.arguments)
+            hirsel_layout::operation::collect_arguments(&callee.store, &callee.arguments)
                 .map_err(|e| ImportError::Layout(path.clone(), e))?;
         let abi = self
             .layouts

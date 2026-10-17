@@ -14,9 +14,10 @@
 //! A value this cannot lay out (a callable, a non-flat Packed extent, a handle) is a `StaticError`, never a guessed image. Only a
 //! library constant holds a function today (`u32.order`'s comparator, an
 //! operation): user constants of function type are not data.
+use hirsel_layout::layout::LayoutBuilder;
 use hirsel_lir::ir::Symbol;
 use hirsel_lir::layout::{
-    LayoutBuilder, SEQUENCE_CAPACITY_OFFSET, sequence_elements_offset, sequence_slice_start,
+    SEQUENCE_CAPACITY_OFFSET, sequence_elements_offset, sequence_slice_start,
 };
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, ScalarKind, SizeSpec, TagForm};
 use hirsel_lir::statics::{StaticBlock, StaticData, StaticReference};

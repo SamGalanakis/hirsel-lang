@@ -22,7 +22,7 @@ pub mod validate;
 
 pub use abi_types::{FnAbi, FnAbiId};
 pub use effect::{Effects, Opcode};
-pub use ir::{InstanceKey, InstanceView, LirUnit, SchemaError};
+pub use ir::{LirUnit, SchemaError};
 pub use layout_types::{LayoutId, LayoutRecord, LayoutTable, TargetSpec};
 pub use stage::{
     InputIdentity, NativeReceipt, ObjectArtifact, Placed, RawReceipt, Rc, Ready, Reuse, Stage,

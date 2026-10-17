@@ -299,7 +299,8 @@ fn c_requires_the_sequential_layout_of_a_direct_packed_sequence() {
 fn derive_packed_list(
     extra: hirsel_types::Primitive,
 ) -> Result<(hirsel_lir::layout_types::LayoutTable, LayoutId), hirsel_lir::layout::LayoutError> {
-    use hirsel_lir::layout::{LayoutBuilder, Owners};
+    use hirsel_layout::layout::{LayoutBuilder, Owners};
+
     use hirsel_types::*;
     let mut store = TypeStore::default();
     let mut add = |kind| store.push(Type::with_kind(kind));
