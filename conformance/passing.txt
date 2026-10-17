@@ -1212,6 +1212,7 @@ conformance/LANG/LANG-6-result-explicit-unit.hir
 conformance/LANG/LANG-6-result-explicit-value.hir
 conformance/LANG/LANG-6-todo-marker-bad.hir
 conformance/LANG/LANG-6-todo-marker-ok.hir
+conformance/LANG/LANG-6-tour-00-statements-run.hir
 conformance/LANG/LANG-7-alias-field-locality-bad.hir
 conformance/LANG/LANG-7-alias-field-locality-ok.hir
 conformance/LANG/LANG-7-any-bad.hir
@@ -1325,6 +1326,7 @@ conformance/LANG/LANG-8-mapping-output-ok.hir
 conformance/LANG/LANG-8-network-constructor-map-bad.hir
 conformance/LANG/LANG-8-network-constructor-map-run.hir
 conformance/LANG/LANG-8-propagation-runtime.hir
+conformance/LANG/LANG-8-tour-00-number-run.hir
 conformance/LANG/LANG-8-tour-03-errors-run.hir
 conformance/LANG/LANG-8-tour-06-json-run.hir
 conformance/LANG/LANG-8-tour-07-path-time-run.hir
@@ -1366,6 +1368,7 @@ conformance/LANG/LANG-9-testhelpers-for-all-law-fail.hir
 conformance/LANG/LANG-9-testhelpers-for-all-run.hir
 conformance/LANG/LANG-9-tour-08-http-run.hir
 conformance/LANG/LANG-9-tour-09-files-bufio-run.hir
+conformance/LANG/LANG-9-tour-11-file-errors-run.hir
 conformance/LANG/LANG-9-tour-13-testing-run.hir
 conformance/MEM/MEM-1-last-surviving-holder.hir
 conformance/MEM/MEM-1-moved-variant-payload-run.hir

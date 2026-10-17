@@ -9,6 +9,78 @@ adjust its source and dependency paths when moving a program. There are no impor
 or dependency downloads. `json.parse` names a selected package definition;
 `out.print` is supplied by `core@1`.
 
+## Statements at a glance
+
+Use `while`, `for x in xs`, half-open ranges `0u64..n`, `break`, `continue`,
+and checked indexing `xs[i]`; assign with `xs[i] = value` on a mutable list.
+
+<!-- tour: conformance/LANG/LANG-6-tour-00-statements-run.hir -->
+[Runnable source](../conformance/LANG/LANG-6-tour-00-statements-run.hir)
+
+```hirsel
+pub fn main() -> Result[(), ()] {
+  let mut xs: List[u64] = [1, 2, 3]
+  xs[0] = 4
+  let mut total = 0u64
+  for x in xs {
+    total += x
+  }
+  for i in 0u64..list.len(xs) {
+    if i == 1 {
+      continue
+    }
+    total += xs[i]
+  }
+  while total < 20 {
+    total += 1
+    if total == 19 {
+      break
+    }
+  }
+  failure.check(total == 19, Arithmetic())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
+To read one decimal number, pass the line returned by `input.read_line` to
+`u64.parse(string.trim(line))`. Matching the parse result handles invalid input;
+`?` propagates `scalar.ParseError`.
+
+<!-- tour: conformance/LANG/LANG-8-tour-00-number-run.hir -->
+[Runnable source](../conformance/LANG/LANG-8-tour-00-number-run.hir)
+
+```hirsel
+pub fn main() -> Result[(), scalar.ParseError] {
+  let line = " 42\n"
+  let n = u64.parse(string.trim(line))?
+  failure.check(n == 42, Arithmetic())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
+To run against scratch files, mount the scratch `data/` directory explicitly.
+From the repository root (replace the source with your Io entry):
+
+```sh
+scratch=$(mktemp -d)
+mkdir "$scratch/data"
+printf '{"io":{"dirs":[{"path":"data","host":"%s/data","access":"read_write"}]}}\n' "$scratch" > "$scratch/grants.json"
+hirsel run program.hir --grants "$scratch/grants.json"
+```
+
+Acquire that mount with `io.dir(rt, path.of("data"))`; file paths are relative
+to the mount. Use `read` access when the program only reads.
+
 The mistakes to avoid first:
 
 - Give numeric literals a context: `let n = 3u64` or `let n: u64 = 3`.
@@ -408,6 +480,38 @@ For a real server, see [hello-web](../examples/hello-web/main.hir),
 [todo-api](../examples/todo-api/main.hir). They show listen/accept,
 `http.receive_request` with head/body limits, `http.respond`, connection cleanup
 and application routing. The concurrent examples currently run in the interpreter.
+
+## File I/O: read, replace, handle missing files
+
+`FileError` is the core type shared by file operations. Match `Error(NotFound())`
+for an absent file; propagate other errors. Atomic replacement writes a temporary
+file, then `file.commit` publishes it. Dropping it before commit aborts the write.
+
+<!-- tour: conformance/LANG/LANG-9-tour-11-file-errors-run.hir -->
+[Runnable source](../conformance/LANG/LANG-9-tour-11-file-errors-run.hir)
+
+```hirsel
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(t, [(path.of("input.txt"), b"hello\n")])
+  let data = file.read_bytes(dir, path.of("input.txt"))?
+  let mut output = file.create_atomic(dir, path.of("output.txt"))?
+  file.write_all(dir, mut output, data)?
+  file.commit(dir, take output)?
+  test.check(t, file.read_bytes(dir, path.of("output.txt")) == Ok(b"hello\n"))
+  let missing = match file.read_bytes(dir, path.of("missing.txt")) {
+    Ok(_) => false,
+    Error(NotFound()) => true,
+    Error(e) => return Error(e),
+  }
+  test.check(t, missing)
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
 
 ## Files and buffered I/O
 

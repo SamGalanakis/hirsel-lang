@@ -1,0 +1,24 @@
+// rule: LANG-6
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let mut xs: List[u64] = [1, 2, 3]
+  xs[0] = 4
+  let mut total = 0u64
+  for x in xs {
+    total += x
+  }
+  for i in 0u64..list.len(xs) {
+    if i == 1 {
+      continue
+    }
+    total += xs[i]
+  }
+  while total < 20 {
+    total += 1
+    if total == 19 {
+      break
+    }
+  }
+  failure.check(total == 19, Arithmetic())
+  Ok(())
+}

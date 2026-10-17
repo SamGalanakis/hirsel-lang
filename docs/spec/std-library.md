@@ -12,6 +12,18 @@ uses no `Unsafe`. It raises language failures only through `failure.check`
 ([core library](core-library.md#memory-and-iteration)). Its algorithms follow named
 reference implementations, ported with their tests.
 
+File operations and buffered file readers use the core error type, written in programs as:
+
+```hirsel
+type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() |
+  NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory()
+```
+
+Match `Error(NotFound())` for an absent file. `FileFault(code)` carries an
+unclassified host error code; it is not an application input-validation error.
+See the [file I/O tour](../tour.md)
+for reading and atomic write-then-commit replacement.
+
 ## The catalogue
 
 These declarations are normative: the source package must declare exactly these

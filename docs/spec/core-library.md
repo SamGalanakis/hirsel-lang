@@ -207,8 +207,7 @@ CancelCause   = Requested | Parent | ChildFailed
 CancelError   = Canceled(CancelCause)
 ChannelError  = Closed | Canceled(CancelCause)
 GrantError    = NotGranted()
-FileError     = FileFault(u32) | Canceled(CancelCause) | NotGranted()
-              | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory()
+type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory()
 InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
 EnvError      = NotGranted() | InvalidUtf8()
@@ -514,6 +513,13 @@ state, and computes sendability and authority from both; `next` need not be noal
 `iter.map` owns its inputs; advancing it preserves the iterator and moves out each `Some`
 item. The `file.walk` iterator stops on `Error`; user `iter.from` callbacks decide their own
 termination.
+
+| List operation | Type | Bounds and failure |
+|---|---|---|
+| `list.len(xs)` | `u64` | Number of elements in `xs: List[T]`. |
+| `xs[i]` | `T` | Zero-based `i: u64`; requires `i < list.len(xs)`, otherwise traps with diagnostic MEM-14 (a language failure, not a `Result` error). |
+| `xs[i] = v` | `()` | Requires mutable `xs: List[T]` and `v: T`; the same MEM-14 bounds check happens before replacement. |
+| `list.push(mut xs, v)` | `()` | Appends `v: T` to a mutable `List[T]`. |
 
 **List storage primitives.** `list.pop` returns `None` when empty; otherwise it moves the
 last element out before publishing `Some`. `list.remove` checks `index < len` before any

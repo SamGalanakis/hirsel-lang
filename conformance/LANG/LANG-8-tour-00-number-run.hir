@@ -1,0 +1,8 @@
+// rule: LANG-8
+// expect: run
+pub fn main() -> Result[(), scalar.ParseError] {
+  let line = " 42\n"
+  let n = u64.parse(string.trim(line))?
+  failure.check(n == 42, Arithmetic())
+  Ok(())
+}
