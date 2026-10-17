@@ -209,7 +209,7 @@ pub fn schema_failure(
                     }
                     _ => true,
                 };
-                (!valid).then(|| (hirsel_diag::RuleId::new("SEM-1").unwrap(),"integer operation requires valid sized integer arguments and conversion widths"))
+                (!valid).then(|| (const { hirsel_diag::RuleId::of("SEM-1") },"integer operation requires valid sized integer arguments and conversion widths"))
             }
             SchemaConstraint::DestinationNoWider {
                 source,
@@ -219,7 +219,7 @@ pub fn schema_failure(
                     (Some((from, _)), Some((to, _))) => to <= from,
                     _ => true,
                 };
-                (!valid).then(|| (hirsel_diag::RuleId::new("SEM-1").unwrap(),"integer operation requires valid sized integer arguments and conversion widths"))
+                (!valid).then(|| (const { hirsel_diag::RuleId::of("SEM-1") },"integer operation requires valid sized integer arguments and conversion widths"))
             }
             SchemaConstraint::PositiveSize(parameter) => matches!(
                 (parameter.binder() == GenericBinder::Bound(0))
@@ -229,7 +229,7 @@ pub fn schema_failure(
             )
             .then(|| {
                 (
-                    hirsel_diag::RuleId::new("MEM-8").unwrap(),
+                    const { hirsel_diag::RuleId::of("MEM-8") },
                     "SIMD lane count must be positive",
                 )
             }),

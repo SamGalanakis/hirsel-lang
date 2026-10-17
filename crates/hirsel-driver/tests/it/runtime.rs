@@ -76,7 +76,7 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
             }],
             terminator: if fail {
                 Terminator::Fail {
-                    rule: hirsel_diag::RuleId::new("FAIL-1").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("FAIL-1") },
                     cleanup: CleanupId(0),
                 }
             } else {
@@ -338,7 +338,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
                     instructions: vec![],
                     // This fixture explicitly requires its configured stdout grant.
                     terminator: Terminator::Fail {
-                        rule: hirsel_diag::RuleId::new("CAP-2").unwrap(),
+                        rule: const { hirsel_diag::RuleId::of("CAP-2") },
                         cleanup: CleanupId(1),
                     },
                     span,

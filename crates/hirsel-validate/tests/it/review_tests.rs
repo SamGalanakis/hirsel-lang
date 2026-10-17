@@ -4865,7 +4865,7 @@ fn intrinsic_bound_constraints_use_actual_types_and_exact_declarations() {
         signature.metadata.schema = vec![SchemaConstraint::Bound {
             parameter: TypeParameterRef::bound(TypeParamId(0)),
             bound: Bound::Plain,
-            rule: hirsel_diag::RuleId::new("GEN-1").unwrap(),
+            rule: const { hirsel_diag::RuleId::of("GEN-1") },
         }];
         if valid {
             fixture.valid();
@@ -4892,7 +4892,7 @@ fn intrinsic_bound_constraints_use_actual_types_and_exact_declarations() {
                 .schema = vec![SchemaConstraint::Bound {
                 parameter: reference,
                 bound: Bound::Plain,
-                rule: hirsel_diag::RuleId::new("GEN-1").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("GEN-1") },
             }];
             assert!(
                 fixture
@@ -8521,7 +8521,7 @@ fn destructor_effect_fixture(allocation: Allocation, transfer: bool, failure: bo
         child.blocks[0].instructions.push(inst(
             InstructionKind::Check {
                 condition: operand(condition, UseKind::Borrow),
-                rule: hirsel_diag::RuleId::new("FAIL-1").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("FAIL-1") },
             },
             exit.0,
         ));
@@ -10012,7 +10012,7 @@ fn integer_to_float_scalar_domains_are_replayed_on_hand_built_calls() {
             signature.metadata.schema = vec![SchemaConstraint::Domain {
                 parameter: TypeParameterRef::bound(TypeParamId(0)),
                 domain,
-                rule: hirsel_diag::RuleId::new("SEM-1").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("SEM-1") },
             }];
             if valid {
                 fixture.valid();

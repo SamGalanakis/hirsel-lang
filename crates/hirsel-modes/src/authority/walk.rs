@@ -18,7 +18,7 @@ struct Frame {
     owner: NameSite,
     allowed: Uses,
     result: Option<TypeId>,
-    restriction: &'static str,
+    restriction: RuleId,
 }
 /// What receives the value whose brand or placement is being judged, for
 /// the required side of a PROV explanation.
@@ -449,7 +449,7 @@ impl<'a> Checker<'a> {
             owner: NameSite::Item(self.item),
             allowed,
             result,
-            restriction: "CAP-1",
+            restriction: const { RuleId::of("CAP-1") },
         });
 
         if let Some(result) = result {
@@ -464,7 +464,7 @@ impl<'a> Checker<'a> {
                 Some((
                     CaptureContext::Escaping,
                     self.frames.last().and_then(|f| f.result),
-                    "CLO-4",
+                    const { RuleId::of("CLO-4") },
                 )),
             );
             self.frame_temporaries(body, temporaries);
@@ -481,7 +481,7 @@ impl<'a> Checker<'a> {
                 owner: NameSite::Expression(root),
                 allowed: Uses::Only(AuthoritySummary::inert()),
                 result: Some(function.result),
-                restriction: "FACT-1",
+                restriction: const { RuleId::of("FACT-1") },
             });
             self.in_clause = true;
             self.expr(root, None);
@@ -536,9 +536,10 @@ impl<'a> Checker<'a> {
     fn span(&self, e: ExprId) -> Span {
         self.tree.expressions[e.0 as usize].origin.span
     }
-    fn error(&mut self, rule: &str, span: Span, message: &str) {
+    fn error(&mut self, rule: RuleId, span: Span, message: &str) {
         if self.out.failure.is_none() && self.signatures.values().all(Option::is_some) {
-            let purity = self.in_clause && (rule.starts_with("CAP-") || rule == "CLO-1");
+            let purity =
+                self.in_clause && (rule.as_str().starts_with("CAP-") || rule.as_str() == "CLO-1");
             let span = if purity {
                 self.clauses
                     .iter()
@@ -552,8 +553,12 @@ impl<'a> Checker<'a> {
             } else {
                 span
             };
-            let rule = if purity { "FACT-1" } else { rule };
-            self.emit(Diagnostic::error(RuleId::new(rule).unwrap(), span, message));
+            let rule = if purity {
+                const { RuleId::of("FACT-1") }
+            } else {
+                rule
+            };
+            self.emit(Diagnostic::error(rule, span, message));
         }
     }
     fn emit(&mut self, diagnostic: Diagnostic) {
@@ -662,7 +667,7 @@ impl<'a> Checker<'a> {
     fn check_pending_tasks(&mut self) {
         for span in self.pending_tasks.values().copied().collect::<Vec<_>>() {
             self.error(
-                "CONC-2",
+                const { RuleId::of("CONC-2") },
                 span,
                 "every task handle must be awaited or explicitly detached",
             );
@@ -702,7 +707,7 @@ impl<'a> Checker<'a> {
     fn expr(
         &mut self,
         e: ExprId,
-        context: Option<(CaptureContext, Option<TypeId>, &'static str)>,
+        context: Option<(CaptureContext, Option<TypeId>, RuleId)>,
     ) -> bool {
         let span = self.span(e);
         self.verdicts.push(Verdict {
@@ -734,7 +739,7 @@ impl<'a> Checker<'a> {
                             && self.brandless_variant(e, ty).is_some();
                         if !inactive {
                             let mut diagnostic = Diagnostic::error(
-                                RuleId::new("PROV-1").unwrap(),
+                                const { RuleId::of("PROV-1") },
                                 span,
                                 "the value's brand owner has ended",
                             );
@@ -791,7 +796,7 @@ impl<'a> Checker<'a> {
         verdict.valid
     }
     fn ended_use(&mut self, span: Span, ended: Span, message: &'static str) {
-        let mut diagnostic = Diagnostic::error(RuleId::new("PROV-1").unwrap(), span, message);
+        let mut diagnostic = Diagnostic::error(const { RuleId::of("PROV-1") }, span, message);
         self.ended_explanation(ended, span).render(&mut diagnostic);
         self.emit(diagnostic);
     }
@@ -807,7 +812,7 @@ impl<'a> Checker<'a> {
         .provided(Fact::new(Cause::IdentityEnded, ended, &[]))
         .required(Fact::new(Requirement::BrandedUse, used, &[]))
     }
-    fn walk(&mut self, e: ExprId, context: Option<(CaptureContext, Option<TypeId>, &'static str)>) {
+    fn walk(&mut self, e: ExprId, context: Option<(CaptureContext, Option<TypeId>, RuleId)>) {
         if !self.valid(e) {
             return;
         }
@@ -1211,7 +1216,13 @@ impl<'a> Checker<'a> {
                                     && crossing_requirement(t) == Sendability::Sendable
                             })
                         })
-                        .map(|part| (CaptureContext::Escaping, Some(part), "CLO-4"));
+                        .map(|part| {
+                            (
+                                CaptureContext::Escaping,
+                                Some(part),
+                                const { RuleId::of("CLO-4") },
+                            )
+                        });
                     self.expr(child, contextual);
                     used = used.join(self.used(child));
                     if let (Some((_, parts)), Some(now)) = (&mut refined, self.ty(child)) {
@@ -1476,7 +1487,7 @@ impl<'a> Checker<'a> {
                                 TypeKind::Builtin { kind: BuiltinType::Packed, .. }))))
                 }) {
                     self.explained(
-                        "MEM-13",
+                        const { RuleId::of("MEM-13") },
                         self.span(e),
                         "a sequence of Packed values is sequential and cannot be indexed",
                         Explanation::default()
@@ -1531,7 +1542,14 @@ impl<'a> Checker<'a> {
             ExprKind::Return(value) => {
                 if let Some(value) = value {
                     let expected = self.frames.last().and_then(|f| f.result);
-                    self.expr(value, Some((CaptureContext::Escaping, expected, "CLO-4")));
+                    self.expr(
+                        value,
+                        Some((
+                            CaptureContext::Escaping,
+                            expected,
+                            const { RuleId::of("CLO-4") },
+                        )),
+                    );
                     used = self.used(value);
                     self.return_value(value, self.span(e));
                 }
@@ -1739,7 +1757,11 @@ impl<'a> Checker<'a> {
                             Some(TypeKind::Function(_))
                         )
                     }) {
-                    Some((CaptureContext::Escaping, expected, "CLO-4"))
+                    Some((
+                        CaptureContext::Escaping,
+                        expected,
+                        const { RuleId::of("CLO-4") },
+                    ))
                 } else {
                     // An inferred function binding supplies scope, not a
                     // declared callable/result promise. Keep literal inference
@@ -1750,7 +1772,11 @@ impl<'a> Checker<'a> {
                             TypeKind::Function(_)
                         )
                     });
-                    Some((CaptureContext::Scoped, expected, "CAP-3"))
+                    Some((
+                        CaptureContext::Scoped,
+                        expected,
+                        const { RuleId::of("CAP-3") },
+                    ))
                 };
                 self.expr(value, context);
                 if let Some(actual) = self.ty(value) {
@@ -1887,12 +1913,16 @@ impl<'a> Checker<'a> {
                 self.expr(place, None);
                 self.expr(
                     value,
-                    Some((CaptureContext::Escaping, self.ty(place), "CLO-4")),
+                    Some((
+                        CaptureContext::Escaping,
+                        self.ty(place),
+                        const { RuleId::of("CLO-4") },
+                    )),
                 );
                 if let Some(t) = self.ty(value) {
                     if self.scoped(t) {
                         self.explained(
-                            "MODE-6",
+                            const { RuleId::of("MODE-6") },
                             stmt.origin.span,
                             "a scoped capability cannot be stored",
                             Explanation::default()
@@ -1908,7 +1938,7 @@ impl<'a> Checker<'a> {
                 if self.protected_field(place) {
                     let name = self.value_name(Some(place));
                     self.explained(
-                        "PROV-5",
+                        const { RuleId::of("PROV-5") },
                         stmt.origin.span,
                         "a sibling brand owner cannot be replaced separately from its record",
                         Explanation::default()
@@ -1919,7 +1949,7 @@ impl<'a> Checker<'a> {
                 if self
                     .frames
                     .last()
-                    .is_some_and(|f| f.restriction == "CONC-5")
+                    .is_some_and(|f| f.restriction.as_str() == "CONC-5")
                 {
                     if let (Some(place_type), Some(value_type)) = (self.ty(place), self.ty(value)) {
                         if self
@@ -1943,7 +1973,7 @@ impl<'a> Checker<'a> {
                                 != Uniqueness::Unique
                         {
                             self.explained(
-                                "CONC-5",
+                                const { RuleId::of("CONC-5") },
                                 stmt.origin.span,
                                 "values stored into a mutex payload must be unique",
                                 self.boundary_explanation(
@@ -2163,7 +2193,7 @@ impl<'a> Checker<'a> {
         if self.scoped(t) {
             let result = self.sites().result(self.frames.last().unwrap().owner);
             self.explained(
-                "MODE-6",
+                const { RuleId::of("MODE-6") },
                 span,
                 "a scoped capability cannot be returned",
                 Explanation::default()
@@ -2185,7 +2215,7 @@ impl<'a> Checker<'a> {
                     let x = self.value_name(Some(value));
                     let callback = self.sites().owner_span(frame.owner);
                     self.explained(
-                        "PROV-4",
+                        const { RuleId::of("PROV-4") },
                         span,
                         "a value cannot escape the arena introduced by this callback",
                         Explanation::default()

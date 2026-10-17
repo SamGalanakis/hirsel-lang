@@ -122,10 +122,16 @@ impl Normalizer<'_, '_> {
             .expressions
             .get(id.0 as usize)
             .cloned()
-            .ok_or_else(|| diagnostic("LANG-6", self.span, "missing contract expression"))?;
+            .ok_or_else(|| {
+                diagnostic(
+                    const { RuleId::of("LANG-6") },
+                    self.span,
+                    "missing contract expression",
+                )
+            })?;
         if !active.insert(id) {
             return Err(diagnostic(
-                "LANG-6",
+                const { RuleId::of("LANG-6") },
                 expr.origin.span,
                 "recursive contract syntax graph",
             ));
@@ -262,7 +268,11 @@ impl Normalizer<'_, '_> {
                 e.tag("closure");
                 let f = self.function(signature, &Attributes::default(), true)?;
                 e.function(&f, &self.types).map_err(|_| {
-                    diagnostic("LANG-6", self.span, "invalid contract closure signature")
+                    diagnostic(
+                        const { RuleId::of("LANG-6") },
+                        self.span,
+                        "invalid contract closure signature",
+                    )
                 })?;
                 let old_p = self.parameters.clone();
                 self.parameters = f.parameters.iter().map(|p| p.name.clone()).collect();
@@ -281,8 +291,13 @@ impl Normalizer<'_, '_> {
             ast::ExprKind::Shape(t) => {
                 e.tag("shape");
                 let t = self.ty(*t, Position::Field)?;
-                e.ty(t, &self.types)
-                    .map_err(|_| diagnostic("LANG-6", self.span, "invalid shape type"))?;
+                e.ty(t, &self.types).map_err(|_| {
+                    diagnostic(
+                        const { RuleId::of("LANG-6") },
+                        self.span,
+                        "invalid shape type",
+                    )
+                })?;
             }
             ast::ExprKind::Before(x) | ast::ExprKind::Comptime(x) => {
                 e.tag(if matches!(expr.kind, ast::ExprKind::Before(_)) {
@@ -296,7 +311,7 @@ impl Normalizer<'_, '_> {
             ast::ExprKind::Result => e.tag("result"),
             ast::ExprKind::Todo(_) | ast::ExprKind::Error => {
                 return Err(diagnostic(
-                    "LANG-6",
+                    const { RuleId::of("LANG-6") },
                     self.span,
                     "contract must contain complete written code",
                 ));
@@ -319,7 +334,13 @@ impl Normalizer<'_, '_> {
             .statements
             .get(id.0 as usize)
             .cloned()
-            .ok_or_else(|| diagnostic("LANG-6", self.span, "missing contract statement"))?;
+            .ok_or_else(|| {
+                diagnostic(
+                    const { RuleId::of("LANG-6") },
+                    self.span,
+                    "missing contract statement",
+                )
+            })?;
         match &s.kind {
             ast::StmtKind::Let {
                 mutable,
@@ -333,7 +354,11 @@ impl Normalizer<'_, '_> {
                 if let Some(t) = ty {
                     let t = self.ty(*t, Position::Field)?;
                     e.ty(t, &self.types).map_err(|_| {
-                        diagnostic("LANG-6", s.origin.span, "invalid contract binding type")
+                        diagnostic(
+                            const { RuleId::of("LANG-6") },
+                            s.origin.span,
+                            "invalid contract binding type",
+                        )
                     })?;
                 }
                 self.expression(*value, e, active, locals)?;
@@ -373,8 +398,13 @@ impl Normalizer<'_, '_> {
                 e.tag("local-function");
                 e.tag(&self.name(*name)?);
                 let f = self.function(signature, &Attributes::default(), true)?;
-                e.function(&f, &self.types)
-                    .map_err(|_| diagnostic("LANG-6", s.origin.span, "invalid local function"))?;
+                e.function(&f, &self.types).map_err(|_| {
+                    diagnostic(
+                        const { RuleId::of("LANG-6") },
+                        s.origin.span,
+                        "invalid local function",
+                    )
+                })?;
                 let old = self.parameters.clone();
                 self.parameters = f.parameters.iter().map(|p| p.name.clone()).collect();
                 self.expression(*body, e, active, locals)?;
@@ -393,7 +423,7 @@ impl Normalizer<'_, '_> {
     ) -> Result<(), QueryError> {
         if !active.insert(id) {
             return Err(diagnostic(
-                "LANG-6",
+                const { RuleId::of("LANG-6") },
                 self.span,
                 "recursive contract pattern",
             ));
@@ -404,7 +434,13 @@ impl Normalizer<'_, '_> {
             .patterns
             .get(id.0 as usize)
             .cloned()
-            .ok_or_else(|| diagnostic("LANG-6", self.span, "missing contract pattern"))?;
+            .ok_or_else(|| {
+                diagnostic(
+                    const { RuleId::of("LANG-6") },
+                    self.span,
+                    "missing contract pattern",
+                )
+            })?;
         match &p.kind {
             ast::PatternKind::Wildcard => e.tag("wildcard"),
             ast::PatternKind::Binding(s) => {
@@ -460,7 +496,7 @@ impl Normalizer<'_, '_> {
             }
             ast::PatternKind::Error => {
                 return Err(diagnostic(
-                    "LANG-6",
+                    const { RuleId::of("LANG-6") },
                     p.origin.span,
                     "invalid contract pattern",
                 ));

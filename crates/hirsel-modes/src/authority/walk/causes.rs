@@ -179,16 +179,16 @@ impl Checker<'_> {
     /// and attach the explanation to the diagnostic it emitted.
     pub(super) fn explained(
         &mut self,
-        rule: &str,
+        rule: RuleId,
         span: Span,
         message: &str,
         explanation: Explanation,
     ) {
         let before = self.out.diagnostics.len();
-        self.error(rule, span, message);
+        self.error(rule.clone(), span, message);
         if self.out.diagnostics.len() > before {
             let diagnostic = self.out.diagnostics.last_mut().unwrap();
-            if diagnostic.rule.as_str() == rule {
+            if diagnostic.rule == rule {
                 explanation.render(diagnostic);
             }
         }

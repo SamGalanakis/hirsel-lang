@@ -144,12 +144,12 @@ fn fail_checks_before_running_and_matches_rule_and_line() {
         .expect;
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
-        rule: RuleId::new("OWN-7").unwrap(),
+        rule: const { RuleId::of("OWN-7") },
         line: 3,
     });
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
     driver.outcome = Ok(RunOutcome::Failure {
-        rule: RuleId::new("OWN-6").unwrap(),
+        rule: const { RuleId::of("OWN-6") },
         line: 3,
     });
     assert!(matches!(
@@ -157,7 +157,7 @@ fn fail_checks_before_running_and_matches_rule_and_line() {
         Status::Fail(_)
     ));
     driver.outcome = Ok(RunOutcome::Failure {
-        rule: RuleId::new("OWN-7").unwrap(),
+        rule: const { RuleId::of("OWN-7") },
         line: 2,
     });
     assert!(matches!(
@@ -530,7 +530,7 @@ fn incomplete_pipeline_keeps_accept_run_fail_unavailable_and_checks_reject_exact
             exit: 0,
         },
         Expect::Fail {
-            rule: RuleId::new("FAIL-1").unwrap(),
+            rule: const { RuleId::of("FAIL-1") },
             line: 3,
             stdout: None,
         },
@@ -541,7 +541,7 @@ fn incomplete_pipeline_keeps_accept_run_fail_unavailable_and_checks_reject_exact
         );
     }
     let matching = Expect::Reject {
-        rule: RuleId::new("LANG-1").unwrap(),
+        rule: const { RuleId::of("LANG-1") },
         line: 3,
     };
     assert_eq!(
@@ -549,7 +549,7 @@ fn incomplete_pipeline_keeps_accept_run_fail_unavailable_and_checks_reject_exact
         Status::Pass
     );
     let wrong = Expect::Reject {
-        rule: RuleId::new("LANG-7").unwrap(),
+        rule: const { RuleId::of("LANG-7") },
         line: 3,
     };
     assert!(matches!(
@@ -618,7 +618,7 @@ fn fail_stdout_is_optional_and_exact_when_present() {
     let expect = header(source).unwrap().expect;
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
-        rule: RuleId::new("OWN-6").unwrap(),
+        rule: const { RuleId::of("OWN-6") },
         line: 6,
     });
     driver.stdout = "before\ndropped\n";
@@ -635,7 +635,7 @@ fn fail_stdout_is_optional_and_exact_when_present() {
         .expect;
     assert!(matches!(&unchecked, Expect::Fail { stdout: None, .. }));
     driver.outcome = Ok(RunOutcome::Failure {
-        rule: RuleId::new("OWN-6").unwrap(),
+        rule: const { RuleId::of("OWN-6") },
         line: 3,
     });
     assert_eq!(
@@ -654,12 +654,12 @@ fn runtime_failure_header_can_name_a_dependency_line_beyond_the_fixture() {
     let expect = header(&runtime).unwrap().expect;
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
-        rule: RuleId::new("OWN-6").unwrap(),
+        rule: const { RuleId::of("OWN-6") },
         line: 99,
     });
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
     driver.outcome = Ok(RunOutcome::Failure {
-        rule: RuleId::new("OWN-6").unwrap(),
+        rule: const { RuleId::of("OWN-6") },
         line: 98,
     });
     assert!(matches!(

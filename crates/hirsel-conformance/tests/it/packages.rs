@@ -17,7 +17,7 @@ fn package_source_indexing_diagnostics_remain_language_rejections() {
     .unwrap();
     std::fs::write(&path, "pub fn fn(t: Test) -> Result[(), ()] { Ok(()) }\n").unwrap();
     let expect = hirsel_conformance::Expect::Reject {
-        rule: hirsel_diag::RuleId::new("LANG-14").unwrap(),
+        rule: const { hirsel_diag::RuleId::of("LANG-14") },
         line: 1,
     };
     assert_eq!(Compiler.evaluate(&path, &expect).0, Status::Pass);

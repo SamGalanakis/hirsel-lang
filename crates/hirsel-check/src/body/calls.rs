@@ -48,7 +48,7 @@ impl Checker<'_, '_> {
         }
         if bad {
             self.report(
-                "LANG-12",
+                const { RuleId::of("LANG-12") },
                 span,
                 "arguments must provide each required label and positional slot exactly once",
             );
@@ -81,7 +81,11 @@ impl Checker<'_, '_> {
             } => {
                 let s = self.snapshot(&definition)?;
                 let SignatureKind::Type(td) = &s.kind else {
-                    self.report("LANG-7", self.span(id), "callee is not callable");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        self.span(id),
+                        "callee is not callable",
+                    );
                     return self.recover_call(id, expected, frame, arguments);
                 };
                 let repr = if let Some(r) = td.representation {
@@ -137,7 +141,7 @@ impl Checker<'_, '_> {
                             )
                         } else {
                             self.report(
-                                "LANG-7",
+                                const { RuleId::of("LANG-7") },
                                 self.span(id),
                                 "constructor is not a variant of this type",
                             );
@@ -146,7 +150,7 @@ impl Checker<'_, '_> {
                     }
                     _ => {
                         self.report(
-                            "LANG-7",
+                            const { RuleId::of("LANG-7") },
                             self.span(id),
                             "opaque type cannot be constructed here",
                         );
@@ -219,20 +223,28 @@ impl Checker<'_, '_> {
             }
             TypeKind::Error => return self.recover_call(id, expected, frame, arguments),
             _ => {
-                self.report("LANG-7", self.span(id), "callee is not a function");
+                self.report(
+                    const { RuleId::of("LANG-7") },
+                    self.span(id),
+                    "callee is not a function",
+                );
                 return self.recover_call(id, expected, frame, arguments);
             }
         };
         if f.incomplete && !self.frames[frame].incomplete {
             self.report(
-                "LANG-6",
+                const { RuleId::of("LANG-6") },
                 self.span(id),
                 "complete definition cannot call an incomplete signature",
             );
             bad = true;
         }
         if (f.foreign.is_some()) && !f.generics.is_empty() {
-            self.report("GEN-4", self.span(id), "foreign calls must be monomorphic");
+            self.report(
+                const { RuleId::of("GEN-4") },
+                self.span(id),
+                "foreign calls must be monomorphic",
+            );
             bad = true;
         }
         // Section 23 assigns missing capability arguments to the authority
@@ -403,8 +415,13 @@ impl Checker<'_, '_> {
         }
         self.work
             .push(Work::AfterChild(After::CallArgument(call, index)));
-        self.expected_sites
-            .insert(arg, (self.span(self.calls[call].id), "LANG-7".into()));
+        self.expected_sites.insert(
+            arg,
+            (
+                self.span(self.calls[call].id),
+                const { RuleId::of("LANG-7") },
+            ),
+        );
         self.work.push(Work::Enter(arg, expected, frame));
         Ok(())
     }
@@ -485,7 +502,7 @@ impl Checker<'_, '_> {
                 }
                 if !self.infer(template, constraint, &mut inferred) {
                     self.report(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         self.span(id),
                         "argument does not match the declared parameter type",
                     );
@@ -508,9 +525,9 @@ impl Checker<'_, '_> {
                             if !self.bound(actual, *b)? {
                                 self.report(
                                     if *b == ast::Bound::Serializable {
-                                        "SER-1"
+                                        const { RuleId::of("SER-1") }
                                     } else {
-                                        "GEN-1"
+                                        const { RuleId::of("GEN-1") }
                                     },
                                     self.span(id),
                                     "actual generic argument lacks a required structural bound",
@@ -731,7 +748,7 @@ impl Checker<'_, '_> {
         let missing_capabilities = c.missing_capabilities;
         if !bad && inferred.iter().any(Option::is_none) {
             self.report(
-                "LANG-2",
+                const { RuleId::of("LANG-2") },
                 self.span(id),
                 "generic call arguments cannot be inferred from its prefix and expected type",
             );
@@ -1055,7 +1072,7 @@ impl Checker<'_, '_> {
         }
         let Some((result, ok, error)) = self.result_parts(ty)? else {
             self.report(
-                "LANG-8",
+                const { RuleId::of("LANG-8") },
                 self.span(id),
                 "? requires the registered Result type",
             );
@@ -1064,9 +1081,9 @@ impl Checker<'_, '_> {
         let Some(expected) = self.frames[frame].error else {
             self.report(
                 if self.frames[frame].finalizer {
-                    "DROP-3"
+                    const { RuleId::of("DROP-3") }
                 } else {
-                    "LANG-8"
+                    const { RuleId::of("LANG-8") }
                 },
                 self.span(id),
                 "? requires an enclosing Result error channel",
@@ -1093,7 +1110,7 @@ impl Checker<'_, '_> {
                 let s = self.snapshot(&p)?;
                 let SignatureKind::Function(f) = &s.kind else {
                     self.report(
-                        "LANG-8",
+                        const { RuleId::of("LANG-8") },
                         self.span(id),
                         "error mapper must be a unary function or variant",
                     );
@@ -1109,7 +1126,7 @@ impl Checker<'_, '_> {
                     && args.iter().all(Option::is_some);
                 if !matches {
                     self.report(
-                        "LANG-8",
+                        const { RuleId::of("LANG-8") },
                         self.span(id),
                         "error mapper must map the source error to the enclosing error",
                     );
@@ -1128,9 +1145,9 @@ impl Checker<'_, '_> {
                             {
                                 self.report(
                                     if *bound == ast::Bound::Serializable {
-                                        "SER-1"
+                                        const { RuleId::of("SER-1") }
                                     } else {
-                                        "GEN-1"
+                                        const { RuleId::of("GEN-1") }
                                     },
                                     self.span(id),
                                     "error mapper actual lacks its required structural bound",
@@ -1174,7 +1191,7 @@ impl Checker<'_, '_> {
                     }))
                 } else {
                     self.report(
-                        "LANG-8",
+                        const { RuleId::of("LANG-8") },
                         self.span(id),
                         "variant mapper needs exactly one matching error payload",
                     );
@@ -1184,7 +1201,7 @@ impl Checker<'_, '_> {
         } else {
             if !self.compatible(error, expected) {
                 self.report(
-                    "LANG-8",
+                    const { RuleId::of("LANG-8") },
                     self.span(id),
                     "plain ? requires identical error types",
                 );

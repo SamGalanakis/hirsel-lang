@@ -33,7 +33,7 @@ impl Parser<'_> {
         } = &written.kind
         {
             return self.fail_at(
-                "LANG-7",
+                const { RuleId::of("LANG-7") },
                 relation.origin.span,
                 "a field, element or type argument cannot declare a relation: it is related as its owner is",
             );
@@ -68,7 +68,7 @@ impl Parser<'_> {
             if modifiers.contains(&modifier) {
                 let span = self.origin(at).span;
                 self.diagnostics.push(Diagnostic::error(
-                    RuleId::new("LANG-7").expect("static rule ID"),
+                    const { RuleId::of("LANG-7") },
                     span,
                     "a modifier is written once: this one is repeated",
                 ));
@@ -89,7 +89,7 @@ impl Parser<'_> {
                         values.extend(self.list(")", Self::part_type)?);
                         Ok(self.push_type(start, TypeExprKind::Tuple(values)))
                     } else {
-                        self.expect(")", "LANG-1")?;
+                        self.expect(")", const { RuleId::of("LANG-1") })?;
                         let height = self.heights.types[first.0 as usize] + 1;
                         self.check_height(height);
                         self.heights.types[first.0 as usize] = height;
@@ -110,11 +110,14 @@ impl Parser<'_> {
                     self.symbols.resolve(attr.name),
                     Some("noalloc" | "advance_only" | "preserves_captures" | "captures")
                 ) {
-                    return self.fail("LANG-7", "attribute cannot prefix a function type");
+                    return self.fail(
+                        const { RuleId::of("LANG-7") },
+                        "attribute cannot prefix a function type",
+                    );
                 }
                 attrs.push(attr);
             }
-            self.expect("fn", "LANG-7")?;
+            self.expect("fn", const { RuleId::of("LANG-7") })?;
             let mut signature = self.header(true, false)?;
             signature.attributes = attrs;
             self.push_type(start, TypeExprKind::Function(signature))
@@ -122,13 +125,18 @@ impl Parser<'_> {
             let path = self.path(true)?;
             let arguments = if self.eat("[") {
                 if self.at("]") {
-                    return self.fail("LANG-7", "type arguments cannot be empty");
+                    return self.fail(
+                        const { RuleId::of("LANG-7") },
+                        "type arguments cannot be empty",
+                    );
                 }
                 self.list("]", |p| {
                     if matches!(p.token(0).map(|t| &t.kind), Some(TokenKind::Integer)) {
                         let Some(n) = size_value(p.text_at(0)) else {
-                            return p
-                                .fail("LANG-7", "size argument must be an unsuffixed u64 literal");
+                            return p.fail(
+                                const { RuleId::of("LANG-7") },
+                                "size argument must be an unsuffixed u64 literal",
+                            );
                         };
                         p.pos += 1;
                         Ok(TypeArgument::SizeLiteral(n))
@@ -156,7 +164,7 @@ impl Parser<'_> {
             } else if self.at("of") {
                 if brand.is_some() || relation.is_some() {
                     return self.fail(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         "a type has one brand, written before its relation: `T of p in x`",
                     );
                 }
@@ -169,7 +177,7 @@ impl Parser<'_> {
             } else if self.at("in") {
                 if relation.is_some() {
                     return self.fail(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         "a type has one relation; name every place in it: `in {x, y}`",
                     );
                 }
@@ -195,17 +203,20 @@ impl Parser<'_> {
     /// `in heap`, `in x` or `in {x, y.a, env}` (MODE-1, PROV-4; #72, #77).
     fn relation(&mut self) -> Parsed<RelationSyntax> {
         let start = self.pos;
-        self.expect("in", "LANG-7")?;
+        self.expect("in", const { RuleId::of("LANG-7") })?;
         let places = if self.eat("{") {
             self.whitespace += 1;
             let result = (|| {
                 if self.at("}") {
-                    return self.fail("LANG-7", "a relation names at least one place");
+                    return self.fail(
+                        const { RuleId::of("LANG-7") },
+                        "a relation names at least one place",
+                    );
                 }
                 let places = self.list("}", Self::relation_place)?;
                 if places.contains(&RelationPlace::Heap) {
                     return self.fail(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         "`heap` is the empty relation and stands alone: `in heap`",
                     );
                 }
@@ -240,7 +251,7 @@ impl Parser<'_> {
         relation: &mut Option<RelationSyntax>,
     ) -> Parsed<()> {
         let start = self.pos;
-        self.expect("@", "LANG-7")?;
+        self.expect("@", const { RuleId::of("LANG-7") })?;
         let word = self.text_at(0).to_owned();
         self.pos += 1;
         let message = match word.as_str() {
@@ -259,7 +270,10 @@ impl Parser<'_> {
                 let mut paths = vec![];
                 if self.eat("(") {
                     if self.at(")") {
-                        return self.fail("LANG-7", "local origins cannot be empty");
+                        return self.fail(
+                            const { RuleId::of("LANG-7") },
+                            "local origins cannot be empty",
+                        );
                     }
                     paths = self.list(")", |p| p.path(false))?;
                 }
@@ -300,7 +314,7 @@ impl Parser<'_> {
         };
         let span = self.origin(start).span;
         self.diagnostics.push(Diagnostic::error(
-            RuleId::new("LANG-7").expect("static rule ID"),
+            const { RuleId::of("LANG-7") },
             span,
             message,
         ));
@@ -320,7 +334,10 @@ impl Parser<'_> {
             if let Some(Literal::Integer(n)) = self.literal() {
                 PatternKind::Literal(Literal::Integer(format!("-{n}")))
             } else {
-                return self.fail("LANG-13", "negative pattern requires integer literal");
+                return self.fail(
+                    const { RuleId::of("LANG-13") },
+                    "negative pattern requires integer literal",
+                );
             }
         } else if let Some(literal) = self.literal() {
             PatternKind::Literal(literal)
@@ -336,7 +353,7 @@ impl Parser<'_> {
                         values.extend(self.list(")", Self::pattern)?);
                         Ok(PatternKind::Tuple(values))
                     } else {
-                        self.expect(")", "LANG-13")?;
+                        self.expect(")", const { RuleId::of("LANG-13") })?;
                         Ok(self.tree.patterns[first.0 as usize].kind.clone())
                     }
                 })();
@@ -354,7 +371,7 @@ impl Parser<'_> {
                         if self.eat("..") {
                             rest = true;
                             self.eat(",");
-                            self.expect(")", "LANG-13")?;
+                            self.expect(")", const { RuleId::of("LANG-13") })?;
                             break;
                         }
                         let label = if self.ident(0) && self.text_at(1) == ":" {
@@ -371,7 +388,7 @@ impl Parser<'_> {
                         if self.eat(")") {
                             break;
                         }
-                        self.expect(",", "LANG-13")?;
+                        self.expect(",", const { RuleId::of("LANG-13") })?;
                     }
                     Ok(PatternKind::Constructor {
                         path: Path {

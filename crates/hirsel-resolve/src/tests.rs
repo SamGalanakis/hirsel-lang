@@ -695,11 +695,13 @@ fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_u
             hirsel_types::LookupOutput {
                 manifest: Default::default(),
                 result: (|| {
-                    Err(QueryError::Diagnostics(vec![crate::index::error(
-                        "LANG-4",
-                        Span::default(),
-                        "provider unresolved name",
-                    )]))
+                    Err(QueryError::Diagnostics(vec![
+                        hirsel_diag::Diagnostic::error(
+                            const { hirsel_diag::RuleId::of("LANG-4") },
+                            Span::default(),
+                            "provider unresolved name",
+                        ),
+                    ]))
                 })(),
             }
         }

@@ -7,6 +7,9 @@ Allowed dependencies: hirsel-span, serde_json and unicode-width (human terminal-
 Invariants and boundary:
 
 - Every Diagnostic has exactly one syntactically validated RuleId (spec introduction, FAIL-1).
+  Compiler literals use `const { RuleId::of("OWN-6") }`; `RuleId::new` validates
+  IDs parsed from external data. Both share the same spelling check.
+  Phase wrappers accept RuleId and construct through `Diagnostic::error`.
 - Primary and labelled secondary locations are byte Spans, resolved using the owning source snapshot.
 - Notes are attached text; a fix is one optional replacement range and replacement string.
   A note beginning `help: ` is a suggested repair and renders as `= help: ...`.

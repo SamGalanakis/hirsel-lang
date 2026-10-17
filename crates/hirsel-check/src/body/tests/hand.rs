@@ -282,7 +282,7 @@ fn nonrecursive_lookup_failures_are_recorded() {
     let mut f = Fixture::new(TypeKind::Tuple(vec![].into()));
     let path = super::support::path("callee");
     f.provider.failure = Some(QueryError::Diagnostics(vec![Diagnostic::error(
-        RuleId::new("LANG-7").unwrap(),
+        const { RuleId::of("LANG-7") },
         origin(9).span,
         "bad callee signature",
     )]));

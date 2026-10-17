@@ -21,7 +21,7 @@ impl Audit<'_, '_> {
                             .span,
                     );
                 self.report(
-                    "MEM-13",
+                    const { RuleId::of("MEM-13") },
                     span,
                     "ordinary variant values expose no payload places",
                 );
@@ -43,7 +43,7 @@ impl Audit<'_, '_> {
             ) && !self.owns_container(place)
             {
                 self.report(
-                    "MEM-13",
+                    const { RuleId::of("MEM-13") },
                     statement.origin.span,
                     "a Packed variant cannot be replaced through a payload or element alias",
                 );

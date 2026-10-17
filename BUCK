@@ -511,6 +511,7 @@ hirsel_library(
         "//third-party:serde_json",
         "//third-party:unicode-width",
     ],
+    doctests = True,
     crate = "hirsel_diag",
     crate_root = "crates/hirsel-diag/src/lib.rs",
     srcs = glob(["crates/hirsel-diag/src/**"]),

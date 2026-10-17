@@ -421,7 +421,7 @@ impl Checker<'_> {
     /// Record a diagnostic and its explanation, rendered after the trace.
     pub(super) fn report(
         &mut self,
-        rule: &str,
+        rule: RuleId,
         site: Span,
         message: &str,
         explain: impl FnOnce(&Self) -> Pending,
@@ -431,7 +431,7 @@ impl Checker<'_> {
         }
         let pending = explain(self);
         self.diagnostics
-            .push(Diagnostic::error(RuleId::new(rule).unwrap(), site, message));
+            .push(Diagnostic::error(rule, site, message));
         self.explanations
             .push((self.diagnostics.len() - 1, pending));
         self.diagnostics.last_mut()
@@ -603,7 +603,7 @@ impl Checker<'_> {
             .unwrap_or_else(|| crate::explain::prose("the callee"));
         let span = self.span_of(argument);
         let mut diagnostic = Diagnostic::error(
-            RuleId::new("OWN-4").unwrap(),
+            const { RuleId::of("OWN-4") },
             span,
             "this `copy` is redundant",
         );

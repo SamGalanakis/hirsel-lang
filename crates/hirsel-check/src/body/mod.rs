@@ -109,7 +109,7 @@ fn check_inner(
                 if hirsel_check_protocol::fact::fact_owner(&c.input.signature.definition).is_some()
                 {
                     c.expected_sites
-                        .insert(*body, (c.span(*body), "FACT-2".into()));
+                        .insert(*body, (c.span(*body), const { RuleId::of("FACT-2") }));
                 }
                 c.work
                     .push(Work::Enter(*body, c.frames[frame].result, frame));
@@ -165,8 +165,10 @@ fn check_inner(
             });
             c.frames[frame].locals.insert(binding, own);
             c.frames[frame].finalizer = true;
-            c.expected_sites
-                .insert(drop.body, (c.span(drop.body), "DROP-3".into()));
+            c.expected_sites.insert(
+                drop.body,
+                (c.span(drop.body), const { RuleId::of("DROP-3") }),
+            );
             c.work.push(Work::Enter(drop.body, Some(unit), frame));
         }
         _ => (),
@@ -286,7 +288,7 @@ struct Checker<'a, 'p> {
     calls: Vec<calls::PendingCall>,
     ranges: BTreeMap<ast::ExprId, TypeId>,
     range_sources: BTreeSet<ast::ExprId>,
-    expected_sites: BTreeMap<ast::ExprId, (Span, String)>,
+    expected_sites: BTreeMap<ast::ExprId, (Span, RuleId)>,
     mut_aliases: BTreeSet<LocalId>,
     proof_failure: &'p std::cell::RefCell<Option<QueryError>>,
 }
@@ -332,9 +334,9 @@ impl Checker<'_, '_> {
     fn span(&self, id: ast::ExprId) -> Span {
         self.input.tree.expressions[id.0 as usize].origin.span
     }
-    fn report(&mut self, rule: &str, span: Span, message: &str) {
+    fn report(&mut self, rule: RuleId, span: Span, message: &str) {
         self.diagnostics
-            .push(Diagnostic::error(RuleId::new(rule).unwrap(), span, message));
+            .push(Diagnostic::error(rule, span, message));
     }
     fn error(&mut self) -> TypeId {
         self.ty(TypeKind::Error)
@@ -694,8 +696,8 @@ impl Checker<'_, '_> {
                     .expected_sites
                     .get(&id)
                     .cloned()
-                    .unwrap_or((self.span(id), "LANG-7".into()));
-                self.report(&rule, span, "expression does not have the expected type");
+                    .unwrap_or((self.span(id), const { RuleId::of("LANG-7") }));
+                self.report(rule, span, "expression does not have the expected type");
                 ty = self.error();
             }
         }
@@ -769,7 +771,7 @@ impl Checker<'_, '_> {
                 },
                 |a| a.origin.span,
             );
-            self.report("CLO-4", span, "this declared capture promise is not yet provable; executable flow proofs are pending");
+            self.report(const { RuleId::of("CLO-4") }, span, "this declared capture promise is not yet provable; executable flow proofs are pending");
         }
         let mut scopes = vec![owner];
         let mut ancestor = parent;
@@ -807,7 +809,10 @@ impl Checker<'_, '_> {
             let boolean = self.primitive(Primitive::Bool);
             self.expected_sites.insert(
                 contract.expression,
-                (self.span(contract.expression), "FACT-1".into()),
+                (
+                    self.span(contract.expression),
+                    const { RuleId::of("FACT-1") },
+                ),
             );
             self.work
                 .push(Work::Enter(contract.expression, Some(boolean), frame));
@@ -833,7 +838,7 @@ impl Checker<'_, '_> {
                 ast::ExprKind::Return(_)
             ) {
                 self.report(
-                    "LANG-11",
+                    const { RuleId::of("LANG-11") },
                     self.span(e),
                     "return cannot be the final statement of a function body",
                 );
@@ -901,7 +906,7 @@ impl Checker<'_, '_> {
                     // but no first-class value contract. Check independent
                     // operands while withholding the invalid value's context.
                     self.report(
-                        "SEM-4",
+                        const { RuleId::of("SEM-4") },
                         self.span(id),
                         "a range is permitted only as a direct for source",
                     );
@@ -1010,7 +1015,7 @@ impl Checker<'_, '_> {
                     // type through resolution, before its u64 expectation can
                     // produce a secondary LANG-7 mismatch.
                     self.report(
-                        "LANG-2",
+                        const { RuleId::of("LANG-2") },
                         self.span(id),
                         "type arguments are never written in expressions",
                     );
@@ -1074,7 +1079,7 @@ impl Checker<'_, '_> {
                 if self.frames[frame].finalizer {
                     if let Some(value) = value {
                         self.expected_sites
-                            .insert(value, (self.span(id), "DROP-3".into()));
+                            .insert(value, (self.span(id), const { RuleId::of("DROP-3") }));
                     }
                 }
                 self.schedule(
@@ -1160,7 +1165,7 @@ impl Checker<'_, '_> {
                 // Spec #42 asks whether an expected function type may as well.
                 if matches!(self.kind(ty), TypeKind::Function(f) if !f.generics.is_empty()) {
                     self.report(
-                        "LANG-2",
+                        const { RuleId::of("LANG-2") },
                         self.span(id),
                         "a generic function takes its type arguments only from a direct call",
                     );
@@ -1210,7 +1215,7 @@ impl Checker<'_, '_> {
                         };
                         if length != Some(cs.len() as u64) {
                             self.report(
-                                "LANG-7",
+                                const { RuleId::of("LANG-7") },
                                 self.span(id),
                                 "Inline literal has the wrong length",
                             );
@@ -1219,7 +1224,7 @@ impl Checker<'_, '_> {
                     t
                 } else {
                     self.report(
-                        "LANG-2",
+                        const { RuleId::of("LANG-2") },
                         self.span(id),
                         "sequence literal needs an expected sequence type",
                     );
@@ -1237,7 +1242,11 @@ impl Checker<'_, '_> {
                 if self.invalid(t) {
                     t
                 } else if op == ast::UnaryOp::Mut && self.readonly_byte_projection(value) {
-                    self.report("LANG-5", self.span(id), "Bytes indexing is read-only");
+                    self.report(
+                        const { RuleId::of("LANG-5") },
+                        self.span(id),
+                        "Bytes indexing is read-only",
+                    );
                     self.error()
                 } else {
                     match op {
@@ -1263,7 +1272,7 @@ impl Checker<'_, '_> {
                             if !self.numeric(t) || (op == ast::UnaryOp::BitNot && !self.integer(t))
                             {
                                 self.report(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     self.span(id),
                                     "operator requires a sized numeric operand",
                                 );
@@ -1284,7 +1293,7 @@ impl Checker<'_, '_> {
                                 && !self.bound(t, ast::Bound::Copyable)?
                             {
                                 self.report(
-                                    "GEN-1",
+                                    const { RuleId::of("GEN-1") },
                                     self.span(id),
                                     "generic copy requires copyable",
                                 );
@@ -1328,7 +1337,7 @@ impl Checker<'_, '_> {
                         self.projected_type(t, part)
                     } else {
                         self.report(
-                            "LANG-7",
+                            const { RuleId::of("LANG-7") },
                             self.span(id),
                             "field is not available on this type",
                         );
@@ -1346,7 +1355,11 @@ impl Checker<'_, '_> {
                 } else if let Some(e) = self.element(t) {
                     self.projected_type(t, e)
                 } else {
-                    self.report("LANG-7", self.span(id), "indexing requires a sequence");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        self.span(id),
+                        "indexing requires a sequence",
+                    );
                     self.error()
                 }
             }
@@ -1370,7 +1383,11 @@ impl Checker<'_, '_> {
                 } else if self.bottom(b) || self.compatible(a, b) {
                     a
                 } else {
-                    self.report("LANG-7", self.span(id), "branches have different types");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        self.span(id),
+                        "branches have different types",
+                    );
                     self.error()
                 }
             }
@@ -1385,7 +1402,7 @@ impl Checker<'_, '_> {
                             if !self.compatible(a, t) {
                                 bad = true;
                                 self.report(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     self.span(id),
                                     "match arms have different types",
                                 );
@@ -1409,7 +1426,11 @@ impl Checker<'_, '_> {
                 } else if let Some(result) = self.frames[frame].result {
                     let unit = self.ty(TypeKind::Tuple(vec![].into()));
                     if !self.compatible(unit, result) {
-                        self.report("LANG-7", self.span(id), "bare return requires unit result");
+                        self.report(
+                            const { RuleId::of("LANG-7") },
+                            self.span(id),
+                            "bare return requires unit result",
+                        );
                     }
                 }
                 self.primitive(Primitive::Never)
@@ -1417,7 +1438,7 @@ impl Checker<'_, '_> {
             E::Break | E::Continue => {
                 if self.frames[frame].loops == 0 {
                     self.report(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         self.span(id),
                         "loop control requires an enclosing loop in this function",
                     );
@@ -1486,7 +1507,7 @@ impl Checker<'_, '_> {
             E::Todo(_) => {
                 if !self.frames[frame].incomplete {
                     self.report(
-                        "LANG-6",
+                        const { RuleId::of("LANG-6") },
                         self.span(id),
                         "todo requires @incomplete on its enclosing definition",
                     );
@@ -1566,17 +1587,16 @@ impl Checker<'_, '_> {
                 let t = self.value(left);
                 self.work.push(Work::Finish(id, expected, frame));
                 let rule = if self.integer(t) {
-                    "SEM-1"
+                    const { RuleId::of("SEM-1") }
                 } else if matches!(
                     self.kind(t),
                     TypeKind::Primitive(Primitive::F32 | Primitive::F64)
                 ) {
-                    "SEM-2"
+                    const { RuleId::of("SEM-2") }
                 } else {
-                    "LANG-7"
+                    const { RuleId::of("LANG-7") }
                 };
-                self.expected_sites
-                    .insert(right, (self.span(id), rule.into()));
+                self.expected_sites.insert(right, (self.span(id), rule));
                 self.work.push(Work::Enter(right, Some(t), frame));
             }
             After::CallCallee(id, expected, frame) => self.start_call(id, expected, frame)?,
@@ -1689,7 +1709,11 @@ impl Checker<'_, '_> {
                     self.pattern(arm.pattern, ty, UseKind::Borrow, false, false, None, frame)?;
                 }
                 if !self.invalid(ty) && !self.exhaustive(ty, &arms)? {
-                    self.report("LANG-7", self.span(id), "match does not cover every value");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        self.span(id),
+                        "match does not cover every value",
+                    );
                 }
                 self.work.push(Work::Finish(id, expected, frame));
                 self.work
@@ -1841,7 +1865,7 @@ impl Checker<'_, '_> {
                         let s = self.snapshot(&definition)?;
                         if matches!(&s.kind,SignatureKind::Type(td) if td.fact.is_some()) {
                             self.report(
-                                "SEM-4",
+                                const { RuleId::of("SEM-4") },
                                 self.input.tree.statements[id.0 as usize].origin.span,
                                 "mutable iteration element may not carry facts",
                             );
@@ -1907,7 +1931,7 @@ impl Checker<'_, '_> {
                         .is_some_and(|r| !self.compatible(result, r))
                 {
                     self.report(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         self.span(id),
                         "closure exits have different result types",
                     );
@@ -1995,7 +2019,7 @@ impl Checker<'_, '_> {
             }
         }
     }
-    fn mutable_place(&self, mut expression: ast::ExprId, _frame: usize) -> Option<&'static str> {
+    fn mutable_place(&self, mut expression: ast::ExprId, _frame: usize) -> Option<RuleId> {
         loop {
             match self.input.tree.expressions[expression.0 as usize].kind {
                 ast::ExprKind::Index { base, .. }
@@ -2004,7 +2028,7 @@ impl Checker<'_, '_> {
                         TypeKind::Primitive(Primitive::Bytes)
                     ) =>
                 {
-                    return Some("LANG-5");
+                    return Some(const { RuleId::of("LANG-5") });
                 }
                 ast::ExprKind::Field { base, .. } | ast::ExprKind::Index { base, .. } => {
                     expression = base
@@ -2015,7 +2039,7 @@ impl Checker<'_, '_> {
                         return None;
                     } // OWN-1/3 belong to I.
                     let Some(ResolvedName::Local(l)) = r else {
-                        return Some("LANG-5");
+                        return Some(const { RuleId::of("LANG-5") });
                     };
                     let b = self
                         .body
@@ -2023,15 +2047,15 @@ impl Checker<'_, '_> {
                         .iter()
                         .find(|b| b.binding == ResolvedName::Local(*l));
                     if self.mut_aliases.contains(l) {
-                        return Some("LANG-15");
+                        return Some(const { RuleId::of("LANG-15") });
                     }
                     return if b.is_some_and(|b| b.mutable) {
                         None
                     } else {
-                        Some("LANG-5")
+                        Some(const { RuleId::of("LANG-5") })
                     };
                 }
-                _ => return Some("LANG-5"),
+                _ => return Some(const { RuleId::of("LANG-5") }),
             }
         }
     }

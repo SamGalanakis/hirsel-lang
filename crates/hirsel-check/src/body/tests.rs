@@ -180,7 +180,7 @@ fn intrinsic_domains_follow_the_callee_metadata_instead_of_its_name() {
         .schema = vec![SchemaConstraint::Domain {
         parameter: TypeParameterRef::bound(TypeParamId(0)),
         domain: ScalarDomain::Float,
-        rule: hirsel_diag::RuleId::new("SEM-2").unwrap(),
+        rule: const { RuleId::of("SEM-2") },
     }];
     let output = check_with_loop_protocols(
         LoopInput {

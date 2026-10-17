@@ -280,7 +280,7 @@ fn independent_ir_validation_rejects_forged_tail_obligations_and_continuations()
                         place: destination,
                         usage: hirsel_types::UseKind::Copy,
                     },
-                    rule: hirsel_diag::RuleId::new("FACT-1").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("FACT-1") },
                 },
                 span,
                 on_failure: hirsel_tir::CleanupId(0),

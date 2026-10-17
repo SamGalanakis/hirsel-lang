@@ -243,7 +243,7 @@ impl Checker<'_> {
     }
 
     fn state_violation(&mut self, binding: usize, advance: bool, site: Span) {
-        self.report(if advance { "MEM-14" } else { "CLO-4" }, site,
+        self.report(if advance { const { RuleId::of("MEM-14") } } else { const { RuleId::of("CLO-4") } }, site,
             "the selected incoming state must survive unchanged except for declared preserving advances", |checker| {
                 let (name, declaration) = checker.binding_site(binding);
                 Explanation::default()

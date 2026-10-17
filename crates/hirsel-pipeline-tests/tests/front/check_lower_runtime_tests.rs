@@ -24,7 +24,7 @@ impl hirsel_interp::Operations for Emit {
         if self.fail.as_ref() == Some(text) {
             return Ok(Some(hirsel_interp::OperationResult::Failed(
                 hirsel_interp::Failure {
-                    rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("LANG-9") },
                     line: 6,
                     site: call.site,
                     kind: "check".into(),

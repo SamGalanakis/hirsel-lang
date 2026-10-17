@@ -498,7 +498,7 @@ impl QueryEngine {
             } = &snapshot.file.tree.items[snapshot.item.0 as usize].kind
             {
                 return Err(QueryError::Diagnostics(vec![Diagnostic::error(
-                    hirsel_diag::RuleId::new("LANG-7").unwrap(),
+                    const { hirsel_diag::RuleId::of("LANG-7") },
                     snapshot.file.tree.types[target.0 as usize].origin.span,
                     "cyclic type aliases have no representation",
                 )]));

@@ -20,7 +20,7 @@ pub fn validate_loop_source(
         (&open.kind, &next.kind)
     else {
         return Err(diagnostic(
-            "SEM-4",
+            const { RuleId::of("SEM-4") },
             span,
             "loop association operations must be functions",
         ));
@@ -28,7 +28,7 @@ pub fn validate_loop_source(
     if !matches!(open_f.parameters.as_slice(), [parameter] if matches!(open.types.get(parameter.ty), Some(Type { kind: TypeKind::Named { definition, .. }, .. }) if definition == &signature.definition))
     {
         return Err(diagnostic(
-            "SEM-4",
+            const { RuleId::of("SEM-4") },
             span,
             "loop open must borrow the associated nominal receiver",
         ));
@@ -48,7 +48,11 @@ pub fn validate_loop_source(
                     continue;
                 }
                 let row = operation.types.get(ty).ok_or_else(|| {
-                    diagnostic("SEM-4", span, "invalid association signature graph")
+                    diagnostic(
+                        const { RuleId::of("SEM-4") },
+                        span,
+                        "invalid association signature graph",
+                    )
                 })?;
                 pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
                 if let TypeKind::Named { definition, .. } = &row.kind {
@@ -56,7 +60,7 @@ pub fn validate_loop_source(
                         == ast::Visibility::Private
                     {
                         return Err(diagnostic(
-                            "PROG-2",
+                            const { RuleId::of("PROG-2") },
                             span,
                             "a public loop association requires exported receiver, cursor and yield types",
                         ));
@@ -118,7 +122,7 @@ pub fn validate_loop_source(
         .contains(&ParameterRef::bound(ParamId(0)))
     {
         return Err(diagnostic(
-            "SEM-4",
+            const { RuleId::of("SEM-4") },
             span,
             "loop cursor must retain its borrowed receiver",
         ));
@@ -145,7 +149,7 @@ pub fn validate_loop_source(
         || !matches!(&types.get(result).unwrap().kind, TypeKind::Named { definition, arguments } if definition == &core_option && matches!(arguments.as_slice(), [GenericArgument::Type(_)]))
     {
         return Err(diagnostic(
-            "SEM-4",
+            const { RuleId::of("SEM-4") },
             span,
             "loop next must return the exact core Option",
         ));
@@ -165,7 +169,7 @@ fn specialize(
 ) -> Result<TypeId, QueryError> {
     let error = || {
         diagnostic(
-            "SEM-4",
+            const { RuleId::of("SEM-4") },
             span,
             "loop operation receiver, arity or passing mode disagrees with its association",
         )

@@ -36,11 +36,13 @@ fn normalize_inner(
     provider: &mut dyn SignatureProvider,
     failure: &std::cell::RefCell<Option<QueryError>>,
 ) -> Result<NormalizedDeclaration, QueryError> {
-    let item = input
-        .tree
-        .items
-        .get(input.item.0 as usize)
-        .ok_or_else(|| diagnostic("LANG-6", Span::default(), "missing item header"))?;
+    let item = input.tree.items.get(input.item.0 as usize).ok_or_else(|| {
+        diagnostic(
+            const { RuleId::of("LANG-6") },
+            Span::default(),
+            "missing item header",
+        )
+    })?;
     let name_span = item.name_span;
     let duplicate = if input.declaration_sites.is_empty() {
         input
@@ -56,7 +58,7 @@ fn normalize_inner(
             .position(|site| site.definition == item.definition && site.name_span == name_span)
             .ok_or_else(|| {
                 diagnostic(
-                    "LANG-6",
+                    const { RuleId::of("LANG-6") },
                     name_span,
                     "item name is missing from module declaration input",
                 )
@@ -67,7 +69,7 @@ fn normalize_inner(
     };
     if duplicate {
         return Err(diagnostic(
-            "LANG-7",
+            const { RuleId::of("LANG-7") },
             name_span,
             "duplicate definition; overloading is forbidden",
         ));
@@ -105,7 +107,7 @@ fn normalize_inner(
             .any(|a| input.symbols.resolve(a.name) == Some("serializable"))
     {
         return Err(diagnostic(
-            "SER-1",
+            const { RuleId::of("SER-1") },
             item.origin.span,
             "a capability cannot opt into a serializable schema",
         ));
@@ -116,7 +118,7 @@ fn normalize_inner(
         ast::ItemKind::Function { signature, abi, .. } => {
             if item.visibility == ast::Visibility::PublicOpaque {
                 return Err(diagnostic(
-                    "PROG-2",
+                    const { RuleId::of("PROG-2") },
                     item.origin.span,
                     "pub opaque applies only to types",
                 ));
@@ -125,28 +127,28 @@ fn normalize_inner(
             if abi.is_some() || input.metadata.exported_c {
                 if !f.generics.is_empty() {
                     return Err(diagnostic(
-                        "GEN-4",
+                        const { RuleId::of("GEN-4") },
                         item.origin.span,
                         "foreign and exported C functions must be monomorphic",
                     ));
                 }
                 if abi.is_some() && !input.metadata.unsafe_ffi {
                     return Err(diagnostic(
-                        "PROG-4",
+                        const { RuleId::of("PROG-4") },
                         item.origin.span,
                         "extern requires an unsafe ffi package",
                     ));
                 }
                 if abi.as_deref().is_some_and(|s| s != "c") {
                     return Err(diagnostic(
-                        "PROG-4",
+                        const { RuleId::of("PROG-4") },
                         item.origin.span,
                         "only the c ABI is supported",
                     ));
                 }
                 if abi.is_some() && !f.parameters.iter().any(|p| n.is_unsafe(p.ty)) {
                     return Err(diagnostic(
-                        "PROG-4",
+                        const { RuleId::of("PROG-4") },
                         item.origin.span,
                         "extern requires a declared Unsafe capability parameter",
                     ));
@@ -154,7 +156,7 @@ fn normalize_inner(
                 for p in &f.parameters {
                     if !n.is_unsafe(p.ty) && !n.ffi_type(p.ty, &mut BTreeSet::new()) {
                         return Err(diagnostic(
-                            "PROG-4",
+                            const { RuleId::of("PROG-4") },
                             item.origin.span,
                             "type is not permitted by the foreign interface",
                         ));
@@ -162,7 +164,7 @@ fn normalize_inner(
                 }
                 if !n.ffi_type(f.result, &mut BTreeSet::new()) {
                     return Err(diagnostic(
-                        "PROG-4",
+                        const { RuleId::of("PROG-4") },
                         item.origin.span,
                         "foreign result type is not permitted",
                     ));
@@ -171,14 +173,14 @@ fn normalize_inner(
                     let abi = abi.as_deref().unwrap_or("c");
                     let mut foreign = input.metadata.foreign.clone().ok_or_else(|| {
                         diagnostic(
-                            "PROG-4",
+                            const { RuleId::of("PROG-4") },
                             item.origin.span,
                             "foreign aliasing contract must be supplied explicitly",
                         )
                     })?;
                     if foreign.abi != abi || foreign.aliasing_contract.is_empty() {
                         return Err(diagnostic(
-                            "PROG-4",
+                            const { RuleId::of("PROG-4") },
                             item.origin.span,
                             "invalid foreign contract",
                         ));
@@ -192,7 +194,7 @@ fn normalize_inner(
         ast::ItemKind::Const { ty, .. } => {
             if item.visibility == ast::Visibility::PublicOpaque {
                 return Err(diagnostic(
-                    "PROG-2",
+                    const { RuleId::of("PROG-2") },
                     item.origin.span,
                     "pub opaque applies only to types",
                 ));
@@ -210,7 +212,7 @@ fn normalize_inner(
             n.generics = n.generic_parameters(generics)?;
             if drop.is_some() && *flavor != ast::TypeFlavor::Resource {
                 return Err(diagnostic(
-                    "LANG-7",
+                    const { RuleId::of("LANG-7") },
                     item.origin.span,
                     "only resources declare drop",
                 ));
@@ -219,14 +221,14 @@ fn normalize_inner(
                 && item.visibility != ast::Visibility::PublicOpaque
             {
                 return Err(diagnostic(
-                    "PROG-2",
+                    const { RuleId::of("PROG-2") },
                     item.origin.span,
                     "only opaque types omit representation",
                 ));
             }
             if attrs.capability.is_some() && item.visibility != ast::Visibility::PublicOpaque {
                 return Err(diagnostic(
-                    "PROG-2",
+                    const { RuleId::of("PROG-2") },
                     item.origin.span,
                     "capabilities require opaque type declarations",
                 ));
@@ -239,9 +241,9 @@ fn normalize_inner(
                         && authority.is_none()
                         && !matches!(body, ast::TypeBody::Opaque)
                     {
-                        "CAP-5"
+                        const { RuleId::of("CAP-5") }
                     } else {
-                        "LANG-6"
+                        const { RuleId::of("LANG-6") }
                     },
                     item.name_span,
                     "opaque bounds and authority must be stated",
@@ -254,7 +256,7 @@ fn normalize_inner(
                     || matches!(body, ast::TypeBody::Distinct { fact: Some(_), .. }))
             {
                 return Err(diagnostic(
-                    "SER-1",
+                    const { RuleId::of("SER-1") },
                     item.origin.span,
                     "serializable requires transparent data without authority, brands or refinements; convert through a data DTO",
                 ));
@@ -272,7 +274,7 @@ fn normalize_inner(
             let fact = if let ast::TypeBody::Distinct { fact: Some(e), .. } = body {
                 if !repr.is_some_and(|r| n.satisfies(r, Bound::Plain)) {
                     return Err(diagnostic(
-                        "FACT-2",
+                        const { RuleId::of("FACT-2") },
                         item.origin.span,
                         "a distinct fact requires a plain base",
                     ));
@@ -285,7 +287,7 @@ fn normalize_inner(
                 && repr.is_some_and(|r| !n.flat_storage(r, &mut BTreeSet::new()))
             {
                 return Err(diagnostic(
-                    "MEM-12",
+                    const { RuleId::of("MEM-12") },
                     item.origin.span,
                     "MEM-12: flat fields require pointer-free storage without capabilities, handles or resources",
                 ));
@@ -321,9 +323,9 @@ fn normalize_inner(
             if opaque && repr.is_some() && !field_authority.is_subset_of(&declared_authority) {
                 let mut error = diagnostic(
                     if attrs.capability.is_some() {
-                        "CAP-5"
+                        const { RuleId::of("CAP-5") }
                     } else {
-                        "CAP-2"
+                        const { RuleId::of("CAP-2") }
                     },
                     item.origin.span,
                     "opaque authority summary omits representation authority",
@@ -359,7 +361,7 @@ fn normalize_inner(
                 && repr.is_some_and(|root| n.scoped_representation(root))
             {
                 return Err(diagnostic(
-                    "MODE-6",
+                    const { RuleId::of("MODE-6") },
                     item.origin.span,
                     "a global capability representation cannot retain scoped content",
                 ));
@@ -389,7 +391,7 @@ fn normalize_inner(
                 && repr.is_some_and(|root| n.satisfies(root, Bound::Serializable));
             if attrs.serializable && !serializable {
                 return Err(diagnostic(
-                    "SER-1",
+                    const { RuleId::of("SER-1") },
                     item.origin.span,
                     "every serialized field needs an admitted schema; opaque or validated types require a data DTO",
                 ));
@@ -408,15 +410,15 @@ fn normalize_inner(
                 {
                     return Err(diagnostic(
                         if *bound == Bound::Serializable {
-                            "SER-1"
+                            const { RuleId::of("SER-1") }
                         } else if attrs.capability.is_some() && *bound == Bound::Inert {
-                            "CAP-2"
+                            const { RuleId::of("CAP-2") }
                         } else if attrs.capability.is_some() && *bound == Bound::Sendable {
-                            "MODE-4"
+                            const { RuleId::of("MODE-4") }
                         } else if attrs.capability.is_some() && *bound == Bound::Serializable {
-                            "SER-1"
+                            const { RuleId::of("SER-1") }
                         } else {
-                            "GEN-1"
+                            const { RuleId::of("GEN-1") }
                         },
                         item.origin.span,
                         "declared bound is not structural",
@@ -504,8 +506,13 @@ fn normalize_inner(
         kind,
         fingerprint: ast::ContentHash::default(),
     };
-    signature.fingerprint = fingerprint(&signature, &dependencies)
-        .map_err(|_| diagnostic("LANG-6", item.origin.span, "invalid signature type graph"))?;
+    signature.fingerprint = fingerprint(&signature, &dependencies).map_err(|_| {
+        diagnostic(
+            const { RuleId::of("LANG-6") },
+            item.origin.span,
+            "invalid signature type graph",
+        )
+    })?;
     Ok(NormalizedDeclaration {
         public: QueryOutput {
             value: signature,
@@ -515,12 +522,8 @@ fn normalize_inner(
         owner,
     })
 }
-fn diagnostic(rule: &str, span: Span, message: &str) -> QueryError {
-    QueryError::Diagnostics(vec![Diagnostic::error(
-        RuleId::new(rule).unwrap(),
-        span,
-        message,
-    )])
+fn diagnostic(rule: RuleId, span: Span, message: &str) -> QueryError {
+    QueryError::Diagnostics(vec![Diagnostic::error(rule, span, message)])
 }
 #[derive(Clone, Copy)]
 enum Position {
@@ -584,7 +587,7 @@ impl Normalizer<'_, '_> {
             .map(str::to_owned)
             .ok_or_else(|| {
                 diagnostic(
-                    "LANG-6",
+                    const { RuleId::of("LANG-6") },
                     self.span,
                     "symbol does not belong to input interner",
                 )
@@ -607,7 +610,7 @@ impl Normalizer<'_, '_> {
                 let name = self.name(g.name)?;
                 if !names.insert(name.clone()) {
                     return Err(diagnostic(
-                        "GEN-1",
+                        const { RuleId::of("GEN-1") },
                         self.span,
                         "duplicate generic parameter",
                     ));
@@ -637,7 +640,11 @@ impl Normalizer<'_, '_> {
         for a in as_ {
             let name = self.name(a.name)?;
             if !seen.insert(name.clone()) {
-                return Err(diagnostic("LANG-6", a.origin.span, "duplicate attribute"));
+                return Err(diagnostic(
+                    const { RuleId::of("LANG-6") },
+                    a.origin.span,
+                    "duplicate attribute",
+                ));
             }
             let function = matches!(kind, ast::ItemKind::Function { .. });
             let type_ = matches!(kind, ast::ItemKind::Type { .. });
@@ -652,7 +659,7 @@ impl Normalizer<'_, '_> {
             };
             if !valid {
                 return Err(diagnostic(
-                    "LANG-6",
+                    const { RuleId::of("LANG-6") },
                     a.origin.span,
                     "attribute is not permitted here",
                 ));
@@ -662,7 +669,7 @@ impl Normalizer<'_, '_> {
                     if !matches!(a.arguments.as_slice(), [ast::AttributeArgument::StatePromise(s)] if !s.selectors.is_empty())
                     {
                         return Err(diagnostic(
-                            "LANG-6",
+                            const { RuleId::of("LANG-6") },
                             a.origin.span,
                             "a callable contract requires nonempty parameter selectors",
                         ));
@@ -674,7 +681,7 @@ impl Normalizer<'_, '_> {
                         [ast::AttributeArgument::LoopSource(_)]
                     ) {
                         return Err(diagnostic(
-                            "SEM-4",
+                            const { RuleId::of("SEM-4") },
                             a.origin.span,
                             "@loop_source requires open and next paths",
                         ));
@@ -683,7 +690,7 @@ impl Normalizer<'_, '_> {
                 "noalloc" | "incomplete" | "blocking" | "packed" | "soa" | "serializable" => {
                     if !a.arguments.is_empty() {
                         return Err(diagnostic(
-                            "LANG-6",
+                            const { RuleId::of("LANG-6") },
                             a.origin.span,
                             "attribute takes no arguments",
                         ));
@@ -700,11 +707,19 @@ impl Normalizer<'_, '_> {
                 "layout" => {
                     if let [ast::AttributeArgument::Name(s)] = a.arguments.as_slice() {
                         if self.name(*s)? != "c" {
-                            return Err(diagnostic("LANG-7", a.origin.span, "unsupported layout"));
+                            return Err(diagnostic(
+                                const { RuleId::of("LANG-7") },
+                                a.origin.span,
+                                "unsupported layout",
+                            ));
                         }
                         result.layout.c = true;
                     } else {
-                        return Err(diagnostic("LANG-7", a.origin.span, "layout requires c"));
+                        return Err(diagnostic(
+                            const { RuleId::of("LANG-7") },
+                            a.origin.span,
+                            "layout requires c",
+                        ));
                     }
                 }
                 "align" => {
@@ -716,7 +731,7 @@ impl Normalizer<'_, '_> {
                             .filter(|n| n.is_power_of_two())
                             .ok_or_else(|| {
                                 diagnostic(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     a.origin.span,
                                     "alignment must be a positive power of two",
                                 )
@@ -724,7 +739,7 @@ impl Normalizer<'_, '_> {
                         result.layout.align = Some(n);
                     } else {
                         return Err(diagnostic(
-                            "LANG-7",
+                            const { RuleId::of("LANG-7") },
                             a.origin.span,
                             "align requires an integer",
                         ));
@@ -740,7 +755,7 @@ impl Normalizer<'_, '_> {
                         }
                         _ => {
                             return Err(diagnostic(
-                                "LANG-6",
+                                const { RuleId::of("LANG-6") },
                                 a.origin.span,
                                 "capability requires global or local",
                             ));
@@ -764,7 +779,7 @@ impl Normalizer<'_, '_> {
         };
         let [ast::AttributeArgument::LoopSource(s)] = a.arguments.as_slice() else {
             return Err(diagnostic(
-                "SEM-4",
+                const { RuleId::of("SEM-4") },
                 a.origin.span,
                 "@loop_source requires open and next paths",
             ));
@@ -820,7 +835,7 @@ impl Normalizer<'_, '_> {
         // Nested function-type binders are not in the grammar (#24).
         if closure && !own_g.is_empty() {
             return Err(diagnostic(
-                "GEN-1",
+                const { RuleId::of("GEN-1") },
                 self.span,
                 "function types cannot declare generic binders",
             ));
@@ -836,20 +851,24 @@ impl Normalizer<'_, '_> {
         for p in &s.parameters {
             if !closure && p.name.is_none() {
                 return Err(diagnostic(
-                    "LANG-6",
+                    const { RuleId::of("LANG-6") },
                     self.span,
                     "declaration parameter requires a name and type",
                 ));
             }
             if let Some(name) = p.name {
                 if !names.insert(name) {
-                    return Err(diagnostic("LANG-12", self.span, "duplicate parameter name"));
+                    return Err(diagnostic(
+                        const { RuleId::of("LANG-12") },
+                        self.span,
+                        "duplicate parameter name",
+                    ));
                 }
             }
             if let Some(label) = p.label {
                 if !labels.insert(label) {
                     return Err(diagnostic(
-                        "LANG-12",
+                        const { RuleId::of("LANG-12") },
                         self.span,
                         "duplicate parameter label",
                     ));
@@ -904,7 +923,7 @@ impl Normalizer<'_, '_> {
                 || s.result.and_then(|t| written_local(self.input.tree, t)) == Some(true))
         {
             return Err(diagnostic(
-                "MODE-1",
+                const { RuleId::of("MODE-1") },
                 s.result.map_or(self.span, |t| {
                     self.input.tree.types[t.0 as usize].origin.span
                 }),
@@ -927,7 +946,7 @@ impl Normalizer<'_, '_> {
                 .collect();
             if !candidates.is_empty() {
                 return Err(diagnostic(
-                    "MODE-1",
+                    const { RuleId::of("MODE-1") },
                     span,
                     &environment_candidates(&candidates),
                 ));
@@ -967,7 +986,7 @@ impl Normalizer<'_, '_> {
                 ) = origin.root
                 else {
                     return Err(diagnostic(
-                        "LANG-6",
+                        const { RuleId::of("LANG-6") },
                         promise.origin.span,
                         "a callable selector names its own parameter and explicit fields",
                     ));
@@ -981,7 +1000,7 @@ impl Normalizer<'_, '_> {
                 } else {
                     if parameters[ordinal.0 as usize].passing != PassingMode::Mut {
                         return Err(diagnostic(
-                            "MEM-14",
+                            const { RuleId::of("MEM-14") },
                             promise.origin.span,
                             "a state preservation selector requires a mut parameter",
                         ));
@@ -1011,7 +1030,7 @@ impl Normalizer<'_, '_> {
                     }
             ) {
                 return Err(diagnostic(
-                    "CLO-4",
+                    const { RuleId::of("CLO-4") },
                     self.span,
                     "@captures requires a callable or erased iterator result",
                 ));
@@ -1168,7 +1187,7 @@ impl Normalizer<'_, '_> {
         let s = self.provider.signature(d)?;
         if s.definition != *d {
             return Err(diagnostic(
-                "LANG-6",
+                const { RuleId::of("LANG-6") },
                 self.span,
                 "provider returned the wrong definition",
             ));
@@ -1183,11 +1202,17 @@ impl Normalizer<'_, '_> {
             .tree
             .types
             .get(id.0 as usize)
-            .ok_or_else(|| diagnostic("LANG-6", self.span, "missing written type"))?
+            .ok_or_else(|| {
+                diagnostic(
+                    const { RuleId::of("LANG-6") },
+                    self.span,
+                    "missing written type",
+                )
+            })?
             .clone();
         if !self.active.insert(id) {
             return Err(diagnostic(
-                "LANG-7",
+                const { RuleId::of("LANG-7") },
                 t.origin.span,
                 "recursive syntax type graph",
             ));
@@ -1197,7 +1222,7 @@ impl Normalizer<'_, '_> {
         let result = match &t.kind {
             ast::TypeExprKind::Error => {
                 return Err(diagnostic(
-                    "LANG-6",
+                    const { RuleId::of("LANG-6") },
                     t.origin.span,
                     "missing written type; signatures cannot infer it",
                 ));
@@ -1237,12 +1262,16 @@ impl Normalizer<'_, '_> {
             ast::TypeExprKind::Named { path, arguments } => {
                 let name = self.path_name(path).map(str::to_owned);
                 if name.as_deref() == Some("any") {
-                    return Err(diagnostic("LANG-7", t.origin.span, "any is not a type"));
+                    return Err(diagnostic(
+                        const { RuleId::of("LANG-7") },
+                        t.origin.span,
+                        "any is not a type",
+                    ));
                 }
                 if let Some((depth, i, g)) = name.as_deref().and_then(|name| self.generic(name)) {
                     if !arguments.is_empty() {
                         return Err(diagnostic(
-                            "GEN-1",
+                            const { RuleId::of("GEN-1") },
                             t.origin.span,
                             "generic parameter cannot be applied",
                         ));
@@ -1257,7 +1286,7 @@ impl Normalizer<'_, '_> {
                         )?,
                         GenericParameter::Size { .. } => {
                             return Err(diagnostic(
-                                "GEN-1",
+                                const { RuleId::of("GEN-1") },
                                 t.origin.span,
                                 "size parameter cannot be used as a type",
                             ));
@@ -1266,7 +1295,7 @@ impl Normalizer<'_, '_> {
                 } else if let Some(p) = name.as_deref().and_then(primitive) {
                     if !arguments.is_empty() {
                         return Err(diagnostic(
-                            "LANG-7",
+                            const { RuleId::of("LANG-7") },
                             t.origin.span,
                             "primitive type cannot take arguments",
                         ));
@@ -1312,7 +1341,7 @@ impl Normalizer<'_, '_> {
                                 SignatureKind::Type(t) => t.generics.clone(),
                                 _ => {
                                     return Err(diagnostic(
-                                        "LANG-7",
+                                        const { RuleId::of("LANG-7") },
                                         t.origin.span,
                                         "value definition used as a type",
                                     ));
@@ -1329,18 +1358,22 @@ impl Normalizer<'_, '_> {
                             });
                         if self.public && !public {
                             return Err(diagnostic(
-                                "PROG-2",
+                                const { RuleId::of("PROG-2") },
                                 prev,
                                 "public signature mentions a private type",
                             ));
                         }
                         if s.as_ref().is_some_and(|s| s.metadata.alias) {
                             let s = s.ok_or_else(|| {
-                                diagnostic("LANG-7", t.origin.span, "recursive type alias")
+                                diagnostic(
+                                    const { RuleId::of("LANG-7") },
+                                    t.origin.span,
+                                    "recursive type alias",
+                                )
                             })?;
                             if !self.aliases.insert(d.clone()) {
                                 return Err(diagnostic(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     t.origin.span,
                                     "recursive type alias",
                                 ));
@@ -1350,7 +1383,7 @@ impl Normalizer<'_, '_> {
                             };
                             let r = def.representation.ok_or_else(|| {
                                 diagnostic(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     t.origin.span,
                                     "opaque type cannot be an alias",
                                 )
@@ -1421,7 +1454,7 @@ impl Normalizer<'_, '_> {
             .is_global()
         {
             return Err(diagnostic(
-                "LANG-7",
+                const { RuleId::of("LANG-7") },
                 self.input.tree.types[id.0 as usize].origin.span,
                 PART_LOCALITY,
             ));
@@ -1463,7 +1496,7 @@ impl Normalizer<'_, '_> {
     ) -> Result<(), QueryError> {
         if gs.len() != args.len() {
             return Err(diagnostic(
-                "GEN-1",
+                const { RuleId::of("GEN-1") },
                 self.span,
                 "wrong generic argument count",
             ));
@@ -1476,9 +1509,9 @@ impl Normalizer<'_, '_> {
                         if !self.satisfies(*t, *b) {
                             return Err(diagnostic(
                                 if *b == Bound::Serializable {
-                                    "SER-1"
+                                    const { RuleId::of("SER-1") }
                                 } else {
-                                    "GEN-1"
+                                    const { RuleId::of("GEN-1") }
                                 },
                                 self.span,
                                 "type argument does not satisfy structural bound",
@@ -1488,7 +1521,7 @@ impl Normalizer<'_, '_> {
                 }
                 _ => {
                     return Err(diagnostic(
-                        "GEN-1",
+                        const { RuleId::of("GEN-1") },
                         self.span,
                         "type/size argument kind mismatch",
                     ));
@@ -1509,7 +1542,7 @@ impl Normalizer<'_, '_> {
             BuiltinType::FnPtr => {
                 if a.is_empty() || !a.iter().all(|a| matches!(a, GenericArgument::Type(_))) {
                     return Err(diagnostic(
-                        "GEN-1",
+                        const { RuleId::of("GEN-1") },
                         self.span,
                         "FnPtr requires type arguments",
                     ));
@@ -1524,7 +1557,7 @@ impl Normalizer<'_, '_> {
                 .any(|(a, size)| size != matches!(a, GenericArgument::Size(_)))
         {
             return Err(diagnostic(
-                "GEN-1",
+                const { RuleId::of("GEN-1") },
                 self.span,
                 "wrong builtin type/size arguments",
             ));
@@ -1535,14 +1568,14 @@ impl Normalizer<'_, '_> {
                     self.satisfies(ty, bound)
                 })
             {
-                return Err(diagnostic(rule.as_str(), self.span, message));
+                return Err(diagnostic(rule, self.span, message));
             }
         }
         if let Some(b) = builtin_bound(b) {
             if let GenericArgument::Type(t) = a[0] {
                 if !self.satisfies(t, b) {
                     return Err(diagnostic(
-                        "GEN-1",
+                        const { RuleId::of("GEN-1") },
                         self.span,
                         "builtin argument does not satisfy its bound",
                     ));
@@ -1573,7 +1606,7 @@ impl Normalizer<'_, '_> {
                 for f in fs {
                     if !seen.insert(f.name) {
                         return Err(diagnostic(
-                            "LANG-12",
+                            const { RuleId::of("LANG-12") },
                             f.origin.span,
                             "duplicate record field",
                         ));
@@ -1591,7 +1624,11 @@ impl Normalizer<'_, '_> {
                 let mut variants = vec![];
                 for v in vs {
                     if !seen.insert(v.name) {
-                        return Err(diagnostic("LANG-7", self.span, "duplicate variant"));
+                        return Err(diagnostic(
+                            const { RuleId::of("LANG-7") },
+                            self.span,
+                            "duplicate variant",
+                        ));
                     }
                     let mut labels = BTreeSet::new();
                     let labelled = v.fields.first().is_some_and(|(n, _)| n.is_some());
@@ -1599,7 +1636,7 @@ impl Normalizer<'_, '_> {
                     for (name, t) in &v.fields {
                         if name.is_some() != labelled || name.is_some_and(|n| !labels.insert(n)) {
                             return Err(diagnostic(
-                                "LANG-12",
+                                const { RuleId::of("LANG-12") },
                                 self.span,
                                 "variant payload labels must be uniform and unique",
                             ));
@@ -1649,7 +1686,11 @@ impl Normalizer<'_, '_> {
         typed: bool,
     ) -> Result<(Origin, Option<TypeId>), QueryError> {
         if p.segments.is_empty() {
-            return Err(diagnostic("LANG-6", self.span, "empty origin path"));
+            return Err(diagnostic(
+                const { RuleId::of("LANG-6") },
+                self.span,
+                "empty origin path",
+            ));
         }
         let name = self.name(p.segments[0])?;
         let root = if sibling {
@@ -1657,8 +1698,13 @@ impl Normalizer<'_, '_> {
                 self.siblings
                     .iter()
                     .position(|s| s == &name)
-                    .ok_or_else(|| diagnostic("LANG-6", self.span, "unknown sibling origin"))?
-                    as u32,
+                    .ok_or_else(|| {
+                        diagnostic(
+                            const { RuleId::of("LANG-6") },
+                            self.span,
+                            "unknown sibling origin",
+                        )
+                    })? as u32,
             ))
         } else if let Some((parameter, _)) = self.parameter(&name) {
             OriginRoot::Parameter(parameter)
@@ -1694,8 +1740,13 @@ impl Normalizer<'_, '_> {
         let mut fields = vec![];
         for s in p.segments.iter().skip(1) {
             let name = self.name(*s)?;
-            let id = current
-                .ok_or_else(|| diagnostic("LANG-6", self.span, "origin has no record fields"))?;
+            let id = current.ok_or_else(|| {
+                diagnostic(
+                    const { RuleId::of("LANG-6") },
+                    self.span,
+                    "origin has no record fields",
+                )
+            })?;
             let mut id = id;
             // #98: a written field place crosses the same payload as a source read.
             while let TypeKind::Box(payload) = self.types.get(id).unwrap().kind {
@@ -1720,7 +1771,11 @@ impl Normalizer<'_, '_> {
                                 let fs = fs.clone();
                                 let i =
                                     fs.iter().position(|f| f.name == name).ok_or_else(|| {
-                                        diagnostic("LANG-6", self.span, "unknown origin field")
+                                        diagnostic(
+                                            const { RuleId::of("LANG-6") },
+                                            self.span,
+                                            "unknown origin field",
+                                        )
                                     })?;
                                 fields.push(FieldId(i as u32));
                                 let imported = self.import(
@@ -1735,14 +1790,27 @@ impl Normalizer<'_, '_> {
                             }
                         }
                     }
-                    return Err(diagnostic("LANG-6", self.span, "origin is not a record"));
+                    return Err(diagnostic(
+                        const { RuleId::of("LANG-6") },
+                        self.span,
+                        "origin is not a record",
+                    ));
                 }
-                _ => return Err(diagnostic("LANG-6", self.span, "origin is not a record")),
+                _ => {
+                    return Err(diagnostic(
+                        const { RuleId::of("LANG-6") },
+                        self.span,
+                        "origin is not a record",
+                    ));
+                }
             };
-            let i = fs
-                .iter()
-                .position(|f| f.name == name)
-                .ok_or_else(|| diagnostic("LANG-6", self.span, "unknown origin field"))?;
+            let i = fs.iter().position(|f| f.name == name).ok_or_else(|| {
+                diagnostic(
+                    const { RuleId::of("LANG-6") },
+                    self.span,
+                    "unknown origin field",
+                )
+            })?;
             fields.push(FieldId(i as u32));
             current = Some(fs[i].ty);
         }
@@ -1769,7 +1837,7 @@ impl Normalizer<'_, '_> {
         for m in modifiers {
             if !seen.insert(*m) {
                 return Err(diagnostic(
-                    "LANG-7",
+                    const { RuleId::of("LANG-7") },
                     self.span,
                     "a modifier is written once: repeat it nowhere",
                 ));
@@ -1781,7 +1849,7 @@ impl Normalizer<'_, '_> {
                     // conditional generic multiplicity, require a known callable.
                     if !matches!(t.kind, TypeKind::Function(_)) {
                         return Err(diagnostic(
-                            "MODE-3",
+                            const { RuleId::of("MODE-3") },
                             self.span,
                             "once requires a function type",
                         ));
@@ -1836,7 +1904,7 @@ impl Normalizer<'_, '_> {
                     // A part's relation is LANG-7 where the part is used.
                     if matches!(pos, Position::Borrow | Position::Take) {
                         return Err(diagnostic(
-                            "MODE-1",
+                            const { RuleId::of("MODE-1") },
                             span,
                             "`env` is a closure or function type's environment: a parameter is not related to it",
                         ));
@@ -1883,7 +1951,7 @@ impl Normalizer<'_, '_> {
                         lifetime = lifetime.union(&Relation::place(origin));
                     } else {
                         return Err(diagnostic(
-                            "MODE-1",
+                            const { RuleId::of("MODE-1") },
                             span,
                             "a relation names parameters, arenas, `heap` or `env`",
                         ));
@@ -1894,7 +1962,7 @@ impl Normalizer<'_, '_> {
         // PROV-4: fresh blocks have one destination.
         if placement.reaches().len() > 1 {
             return Err(diagnostic(
-                "PROV-4",
+                const { RuleId::of("PROV-4") },
                 span,
                 "a relation names at most one arena directly",
             ));
@@ -1972,7 +2040,7 @@ impl Normalizer<'_, '_> {
                     .any(|a| self.input.symbols.resolve(a.name) == Some("capability"))
             {
                 return Err(diagnostic(
-                    "PROG-2",
+                    const { RuleId::of("PROG-2") },
                     self.span,
                     "public authority summary mentions a private type",
                 ));

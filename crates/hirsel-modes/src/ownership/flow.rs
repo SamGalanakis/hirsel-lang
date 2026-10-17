@@ -2083,12 +2083,12 @@ impl Checker<'_> {
             Relation::environment()
         }
     }
-    fn diagnostic(&mut self, rule: &str, site: Span, message: &str) -> Option<&mut Diagnostic> {
+    fn diagnostic(&mut self, rule: RuleId, site: Span, message: &str) -> Option<&mut Diagnostic> {
         if !self.emit {
             return None;
         }
         self.diagnostics
-            .push(Diagnostic::error(RuleId::new(rule).unwrap(), site, message));
+            .push(Diagnostic::error(rule, site, message));
         self.diagnostics.last_mut()
     }
     // Dead operations still need explicit protocol entries. They have no flow
@@ -2234,7 +2234,7 @@ impl Checker<'_> {
         };
         if state.argument_conflicts.insert(call) {
             self.report(
-                "OWN-3",
+                const { RuleId::of("OWN-3") },
                 self.span_of(call),
                 "exclusive call arguments overlap storage",
                 |c| {
@@ -2417,7 +2417,7 @@ impl Checker<'_> {
                     continue;
                 }
                 self.report(
-                    "MODE-4",
+                    const { RuleId::of("MODE-4") },
                     site,
                     "mutable hand-back requires current sendable content",
                     |c| {
@@ -2475,14 +2475,14 @@ impl Checker<'_> {
         &mut self,
         state: &State,
         place: &Place,
-        rule: &str,
+        rule: RuleId,
         site: Span,
         message: &str,
         explain: impl FnOnce(&Self) -> causes::Pending,
     ) {
         if let Some(root) = self.clause_parameter(state, place.binding) {
             self.diagnostic(
-                "FACT-1",
+                const { RuleId::of("FACT-1") },
                 self.tree.expressions[root.0 as usize].origin.span,
                 "contract parameters are read-only",
             );
@@ -2495,24 +2495,24 @@ impl Checker<'_> {
     fn access(&mut self, place: &Place, state: &State, operation: Span) -> bool {
         let binding = &self.body.bindings[place.binding];
         let rule = if binding.owner != self.graph.owner && self.graph.scoped {
-            Some("CLO-1")
+            Some(const { RuleId::of("CLO-1") })
         } else if let ResolvedName::Parameter(p) = binding.binding {
             match self.parameter_passing(&binding.owner, p) {
-                PassingMode::Borrow => Some("OWN-1"),
+                PassingMode::Borrow => Some(const { RuleId::of("OWN-1") }),
                 PassingMode::Mut => None,
-                PassingMode::Take => Some("LANG-5"),
+                PassingMode::Take => Some(const { RuleId::of("LANG-5") }),
             }
         } else if state.slots[place.binding].value.aliased().is_some()
             && binding.usage != UseKind::Mut
         {
-            Some("LANG-15")
+            Some(const { RuleId::of("LANG-15") })
         } else if !binding.mutable {
-            Some("LANG-5")
+            Some(const { RuleId::of("LANG-5") })
         } else {
             None
         };
         if let Some(rule) = rule {
-            let cause = match rule {
+            let cause = match rule.as_str() {
                 "LANG-15" => Some(Cause::MutAlias),
                 "LANG-5" => Some(Cause::Immutable),
                 "OWN-1" => Some(Cause::ReadOnlyParameter),
@@ -2547,7 +2547,7 @@ impl Checker<'_> {
                 )
             {
                 self.report(
-                    "OWN-7",
+                    const { RuleId::of("OWN-7") },
                     operation,
                     "published Shared and region storage cannot be mutated",
                     |c| {
@@ -2576,9 +2576,9 @@ impl Checker<'_> {
                     && (self.capturer(state, place.binding).is_some()
                         || self.iterated(state, place))
                 {
-                    "OWN-3"
+                    const { RuleId::of("OWN-3") }
                 } else {
-                    "MODE-1"
+                    const { RuleId::of("MODE-1") }
                 },
                 operation,
                 "a live result or alias keeps this storage borrowed",
@@ -2693,20 +2693,25 @@ impl Checker<'_> {
                 || self.properties[ty.index()].scoped_capability;
             let closure = self.span_of(expression);
             if state.slots[index].available != LIVE {
-                self.report("OWN-2", closure, "capture uses a moved value", |c| {
-                    let (name, _) = c.binding_site(index);
-                    c.moved(
-                        index,
-                        expression,
-                        Fact::new(Requirement::Capture, closure, &[&name]),
-                    )
-                });
+                self.report(
+                    const { RuleId::of("OWN-2") },
+                    closure,
+                    "capture uses a moved value",
+                    |c| {
+                        let (name, _) = c.binding_site(index);
+                        c.moved(
+                            index,
+                            expression,
+                            Fact::new(Requirement::Capture, closure, &[&name]),
+                        )
+                    },
+                );
                 continue;
             }
             if self.finalizer_self(index) && matches!(capture.usage, UseKind::Take | UseKind::Copy)
             {
                 self.report(
-                    "DROP-3",
+                    const { RuleId::of("DROP-3") },
                     closure,
                     "a finalizer cannot move or copy its whole resource into a closure",
                     |c| {
@@ -2721,7 +2726,7 @@ impl Checker<'_> {
             }
             if escaping && !specialized && (mutable || (!plain && part.aliased().is_some())) {
                 self.report(
-                    "CLO-4",
+                    const { RuleId::of("CLO-4") },
                     closure,
                     "escaping captures need immutable owned global values",
                     |c| {
@@ -2741,7 +2746,7 @@ impl Checker<'_> {
             // parameter or an enclosing closure's borrowed capture is not.
             if take && !plain && part.aliased().is_some() {
                 self.report(
-                    "OWN-1",
+                    const { RuleId::of("OWN-1") },
                     closure,
                     "a borrowed value cannot be taken into a closure",
                     |c| {
@@ -2771,7 +2776,7 @@ impl Checker<'_> {
             } else if escaping {
                 if !specialized && !self.properties[ty.index()].copyable {
                     self.report(
-                        "OWN-5",
+                        const { RuleId::of("OWN-5") },
                         closure,
                         "this escaping capture must be taken",
                         |c| {
@@ -2800,7 +2805,7 @@ impl Checker<'_> {
             }
             if escaping && !specialized && !self.arenas.global(&part.modes.relation) && !plain {
                 self.report(
-                    "CLO-4",
+                    const { RuleId::of("CLO-4") },
                     closure,
                     "local values cannot be escaping captures",
                     |c| {
@@ -2997,7 +3002,7 @@ impl Checker<'_> {
             .collect();
         if let Some(&(first, _)) = ended.first() {
             self.report(
-                "MODE-1",
+                const { RuleId::of("MODE-1") },
                 site,
                 "a local view cannot outlive its temporary source scope",
                 |c| {
@@ -3044,7 +3049,7 @@ impl Checker<'_> {
         };
         let consumer = self.span_of(consumer);
         self.report(
-            "MODE-1",
+            const { RuleId::of("MODE-1") },
             self.span_of(tail),
             "a borrowed part cannot outlive the block that declares its owner",
             |c| {
@@ -3260,9 +3265,9 @@ impl Checker<'_> {
                         if *context == Context::Invoke
                             && value.modes.multiplicity == Multiplicity::Once
                         {
-                            "MODE-3"
+                            const { RuleId::of("MODE-3") }
                         } else {
-                            "OWN-2"
+                            const { RuleId::of("OWN-2") }
                         },
                         read_site,
                         "the value is moved or not initialised on every path",
@@ -3343,7 +3348,7 @@ impl Checker<'_> {
                     && self.finalizer_self(place.binding)
                 {
                     self.report(
-                        "DROP-3",
+                        const { RuleId::of("DROP-3") },
                         operation_site,
                         "a finalizer cannot move or copy its whole resource",
                         |c| {
@@ -3385,7 +3390,7 @@ impl Checker<'_> {
                         self.access_diagnostic(
                             state,
                             &place,
-                            "OWN-1",
+                            const { RuleId::of("OWN-1") },
                             operation_site,
                             "an owned result cannot move out of borrowed storage",
                             |c| {
@@ -3399,7 +3404,7 @@ impl Checker<'_> {
                         value.invalid = true;
                     } else if !place.projections.is_empty() || value.element_place {
                         self.report(
-                            "OWN-8",
+                            const { RuleId::of("OWN-8") },
                             operation_site,
                             "destructure the whole owned value to move a part",
                             |c| {
@@ -3415,7 +3420,7 @@ impl Checker<'_> {
                         self.access_diagnostic(
                             state,
                             &place,
-                            "OWN-1",
+                            const { RuleId::of("OWN-1") },
                             operation_site,
                             "a borrowed value cannot be taken",
                             |c| {
@@ -3429,7 +3434,7 @@ impl Checker<'_> {
                         value.invalid = true;
                     } else if self.loaned(state, &place) {
                         self.report(
-                            "MODE-1",
+                            const { RuleId::of("MODE-1") },
                             operation_site,
                             "a live local result keeps this value borrowed",
                             |c| {
@@ -3458,7 +3463,11 @@ impl Checker<'_> {
                         TypeKind::Parameter(_)
                     );
                     if let Some(d) = self.report(
-                        if generic { "GEN-1" } else { "OWN-5" },
+                        if generic {
+                            const { RuleId::of("GEN-1") }
+                        } else {
+                            const { RuleId::of("OWN-5") }
+                        },
                         operation_site,
                         "this value is noncopyable",
                         |_| {
@@ -3596,7 +3605,7 @@ impl Checker<'_> {
                     {
                         if !property.copyable {
                             self.report(
-                                "OWN-5",
+                                const { RuleId::of("OWN-5") },
                                 operation_site,
                                 "deep copying requires a copyable value",
                                 |_| {
@@ -3724,7 +3733,7 @@ impl Checker<'_> {
                         let operand = self.span_of(child);
                         let site = self.span_of(*expression);
                         self.report(
-                            "OWN-3",
+                            const { RuleId::of("OWN-3") },
                             site,
                             "this operand is a borrowed value, not a place or an owned temporary",
                             |_| {
@@ -3782,7 +3791,7 @@ impl Checker<'_> {
                                 let site = self.span_of(*expression);
                                 let operand = self.span_of(child);
                                 self.report(
-                                    "OWN-5",
+                                    const { RuleId::of("OWN-5") },
                                     site,
                                     "deep copying requires a copyable value",
                                     |_| {
@@ -3810,7 +3819,11 @@ impl Checker<'_> {
                         let site = self.span_of(*expression);
                         let operand = self.span_of(child);
                         if let Some(d) = self.report(
-                            if generic { "GEN-1" } else { "OWN-5" },
+                            if generic {
+                                const { RuleId::of("GEN-1") }
+                            } else {
+                                const { RuleId::of("OWN-5") }
+                            },
                             site,
                             "this value is noncopyable",
                             |_| {
@@ -4562,14 +4575,19 @@ impl Checker<'_> {
                 }
                 if !place.projections.is_empty() || *compound {
                     if state.slots[place.binding].available != LIVE {
-                        self.report("OWN-2", *operation, "assignment reads a moved value", |c| {
-                            let (name, _) = c.binding_site(place.binding);
-                            c.moved(
-                                place.binding,
-                                *expression,
-                                Fact::new(Requirement::Write, *operation, &[&name]),
-                            )
-                        });
+                        self.report(
+                            const { RuleId::of("OWN-2") },
+                            *operation,
+                            "assignment reads a moved value",
+                            |c| {
+                                let (name, _) = c.binding_site(place.binding);
+                                c.moved(
+                                    place.binding,
+                                    *expression,
+                                    Fact::new(Requirement::Write, *operation, &[&name]),
+                                )
+                            },
+                        );
                         return;
                     }
                 }
@@ -4599,7 +4617,7 @@ impl Checker<'_> {
                 }
                 if value.scoped() {
                     self.report(
-                        "CLO-1",
+                        const { RuleId::of("CLO-1") },
                         *operation,
                         "a scoped closure cannot be stored",
                         |c| {
@@ -4618,7 +4636,7 @@ impl Checker<'_> {
                     && !self.arenas.global(&value.modes.relation)
                 {
                     self.report(
-                        "MODE-1",
+                        const { RuleId::of("MODE-1") },
                         *operation,
                         "a local value cannot be stored into global storage",
                         |c| c.locality(state, &value, c.receiver_requirement(place.binding)),
@@ -4643,7 +4661,7 @@ impl Checker<'_> {
                     && !self.property(*rhs).is_some_and(|p| p.plain)
                 {
                     self.report(
-                        "MODE-2",
+                        const { RuleId::of("MODE-2") },
                         *operation,
                         "whole-value assignment must preserve declared uniqueness",
                         |c| {
@@ -4692,7 +4710,7 @@ impl Checker<'_> {
                     && self.property(*rhs).is_some_and(|p| p.function)
                 {
                     if let Some(d) = self.report(
-                        "MODE-3",
+                        const { RuleId::of("MODE-3") },
                         *operation,
                         "a once function cannot satisfy a many function type",
                         |c| {
@@ -4889,7 +4907,7 @@ impl Checker<'_> {
                         });
                 if !self.crossing_borrows_live(state, &callable) || !argument_inputs_live {
                     self.report(
-                        "MODE-4",
+                        const { RuleId::of("MODE-4") },
                         call_site,
                         "a borrowed capture has lost its required crossing proof",
                         |_| {
@@ -4927,7 +4945,7 @@ impl Checker<'_> {
                         // lend exclusively (OWN-3).
                         let operand = self.span_of(arg.value);
                         self.report(
-                            "OWN-3",
+                            const { RuleId::of("OWN-3") },
                             call_site,
                             "a constructor operand cannot be passed mut",
                             |_| {
@@ -4951,7 +4969,7 @@ impl Checker<'_> {
                             let operand = self.span_of(arg.value);
                             let callee_site = self.span_of(*callee);
                             self.report(
-                                "OWN-3",
+                                const { RuleId::of("OWN-3") },
                                 call_site,
                                 "a mut parameter requires mut at the call site",
                                 |_| {
@@ -4988,7 +5006,7 @@ impl Checker<'_> {
                             let lent_at = lent_tail.unwrap_or(arg.value);
                             let lent = place(self.body, lent_at, self.source_rows);
                             self.report(
-                                "OWN-2",
+                                const { RuleId::of("OWN-2") },
                                 call_site,
                                 "a take parameter requires an owned argument",
                                 |c| {
@@ -5049,7 +5067,7 @@ impl Checker<'_> {
                                 let (earlier, later) = (loans[j].2, loans[i].2);
                                 let binding = loans[i].0.binding;
                                 self.report(
-                                    "OWN-3",
+                                    const { RuleId::of("OWN-3") },
                                     call_site,
                                     "exclusive call arguments overlap storage",
                                     |c| {
@@ -5162,7 +5180,7 @@ impl Checker<'_> {
                             {
                                 let operand = self.span_of(arg.value);
                                 self.report(
-                                    "MODE-4",
+                                    const { RuleId::of("MODE-4") },
                                     call_site,
                                     "each actual generic occurrence must be sendable before parameter weakening",
                                     |_| {
@@ -5767,7 +5785,7 @@ impl Checker<'_> {
                         && !self.property(*value).is_some_and(|p| p.copyable)
                     {
                         self.report(
-                            "OWN-1",
+                            const { RuleId::of("OWN-1") },
                             site,
                             "an owned result cannot move out of borrowed storage",
                             |c| {
@@ -5779,12 +5797,21 @@ impl Checker<'_> {
                             },
                         );
                     } else if actual.scoped() {
-                        self.report("CLO-1", site, "a scoped closure cannot be returned", |_| {
-                            Explanation::default()
-                                .provided(Fact::new(Cause::ScopedClosure, site, &[]))
-                                .required(Fact::new(Requirement::ReturnClosure, result_site, &[]))
-                                .into()
-                        });
+                        self.report(
+                            const { RuleId::of("CLO-1") },
+                            site,
+                            "a scoped closure cannot be returned",
+                            |_| {
+                                Explanation::default()
+                                    .provided(Fact::new(Cause::ScopedClosure, site, &[]))
+                                    .required(Fact::new(
+                                        Requirement::ReturnClosure,
+                                        result_site,
+                                        &[],
+                                    ))
+                                    .into()
+                            },
+                        );
                     } else if self.arenas.global(&result.relation)
                         && actual.usage == UseKind::Borrow
                         && actual.aliased().is_some()
@@ -5793,7 +5820,7 @@ impl Checker<'_> {
                         // A scoped capture is a borrow of a possibly global value
                         // (CLO-1): reading it does not make an owned result.
                         self.report(
-                            "MODE-1",
+                            const { RuleId::of("MODE-1") },
                             site,
                             "this operation requires a global value",
                             |c| c.locality(state, &actual, requirement),
@@ -5804,7 +5831,7 @@ impl Checker<'_> {
                         // Whatever the result declares, its sources are named
                         // storage of the caller; a temporary of this body is not.
                         self.report(
-                            "MODE-1",
+                            const { RuleId::of("MODE-1") },
                             site,
                             "a local result retains a temporary that ends with the function",
                             |c| c.temporary_result(&actual, result_site),
@@ -5817,7 +5844,7 @@ impl Checker<'_> {
                         // local as that argument was. A callable's unnamed
                         // local result cannot name one.
                         self.report(
-                            "MODE-1",
+                            const { RuleId::of("MODE-1") },
                             site,
                             "a local result retains a taken parameter its relation does not name",
                             |c| {
@@ -5840,7 +5867,7 @@ impl Checker<'_> {
                         );
                     } else if self.parameter_parts.outside(&actual) {
                         self.report(
-                            "MODE-1",
+                            const { RuleId::of("MODE-1") },
                             site,
                             "a local result reads a part of a parameter its relation does not name",
                             |c| c.locality(state, &actual, requirement),
@@ -5851,7 +5878,7 @@ impl Checker<'_> {
                                 && !self.result_sources_allowed(state, &actual, &parameters)
                             {
                                 self.report(
-                                    "MODE-1",
+                                    const { RuleId::of("MODE-1") },
                                     site,
                                     "a local result retains a source its relation does not name",
                                     |c| c.locality(state, &actual, requirement),
@@ -6199,7 +6226,7 @@ impl Checker<'_> {
                     .is_some_and(|proof| proof != Sendability::Sendable)
             {
                 let provided = self.span_of(actual.site.unwrap_or(expression));
-                self.report("MODE-4", site, "the current owned part has lost the evidence required by its sendable receiving type", |_| {
+                self.report(const { RuleId::of("MODE-4") }, site, "the current owned part has lost the evidence required by its sendable receiving type", |_| {
                     Explanation::default().provided(Fact::new(Cause::NotSendable, provided, &[]))
                         .required(Fact::new(Requirement::SendableType, site, &["the receiving type"])).into()
                 });
@@ -6232,7 +6259,7 @@ impl Checker<'_> {
     fn environment_slot(&mut self, site: ExprId, context: Fact<Requirement>) {
         let span = self.span_of(site);
         self.report(
-            "MODE-1",
+            const { RuleId::of("MODE-1") },
             span,
             "this closure's result is local to its environment",
             |_| {
@@ -6266,7 +6293,7 @@ impl Checker<'_> {
         {
             if actual.scoped() {
                 self.report(
-                    "CLO-1",
+                    const { RuleId::of("CLO-1") },
                     span,
                     "this operation requires a global value",
                     |_| {
@@ -6290,7 +6317,7 @@ impl Checker<'_> {
                     _ => context,
                 };
                 self.report(
-                    "MODE-1",
+                    const { RuleId::of("MODE-1") },
                     span,
                     "this operation requires a global value",
                     |c| c.locality(state, actual, context),
@@ -6301,7 +6328,7 @@ impl Checker<'_> {
             && !self.property(expression).is_some_and(|p| p.plain)
         {
             self.report(
-                "MODE-2",
+                const { RuleId::of("MODE-2") },
                 span,
                 "this operation requires a unique value",
                 |_| {
@@ -6316,7 +6343,7 @@ impl Checker<'_> {
             && self.property(expression).is_some_and(|p| p.function)
         {
             if let Some(d) = self.report(
-                "MODE-3",
+                const { RuleId::of("MODE-3") },
                 span,
                 "a once function cannot satisfy a many function type",
                 |_| {
@@ -6332,7 +6359,7 @@ impl Checker<'_> {
             && self.captured_sendability(expression, actual) != Sendability::Sendable
         {
             self.report(
-                "MODE-4",
+                const { RuleId::of("MODE-4") },
                 span,
                 "current content is not proved sendable",
                 |_| {

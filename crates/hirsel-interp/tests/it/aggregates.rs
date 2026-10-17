@@ -88,7 +88,7 @@ fn finalizer(name: &str, fail: bool) -> Definition {
     if fail {
         b.block(
             Terminator::Fail {
-                rule: RuleId::new("FAIL-1").unwrap(),
+                rule: const { RuleId::of("FAIL-1") },
                 cleanup: CleanupId(0),
             },
             9,
@@ -157,7 +157,7 @@ fn failure_preserves_original_cause_then_records_cleanup_failures_in_order() {
     let c = b.cleanup(vec![drop(z), drop(a)]);
     b.block(
         Terminator::Fail {
-            rule: RuleId::new("FACT-1").unwrap(),
+            rule: const { RuleId::of("FACT-1") },
             cleanup: c,
         },
         6,
@@ -235,7 +235,7 @@ fn direct_mut_call_writes_back_even_on_failure() {
         let callee = if fail {
             callee.block(
                 Terminator::Fail {
-                    rule: RuleId::new("FAIL-1").unwrap(),
+                    rule: const { RuleId::of("FAIL-1") },
                     cleanup: CleanupId(0),
                 },
                 3,
@@ -421,7 +421,7 @@ fn instruction_failure_paths_release_temporaries_then_locals_in_list_order() {
             b.emit(
                 InstructionKind::Check {
                     condition: copy(f),
-                    rule: RuleId::new("LANG-9").unwrap(),
+                    rule: const { RuleId::of("LANG-9") },
                 },
                 7,
                 c,
@@ -461,7 +461,7 @@ fn suspended_call_failure_drops_transferred_argument_before_callers_local() {
     let c = callee.cleanup(vec![drop(p)]);
     callee.block(
         Terminator::Fail {
-            rule: RuleId::new("FAIL-1").unwrap(),
+            rule: const { RuleId::of("FAIL-1") },
             cleanup: c,
         },
         8,

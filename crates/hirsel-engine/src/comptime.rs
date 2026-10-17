@@ -120,7 +120,7 @@ impl QueryEngine {
                 .chain([reference])
                 .map(|site| {
                     Diagnostic::error(
-                        hirsel_diag::RuleId::new("CT-4").unwrap(),
+                        const { hirsel_diag::RuleId::of("CT-4") },
                         site,
                         "compile-time dependency cycle",
                     )
@@ -334,7 +334,7 @@ impl QueryEngine {
             ),
             Outcome::Failed(failure) => {
                 let mut diagnostic = Diagnostic::error(
-                    hirsel_diag::RuleId::new("CT-1").unwrap(),
+                    const { hirsel_diag::RuleId::of("CT-1") },
                     file.tree.expressions[expression.0 as usize].origin.span,
                     "compile-time evaluation failed",
                 );
@@ -352,7 +352,7 @@ impl QueryEngine {
             // configured budget until #7 specifies source-event accounting.
             Outcome::ToolingLimit(limit) if limit.kind == hirsel_tir::ToolingLimitKind::Steps => {
                 let mut diagnostic = Diagnostic::error(
-                    hirsel_diag::RuleId::new("CT-1").unwrap(),
+                    const { hirsel_diag::RuleId::of("CT-1") },
                     file.tree.expressions[expression.0 as usize].origin.span,
                     "compile-time evaluation exhausted its step limit",
                 );

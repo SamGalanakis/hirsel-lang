@@ -38,7 +38,10 @@ impl Parser<'_> {
                         };
                         let value = p.expr(0)?;
                         if p.at(":") {
-                            return p.fail("LANG-12", "an argument has one label before its value");
+                            return p.fail(
+                                const { RuleId::of("LANG-12") },
+                                "an argument has one label before its value",
+                            );
                         }
                         // #51: retain written argument order pending the label-order ruling.
                         Ok(Argument { label, value })
@@ -57,7 +60,7 @@ impl Parser<'_> {
                     let result = self.expr(0);
                     self.whitespace -= 1;
                     let index = result?;
-                    self.expect("]", "LANG-1")?;
+                    self.expect("]", const { RuleId::of("LANG-1") })?;
                     left = self.push_expr(start, ExprKind::Index { base: left, index });
                     continue;
                 }
@@ -90,7 +93,7 @@ impl Parser<'_> {
             }
             if nonassoc == Some(precedence) {
                 return self.fail(
-                    "LANG-1",
+                    const { RuleId::of("LANG-1") },
                     "comparisons and ranges cannot chain without parentheses",
                 );
             }
@@ -102,7 +105,10 @@ impl Parser<'_> {
             }
         }
         if self.continuing() && self.at("as") {
-            return self.fail("LANG-7", "casts are excluded; use named conversions");
+            return self.fail(
+                const { RuleId::of("LANG-7") },
+                "casts are excluded; use named conversions",
+            );
         }
         Ok(left)
     }
@@ -132,14 +138,17 @@ impl Parser<'_> {
                 let result = (|| {
                     let first = self.expr(0)?;
                     if self.at(":") {
-                        return self.fail("LANG-12", "tuple entries cannot have labels");
+                        return self.fail(
+                            const { RuleId::of("LANG-12") },
+                            "tuple entries cannot have labels",
+                        );
                     }
                     if self.eat(",") {
                         let mut values = vec![first];
                         values.extend(self.list(")", |p| p.expr(0))?);
                         Ok(self.push_expr(start, ExprKind::Tuple(values)))
                     } else {
-                        self.expect(")", "LANG-1")?;
+                        self.expect(")", const { RuleId::of("LANG-1") })?;
                         let height = self.heights.expressions[first.0 as usize] + 1;
                         self.check_height(height);
                         self.heights.expressions[first.0 as usize] = height;
@@ -155,7 +164,10 @@ impl Parser<'_> {
             return self.block_context();
         } else if self.eat("if") {
             if self.at("let") {
-                return self.fail("LANG-13", "if let is excluded; use match");
+                return self.fail(
+                    const { RuleId::of("LANG-13") },
+                    "if let is excluded; use match",
+                );
             }
             let condition = self.required(|p| p.expr(0))?;
             let then_branch = self.block()?;
@@ -175,7 +187,7 @@ impl Parser<'_> {
             }
         } else if self.eat("match") {
             let value = self.required(|p| p.expr(0))?;
-            self.expect("{", "LANG-7")?;
+            self.expect("{", const { RuleId::of("LANG-7") })?;
             let outer = self.whitespace;
             self.whitespace = 0;
             let result = (|| {
@@ -187,7 +199,7 @@ impl Parser<'_> {
                     } else {
                         None
                     };
-                    self.expect("=>", "LANG-7")?;
+                    self.expect("=>", const { RuleId::of("LANG-7") })?;
                     let body = self.expr(0)?;
                     arms.push(MatchArm {
                         pattern,
@@ -207,7 +219,7 @@ impl Parser<'_> {
             let mut signature = self.required(|p| {
                 if p.at("[") {
                     return p.fail(
-                        "LANG-1",
+                        const { RuleId::of("LANG-1") },
                         "closure literals cannot declare generic parameters",
                     );
                 }
@@ -216,7 +228,10 @@ impl Parser<'_> {
             let body = self.block()?;
             if self.at("uses") {
                 if signature.uses.is_some() {
-                    return self.fail("CLO-4", "closure cannot specify uses twice");
+                    return self.fail(
+                        const { RuleId::of("CLO-4") },
+                        "closure cannot specify uses twice",
+                    );
                 }
                 signature.uses = self.uses()?;
             }
@@ -242,36 +257,39 @@ impl Parser<'_> {
         } else if self.eat("result") {
             ExprKind::Result
         } else if self.eat("shape") {
-            self.expect("(", "CT-3")?;
+            self.expect("(", const { RuleId::of("CT-3") })?;
             self.whitespace += 1;
             let result = self.ty();
             self.whitespace -= 1;
             let ty = result?;
-            self.expect(")", "LANG-1")?;
+            self.expect(")", const { RuleId::of("LANG-1") })?;
             ExprKind::Shape(ty)
         } else if self.eat("before") {
-            self.expect("(", "FACT-1")?;
+            self.expect("(", const { RuleId::of("FACT-1") })?;
             self.whitespace += 1;
             let result = self.expr(0);
             self.whitespace -= 1;
             let value = result?;
-            self.expect(")", "LANG-1")?;
+            self.expect(")", const { RuleId::of("LANG-1") })?;
             ExprKind::Before(value)
         } else if self.eat("todo") {
             let message = if self.eat("(") {
                 if !matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::String)) {
-                    return self.fail("LANG-6", "todo message must be a string literal");
+                    return self.fail(
+                        const { RuleId::of("LANG-6") },
+                        "todo message must be a string literal",
+                    );
                 }
                 let message = self.text_at(0).into();
                 self.pos += 1;
-                self.expect(")", "LANG-6")?;
+                self.expect(")", const { RuleId::of("LANG-6") })?;
                 Some(message)
             } else {
                 None
             };
             ExprKind::Todo(message)
         } else {
-            return self.fail("LANG-1", "expected expression");
+            return self.fail(const { RuleId::of("LANG-1") }, "expected expression");
         };
         Ok(self.push_expr(start, kind))
     }
@@ -290,7 +308,7 @@ impl Parser<'_> {
     }
     fn block_inner(&mut self) -> Parsed<ExprId> {
         let start = self.pos;
-        self.expect("{", "LANG-1")?;
+        self.expect("{", const { RuleId::of("LANG-1") })?;
         let mut statements = vec![];
         let mut tail = None;
         while !self.eat("}") {
@@ -298,7 +316,10 @@ impl Parser<'_> {
                 return Err(());
             }
             if self.eof() {
-                return self.fail("LANG-1", "expected closing block brace");
+                return self.fail(
+                    const { RuleId::of("LANG-1") },
+                    "expected closing block brace",
+                );
             }
             if self.eat(";") {
                 continue;
@@ -373,10 +394,13 @@ impl Parser<'_> {
             } else {
                 None
             };
-            self.expect("=", "LANG-5")?;
+            self.expect("=", const { RuleId::of("LANG-5") })?;
             let value = self.expr(0)?;
             if self.at("else") {
-                return self.fail("LANG-13", "let else is excluded; use match");
+                return self.fail(
+                    const { RuleId::of("LANG-13") },
+                    "let else is excluded; use match",
+                );
             }
             return Ok(StmtKind::Let {
                 mutable,
@@ -387,7 +411,7 @@ impl Parser<'_> {
         }
         if self.eat("for") {
             let pattern = self.pattern()?;
-            self.expect("in", "LANG-13")?;
+            self.expect("in", const { RuleId::of("LANG-13") })?;
             let source = self.required(|p| p.expr(0))?;
             let body = self.block()?;
             return Ok(StmtKind::For {
@@ -419,7 +443,7 @@ impl Parser<'_> {
             self.pos += 1;
             let value = self.expr(0)?;
             if assignment(self.text_at(0)).is_some() {
-                return self.fail("LANG-5", "assignment cannot chain");
+                return self.fail(const { RuleId::of("LANG-5") }, "assignment cannot chain");
             }
             Ok(StmtKind::Assign {
                 place,

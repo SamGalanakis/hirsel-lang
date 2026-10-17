@@ -1709,7 +1709,7 @@ fn instantiation_bound_schema_fingerprints_and_scoped_references() {
     let constraint = |parameter, bound| hirsel_types::SchemaConstraint::Bound {
         parameter,
         bound,
-        rule: hirsel_diag::RuleId::new("GEN-1").unwrap(),
+        rule: const { RuleId::of("GEN-1") },
     };
     signature.metadata.schema = vec![constraint(
         TypeParameterRef::bound(TypeParamId(0)),

@@ -142,7 +142,7 @@ fn schema(name: &str) -> Vec<SchemaConstraint> {
         return vec![Bound {
             parameter: TypeParameterRef::bound(TypeParamId(0)),
             bound: hirsel_types::Bound::Copyable,
-            rule: hirsel_diag::RuleId::new("GEN-1").unwrap(),
+            rule: const { hirsel_diag::RuleId::of("GEN-1") },
         }];
     }
     let domains = match name {
@@ -174,14 +174,15 @@ fn schema(name: &str) -> Vec<SchemaConstraint> {
         constraints.push(Domain {
             parameter,
             domain,
-            rule: hirsel_diag::RuleId::new(match domain {
-                Integer => "SEM-1",
-                Float if name == "float.from_int" => "SEM-1",
-                Float => "SEM-2",
-                Scalar if name.starts_with("simd.") || name == "Simd" => "MEM-8",
-                Scalar => "CONC-7",
-            })
-            .unwrap(),
+            rule: match domain {
+                Integer => const { hirsel_diag::RuleId::of("SEM-1") },
+                Float if name == "float.from_int" => const { hirsel_diag::RuleId::of("SEM-1") },
+                Float => const { hirsel_diag::RuleId::of("SEM-2") },
+                Scalar if name.starts_with("simd.") || name == "Simd" => {
+                    const { hirsel_diag::RuleId::of("MEM-8") }
+                }
+                Scalar => const { hirsel_diag::RuleId::of("CONC-7") },
+            },
         });
         constraints.push(NoallocDrop(parameter));
     }

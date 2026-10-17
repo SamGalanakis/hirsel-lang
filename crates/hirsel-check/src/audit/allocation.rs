@@ -68,7 +68,7 @@ impl AllocationReason {
                 "noalloc destruction requires nonallocating owned-field cleanup"
             }
         };
-        let mut diagnostic = Diagnostic::error(RuleId::new("MEM-5").unwrap(), self.span, message);
+        let mut diagnostic = Diagnostic::error(const { RuleId::of("MEM-5") }, self.span, message);
         match self.kind {
             AllocationReasonKind::Cleanup { summary, notes } => {
                 diagnostic

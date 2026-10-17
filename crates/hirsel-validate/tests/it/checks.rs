@@ -58,7 +58,7 @@ fn branch_and_check_require_booleans() {
     let mut f = Fixture::unit();
     f.emit(InstructionKind::Check {
         condition: copy(0),
-        rule: RuleId::new("FACT-1").unwrap(),
+        rule: const { RuleId::of("FACT-1") },
     });
     f.broken(vec![ViolationKind::TypeMismatch {
         entity: "check condition",
@@ -1564,7 +1564,7 @@ fn missing_failure_cleanup_includes_earlier_argument_temporaries() {
     f.body().blocks[0].instructions.push(inst(
         InstructionKind::Check {
             condition: copy(condition),
-            rule: RuleId::new("FACT-1").unwrap(),
+            rule: const { RuleId::of("FACT-1") },
         },
         1,
     ));
@@ -5748,7 +5748,7 @@ fn mutable_parameter_must_be_live_on_every_exit() {
         });
         if fail {
             f.body().blocks[0].terminator = Terminator::Fail {
-                rule: hirsel_diag::RuleId::new("FAIL-1").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("FAIL-1") },
                 cleanup: CleanupId(0),
             };
         }
@@ -6808,7 +6808,7 @@ fn whole_root_failure_cleanup_reuses_incremental_obligation_proofs() {
             body.blocks[0].instructions.push(inst(
                 InstructionKind::Check {
                     condition: copy(condition),
-                    rule: hirsel_diag::RuleId::new("FACT-1").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("FACT-1") },
                 },
                 cleanup,
             ));
@@ -6890,7 +6890,7 @@ fn independent_loan_ends_share_the_incremental_failure_proof() {
             body.blocks[0].instructions.push(inst(
                 InstructionKind::Check {
                     condition: copy(condition),
-                    rule: hirsel_diag::RuleId::new("FACT-1").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("FACT-1") },
                 },
                 cleanup,
             ));

@@ -535,7 +535,7 @@ impl Checker<'_> {
         {
             let site = self.span_of(value.site.unwrap_or(expression));
             self.report(
-                "CLO-4",
+                const { RuleId::of("CLO-4") },
                 site,
                 "the created environment retains an unselected or unproved input envelope",
                 |_| {

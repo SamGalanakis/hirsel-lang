@@ -242,7 +242,7 @@ impl Checker<'_, '_> {
                     {
                         let span = *span;
                         self.report(
-                            "SEM-4",
+                            const { RuleId::of("SEM-4") },
                             span,
                             "mutable iteration source may not be used in the body",
                         );
@@ -313,7 +313,11 @@ impl Checker<'_, '_> {
                         });
                         t = self.projected_type(t, ty);
                     } else {
-                        self.report("LANG-7", self.span(id), "field is unavailable on this type");
+                        self.report(
+                            const { RuleId::of("LANG-7") },
+                            self.span(id),
+                            "field is unavailable on this type",
+                        );
                         t = self.error();
                     }
                 }
@@ -415,7 +419,7 @@ impl Checker<'_, '_> {
                             // only record names introduce bare constructors.
                             if !matches!(self.kind(representation), TypeKind::Record(_)) {
                                 self.report(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     self.span(id),
                                     "a type name cannot be used as a value",
                                 );
@@ -425,7 +429,7 @@ impl Checker<'_, '_> {
                             // record must have a complete contextual type.
                             if !t.generics.is_empty() && missing_arguments {
                                 self.report(
-                                    "LANG-2",
+                                    const { RuleId::of("LANG-2") },
                                     self.span(id),
                                     "a bare generic constructor requires an expected type",
                                 );
@@ -434,7 +438,7 @@ impl Checker<'_, '_> {
                             if matches!(self.kind(representation), TypeKind::Record(fields) if !fields.is_empty())
                             {
                                 self.report(
-                                    "LANG-12",
+                                    const { RuleId::of("LANG-12") },
                                     self.span(id),
                                     "record fields must be supplied by a labelled constructor call",
                                 );
@@ -486,7 +490,7 @@ impl Checker<'_, '_> {
                                 .unwrap_or_default();
                             if !vs.iter().any(|v| v.name == name && v.fields.is_empty()) {
                                 self.report(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     self.span(id),
                                     "variant payload must be supplied by a constructor call",
                                 );
@@ -545,7 +549,7 @@ impl Checker<'_, '_> {
                     }
                 }
                 self.report(
-                    "LANG-2",
+                    const { RuleId::of("LANG-2") },
                     self.span(id),
                     "bare variant needs an unambiguous expected type",
                 );
@@ -710,7 +714,7 @@ impl Checker<'_, '_> {
             )
         {
             self.report(
-                "MODE-1",
+                const { RuleId::of("MODE-1") },
                 self.input.tree.types[t.0 as usize].origin.span,
                 "a named function has no environment: its local result names its sources, `in x`",
             );
@@ -734,7 +738,7 @@ impl Checker<'_, '_> {
             }
             if !candidates.is_empty() {
                 self.report(
-                    "MODE-1",
+                    const { RuleId::of("MODE-1") },
                     span,
                     &hirsel_check_protocol::declaration::environment_candidates(&candidates),
                 );
@@ -823,12 +827,8 @@ impl Checker<'_, '_> {
         lexical: &[TypeId],
         mut result: TypeId,
     ) -> Result<(SharedSlice<StatePromise>, TypeId), QueryError> {
-        let fail = |rule: &str, span: Span, message: &str| {
-            QueryError::Diagnostics(vec![hirsel_diag::Diagnostic::error(
-                hirsel_diag::RuleId::new(rule).unwrap(),
-                span,
-                message,
-            )])
+        let fail = |rule: RuleId, span: Span, message: &str| {
+            QueryError::Diagnostics(vec![hirsel_diag::Diagnostic::error(rule, span, message)])
         };
         let mut promises = BTreeMap::<RelationPlace, StatePromise>::new();
         let mut captures = Vec::new();
@@ -842,7 +842,7 @@ impl Checker<'_, '_> {
             for path in &promise.selectors {
                 let unknown = || {
                     fail(
-                        "LANG-6",
+                        const { RuleId::of("LANG-6") },
                         span,
                         "a callable selector names its own parameter and explicit fields",
                     )
@@ -885,7 +885,7 @@ impl Checker<'_, '_> {
                 }
                 if parameters[ordinal].passing != ast::PassingMode::Mut {
                     return Err(fail(
-                        "MEM-14",
+                        const { RuleId::of("MEM-14") },
                         span,
                         "a state preservation selector requires a mut parameter",
                     ));
@@ -912,7 +912,7 @@ impl Checker<'_, '_> {
                     }
             ) {
                 return Err(fail(
-                    "CLO-4",
+                    const { RuleId::of("CLO-4") },
                     captures_span.unwrap(),
                     "@captures requires a callable or erased iterator result",
                 ));
@@ -938,7 +938,7 @@ impl Checker<'_, '_> {
         {
             let span = relation.origin.span;
             self.report(
-                "MODE-1",
+                const { RuleId::of("MODE-1") },
                 span,
                 &format!(
                     "`env` is a closure or function type's environment: {what} is not related to it"
@@ -1062,7 +1062,7 @@ impl Checker<'_, '_> {
                     .is_global()
                 {
                     self.report(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         self.input.tree.types[part.0 as usize].origin.span,
                         hirsel_check_protocol::declaration::PART_LOCALITY,
                     );
@@ -1103,7 +1103,7 @@ impl Checker<'_, '_> {
                                 // known function, including in nested headers.
                                 if !matches!(row.kind, TypeKind::Function(_)) {
                                     self.report(
-                                        "MODE-3",
+                                        const { RuleId::of("MODE-3") },
                                         node.origin.span,
                                         "once requires a function type",
                                     );
@@ -1176,7 +1176,7 @@ impl Checker<'_, '_> {
                                         if bounds.contains(&ast::Bound::Serializable)
                                             && !self.bound(*actual, ast::Bound::Serializable)?
                                         {
-                                            self.report("SER-1", self.input.tree.types[id.0 as usize].origin.span,
+                                            self.report(const { RuleId::of("SER-1") }, self.input.tree.types[id.0 as usize].origin.span,
                                                 "type argument needs a transparent serializable schema");
                                             serializable = false;
                                         }
@@ -1224,7 +1224,7 @@ impl Checker<'_, '_> {
                                     };
                                     if unmet {
                                         self.report(
-                                            "GEN-1",
+                                            const { RuleId::of("GEN-1") },
                                             self.input.tree.types[id.0 as usize].origin.span,
                                             "builtin argument does not satisfy its bound",
                                         );
@@ -1403,7 +1403,7 @@ impl Checker<'_, '_> {
         }
         if !self.compatible(a, b) {
             self.report(
-                "LANG-7",
+                const { RuleId::of("LANG-7") },
                 self.span(id),
                 "operator operands have different types",
             );
@@ -1412,7 +1412,11 @@ impl Checker<'_, '_> {
         match op {
             Eq | Ne => {
                 if !self.bound(a, ast::Bound::Data)? {
-                    self.report("GEN-1", self.span(id), "equality requires data operands");
+                    self.report(
+                        const { RuleId::of("GEN-1") },
+                        self.span(id),
+                        "equality requires data operands",
+                    );
                     return Ok(self.error());
                 }
                 Ok(self.primitive(Primitive::Bool))
@@ -1425,7 +1429,7 @@ impl Checker<'_, '_> {
                     )
                 {
                     self.report(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         self.span(id),
                         "ordering requires scalars or byte strings",
                     );
@@ -1437,7 +1441,7 @@ impl Checker<'_, '_> {
             Range | RangeInclusive => {
                 if !self.integer(a) {
                     self.report(
-                        "SEM-4",
+                        const { RuleId::of("SEM-4") },
                         self.span(id),
                         "range bounds require one integer type",
                     );
@@ -1454,7 +1458,7 @@ impl Checker<'_, '_> {
                     || (matches!(op, Shl | Shr | BitAnd | BitOr | BitXor) && !self.integer(a))
                 {
                     self.report(
-                        "LANG-7",
+                        const { RuleId::of("LANG-7") },
                         self.span(id),
                         "operator is not defined for this type",
                     );
@@ -1495,7 +1499,7 @@ impl Checker<'_, '_> {
                 )
             {
                 self.report(
-                    "SEM-4",
+                    const { RuleId::of("SEM-4") },
                     self.span(source),
                     "iterator source needs mut or take",
                 );
@@ -1520,7 +1524,7 @@ impl Checker<'_, '_> {
                 }
             ) {
                 self.report(
-                    "SEM-4",
+                    const { RuleId::of("SEM-4") },
                     self.span(source),
                     "a borrowed loop association admits neither mut nor take",
                 );
@@ -1532,7 +1536,7 @@ impl Checker<'_, '_> {
             return Ok(e);
         }
         self.report(
-            "SEM-4",
+            const { RuleId::of("SEM-4") },
             self.span(source),
             "expression is not a loop source",
         );

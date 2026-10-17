@@ -127,7 +127,7 @@ fn execute_writeback(native: bool, ending: u8, invalid: bool) -> Result<Executio
         1 => {
             callback.block(
                 Terminator::Fail {
-                    rule: hirsel_diag::RuleId::new("SEM-1").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("SEM-1") },
                     cleanup: CleanupId(0),
                 },
                 6,

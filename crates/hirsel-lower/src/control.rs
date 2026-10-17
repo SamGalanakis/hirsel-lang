@@ -200,7 +200,7 @@ impl Builder<'_, '_> {
                     place: destination,
                     usage: hirsel_types::UseKind::Copy,
                 },
-                rule: hirsel_diag::RuleId::new("FACT-1").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("FACT-1") },
             },
             span,
         );
@@ -1213,7 +1213,7 @@ impl Builder<'_, '_> {
         self.emit_with(
             InstructionKind::Check {
                 condition,
-                rule: hirsel_diag::RuleId::new("FACT-2").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("FACT-2") },
             },
             span,
             failure,

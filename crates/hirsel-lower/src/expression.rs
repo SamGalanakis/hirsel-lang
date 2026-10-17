@@ -628,7 +628,7 @@ impl Builder<'_, '_> {
                 let cleanup = self.cleanup();
                 self.terminate(
                     Terminator::Fail {
-                        rule: hirsel_diag::RuleId::new("LANG-6").unwrap(),
+                        rule: const { hirsel_diag::RuleId::of("LANG-6") },
                         cleanup,
                     },
                     span,

@@ -8,21 +8,21 @@ impl Checker<'_> {
         intrinsic: Option<Intrinsic>,
         f: &FunctionType,
         missing: &BTreeSet<ParameterRef>,
-    ) -> &'static str {
+    ) -> RuleId {
         match intrinsic {
-            Some(Intrinsic::UnsafeOperation) => "MEM-9",
+            Some(Intrinsic::UnsafeOperation) => const { RuleId::of("MEM-9") },
             Some(
                 Intrinsic::Synchronization
                 | Intrinsic::MutexCreate
                 | Intrinsic::MutexWith
                 | Intrinsic::AtomicCreate,
-            ) => "CAP-4",
+            ) => const { RuleId::of("CAP-4") },
             Some(
                 Intrinsic::HandleOperation
                 | Intrinsic::ChannelSend
                 | Intrinsic::TaskAwait
                 | Intrinsic::TaskDetach,
-            ) => "CAP-2",
+            ) => const { RuleId::of("CAP-2") },
             _ => {
                 let branded_resource = f.parameters.iter().any(|p| {
                     let Some(row) = self.out.body.types.get(p.ty) else {
@@ -45,7 +45,11 @@ impl Checker<'_> {
                     self.read(&definition)
                         .is_some_and(|s| matches!(&s.kind, SignatureKind::Type(t) if t.resource))
                 });
-                if branded_resource { "CAP-2" } else { "CAP-1" }
+                if branded_resource {
+                    const { RuleId::of("CAP-2") }
+                } else {
+                    const { RuleId::of("CAP-1") }
+                }
             }
         }
     }

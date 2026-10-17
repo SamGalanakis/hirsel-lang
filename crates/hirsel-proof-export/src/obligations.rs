@@ -157,10 +157,6 @@ pub(crate) struct Table {
     pub callees: BTreeSet<DefPath>,
 }
 
-fn rule(text: &str) -> RuleId {
-    RuleId::new(text).expect("static rule id")
-}
-
 fn function(signature: Option<&Signature>) -> Option<&hirsel_types::FunctionType> {
     match &signature?.kind {
         SignatureKind::Function(function) => Some(function),
@@ -183,7 +179,7 @@ struct Builder<'d> {
     /// projection; loans and bindings give one access several PlaceIds):
     /// every instruction or terminator naming it is a site of its one
     /// obligation.
-    places: HashMap<(usize, LocalId, Vec<Projection>, &'static str), usize>,
+    places: HashMap<(usize, LocalId, Vec<Projection>, RuleId), usize>,
 }
 impl Builder<'_> {
     fn push(&mut self, rule: RuleId, kind: ObligationKind, site: Site, detail: Detail) -> usize {
@@ -209,16 +205,19 @@ impl Builder<'_> {
         let variant = projection
             .iter()
             .any(|p| matches!(p, Projection::VariantField { .. }));
-        for (code, present) in [("MEM-14", index), ("MEM-13", variant)] {
+        for (code, present) in [
+            (const { RuleId::of("MEM-14") }, index),
+            (const { RuleId::of("MEM-13") }, variant),
+        ] {
             if !present {
                 continue;
             }
-            let key = (b, row.root, projection.clone(), code);
+            let key = (b, row.root, projection.clone(), code.clone());
             match self.places.get(&key) {
                 Some(index) => self.obligations[*index].1.push(site.clone()),
                 None => {
                     let index = self.push(
-                        rule(code),
+                        code,
                         ObligationKind::FailureEdge,
                         site.clone(),
                         Detail::Site,
@@ -236,7 +235,7 @@ pub(crate) fn table<'a>(
     definition: &Definition,
     signature: impl Fn(&DefPath) -> Option<&'a Signature>,
 ) -> Table {
-    let fact = rule("FACT-1");
+    let fact = const { RuleId::of("FACT-1") };
     let owner = function(signature(&definition.path));
     let owner_contracts: &[Contract] = owner.map_or(&[], |f| &f.contracts);
     let contract_checks = contract_checks(definition, owner_contracts);
@@ -276,7 +275,7 @@ pub(crate) fn table<'a>(
                             .is_some_and(|rvalue| checked_arithmetic(definition, body, rvalue)) =>
                     {
                         builder.push(
-                            rule("SEM-1"),
+                            const { RuleId::of("SEM-1") },
                             ObligationKind::FailureEdge,
                             site.clone(),
                             Detail::Site,
@@ -422,7 +421,7 @@ fn contract_checks(
             results.insert(result, *closure);
         }
     }
-    let fact = rule("FACT-1");
+    let fact = const { RuleId::of("FACT-1") };
     for (k, block) in body.blocks.iter().enumerate() {
         for (i, instruction) in block.instructions.iter().enumerate() {
             if let InstructionKind::Check { condition, rule } = &instruction.kind

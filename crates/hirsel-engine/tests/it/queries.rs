@@ -23,7 +23,7 @@ fn path(name: &str) -> DefPath {
 }
 fn error(span: Span) -> QueryError {
     QueryError::Diagnostics(vec![Diagnostic::error(
-        RuleId::new("LANG-1").unwrap(),
+        const { RuleId::of("LANG-1") },
         span,
         "fixture rejection",
     )])
@@ -723,7 +723,7 @@ impl SignaturePhase for ObserveDuplicates {
         assert_eq!(candidates.len(), 2);
         let (later, item) = &candidates[1];
         Err(QueryError::Diagnostics(vec![Diagnostic::error(
-            RuleId::new("LANG-7").unwrap(),
+            const { RuleId::of("LANG-7") },
             later.tree.items[item.0 as usize].origin.span,
             "fixture overloading",
         )]))

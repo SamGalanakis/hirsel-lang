@@ -111,7 +111,7 @@ impl Checker<'_, '_> {
                             PatternDecisionKind::Binding(local)
                         } else {
                             self.report(
-                                "LANG-13",
+                                const { RuleId::of("LANG-13") },
                                 p.origin.span,
                                 "pattern name is not a binding or variant of this type",
                             );
@@ -123,7 +123,7 @@ impl Checker<'_, '_> {
                         let t = self.literal(l, Some(inspected), p.origin.span, false);
                         if !self.compatible(t, inspected) {
                             self.report(
-                                "LANG-7",
+                                const { RuleId::of("LANG-7") },
                                 p.origin.span,
                                 "literal pattern has the wrong type",
                             );
@@ -135,7 +135,7 @@ impl Checker<'_, '_> {
                         if let TypeKind::Tuple(ts) = self.kind(inspected) {
                             if ts.len() != ps.len() {
                                 self.report(
-                                    "LANG-13",
+                                    const { RuleId::of("LANG-13") },
                                     p.origin.span,
                                     "tuple pattern has the wrong arity",
                                 );
@@ -147,7 +147,11 @@ impl Checker<'_, '_> {
                             }
                             PatternDecisionKind::Tuple
                         } else {
-                            self.report("LANG-13", p.origin.span, "tuple pattern requires a tuple");
+                            self.report(
+                                const { RuleId::of("LANG-13") },
+                                p.origin.span,
+                                "tuple pattern requires a tuple",
+                            );
                             for child in ps {
                                 let e = self.error();
                                 children.push((*child, e));
@@ -174,7 +178,7 @@ impl Checker<'_, '_> {
                                     && (owner.0.package != self.input.context.package
                                         || owner.0.modules != self.input.context.modules)
                                 {
-                                    self.report("LANG-13",root_span,"a type with drop may be destructured only in its defining module");
+                                    self.report(const { RuleId::of("LANG-13") },root_span,"a type with drop may be destructured only in its defining module");
                                 }
                             }
                             let shape = match self.kind(repr) {
@@ -229,7 +233,7 @@ impl Checker<'_, '_> {
                                 PatternDecisionKind::Constructor(ctx)
                             } else {
                                 self.report(
-                                    "LANG-13",
+                                    const { RuleId::of("LANG-13") },
                                     p.origin.span,
                                     "constructor pattern does not belong to the expected type",
                                 );
@@ -241,7 +245,7 @@ impl Checker<'_, '_> {
                             }
                         } else {
                             self.report(
-                                "LANG-13",
+                                const { RuleId::of("LANG-13") },
                                 p.origin.span,
                                 "constructor pattern needs a nominal type",
                             );
@@ -289,7 +293,11 @@ impl Checker<'_, '_> {
             todo.extend(children.into_iter().rev());
         }
         if irrefutable && refutable {
-            self.report("LANG-13", root_span, "binding pattern must be irrefutable");
+            self.report(
+                const { RuleId::of("LANG-13") },
+                root_span,
+                "binding pattern must be irrefutable",
+            );
         }
         Ok(())
     }

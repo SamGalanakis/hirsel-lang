@@ -75,7 +75,7 @@ fn callback(name: &str, end: Ending, boolean: bool) -> Definition {
             }));
             b.block(
                 Terminator::Fail {
-                    rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("LANG-9") },
                     cleanup: CleanupId(0),
                 },
                 5,

@@ -131,7 +131,7 @@ impl Parser<'_> {
             false
         }
     }
-    fn expect(&mut self, word: &str, rule: &str) -> Parsed<()> {
+    fn expect(&mut self, word: &str, rule: RuleId) -> Parsed<()> {
         if self.eat(word) {
             Ok(())
         } else {
@@ -156,15 +156,12 @@ impl Parser<'_> {
                 .map_or(0, |s| s.text().len() as u32),
         })
     }
-    fn fail<T>(&mut self, rule: &str, message: impl Into<String>) -> Parsed<T> {
+    fn fail<T>(&mut self, rule: RuleId, message: impl Into<String>) -> Parsed<T> {
         self.fail_at(rule, self.span(), message)
     }
-    fn fail_at<T>(&mut self, rule: &str, span: Span, message: impl Into<String>) -> Parsed<T> {
-        self.diagnostics.push(Diagnostic::error(
-            RuleId::new(rule).expect("static rule ID"),
-            span,
-            message,
-        ));
+    fn fail_at<T>(&mut self, rule: RuleId, span: Span, message: impl Into<String>) -> Parsed<T> {
+        self.diagnostics
+            .push(Diagnostic::error(rule, span, message));
         Err(())
     }
     fn origin(&self, start: usize) -> Origin {
@@ -228,10 +225,11 @@ impl Parser<'_> {
                 self.pos += 1;
                 Ok(s)
             }
-            Some(TokenKind::Keyword(_)) => {
-                self.fail("LANG-14", "reserved keyword cannot be a name")
-            }
-            _ => self.fail("LANG-4", "expected a name"),
+            Some(TokenKind::Keyword(_)) => self.fail(
+                const { RuleId::of("LANG-14") },
+                "reserved keyword cannot be a name",
+            ),
+            _ => self.fail(const { RuleId::of("LANG-4") }, "expected a name"),
         }
     }
     fn member(&mut self) -> Parsed<Symbol> {
@@ -248,7 +246,7 @@ impl Parser<'_> {
                 return Ok(s);
             }
             return self.fail(
-                "LANG-1",
+                const { RuleId::of("LANG-1") },
                 "keyword member spelling is missing from the symbol snapshot",
             );
         }
@@ -286,13 +284,16 @@ impl Parser<'_> {
             let mut values = vec![];
             while !self.eat(close) {
                 if self.eof() {
-                    return self.fail("LANG-1", format!("expected `{close}`"));
+                    return self.fail(
+                        const { RuleId::of("LANG-1") },
+                        format!("expected `{close}`"),
+                    );
                 }
                 values.push(entry(self)?);
                 if self.eat(close) {
                     break;
                 }
-                self.expect(",", "LANG-1")?;
+                self.expect(",", const { RuleId::of("LANG-1") })?;
             }
             Ok(values)
         })();
@@ -311,7 +312,10 @@ impl Parser<'_> {
         if self.at(close) || self.eat(",") || self.newline() {
             Ok(())
         } else {
-            self.fail("LANG-1", "expected comma or newline between entries")
+            self.fail(
+                const { RuleId::of("LANG-1") },
+                "expected comma or newline between entries",
+            )
         }
     }
     fn end(&mut self, implicit: bool) -> Parsed<bool> {
@@ -322,7 +326,7 @@ impl Parser<'_> {
             return Ok(false);
         }
         self.fail(
-            "LANG-1",
+            const { RuleId::of("LANG-1") },
             "expected newline or semicolon after complete statement/item",
         )
     }
@@ -443,19 +447,28 @@ impl Parser<'_> {
                     .get(p + 1)
                     .and_then(|&i| self.tokens.get(i));
                 if !a.zip(b).is_some_and(|(a, b)| a.span.end == b.span.start) {
-                    return self.fail("LANG-4", "package/version head must be adjacent");
+                    return self.fail(
+                        const { RuleId::of("LANG-4") },
+                        "package/version head must be adjacent",
+                    );
                 }
             }
             self.pos += 1;
             if !matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::Integer)) {
-                return self.fail("LANG-4", "expected numeric package version");
+                return self.fail(
+                    const { RuleId::of("LANG-4") },
+                    "expected numeric package version",
+                );
             }
             let version = self.text_at(0).to_owned();
             if size_value(&version).is_none() {
-                return self.fail("LANG-4", "package version must be unsuffixed integer");
+                return self.fail(
+                    const { RuleId::of("LANG-4") },
+                    "package version must be unsuffixed integer",
+                );
             }
             self.pos += 1;
-            self.expect("/", "LANG-4")?;
+            self.expect("/", const { RuleId::of("LANG-4") })?;
             package = Some(PackageId {
                 name: self.symbols.resolve(segments[0]).unwrap_or("").into(),
                 version,

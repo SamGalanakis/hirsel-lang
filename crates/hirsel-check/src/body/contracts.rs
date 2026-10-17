@@ -43,15 +43,15 @@ impl Checker<'_, '_> {
             for contract in syntax.contracts.clone() {
                 let root = contract.expression;
                 let rule = if fact == Some(root) {
-                    "FACT-2"
+                    const { RuleId::of("FACT-2") }
                 } else {
-                    "FACT-1"
+                    const { RuleId::of("FACT-1") }
                 };
                 let mut snapshots = vec![];
                 if !self.invalid(self.value(root))
                     && self.kind(self.value(root)) != TypeKind::Primitive(Primitive::Bool)
                 {
-                    self.report(rule, self.span(root), "contract must be boolean");
+                    self.report(rule.clone(), self.span(root), "contract must be boolean");
                 }
                 let mut todo = vec![(root, false)];
                 while let Some((id, before)) = todo.pop() {
@@ -77,7 +77,7 @@ impl Checker<'_, '_> {
                         if consumes && self.source_place(target).is_some_and(|p| {
                             matches!(&p.root, SourceRoot::Binding { owner, binding: ResolvedName::Parameter(_) } if *owner == self.frames[frame].owner)
                         }) {
-                            self.report(rule, self.span(root), "contract parameters are read-only");
+                            self.report(rule.clone(), self.span(root), "contract parameters are read-only");
                         }
                     }
                     match kind {
@@ -92,7 +92,7 @@ impl Checker<'_, '_> {
                                     }
                                 } else {
                                     self.report(
-                                        rule,
+                                        rule.clone(),
                                         self.span(id),
                                         "entry snapshot must be plain",
                                     );
@@ -109,7 +109,7 @@ impl Checker<'_, '_> {
                                         .is_some_and(|p| p.passing == ast::PassingMode::Take)
                                     {
                                         self.report(
-                                            rule,
+                                            rule.clone(),
                                             self.span(root),
                                             "taken postcondition parameter requires before",
                                         );
@@ -138,7 +138,7 @@ impl Checker<'_, '_> {
                                 if consumes && self.source_place(argument.expression).is_some_and(|place| {
                                     matches!(&place.root, SourceRoot::Binding {owner, binding: ResolvedName::Parameter(_)} if *owner == self.frames[frame].owner)
                                 }) {
-                                    self.report(rule, self.span(root), "contract parameters are read-only");
+                                    self.report(rule.clone(), self.span(root), "contract parameters are read-only");
                                     break;
                                 }
                             }
@@ -151,7 +151,7 @@ impl Checker<'_, '_> {
                                         .any(|c| c.ty == self.value(callee));
                                 if f.authority != AuthoritySummary::inert() && !known_literal {
                                     self.report(
-                                        rule,
+                                        rule.clone(),
                                         self.span(root),
                                         "contract calls must be pure",
                                     );

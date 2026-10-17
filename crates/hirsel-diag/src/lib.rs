@@ -1,25 +1,61 @@
 //! Rule-linked diagnostics and stable JSON (FAIL-1, LANG-6).
 use hirsel_span::{SourceMap, Span};
-use std::fmt;
+use std::{borrow::Cow, fmt};
 use unicode_width::UnicodeWidthStr;
 /// A syntactically valid specification ID (FAIL-1); membership is checked against the spec.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct RuleId(String);
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct RuleId(Cow<'static, str>);
 
 impl RuleId {
+    /// A fixed compiler rule, validated during constant evaluation.
+    ///
+    /// ```
+    /// use hirsel_diag::RuleId;
+    /// const RULE: RuleId = RuleId::of("OWN-6");
+    /// assert_eq!(RULE.as_str(), "OWN-6");
+    /// ```
+    ///
+    /// Invalid fixed IDs fail to compile:
+    ///
+    /// ```compile_fail
+    /// use hirsel_diag::RuleId;
+    /// const RULE: RuleId = RuleId::of("OWN-0");
+    /// ```
+    pub const fn of(value: &'static str) -> Self {
+        assert!(Self::valid(value), "invalid rule ID; expected PREFIX-N");
+        Self(Cow::Borrowed(value))
+    }
+
+    /// Validate an ID read from external data.
     pub fn new(value: impl Into<String>) -> Result<Self, InvalidRuleId> {
         let value = value.into();
-        let valid = value.split_once('-').is_some_and(|(prefix, number)| {
-            !prefix.is_empty()
-                && prefix.bytes().all(|b| b.is_ascii_uppercase())
-                && number.starts_with(|c: char| ('1'..='9').contains(&c))
-                && number.bytes().all(|b| b.is_ascii_digit())
-        });
-        if valid {
-            Ok(Self(value))
+        if Self::valid(&value) {
+            Ok(Self(Cow::Owned(value)))
         } else {
             Err(InvalidRuleId(value))
         }
+    }
+
+    const fn valid(value: &str) -> bool {
+        let bytes = value.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() && bytes[i].is_ascii_uppercase() {
+            i += 1;
+        }
+        if i == 0 || i >= bytes.len() || bytes[i] != b'-' {
+            return false;
+        }
+        i += 1;
+        if i >= bytes.len() || bytes[i] < b'1' || bytes[i] > b'9' {
+            return false;
+        }
+        while i < bytes.len() {
+            if !bytes[i].is_ascii_digit() {
+                return false;
+            }
+            i += 1;
+        }
+        true
     }
 
     pub fn as_str(&self) -> &str {
@@ -214,9 +250,27 @@ mod tests {
     use super::*;
     #[test]
     fn rule_ids_are_validated() {
-        assert_eq!(RuleId::new("OWN-6").unwrap().prefix(), "OWN");
-        for invalid in ["", "own-6", "OWN-0", "OWN-01", "OWN--6", "OWN-6x", "-6"] {
+        const RULE: RuleId = RuleId::of("OWN-6");
+        assert_eq!(RULE.prefix(), "OWN");
+        assert_eq!(RULE, RuleId::new("OWN-6").unwrap());
+        for valid in ["A-1", "LANG-14", "EXAMPLE-12345678901234567890"] {
+            assert_eq!(RuleId::of(valid), RuleId::new(valid).unwrap());
+        }
+        for invalid in [
+            "",
+            "own-6",
+            "OWN-0",
+            "OWN-01",
+            "OWN--6",
+            "OWN-6x",
+            "-6",
+            "OWN-",
+            "OWN-6-1",
+            "\u{d6}WN-6",
+            "OWN-６",
+        ] {
             assert!(RuleId::new(invalid).is_err());
+            assert!(std::panic::catch_unwind(|| RuleId::of(invalid)).is_err());
         }
     }
     #[test]

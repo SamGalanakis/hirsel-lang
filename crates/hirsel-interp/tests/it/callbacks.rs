@@ -68,7 +68,7 @@ fn fixture(failing: bool, mutating: bool) -> Definition {
     let d = if failing {
         callback.block(
             Terminator::Fail {
-                rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("LANG-9") },
                 cleanup: CleanupId(0),
             },
             5,
@@ -297,7 +297,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
             if call.path == &path("native") {
                 return Ok(Some(if self.native_fails {
                     OperationResult::Failed(hirsel_interp::Failure {
-                        rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                        rule: const { hirsel_diag::RuleId::of("LANG-9") },
                         site: call.site,
                         line: 5,
                         kind: "native".into(),
@@ -354,7 +354,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
         if fail {
             b.block(
                 Terminator::Fail {
-                    rule: hirsel_diag::RuleId::new("FAIL-1").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("FAIL-1") },
                     cleanup: CleanupId(0),
                 },
                 8,
@@ -381,7 +381,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
             let body = if callback_fails {
                 nested.block(
                     Terminator::Fail {
-                        rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                        rule: const { hirsel_diag::RuleId::of("LANG-9") },
                         cleanup: CleanupId(0),
                     },
                     5,
@@ -601,7 +601,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
         let nested = if failing {
             nested.block(
                 Terminator::Fail {
-                    rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                    rule: const { hirsel_diag::RuleId::of("LANG-9") },
                     cleanup: CleanupId(0),
                 },
                 6,
@@ -777,7 +777,7 @@ fn nested_native_named_callbacks_resume_mut_updates_and_preserve_failure_and_dep
             if call.path == &path("leaf") {
                 return Ok(Some(if self.failing {
                     OperationResult::Failed(hirsel_interp::Failure {
-                        rule: hirsel_diag::RuleId::new("FAIL-1").unwrap(),
+                        rule: const { hirsel_diag::RuleId::of("FAIL-1") },
                         line: 1,
                         site: call.site,
                         kind: "leaf".into(),

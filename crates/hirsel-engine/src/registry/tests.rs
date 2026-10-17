@@ -451,7 +451,7 @@ fn a_schema_domain_diagnostic_identity_changes_its_fingerprint() {
         .as_ref()
         .clone();
     if let SchemaConstraint::Domain { rule, .. } = &mut signature.metadata.schema[0] {
-        *rule = hirsel_diag::RuleId::new("MEM-8").unwrap();
+        *rule = const { hirsel_diag::RuleId::of("MEM-8") };
     } else {
         panic!("missing domain");
     }

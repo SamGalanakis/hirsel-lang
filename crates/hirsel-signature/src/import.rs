@@ -38,9 +38,9 @@ impl Normalizer<'_, '_> {
         .map_err(|error| {
             diagnostic(
                 if matches!(error, GraphError::StructuralCycle(_)) {
-                    "LANG-7"
+                    const { RuleId::of("LANG-7") }
                 } else {
-                    "LANG-6"
+                    const { RuleId::of("LANG-6") }
                 },
                 self.span,
                 "invalid imported signature type graph or substitution",

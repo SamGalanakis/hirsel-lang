@@ -79,7 +79,7 @@ impl Checker<'_, '_> {
         });
         let Some(p) = primitive else {
             self.report(
-                "LANG-2",
+                const { RuleId::of("LANG-2") },
                 span,
                 "literal needs an expected type or numeric suffix",
             );
@@ -88,7 +88,11 @@ impl Checker<'_, '_> {
         match l {
             ast::Literal::Integer(s) => {
                 let Some((bits, signed)) = width(p) else {
-                    self.report("LANG-7", span, "integer literal requires an integer type");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        span,
+                        "integer literal requires an integer type",
+                    );
                     return self.error();
                 };
                 let mut core = numeric_core(s);
@@ -116,7 +120,11 @@ impl Checker<'_, '_> {
                 };
                 if magnitude.is_none_or(|n| n > limit) || (sign && !signed && magnitude != Some(0))
                 {
-                    self.report("SEM-1", span, "integer literal is outside its type's range");
+                    self.report(
+                        const { RuleId::of("SEM-1") },
+                        span,
+                        "integer literal is outside its type's range",
+                    );
                     return self.error();
                 }
             }
@@ -128,25 +136,41 @@ impl Checker<'_, '_> {
                     _ => false,
                 };
                 if !valid {
-                    self.report("SEM-2", span, "float literal requires f32 or f64");
+                    self.report(
+                        const { RuleId::of("SEM-2") },
+                        span,
+                        "float literal requires f32 or f64",
+                    );
                     return self.error();
                 }
             }
             ast::Literal::String(_) => {
                 if p != Primitive::String {
-                    self.report("LANG-7", span, "string literal requires String");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        span,
+                        "string literal requires String",
+                    );
                     return self.error();
                 }
             }
             ast::Literal::Bytes(_) => {
                 if p != Primitive::Bytes {
-                    self.report("LANG-7", span, "bytes literal requires Bytes");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        span,
+                        "bytes literal requires Bytes",
+                    );
                     return self.error();
                 }
             }
             ast::Literal::Bool(_) => {
                 if p != Primitive::Bool {
-                    self.report("LANG-7", span, "boolean literal requires bool");
+                    self.report(
+                        const { RuleId::of("LANG-7") },
+                        span,
+                        "boolean literal requires bool",
+                    );
                     return self.error();
                 }
             }

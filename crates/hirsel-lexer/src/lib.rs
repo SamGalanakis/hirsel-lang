@@ -19,7 +19,12 @@ pub fn lex(file: FileId, sources: &SourceMap, interner: &mut Interner) -> LexOut
         Some(source) => scan(file, source.text().as_bytes(), interner),
         None => {
             let mut scanner = Scanner::new(file, &[], interner);
-            scanner.error("LANG-1", 0, 0, "source file is unavailable");
+            scanner.error(
+                const { RuleId::of("LANG-1") },
+                0,
+                0,
+                "source file is unavailable",
+            );
             scanner.finish()
         }
     }
@@ -59,14 +64,12 @@ impl<'a> Scanner<'a> {
             end: end as u32,
         }
     }
-    fn error(&mut self, rule: &str, start: usize, end: usize, message: &str) {
-        // Only fixed, valid rule IDs are supplied by this module.
-        if let Ok(rule) = RuleId::new(rule) {
-            self.output
-                .diagnostics
-                .push(Diagnostic::error(rule, self.span(start, end), message));
-        }
+    fn error(&mut self, rule: RuleId, start: usize, end: usize, message: &str) {
+        self.output
+            .diagnostics
+            .push(Diagnostic::error(rule, self.span(start, end), message));
     }
+
     fn emit(&mut self, start: usize, kind: TokenKind) {
         self.output.tokens.push(Token {
             kind,
@@ -133,9 +136,9 @@ impl<'a> Scanner<'a> {
                         || ch.is_some_and(|c| {
                             bidi(c) || c == '\r' || (start == 0 && c == '\u{feff}')
                         }) {
-                        "SEM-3"
+                        const { RuleId::of("SEM-3") }
                     } else {
-                        "LANG-1"
+                        const { RuleId::of("LANG-1") }
                     };
                     self.error(rule, start, self.pos, "invalid source character");
                     TokenKind::Invalid
@@ -158,7 +161,12 @@ impl<'a> Scanner<'a> {
             || ch
                 .is_some_and(|c| bidi(c) || (c == '\r' && self.bytes.get(self.pos) != Some(&b'\n')))
         {
-            self.error("SEM-3", start, self.pos, "forbidden character in comment");
+            self.error(
+                const { RuleId::of("SEM-3") },
+                start,
+                self.pos,
+                "forbidden character in comment",
+            );
         }
     }
     fn line_comment(&mut self) -> TokenKind {
@@ -194,7 +202,12 @@ impl<'a> Scanner<'a> {
             }
         }
         if depth != 0 {
-            self.error("LANG-1", start, self.pos, "unterminated block comment");
+            self.error(
+                const { RuleId::of("LANG-1") },
+                start,
+                self.pos,
+                "unterminated block comment",
+            );
         }
         TokenKind::Trivia(if doc {
             TriviaKind::DocBlock
@@ -264,7 +277,11 @@ impl<'a> Scanner<'a> {
         };
         if !valid {
             self.error(
-                if float { "SEM-2" } else { "SEM-1" },
+                if float {
+                    const { RuleId::of("SEM-2") }
+                } else {
+                    const { RuleId::of("SEM-1") }
+                },
                 start,
                 self.pos,
                 "malformed numeric literal or suffix",
@@ -329,14 +346,19 @@ impl<'a> Scanner<'a> {
                             c <= '\u{1f}' || c == '\u{7f}' || bidi(c) || (bytes && !c.is_ascii())
                         })
                     {
-                        self.error("SEM-3", at, self.pos, "forbidden literal character");
+                        self.error(
+                            const { RuleId::of("SEM-3") },
+                            at,
+                            self.pos,
+                            "forbidden literal character",
+                        );
                     }
                 }
             }
         }
         if !closed {
             self.error(
-                "SEM-3",
+                const { RuleId::of("SEM-3") },
                 start,
                 self.pos,
                 "unterminated string or bytes literal",
@@ -352,13 +374,18 @@ impl<'a> Scanner<'a> {
         let start = self.pos;
         self.pos += 1;
         let Some(&byte) = self.bytes.get(self.pos) else {
-            self.error("SEM-3", start, self.pos, "incomplete escape");
+            self.error(
+                const { RuleId::of("SEM-3") },
+                start,
+                self.pos,
+                "incomplete escape",
+            );
             return;
         };
         // Do not swallow a physical newline into a malformed escape.
         if matches!(byte, b'\r' | b'\n') {
             self.error(
-                "SEM-3",
+                const { RuleId::of("SEM-3") },
                 start,
                 self.pos,
                 "escape line continuation is forbidden",
@@ -382,7 +409,12 @@ impl<'a> Scanner<'a> {
                     self.pos += 1;
                 }
                 if count != 2 || (!bytes && value > 0x7f) {
-                    self.error("SEM-3", start, self.pos, "invalid hexadecimal escape");
+                    self.error(
+                        const { RuleId::of("SEM-3") },
+                        start,
+                        self.pos,
+                        "invalid hexadecimal escape",
+                    );
                 }
             }
             b'u' => {
@@ -407,13 +439,23 @@ impl<'a> Scanner<'a> {
                     valid = false;
                 }
                 if !valid {
-                    self.error("SEM-3", start, self.pos, "invalid Unicode escape");
+                    self.error(
+                        const { RuleId::of("SEM-3") },
+                        start,
+                        self.pos,
+                        "invalid Unicode escape",
+                    );
                 }
             }
             _ => {
                 let (_, len) = scalar(&self.bytes[self.pos..]);
                 self.pos += len;
-                self.error("SEM-3", start, self.pos, "unknown escape");
+                self.error(
+                    const { RuleId::of("SEM-3") },
+                    start,
+                    self.pos,
+                    "unknown escape",
+                );
             }
         }
     }

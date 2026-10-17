@@ -74,7 +74,7 @@ pub fn check(
                 && !audit.fixed_size(*element, &mut BTreeSet::new())?
             {
                 audit.report(
-                    "MEM-12",
+                    const { RuleId::of("MEM-12") },
                     expression.origin.span,
                     "a flat list of variable-size elements is sequential and cannot be indexed",
                 );
@@ -89,7 +89,7 @@ pub fn check(
             && !audit.fixed_size(ty, &mut BTreeSet::new())?
         {
             audit.report(
-                "MEM-12",
+                const { RuleId::of("MEM-12") },
                 statement.origin.span,
                 "variable-size flat fields are fixed at construction",
             );
@@ -120,9 +120,9 @@ struct Audit<'a, 'p> {
     diagnostics: Vec<Diagnostic>,
 }
 impl Audit<'_, '_> {
-    fn report(&mut self, rule: &str, span: hirsel_span::Span, message: &str) {
+    fn report(&mut self, rule: RuleId, span: hirsel_span::Span, message: &str) {
         self.diagnostics
-            .push(Diagnostic::error(RuleId::new(rule).unwrap(), span, message));
+            .push(Diagnostic::error(rule, span, message));
     }
     fn snapshot(&mut self, path: &ast::DefPath) -> Result<SignatureRef, QueryError> {
         if *path == self.input.signature.definition {
@@ -177,7 +177,7 @@ impl Audit<'_, '_> {
             // Flat-compatible elements are already proved by signature::flat_storage.
             if *flavor != ast::TypeFlavor::Flat || !list || ordinal + 1 != fields.len() {
                 self.report(
-                    "MEM-12",
+                    const { RuleId::of("MEM-12") },
                     field.origin.span,
                     "a growable field must be the final List field of a flat record",
                 );

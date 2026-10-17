@@ -3,20 +3,26 @@ use super::*;
 impl Parser<'_> {
     pub(super) fn attribute(&mut self) -> Parsed<Attribute> {
         let start = self.pos;
-        self.expect("@", "LANG-1")?;
+        self.expect("@", const { RuleId::of("LANG-1") })?;
         let spelling = self.text_at(0).to_owned();
         let name = self.name()?;
         let mut arguments = vec![];
         match spelling.as_str() {
             "noalloc" | "soa" | "packed" | "blocking" | "incomplete" | "serializable" => {}
             "loop_source" | "advance_only" | "preserves_captures" | "captures" => {
-                self.expect("(", "LANG-1")?;
+                self.expect("(", const { RuleId::of("LANG-1") })?;
                 if self.at(")") {
-                    return self.fail("LANG-7", "a declaration selector list cannot be empty");
+                    return self.fail(
+                        const { RuleId::of("LANG-7") },
+                        "a declaration selector list cannot be empty",
+                    );
                 }
                 let mut paths = self.list(")", |p| p.path(false))?;
                 if spelling == "loop_source" && paths.len() != 2 {
-                    return self.fail("LANG-7", "@loop_source requires open and next paths");
+                    return self.fail(
+                        const { RuleId::of("LANG-7") },
+                        "@loop_source requires open and next paths",
+                    );
                 }
                 arguments.push(if spelling == "loop_source" {
                     let next = paths.pop().unwrap();
@@ -39,17 +45,18 @@ impl Parser<'_> {
                 });
             }
             "layout" | "align" | "capability" => {
-                self.expect("(", "LANG-1")?;
+                self.expect("(", const { RuleId::of("LANG-1") })?;
                 match spelling.as_str() {
                     "layout" => {
                         if !self.at("c") {
-                            return self.fail("LANG-7", "layout requires c");
+                            return self.fail(const { RuleId::of("LANG-7") }, "layout requires c");
                         }
                         arguments.push(AttributeArgument::Name(self.name()?));
                     }
                     "align" => {
                         if !matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::Integer)) {
-                            return self.fail("LANG-7", "align requires an integer");
+                            return self
+                                .fail(const { RuleId::of("LANG-7") }, "align requires an integer");
                         }
                         arguments.push(AttributeArgument::Integer(self.text_at(0).into()));
                         self.pos += 1;
@@ -60,14 +67,22 @@ impl Parser<'_> {
                         } else if self.eat("local") {
                             Keyword::Local
                         } else {
-                            return self.fail("MODE-6", "capability requires global or local");
+                            return self.fail(
+                                const { RuleId::of("MODE-6") },
+                                "capability requires global or local",
+                            );
                         };
                         arguments.push(AttributeArgument::Keyword(keyword));
                     }
                 }
-                self.expect(")", "LANG-1")?;
+                self.expect(")", const { RuleId::of("LANG-1") })?;
             }
-            _ => return self.fail("LANG-7", "unknown declaration attribute"),
+            _ => {
+                return self.fail(
+                    const { RuleId::of("LANG-7") },
+                    "unknown declaration attribute",
+                );
+            }
         }
         Ok(Attribute {
             name,
@@ -80,7 +95,10 @@ impl Parser<'_> {
             return Ok(vec![]);
         }
         if self.at("]") {
-            return self.fail("LANG-7", "generic binder cannot be empty");
+            return self.fail(
+                const { RuleId::of("LANG-7") },
+                "generic binder cannot be empty",
+            );
         }
         self.list("]", |p| {
             let name = p.name()?;
@@ -109,7 +127,9 @@ impl Parser<'_> {
                 "copyable" => Bound::Copyable,
                 "noalloc_drop" => Bound::NoallocDrop,
                 "serializable" => Bound::Serializable,
-                _ => return self.fail("GEN-1", "expected structural bound"),
+                _ => {
+                    return self.fail(const { RuleId::of("GEN-1") }, "expected structural bound");
+                }
             };
             self.pos += 1;
             bounds.push(bound);
@@ -123,12 +143,12 @@ impl Parser<'_> {
         if !self.eat("uses") {
             return Ok(None);
         }
-        self.expect("{", "CLO-4")?;
+        self.expect("{", const { RuleId::of("CLO-4") })?;
         Ok(Some(self.list("}", |p| p.path(false))?))
     }
     pub(super) fn header(&mut self, anonymous: bool, contracts: bool) -> Parsed<FunctionSyntax> {
         let generics = if anonymous { vec![] } else { self.generics()? };
-        self.expect("(", "LANG-1")?;
+        self.expect("(", const { RuleId::of("LANG-1") })?;
         let parameters = self.list(")", |p| p.parameter(anonymous))?;
         let result = if (!anonymous || self.continuing()) && self.eat("->") {
             Some(self.ty()?)
@@ -170,7 +190,10 @@ impl Parser<'_> {
     fn parameter(&mut self, anonymous: bool) -> Parsed<Parameter> {
         // Colon lookahead is bounded to the parameter head; never classify names by type lookup.
         if matches!(self.text_at(0), "mut" | "take") && self.text_at(1) == ":" {
-            return self.fail("LANG-14", "reserved keyword cannot be a parameter name");
+            return self.fail(
+                const { RuleId::of("LANG-14") },
+                "reserved keyword cannot be a parameter name",
+            );
         }
         let named = (0..4).any(|i| {
             self.text_at(i) == ":"
@@ -193,7 +216,7 @@ impl Parser<'_> {
         };
         let passing = self.passing();
         let name = self.name()?;
-        self.expect(":", "LANG-6")?;
+        self.expect(":", const { RuleId::of("LANG-6") })?;
         Ok(Parameter {
             label,
             name: Some(name),
@@ -231,7 +254,7 @@ impl Parser<'_> {
         let (name, kind) = if self.at("fn") || self.at("extern") {
             let abi = if self.eat("extern") {
                 if !matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::String)) {
-                    return self.fail("PROG-4", "extern requires ABI string");
+                    return self.fail(const { RuleId::of("PROG-4") }, "extern requires ABI string");
                 }
                 let text = self.text_at(0).to_owned();
                 self.pos += 1;
@@ -239,7 +262,7 @@ impl Parser<'_> {
             } else {
                 None
             };
-            self.expect("fn", "LANG-6")?;
+            self.expect("fn", const { RuleId::of("LANG-6") })?;
             let name = self.name()?;
             let mut signature = self.header(false, true)?;
             signature.attributes = attributes.clone();
@@ -247,7 +270,7 @@ impl Parser<'_> {
                 Some(self.block()?)
             } else if self.eat("=") {
                 let expr_start = self.pos;
-                self.expect("comptime", "CT-1")?;
+                self.expect("comptime", const { RuleId::of("CT-1") })?;
                 let value = self.expr(0)?;
                 Some(self.push_expr(expr_start, ExprKind::Comptime(value)))
             } else {
@@ -259,7 +282,7 @@ impl Parser<'_> {
                 && (self.at("in") || self.at("of"))
             {
                 return self.fail(
-                    "LANG-7",
+                    const { RuleId::of("LANG-7") },
                     "keep a result relation or brand with its type, or parenthesize the type",
                 );
             }
@@ -273,21 +296,21 @@ impl Parser<'_> {
             )
         } else if self.eat("const") {
             let name = self.name()?;
-            self.expect(":", "LANG-6")?;
+            self.expect(":", const { RuleId::of("LANG-6") })?;
             let ty = self.required(Self::ty)?;
-            self.expect("=", "LANG-6")?;
+            self.expect("=", const { RuleId::of("LANG-6") })?;
             let value = self.expr(0)?;
             (name, ItemKind::Const { ty, value })
         } else if matches!(self.text_at(0), "type" | "distinct" | "resource" | "flat") {
             self.type_item(visibility)?
         } else if self.at("|") {
             return self.fail(
-                "LANG-1",
+                const { RuleId::of("LANG-1") },
                 "a variant list continues only after a trailing `|`",
             );
         } else {
             return self.fail(
-                "LANG-1",
+                const { RuleId::of("LANG-1") },
                 "expected a top-level definition (fn, const, type)",
             );
         };
@@ -330,7 +353,11 @@ impl Parser<'_> {
         if let Some(span) = opaque_span
             && !matches!(kind, ItemKind::Type { .. })
         {
-            return self.fail_at("PROG-2", span, "pub opaque applies only to types");
+            return self.fail_at(
+                const { RuleId::of("PROG-2") },
+                span,
+                "pub opaque applies only to types",
+            );
         }
         for attr in attrs {
             let valid = match self.symbols.resolve(attr.name).unwrap_or("") {
@@ -343,7 +370,7 @@ impl Parser<'_> {
             };
             if !valid {
                 self.diagnostics.push(Diagnostic::error(
-                    RuleId::new("LANG-7").unwrap(),
+                    const { RuleId::of("LANG-7") },
                     attr.origin.span,
                     "attribute is not permitted on this declaration",
                 ));
@@ -355,10 +382,10 @@ impl Parser<'_> {
     fn field(&mut self, record: bool) -> Parsed<FieldSyntax> {
         let start = self.pos;
         let name = self.name()?;
-        self.expect(":", "LANG-6")?;
+        self.expect(":", const { RuleId::of("LANG-6") })?;
         let ty = self.part_type()?;
         let growable = if record && self.eat("@") {
-            self.expect("growable", "LANG-7")?;
+            self.expect("growable", const { RuleId::of("LANG-7") })?;
             true
         } else {
             false
@@ -380,13 +407,13 @@ impl Parser<'_> {
         } else {
             TypeFlavor::Ordinary
         };
-        self.expect("type", "LANG-1")?;
+        self.expect("type", const { RuleId::of("LANG-1") })?;
         let name_span = self.span();
         let name = self.name()?;
         let generics = self.generics()?;
         let bounds = if flavor != TypeFlavor::Distinct && self.eat(":") {
             Some(if self.eat("(") {
-                self.expect(")", "GEN-1")?;
+                self.expect(")", const { RuleId::of("GEN-1") })?;
                 vec![]
             } else {
                 self.bounds()?
@@ -400,12 +427,12 @@ impl Parser<'_> {
             self.uses()?
         };
         let body = if flavor == TypeFlavor::Distinct {
-            self.expect("(", "LANG-7")?;
+            self.expect("(", const { RuleId::of("LANG-7") })?;
             self.whitespace += 1;
             let result = self.field(false);
             self.whitespace -= 1;
             let field = result?;
-            self.expect(")", "LANG-7")?;
+            self.expect(")", const { RuleId::of("LANG-7") })?;
             let fact = if self.eat("where") {
                 Some(self.expr(0)?)
             } else {
@@ -422,7 +449,7 @@ impl Parser<'_> {
         } else if self.eat("=") {
             if self.at("|") {
                 return self.fail(
-                    "LANG-4",
+                    const { RuleId::of("LANG-4") },
                     "a variant list starts with a name; continuation follows a trailing `|`",
                 );
             }
@@ -442,14 +469,14 @@ impl Parser<'_> {
             TypeBody::Opaque
         } else {
             return self.fail_at(
-                "LANG-7",
+                const { RuleId::of("LANG-7") },
                 name_span,
                 "type requires fields or a right-hand side",
             );
         };
         if self.at("where") {
             return self.fail(
-                "FACT-2",
+                const { RuleId::of("FACT-2") },
                 "where is allowed only on a distinct plain-field declaration",
             );
         }
@@ -457,7 +484,7 @@ impl Parser<'_> {
             self.at("@") && self.text_at(1) == "noalloc" && self.text_at(2) == "drop";
         if (self.at("drop") || annotated_drop) && flavor != TypeFlavor::Resource {
             return self.fail(
-                "DROP-1",
+                const { RuleId::of("DROP-1") },
                 "copyable types cannot declare user-visible destruction",
             );
         }
@@ -468,9 +495,9 @@ impl Parser<'_> {
             false
         };
         let drop = if self.eat("drop") {
-            self.expect("(", "DROP-2")?;
+            self.expect("(", const { RuleId::of("DROP-2") })?;
             let binding = self.name()?;
-            self.expect(")", "DROP-2")?;
+            self.expect(")", const { RuleId::of("DROP-2") })?;
             Some(DropSyntax {
                 noalloc,
                 binding,
@@ -509,7 +536,7 @@ impl Parser<'_> {
         };
         if fields.iter().any(|f| f.0.is_some()) && fields.iter().any(|f| f.0.is_none()) {
             return self.fail(
-                "LANG-12",
+                const { RuleId::of("LANG-12") },
                 "variant payloads must be uniformly labelled or positional",
             );
         }

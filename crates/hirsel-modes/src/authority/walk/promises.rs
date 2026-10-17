@@ -28,7 +28,7 @@ impl Checker<'_> {
         let mut valid = true;
         if t.brand.alternatives.iter().any(|o| matches!(o.root, OriginRoot::Parameter(ParameterRef::Bound { depth: 0, parameter: p }) if f.parameters.get(p.0 as usize).is_some_and(|p| p.passing == PassingMode::Take))) {
             self.explained(
-                "PROV-1",
+                const { RuleId::of("PROV-1") },
                 span,
                 "a brand cannot name a taken parameter",
                 Explanation::default()
@@ -52,7 +52,7 @@ impl Checker<'_> {
                 && matches!(o.root, OriginRoot::Parameter(ParameterRef::Bound { depth: 0, parameter: p }) if f.parameters.get(p.0 as usize).is_some_and(|p| p.passing == PassingMode::Take))))
         {
             self.explained(
-                "PROV-4",
+                const { RuleId::of("PROV-4") },
                 span,
                 "a placement cannot name a taken parameter",
                 Explanation::default()
@@ -84,7 +84,11 @@ impl Checker<'_> {
             let stale = self.invalid.get(&actual).copied();
             if let Some(invalidation) = stale {
                 let mut d = Diagnostic::error(
-                    RuleId::new(if sibling { "PROV-5" } else { "PROV-1" }).unwrap(),
+                    if sibling {
+                        const { RuleId::of("PROV-5") }
+                    } else {
+                        const { RuleId::of("PROV-1") }
+                    },
                     span,
                     "the brand's owner was invalidated",
                 );
@@ -121,7 +125,11 @@ impl Checker<'_> {
             if a.brand.alternatives.len() != 1 || b.brand.alternatives.len() != 1 {
                 let explanation = self.unbranded_explanation(&b.brand, span);
                 self.explained(
-                    if sibling { "PROV-5" } else { "PROV-2" },
+                    if sibling {
+                        const { RuleId::of("PROV-5") }
+                    } else {
+                        const { RuleId::of("PROV-2") }
+                    },
                     span,
                     "a union or erased origin cannot satisfy a branded use",
                     explanation,
@@ -130,7 +138,11 @@ impl Checker<'_> {
             }
             if brand_join(&a.brand, &Brand::default()) != brand_join(&b.brand, &Brand::default()) {
                 let mut diagnostic = Diagnostic::error(
-                    RuleId::new(if sibling { "PROV-5" } else { "PROV-1" }).unwrap(),
+                    if sibling {
+                        const { RuleId::of("PROV-5") }
+                    } else {
+                        const { RuleId::of("PROV-1") }
+                    },
                     span,
                     "the value belongs to a different origin",
                 );
@@ -186,14 +198,14 @@ impl Checker<'_> {
             if within {
                 let (message, explanation) =
                     self.within_explanation(&actual, &expected, &b.modes.relation, span);
-                self.explained("PROV-4", span, &message, explanation);
+                self.explained(const { RuleId::of("PROV-4") }, span, &message, explanation);
                 return false;
             }
             // Name an arena the value holds outside the relation.
             let escaping = actual.retain(|r| !expected.reaches().contains(r));
             let explanation = self.placement_explanation(&escaping, &b.modes.relation, span);
             self.explained(
-                "PROV-4",
+                const { RuleId::of("PROV-4") },
                 span,
                 "the value's placement does not outlive the required arena",
                 explanation,
@@ -233,7 +245,7 @@ impl Checker<'_> {
                 });
             if owned_local {
                 self.explained(
-                    "MODE-1",
+                    const { RuleId::of("MODE-1") },
                     span,
                     "an owned result retains a pre-existing local source bound",
                     Explanation::default()
@@ -247,7 +259,7 @@ impl Checker<'_> {
                 return false;
             }
             self.explained(
-                "MODE-4",
+                const { RuleId::of("MODE-4") },
                 span,
                 "a value that is not sendable cannot be kept where its type is `sendable`",
                 Explanation::default()
@@ -272,11 +284,11 @@ impl Checker<'_> {
                     let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
                     self.explained(
                         if intrinsic == Some(Intrinsic::MutexWith) {
-                            "CONC-5"
+                            const { RuleId::of("CONC-5") }
                         } else if b.modes.relation.is_global() {
-                            "CLO-4"
+                            const { RuleId::of("CLO-4") }
                         } else {
-                            "CAP-3"
+                            const { RuleId::of("CAP-3") }
                         },
                         span,
                         "function value authority exceeds the required uses restriction",
@@ -293,7 +305,7 @@ impl Checker<'_> {
                 let value = self.received_span(span);
                 let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
                 self.explained(
-                    "MEM-5",
+                    const { RuleId::of("MEM-5") },
                     span,
                     "the function value may allocate where the function type is `@noalloc`",
                     Explanation::default()
@@ -314,7 +326,7 @@ impl Checker<'_> {
                         })
                 });
                 self.explained(
-                    if advance { "MEM-14" } else { "CLO-4" },
+                    if advance { const { RuleId::of("MEM-14") } } else { const { RuleId::of("CLO-4") } },
                     span,
                     "the function value does not promise the state guarantees the function type requires",
                     Explanation::default()
@@ -327,7 +339,7 @@ impl Checker<'_> {
                 let value = self.received_span(span);
                 let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
                 self.explained(
-                    "CLO-4",
+                    const { RuleId::of("CLO-4") },
                     span,
                     "the function value does not promise the creation inputs the function type selects",
                     Explanation::default()
@@ -348,8 +360,8 @@ impl Checker<'_> {
                     let value = self.received_span(span);
                     let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
                     self.explained(
-                        if sibling && matches!(rule, "PROV-1" | "PROV-2") {
-                            "PROV-5"
+                        if sibling && matches!(rule.as_str(), "PROV-1" | "PROV-2") {
+                            const { RuleId::of("PROV-5") }
                         } else {
                             rule
                         },
@@ -431,7 +443,7 @@ impl Checker<'_> {
                 let relation = b.modes.relation.clone();
                 let (message, explanation) =
                     self.within_explanation(&held, &allowed, &relation, span);
-                self.explained("PROV-4", span, &message, explanation);
+                self.explained(const { RuleId::of("PROV-4") }, span, &message, explanation);
                 return false;
             }
             return true;
@@ -446,7 +458,7 @@ impl Checker<'_> {
             let (actual, expected) = (a.modes.relation.clone(), b.modes.relation.clone());
             let explanation = self.placement_explanation(&actual, &expected, span);
             self.explained(
-                "PROV-4",
+                const { RuleId::of("PROV-4") },
                 span,
                 "an arena value cannot be kept where no placement is declared",
                 explanation,
@@ -479,7 +491,7 @@ impl Checker<'_> {
                 let explanation =
                     self.placement_explanation(&a.modes.relation, &b.modes.relation, span);
                 self.explained(
-                    "PROV-4",
+                    const { RuleId::of("PROV-4") },
                     span,
                     "an arena value cannot be kept where no placement is declared",
                     explanation,
@@ -566,7 +578,7 @@ impl Checker<'_> {
                 .as_ref()
                 .map_or(self.span(argument), |r| r.span);
             self.explained(
-                "PROV-2",
+                const { RuleId::of("PROV-2") },
                 self.span(argument),
                 "the parameter could hand this storage back without the brand its type names",
                 Explanation::default()
@@ -636,7 +648,7 @@ impl Checker<'_> {
             let value = self.received_span(span);
             let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
             self.explained(
-                "MODE-2",
+                const { RuleId::of("MODE-2") },
                 span,
                 "the receiving type cannot change this nested uniqueness contract",
                 Explanation::default()
@@ -704,7 +716,7 @@ impl Checker<'_> {
         actual: TypeId,
         expected: TypeId,
         variance: Variance,
-    ) -> Option<(&'static str, &'static str)> {
+    ) -> Option<(RuleId, &'static str)> {
         let types = &self.out.body.types;
         let (a, b) = (types.get(actual)?.clone(), types.get(expected)?.clone());
         if matches!(a.kind, TypeKind::Error) || matches!(b.kind, TypeKind::Error) {
@@ -712,19 +724,19 @@ impl Checker<'_> {
         }
         if a.modes.relation != b.modes.relation {
             return Some((
-                "MODE-1",
+                const { RuleId::of("MODE-1") },
                 "a function header's relation differs from the required function type",
             ));
         }
         if a.modes.uniqueness != b.modes.uniqueness {
             return Some((
-                "MODE-2",
+                const { RuleId::of("MODE-2") },
                 "a function header's uniqueness differs from the required function type",
             ));
         }
         if a.modes.multiplicity != b.modes.multiplicity {
             return Some((
-                "MODE-3",
+                const { RuleId::of("MODE-3") },
                 "a function header's multiplicity differs from the required function type",
             ));
         }
@@ -739,14 +751,14 @@ impl Checker<'_> {
             };
             if differs {
                 return Some((
-                    "MODE-4",
+                    const { RuleId::of("MODE-4") },
                     "a function header's sendability differs from the required function type",
                 ));
             }
         }
         if a.brand.alternatives.is_empty() != b.brand.alternatives.is_empty() {
             return Some((
-                "PROV-1",
+                const { RuleId::of("PROV-1") },
                 "a function header's brand differs from the required function type",
             ));
         }
@@ -755,13 +767,13 @@ impl Checker<'_> {
             let demanded = variance == Variance::Covariant || self.promises(bf, af);
             if !supplied {
                 return Some((
-                    "CLO-2",
+                    const { RuleId::of("CLO-2") },
                     "a function in the header promises less than the required function type",
                 ));
             }
             if !demanded {
                 return Some((
-                    "CLO-2",
+                    const { RuleId::of("CLO-2") },
                     "a function in the header requires more than the required function type gives",
                 ));
             }
@@ -810,7 +822,7 @@ impl Checker<'_> {
             // callable contract; owned many-to-once reception may weaken.
             if a.modes.multiplicity != b.modes.multiplicity {
                 self.explained(
-                    "MODE-3",
+                    const { RuleId::of("MODE-3") },
                     span,
                     "a `mut` callable argument must have exactly the parameter's once/many multiplicity: the callee may replace it with any function of the parameter's type. Match the binding and parameter types, or take the value and return the new one",
                     Explanation::default()
@@ -837,7 +849,7 @@ impl Checker<'_> {
                         ((actual, expected) == root).then_some(root),
                     );
                     self.explained(
-                        "CLO-2",
+                        const { RuleId::of("CLO-2") },
                         span,
                         &message,
                         Explanation::default()
@@ -875,7 +887,7 @@ impl Checker<'_> {
                 };
                 let description = format!("the parameter of `{callee}`");
                 self.explained(
-                    "MODE-4",
+                    const { RuleId::of("MODE-4") },
                     span,
                     &format!(
                         "a `mut` argument's crossing mode must be exactly the parameter's: `{callee}` may store in `{name}` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one"
@@ -915,7 +927,7 @@ impl Checker<'_> {
     }
     /// Whether an erased state's captures (CLO-2) or a cleanup summary
     /// (MEM-5) differ between two rows that must state the same contract.
-    fn state_difference(&mut self, a: &Type, b: &Type) -> Option<(&'static str, &'static str)> {
+    fn state_difference(&mut self, a: &Type, b: &Type) -> Option<(RuleId, &'static str)> {
         let state = |row: &Type| {
             row.erased_captures
                 .as_ref()
@@ -931,10 +943,13 @@ impl Checker<'_> {
             held == allowed || (subset(&held, &allowed) && subset(&allowed, &held))
         };
         if !same_state {
-            Some(("CLO-2", "erased state's captured authority"))
+            Some((
+                const { RuleId::of("CLO-2") },
+                "erased state's captured authority",
+            ))
         } else if a.drop_allocation != b.drop_allocation {
             Some((
-                "MEM-5",
+                const { RuleId::of("MEM-5") },
                 "cleanup summary (whether destroying it may allocate)",
             ))
         } else {
@@ -961,13 +976,19 @@ impl Checker<'_> {
             let differs = if !self.property(actual, Bound::Plain)
                 && crossing_requirement(&a) != crossing_requirement(&b)
             {
-                Some(("MODE-4", "crossing receiving contract"))
+                Some((
+                    const { RuleId::of("MODE-4") },
+                    "crossing receiving contract",
+                ))
             } else {
                 match (&a.kind, &b.kind) {
                     (TypeKind::Function(af), TypeKind::Function(bf))
                         if !(self.promises(af, bf) && self.promises(bf, af)) =>
                     {
-                        Some(("CLO-2", "callable promise (`uses` and `@noalloc`)"))
+                        Some((
+                            const { RuleId::of("CLO-2") },
+                            "callable promise (`uses` and `@noalloc`)",
+                        ))
                     }
                     _ => self.state_difference(&a, &b),
                 }

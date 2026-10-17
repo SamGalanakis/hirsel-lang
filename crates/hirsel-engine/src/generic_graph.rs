@@ -485,7 +485,7 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
                 .into_iter()
                 .map(|site| {
                     Diagnostic::error(
-                        RuleId::new("GEN-5").unwrap(),
+                        const { RuleId::of("GEN-5") },
                         site,
                         "a recursive instantiation cycle grows its type arguments",
                     )

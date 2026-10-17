@@ -247,12 +247,12 @@ mod obligation_tests {
     #[test]
     fn section_23_operand_read_precedes_enclosing_call_properties() {
         let call = Diagnostic::error(
-            RuleId::new("CLO-3").unwrap(),
+            const { RuleId::of("CLO-3") },
             Span::new(FileId(0), 1, 20).unwrap(),
             "crossing",
         );
         let read = Diagnostic::error(
-            RuleId::new("OWN-2").unwrap(),
+            const { RuleId::of("OWN-2") },
             Span::new(FileId(0), 8, 9).unwrap(),
             "use after move",
         );
@@ -264,7 +264,7 @@ mod obligation_tests {
     #[test]
     fn section_23_required_modes_follow_identity_and_mode_order() {
         let site = Span::new(FileId(0), 1, 2).unwrap();
-        let multiplicity = Diagnostic::error(RuleId::new("MODE-3").unwrap(), site, "any text")
+        let multiplicity = Diagnostic::error(const { RuleId::of("MODE-3") }, site, "any text")
             .with_obligation(Obligation::Multiplicity);
         for rule in ["PROV-1", "MODE-1", "MODE-2"] {
             let other = Diagnostic::error(RuleId::new(rule).unwrap(), site, "required property");
@@ -314,7 +314,7 @@ mod instantiation_tests {
                     2
                 );
             }
-            let availability = Diagnostic::error(RuleId::new("OWN-2").unwrap(), argument, "moved");
+            let availability = Diagnostic::error(const { RuleId::of("OWN-2") }, argument, "moved");
             assert_eq!(
                 select_diagnostics(vec![bound, availability.clone()], None),
                 vec![availability]

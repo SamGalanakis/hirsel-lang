@@ -309,7 +309,7 @@ impl Checker<'_> {
             && !self.property(error, Bound::Plain)
         {
             self.explained(
-                "MODE-2",
+                const { RuleId::of("MODE-2") },
                 span,
                 "the error mapper requires a unique error payload",
                 Explanation::default()
@@ -331,11 +331,11 @@ impl Checker<'_> {
                 let (valid, rule) = match bound {
                     Bound::Sendable => (
                         self.receives_sendability(*actual, &Sendability::Sendable),
-                        "MODE-4",
+                        const { RuleId::of("MODE-4") },
                     ),
                     Bound::Inert => (
                         subset(&self.authority(*actual), &AuthoritySummary::inert()),
-                        "CAP-2",
+                        const { RuleId::of("CAP-2") },
                     ),
                     _ => continue,
                 };
@@ -573,7 +573,11 @@ impl Checker<'_> {
             let context = expected.and_then(|t| {
                 let ty = self.out.body.types.get(t)?;
                 let TypeKind::Function(_) = &ty.kind else {
-                    return Some((CaptureContext::Escaping, Some(t), "CLO-4"));
+                    return Some((
+                        CaptureContext::Escaping,
+                        Some(t),
+                        const { RuleId::of("CLO-4") },
+                    ));
                 };
                 let ctx = if matches!(
                     intrinsic,
@@ -595,11 +599,11 @@ impl Checker<'_> {
                     unreachable!()
                 };
                 let rule = if intrinsic == Some(Intrinsic::MutexWith) {
-                    "CONC-5"
+                    const { RuleId::of("CONC-5") }
                 } else if callback.parameters.iter().any(|p| self.scoped(p.ty)) {
-                    "CAP-3"
+                    const { RuleId::of("CAP-3") }
                 } else {
-                    "CLO-2"
+                    const { RuleId::of("CLO-2") }
                 };
                 Some((ctx, expected, rule))
             });
@@ -1013,7 +1017,7 @@ impl Checker<'_> {
                         .and_then(|actual| self.capability_definition(*actual));
                     if supplied.as_ref() != Some(&capability) {
                         self.error(
-                            provision_rule,
+                            provision_rule.clone(),
                             span,
                             "the operation requires its explicit typed capability argument",
                         );
@@ -1246,14 +1250,14 @@ impl Checker<'_> {
                         && !derived_inputs
                         && !subset(&ambient, &allowed)
                     {
-                        let rule = if matches!(frame.restriction, "CONC-5" | "CAP-3") {
-                            frame.restriction
+                        let rule = if matches!(frame.restriction.as_str(), "CONC-5" | "CAP-3") {
+                            frame.restriction.clone()
                         } else if transparent {
-                            "CLO-2"
+                            const { RuleId::of("CLO-2") }
                         } else {
-                            frame.restriction
+                            frame.restriction.clone()
                         };
-                        if rule == "CONC-5" {
+                        if rule.as_str() == "CONC-5" {
                             self.explained(
                                 rule,
                                 span,
@@ -1315,7 +1319,7 @@ impl Checker<'_> {
                 if matches!(p.passing, PassingMode::Mut | PassingMode::Take) {
                     if self.protected_field(a.value) {
                         self.explained(
-                            "PROV-5",
+                            const { RuleId::of("PROV-5") },
                             span,
                             "a sibling brand owner cannot be moved or passed mut separately from its record",
                             Explanation::default()
@@ -1718,7 +1722,7 @@ impl Checker<'_> {
                     .unwrap_or_else(|error| self.proof_failure(error, true));
                 if forbidden {
                     let site = self.span(e);
-                    self.explained("MODE-4", site, "a generic parameter with copying permission cannot carry this implicit sendable receiving requirement; write sendable on its required occurrences or remove the copying permission",
+                    self.explained(const { RuleId::of("MODE-4") }, site, "a generic parameter with copying permission cannot carry this implicit sendable receiving requirement; write sendable on its required occurrences or remove the copying permission",
                         Explanation::default().provided(Fact::new(Cause::NotSendable, site, &[]))
                             .required(Fact::new(Requirement::SendableType, site, &["the receiving type"])));
                     return;
@@ -1844,14 +1848,18 @@ impl Checker<'_> {
                     if bounds.contains(&Bound::Serializable)
                         && !self.property(actual, Bound::Serializable)
                     {
-                        self.error("SER-1", self.span(e),
+                        self.error(const { RuleId::of("SER-1") }, self.span(e),
                             "actual generic argument needs a transparent serializable schema without brands or authority");
                         return;
                     }
                     let owner = match intrinsic {
-                        Some(Intrinsic::MutexWith | Intrinsic::MutexCreate) => "CONC-5",
-                        Some(Intrinsic::ChannelOpen | Intrinsic::ChannelSend) => "CONC-6",
-                        _ => "MODE-4",
+                        Some(Intrinsic::MutexWith | Intrinsic::MutexCreate) => {
+                            const { RuleId::of("CONC-5") }
+                        }
+                        Some(Intrinsic::ChannelOpen | Intrinsic::ChannelSend) => {
+                            const { RuleId::of("CONC-6") }
+                        }
+                        _ => const { RuleId::of("MODE-4") },
                     };
                     if bounds.contains(&Bound::Sendable) && !self.sendable(actual) {
                         self.explained(
@@ -1878,9 +1886,9 @@ impl Checker<'_> {
                     {
                         self.explained(
                             if intrinsic == Some(Intrinsic::SharedFreeze) {
-                                "MEM-11"
+                                const { RuleId::of("MEM-11") }
                             } else {
-                                "CAP-2"
+                                const { RuleId::of("CAP-2") }
                             },
                             self.span(e),
                             "inert requires an empty declared authority summary",
@@ -1916,7 +1924,7 @@ impl Checker<'_> {
                 if let Some(t) = args.first() {
                     if self.contains_resource(*t) {
                         self.explained(
-                            "MEM-11",
+                            const { RuleId::of("MEM-11") },
                             span,
                             "Shared construction cannot hold resources",
                             Explanation::default()
@@ -1929,7 +1937,7 @@ impl Checker<'_> {
                             != Uniqueness::Unique
                     {
                         self.explained(
-                            "MEM-11",
+                            const { RuleId::of("MEM-11") },
                             span,
                             "Shared construction requires a unique root",
                             Explanation::default()
@@ -1942,7 +1950,7 @@ impl Checker<'_> {
             Some(Intrinsic::ArenaSeal) => {
                 if args.get(1).is_some_and(|t| self.contains_resource(*t)) {
                     self.explained(
-                        "MEM-4",
+                        const { RuleId::of("MEM-4") },
                         span,
                         "an arena seal cannot hold resources",
                         Explanation::default()
@@ -1972,7 +1980,7 @@ impl Checker<'_> {
                             Requirement::Sendable
                         };
                         self.explained(
-                            "CONC-5",
+                            const { RuleId::of("CONC-5") },
                             span,
                             "mutex payload must be unique and sendable",
                             self.payload_explanation(e, 1, cause, required),
@@ -1983,7 +1991,7 @@ impl Checker<'_> {
             Some(Intrinsic::ChannelSend) => {
                 if let Some(t) = args.get(2) {
                     if !self.sendable(*t) {
-                        self.explained("CONC-6", span, "channel payload must be sendable; Receivers cross only by task capture",
+                        self.explained(const { RuleId::of("CONC-6") }, span, "channel payload must be sendable; Receivers cross only by task capture",
                             self.payload_explanation(e, 2, Cause::NotSendable, Requirement::Sendable));
                     }
                 }
@@ -2003,7 +2011,7 @@ impl Checker<'_> {
                     if let GenericArgument::Type(t) = t {
                         if !self.sendable(t) {
                             self.explained(
-                                "CONC-6",
+                                const { RuleId::of("CONC-6") },
                                 span,
                                 "channel payload type must be sendable",
                                 self.boundary_explanation(
@@ -2022,7 +2030,11 @@ impl Checker<'_> {
                 if let Some(t) = args.get(1) {
                     if !matches!(self.out.body.types.get(*t).map(|t| &t.kind), Some(TypeKind::Primitive(p)) if !matches!(p, Primitive::Bytes | Primitive::String))
                     {
-                        self.error("CONC-7", span, "atomic payload must be scalar");
+                        self.error(
+                            const { RuleId::of("CONC-7") },
+                            span,
+                            "atomic payload must be scalar",
+                        );
                     }
                 }
             }
@@ -2038,9 +2050,9 @@ impl Checker<'_> {
                             .unwrap_or(actual.result);
                         if !self.sendable(result) {
                             let rule = if intrinsic == Some(Intrinsic::MutexWith) {
-                                "CONC-5"
+                                const { RuleId::of("CONC-5") }
                             } else {
-                                "MODE-4"
+                                const { RuleId::of("MODE-4") }
                             };
                             let result_span = if intrinsic == Some(Intrinsic::MutexWith) {
                                 self.callback_result_span(e)
@@ -2206,7 +2218,14 @@ impl Checker<'_> {
                 .find(|(_, e)| **e == a.value)
                 .and_then(|(f, _)| fields.get(f.0 as usize))
                 .map(|f| f.ty);
-            self.expr(a.value, Some((CaptureContext::Escaping, expected, "CLO-4")));
+            self.expr(
+                a.value,
+                Some((
+                    CaptureContext::Escaping,
+                    expected,
+                    const { RuleId::of("CLO-4") },
+                )),
+            );
             used = used.join(self.used(a.value));
         }
         // a constructed value holds its parts' loans, so it lives
@@ -2554,7 +2573,7 @@ impl Checker<'_> {
         &mut self,
         e: ExprId,
         body: ExprId,
-        context: Option<(CaptureContext, Option<TypeId>, &'static str)>,
+        context: Option<(CaptureContext, Option<TypeId>, RuleId)>,
     ) {
         let actual = self.ty(e).unwrap();
         let original = self.out.body.types.get(actual).unwrap().clone();
@@ -2582,7 +2601,7 @@ impl Checker<'_> {
         owner: NameSite,
         original: Type,
         syntax: Option<hirsel_syntax::FunctionSyntax>,
-        context: Option<(CaptureContext, Option<TypeId>, &'static str)>,
+        context: Option<(CaptureContext, Option<TypeId>, RuleId)>,
     ) {
         let TypeKind::Function(mut f) = original.kind.clone() else {
             self.out.failure.get_or_insert(QueryError::NotImplemented);
@@ -2645,7 +2664,7 @@ impl Checker<'_> {
             }
         }
         let (ctx, expected, restriction) =
-            context.unwrap_or((CaptureContext::Scoped, None, "CAP-3"));
+            context.unwrap_or((CaptureContext::Scoped, None, const { RuleId::of("CAP-3") }));
         let expected_type = expected.and_then(|t| self.out.body.types.get(t)).cloned();
         let expected_function = expected_type.as_ref().and_then(|t| match &t.kind {
             TypeKind::Function(f) => Some(f.clone()),
@@ -2749,11 +2768,11 @@ impl Checker<'_> {
             if let Uses::Only(allowed) = &capture_limit {
                 if !subset(&a, allowed) {
                     let rule = if matches!(ctx, CaptureContext::Escaping | CaptureContext::Task) {
-                        "CLO-4"
+                        const { RuleId::of("CLO-4") }
                     } else {
-                        restriction
+                        restriction.clone()
                     };
-                    let provided = if rule == "CONC-5" {
+                    let provided = if rule.as_str() == "CONC-5" {
                         let (name, site) = self.sites().binding(&b);
                         Fact::new(Cause::AuthorityCapture, site, &[&name])
                     } else {
@@ -2817,7 +2836,7 @@ impl Checker<'_> {
             }
             if self.scoped(b.ty) && matches!(ctx, CaptureContext::Escaping | CaptureContext::Task) {
                 self.explained(
-                    "MODE-6",
+                    const { RuleId::of("MODE-6") },
                     self.span(e),
                     "a scoped capability cannot enter an escaping capture",
                     Explanation::default()
@@ -2855,7 +2874,7 @@ impl Checker<'_> {
                         Cause::NotSendable
                     };
                     self.explained(
-                        "CLO-3",
+                        const { RuleId::of("CLO-3") },
                         self.span(e),
                         "task captures must copy or take sendable values; Receivers must be taken",
                         Explanation::default()
@@ -2868,7 +2887,7 @@ impl Checker<'_> {
                 && self.retains_scoped_placement(capture_type_id)
             {
                 self.explained(
-                    "PROV-4",
+                    const { RuleId::of("PROV-4") },
                     self.span(e),
                     "a closure cannot outlive the storage of its captured value",
                     Explanation::default()
@@ -3011,7 +3030,7 @@ impl Checker<'_> {
             Some((
                 CaptureContext::Escaping,
                 (!inferred_result).then_some(f.result),
-                "CLO-4",
+                const { RuleId::of("CLO-4") },
             )),
         );
         self.frame_temporaries(body, temporaries);
@@ -3126,7 +3145,7 @@ impl Checker<'_> {
         }
         if owned_brand {
             self.explained(
-                "PROV-2",
+                const { RuleId::of("PROV-2") },
                 self.span(e),
                 "a closure result cannot be branded or placed in its own parameters",
                 Explanation::default()

@@ -153,16 +153,16 @@ impl ManifestIndex {
                 || !segment(&path.name)
                 || !path.modules.iter().all(|m| segment(m))
             {
-                diagnostics.push(error(
-                    "PROG-1",
+                diagnostics.push(Diagnostic::error(
+                    const { RuleId::of("PROG-1") },
                     entry.span,
                     "definition path is not canonical",
                 ));
                 continue;
             }
             if let Some(first) = entries.get(&entry.definition) {
-                let mut diagnostic = error(
-                    "LANG-7",
+                let mut diagnostic = Diagnostic::error(
+                    const { RuleId::of("LANG-7") },
                     entry.span,
                     "duplicate definition path; overloading is forbidden",
                 );
@@ -354,10 +354,6 @@ impl ManifestIndex {
         }
         Ok(definition.clone())
     }
-}
-
-pub(crate) fn error(rule: &str, span: Span, message: impl Into<String>) -> Diagnostic {
-    Diagnostic::error(RuleId::new(rule).expect("static rule ID"), span, message)
 }
 
 // Name tokens give precise locations even when an item begins with attributes.

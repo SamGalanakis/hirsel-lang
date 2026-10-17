@@ -1337,7 +1337,7 @@ mod tests {
     #[test]
     fn different_provided_creation_sites_and_definitions_never_share_a_key() {
         let key = |root, cause, site| {
-            let mut d = Diagnostic::error(RuleId::new("MODE-1").unwrap(), span(9), "base");
+            let mut d = Diagnostic::error(const { RuleId::of("MODE-1") }, span(9), "base");
             Explanation {
                 root: Some(root),
                 ..Explanation::default()

@@ -63,7 +63,7 @@ impl Audit<'_, '_> {
             let mut active = BTreeSet::from([item.definition.clone()]);
             if self.inline_cycle(ty, &mut active)? {
                 self.report(
-                    "MEM-7",
+                    const { RuleId::of("MEM-7") },
                     span,
                     "recursive inline layout requires an explicit block boundary such as box",
                 );

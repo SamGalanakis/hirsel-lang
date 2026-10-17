@@ -1,5 +1,5 @@
-use crate::{LookupError, ManifestIndex, Namespace, index::error};
-use hirsel_diag::Label;
+use crate::{LookupError, ManifestIndex, Namespace};
+use hirsel_diag::{Diagnostic, Label, RuleId};
 use hirsel_intern::{Interner, Symbol};
 use hirsel_span::Span;
 use hirsel_syntax::*;
@@ -226,11 +226,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .unwrap_or("<invalid symbol>")
             .to_owned()
     }
-    fn diagnostic(&mut self, rule: &str, span: Span, message: impl Into<String>) {
+    fn diagnostic(&mut self, rule: RuleId, span: Span, message: impl Into<String>) {
         self.output
             .query
             .diagnostics
-            .push(error(rule, span, message));
+            .push(Diagnostic::error(rule, span, message));
     }
     fn lookup(&mut self, path: &Path, _span: Span) -> Result<DefPath, LookupError> {
         let segments = path
@@ -291,14 +291,16 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         d
                     }))
             }
-            LookupError::Missing => self.diagnostic("LANG-4", span, "unresolved name"),
+            LookupError::Missing => {
+                self.diagnostic(const { RuleId::of("LANG-4") }, span, "unresolved name")
+            }
             LookupError::Ambiguous => self.diagnostic(
-                "LANG-4",
+                const { RuleId::of("LANG-4") },
                 span,
                 "ambiguous module head; write a full package/version path",
             ),
             LookupError::Invisible(_) => self.diagnostic(
-                "PROG-2",
+                const { RuleId::of("PROG-2") },
                 span,
                 "definition is not visible from this package/module",
             ),
@@ -371,8 +373,8 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
     fn bind(&mut self, name: Symbol, binding: Binding) {
         if let Some(old) = self.value(name) {
-            let mut d = error(
-                "LANG-4",
+            let mut d = Diagnostic::error(
+                const { RuleId::of("LANG-4") },
                 binding.span,
                 "a local cannot shadow another local",
             );
@@ -397,7 +399,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         };
         if self.index.reserves_value(&self.spelling(name)) || provider_value {
             self.diagnostic(
-                "LANG-4",
+                const { RuleId::of("LANG-4") },
                 binding.span,
                 "a local cannot shadow a same-package top-level value",
             );
@@ -454,7 +456,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         for (ordinal, parameter) in generics.iter().enumerate() {
             if self.generic(parameter.name).is_some() || self.value(parameter.name).is_some() {
                 self.diagnostic(
-                    "GEN-1",
+                    const { RuleId::of("GEN-1") },
                     name_spans.get(ordinal).copied().unwrap_or(span),
                     "duplicate generic parameter",
                 );
@@ -569,7 +571,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         for field in &fields {
                             if !names.insert(field.name) {
                                 self.diagnostic(
-                                    "LANG-12",
+                                    const { RuleId::of("LANG-12") },
                                     field.origin.span,
                                     "duplicate field name",
                                 );
@@ -594,7 +596,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         for (ordinal, variant) in variants.into_iter().enumerate() {
                             if !names.insert(variant.name) {
                                 self.diagnostic(
-                                    "LANG-7",
+                                    const { RuleId::of("LANG-7") },
                                     name_spans.get(ordinal).copied().unwrap_or(item.origin.span),
                                     "duplicate variant name",
                                 );
@@ -605,7 +607,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                     && !labels.insert(label)
                                 {
                                     self.diagnostic(
-                                        "LANG-12",
+                                        const { RuleId::of("LANG-12") },
                                         item.origin.span,
                                         "duplicate payload field name",
                                     );
@@ -725,7 +727,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     && !labels.insert(label)
                 {
                     self.diagnostic(
-                        "LANG-12",
+                        const { RuleId::of("LANG-12") },
                         self.file
                             .parameter_label_span(origin, parameter)
                             .unwrap_or(span),
@@ -769,7 +771,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                     .push((id, ResolvedName::Primitive(primitive)));
                                 ExpectedType::Unknown
                             } else if self.spelling(name) == "any" {
-                                self.diagnostic("LANG-7", node.origin.span, "any is not a type");
+                                self.diagnostic(
+                                    const { RuleId::of("LANG-7") },
+                                    node.origin.span,
+                                    "any is not a type",
+                                );
                                 ExpectedType::Unknown
                             } else {
                                 self.named_type(id, &path, node.origin.span)
@@ -858,7 +864,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         match self.lookup(path, span) {
             Ok(definition) => {
                 if self.namespace(&definition) == Some(Namespace::Value) {
-                    self.diagnostic("LANG-4", span, "value name used in type context");
+                    self.diagnostic(
+                        const { RuleId::of("LANG-4") },
+                        span,
+                        "value name used in type context",
+                    );
                     return ExpectedType::Unknown;
                 }
                 if self.exported
@@ -867,7 +877,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         .entry(&definition)
                         .is_some_and(|e| e.visibility == Visibility::Private)
                 {
-                    self.diagnostic("PROG-2", span, "public signature mentions a private type");
+                    self.diagnostic(
+                        const { RuleId::of("PROG-2") },
+                        span,
+                        "public signature mentions a private type",
+                    );
                 }
                 let native = self.signature(&definition).is_some_and(|signature| {
                     matches!(&signature.kind, ty::SignatureKind::Type(declaration)
@@ -909,7 +923,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .cloned()
             .filter(|_| path.package.is_none())
         else {
-            self.diagnostic("LANG-4", span, "unresolved sibling field name");
+            self.diagnostic(
+                const { RuleId::of("LANG-4") },
+                span,
+                "unresolved sibling field name",
+            );
             return;
         };
         self.output.contextual.push((
@@ -933,7 +951,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 .enumerate()
                 .find(|(_, (n, _))| n == &self.spelling(*name))
             else {
-                self.diagnostic("LANG-4", span, "unresolved sibling projection field");
+                self.diagnostic(
+                    const { RuleId::of("LANG-4") },
+                    span,
+                    "unresolved sibling projection field",
+                );
                 return;
             };
             if !self.representation_visible(&owner, span) {
@@ -984,7 +1006,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         {
             let _ = self.lookup(path, span);
             self.diagnostic(
-                "LANG-2",
+                const { RuleId::of("LANG-2") },
                 span,
                 "local and parameter definitions must precede their use",
             );
@@ -1039,7 +1061,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         {
             let _ = self.lookup(path, span);
             self.diagnostic(
-                "LANG-2",
+                const { RuleId::of("LANG-2") },
                 span,
                 "local and parameter definitions must precede their use",
             );
@@ -1226,7 +1248,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         .entry(&owner)
                         .is_some_and(|e| e.visibility == Visibility::PublicOpaque))
             {
-                self.diagnostic("PROG-2", span, "opaque/private representation is hidden");
+                self.diagnostic(
+                    const { RuleId::of("PROG-2") },
+                    span,
+                    "opaque/private representation is hidden",
+                );
                 return false;
             }
             let signature = self.signature(&owner);
@@ -1242,7 +1268,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     )
                 })
             {
-                self.diagnostic("PROG-2", span, "opaque/private representation is hidden");
+                self.diagnostic(
+                    const { RuleId::of("PROG-2") },
+                    span,
+                    "opaque/private representation is hidden",
+                );
                 return false;
             }
             if let Some(signature) = signature
@@ -1389,13 +1419,21 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             | ExprKind::Continue => expected,
             ExprKind::Result => {
                 if self.contract_kind != Some(ContractKind::Ensures) {
-                    self.diagnostic("FACT-1", span, "result is available only inside ensures");
+                    self.diagnostic(
+                        const { RuleId::of("FACT-1") },
+                        span,
+                        "result is available only inside ensures",
+                    );
                 }
                 expected
             }
             ExprKind::Before(value) => {
                 if self.contract_kind != Some(ContractKind::Ensures) {
-                    self.diagnostic("FACT-1", span, "before is available only inside ensures");
+                    self.diagnostic(
+                        const { RuleId::of("FACT-1") },
+                        span,
+                        "before is available only inside ensures",
+                    );
                     expected
                 } else {
                     self.expr(value, expected)
@@ -1457,9 +1495,17 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         .iter()
                         .any(|(n, _)| n == &self.spelling(field))
                     {
-                        self.diagnostic("LANG-4", span, "variants must be written bare");
+                        self.diagnostic(
+                            const { RuleId::of("LANG-4") },
+                            span,
+                            "variants must be written bare",
+                        );
                     } else {
-                        self.diagnostic("LANG-4", span, "unresolved field name");
+                        self.diagnostic(
+                            const { RuleId::of("LANG-4") },
+                            span,
+                            "unresolved field name",
+                        );
                     }
                 } else {
                     self.defer(NameSite::Expression(id), field, span);
@@ -1609,9 +1655,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 let _ = self.lookup(path, span);
                 self.diagnostic(
                     if self.local_function_depth > 0 {
-                        "LANG-10"
+                        const { RuleId::of("LANG-10") }
                     } else {
-                        "LANG-2"
+                        const { RuleId::of("LANG-2") }
                     },
                     span,
                     "local definitions must precede their use",
@@ -1749,9 +1795,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 } else {
                     let rule = if matches!(site, NameSite::Expression(id) if self.callees.contains(&id))
                     {
-                        "LANG-1"
+                        const { RuleId::of("LANG-1") }
                     } else {
-                        "LANG-4"
+                        const { RuleId::of("LANG-4") }
                     };
                     self.diagnostic(
                         rule,
@@ -1857,7 +1903,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     },
                 ));
             } else if owner_variant.is_some() && argument.label.is_some() {
-                self.diagnostic("LANG-12", span, "constructor label is not declared");
+                self.diagnostic(
+                    const { RuleId::of("LANG-12") },
+                    span,
+                    "constructor label is not declared",
+                );
             }
             self.expr(argument.value, arg_expected);
         }
@@ -2017,7 +2067,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         Ok(owner) => {
                             if self.namespace(&owner) != Some(Namespace::Type) {
                                 self.diagnostic(
-                                    "LANG-4",
+                                    const { RuleId::of("LANG-4") },
                                     node.origin.span,
                                     "pattern constructor is not a type",
                                 );
@@ -2073,7 +2123,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         ));
                     } else if identity.is_some() && field.label.is_some() {
                         self.diagnostic(
-                            "LANG-4",
+                            const { RuleId::of("LANG-4") },
                             node.origin.span,
                             "unresolved pattern field name",
                         );

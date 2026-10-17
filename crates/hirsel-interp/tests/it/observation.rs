@@ -19,7 +19,7 @@ fn fixture() -> (SourceMap, Execution) {
         .map(|(i, kind)| FailureRecord {
             failure: Failure {
                 kind: kind.into(),
-                rule: hirsel_diag::RuleId::new("FAIL-1").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("FAIL-1") },
                 line: 2,
                 site: anchor.site,
             },

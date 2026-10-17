@@ -15,7 +15,7 @@ fn invalid(message: impl Into<String>) -> QueryError {
 // executable constant environments have a contract, only data is transported.
 fn non_data(site: Span) -> QueryError {
     let mut diagnostic = Diagnostic::error(
-        hirsel_diag::RuleId::new("CT-2").unwrap(),
+        const { hirsel_diag::RuleId::of("CT-2") },
         site,
         "compile-time values cannot materialize resources, capabilities or closures",
     );

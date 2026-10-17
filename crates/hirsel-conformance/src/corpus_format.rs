@@ -775,7 +775,7 @@ mod tests {
     }
     fn rejection(line: usize) -> Expect {
         Expect::Reject {
-            rule: hirsel_diag::RuleId::new("LANG-1").unwrap(),
+            rule: const { hirsel_diag::RuleId::of("LANG-1") },
             line,
         }
     }
@@ -886,7 +886,7 @@ mod tests {
                 ..Default::default()
             };
             let expect = Expect::Fail {
-                rule: hirsel_diag::RuleId::new("LANG-1").unwrap(),
+                rule: const { hirsel_diag::RuleId::of("LANG-1") },
                 line: 3,
                 stdout: None,
             };

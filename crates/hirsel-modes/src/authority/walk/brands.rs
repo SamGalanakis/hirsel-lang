@@ -342,7 +342,7 @@ impl Checker<'_> {
                 .and_then(|origin| self.origin_site(&origin).1)
                 .unwrap_or(self.span(expression));
             self.explained(
-                "MEM-4",
+                const { RuleId::of("MEM-4") },
                 self.span(expression),
                 "an arena construction cannot hold resources",
                 Explanation::default()

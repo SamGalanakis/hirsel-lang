@@ -173,7 +173,7 @@ pub(crate) fn read_source(path: &Path) -> Result<String, ToolError> {
                 .ok_or(ToolError::SourceTooLarge)?;
             let span = hirsel_span::Span::new(file, offset as u32, offset as u32).unwrap();
             let mut diagnostic = Diagnostic::error(
-                hirsel_diag::RuleId::new("SEM-3").unwrap(),
+                const { hirsel_diag::RuleId::of("SEM-3") },
                 span,
                 "invalid UTF-8 in source",
             );

@@ -150,7 +150,7 @@ impl Checker<'_, '_> {
                 at.end = at.start + self.name(*name).len() as u32;
             }
             let mut diagnostic = Diagnostic::error(
-                RuleId::new("CT-2").unwrap(),
+                const { RuleId::of("CT-2") },
                 at,
                 "comptime depends on a value not known in its closed evaluation frame",
             );
@@ -227,7 +227,7 @@ impl Checker<'_, '_> {
             .copied()
             .unwrap_or(wrapper);
             let mut diagnostic = Diagnostic::error(
-                RuleId::new("CT-2").unwrap(),
+                const { RuleId::of("CT-2") },
                 at,
                 "comptime needs a concrete result type at definition time",
             );

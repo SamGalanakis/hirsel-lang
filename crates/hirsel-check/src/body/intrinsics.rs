@@ -33,7 +33,7 @@ impl Checker<'_, '_> {
         };
         if !valid {
             self.report(
-                "DROP-4",
+                const { RuleId::of("DROP-4") },
                 self.span(id),
                 "forget accepts a resource only in its defining module",
             );
@@ -83,7 +83,7 @@ impl Checker<'_, '_> {
                 proofs.get(&(ty, bound)).copied().unwrap_or(false)
             })
         {
-            self.report(rule.as_str(), span, message);
+            self.report(rule, span, message);
             return Ok(false);
         }
         Ok(true)

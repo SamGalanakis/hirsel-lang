@@ -56,7 +56,7 @@ fn replacement(failure: bool) -> Fixture {
         f.assign(condition, Rvalue::Constant(Constant::Bool(false)), 0);
         f.emit(InstructionKind::Check {
             condition: copy(condition),
-            rule: hirsel_diag::RuleId::new("MEM-14").unwrap(),
+            rule: const { hirsel_diag::RuleId::of("MEM-14") },
         });
     }
     f
