@@ -103,6 +103,7 @@ impl Configuration {
                 "{passes}/llvm-{}/{}/{}",
                 match opt {
                     OptLevel::None => "O0",
+                    OptLevel::Default => "O2",
                     OptLevel::Speed => "O3",
                 },
                 partition.name(),

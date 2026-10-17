@@ -501,3 +501,6 @@ reads reverse that bridge without reading a header. Inline uncounted aggregates
 copy only bytes. The construction drop-elision flag suppresses regional child
 cleanup only when C proves the fields and lifetime; other region payloads keep
 their scheduled cleanup.
+
+`OptLevel::Default` selects LLVM O2 for ordinary standalone builds; `None`
+selects O0 and `Speed` selects O3. All profiles run the same IR validators.

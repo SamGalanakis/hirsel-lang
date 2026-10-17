@@ -28,6 +28,7 @@ fn values(c: &Configuration) -> Vec<String> {
             "llvm".into(),
             match opt {
                 OptLevel::None => "O0",
+                OptLevel::Default => "O2",
                 OptLevel::Speed => "O3",
             }
             .into(),

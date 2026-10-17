@@ -120,6 +120,8 @@ impl PrefixWord {
 pub enum OptLevel {
     /// `default<O0>`, with no code generation optimization.
     None,
+    /// `default<O2>`, the ordinary executable build profile.
+    Default,
     /// `default<O3>`.
     Speed,
 }
@@ -128,6 +130,7 @@ impl OptLevel {
     fn pipeline(self) -> &'static str {
         match self {
             OptLevel::None => "default<O0>",
+            OptLevel::Default => "default<O2>",
             OptLevel::Speed => "default<O3>",
         }
     }
