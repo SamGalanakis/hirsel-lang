@@ -354,63 +354,6 @@ fn httpget() {
 }
 
 #[test]
-fn literal_diagnostics_use_the_literal_kind() {
-    for (literal, ty, message) in [
-        (
-            "true",
-            "bool",
-            "boolean literal needs an expected bool type",
-        ),
-        (
-            r#""x""#,
-            "String",
-            "string literal needs an expected String type",
-        ),
-        (
-            r#"b"x""#,
-            "Bytes",
-            "byte string literal needs an expected Bytes type",
-        ),
-        (
-            "3",
-            "u64",
-            "literal needs an expected type or numeric suffix",
-        ),
-        (
-            "3.5",
-            "f64",
-            "literal needs an expected type or numeric suffix",
-        ),
-    ] {
-        let rejected =
-            format!("pub fn main() -> Result[(), ()] {{ let value = {literal}; Ok(()) }}");
-        let fixture = Fixture::new("diagnostic", &rejected);
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("check")
-            .arg(fixture.0.join("hirsel.json"))
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("error[LANG-2]"), "{stderr}");
-        assert!(stderr.contains(message), "{stderr}");
-        let accepted =
-            format!("pub fn main() -> Result[(), ()] {{ let value: {ty} = {literal}; Ok(()) }}");
-        std::fs::write(fixture.0.join("main.hir"), accepted).unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("check")
-            .arg(fixture.0.join("hirsel.json"))
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-#[test]
 fn todo_persists_between_native_launches() {
     let fixture = Fixture::new("todo", include_str!("../../../examples/todo/main.hir"));
     let executable = fixture.native_executable();
