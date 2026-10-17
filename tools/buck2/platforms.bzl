@@ -11,11 +11,12 @@ CPU_CLASSES (tools/buck2/action_sizes_from_log.py) and the conformance shards
 (TEST_REQUESTS) ask for `cpu_class=fast`; every other compile, test run and gate
 shard runs on any worker.
 
-The pool serves lane and CI work at priority 100; 0 is its warming class,
-which never gets a reserved worker. Compiles and test runs ask for 100, and only
-the test runs of the on-demand full run (`-c hirsel.full=true`, without
-`-c hirsel.tests=focus`) for 0. The
-scheduler reads the REAPI execution policy's priority, which Buck2 sends from a
+Every hirsel remote action, compile or test run, gate, focus or full, queues
+at priority 50: below the pool's lane and CI class (100), so that work
+dispatches first, and above its warming class (0), which never gets a
+reserved worker. It is one priority because the scheduler merges identical
+actions and keeps the first submitter's: a test run once sent at 0 held later
+gates' runs of the same digest at 0 for up to 113 minutes. The scheduler reads the REAPI execution policy's priority, which Buck2 sends from a
 `CommandExecutorConfig`: a platform's for its actions, and a test's own
 `default_executor` (`test_executor`) for its run. The priority is not a platform
 property, so it is not part of an action key.
@@ -24,7 +25,7 @@ property, so it is not part of an action key.
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS", "POOL_BUDGETS")
 load(":test_sizes.bzl", "TEST_REQUESTS")
 
-PRIORITY = 100
+PRIORITY = 50
 
 # A pool test binary's request, `[cpu, memory_kb, cpu_class]`, is measured
 # from the workers' usage logs (TEST_REQUESTS, test_sizes_from_usage.py): one
@@ -38,10 +39,6 @@ DEFAULT_TEST_REQUEST = [1, 2097152, ""]
 # behind a stream of one-CPU actions a four-CPU run of a single case waited up
 # to minutes for one worker to free four CPUs at once, then ran for a second.
 FOCUS = read_root_config("hirsel", "tests", "pool") == "focus"
-
-# A full run's test runs queue at 0 unless focused: `-c hirsel.full=true` also
-# declares the campaign targets a lane runs filtered, which someone waits on.
-TEST_PRIORITY = 0 if read_root_config("hirsel", "full", "false") == "true" and not FOCUS else PRIORITY
 
 def _test_request(cpu, memory_kb, cpu_class):
     """A test request's budget name and effective `[cpu, memory_kb, cpu_class]`."""
@@ -61,7 +58,7 @@ def test_executor(cpu, memory_kb, cpu_class):
     return CommandExecutorConfig(
         local_enabled = LOCAL,
         remote_enabled = not LOCAL,
-        priority = TEST_PRIORITY,
+        priority = PRIORITY,
         remote_execution_properties = pool_properties(cpu, memory_kb, cpu_class),
         remote_execution_use_case = "hirsel",
     )
@@ -136,7 +133,7 @@ def _platforms(ctx):
             executor_config = CommandExecutorConfig(
                 local_enabled = LOCAL,
                 remote_enabled = not LOCAL,
-                priority = TEST_PRIORITY if name.startswith("pool_test_") or name.startswith("pool_focus_") else PRIORITY,
+                priority = PRIORITY,
                 remote_execution_properties = pool_properties(cpu, memory_kb, cpu_class),
                 remote_execution_use_case = "hirsel",
                 remote_output_paths = "output_paths",

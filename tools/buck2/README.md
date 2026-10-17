@@ -247,10 +247,11 @@ them into a shared directory.
   twins and measured test requests (below), carrying the pool's platform
   properties. Only the critical-path compiles named in `CPU_CLASSES`
   (`action_sizes_from_log.py`) and the conformance shards ask for
-  `cpu_class=fast`; other tests and gate shards run on any worker. Compiles
-  and test runs queue at priority 100, the pool's class for lane and CI work;
-  only the test runs of the on-demand full run (`-c hirsel.full=true` without
-  `-c hirsel.tests=focus`) queue at 0, its warming class, which gets no reserved worker. A test run carries its
+  `cpu_class=fast`; other tests and gate shards run on any worker. Every
+  remote action, compile or test run, gate, focus or full, queues at priority
+  50: below the pool's lane and CI class (100), above its warming class (0),
+  which gets no reserved worker. One priority, since the scheduler merges
+  identical actions at the first submitter's priority. A test run carries its
   own executor (`test_executor` in `platforms.bzl`): Buck2 runs tests with it,
   not with their platform's. The priority is not part of an action key. The
   platforms also include the invoking host for an explicit
