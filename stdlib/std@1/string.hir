@@ -42,6 +42,34 @@ pub fn split(take s: String, separator: String) -> List[String] uses {} {
   take parts
 }
 
+// Rust str::split_ascii_whitespace: split on ASCII whitespace, omit empty
+// fields. ASCII delimiters cannot split a UTF-8 scalar. Vertical tab is not
+// ASCII whitespace under this API (unlike this module's trim policy).
+@noalloc
+fn ascii_whitespace(byte: u8) -> bool uses {} {
+  whitespace(byte) && byte != 11
+}
+
+pub fn split_ascii_whitespace(take s: String) -> List[String] uses {} {
+  let source = core@1/string.as_bytes(s)
+  let len = core@1/bytes.len(source)
+  let mut parts: List[String] = []
+  let mut i: u64 = 0
+  while i < len {
+    while i < len && ascii_whitespace(source[i]) {
+      i += 1
+    }
+    let begin = i
+    while i < len && !ascii_whitespace(source[i]) {
+      i += 1
+    }
+    if begin < i {
+      core@1/list.push(mut parts, piece(s, begin, i))
+    }
+  }
+  take parts
+}
+
 // Byte matching is safe for UTF-8: a nonempty valid pattern cannot start at
 // a continuation byte. Offsets and positions remain relative to this slice.
 @noalloc

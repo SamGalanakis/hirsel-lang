@@ -171,7 +171,9 @@ of input sorted by the same comparator), `find`, `map`, `filter`, `fold`, `all`,
 `partition`, `concat` and `dedup` (removing consecutive equal elements). `std@1/string`
 provides `split` (on a nonempty separator, nonoverlapping, keeping leading, trailing and
 empty fields; an empty separator fails SEM-3), `find` (the first match as a `StrPos`),
-`starts_with`, `ends_with`, `trim` (ASCII space and `\t` to `\r`, a slice related to the
+`split_ascii_whitespace(take s: String) -> List[String]` (on ASCII tab, LF,
+form feed, CR and space; omitting empty fields and preserving vertical tab and
+non-ASCII whitespace), `starts_with`, `ends_with`, `trim` (ASCII space and `\t` to `\r`, a slice related to the
 source), `ascii_lower`, `ascii_upper`, `concat` and `join`. `std@1/text` treats a
 `List[u8]` as a UTF-8 builder: `append` appends a string's bytes and `finish` validates the
 builder into a `String` or returns the bytes.

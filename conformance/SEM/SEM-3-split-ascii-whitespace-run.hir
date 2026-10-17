@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: run
+// Rust str examples and coretests ASCII vectors; NBSP and vertical tab stay.
+pub fn main() -> Result[(), ()] {
+  let simple = std@1/string.split_ascii_whitespace("A few words")
+  let expected: List[String] = ["A", "few", "words"]
+  failure.check(simple == expected, TextInvariant())
+  let mixed = std@1/string.split_ascii_whitespace(" Mary   had\ta little  \n\t lamb")
+  let words: List[String] = ["Mary", "had", "a", "little", "lamb"]
+  failure.check(mixed == words, TextInvariant())
+  failure.check(list.len(std@1/string.split_ascii_whitespace("")) == 0, TextInvariant())
+  failure.check(
+    list.len(std@1/string.split_ascii_whitespace(" \t\n\u{c}\r")) == 0,
+    TextInvariant()
+  )
+  let unicode = std@1/string.split_ascii_whitespace(" é\u{a0}λ\u{b}x ")
+  let kept: List[String] = ["é\u{a0}λ\u{b}x"]
+  failure.check(unicode == kept, TextInvariant())
+  Ok(())
+}
