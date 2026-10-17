@@ -1524,6 +1524,7 @@ conformance/MEM/MEM-12-flat-part-copy-return.hir
 conformance/MEM/MEM-12-flat-part-index-run.hir
 conformance/MEM/MEM-12-flat-resource-bad.hir
 conformance/MEM/MEM-12-flat-resource-ok.hir
+conformance/MEM/MEM-12-flat-variant-arm-run.hir
 conformance/MEM/MEM-12-flat-view-region-scalars-run.hir
 conformance/MEM/MEM-12-growable-last-bad.hir
 conformance/MEM/MEM-12-growable-last-ok.hir

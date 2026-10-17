@@ -1,0 +1,25 @@
+// rule: MEM-12
+// expect: run
+// A fixed flat record bound from a variant arm is an uncounted view of it.
+flat type FlatRow {
+  n: u16,
+  flag: bool,
+}
+
+fn make(n: u16) -> Option[FlatRow] {
+  Some(FlatRow(n: n, flag: true))
+}
+
+fn read(row: FlatRow) -> u16 {
+  row.n
+}
+
+pub fn main() -> Result[(), ()] {
+  match make(4660) {
+    Some(row) => {
+      failure.check(read(row) == 4660u16 && row.flag, Arithmetic())
+      Ok(())
+    },
+    None => Error(()),
+  }
+}

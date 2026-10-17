@@ -328,6 +328,10 @@ over its inner variant's arms), checks it against the table and emits
 layout it cannot walk (variable flat records, sequential `List[Packed]`, SoA
 columns) declines the lowering as unsupported.
 
+A variant pattern reads its tag through a synthetic loan only when the
+variant's type owns counted storage; an uncounted variant that is not plain
+bits (one holding a fixed flat record) is a plain borrowed read.
+
 A body is written against `builder::Body`, which prepares each parameter in
 an entry prologue (a `take` parameter is held in a slot with a cached failure
 cleanup that drops it). Rules every body keeps:

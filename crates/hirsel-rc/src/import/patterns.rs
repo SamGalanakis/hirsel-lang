@@ -186,10 +186,13 @@ impl Importer<'_, '_> {
             Some(tag) => tag.variants.iter().map(|v| v.ordinal).collect(),
             None => return malformed("a variant pattern on a layout without a tag"),
         };
-        let loan = (!self.bits(p.ty)).then(|| self.synthetic_loan(address));
+        let loan = self.owns(p.ty).then(|| self.synthetic_loan(address));
         let (mode, holding) = match loan {
             Some(l) => (ReadMode::Borrow, Holding::Borrowed(l)),
-            None => (ReadMode::Bits, Holding::Plain),
+            None if self.bits(p.ty) => (ReadMode::Bits, Holding::Plain),
+            // Uncounted but not plain bits (a fixed flat record's arm): a
+            // plain view, as a borrowed read of uncounted storage elsewhere.
+            None => (ReadMode::Borrow, Holding::Plain),
         };
         let value = self.value(p.ty, holding);
         self.push(Inst::Read {
