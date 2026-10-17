@@ -129,6 +129,9 @@ pub struct Descriptor {
     pub finalizer: Option<FinalizerRef>,
     pub field_count: u32,
     pub flags: u32,
+    /// The MEM-6 charge of a block of this payload layout (descriptor version 6), per
+    /// element with `LAYOUT_LOGICAL_PER_ELEMENT`; `LOGICAL_UNSUPPORTED` without one.
+    pub logical: u64,
     pub steps: Vec<Step>,
 }
 
@@ -238,13 +241,22 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
             lower.steps.len()
         )));
     }
+    let (logical, per_element) = match crate::layout::block_charge(table, id) {
+        Some(crate::layout::LogicalCharge::Fixed(n)) => (n, 0),
+        Some(crate::layout::LogicalCharge::PerElement(n)) => {
+            (n, crate::runtime_abi::LAYOUT_LOGICAL_PER_ELEMENT)
+        }
+        None => (crate::runtime_abi::LOGICAL_UNSUPPORTED, 0),
+    };
     Ok(Descriptor {
         layout: id,
         size,
         align: u64::from(record.align),
         finalizer: record.finalizer.clone(),
         field_count,
-        flags: if unsafe_ffi { LAYOUT_UNSAFE_FFI } else { 0 }
+        logical,
+        flags: per_element
+            | if unsafe_ffi { LAYOUT_UNSAFE_FFI } else { 0 }
             | if dynamic { LAYOUT_DYNAMIC } else { 0 }
             | if no_extent(record) {
                 LAYOUT_NO_EXTENT

@@ -37,6 +37,20 @@ impl FailureState {
         self.primary.is_some()
     }
 
+    /// The number of records: the primary and its causes.
+    pub(crate) fn count(&self) -> usize {
+        usize::from(self.primary.is_some()) + self.causes.len()
+    }
+
+    /// Forget every record from the `count`-th on.
+    pub(crate) fn truncate(&mut self, count: usize) {
+        if count == 0 {
+            self.clear();
+        } else {
+            self.causes.truncate(count - 1);
+        }
+    }
+
     /// Forget the failure and return its bookkeeping storage.
     pub(crate) fn clear(&mut self) {
         *self = FailureState::default();

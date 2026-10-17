@@ -9,6 +9,10 @@ conformance/LANG/LANG-11-block-local-share-run.hir
 conformance/MEM/MEM-10-caller-arena-tree-run.hir
 conformance/MEM/MEM-12-flat-list-builder-run.hir
 conformance/MEM/MEM-3-keyed-read-nested-key-run.hir
+conformance/MEM/MEM-6-cleanup-failure-propagates-run.hir
+conformance/MEM/MEM-6-copy-charge-run.hir
+conformance/MEM/MEM-6-exhausted-callback-cleanup-run.hir
+conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir
 conformance/MEM/MEM-7-box-read-binarytrees-run.hir
 conformance/MEM/MEM-7-box-read-borrowed-run.hir
 conformance/MEM/MEM-7-box-read-cow-run.hir

@@ -480,3 +480,108 @@ fn graph_copies_use_the_destination_and_outlive_source_arenas() {
         }
     }
 }
+
+/// A deep copy into a bounded arena (MEM-6) is charged before anything is copied: every
+/// block once per reference, so a diamond's shared leaf counts twice. A budget one byte short
+/// returns `STATUS_EXHAUSTED`, copies nothing and leaves the budget; the exact budget copies.
+#[test]
+fn a_bounded_copy_charges_every_reference_before_copying() {
+    use hirsel_rt::Region;
+    use hirsel_rt::region::{
+        hirsel_rt_v2_arena_bound, hirsel_rt_v2_arena_enter, hirsel_rt_v2_region_exit,
+    };
+    use std::mem::MaybeUninit;
+
+    let ctx = Ctx::diagnostic();
+    let leaf = leak(Layout {
+        logical: 8,
+        ..*leaf(8)
+    });
+    let pair = leak(Layout {
+        logical: 24,
+        ..*pair()
+    });
+    let shared = alloc_block(ctx.0, leaf, 8);
+    write_u64(shared, 0, 42);
+    unsafe { hirsel_rt_v2_dup(ctx.0, shared) };
+    let root = alloc_block(ctx.0, pair, 24);
+    write_ref(root, 0, shared);
+    write_ref(root, 8, shared);
+    write_u64(root, 16, 7);
+    for (cap, copied) in [(39, false), (40, true)] {
+        let mut arena = MaybeUninit::<Region>::uninit();
+        unsafe {
+            hirsel_rt_v2_arena_enter(ctx.0, arena.as_mut_ptr());
+            hirsel_rt_v2_arena_bound(ctx.0, arena.as_mut_ptr(), cap);
+            let mut out = ptr::null_mut();
+            let status = hirsel_rt_v2_unique_copy(ctx.0, root, arena.as_mut_ptr(), 0, &mut out);
+            let remaining = (*arena.as_ptr()).remaining;
+            if copied {
+                assert_eq!((status, remaining), (0, 0));
+                assert_eq!(child(out, 0), child(out, 8), "the copy keeps its sharing");
+            } else {
+                assert_eq!((status, remaining), (hirsel_rt::STATUS_EXHAUSTED, 39));
+                assert!(out.is_null());
+            }
+            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, arena.as_mut_ptr(), 0), 0);
+        }
+    }
+    release(ctx.0, root);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+/// `arena_recover` forgets exactly the bounded arena's own `OutOfSpace`, the one record since
+/// its bound: not another arena's, not one recorded before the bound, and not one a cleanup
+/// failure followed.
+#[test]
+fn a_bounded_arena_recovers_only_its_own_sole_out_of_space() {
+    use hirsel_rt::Region;
+    use hirsel_rt::failure::{
+        hirsel_rt_v2_failure_active, hirsel_rt_v2_failure_begin, hirsel_rt_v2_failure_cause_count,
+        hirsel_rt_v2_failure_clear,
+    };
+    use hirsel_rt::region::{
+        hirsel_rt_v2_arena_bound, hirsel_rt_v2_arena_enter, hirsel_rt_v2_arena_exhausted,
+        hirsel_rt_v2_arena_recover, hirsel_rt_v2_region_exit,
+    };
+    use std::mem::MaybeUninit;
+
+    let ctx = Ctx::diagnostic();
+    let mut outer = MaybeUninit::<Region>::uninit();
+    let mut inner = MaybeUninit::<Region>::uninit();
+    let (outer, inner) = (outer.as_mut_ptr(), inner.as_mut_ptr());
+    unsafe {
+        hirsel_rt_v2_arena_enter(ctx.0, outer);
+        hirsel_rt_v2_arena_bound(ctx.0, outer, 10);
+        hirsel_rt_v2_arena_enter(ctx.0, inner);
+        hirsel_rt_v2_arena_bound(ctx.0, inner, 10);
+        // The inner callback exhausts the outer arena: only the outer recovers it.
+        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, outer, 1, 6, 0), 1);
+        assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, inner), 0);
+        assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, outer), 1);
+        assert_eq!(hirsel_rt_v2_failure_active(ctx.0), 0);
+        // A cleanup failure after the arena's own keeps both.
+        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0), 1);
+        assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0), 1);
+        assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, inner), 0);
+        assert_eq!(hirsel_rt_v2_failure_cause_count(ctx.0), 1);
+        hirsel_rt_v2_failure_clear(ctx.0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner, 0), 0);
+        // Bound while a failure is active: its own record is a cause, recovered alone.
+        assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0), 1);
+        hirsel_rt_v2_arena_enter(ctx.0, inner);
+        hirsel_rt_v2_arena_bound(ctx.0, inner, 10);
+        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0), 1);
+        assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, inner), 1);
+        assert_eq!(
+            (
+                hirsel_rt_v2_failure_active(ctx.0),
+                hirsel_rt_v2_failure_cause_count(ctx.0)
+            ),
+            (1, 0)
+        );
+        hirsel_rt_v2_failure_clear(ctx.0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner, 0), 0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer, 0), 0);
+    }
+}

@@ -510,12 +510,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.store(shape, image, slot);
                     let entry = self.runtime(RuntimeEntry::UniqueCopyValue)?;
                     let descriptor = self.descriptor(ty.layout)?;
-                    let site = self.const_u64(self.anchor_code(site.anchor)?);
+                    let anchor = site.anchor;
+                    let site = self.const_u64(self.anchor_code(anchor)?);
                     let status = self.builder.call(
                         entry,
                         &[self.context, descriptor, slot.ptr, destination, site],
                     );
-                    self.status_guard(status, failure)?;
+                    self.copy_status(status, destination, anchor, failure)?;
                     let copy = self.load(shape, slot);
                     return self.define(result, copy);
                 }
@@ -570,14 +571,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     RuntimeEntry::Detach
                 })?;
                 let out = self.prologue.alloca(self.module.ptr_type(), 8);
-                let site = self.const_u64(self.anchor_code(site.anchor)?);
+                let anchor = site.anchor;
+                let site = self.const_u64(self.anchor_code(anchor)?);
                 let arguments = if deep {
                     vec![self.context, self.get(value)?, destination, site, out]
                 } else {
                     vec![self.context, self.get(value)?, site, out]
                 };
                 let status = self.builder.call(entry, &arguments);
-                self.status_guard(status, failure)?;
+                if deep {
+                    self.copy_status(status, destination, anchor, failure)?;
+                } else {
+                    self.status_guard(status, failure)?;
+                }
                 let copy = self.builder.load(self.module.ptr_type(), out, 8);
                 if !deep {
                     // copy.rs::hirsel_rt_v2_detach allocates count-one storage,
@@ -1241,13 +1247,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Inst::RegionPublish { .. } => Ok(()),
             // A token is its region's record address.
             Inst::ArenaToken {
-                budget: Some(_), ..
-            } => self.unsupported("a bounded arena (MEM-6)"),
-            Inst::ArenaToken {
                 result,
                 mark,
-                budget: None,
+                budget,
             } => {
+                // A bounded arena's budget (MEM-6) is set before its token exists.
+                if let Some(budget) = budget {
+                    let bound = self.runtime(RuntimeEntry::ArenaBound)?;
+                    let record = self.get(mark)?;
+                    self.builder
+                        .call(bound, &[self.context, record, self.get(budget)?]);
+                }
                 let record = self.get(mark)?;
                 self.define(result, record)
             }

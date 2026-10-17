@@ -497,4 +497,7 @@ is exactly the `OutOfSpace` of a bounded arena this unit opened, with no later
 failure, it is forgotten and control resumes on `caught`; otherwise it continues
 on `failed`. C admits it only in a library body's failure cleanup, with a
 `Body` target for `caught`, naming an arena opened with a budget in the unit;
-`tests/it/revision26.rs` pairs each rule with its valid twin.
+`tests/it/revision26.rs` pairs each rule with its valid twin. Runtime ABI 7 grows the
+region record to 64 bytes (`REGION_REMAINING_OFFSET`), adds `STATUS_EXHAUSTED` and the
+`arena_bound`, `arena_exhausted` and `arena_recover` entries; layout descriptor version 6 adds
+each payload's `logical` charge (`rt_program::Descriptor::logical`).

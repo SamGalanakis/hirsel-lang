@@ -260,8 +260,12 @@ inline limit. An `Arena` token may also be the inert `heap` value (null); constr
 and graph copies test that token before accessing a region record. Segment overflow calls `hirsel_rt_v2_arena_alloc`, which, like `hirsel_rt_v2_alloc`,
 returns the block and cannot fail (runtime ABI 3), so no allocation tests a status; a null inline limit
 keeps diagnostic allocations in the runtime for owner tracking and poisoning.
-A bounded arena (an `ArenaToken` with a budget, MEM-6) and `Recover` are
-`Unsupported` until native charging lands.
+A bounded arena (MEM-6): an `ArenaToken` with a budget calls `hirsel_rt_v2_arena_bound`;
+when the program has a `Recover` (and so MEM-6 among its failure codes), every arena
+construction tests and lowers the record's `remaining` word before its bump, and an excess
+calls `hirsel_rt_v2_arena_exhausted` and enters the construction's cleanup without beginning
+another failure. A deep copy's `STATUS_EXHAUSTED` takes the same path; `Recover` branches on
+`hirsel_rt_v2_arena_recover`. A flat payload in such a program is `Unsupported`.
 A heap construction whose extent is a constant small request calls its pool's fast path
 (runtime ABI 4, `runtime::alloc_fast`), a private function with `hirsel_rt_v2_alloc`'s
 signature and allocator attributes that pops the pool's current page: the page pointer at the

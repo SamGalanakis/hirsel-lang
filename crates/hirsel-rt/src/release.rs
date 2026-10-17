@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 5;
+pub const LAYOUT_VERSION: u32 = 6;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -46,6 +46,11 @@ pub const LAYOUT_WIDE_CURSOR: u32 = 4;
 /// record before the header; their capacity is `Layout::size` and their alignment
 /// `max(Layout::align, 8)`.
 pub const LAYOUT_NO_EXTENT: u32 = 8;
+/// `Layout::flags` (version 6): `Layout::logical` is per element, so a block's MEM-6 charge
+/// is it times the u64 count at the payload's start.
+pub const LAYOUT_LOGICAL_PER_ELEMENT: u32 = 16;
+/// `Layout::logical` of a layout with no logical size (a flat encoding, an environment).
+pub const LOGICAL_UNSUPPORTED: u64 = u64::MAX;
 
 /// Release the counted block reference stored at `offset`.
 pub const STEP_RELEASE: u32 = 1;
@@ -94,6 +99,9 @@ pub struct Layout {
     /// Number of top-level fields addressed by a live mask.
     pub field_count: u32,
     pub flags: u32,
+    /// The MEM-6 charge of a block of this payload layout (version 6; the runtime README's
+    /// table), per element with [`LAYOUT_LOGICAL_PER_ELEMENT`].
+    pub logical: u64,
 }
 
 /// One drop program step. Outside every loop it is active only when its top-level `field` is
@@ -152,7 +160,12 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
     if layout.align == 0 || !layout.align.is_power_of_two() {
         fault("a layout descriptor's alignment is not a power of two");
     }
-    if layout.flags & !(LAYOUT_UNSAFE_FFI | LAYOUT_DYNAMIC | LAYOUT_WIDE_CURSOR | LAYOUT_NO_EXTENT)
+    if layout.flags
+        & !(LAYOUT_UNSAFE_FFI
+            | LAYOUT_DYNAMIC
+            | LAYOUT_WIDE_CURSOR
+            | LAYOUT_NO_EXTENT
+            | LAYOUT_LOGICAL_PER_ELEMENT)
         != 0
     {
         fault("a layout descriptor has unknown flags");

@@ -214,7 +214,20 @@ arena list detaches it onto the counted heap, so the bound does not cover list g
 callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
 cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
 reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
-`hirsel_types::logical`.
+`hirsel_types::logical`; H and native execution charge from layouts
+(`hirsel_lir::layout::block_charge`, held to the type table by a cross-check test).
+
+Natively (runtime ABI 7) an arena record carries `remaining` (offset 48, `u64::MAX`
+unbounded), `bound` and `exhausted`. `hirsel_rt_v2_arena_bound` sets the budget when the
+bounded token is made, counting from the failures recorded then. Compiled code tests each arena
+construction's charge against `remaining` and lowers it inline; an excess calls
+`hirsel_rt_v2_arena_exhausted`, which records the failure and marks it as the arena's own.
+A deep copy into a bounded arena charges the tree first from each descriptor's `logical` word
+(descriptor version 6; per element times the payload's u64 count with
+`LAYOUT_LOGICAL_PER_ELEMENT`) and returns `STATUS_EXHAUSTED` without copying when it does not
+fit. `hirsel_rt_v2_arena_recover` forgets the failure only when it is that arena's own and the
+one record since its bound. A copy of a block with no logical size (a flat encoding or an
+environment) into a bounded arena is an invariant fault.
 
 ## Library and Io
 

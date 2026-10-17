@@ -23,9 +23,9 @@ use hirsel_syntax::DefPath;
 pub use c_entry::{c_call, c_definition};
 pub use emit::emit_object_profile;
 pub use emit::{
-    EmitInputs, FailureCode, FailureCodes, OptLevel, TOOLCHAIN_IMPORTS, check_target, compile_ir,
-    emit_ir, emit_object, emit_optimized_ir, function_thunk_name, register_result, site_code,
-    symbol_name,
+    BOUNDED_RULE, EmitInputs, FailureCode, FailureCodes, OptLevel, TOOLCHAIN_IMPORTS, check_target,
+    compile_ir, emit_ir, emit_object, emit_optimized_ir, function_thunk_name, register_result,
+    site_code, symbol_name,
 };
 pub use object::{ImportRelocation, ObjectFile};
 pub use profile::{ProfileSource, ProfileSources};

@@ -29,6 +29,16 @@ pub fn failure_rules(program: &ReadyProgram) -> Vec<String> {
             }
         }
     }
+    // A bounded arena's exhaustion (MEM-6) starts at any arena construction or copy; only
+    // `arena.bounded`'s recovery opens one.
+    if program.units.iter().any(|u| {
+        u.unit()
+            .terminators
+            .iter()
+            .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
+    }) {
+        rules.insert(hirsel_llvm::BOUNDED_RULE);
+    }
     rules.into_iter().map(str::to_string).collect()
 }
 

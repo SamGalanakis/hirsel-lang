@@ -375,7 +375,7 @@ const BARE_CONTROL: &str = r#"#include "hirsel_rt_v2.h"
 #include <assert.h>
 #include <string.h>
 static const hirsel_rt_v2_layout node = {HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION,
-  16, 8, NULL, NULL, 0, 0, HIRSEL_RT_V2_LAYOUT_NO_EXTENT};
+  16, 8, NULL, NULL, 0, 0, HIRSEL_RT_V2_LAYOUT_NO_EXTENT, 0};
 static const hirsel_rt_v2_layout *const layouts[] = {&node};
 enum { BYTES = 0, NODE = 2 };
 static hirsel_rt_v2_stats stats(hirsel_rt_v2_ctx *ctx) { hirsel_rt_v2_stats s; hirsel_rt_v2_ctx_stats(ctx, &s); return s; }

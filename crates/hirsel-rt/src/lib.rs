@@ -63,18 +63,22 @@ pub use failure::FailureRecord;
 pub use finalize::{Cleanup, CloseThunk, DropThunk};
 pub use region::{Builder, REGION_POOL_IDLE_CAP, Region, SEGMENT_SIZE};
 pub use release::{
-    LAYOUT_DYNAMIC, LAYOUT_MAGIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI, LAYOUT_VERSION, Layout,
-    NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT,
-    STEP_LOOP, STEP_NONNULL, STEP_RELEASE, STEP_TAG, Step, WHOLE_VALUE,
+    LAYOUT_DYNAMIC, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_MAGIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI,
+    LAYOUT_VERSION, LOGICAL_UNSUPPORTED, Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN,
+    STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE,
+    STEP_TAG, Step, WHOLE_VALUE,
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library
 /// primitive with a manifest `failure` rule asks the caller to record it at the call site.
 pub const STATUS_FAILURE: u8 = 1;
+/// A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
+/// recorded; the caller records the arena's `OutOfSpace`.
+pub const STATUS_EXHAUSTED: u8 = 2;
 
 /// Report a broken runtime invariant and abort. Never a language failure.
 #[cold]

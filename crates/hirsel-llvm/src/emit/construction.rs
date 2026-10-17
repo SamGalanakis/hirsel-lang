@@ -513,6 +513,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         extent: Value<'m>,
         align: u32,
         flat: bool,
+        failure: FailureId,
     ) -> Emitted<Value<'m>> {
         let ptr = self.module.ptr_type();
         let out = self.prologue.alloca(ptr, 8);
@@ -531,6 +532,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.store(block, out, 8);
             self.builder.br(done);
             self.builder.position(in_arena);
+        }
+        // A bounded arena is charged before the bump (MEM-6).
+        if self.bounded_code().is_some() {
+            let bytes = self.construction_charge(site)?;
+            self.charge(token, bytes, site.anchor, failure)?;
         }
         // A flat immortal owner's copy may read its capacity rounded to 16, as a region's.
         let capacity = if flat {
@@ -918,7 +924,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     return self.invalid("an arena token slot without storage");
                 };
                 let token = self.load(Shape::Scalar(ScalarKind::Pointer), slot);
-                let block = self.arena_block(token, true, site, extent_value, align, flat)?;
+                let block =
+                    self.arena_block(token, true, site, extent_value, align, flat, failure)?;
                 arena = Some((token, true));
                 (block, self.payload_of(block, site.layout)?)
             }
@@ -930,7 +937,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     return self.invalid("a caller destination in a function without one");
                 };
                 let token = self.module.parameter(self.function, index);
-                let block = self.arena_block(token, true, site, extent_value, align, flat)?;
+                let block =
+                    self.arena_block(token, true, site, extent_value, align, flat, failure)?;
                 arena = Some((token, true));
                 (block, self.payload_of(block, site.layout)?)
             }

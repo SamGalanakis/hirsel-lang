@@ -12,11 +12,14 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
 pub const STATUS_FAILURE: u8 = 1;
+/// A deep copy into a bounded arena whose budget does not cover it (MEM-6, runtime
+/// ABI 7): nothing is copied or recorded; the caller records the arena's `OutOfSpace`.
+pub const STATUS_EXHAUSTED: u8 = 2;
 /// Launch uses a separate channel from language failure.
 pub const LAUNCH_OK: u8 = 0;
 pub const LAUNCH_ABI_MISMATCH: u8 = 2;
@@ -114,11 +117,17 @@ pub const REGION_POOL_IDLE_CAP: u64 = 8 << 20;
 /// Arena bump ABI: cursor is mutable; end is the inline limit (null with diagnostics).
 pub const REGION_CURSOR_OFFSET: u64 = 8;
 pub const REGION_END_OFFSET: u64 = 16;
+/// The logical bytes a bounded arena (MEM-6, runtime ABI 7) has left; an arena
+/// construction subtracts its charge inline after testing it fits. Unbounded is
+/// `u64::MAX`.
+pub const REGION_REMAINING_OFFSET: u64 = 48;
+/// Bytes of `hirsel_rt_v2_region`.
+pub const REGION_RECORD_BYTES: u64 = 64;
 
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 5;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 6;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -127,6 +136,12 @@ pub const LAYOUT_DYNAMIC: u32 = 2;
 /// extent before the header; their capacity is the descriptor size and their alignment
 /// `max(align, 8)`.
 pub const LAYOUT_NO_EXTENT: u32 = 8;
+/// The descriptor's `logical` is per element (descriptor version 6): a block's charge
+/// is it times the u64 count at the payload's start.
+pub const LAYOUT_LOGICAL_PER_ELEMENT: u32 = 16;
+/// `logical` of a layout with no logical size (a flat encoding or an environment): a
+/// deep copy of such a block into a bounded arena is an invariant fault.
+pub const LOGICAL_UNSUPPORTED: u64 = u64::MAX;
 pub const STEP_RELEASE: u32 = 1;
 pub const STEP_FINALIZE: u32 = 2;
 pub const STEP_CLOSE_HANDLE: u32 = 3;
@@ -340,6 +355,9 @@ pub enum RuntimeEntry {
     RegionExit,
     ArenaAlloc,
     ArenaEnter,
+    ArenaBound,
+    ArenaExhausted,
+    ArenaRecover,
     BuilderBegin,
     BuilderGrow,
     BuilderPublish,
@@ -423,7 +441,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 48] = [
+    pub const ALL: [RuntimeEntry; 51] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -459,6 +477,9 @@ impl RuntimeEntry {
         Self::RegionExit,
         Self::ArenaAlloc,
         Self::ArenaEnter,
+        Self::ArenaBound,
+        Self::ArenaExhausted,
+        Self::ArenaRecover,
         Self::BuilderBegin,
         Self::BuilderGrow,
         Self::BuilderPublish,
@@ -696,6 +717,17 @@ impl RuntimeEntry {
                 const { &[CTX, REGION, LAYOUT, p("extent", U64), p("align", U64)] },
             ),
             Self::ArenaEnter => ("hirsel_rt_v2_arena_enter", VOID, const { &[CTX, REGION] }),
+            Self::ArenaBound => (
+                "hirsel_rt_v2_arena_bound",
+                VOID,
+                const { &[CTX, REGION, p("capacity", U64)] },
+            ),
+            Self::ArenaExhausted => (
+                "hirsel_rt_v2_arena_exhausted",
+                U8,
+                const { &[CTX, REGION, p("kind", U32), p("rule", U32), p("site", U64)] },
+            ),
+            Self::ArenaRecover => ("hirsel_rt_v2_arena_recover", U8, const { &[CTX, REGION] }),
             Self::BuilderBegin => (
                 "hirsel_rt_v2_builder_begin",
                 U8,
@@ -841,6 +873,9 @@ snapshot_enum!(RuntimeEntry {
     RegionExit,
     ArenaAlloc,
     ArenaEnter,
+    ArenaBound,
+    ArenaExhausted,
+    ArenaRecover,
     BuilderBegin,
     BuilderGrow,
     BuilderPublish,

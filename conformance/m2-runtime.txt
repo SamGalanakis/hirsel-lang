@@ -2,10 +2,3 @@
 conformance/MEM/MEM-11-shared-index-example.hir	Shared runtime
 conformance/MEM/MEM-11-thaw-last-root.hir	Shared runtime
 conformance/MEM/MEM-11-thaw-shared-root.hir	Shared runtime
-conformance/MEM/MEM-6-empty-positive-cap.hir	arena/region runtime
-conformance/MEM/MEM-6-empty-zero-cap.hir	arena/region runtime
-conformance/MEM/MEM-6-cleanup-failure-propagates-run.hir	arena/region runtime
-conformance/MEM/MEM-6-copy-charge-run.hir	arena/region runtime
-conformance/MEM/MEM-6-exact-cap-fits-run.hir	arena/region runtime
-conformance/MEM/MEM-6-exhausted-callback-cleanup-run.hir	arena/region runtime
-conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir	arena/region runtime

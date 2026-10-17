@@ -185,6 +185,7 @@ pub fn derive(owners: &Owners, store: &TypeStore, types: &[TypeId]) -> (Derived,
         step_count: 0,
         field_count: 0,
         flags: 0,
+        logical: 0,
     });
     (
         Derived {
@@ -213,6 +214,7 @@ fn materialize(descriptors: &HashMap<LayoutId, Descriptor>) -> HashMap<LayoutId,
                 step_count: d.steps.len() as u64,
                 field_count: d.field_count,
                 flags: d.flags,
+                logical: d.logical,
             })
             .collect::<Vec<_>>()
             .into_boxed_slice(),

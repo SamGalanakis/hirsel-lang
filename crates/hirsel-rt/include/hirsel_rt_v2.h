@@ -17,9 +17,12 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 6
+#define HIRSEL_RT_V2_ABI_VERSION 7
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
+/* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
+ * recorded; the caller records the arena's OutOfSpace with hirsel_rt_v2_arena_exhausted. */
+#define HIRSEL_RT_V2_STATUS_EXHAUSTED 2
 
 #define HIRSEL_RT_V2_LAUNCH_OK 0
 #define HIRSEL_RT_V2_LAUNCH_ABI_MISMATCH 2
@@ -106,12 +109,16 @@ extern "C" {
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 5
+#define HIRSEL_RT_V2_LAYOUT_VERSION 6
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
 /* A fixed-size, non-flat layout: its arena blocks have no extent prefix (capacity is size). */
 #define HIRSEL_RT_V2_LAYOUT_NO_EXTENT 8
+/* `logical` is per element: a block's MEM-6 charge is it times the u64 count at the payload's start. */
+#define HIRSEL_RT_V2_LAYOUT_LOGICAL_PER_ELEMENT 16
+/* `logical` of a layout with no logical size (a flat encoding, an environment). */
+#define HIRSEL_RT_V2_LOGICAL_UNSUPPORTED UINT64_MAX
 #define HIRSEL_RT_V2_INDEX_MASK 0x1fffffffu
 #define HIRSEL_RT_V2_KIND_SHIFT 29
 #define HIRSEL_RT_V2_KIND_SMALL 0
@@ -175,6 +182,7 @@ struct hirsel_rt_v2_layout {
     uint64_t step_count;
     uint32_t field_count;
     uint32_t flags;
+    uint64_t logical; /* MEM-6 charge of a block of this payload layout (runtime README) */
 };
 
 /* Compiler-reserved cleanup continuation for an inline value. */
@@ -187,9 +195,12 @@ typedef struct hirsel_rt_v2_cleanup {
 
 /* Arena bump ABI: compiled code updates cursor and reads end. The inline limit
  * end is null before the first segment and in diagnostic mode (runtime-only bumps).
+ * A bounded arena (MEM-6) has `remaining` logical bytes, which compiled code tests and
+ * lowers before each arena construction; it is UINT64_MAX when unbounded.
  * Remaining fields are private to the runtime. */
 #define HIRSEL_RT_V2_REGION_CURSOR_OFFSET 8
 #define HIRSEL_RT_V2_REGION_END_OFFSET 16
+#define HIRSEL_RT_V2_REGION_REMAINING_OFFSET 48
 typedef struct hirsel_rt_v2_region {
     void *segment;
     void *cursor;
@@ -197,6 +208,9 @@ typedef struct hirsel_rt_v2_region {
     void *cleanup;
     struct hirsel_rt_v2_region *parent;
     uint64_t state;
+    uint64_t remaining;
+    uint32_t bound;     /* 0 unbounded, else 1 + the failure count when the bound was set */
+    uint32_t exhausted; /* 0, else 1 + the index of the arena's own OutOfSpace record */
 } hirsel_rt_v2_region;
 
 typedef struct hirsel_rt_v2_builder {
@@ -252,9 +266,9 @@ typedef struct hirsel_rt_v2_failure {
 #define HIRSEL_RT_V2_ASSERT_SIZE(type, bytes) _Static_assert(sizeof(type) == (bytes), #type " size")
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_header, HIRSEL_RT_V2_HEADER_SIZE);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_step, 56);
-HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_layout, 56);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_layout, 64);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_cleanup, 32);
-HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_region, 48);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_region, 64);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_builder, 40);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_config, 56);
 #ifdef HIRSEL_RT_ENABLE_STATS
@@ -346,7 +360,8 @@ uint8_t hirsel_rt_v2_reuse(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token, ui
                            uint64_t extent, uint64_t align, hirsel_rt_v2_header **out_block);
 void hirsel_rt_v2_dispose(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token);
 
-/* Deep unique copy. */
+/* Deep unique copy. Into a bounded arena (MEM-6) the whole tree is charged first, every block once
+ * per reference; STATUS_EXHAUSTED when that exceeds the arena's remaining budget. */
 uint8_t hirsel_rt_v2_unique_copy(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, hirsel_rt_v2_region *region, uint64_t site,
                                  hirsel_rt_v2_header **out_block);
 
@@ -382,6 +397,14 @@ hirsel_rt_v2_header *hirsel_rt_v2_arena_alloc(hirsel_rt_v2_ctx *ctx, hirsel_rt_v
                                               uint32_t index, uint64_t extent, uint64_t align);
 /* Enter an arena's region, seeding its cursor and limit from an idle pooled segment if any. */
 void hirsel_rt_v2_arena_enter(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region);
+/* Bounded arenas (MEM-6). Bound an entered arena to `capacity` logical bytes. */
+void hirsel_rt_v2_arena_bound(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, uint64_t capacity);
+/* Record the arena's own OutOfSpace failure (`kind`, `rule` at `site`); returns STATUS_FAILURE. */
+uint8_t hirsel_rt_v2_arena_exhausted(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, uint32_t kind,
+                                     uint32_t rule, uint64_t site);
+/* 1 after forgetting the active failure when it is exactly the arena's own OutOfSpace, the one
+ * failure recorded since its bound was set; else 0, the failure untouched. */
+uint8_t hirsel_rt_v2_arena_recover(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region);
 uint8_t hirsel_rt_v2_builder_begin(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, uint64_t capacity,
                                    uint64_t align, hirsel_rt_v2_builder *out);
 uint8_t hirsel_rt_v2_builder_grow(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_builder *builder, uint64_t used,

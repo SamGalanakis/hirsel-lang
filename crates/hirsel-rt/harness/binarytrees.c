@@ -38,7 +38,7 @@ static const hirsel_rt_v2_step node_steps[] = {
     {.kind = HIRSEL_RT_V2_STEP_RELEASE, .field = 0, .offset = offsetof(Payload, left), .count_offset = HIRSEL_RT_V2_NO_OFFSET},
 };
 static const hirsel_rt_v2_layout node_layout = {
-    HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION, sizeof(Payload), 8, NULL, node_steps, 3, 2, 0};
+    HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION, sizeof(Payload), 8, NULL, node_steps, 3, 2, 0, 0};
 #endif
 static hirsel_rt_v2_ctx *ctx;
 

@@ -63,7 +63,7 @@ static uint8_t failing_drop(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor)
     {.kind = (kind_), .field = (field_), .offset = (offset_), .count_offset = HIRSEL_RT_V2_NO_OFFSET}
 #define LAYOUT(size_, finalizer_, steps_, step_count_, field_count_)                               \
     {HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION, (size_), 8, (finalizer_), (steps_), (step_count_),   \
-     (field_count_), 0}
+     (field_count_), 0, 0}
 
 static const hirsel_rt_v2_layout empty = LAYOUT(0, NULL, NULL, 0, 0);
 static const hirsel_rt_v2_layout logged_leaf = LAYOUT(8, log_drop, NULL, 0, 1);
@@ -91,10 +91,10 @@ static const hirsel_rt_v2_step list_steps[] = {
     STEP(HIRSEL_RT_V2_STEP_RELEASE, HIRSEL_RT_V2_WHOLE_VALUE, 8),
     STEP(HIRSEL_RT_V2_STEP_CLOSE_HANDLE, HIRSEL_RT_V2_WHOLE_VALUE, 0)};
 static const hirsel_rt_v2_layout list = {HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION, 8, 8, NULL, list_steps, 3, 0,
-                                         HIRSEL_RT_V2_LAYOUT_DYNAMIC | HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR};
+                                         HIRSEL_RT_V2_LAYOUT_DYNAMIC | HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR, 0};
 
 static const hirsel_rt_v2_layout ffi = {HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION, 8, 8, failing_drop, NULL, 0,
-                                            1, HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI};
+                                            1, HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI, 0};
 static const hirsel_rt_v2_layout *const registry[] = {&empty, &logged_leaf, &failing_leaf, &failing_pair, &cell, &niche_cell, &list, &ffi};
 static uint32_t descriptor_index(const hirsel_rt_v2_layout *layout) {
     for(uint32_t i=0; i<sizeof registry/sizeof *registry; i++) if(registry[i]==layout) return i+2;

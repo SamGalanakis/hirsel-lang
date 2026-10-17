@@ -14,7 +14,7 @@ use std::process::Command;
 const PROGRAM: &str = r#"
 #include "hirsel_rt_v2.h"
 
-static const hirsel_rt_v2_layout empty = {HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION, 0, 8, 0, 0, 0, 0, 0};
+static const hirsel_rt_v2_layout empty = {HIRSEL_RT_V2_LAYOUT_MAGIC, HIRSEL_RT_V2_LAYOUT_VERSION, 0, 8, 0, 0, 0, 0, 0, 0};
 static const hirsel_rt_v2_layout *const registry[] = {&empty};
 /* Registry entry i is descriptor index i + 2. */
 #define EMPTY 2

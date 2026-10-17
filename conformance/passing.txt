@@ -1752,6 +1752,13 @@ conformance/MEM/MEM-5-wave2-u64-to-string-ok.hir
 conformance/MEM/MEM-5-wave2-u8-format-ok.hir
 conformance/MEM/MEM-5-wave2-u8-to-string-bad.hir
 conformance/MEM/MEM-5-wave2-u8-to-string-ok.hir
+conformance/MEM/MEM-6-cleanup-failure-propagates-run.hir
+conformance/MEM/MEM-6-copy-charge-run.hir
+conformance/MEM/MEM-6-empty-positive-cap.hir
+conformance/MEM/MEM-6-empty-zero-cap.hir
+conformance/MEM/MEM-6-exact-cap-fits-run.hir
+conformance/MEM/MEM-6-exhausted-callback-cleanup-run.hir
+conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir
 conformance/MEM/MEM-7-align-8.hir
 conformance/MEM/MEM-7-box-read-binarytrees-run.hir
 conformance/MEM/MEM-7-box-read-borrowed-move-bad.hir

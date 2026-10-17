@@ -685,6 +685,9 @@ impl Adapter {
                     cleanup: ptr::null_mut(),
                     parent: ptr::null_mut(),
                     state: 0,
+                    remaining: u64::MAX,
+                    bound: 0,
+                    exhausted: 0,
                 });
                 unsafe { hirsel_rt_v2_region_enter(ctx, &mut *region) };
                 self.regions.insert(0, (g, region, Vec::new()));

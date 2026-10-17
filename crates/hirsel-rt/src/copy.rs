@@ -17,6 +17,11 @@
 //! enforce. The walk keeps its state in runtime-owned scratch (a visited map and two explicit
 //! stacks) and never recurses, so its native stack is constant whatever the graph's depth
 //! (MEM-3).
+//!
+//! Into a bounded arena (MEM-6) the copy is charged before anything is copied: every block
+//! of the tree once per reference to it, independently of sharing, at its descriptor's
+//! `logical` size (per element: times its u64 count). A copy the budget does not cover
+//! returns [`STATUS_EXHAUSTED`] and copies nothing; the caller records the failure.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -25,11 +30,12 @@ use std::ptr;
 use crate::alloc::{DOMAIN_HEAP, Header, payload};
 use crate::context::RunCtx;
 use crate::count::check_live_block;
+use crate::release::{LAYOUT_LOGICAL_PER_ELEMENT, LOGICAL_UNSUPPORTED};
 use crate::release::{
     Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
     STEP_NONNULL, STEP_RELEASE, STEP_TAG, Step, variant_inactive,
 };
-use crate::{STATUS_OK, fault};
+use crate::{STATUS_EXHAUSTED, STATUS_OK, fault};
 
 /// A new block of `original`'s layout, capacity and alignment holding its bytes, with one
 /// holder.
@@ -223,12 +229,97 @@ unsafe fn copy_graph(
     }
 }
 
+/// The MEM-6 charge of one block: its descriptor's logical size, per element times its count.
+unsafe fn block_charge(ctx: &RunCtx, block: *mut Header) -> u64 {
+    // SAFETY: `block` is a live block of a descriptor of `ctx`.
+    unsafe {
+        let layout = &*ctx.descriptor((*block).index());
+        if layout.logical == LOGICAL_UNSUPPORTED {
+            fault("a bounded-arena copy reached a block with no logical size");
+        }
+        if layout.flags & LAYOUT_LOGICAL_PER_ELEMENT != 0 {
+            let count = payload(block).cast::<u64>().read_unaligned();
+            layout.logical.saturating_mul(count)
+        } else {
+            layout.logical
+        }
+    }
+}
+
+/// The MEM-6 charge of the tree whose holder slots `root` visits: every block once per
+/// reference to it, each block's subtree charged once and memoized, without recursion.
+unsafe fn tree_charge(ctx: &RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) -> u64 {
+    // SAFETY: caller contract of the entries below.
+    unsafe {
+        let child = |slot: *mut u8| slot.cast::<*mut Header>().read_unaligned();
+        let children = |block: *mut Header| {
+            let mut out = Vec::new();
+            holders(
+                ctx.descriptor((*block).index()),
+                payload(block),
+                &mut |slot| out.push(child(slot)),
+            );
+            out
+        };
+        let mut roots = Vec::new();
+        root(&mut |slot| roots.push(child(slot)));
+        let mut charges: HashMap<*mut Header, u64> = HashMap::new();
+        let mut work: Vec<(*mut Header, bool)> = roots.iter().map(|&b| (b, false)).collect();
+        while let Some((block, expanded)) = work.pop() {
+            if charges.contains_key(&block) {
+                continue;
+            }
+            let below = children(block);
+            if !expanded {
+                work.push((block, true));
+                work.extend(
+                    below
+                        .into_iter()
+                        .filter(|c| !charges.contains_key(c))
+                        .map(|c| (c, false)),
+                );
+                continue;
+            }
+            let total = below.iter().fold(block_charge(ctx, block), |total, c| {
+                total.saturating_add(charges[c])
+            });
+            charges.insert(block, total);
+        }
+        roots
+            .iter()
+            .fold(0u64, |total, r| total.saturating_add(charges[r]))
+    }
+}
+
+/// Take a deep copy's charge from a bounded destination; false when it exceeds the budget.
+unsafe fn charge_copy(
+    ctx: &RunCtx,
+    destination: *mut crate::region::Region,
+    root: impl FnOnce(&mut dyn FnMut(*mut u8)),
+) -> bool {
+    // SAFETY: `destination` is null or an active arena record.
+    unsafe {
+        if destination.is_null() || (*destination).bound == 0 {
+            return true;
+        }
+        let charge = tree_charge(ctx, root);
+        match (*destination).remaining.checked_sub(charge) {
+            Some(remaining) => {
+                (*destination).remaining = remaining;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 /// `unique x`: a deep copy of the graph of counted heap blocks reachable from `block`, written
 /// to `out_block` with one holder. Sharing inside the graph is preserved (each block is copied
 /// once and every slot naming it names its copy), immortal and static blocks included.
 /// A null destination selects the heap; otherwise every copied block belongs to
-/// that active arena. Returns 0; host exhaustion terminates environmentally. `site` is reserved for future
-/// bounded arena charging, as for `alloc`.
+/// that active arena. Returns 0, or [`STATUS_EXHAUSTED`] when a bounded destination's budget
+/// does not cover the copy; host exhaustion terminates environmentally. `site` is reserved,
+/// as for `alloc`.
 ///
 /// # Safety
 /// `ctx` is live, `block` a live block the caller can read (it keeps its own credit), and
@@ -246,6 +337,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
         if (*ctx).heap.diagnostic {
             check_live_block(&*ctx, block);
         }
+        let charged = charge_copy(&*ctx, destination, |visit| {
+            let mut slot = block;
+            visit((&raw mut slot).cast::<u8>());
+        });
+        if !charged {
+            return STATUS_EXHAUSTED;
+        }
         let mut root: *mut Header = ptr::null_mut();
         copy_graph(ctx, destination, |redirect| {
             let slot = (&raw mut root).cast::<u8>();
@@ -261,7 +359,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
 /// `value` is a bit copy of the source, whose holder slots (read through `layout`'s
 /// program) still name the source's blocks without a credit; each is rewritten in place to a
 /// deep copy at `destination`, as `unique_copy` makes them, one visited map serving the whole value. Returns
-/// 0; host exhaustion terminates environmentally.
+/// 0, or [`STATUS_EXHAUSTED`] as `unique_copy` does; host exhaustion terminates environmentally.
 ///
 /// # Safety
 /// `ctx` is live, `layout` the descriptor of the value at `value`, which the caller owns and
@@ -278,6 +376,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
     // SAFETY: caller contract.
     unsafe {
         let layout = (*ctx).descriptor(index);
+        if !charge_copy(&*ctx, destination, |visit| holders(layout, value, visit)) {
+            return STATUS_EXHAUSTED;
+        }
         copy_graph(ctx, destination, |redirect| {
             holders(layout, value, redirect)
         });

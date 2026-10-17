@@ -57,6 +57,13 @@ pub struct Region {
     pub cleanup: *mut u8,
     pub parent: *mut Region,
     pub state: u64,
+    /// A bounded arena's logical bytes left (MEM-6), which compiled code tests and lowers
+    /// before each arena construction; `u64::MAX` when unbounded.
+    pub remaining: u64,
+    /// 0 unbounded, else 1 + the failure count when the bound was set.
+    pub bound: u32,
+    /// 0, else 1 + the index of the arena's own `OutOfSpace` record.
+    pub exhausted: u32,
 }
 
 /// An unpublished builder: `capacity` reserved bytes at `data` in `region`.
@@ -571,6 +578,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_enter(ctx: *mut RunCtx, region: *mu
             cleanup: ptr::null_mut(),
             parent: ctx.regions.active,
             state: REGION_ACTIVE,
+            remaining: u64::MAX,
+            bound: 0,
+            exhausted: 0,
         });
         ctx.regions.active = region;
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
@@ -600,6 +610,82 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_enter(ctx: *mut RunCtx, region: *mut
             region.cursor = install(ctx, region, segment);
         }
     }
+}
+
+/// Bound the entered arena `region` to `capacity` logical bytes (MEM-6), counted from the
+/// failures recorded now.
+///
+/// # Safety
+/// `ctx` is live and `region` an entered arena record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arena_bound(
+    ctx: *mut RunCtx,
+    region: *mut Region,
+    capacity: u64,
+) {
+    // SAFETY: caller contract.
+    unsafe {
+        check_active(region);
+        let count = (*ctx).failure.count();
+        let region = &mut *region;
+        region.remaining = capacity;
+        region.bound = failure_index(count) + 1;
+        region.exhausted = 0;
+    }
+}
+
+/// Record the bounded arena `region`'s own `OutOfSpace` (`kind` and `rule` at `site`) and
+/// mark it as the arena's. Returns [`STATUS_FAILURE`](crate::STATUS_FAILURE).
+///
+/// # Safety
+/// `ctx` is live and `region` an entered arena record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arena_exhausted(
+    ctx: *mut RunCtx,
+    region: *mut Region,
+    kind: u32,
+    rule: u32,
+    site: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        check_active(region);
+        let index = (*ctx).failure.count();
+        (*region).exhausted = failure_index(index) + 1;
+        crate::failure::hirsel_rt_v2_failure_begin(ctx, kind, rule, site)
+    }
+}
+
+/// Forget the active failure and return 1 when it is exactly the bounded arena `region`'s own
+/// `OutOfSpace`: the one record since its bound was set. Otherwise return 0 and keep it.
+///
+/// # Safety
+/// `ctx` is live and `region` an entered arena record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arena_recover(ctx: *mut RunCtx, region: *mut Region) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        check_active(region);
+        let region = &mut *region;
+        let failures = &mut (*ctx).failure;
+        if region.bound == 0 || region.exhausted != region.bound {
+            return 0;
+        }
+        let start = (region.bound - 1) as usize;
+        if failures.count() != start + 1 {
+            return 0;
+        }
+        failures.truncate(start);
+        region.exhausted = 0;
+        1
+    }
+}
+
+fn failure_index(count: usize) -> u32 {
+    u32::try_from(count)
+        .ok()
+        .filter(|&n| n < u32::MAX - 1)
+        .unwrap_or_else(|| fault("a failure count overflows a bounded arena's record"))
 }
 
 /// T19 RegionAlloc. Reserve `extent` uncounted bytes aligned to `align` in `region` and write their

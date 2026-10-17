@@ -55,7 +55,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         );
         (
             self.module.struct_type(&[
-                i32_ty, i32_ty, i64_ty, i64_ty, ptr, ptr, i64_ty, i32_ty, i32_ty,
+                i32_ty, i32_ty, i64_ty, i64_ty, ptr, ptr, i64_ty, i32_ty, i32_ty, i64_ty,
             ]),
             self.module.struct_type(&[
                 i32_ty, i32_ty, i32_ty, i32_ty, i64_ty, i64_ty, i64_ty, i64_ty, ptr,
@@ -96,7 +96,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.manifested.descriptors.insert(name.clone());
         let global = self.module.linkonce_constant(&name, ty, 8);
         let null = self.module.const_zero(self.module.ptr_type());
-        let initializer = self.descriptor_initializer(0, 1, null, null, 0, 0, 0);
+        let initializer = self.descriptor_initializer(0, 1, null, null, 0, 0, 0, 0);
         self.module.set_initializer(global, initializer);
         global
     }
@@ -143,6 +143,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         step_count: u64,
         field_count: u32,
         flags: u32,
+        logical: u64,
     ) -> Value<'m> {
         let (i32_ty, i64_ty) = (self.module.int_type(32), self.module.int_type(64));
         let u32_ = |n: u32| self.module.const_int(i32_ty, u128::from(n));
@@ -157,6 +158,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             u64_(step_count),
             u32_(field_count),
             u32_(flags),
+            u64_(logical),
         ])
     }
 
@@ -241,6 +243,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 d.steps.len() as u64,
                 d.field_count,
                 d.flags,
+                d.logical,
             );
             self.module.set_initializer(global, initializer);
         }

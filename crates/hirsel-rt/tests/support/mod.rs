@@ -254,6 +254,7 @@ pub fn layout(
         steps: steps.as_ptr(),
         step_count: steps.len() as u64,
         field_count,
+        logical: 0,
         flags: if steps
             .iter()
             .any(|s| matches!(s.kind, hirsel_rt::STEP_LOOP | hirsel_rt::STEP_COLUMN))

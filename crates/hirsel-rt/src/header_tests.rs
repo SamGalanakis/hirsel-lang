@@ -38,6 +38,7 @@ fn layout(size: u64, steps: &[Step], flags: u32) -> Layout {
         step_count: steps.len() as u64,
         field_count: 0,
         flags,
+        logical: 0,
     }
 }
 struct Ctx(*mut RunCtx);

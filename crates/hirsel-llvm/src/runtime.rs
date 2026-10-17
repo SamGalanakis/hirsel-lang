@@ -43,6 +43,11 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         // and no willreturn promise; the record's scalar contents are copied.
         R::FailureBegin | R::FailureClear => (MemoryEffects::ReadWrite, false, &[0]),
         R::FailureAppend => (MemoryEffects::ReadWrite, false, &[0, 1]),
+        // A bounded arena's bookkeeping (MEM-6): the record's words and the failure
+        // state, which recording or forgetting a failure can allocate or free.
+        R::ArenaBound | R::ArenaExhausted | R::ArenaRecover => {
+            (MemoryEffects::ReadWrite, false, &[0, 1])
+        }
         // Allocator/free-list entries retain block pointers. Cleanup/finalization
         // invokes user code, which may diverge or store pointers; host operations
         // may terminate. No stronger promise is justified for these families.
