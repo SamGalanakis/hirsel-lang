@@ -515,6 +515,15 @@ remains host-independent. Scripted `net.listen` checks the exact grant before re
 that scripted incoming peers are unavailable, so an empty rule set returns NotGranted
 without a provider effect.
 
+`library::process` is the reference Process provider. `SimulationConfig.process`
+holds the `io.process` grant; the `process` projection mints the root Proc with its
+rules. `proc.run` checks a canonical absolute program and NUL-free arguments
+(InvalidInput), then the exact rules (NotGranted), then serves the first unused
+`process.script@1` or `test.process` entry with equal program and args (none:
+NotFound), bounding each stream by `max_output` (OutputLimit). It never spawns: a
+`process.spawn@1` grant needs a host completion from `supply_process`. Replay takes
+the recorded completion and re-derives the checks; a contradiction refuses.
+
 SimulationConfig supplies stdin bytes and exact Env name-to-optional-value snapshots.
 Library dispatch owns stdin cursor advancement, append-only mut byte buffers,
 UTF-8 argument text, and distinct stderr capture in ObservedSimulation. Each

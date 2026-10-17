@@ -480,6 +480,41 @@ impl HostLibrary {
         }
         Ok(())
     }
+    /// The root Proc and its runs go to the runtime's host provider, which checks and
+    /// records them; a scripted `test.process` Proc stays with the library.
+    fn host_process(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
+        let request = if name == "io.process" {
+            R::Process { io: 1 }
+        } else {
+            let directory = match tag(&a[4])? {
+                0 => None,
+                _ => Some(self.id(fields(&a[4])?[0]).map_err(|_| {
+                    Error::Unavailable("a test.dir Dir cannot start a host program".into())
+                })?),
+            };
+            R::ProcessRun {
+                process: self.id(&a[0])?,
+                program: text(fields(&a[1])?[0])?,
+                args: fields(&a[2])?
+                    .into_iter()
+                    .map(text)
+                    .collect::<Result<_, _>>()?,
+                stdin: bytes(&a[3])?,
+                directory,
+                max_output: word(&a[5])?,
+            }
+        };
+        let completion = self
+            .io
+            .call(request)
+            .map_err(|e| Error::Unavailable(format!("host process: {e:?}")))?;
+        Ok(OperationResult::returned(match completion {
+            C::Handle(Ok(id)) => ok(self.handle(id, "Proc")),
+            C::Handle(Err(hirsel_rt::io::IoError::NotGranted)) => error(variant(0, vec![])),
+            C::Process(outcome) => hirsel_interp::library::process::outcome_value(&outcome),
+            _ => return Err(invalid()),
+        }))
+    }
     fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
         self.yield_now = true;
         if !matches!(
@@ -1053,6 +1088,26 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
                 return self.storage(&name, call.arguments).map(Some);
+            }
+            if name == "io.process"
+                || name == "proc.run" && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+            {
+                if name == "io.process" {
+                    // Validate the Io operand through the ordinary library before projecting it.
+                    self.library.call(
+                        OperationCall {
+                            runtime: call.runtime,
+                            path: call.path,
+                            generics: call.generics,
+                            arguments: call.arguments,
+                            result_type: call.result_type,
+                            types: call.types,
+                            site: call.site,
+                        },
+                        cx,
+                    )?;
+                }
+                return self.host_process(&name, call.arguments).map(Some);
             }
             if name == "io.net" {
                 // Validate the Io operand through the ordinary library before projecting it.

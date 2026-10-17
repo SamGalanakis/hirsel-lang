@@ -55,6 +55,10 @@ impl RealIo {
     ) -> Result<(), AdapterError> {
         self.state.set_net_script(peers)
     }
+    /// The admitted `io.process` grant. Absent, the root Proc runs nothing.
+    pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
+        self.state.set_process_grant(grant);
+    }
     /// The admitted RunConfig rule set of the root Net (`io.net.rules`). Absent, the
     /// root Net permits nothing.
     pub fn set_net_rules(&mut self, rules: std::collections::BTreeSet<NetRule>) {
@@ -355,6 +359,7 @@ impl Adapter for RealIo {
         let fake = self.state.is_fake_request(&request);
         let mut fault = if self.state.denied_projection(&request)
             || crate::net::is_net_request(&request)
+            || crate::process::is_process_request(&request)
             || matches!(&request, Request::ReadStdin { stdin, .. } if self.state.expect(*stdin, crate::handles::Grant::Stdin).is_err())
             || matches!(
                 request,
@@ -419,6 +424,26 @@ impl Adapter for RealIo {
             Request::Monotonic { .. } | Request::Wall { .. } => {
                 let input = clock_input(&request, fault.as_ref());
                 self.state.sample(&request, input)
+            }
+            Request::ProcessRun { .. } => {
+                let directories = &self.disk.directories;
+                self.state.execute_process(
+                    &mut |spec| {
+                        let cwd = match spec.directory {
+                            None => None,
+                            Some(d) => match directories.get(&d) {
+                                Some(pin) => Some(pin.as_raw_fd()),
+                                None => {
+                                    return Ok(crate::process::ProcessOutcome::Error(
+                                        crate::process::ProcessFailure::InvalidInput,
+                                    ));
+                                }
+                            },
+                        };
+                        Ok(crate::process::run_host(spec, cwd))
+                    },
+                    &request,
+                )
             }
             _ => self
                 .state

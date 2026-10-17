@@ -186,6 +186,9 @@ impl HostAuthority for HostGrants {
                     })?;
             }
         }
+        if let Some(grant) = run.process_grant() {
+            io.set_process_grant(grant);
+        }
         self.io = Some(io);
         Ok(())
     }

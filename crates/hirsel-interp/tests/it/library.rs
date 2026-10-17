@@ -1336,3 +1336,90 @@ fn stdin_replay_rejects_oversized_chunks_and_invalid_errors_before_publication()
         assert_eq!(h.library.simulation.events.len(), 1);
     }
 }
+
+#[test]
+fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() {
+    use hirsel_run_config::{ExitStatus, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun};
+    let grant = |runs: Vec<ProcessRun>| SimulationConfig {
+        process: Some(ProcessGrant {
+            provider: "process.script@1".into(),
+            rules: vec![ProcessRule {
+                program: "/usr/bin/git".into(),
+                env: vec![],
+            }],
+            runs: Some(runs),
+        }),
+        ..Default::default()
+    };
+    let scripted = grant(vec![ProcessRun {
+        program: "/usr/bin/git".into(),
+        args: vec!["status".into()],
+        outcome: ProcessOutcome::Output {
+            status: ExitStatus::Exited(3),
+            stdout: b"clean".to_vec(),
+            stderr: vec![],
+        },
+    }]);
+    let run = |h: &mut Harness, program: &str| {
+        let io = h.root("Io");
+        let p = unok(h.value("io.process", vec![io]));
+        let args = collection::sequence(BuiltinType::List, [Value::String("status".into())]);
+        h.try_call(
+            "proc.run",
+            vec![
+                p,
+                path(program),
+                args,
+                Value::Bytes(vec![]),
+                none(),
+                u64_value(64),
+            ],
+            TypeKind::Tuple(vec![].into()),
+        )
+    };
+    let mut recorded = Harness::new(scripted);
+    let first = run(&mut recorded, "/usr/bin/git").unwrap();
+    let OperationResult::Complete { value, .. } = &first else {
+        panic!("{first:?}")
+    };
+    assert_eq!(
+        *value,
+        process::outcome_value(&ProcessOutcome::Output {
+            status: ExitStatus::Exited(3),
+            stdout: b"clean".to_vec(),
+            stderr: vec![],
+        })
+    );
+    let tape = recorded.library.simulation.events.clone();
+    // Replay never consults the script: an empty one still returns the recording.
+    let mut h = Harness::new(Default::default());
+    h.run.inputs = tape.clone();
+    h.library = Library::new(&h.run, grant(vec![])).unwrap();
+    let OperationResult::Complete {
+        value: replayed, ..
+    } = run(&mut h, "/usr/bin/git").unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(&replayed, value);
+    // A granted run recorded as NotGranted, or an output past its bound, contradicts
+    // the re-derived checks and publishes nothing.
+    for forged in [
+        process::encode_completion(&ProcessOutcome::Error(
+            hirsel_run_config::ProcessFailure::NotGranted,
+        )),
+        process::encode_completion(&ProcessOutcome::Output {
+            status: ExitStatus::Exited(0),
+            stdout: vec![0; 65],
+            stderr: vec![],
+        }),
+        vec![2],
+    ] {
+        let mut h = Harness::new(Default::default());
+        h.run.inputs = tape.clone();
+        h.run.inputs.last_mut().unwrap().output = forged;
+        h.library = Library::new(&h.run, grant(vec![])).unwrap();
+        assert!(run(&mut h, "/usr/bin/git").is_err());
+        assert_eq!(h.library.simulation.events.len(), 1);
+    }
+}

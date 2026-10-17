@@ -30,6 +30,11 @@ pub enum Grant {
     Test {
         seed: u64,
     },
+    /// Exact program rules and the world that serves them.
+    Process {
+        rules: Vec<hirsel_run_config::ProcessRule>,
+        world: crate::process::ProcessWorld,
+    },
     Directory {
         root: String,
         access: hirsel_run_config::Access,

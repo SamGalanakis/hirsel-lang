@@ -176,6 +176,22 @@ qemu, on the diagnostic `//:hirsel-rt-archives` archive), which `tools/check-nat
 against glibc malloc, mimalloc, jemalloc and 48- and 32-byte-node mimalloc controls (the prior header controls) in paired rounds, with a tree freed by the walk
 (`hirsel-walk`) and by the compiled glue of the node layout (`hirsel`).
 
+## Processes
+
+`process.rs` holds the Process capability (docs/spec/core-library.md#processes).
+`State::execute_process` checks every `proc.run` before any effect: the Proc and Dir
+handles, a canonical absolute program and NUL-free arguments (InvalidInput), then the
+exact rules (NotGranted); a scripted world (`process.script@1`, `test.process`) is
+served from its entries, and only a checked host run reaches the adapter's provider.
+`RealIo` runs it with `run_host`: std `Command`, an empty environment plus the rule's
+pass-through names, `/` or the pinned Dir as working directory, and one `poll` loop
+that feeds stdin and drains both pipes, killing a child past `max_output` on either
+stream. SIGPIPE is blocked on the calling thread for the loop and a raised one is
+discarded, so a child that ignores its stdin cannot end the program. `SimIo` replays
+the recorded completion in place of the host and rejects one that contradicts the
+re-derived checks. Tape forms are `process`, `test_process` and `process_run`
+requests and a `process` completion (`host_io_tape.rs`).
+
 ## Bounded arenas
 
 `arena.bounded(cap, body)` (MEM-6) charges every block placed in its arena a logical size

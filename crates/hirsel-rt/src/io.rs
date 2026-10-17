@@ -113,6 +113,22 @@ pub enum Request {
     Net {
         io: u64,
     },
+    Process {
+        io: u64,
+    },
+    TestProcess {
+        test: u64,
+        runs: Vec<hirsel_run_config::ProcessRun>,
+    },
+    /// `proc.run`; `directory` is the working directory's Dir handle.
+    ProcessRun {
+        process: u64,
+        program: String,
+        args: Vec<String>,
+        stdin: Vec<u8>,
+        directory: Option<u64>,
+        max_output: u64,
+    },
     TestCheck {
         test: u64,
         condition: bool,
@@ -321,6 +337,7 @@ pub enum Completion {
     NetUnit(Result<(), NetError>),
     Address(Result<SocketAddr, NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
+    Process(hirsel_run_config::ProcessOutcome),
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fault {
@@ -482,6 +499,11 @@ pub(crate) struct State {
     pub net_rules: BTreeSet<NetRule>,
     pub net_world: NetWorld,
     pub net_scripts: BTreeMap<u64, crate::io_net_script::ScriptNet>,
+    /// The admitted rules of the root Proc and the world serving it.
+    pub process_rules: Vec<hirsel_run_config::ProcessRule>,
+    pub process_world: crate::process::ProcessWorld,
+    /// Unused entries of each scripted world, keyed by world.
+    pub process_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ProcessRun>>>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -500,10 +522,15 @@ impl Default for State {
             net_rules: BTreeSet::new(),
             net_world: NetWorld::Host,
             net_scripts: BTreeMap::new(),
-            projections: ["stdin", "stderr", "stdout", "tasks", "net", "random", "dir"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            process_rules: vec![],
+            process_world: crate::process::ProcessWorld::Host,
+            process_scripts: BTreeMap::new(),
+            projections: [
+                "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         }
     }
 }
@@ -535,6 +562,7 @@ impl State {
             Request::Stdout { .. } => "stdout",
             Request::Tasks { .. } => "tasks",
             Request::Net { .. } => "net",
+            Request::Process { .. } => "process",
             Request::Random { .. } => "random",
             Request::Directory { .. } => "dir",
             _ => return false,
@@ -624,6 +652,20 @@ impl State {
                 return Err(AdapterError::InvalidCompletion);
             }
             return self.execute_net(net, request);
+        }
+        // Process outcomes are provider inputs too; only a host adapter can spawn.
+        if crate::process::is_process_request(request) {
+            if fault.is_some() {
+                return Err(AdapterError::InvalidCompletion);
+            }
+            return self.execute_process(
+                &mut |_| {
+                    Err(AdapterError::Unsupported(
+                        "this provider cannot run host programs".into(),
+                    ))
+                },
+                request,
+            );
         }
         // Policy denial is independently derived, never an injected tape fault.
         if fault.is_some_and(|f| f.error == IoError::NotGranted)

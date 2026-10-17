@@ -33,7 +33,8 @@ codes, plus injected tool operations for clean checking, run and formatting code
 filesystem and root arguments. The JSON object accepts `args`, `grants`, `projections` and
 `directories` as string arrays, `files` as a string-valued map, `env` as an exact
 name-to-string-or-null grant map, `stdin` as text or an array of bytes, and
-`monotonic` as a nonnegative u64 and `wall` as signed i64 nanoseconds. File strings are exact UTF-8 bytes; paths remain
+`monotonic` as a nonnegative u64 and `wall` as signed i64 nanoseconds, and `process` as a
+RunConfig `io.process` object whose `process.script@1` runs serve `proc.run`. File strings are exact UTF-8 bytes; paths remain
 confined to the simulated root. For example:
 
 ```json
@@ -71,7 +72,7 @@ launch manifest JSON path. A source path loads its exact `.hir.json` sidecar
 when present, otherwise standalone@0. `fmt` always formats a source file.
 
 An explicit empty simulation `projections` array grants no Io projections. Its
-allowed names are stdin, stderr, stdout, tasks, net, random and dir; an unknown name refuses
+allowed names are stdin, stderr, stdout, tasks, net, process, random and dir; an unknown name refuses
 the simulation input. Root Io and Args grants remain separate. This fake-input
 seam is independent of the production RunConfig admission contract.
 

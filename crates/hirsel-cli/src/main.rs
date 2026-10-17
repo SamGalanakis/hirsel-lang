@@ -567,7 +567,14 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
                         for projection in &values {
                             if !matches!(
                                 projection.as_str(),
-                                "stdin" | "stderr" | "stdout" | "tasks" | "net" | "random" | "dir"
+                                "stdin"
+                                    | "stderr"
+                                    | "stdout"
+                                    | "tasks"
+                                    | "net"
+                                    | "process"
+                                    | "random"
+                                    | "dir"
                             ) {
                                 return Err(format!("unknown Io projection {projection}"));
                             }
@@ -611,6 +618,12 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
                         config.env.insert(name.clone(), Some(text.into()));
                     }
                 }
+            }
+            // The RunConfig `io.process` object; the simulation serves process.script@1.
+            "process" => {
+                config.process = Some(
+                    serde_json::from_value(value.clone()).map_err(|e| format!("process: {e}"))?,
+                )
             }
             "wall" => config.wall = value.as_i64().ok_or("wall: expected a signed integer")?,
             "monotonic" => {

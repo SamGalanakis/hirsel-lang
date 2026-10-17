@@ -1,6 +1,17 @@
-//! Additional typed tape forms for host streams and exact environment reads.
+//! Additional typed tape forms for host streams, exact environment reads and processes.
 use crate::io::{Completion, EnvError, InputError, Request};
-use hirsel_run_config::hex;
+use hirsel_run_config::{ExitStatus, ProcessFailure, ProcessOutcome, hex};
+
+fn failure_word(failure: ProcessFailure) -> String {
+    match failure {
+        ProcessFailure::NotGranted => "not_granted".into(),
+        ProcessFailure::InvalidInput => "invalid_input".into(),
+        ProcessFailure::NotFound => "not_found".into(),
+        ProcessFailure::PermissionDenied => "permission_denied".into(),
+        ProcessFailure::OutputLimit => "output_limit".into(),
+        ProcessFailure::Fault(code) => format!("fault {code}"),
+    }
+}
 
 pub(crate) fn render_request(request: &Request) -> Option<String> {
     Some(match request {
@@ -9,6 +20,33 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         Request::ReadStdin { stdin, max } => format!("stdin_read {stdin} {max}"),
         Request::PrintStderr { stderr, bytes } => format!("stderr_print {stderr} {}", hex(bytes)),
         Request::EnvGet { env, name } => format!("env_get {env} {}", hex(name.as_bytes())),
+        Request::Process { io } => format!("process {io}"),
+        Request::TestProcess { test, runs } => format!(
+            "test_process {test} {}",
+            hex(&hirsel_run_config::encode_process_runs(runs))
+        ),
+        // The argument count leads, so every word after it is one argument.
+        Request::ProcessRun {
+            process,
+            program,
+            args,
+            stdin,
+            directory,
+            max_output,
+        } => {
+            let mut text = format!(
+                "process_run {process} {} {} {} {max_output} {}",
+                hex(program.as_bytes()),
+                hex(stdin),
+                directory.map_or_else(|| "none".into(), |d| d.to_string()),
+                args.len()
+            );
+            for arg in args {
+                text.push(' ');
+                text.push_str(&hex(arg.as_bytes()));
+            }
+            text
+        }
         _ => return None,
     })
 }
@@ -23,6 +61,20 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         Completion::Env(Ok(None)) => "env none".into(),
         Completion::Env(Err(EnvError::NotGranted)) => "env not_granted".into(),
         Completion::Env(Err(EnvError::InvalidUtf8)) => "env invalid_utf8".into(),
+        Completion::Process(ProcessOutcome::Output {
+            status,
+            stdout,
+            stderr,
+        }) => {
+            let (kind, code) = match status {
+                ExitStatus::Exited(code) => ("exited", code),
+                ExitStatus::Signaled(signal) => ("signaled", signal),
+            };
+            format!("process {kind} {code} {} {}", hex(stdout), hex(stderr))
+        }
+        Completion::Process(ProcessOutcome::Error(failure)) => {
+            format!("process error {}", failure_word(*failure))
+        }
         _ => return None,
     })
 }
@@ -67,6 +119,37 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             env: number(env)?,
             name: text(name)?,
         },
+        ["process", io] => Request::Process { io: number(io)? },
+        ["test_process", test, runs] => Request::TestProcess {
+            test: number(test)?,
+            runs: hirsel_run_config::decode_process_runs(&bytes(runs)?)
+                .map_err(|e| e.to_string())?,
+        },
+        [
+            "process_run",
+            process,
+            program,
+            stdin,
+            directory,
+            max_output,
+            count,
+            args @ ..,
+        ] => {
+            if number::<usize>(count)? != args.len() {
+                return Err("process tape argument count".into());
+            }
+            Request::ProcessRun {
+                process: number(process)?,
+                program: text(program)?,
+                args: args.iter().map(|a| text(a)).collect::<Result<_, _>>()?,
+                stdin: bytes(stdin)?,
+                directory: match *directory {
+                    "none" => None,
+                    d => Some(number(d)?),
+                },
+                max_output: number(max_output)?,
+            }
+        }
         _ => return Ok(None),
     }))
 }
@@ -81,6 +164,35 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["env", "none"] => Completion::Env(Ok(None)),
         ["env", "not_granted"] => Completion::Env(Err(EnvError::NotGranted)),
         ["env", "invalid_utf8"] => Completion::Env(Err(EnvError::InvalidUtf8)),
+        [
+            "process",
+            kind @ ("exited" | "signaled"),
+            code,
+            stdout,
+            stderr,
+        ] => {
+            let code = number(code)?;
+            Completion::Process(ProcessOutcome::Output {
+                status: if *kind == "exited" {
+                    ExitStatus::Exited(code)
+                } else {
+                    ExitStatus::Signaled(code)
+                },
+                stdout: bytes(stdout)?,
+                stderr: bytes(stderr)?,
+            })
+        }
+        ["process", "error", failure @ ..] => {
+            Completion::Process(ProcessOutcome::Error(match failure {
+                ["not_granted"] => ProcessFailure::NotGranted,
+                ["invalid_input"] => ProcessFailure::InvalidInput,
+                ["not_found"] => ProcessFailure::NotFound,
+                ["permission_denied"] => ProcessFailure::PermissionDenied,
+                ["output_limit"] => ProcessFailure::OutputLimit,
+                ["fault", code] => ProcessFailure::Fault(number(code)?),
+                _ => return Err("bad process tape error".into()),
+            }))
+        }
         _ => return Ok(None),
     }))
 }

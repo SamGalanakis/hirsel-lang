@@ -60,6 +60,12 @@ A program can acquire `io.dir(rt, path.of("data"))` and read relative paths with
 that grant. Use `read_write` only when writes are intended. No working directory,
 standard stream, environment key, clock or network authority is implicit.
 
+To let a program run other programs, grant each one by its exact absolute path:
+`"process":{"provider":"process.spawn@1","rules":[{"program":"/usr/bin/git","env":["HOME"]}]}`
+in `io`. `io.process(rt)` then projects a `Proc`, and `proc.run` runs `/usr/bin/git`
+with an empty environment except `HOME`; any other program is `NotGranted()`. A granted
+program can do whatever the host lets it do.
+
 The run record path must be absolute; a template path may be relative. The launcher validates the record, checks
 its semantic program revision, entry and launch kind, checks required roots and
 admission conditions, then pins host grants before entry. The same binary can

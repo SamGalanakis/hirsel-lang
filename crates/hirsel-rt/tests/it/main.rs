@@ -13,6 +13,7 @@ mod mounts;
 mod net;
 mod net_script;
 mod network_replay;
+mod process;
 mod recorder_overlap;
 mod recording;
 mod regions;

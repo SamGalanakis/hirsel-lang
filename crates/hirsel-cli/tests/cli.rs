@@ -2221,3 +2221,61 @@ fn launch_admission_conditions_and_historical_replay() {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[test]
+fn real_host_processes_run_granted_echo_and_false_and_refuse_everything_else() {
+    let source = file(
+        r#"pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let p = io.process(rt)?
+  match proc.run(p, path.of("/bin/echo"), ["hello", "from echo"], b"", None(), 1024) {
+    Ok(o) => {
+      if o.status == Exited(0) && o.stdout == b"hello from echo\n" && o.stderr == b"" {
+        let _ = out.print(out, "echo ok\n")
+      }
+    },
+    Error(_) => (),
+  }
+  let fails = proc.run(p, path.of("/bin/false"), [], b"", None(), 1024)
+  if fails == Ok(ProcessOutput(status: Exited(1), stdout: b"", stderr: b"")) {
+    let _ = out.print(out, "false exited 1\n")
+  }
+  if proc.run(p, path.of("/bin/sh"), ["-c", "true"], b"", None(), 1024) == Error(NotGranted()) {
+    let _ = out.print(out, "sh not granted\n")
+  }
+  if proc.run(p, path.of("echo"), [], b"", None(), 1024) == Error(InvalidInput()) {
+    let _ = out.print(out, "search name refused\n")
+  }
+  Ok(())
+}
+"#,
+    );
+    let grants = file(
+        r#"{"io":{"stdout":"stdout.bytes@1","dirs":[],"process":{"provider":"process.spawn@1","rules":[{"program":"/bin/echo"},{"program":"/bin/false"}]}}}"#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--grants")
+        .arg(&grants)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "echo ok\nfalse exited 1\nsh not granted\nsearch name refused\n"
+    );
+    // Without the process grant there is no Proc: main returns its GrantError.
+    std::fs::write(&grants, r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]}}"#).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--grants")
+        .arg(&grants)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(grants).unwrap();
+}

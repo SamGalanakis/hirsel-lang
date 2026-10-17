@@ -1,0 +1,11 @@
+// rule: CAP-1
+// expect: run
+// An empty rule set is a Proc that runs nothing, checked before any effect.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let p = io.process(rt)?
+  failure.check(
+    proc.run(p, path.of("/bin/echo"), ["hello"], b"", None(), 64) == Error(NotGranted()),
+    Bounds()
+  )
+  Ok(())
+}

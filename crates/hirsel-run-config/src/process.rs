@@ -82,6 +82,29 @@ pub fn canonical_program(path: &str) -> bool {
     })
 }
 
+/// The checks every provider makes, in order, before any effect.
+pub fn check(program: &str, args: &[String], rules: &[ProcessRule]) -> Result<(), ProcessFailure> {
+    if !canonical_program(program) || args.iter().any(|a| a.contains('\0')) {
+        return Err(ProcessFailure::InvalidInput);
+    }
+    if !rules.iter().any(|r| r.program == program) {
+        return Err(ProcessFailure::NotGranted);
+    }
+    Ok(())
+}
+
+/// A completion's streams bounded by `max_output`, as every provider applies it.
+pub fn bounded(outcome: ProcessOutcome, max_output: u64) -> ProcessOutcome {
+    match outcome {
+        ProcessOutcome::Output { stdout, stderr, .. }
+            if stdout.len() as u64 > max_output || stderr.len() as u64 > max_output =>
+        {
+            ProcessOutcome::Error(ProcessFailure::OutputLimit)
+        }
+        outcome => outcome,
+    }
+}
+
 impl ProcessGrant {
     pub(crate) fn validate(&mut self) -> Result<(), RunRefusal> {
         let script =
@@ -128,4 +151,15 @@ impl ProcessGrant {
         }
         Ok(())
     }
+}
+
+/// The ordered script encoding used by scripted process tape requests.
+/// Encoding data grants no authority and does not admit a RunConfig.
+pub fn encode_process_runs(runs: &[ProcessRun]) -> Vec<u8> {
+    serde_json::to_vec(runs).expect("script data has no failing JSON values")
+}
+
+/// Decode script data without minting a validated run; the serving adapter checks it.
+pub fn decode_process_runs(bytes: &[u8]) -> Result<Vec<ProcessRun>, RunRefusal> {
+    serde_json::from_slice(bytes).map_err(|error| invalid("io.process.runs", &error.to_string()))
 }

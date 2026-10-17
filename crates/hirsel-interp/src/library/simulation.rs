@@ -34,6 +34,8 @@ pub enum Fault {
 pub struct SimulationConfig {
     /// Explicit script provider and exact rules; peer data never widens authority.
     pub net: Option<hirsel_run_config::NetGrant>,
+    /// Exact process rules; scripted runs never widen them.
+    pub process: Option<hirsel_run_config::ProcessGrant>,
     pub random_seed: u64,
     pub test_seed: u64,
     pub grants: BTreeSet<String>,
@@ -58,6 +60,7 @@ impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
             net: None,
+            process: None,
             random_seed: 0,
             test_seed: 0,
             grants: ["Io", "Args", "Env"]
@@ -65,10 +68,12 @@ impl Default for SimulationConfig {
                 .map(str::to_owned)
                 .collect(),
             mounts: BTreeMap::from([(String::new(), Access::ReadWrite)]),
-            projections: ["stdin", "stderr", "stdout", "tasks", "net", "random", "dir"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            projections: [
+                "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
             args: vec![],
             env: BTreeMap::new(),
             stdin: Vec::new(),
@@ -90,6 +95,10 @@ pub(crate) enum Grant {
     },
     Stream {
         net: u64,
+    },
+    Proc {
+        world: u64,
+        rules: Vec<hirsel_run_config::ProcessRule>,
     },
     Root(String),
     Dir {
@@ -117,6 +126,8 @@ pub(crate) enum Grant {
 pub struct Simulation {
     pub(super) net_worlds: BTreeMap<u64, super::net::World>,
     pub(super) net_streams: BTreeMap<u64, super::net::ScriptStream>,
+    pub(super) process_worlds: BTreeMap<u64, super::process::World>,
+    pub(super) supplied_process: Option<hirsel_run_config::ProcessOutcome>,
     pub config: SimulationConfig,
     pub events: Vec<CapabilityEvent>,
     pub stderr: Vec<u8>,
@@ -148,6 +159,10 @@ pub enum ObservedGrant {
     },
     Stream {
         net: u64,
+    },
+    Proc {
+        world: u64,
+        rules: Vec<hirsel_run_config::ProcessRule>,
     },
     Root(String),
     Directory {
@@ -189,6 +204,10 @@ impl Simulation {
                             rules: rules.clone(),
                         },
                         Grant::Stream { net } => ObservedGrant::Stream { net: *net },
+                        Grant::Proc { world, rules } => ObservedGrant::Proc {
+                            world: *world,
+                            rules: rules.clone(),
+                        },
                         Grant::Root(kind) => ObservedGrant::Root(kind.clone()),
                         Grant::Dir { tree, root, access } => ObservedGrant::Directory {
                             tree: *tree,
@@ -286,9 +305,12 @@ impl Simulation {
         }
         let random_seed = config.random_seed;
         let net_worlds = super::net::configured_world(config.net.as_ref())?;
+        let process_worlds = super::process::configured_world(config.process.as_ref())?;
         let mut simulation = Self {
             net_worlds,
             net_streams: BTreeMap::new(),
+            process_worlds,
+            supplied_process: None,
             config,
             events: vec![],
             stderr: Vec::new(),
@@ -534,6 +556,7 @@ impl Simulation {
             && match self.grants.get(id) {
                 Some(Grant::Net { .. }) => kind == "Net",
                 Some(Grant::Stream { .. }) => kind == "Stream",
+                Some(Grant::Proc { .. }) => kind == "Proc",
                 Some(Grant::Root(name)) => name == kind,
                 Some(Grant::Dir { .. }) => kind == "Dir",
                 Some(Grant::File { .. }) => kind == "File",

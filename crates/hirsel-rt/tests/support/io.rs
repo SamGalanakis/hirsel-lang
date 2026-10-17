@@ -138,6 +138,11 @@ pub fn replay_interpreter_with_fixture(
                 | Request::EnvGet { .. } => {
                     panic!("host input tapes require the explicit stream and Env replay fixture")
                 }
+                Request::Process { .. }
+                | Request::TestProcess { .. }
+                | Request::ProcessRun { .. } => {
+                    panic!("process tapes replay through tests/it/process.rs")
+                }
                 Request::MonotonicClock { io } => ("io.monotonic_clock", vec![handle("Io", *io)]),
                 Request::WallClock { io } => ("io.wall_clock", vec![handle("Io", *io)]),
                 Request::Monotonic { clock } => {
@@ -494,6 +499,15 @@ pub fn replay_interpreter_with_fixture(
                         }
                         hirsel_rt::handles::Grant::Test { .. } => {
                             ObservedGrant::Root("Test".into())
+                        }
+                        hirsel_rt::handles::Grant::Process { rules, world } => {
+                            ObservedGrant::Proc {
+                                world: match world {
+                                    hirsel_rt::process::ProcessWorld::Host => 0,
+                                    hirsel_rt::process::ProcessWorld::Script(id) => *id,
+                                },
+                                rules: rules.clone(),
+                            }
                         }
                         hirsel_rt::handles::Grant::Stdin => ObservedGrant::Root("Stdin".into()),
                         hirsel_rt::handles::Grant::Stderr => ObservedGrant::Root("Stderr".into()),

@@ -71,6 +71,10 @@ impl SimIo {
         self.state.mounts = mounts;
         Ok(())
     }
+    /// The admitted `io.process` grant. Absent, the root Proc runs nothing.
+    pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
+        self.state.set_process_grant(grant);
+    }
     /// The bound RunConfig rule set; replay re-derives every grant decision from it.
     pub fn set_net_rules(&mut self, rules: std::collections::BTreeSet<NetRule>) {
         self.state.net_rules = rules;
@@ -145,7 +149,19 @@ impl Adapter for SimIo {
                 _ => None,
             },
         };
-        let result = if matches!(
+        let result = if let Request::ProcessRun { .. } = request {
+            if event.fault.is_some() {
+                return Err(AdapterError::InvalidCompletion);
+            }
+            // The recorded completion stands in for the host; the checks are re-derived.
+            state.execute_process(
+                &mut |_| match &event.completion {
+                    Completion::Process(outcome) => Ok(outcome.clone()),
+                    _ => Err(AdapterError::InvalidCompletion),
+                },
+                &request,
+            )
+        } else if matches!(
             request,
             Request::Monotonic { .. } | Request::Wall { .. } | Request::ReadStdin { .. }
         ) {
