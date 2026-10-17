@@ -66,7 +66,9 @@ sequentially consistent scalar atomics. A payload with observable destruction ma
 its mutex noncopyable through the recursive Copyable bound; its single owner drops
 the payload through the evaluator. Copyable payload snapshots may remain in the
 library until the run ends, as with the reference model's other allocation costs.
-Shared, bounded arenas, regions and slots still report Error::Unavailable. Property traversal and test helpers execute ordinary
+`copy_to` uses the interpreter's iterative semantic value copy; checked execution
+uses the declared destination relation to retain the target arena lifetime.
+Shared, bounded arenas and sealed regions still report Error::Unavailable. Property traversal and test helpers execute ordinary
 std@1 source; core Test check_case reports its recorded seed and the supplied
 case index. Core test.fail records LANG-9 and only fails; std expect_error
 transfers the Error payload and destroys an Ok value before test.fail. Pull iterators own state/callbacks and lazily apply adapters;

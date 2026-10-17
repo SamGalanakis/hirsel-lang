@@ -476,10 +476,26 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             } => {
                 let site = self.construct_site(construct)?;
                 let ty = self.value_type(value)?;
+                let destination = match site.placement {
+                    Some(Placement::Fixed(StorageOwner::Heap(_))) => {
+                        self.module.const_zero(self.module.ptr_type())
+                    }
+                    Some(Placement::Fixed(StorageOwner::Arena(id))) => {
+                        let instance = &self.unit.tables.arenas[id.index()];
+                        let slot = self.slots[instance.slot.index()].ok_or_else(|| {
+                            CodegenError::Invalid {
+                                definition: self.definition().clone(),
+                                what: "arena token slot without storage".into(),
+                            }
+                        })?;
+                        self.load(Shape::Scalar(ScalarKind::Pointer), slot)
+                    }
+                    _ => return self.unsupported("a unique copy outside heap or arena storage"),
+                };
                 // An inline value (an aggregate, variant or inline array holding blocks) is
                 // copied in place: a bit copy in a slot of its layout whose holders the
                 // runtime rewrites to deep copies.
-                if deep && ty.repr == ValueRepr::Aggregate {
+                if deep && matches!(ty.repr, ValueRepr::Aggregate | ValueRepr::Callable) {
                     let shape = self.layout_shape(ty.layout)?;
                     let slot = self.stack(ty.layout)?;
                     let image = self.get(value)?;
@@ -487,18 +503,24 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     let entry = self.runtime(RuntimeEntry::UniqueCopyValue)?;
                     let descriptor = self.descriptor(ty.layout)?;
                     let site = self.const_u64(self.anchor_code(site.anchor)?);
-                    let status = self
-                        .builder
-                        .call(entry, &[self.context, descriptor, slot.ptr, site]);
+                    let status = self.builder.call(
+                        entry,
+                        &[self.context, descriptor, slot.ptr, destination, site],
+                    );
                     self.status_guard(status, failure)?;
                     let copy = self.load(shape, slot);
                     return self.define(result, copy);
                 }
-                if !matches!(
-                    site.placement,
-                    Some(Placement::Fixed(StorageOwner::Heap(_)))
-                ) {
-                    return self.unsupported("a unique copy outside the heap");
+                if deep
+                    && matches!(
+                        ty.repr,
+                        ValueRepr::Unit
+                            | ValueRepr::Scalar(_)
+                            | ValueRepr::Handle
+                            | ValueRepr::Arena
+                    )
+                {
+                    return self.define(result, self.get(value)?);
                 }
                 if ty.repr != ValueRepr::Block {
                     return self.invalid("a unique copy of a value that is not a block");
@@ -541,9 +563,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 })?;
                 let out = self.prologue.alloca(self.module.ptr_type(), 8);
                 let site = self.const_u64(self.anchor_code(site.anchor)?);
-                let status = self
-                    .builder
-                    .call(entry, &[self.context, self.get(value)?, site, out]);
+                let arguments = if deep {
+                    vec![self.context, self.get(value)?, destination, site, out]
+                } else {
+                    vec![self.context, self.get(value)?, site, out]
+                };
+                let status = self.builder.call(entry, &arguments);
                 self.status_guard(status, failure)?;
                 let copy = self.builder.load(self.module.ptr_type(), out, 8);
                 if !deep {

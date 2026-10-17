@@ -1013,6 +1013,13 @@ primary_operations! { self, call, context, name, a, value;
         if !a.is_empty() { return Err(invalid("heap operation arity")); }
         Value::Handle { kind: "$Heap".into(), id: 0 }
     },
+    Primitive: "copy_to" => {
+        match arg(a, 0)? {
+            Value::Handle { kind, .. } if kind == "$Heap" || kind == crate::checked::ARENA_HANDLE => {},
+            _ => return Err(invalid("copy_to destination is not an Arena")),
+        }
+        arg(a, 1)?.clone()
+    },
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
@@ -1041,7 +1048,7 @@ primary_operations! { self, call, context, name, a, value;
         let result = self.synchronization_call(name, &call, context);
         if result.is_err() && let Some(saved) = saved { self.synchronizers = saved; }
         return result.map(Some); },
-    Unavailable: "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Unavailable: "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" => {
         return self.network_call(name, &call, context).map(Some);
     },

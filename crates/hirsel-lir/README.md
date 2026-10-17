@@ -476,3 +476,8 @@ provenance through construction, storage versions and projected reads; regional
 constructions with elided drops must hold trivial fields or uncounted children
 of the same region. Other region payloads retain scheduled cleanup.
 User finalizers cannot be omitted, and nested regional values cannot return.
+
+LIR revision 25 adds `ConstantValue::Heap`, the distinguished inert Arena token.
+C admits that exact literal at Arena layout; integer bits and call results still
+cannot forge tokens. Scoped Arena tokens retain their open-region obligations.
+Runtime ABI 6 passes the destination token to both deep-copy entries.

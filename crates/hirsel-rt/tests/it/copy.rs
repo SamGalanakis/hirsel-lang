@@ -20,7 +20,7 @@ use support::*;
 fn copy(ctx: *mut RunCtx, block: *mut Header) -> *mut Header {
     let mut out = ptr::null_mut();
     assert_eq!(
-        unsafe { hirsel_rt_v2_unique_copy(ctx, block, 0, &mut out) },
+        unsafe { hirsel_rt_v2_unique_copy(ctx, block, ptr::null_mut(), 0, &mut out) },
         0
     );
     out
@@ -323,6 +323,7 @@ fn an_inline_value_s_holders_are_copied_in_place_keeping_their_sharing() {
             ctx.0,
             index(ctx.0, pair()),
             value.as_mut_ptr().cast::<u8>(),
+            ptr::null_mut(),
             0,
         )
     };
@@ -403,5 +404,79 @@ fn detach_preserves_sequence_length_and_returns_one_holder_in_every_storage_case
             (COUNT_IMMORTAL, length)
         );
         release(ctx.0, result);
+    }
+}
+
+/// Source values cannot observe allocator ownership or graph sharing. Check those
+/// independently here, including reads after both source arenas have closed.
+#[test]
+fn graph_copies_use_the_destination_and_outlive_source_arenas() {
+    use hirsel_rt::Region;
+    use hirsel_rt::region::{hirsel_rt_v2_region_enter, hirsel_rt_v2_region_exit};
+    use std::mem::MaybeUninit;
+
+    for (flags, fixed) in [
+        (0, false),
+        (CONFIG_DIAGNOSTIC, false),
+        (0, true),
+        (CONFIG_DIAGNOSTIC, true),
+    ] {
+        let parent = if fixed {
+            with_flags(pair(), hirsel_rt::LAYOUT_NO_EXTENT)
+        } else {
+            pair()
+        };
+        let child_layout = if fixed {
+            with_flags(leaf(8), hirsel_rt::LAYOUT_NO_EXTENT)
+        } else {
+            leaf(8)
+        };
+        let ctx = Ctx::with(Config {
+            flags,
+            ..Config::new()
+        });
+        let shared = alloc_block(ctx.0, child_layout, 8);
+        write_u64(shared, 0, 42);
+        unsafe { hirsel_rt_v2_dup(ctx.0, shared) };
+        let root = alloc_block(ctx.0, parent, 24);
+        write_ref(root, 0, shared);
+        write_ref(root, 8, shared);
+        write_u64(root, 16, 7);
+        let mut outer = MaybeUninit::<Region>::uninit();
+        let mut inner = MaybeUninit::<Region>::uninit();
+        unsafe {
+            hirsel_rt_v2_region_enter(ctx.0, outer.as_mut_ptr());
+            hirsel_rt_v2_region_enter(ctx.0, inner.as_mut_ptr());
+            let mut first = ptr::null_mut();
+            assert_eq!(
+                hirsel_rt_v2_unique_copy(ctx.0, root, outer.as_mut_ptr(), 0, &mut first),
+                0
+            );
+            let mut second = ptr::null_mut();
+            assert_eq!(
+                hirsel_rt_v2_unique_copy(ctx.0, first, inner.as_mut_ptr(), 0, &mut second),
+                0
+            );
+            assert_eq!(count(first), COUNT_IMMORTAL);
+            assert_eq!(count(child(second, 0)), COUNT_IMMORTAL);
+            assert_eq!(child(second, 0), child(second, 8));
+            assert_ne!(child(first, 0), child(second, 0));
+            assert_eq!(
+                ctx.stats().live_blocks,
+                2,
+                "arena copies allocated no heap blocks"
+            );
+            release(ctx.0, root);
+            let escaped = copy(ctx.0, second);
+            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner.as_mut_ptr(), 0), 0);
+            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer.as_mut_ptr(), 0), 0);
+            assert_eq!(read_u64(escaped, 16), 7);
+            assert_eq!(read_u64(child(escaped, 0), 0), 42);
+            assert_eq!(child(escaped, 0), child(escaped, 8));
+            assert_eq!(count(child(escaped, 0)), 2);
+            release(ctx.0, escaped);
+            assert_eq!(ctx.stats().live_blocks, 0);
+            assert_eq!(ctx.stats().active_regions, 0);
+        }
     }
 }

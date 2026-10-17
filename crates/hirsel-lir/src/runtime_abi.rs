@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -590,6 +590,7 @@ impl RuntimeEntry {
                     &[
                         CTX,
                         BLOCK,
+                        REGION,
                         p("site", U64),
                         p("out_block", ptr(N::Header, 2)),
                     ]
@@ -598,7 +599,15 @@ impl RuntimeEntry {
             Self::UniqueCopyValue => (
                 "hirsel_rt_v2_unique_copy_value",
                 U8,
-                const { &[CTX, LAYOUT, p("value", ptr(CName::U8, 1)), p("site", U64)] },
+                const {
+                    &[
+                        CTX,
+                        LAYOUT,
+                        p("value", ptr(CName::U8, 1)),
+                        REGION,
+                        p("site", U64),
+                    ]
+                },
             ),
             Self::Detach => (
                 "hirsel_rt_v2_detach",

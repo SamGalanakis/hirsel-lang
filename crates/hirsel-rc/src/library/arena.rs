@@ -53,3 +53,56 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     b.ret(result);
     Ok(b.finish())
 }
+
+/// `heap` is an inert allocator token, represented independently of any region.
+pub static HEAP: super::InlineLowering = super::InlineLowering {
+    path: || hirsel_syntax::DefPath::core("$intrinsic.heap"),
+    lower: |cx, call| {
+        let layout = cx.place_layout(call.destination)?;
+        let token = cx.constant(layout, ConstantValue::Heap);
+        cx.finish(call, token)?;
+        Ok(true)
+    },
+};
+
+pub static COPY_TO: LibraryBody = LibraryBody {
+    path: || hirsel_syntax::DefPath::core("copy_to"),
+    build: copy_to,
+};
+
+fn copy_to(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
+    let mut b = Body::new(cx)?;
+    let source = b.parameters[1];
+    let (value, loan) = b.borrow(source.address, false)?;
+    let result = b.fresh(source.layout);
+    let layout = b.cx.payload(source.layout).unwrap_or(source.layout);
+    let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
+    b.ed.unit.tables.constructs.push(ConstructSite {
+        arena_no_drop: false,
+        constructor: ConstructorKind::Tuple,
+        layout,
+        fields: PoolRange::EMPTY,
+        destination: DestinationClass::Arena(b.parameters[0].slot),
+        placement: None,
+        anchor: b.anchor,
+    });
+    let next = b.failure(None);
+    let cleanup = b.ed.unit.tables.failures[next.index()].cleanup;
+    let ending = b.block(BlockKind::FailureCleanup, &[]);
+    b.ed.code[ending.index()].push(Inst::EndLoan {
+        loan,
+        if_active: false,
+    });
+    b.ed.unit.terminators[ending.index()] = Terminator::Jump(cleanup);
+    let failure = b.failure_to(ending, &[], None);
+    b.push(Inst::UniqueCopy {
+        result,
+        value,
+        construct,
+        deep: true,
+        failure,
+    });
+    b.end_loan(loan);
+    b.ret(Some(result));
+    Ok(b.finish())
+}

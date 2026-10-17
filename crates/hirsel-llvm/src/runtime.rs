@@ -89,7 +89,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
     let cells: &[u32] = match entry {
         R::CtxStats | R::BuilderGrow | R::BuilderPublish => &[1],
         R::Reuse => &[5],
-        R::UniqueCopy | R::Detach => &[3],
+        R::UniqueCopy => &[4],
+        R::Detach => &[3],
         R::UniqueCopyValue => &[2],
         R::RegionReserve | R::BuilderBegin => &[4],
         _ => &[],

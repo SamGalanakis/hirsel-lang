@@ -474,3 +474,44 @@ fn a_store_in_a_loop_does_not_prove_a_frame_stable_arena_token() {
         |k| *k == K::Placement("unproved arena child-credit elision"),
     );
 }
+
+/// Only the distinguished Heap literal is a constant allocator token; zero
+/// integer bits do not become a token by being given the Arena representation.
+#[test]
+fn the_heap_literal_is_a_token_but_integer_bits_are_not() {
+    pair(
+        |mutant| {
+            let mut t = Lir::<Placed>::new(&[], None);
+            let result = t.plain(l::ARENA);
+            let ty = t.builder.unit.values[result.index()].ty;
+            t.builder.unit.tables.constants.push(ConstantData {
+                ty,
+                value: if mutant {
+                    ConstantValue::Integer(0)
+                } else {
+                    ConstantValue::Heap
+                },
+            });
+            t.builder.push(
+                ENTRY,
+                Inst::Const {
+                    result,
+                    constant: ConstantId(0),
+                },
+            );
+            let next = t.builder.block(BlockKind::Body, &[]);
+            let fail = t.builder.propagate();
+            t.call(
+                ENTRY,
+                &[TOKEN],
+                None,
+                &[ArgumentValue::Value(result)],
+                (next, &[]),
+                fail,
+            );
+            t.builder.ret(next, None);
+            t.check()
+        },
+        |k| matches!(k, K::Type("constant" | "forged arena token")),
+    );
+}

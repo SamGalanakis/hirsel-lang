@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 5
+#define HIRSEL_RT_V2_ABI_VERSION 6
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 
@@ -347,12 +347,12 @@ uint8_t hirsel_rt_v2_reuse(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token, ui
 void hirsel_rt_v2_dispose(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token);
 
 /* Deep unique copy. */
-uint8_t hirsel_rt_v2_unique_copy(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t site,
+uint8_t hirsel_rt_v2_unique_copy(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, hirsel_rt_v2_region *region, uint64_t site,
                                  hirsel_rt_v2_header **out_block);
 
 /* Deep unique copy of an inline value: its holder slots rewritten to copies in place. */
 uint8_t hirsel_rt_v2_unique_copy_value(hirsel_rt_v2_ctx *ctx, uint32_t index,
-                                       uint8_t *value, uint64_t site);
+                                       uint8_t *value, hirsel_rt_v2_region *region, uint64_t site);
 
 /* Copy-on-write detach: the block alone, its counted children shared. */
 uint8_t hirsel_rt_v2_detach(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t site,

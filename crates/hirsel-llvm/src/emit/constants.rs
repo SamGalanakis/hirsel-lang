@@ -8,6 +8,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let shape = self.shape(self.lir_type(data.ty)?)?;
         let module = self.module;
         Ok(match (&data.value, shape) {
+            (ConstantValue::Heap, Shape::Scalar(ScalarKind::Pointer)) => {
+                module.const_zero(module.ptr_type())
+            }
             (ConstantValue::Unit, Shape::Unit) => module.const_zero(self.llvm_type(shape)),
             (ConstantValue::Bool(b), Shape::Scalar(ScalarKind::Bool)) => {
                 module.const_int(module.int_type(1), u128::from(*b))

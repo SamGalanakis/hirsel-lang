@@ -1,0 +1,33 @@
+// rule: MEM-4
+// expect: run
+// stdout: ok
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let copied: List[String] = arena.with(
+    fn(a: Arena) -> List[String] {
+      let source: List[String] = ["first", "second"]
+      let inside: List[String] in a = copy_to(a, source)
+      arena.with(
+        fn(b: Arena) -> List[String] {
+          let nested: List[String] in b = copy_to(b, inside)
+          copy_to(heap, nested)
+        }
+      )
+    }
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if copied == ["first", "second"] {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

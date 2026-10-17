@@ -280,6 +280,10 @@ reuse, elided dups and kept fields through counters and the units.
 through the pipeline: C accepts each stage, and the heap executor and the
 interpreter agree on results and SEM-1 failures.
 
+`arena::COPY_TO` builds a deep `UniqueCopy` with the allocator parameter as its
+construction destination. `arena::HEAP` imports the inert counted-heap token as
+`ConstantValue::Heap` (LIR revision 25); scoped tokens still come from `ArenaOpen`.
+
 ## Native library (LIR schema revision 7)
 
 `library` holds the core library's generic operations as LIR.

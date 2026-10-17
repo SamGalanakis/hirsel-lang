@@ -715,7 +715,7 @@ pub enum Inst {
         value: ValueId,
     },
     /// A copy of a counted block into the construct's destination, holding
-    /// one credit. Deep (`unique x`): every counted heap block the value
+    /// one credit. Deep (`unique x`, `copy_to`): every headered block the value
     /// reaches is copied once, sharing inside the graph preserved. Shallow
     /// (a copy-on-write detach, OWN-4): only the block itself, each counted
     /// child shared with one more holder.
@@ -1185,6 +1185,8 @@ pub struct CallSite {
 /// Typed literal bits; floats keep their bit patterns.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum ConstantValue {
+    /// The distinguished counted-heap Arena token.
+    Heap,
     Unit,
     Bool(bool),
     Integer(u128),
@@ -2792,6 +2794,7 @@ snapshot_struct!(CallSite {
     anchor
 });
 snapshot_enum!(ConstantValue {
+    Heap,
     Unit,
     Bool(value),
     Integer(value),

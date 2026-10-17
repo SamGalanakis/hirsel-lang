@@ -52,8 +52,8 @@ pub(crate) enum Val {
         env: Option<Ptr>,
     },
     Handle(u64),
-    /// An arena token: the ledger region it names.
-    Arena(usize),
+    /// An allocator token: None is the counted heap, Some names a ledger region.
+    Arena(Option<usize>),
     Token(Option<TokenId>),
     Mark(usize),
     Mask(Vec<bool>),
@@ -2858,6 +2858,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .ok_or_else(|| err(V::Malformed, "unknown constant"))?;
                 let ty = self.lir_type(unit, data.ty)?;
                 let val = match (&data.value, ty.repr) {
+                    (ConstantValue::Heap, ValueRepr::Arena) => Val::Arena(None),
                     (ConstantValue::Unit, _) => Val::Unit,
                     (ConstantValue::Bool(b), ValueRepr::Scalar(ScalarKind::Bool)) => Val::Bits {
                         scalar: ScalarKind::Bool,
@@ -4010,15 +4011,17 @@ impl<'p, S: Stage> Machine<'p, S> {
                     return self.fail_at(f, failure, true);
                 }
                 let site = self.construct_site(unit, construct)?;
-                if !matches!(
-                    site.placement,
-                    Some(Placement::Fixed(StorageOwner::Heap(_)))
-                ) {
-                    return fail(V::Unsupported, "unique copy into a non-heap destination");
+                if !deep
+                    && !matches!(
+                        site.placement,
+                        Some(Placement::Fixed(StorageOwner::Heap(_)))
+                    )
+                {
+                    return fail(V::Unsupported, "shallow detach into a non-heap destination");
                 }
                 let val = self.read_use(f, value)?;
                 let val = if deep {
-                    self.deep_copy(val)?
+                    self.deep_copy(f, site.placement, val)?
                 } else {
                     self.detach(val)?
                 };
@@ -4531,7 +4534,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             Inst::ArenaToken { result, mark } => {
                 let rt = self.region_of(f, mark)?;
-                self.define_fresh(f, result, Val::Arena(rt))?;
+                self.define_fresh(f, result, Val::Arena(Some(rt)))?;
             }
             Inst::ArenaOpen { .. } => {
                 return fail(V::Malformed, "an arena opening after placement");
@@ -4879,8 +4882,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 return fail(V::Unsupported, "run-time construction into static storage");
             }
             Some(Placement::Fixed(StorageOwner::Arena(arena))) => {
-                let region = self.arena_of(f, arena)?;
-                return self.arena_alloc(region, payload, size);
+                if let Some(region) = self.arena_of(f, arena)? {
+                    return self.arena_alloc(region, payload, size);
+                }
+                true
             }
             Some(Placement::Fixed(StorageOwner::Frozen(_))) => {
                 return fail(V::Unsupported, "M2 Shared placement");
@@ -4904,7 +4909,7 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     /// The arena an arena placement names: the token in its instance's slot,
     /// which must be a checked token of an open arena.
-    fn arena_of(&self, f: &Frame, arena: ArenaInstanceId) -> Checked<usize> {
+    fn arena_of(&self, f: &Frame, arena: ArenaInstanceId) -> Checked<Option<usize>> {
         let u = self.unit(f.unit);
         let instance = u
             .tables
@@ -4929,7 +4934,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "an arena placement whose slot holds no token",
             );
         };
-        if !self.ledger.regions[region].live {
+        if region.is_some_and(|region| !self.ledger.regions[region].live) {
             return fail(V::UseAfterFree, "an arena placement in a closed arena");
         }
         Ok(region)
@@ -5623,7 +5628,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         })
     }
 
-    /// The heap or static block a holder cell names: a deep copy copies it.
+    /// The headered heap, static or arena block a holder cell names: a deep copy copies it.
     /// A static block's cells hold its children without a credit, so any
     /// non-borrowed data cell is a holder.
     fn holder_target(&self, cell: &Cell) -> Option<Ptr> {
@@ -5633,7 +5638,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
     }
 
-    /// The heap or static block a data cell names, borrowed or not: the
+    /// The headered block a data cell names, borrowed or not: the
     /// cells of a value read through a loan are its holders' views.
     fn block_target(&self, cell: &Cell) -> Option<Ptr> {
         let Cell::Data { ptr, .. } = cell else {
@@ -5642,21 +5647,37 @@ impl<'p, S: Stage> Machine<'p, S> {
         self.ledger
             .allocations
             .get(ptr.alloc.0 as usize)
-            .filter(|a| matches!(a.owner, Owner::Heap | Owner::Static) && a.count.is_some())
+            .filter(|a| {
+                matches!(a.owner, Owner::Heap | Owner::Static | Owner::Region(_))
+                    && a.count.is_some()
+            })
             .map(|_| *ptr)
     }
 
-    /// `unique x`: deep-copy every heap or static block reachable from `val`
+    /// Deep-copy every headered block reachable from `val` into its destination
     /// through holder cells, each once, so sharing inside the graph is kept.
     /// Static and immortal blocks are copied too: the copy is unique, so a
     /// `unique` parameter writes it in place (MODE-2).
     ///
     /// An inline value (`Val::Image`) is copied in place: its holder cells
     /// name deep copies with a credit each, sharing kept across the value.
-    fn deep_copy(&mut self, val: Val) -> Checked<Val> {
+    fn deep_copy(&mut self, f: &Frame, placement: Option<Placement>, val: Val) -> Checked<Val> {
+        let mut callable = None;
         let (root, mut image) = match val {
+            Val::Callable {
+                code,
+                env: Some(root),
+            } => {
+                callable = Some(code);
+                (Some(root), None)
+            }
             Val::Ptr(root) => (Some(root), None),
             Val::Image(image) => (None, Some(image)),
+            Val::Unit
+            | Val::Bits { .. }
+            | Val::Handle(_)
+            | Val::Arena(_)
+            | Val::Callable { env: None, .. } => return Ok(val),
             _ => return fail(V::Unsupported, "unique copy of a non-block value"),
         };
         let mut copies: BTreeMap<AllocId, Ptr> = BTreeMap::new();
@@ -5672,10 +5693,10 @@ impl<'p, S: Stage> Machine<'p, S> {
             if !a.extent.resources.is_empty() {
                 return fail(V::TypeConfusion, "unique copy of a resource");
             }
-            let (layout, size, align) = (a.layout.expect("live"), a.extent.len(), a.align);
+            let (layout, size) = (a.layout.expect("live"), a.extent.len());
             let image = a.extent.copy(0, size, None);
             pending.extend(image.cells.values().filter_map(|c| self.holder_target(c)));
-            let copy = self.heap_alloc(layout, size, align)?;
+            let copy = self.place_sized(f, placement, layout, size)?;
             self.ledger.get_mut(copy.alloc).extent.place(0, image);
             copies.insert(p.alloc, copy);
         }
@@ -5739,7 +5760,19 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
         }
         Ok(match (root, image) {
-            (Some(root), _) => Val::Ptr(copies[&root.alloc]),
+            (Some(root), _) => {
+                let copy = Ptr {
+                    offset: root.offset,
+                    ..copies[&root.alloc]
+                };
+                match callable {
+                    Some(code) => Val::Callable {
+                        code,
+                        env: Some(copy),
+                    },
+                    None => Val::Ptr(copy),
+                }
+            }
             (None, Some(image)) => Val::Image(image),
             (None, None) => unreachable!("a root or an image"),
         })

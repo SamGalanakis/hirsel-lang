@@ -503,8 +503,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     /// A block at an arena token: a counted heap block when the
     /// token is null (`heap`), else an immortal block bump-allocated in that arena. An `Arena`
-    /// value is never null (C admits only open arena records), so only the hidden caller
-    /// destination (`nullable`) tests for the heap.
+    /// value can be the inert heap token as well as an open arena record.
+    /// `nullable` controls whether this destination admits the heap token.
     pub(super) fn arena_block(
         &mut self,
         token: Value<'m>,
@@ -918,8 +918,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     return self.invalid("an arena token slot without storage");
                 };
                 let token = self.load(Shape::Scalar(ScalarKind::Pointer), slot);
-                let block = self.arena_block(token, false, site, extent_value, align, flat)?;
-                arena = Some((token, false));
+                let block = self.arena_block(token, true, site, extent_value, align, flat)?;
+                arena = Some((token, true));
                 (block, self.payload_of(block, site.layout)?)
             }
             (Some(Placement::CallerDestination), ValueRepr::Block) if token.is_none() => {

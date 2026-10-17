@@ -1173,6 +1173,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                     );
                 let ok = unit.types[data.ty.index()] == *self.ty(result)
                     && match (&data.value, repr) {
+                        (ConstantValue::Heap, ValueRepr::Arena) => true,
                         (ConstantValue::Unit, ValueRepr::Unit) => true,
                         (ConstantValue::Bool(_), ValueRepr::Scalar(ScalarKind::Bool)) => true,
                         (ConstantValue::Integer(n), ValueRepr::Scalar(k)) => {
@@ -3474,6 +3475,9 @@ impl<S: Stage> Checker<'_, '_, S> {
             let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
             for (i, inst) in insts.iter().enumerate() {
                 let producer = matches!(
+                    inst,
+                    Inst::Const { constant, .. } if unit.tables.constants[constant.index()].value == ConstantValue::Heap
+                ) || matches!(
                     inst,
                     Inst::ArenaOpen { .. }
                         | Inst::ArenaToken { .. }

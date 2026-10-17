@@ -76,6 +76,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "slots.get"
             | "slots.remove"
             | "arena.with"
+            | "copy_to"
             | "failure.check"
             | "sorted_map.insert"
             | "$intrinsic.SortedMapOrder_open"
@@ -238,6 +239,7 @@ pub(crate) const MAP_BODIES: &[&str] = &[
 ];
 
 pub const INLINE_OPERATIONS: &[&str] = &[
+    "$intrinsic.heap",
     "slots.empty",
     "bytes.from_list",
     "bytes.len",

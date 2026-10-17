@@ -1,5 +1,6 @@
-//! Deep unique copy (`unique x`, a deep LIR `UniqueCopy`): every counted heap block reachable
-//! from a root block, or from an inline value's holder slots, is copied once, so sharing
+//! Deep copy (`unique x`, `copy_to`, a deep LIR `UniqueCopy`): every headered block
+//! reachable from a root block or an inline value's holder slots is copied once
+//! into the explicit heap/arena destination, so sharing
 //! inside the copied graph is preserved. A copy-on-write
 //! detach (a shallow `UniqueCopy`, OWN-4) copies the root block alone and gives each counted
 //! child one more holder.
@@ -32,13 +33,25 @@ use crate::{STATUS_OK, fault};
 
 /// A new block of `original`'s layout, capacity and alignment holding its bytes, with one
 /// holder.
-unsafe fn clone_block(ctx: &mut RunCtx, original: *mut Header) -> *mut Header {
-    // SAFETY: `original` is a live heap block; the copy is fresh storage of its capacity.
+unsafe fn clone_block(
+    ctx: &mut RunCtx,
+    original: *mut Header,
+    destination: *mut crate::region::Region,
+) -> *mut Header {
+    // SAFETY: `original` is a live headered block; the copy holds all its payload data.
     unsafe {
         if (*ctx.descriptor((*original).index())).finalizer.is_some() {
             fault("a unique copy reached a resource, which is noncopyable");
         }
-        let (capacity, align) = ctx.heap.usable(original);
+        let (capacity, mut align) = ctx.heap.usable(original);
+        // Fixed arena blocks omit extent metadata and use exactly the descriptor size.
+        let layout = &*ctx.descriptor((*original).index());
+        let capacity = if !destination.is_null() && layout.flags & crate::LAYOUT_NO_EXTENT != 0 {
+            align = layout.align;
+            layout.size
+        } else {
+            capacity
+        };
         #[cfg(feature = "measurement")]
         {
             ctx.heap.measurement.record("copied_blocks", 1);
@@ -46,14 +59,24 @@ unsafe fn clone_block(ctx: &mut RunCtx, original: *mut Header) -> *mut Header {
             ctx.heap.measurement.record("copied_bytes", capacity);
             ctx.heap.measurement.copied_bytes += capacity;
         }
-        let copy = crate::alloc::hirsel_rt_v2_alloc(
-            ctx,
-            (*original).index(),
-            capacity,
-            align,
-            DOMAIN_HEAP,
-            0,
-        );
+        let copy = if destination.is_null() {
+            crate::alloc::hirsel_rt_v2_alloc(
+                ctx,
+                (*original).index(),
+                capacity,
+                align,
+                DOMAIN_HEAP,
+                0,
+            )
+        } else {
+            crate::region::hirsel_rt_v2_arena_alloc(
+                ctx,
+                destination,
+                (*original).index(),
+                capacity,
+                align,
+            )
+        };
         ptr::copy_nonoverlapping(payload(original), payload(copy), capacity as usize);
         copy
     }
@@ -150,7 +173,11 @@ unsafe fn holders(layout: *const Layout, value: *mut u8, visit: &mut dyn FnMut(*
 /// The deep copy walk: each slot of `root` naming a counted block is rewritten to that
 /// block's copy (made once), and then every copy's slots in turn. A block reached again gains
 /// one holder instead of a second copy, so sharing inside the graph is kept.
-unsafe fn copy_graph(raw: *mut RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) {
+unsafe fn copy_graph(
+    raw: *mut RunCtx,
+    destination: *mut crate::region::Region,
+    root: impl FnOnce(&mut dyn FnMut(*mut u8)),
+) {
     // SAFETY: caller contract of the entries below.
     unsafe {
         let ctx = &mut *raw;
@@ -174,7 +201,7 @@ unsafe fn copy_graph(raw: *mut RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8)
                     target
                 }
                 None => {
-                    let target = clone_block(&mut *raw, child);
+                    let target = clone_block(&mut *raw, child, destination);
                     copies.insert(child, target);
                     pending.borrow_mut().push(target);
                     target
@@ -199,16 +226,18 @@ unsafe fn copy_graph(raw: *mut RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8)
 /// `unique x`: a deep copy of the graph of counted heap blocks reachable from `block`, written
 /// to `out_block` with one holder. Sharing inside the graph is preserved (each block is copied
 /// once and every slot naming it names its copy), immortal and static blocks included.
-/// Returns 0; host exhaustion terminates environmentally. `site` is reserved for future
+/// A null destination selects the heap; otherwise every copied block belongs to
+/// that active arena. Returns 0; host exhaustion terminates environmentally. `site` is reserved for future
 /// bounded arena charging, as for `alloc`.
 ///
 /// # Safety
 /// `ctx` is live, `block` a live block the caller can read (it keeps its own credit), and
-/// `out_block` writable.
+/// `out_block` writable; `destination` is null or an active arena record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
     ctx: *mut RunCtx,
     block: *mut Header,
+    destination: *mut crate::region::Region,
     _site: u64,
     out_block: *mut *mut Header,
 ) -> u8 {
@@ -218,7 +247,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
             check_live_block(&*ctx, block);
         }
         let mut root: *mut Header = ptr::null_mut();
-        copy_graph(ctx, |redirect| {
+        copy_graph(ctx, destination, |redirect| {
             let slot = (&raw mut root).cast::<u8>();
             slot.cast::<*mut Header>().write_unaligned(block);
             redirect(slot);
@@ -231,23 +260,27 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
 /// `unique x` of an inline value (an aggregate, variant or inline array holding blocks):
 /// `value` is a bit copy of the source, whose holder slots (read through `layout`'s
 /// program) still name the source's blocks without a credit; each is rewritten in place to a
-/// deep copy, as `unique_copy` makes them, one visited map serving the whole value. Returns
+/// deep copy at `destination`, as `unique_copy` makes them, one visited map serving the whole value. Returns
 /// 0; host exhaustion terminates environmentally.
 ///
 /// # Safety
 /// `ctx` is live, `layout` the descriptor of the value at `value`, which the caller owns and
 /// may write, and whose slots name live blocks the source keeps its credits for.
+/// `destination` is null (heap) or an active arena record.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
     ctx: *mut RunCtx,
     index: u32,
     value: *mut u8,
+    destination: *mut crate::region::Region,
     _site: u64,
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
         let layout = (*ctx).descriptor(index);
-        copy_graph(ctx, |redirect| holders(layout, value, redirect));
+        copy_graph(ctx, destination, |redirect| {
+            holders(layout, value, redirect)
+        });
         STATUS_OK
     }
 }
@@ -342,7 +375,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_detach(
         if ctx.heap.diagnostic {
             check_live_block(&*ctx, block);
         }
-        let copy = clone_block(ctx, block);
+        let copy = clone_block(ctx, block, ptr::null_mut());
         let diagnostic = ctx.heap.diagnostic;
         holders(
             ctx.descriptor((*copy).index()),

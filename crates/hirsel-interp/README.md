@@ -79,7 +79,8 @@ The core dispatches no named numeric/string operations. In particular integer
 conversion signatures, float-to-integer behavior, explicit fused math, IEEE bits,
 float min/max/total order, scalar views are dependency
 owned by M against docs/spec/core-library.md (which settles #18). There is no conversion opcode in frozen `Rvalue`.
-Region cleanup is unavailable until its owning runtime task. Unavailable features are
+`copy_to` deep-copies semantic values; checked result bounds follow its allocator
+parameter. Bounded arenas and sealed-region cleanup remain unavailable. Unavailable features are
 reported explicitly, never silently approximated.
 
 ## Explicit limit and exit policies

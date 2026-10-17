@@ -534,6 +534,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     })
     .collect();
     t.constants = [
+        ConstantValue::Heap,
         ConstantValue::Unit,
         ConstantValue::Bool(true),
         ConstantValue::Integer(u128::MAX),

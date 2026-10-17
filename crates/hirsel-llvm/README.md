@@ -242,7 +242,8 @@ with `COUNT_UNIQUE`, without a runtime call or diagnostic-flag branch. `Weaken`
 is a move, and `UniqueCopy` calls
 `hirsel_rt_v2_unique_copy` when deep and `hirsel_rt_v2_detach` when shallow; a deep copy of
 an inline value spills it to a stack slot of its layout and calls
-`hirsel_rt_v2_unique_copy_value` with that layout's descriptor. Regions use `region_enter`/`reserve`/`schedule`/`exit` on a
+`hirsel_rt_v2_unique_copy_value` with that layout's descriptor. Both deep-copy entries
+receive the construction's destination token (runtime ABI 6). Regions use `region_enter`/`reserve`/`schedule`/`exit` on a
 48-byte record per region instance, and a region reference addresses its payload directly.
 `FinalizeBegin`/`FinalizeEnd` call `hirsel_rt_v2_finalize_begin`/`end`. A layout with a
 user finalizer gets a private drop wrapper `hirsel.drop.<id>` that calls its drop body
@@ -255,8 +256,8 @@ also has one shared identity. Private drop, hash and compare helpers keep their 
 per-layout names: their addresses are not descriptor identity. A construction in an arena or at a caller
 destination reads its arena token (the arena instance's slot, or the hidden destination; null is the heap)
 and bump-allocates an immortal block inline by advancing the record's cursor within its
-inline limit. A construction in an `Arena` slot has no heap test: C admits no null `Arena`
-value. Segment overflow calls `hirsel_rt_v2_arena_alloc`, which, like `hirsel_rt_v2_alloc`,
+inline limit. An `Arena` token may also be the inert `heap` value (null); constructions
+and graph copies test that token before accessing a region record. Segment overflow calls `hirsel_rt_v2_arena_alloc`, which, like `hirsel_rt_v2_alloc`,
 returns the block and cannot fail (runtime ABI 3), so no allocation tests a status; a null inline limit
 keeps diagnostic allocations in the runtime for owner tracking and poisoning.
 A heap construction whose extent is a constant small request calls its pool's fast path

@@ -102,8 +102,11 @@ Invariants:
   heap)` class. Region exit releases the region's outgoing holders and fails
   if any surviving storage references the region. Regions exit innermost
   first. An arena token is a checked cell naming its region; an arena
-  construction reads it from its slot, requires the region open, and allocates
-  an immortal block the region frees at exit.
+  construction reads it from its slot, requires a scoped region open, and allocates
+  an immortal block the region frees at exit. The distinguished heap token has no
+  region and allocates counted heap storage. Deep copies traverse headered arena
+  owners as well as heap/static owners and allocate every copied block at the
+  construction's destination, preserving sharing within the graph.
 - Terminal audit is compulsory on success and on language failure: observe the
   result, release harness roots, drain, then require no live heap allocation,
   raw storage, unconsumed token, open resource or handle, or live region.

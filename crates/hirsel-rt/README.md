@@ -95,10 +95,13 @@ Invariants and boundary:
   credits and finalizes scheduled resources newest first at exit, then the pool keeps at most
   8 MiB idle (MEM-10). Unpublished builders may grow (in place or by relocation); published
   ones never move.
-- `unique_copy` deep-copies the counted heap blocks reachable from a root through each block's
+- `unique_copy` deep-copies headered heap, static and arena blocks reachable from a root through each block's
   `RELEASE` steps (tags and loops respected), each block once so sharing is kept; immortal and
   static blocks are copied too, since a `unique` value is written in place without a test,
-  and a resource or handle is an invariant fault. Its visited map and
+  and a resource or handle is an invariant fault. Runtime ABI 6 takes an explicit destination:
+  null selects the counted heap; an active region selects immortal arena blocks for the
+  entire copied graph, with no outgoing heap credits. Fixed arena copies use descriptor
+  size/alignment; other copies retain source capacity. Its visited map and
   work stacks are runtime-owned, so the native stack stays constant over any depth.
 - `unique_copy_value` is `unique_copy` from an inline value (an aggregate, variant or inline
   array holding blocks): the caller's bit copy, whose holder slots (read through the value's

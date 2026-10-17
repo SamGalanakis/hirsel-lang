@@ -56,7 +56,7 @@ pub(crate) enum Cell {
     /// nested function's value, called only through `Callee::Bound`.
     Code(Option<usize>),
     /// An arena token: the ledger region of the arena it names.
-    Arena(usize),
+    Arena(Option<usize>),
 }
 
 /// Bytes with an initialized map and checked handle cells.
@@ -146,7 +146,7 @@ impl Extent {
         let marker = match &cell {
             Cell::Data { ptr, .. } => u64::from(ptr.alloc.0) << 32 | ptr.offset,
             Cell::Code(unit) => unit.map_or(0, |u| u as u64 + 1),
-            Cell::Arena(region) => *region as u64 + 1,
+            Cell::Arena(region) => region.map_or(0, |r| r as u64 + 1),
         };
         let bytes = marker.to_le_bytes();
         self.write_bytes(offset, &bytes[..word as usize]);
