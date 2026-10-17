@@ -485,6 +485,11 @@ pub fn elide(unit: &mut LirUnit<Placed>, table: &LayoutTable) {
         }
     }
     for (site, flag) in unit.tables.constructs.iter_mut().zip(flags) {
-        site.arena_no_drop = flag;
+        if !matches!(
+            site.placement,
+            Some(Placement::Fixed(StorageOwner::LocalRegion(_)))
+        ) {
+            site.arena_no_drop = flag;
+        }
     }
 }

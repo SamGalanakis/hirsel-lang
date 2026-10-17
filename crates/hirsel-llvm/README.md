@@ -482,3 +482,10 @@ instructions and terminators for validator and backend tests. Suite-specific
 layout tables, identities, cleanup recipes and assertions remain in test support.
 
 Type-store test fixtures use `hirsel-layout` for type-to-layout and ABI derivation.
+
+Nested compiler-local region aggregates use headerless SSA block pointers.
+Field stores rebase them to the logical layout's pointer encoding, and uncounted
+reads reverse that bridge without reading a header. Inline uncounted aggregates
+copy only bytes. The construction drop-elision flag suppresses regional child
+cleanup only when C proves the fields and lifetime; other region payloads keep
+their scheduled cleanup.

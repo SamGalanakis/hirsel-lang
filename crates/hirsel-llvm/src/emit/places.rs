@@ -88,7 +88,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// A value as its layout reads it: an uncounted reference (region storage) at a counted
     /// block layout is rebased to where that block's header would be, so code that adds the
     /// payload offset reaches its payload. Only the address is computed; no header is read.
-    pub(super) fn counted_view(&mut self, value: ValueId) -> Emitted<Value<'m>> {
+    pub(super) fn counted_view(&self, value: ValueId) -> Emitted<Value<'m>> {
         let ty = self.value_type(value)?;
         let v = self.get(value)?;
         let (LayoutKind::Block { payload } | LayoutKind::Box { payload }) =
@@ -112,6 +112,30 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .module
             .const_int(self.module.int_type(64), (offset as u128).wrapping_neg());
         Ok(self.builder.offset(v, back))
+    }
+
+    /// Stored fields follow their logical layout's pointer encoding. A read into
+    /// an uncounted SSA value reverses the address-only bridge used by counted_view.
+    pub(super) fn read_uncounted(
+        &self,
+        value: Value<'m>,
+        ty: LirTypeId,
+        address: AddressId,
+    ) -> Emitted<Value<'m>> {
+        let ty = self.lir_type(ty)?;
+        if self.whole_slot(address).is_some() || ty.repr != ValueRepr::Uncounted {
+            return Ok(value);
+        }
+        let layout = self.layout(ty.layout)?;
+        if let LayoutKind::Block { payload } | LayoutKind::Box { payload } = layout.kind
+            && !layout
+                .scan
+                .iter()
+                .any(|s| matches!(s, ScanStep::Uncounted { .. }))
+        {
+            return Ok(self.payload_of(value, payload)?.ptr);
+        }
+        Ok(value)
     }
 
     /// Regional flat storage includes an immortal header before its payload.

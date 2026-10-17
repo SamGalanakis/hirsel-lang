@@ -76,7 +76,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     ) -> Emitted {
         let site = self.construct_site(construct)?;
         let ty = self.value_type(result)?;
-        if matches!(ty.repr, ValueRepr::Block | ValueRepr::Uncounted) {
+        if matches!(
+            self.layout(ty.layout)?.kind,
+            LayoutKind::Block { .. } | LayoutKind::Box { .. }
+        ) {
             if ty.repr == ValueRepr::Block
                 && let Some((builder, released)) = self.dying_builder(site)?
             {
@@ -300,7 +303,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return self.invalid("a construction without a value for its field");
         };
         let at = self.field_place(place, field.offset, field.layout, field.unaligned)?;
-        self.store(self.value_shape(value.value)?, self.get(value.value)?, at);
+        self.store(
+            self.value_shape(value.value)?,
+            self.counted_view(value.value)?,
+            at,
+        );
         Ok(())
     }
 
@@ -335,7 +342,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 self.store(
                     self.value_shape(value.value)?,
-                    self.get(value.value)?,
+                    self.counted_view(value.value)?,
                     place,
                 );
                 return Ok(());
@@ -389,7 +396,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 for value in values {
                     let offset = start + u64::from(value.field) * stride;
                     let at = self.field_place(place, offset, element, false)?;
-                    self.store(self.value_shape(value.value)?, self.get(value.value)?, at);
+                    self.store(
+                        self.value_shape(value.value)?,
+                        self.counted_view(value.value)?,
+                        at,
+                    );
                 }
                 return Ok(());
             }
@@ -802,8 +813,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     /// A block construction: a heap block (allocated, or installed in `token`'s storage), or
     /// uncounted storage reserved in a compiler-local region, whose zeroed payload then
-    /// receives the fields. A region payload whose layout drops anything is scheduled with the
-    /// region, which drops it at exit.
+    /// receives the fields. Payload cleanup is scheduled unless C has proved
+    /// that its children are uncounted and end with the region.
     pub(super) fn construct_block(
         &mut self,
         result: ValueId,
@@ -854,7 +865,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let mut bytes = self.const_u64(extent);
             for value in self.pool(site.fields, &self.unit.pools.fields)? {
                 let temp = self.stack(element)?;
-                self.store(self.value_shape(value.value)?, self.get(value.value)?, temp);
+                self.store(
+                    self.value_shape(value.value)?,
+                    self.counted_view(value.value)?,
+                    temp,
+                );
                 let extent = self.extent(element, temp.ptr)?;
                 bytes = self.builder.binary(BinOp::Add, bytes, extent);
             }
@@ -883,7 +898,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 let payload = self.reserve_region(record, site.layout, extent_value, failure)?;
                 let storage = payload.ptr;
-                if !self.layout(site.layout)?.drop.is_empty() {
+                if !site.arena_no_drop && !self.layout(site.layout)?.drop.is_empty() {
                     let descriptor = self.descriptor(site.layout)?;
                     let schedule = self.runtime(RuntimeEntry::RegionSchedule)?;
                     let status = self

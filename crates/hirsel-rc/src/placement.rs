@@ -14,7 +14,7 @@
 //! stores, reads, copies, replacements and block parameters. A class stays in
 //! the region only when every member is defined by a region construction or
 //! by that flow and no member is returned, passed to a call, captured,
-//! stored into a field or another construction, projected into, written
+//! stored into a foreign container, written
 //! through or disposed. Region values are uncounted: their slots lose their
 //! drops, which the region's exit discharges, and a copy of one is a plain
 //! read.
@@ -25,10 +25,10 @@
 use crate::insert::{Editor, Facts, Lay, PENDING_FAILURE, synthesize_failure};
 use crate::instance::{InstanceId, Instances};
 use hirsel_lir::ir::{
-    AddressBase, ArenaInstanceId, ArgumentValue, BlockId, BlockKind, ConstructorKind,
-    DestinationClass, ExternalInstance, Holding, Inst, LirType, LirTypeId, LirUnit, Placement,
-    ReadMode, RegionInstance, RegionInstanceId, ScopeId, ScopeInfo, SlotId, SlotInfo, SlotKind,
-    StorageOwner, TaskDomainId, Terminator, ValueId, ValueRepr,
+    ArenaInstanceId, ArgumentValue, BlockId, BlockKind, ConstructorKind, DestinationClass,
+    ExternalInstance, Holding, Inst, LirType, LirTypeId, LirUnit, Placement, ReadMode,
+    RegionInstance, RegionInstanceId, ScopeId, ScopeInfo, SlotId, SlotInfo, SlotKind, StorageOwner,
+    TaskDomainId, Terminator, ValueId, ValueRepr,
 };
 use hirsel_lir::layout_types::{LayoutKind, LayoutTable, StorageKind};
 use hirsel_lir::stage::{Placed, Value};
@@ -245,8 +245,11 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
     let facts = Facts::new(&unit, table);
     let n_values = unit.values.len();
     let mut classes = Classes::new(n_values, unit.slots.len());
-    let is_block =
-        |unit: &LirUnit<Placed>, ty: LirTypeId| unit.types[ty.index()].repr == ValueRepr::Block;
+    let carries = |ty: LirTypeId| {
+        let ty = &unit.types[ty.index()];
+        ty.repr == ValueRepr::Block || ty.repr == ValueRepr::Aggregate && !lay.trivial(ty.layout)
+    };
+
     // Members defined some other way than a region construction or the
     // class's own flow, and members that leave the frame.
     let mut foreign: BTreeSet<Node> = BTreeSet::new();
@@ -299,14 +302,6 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
             } => {
                 written.insert(address);
             }
-            Inst::Read {
-                result,
-                address,
-                mode: ReadMode::Take,
-                ..
-            } if unit.values[result.index()].holding != Holding::Plain => {
-                written.insert(address);
-            }
             _ => {}
         }
     }
@@ -337,13 +332,26 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                     result, construct, ..
                 } => {
                     let site = &unit.tables.constructs[construct.index()];
+                    let inline = unit.types[unit.values[result.index()].ty.index()].repr
+                        == ValueRepr::Aggregate
+                        && !lay.destructible(site.layout);
                     if region_candidate(&unit, table, site, result) {
                         sources.insert(result);
+                    } else if inline {
+                        // An inline container joins its region children.
                     } else {
                         define_foreign(result);
                     }
+                    let encoded = site.constructor != ConstructorKind::Box
+                        && table
+                            .layout(site.layout)
+                            .is_some_and(|l| l.kind == LayoutKind::Flat);
                     for f in site.fields.get(&unit.pools.fields).unwrap_or(&[]) {
-                        escaped.insert(Node::Value(f.value));
+                        if encoded {
+                            escaped.insert(Node::Value(f.value));
+                        } else if carries(unit.values[f.value.index()].ty) {
+                            classes.union(Node::Value(result), Node::Value(f.value));
+                        }
                     }
                 }
                 // An element built in place copies its fields' bytes; its
@@ -401,6 +409,13 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                     Some(s) => {
                         classes.union(Node::Value(result), Node::Slot(s));
                         classes.union(Node::Value(reaching), Node::Slot(s));
+                    }
+                    None if carries(unit.values[result.index()].ty) => {
+                        if let Some(root) = root_of(address) {
+                            classes.union(Node::Value(result), root);
+                        } else {
+                            define_foreign(result);
+                        }
                     }
                     None => define_foreign(result),
                 },
@@ -527,13 +542,13 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
     }
     for v in 0..n_values {
         let node = Node::Value(ValueId(v as u32));
-        if !is_block(&unit, unit.values[v].ty) {
+        if !carries(unit.values[v].ty) {
             let c = classes.of(node);
             bad.insert(c);
         }
     }
     for s in 0..unit.slots.len() {
-        if !is_block(&unit, unit.slots[s].ty) {
+        if !carries(unit.slots[s].ty) {
             let c = classes.of(Node::Slot(SlotId(s as u32)));
             bad.insert(c);
         }
@@ -622,10 +637,16 @@ fn rewrite(
             unit.slots[s].ty = ty;
         }
     }
+    let facts = Facts::new(&unit, table);
     for a in 0..unit.addresses.len() {
-        if let AddressBase::Slot(s) = unit.addresses[a].base
-            && local_slots[s.index()]
-            && unit.addresses[a].projection.len == 0
+        let local_root = facts.places[a].as_ref().is_some_and(|p| match p.root {
+            crate::insert::Root::Slot(s) => local_slots[s.index()],
+            crate::insert::Root::Value(v) => local_values[v.index()],
+        });
+        let ty = &unit.types[unit.addresses[a].ty.index()];
+        if local_root
+            && (ty.repr == ValueRepr::Block
+                || ty.repr == ValueRepr::Aggregate && !lay.trivial(ty.layout))
         {
             let old = unit.addresses[a].ty;
             let ty = twin(&mut unit, old);
@@ -651,10 +672,18 @@ fn rewrite(
                 Inst::Construct {
                     result, construct, ..
                 } if local_values[result.index()] => {
-                    ed.unit.tables.constructs[construct.index()].placement =
-                        Some(Placement::Fixed(StorageOwner::LocalRegion(region)));
-                    out.push(inst);
-                    out.push(Inst::RegionPublish { value: result });
+                    if lay
+                        .payload(ed.unit.types[ed.unit.values[result.index()].ty.index()].layout)
+                        .is_some()
+                    {
+                        ed.unit.tables.constructs[construct.index()].arena_no_drop = true;
+                        ed.unit.tables.constructs[construct.index()].placement =
+                            Some(Placement::Fixed(StorageOwner::LocalRegion(region)));
+                        out.push(inst);
+                        out.push(Inst::RegionPublish { value: result });
+                    } else {
+                        out.push(inst);
+                    }
                 }
                 // Region contents end with the region.
                 Inst::Drop { address, .. } if whole_local(&facts, address) => {}
@@ -664,7 +693,18 @@ fn rewrite(
                     address,
                     reaching,
                     ..
-                } if whole_local(&facts, address) => out.push(Inst::Read {
+                } if local_values[result.index()] => out.push(Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    mode: ReadMode::Borrow,
+                }),
+                Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    ..
+                } if local_values[result.index()] => out.push(Inst::Read {
                     result,
                     address,
                     reaching,

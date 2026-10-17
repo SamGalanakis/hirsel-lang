@@ -1872,6 +1872,17 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let bits = scalar::canonical(k, u128::from_le_bytes(bytes));
                 Ok((Val::Bits { scalar: k, bits }, None, false))
             }
+            ValueRepr::Uncounted
+                if !matches!(
+                    self.record(layout)?.kind,
+                    LayoutKind::Block { .. } | LayoutKind::Box { .. }
+                ) =>
+            {
+                if size > 0 && !self.initialized(&e, 0, layout)?.1 {
+                    return Err(uninit());
+                }
+                Ok((Val::Image(e), None, false))
+            }
             ValueRepr::Block | ValueRepr::Uncounted => {
                 if !e.all_init(0, self.word) {
                     return Err(uninit());
@@ -2950,7 +2961,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                     {
                         Val::Ptr(root)
                     }
-                    _ if ty.repr == ValueRepr::Uncounted => Val::Ptr(root),
+                    _ if ty.repr == ValueRepr::Uncounted
+                        && matches!(
+                            self.record(ty.layout)?.kind,
+                            LayoutKind::Block { .. } | LayoutKind::Box { .. }
+                        ) =>
+                    {
+                        Val::Ptr(root)
+                    }
                     _ if ty.layout == held => {
                         let size = self.size(held)?;
                         let e = self.ledger.check(root)?.extent.copy(0, size, None);

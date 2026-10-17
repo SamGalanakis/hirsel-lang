@@ -1,0 +1,37 @@
+// rule: MEM-5
+// expect: run
+// stdout: ok
+// Nested lists and their inline tuple containers remain in the closure region.
+@noalloc
+fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {
+  f()
+}
+
+@noalloc
+fn example() -> u64 {
+  invoke(
+    fn() {
+      let xs: List[(List[u64], u64)] = [([7], 0u64)]
+      let (n, _) = xs[0]
+      let deeper: List[List[u64]] = [[9]]
+      let alias = copy deeper
+      if alias[0][0] == 9 {
+        n[0]
+      } else {
+        0u64
+      }
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(
+    io.stdout(rt)?,
+    if example() == 7 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

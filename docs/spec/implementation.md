@@ -17,6 +17,30 @@ feedback edges. Each validator still derives its own IR facts and edge policy
 independently. These utilities carry no producer ownership or liveness answers;
 sharing them is an implementation choice, not a language rule.
 
+## Nested compiler-local region aggregates
+
+Placement may keep a nested construction in the frame's internal region only
+when every block container on every path to it is placed in that same region,
+all inline containers carry uncounted fields, and no value escapes the region's
+lifetime. Foreign children, mutation, calls and returns conservatively prevent
+this placement. User-visible finalization is never elided.
+
+Region block references and inline region aggregates carry no holder credits.
+Their copies are plain reads; their slot drops and region payload child drops
+are omitted. The region frees all of their storage together. Logical layouts
+still describe the fields; the LIR representation records their uncounted use.
+The existing construction drop-elision flag distinguishes these payloads from
+ordinary region payloads whose cleanup remains scheduled. Nested pointer cells
+retain their logical layout encoding; the emitter rebases uncounted pointers
+at field stores and reads without reading a counted header.
+
+C independently checks that a construction with elided drops contains only trivial
+fields or uncounted children in the same region, propagates region provenance
+through inline containers, storage and projections, and rejects a value returned
+or used after its region ends. H checks the actual physical cells: no heap holder
+may disappear when a region is freed, and no reference outside the region may
+point into it at exit. Neither check trusts placement's escape analysis.
+
 ## The reference interpreter
 
 The reference interpreter executes typed IR directly and is the oracle for every observable

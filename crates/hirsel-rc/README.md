@@ -533,3 +533,10 @@ legalization share `PassError`. Unsupported and malformed failures retain their
 message as text; instance and layout errors retain their structured payloads.
 The driver supplies stage and definition attribution through Display at its six
 pass boundaries. Ready returns the same error without duplicate wrappers.
+
+Nested constructions join the same placement class through their nontrivial
+fields and projected extractions. Inline containers use `Uncounted` at their
+existing inline layouts; their copies and ownership takes become plain reads
+and their drops disappear. A foreign child or escaping container keeps the entire
+class counted. Flat encodings read their inputs without retaining references,
+so they do not join those inputs' placement classes.

@@ -302,13 +302,13 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
             _ => {}
         }
     }
-    for (i, site) in u
-        .tables
-        .constructs
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.arena_no_drop)
-    {
+    for (i, site) in u.tables.constructs.iter().enumerate().filter(|(_, s)| {
+        s.arena_no_drop
+            && !matches!(
+                s.placement,
+                Some(Placement::Fixed(StorageOwner::LocalRegion(_)))
+            )
+    }) {
         let valid = cx.stage >= StageKind::Placed
             && ordinary[i]
             && arena_slot(cx, site)

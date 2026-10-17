@@ -1513,6 +1513,8 @@ conformance/MEM/MEM-5-map-bad.hir
 conformance/MEM/MEM-5-map-ok.hir
 conformance/MEM/MEM-5-mut-handback-cleanup-summary-bad.hir
 conformance/MEM/MEM-5-mut-handback-cleanup-summary-run.hir
+conformance/MEM/MEM-5-nested-region-closure-run.hir
+conformance/MEM/MEM-5-nested-region-escape-reject.hir
 conformance/MEM/MEM-5-net-read-noalloc-bad.hir
 conformance/MEM/MEM-5-net-read-noalloc-ok.hir
 conformance/MEM/MEM-5-nfc-noalloc-bad.hir

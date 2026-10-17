@@ -1,0 +1,8 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 6
+// Returning the nested container requires heap placement in a noalloc body.
+@noalloc
+fn escape() -> List[(List[u64], u64)] {
+  let xs: List[(List[u64], u64)] = [([7], 0u64)]
+  xs
+}

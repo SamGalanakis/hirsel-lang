@@ -445,3 +445,10 @@ H writes its checked handle with the block's owning layout into the owner word,
 then audits the Slice's existing counted scan and drop. Other raw scalar pointer
 stores retain their existing type checks. The pipeline byte-freeze controls audit
 static, shared and grown owners and every injected failure in both placements.
+
+Compiler-local region constructions marked for drop elision omit payload drops, including nested
+inline `Uncounted` fields. H still records every actual cell and frees the
+region through its ledger: a hidden heap holder fails the count or leaked-credit
+audit, and an outside reference fails the region escape audit. The source-free controls
+in `tests/it/nested_regions.rs` also check C's independent field and lifetime
+proofs, with accepted twins.

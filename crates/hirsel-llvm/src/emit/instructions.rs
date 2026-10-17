@@ -262,6 +262,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             } => {
                 let place = self.place(address)?;
                 let value = self.load_bounded(self.value_shape(result)?, place)?;
+                let value =
+                    self.read_uncounted(value, self.unit.values[result.index()].ty, address)?;
                 if let Some(slot) = self.whole_slot(address)
                     && let Some(state) = self.sequence_states[slot.index()]
                 {
@@ -278,7 +280,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
             Inst::Store { address, value, .. } => {
                 let place = self.place(address)?;
-                self.store(self.value_shape(value)?, self.get(value)?, place);
+                let stored = if self.whole_slot(address).is_some() {
+                    self.get(value)?
+                } else {
+                    self.counted_view(value)?
+                };
+                self.store(self.value_shape(value)?, stored, place);
                 if let Some(slot) = self.whole_slot(address) {
                     self.settled(slot.index());
                 }
@@ -298,8 +305,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let Some(Some(slot)) = self.slots.get(displaced.index()).copied() else {
                     return self.invalid("a Replace without its displaced slot");
                 };
+                let old =
+                    self.read_uncounted(old, self.unit.slots[displaced.index()].ty, address)?;
                 self.store(shape, old, slot);
-                self.store(shape, self.get(value)?, place);
+                let stored = if self.whole_slot(address).is_some() {
+                    self.get(value)?
+                } else {
+                    self.counted_view(value)?
+                };
+                self.store(shape, stored, place);
                 if let Some(state) = self.sequence_states[displaced.index()] {
                     let length = self.sequence_length(old, slot.layout)?;
                     self.builder.store(length, state.length, 8);

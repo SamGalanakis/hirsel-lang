@@ -149,7 +149,7 @@ pub enum ValueRepr {
     Scalar(ScalarKind),
     /// A counted heap block reference: one holder credit.
     Block,
-    /// A reference into uncounted storage (region, arena, frozen, static).
+    /// An uncounted block reference, or inline aggregate of regional references.
     Uncounted,
     /// An inline aggregate value.
     Aggregate,
@@ -1059,7 +1059,8 @@ pub enum FlatFieldOp {
 /// obligation and (from Placed on) its storage placement.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ConstructSite {
-    /// C proves every owned child belongs to this same stable arena token.
+    /// C proves every nontrivial child belongs to the same stable arena token
+    /// or local region.
     /// No child-credit walk or payload drop is scheduled for this construction.
     pub arena_no_drop: bool,
     pub constructor: ConstructorKind,

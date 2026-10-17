@@ -158,7 +158,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 ValueRepr::Block,
                 LayoutKind::Block { payload: p } | LayoutKind::Box { payload: p },
             ) if *p == held => Ok(block),
-            (ValueRepr::Uncounted, _) => Ok(self.payload_of(block, held)?.ptr),
+            (ValueRepr::Uncounted, LayoutKind::Block { .. } | LayoutKind::Box { .. }) => {
+                Ok(self.payload_of(block, held)?.ptr)
+            }
             _ if ty.layout == held => {
                 let place = self.payload_of(block, held)?;
                 Ok(self.load(self.layout_shape(held)?, place))

@@ -8,6 +8,7 @@ mod entry_return;
 mod fixtures;
 mod heap;
 mod moved_variant;
+mod nested_regions;
 mod nested_views;
 mod niche;
 mod operations;

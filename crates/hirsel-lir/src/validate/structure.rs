@@ -603,7 +603,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 (ValueRepr::Token, LayoutKind::Header) => true,
                 (ValueRepr::RegionMark | ValueRepr::InitMask { .. }, LayoutKind::Scalar(_)) => true,
                 (
-                    ValueRepr::Aggregate,
+                    ValueRepr::Aggregate | ValueRepr::Uncounted,
                     LayoutKind::Aggregate
                     | LayoutKind::Environment { .. }
                     | LayoutKind::Variant
@@ -1440,7 +1440,8 @@ impl<S: Stage> Checker<'_, '_, S> {
             Inst::Address { address, .. } => {
                 let info = &unit.addresses[address.index()];
                 if let AddressBase::Value(v) = info.base
-                    && !matches!(self.ty(v).repr, ValueRepr::Block | ValueRepr::Uncounted)
+                    && (!matches!(self.ty(v).repr, ValueRepr::Block | ValueRepr::Uncounted)
+                        || self.cx.layouts.payload(self.layout_of(v)).is_none())
                 {
                     self.add(site, K::AddressType(address));
                 }
@@ -2149,7 +2150,9 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
             }
             Inst::RegionPublish { value } => {
-                if self.ty(value).repr != ValueRepr::Uncounted {
+                if self.ty(value).repr != ValueRepr::Uncounted
+                    || layouts.payload(self.layout_of(value)).is_none()
+                {
                     self.add(site, K::Type("region publication"));
                 }
             }
@@ -2413,7 +2416,7 @@ impl<S: Stage> Checker<'_, '_, S> {
         self.constructed_fields(site, construct, facts, None);
         let result_layout = self.layout_of(result);
         let ok = match self.ty(result).repr {
-            ValueRepr::Block | ValueRepr::Uncounted => {
+            ValueRepr::Block | ValueRepr::Uncounted if layouts.payload(result_layout).is_some() => {
                 layouts.payload(result_layout) == Some(c.layout)
             }
             _ => result_layout == c.layout && c.constructor != ConstructorKind::Box,
@@ -2580,9 +2583,10 @@ impl<S: Stage> Checker<'_, '_, S> {
         // An arena block reference keeps the Block representation: it carries
         // its domain, an immortal arena block or a counted heap block when the
         // token is `heap`.
+        let block = self.cx.layouts.payload(self.layout_of(result)).is_some();
         let repr_ok = match (kind, repr) {
-            (Some(StorageKind::Heap), r) => r != ValueRepr::Uncounted,
-            (Some(StorageKind::Arena), r) => r != ValueRepr::Uncounted,
+            (Some(StorageKind::Heap), r) => !block || r != ValueRepr::Uncounted,
+            (Some(StorageKind::Arena), r) => !block || r != ValueRepr::Uncounted,
             (Some(_), r) => r == ValueRepr::Uncounted || !matches!(r, ValueRepr::Block),
             (None, _) => true,
         };
@@ -2622,7 +2626,9 @@ impl<S: Stage> Checker<'_, '_, S> {
                     let ok = distinct.len() == arms.len()
                         && match self.ty(value).repr {
                             ValueRepr::Scalar(k) => integer_bits(k).is_some(),
-                            ValueRepr::Aggregate => self.tag_variants(value).is_some(),
+                            ValueRepr::Aggregate | ValueRepr::Uncounted => {
+                                self.tag_variants(value).is_some()
+                            }
                             _ => false,
                         };
                     if !ok {
@@ -3511,14 +3517,12 @@ impl<S: Stage> Checker<'_, '_, S> {
 
     fn regions(&mut self, facts: &mut Facts) {
         let unit = self.cx.unit;
-        let mut seeded = BTreeSet::new();
         for block in &unit.blocks {
             let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
             for inst in insts {
                 match *inst {
                     Inst::RegionEnter { result, region } => {
                         facts.regions[result.index()].insert(region);
-                        seeded.insert(result);
                     }
                     Inst::Construct {
                         result, construct, ..
@@ -3545,25 +3549,143 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
             }
         }
-        // Reservations take their mark's region, possibly through joins.
-        loop {
-            let before = facts.regions.clone();
-            for block in &unit.blocks {
-                let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
-                for inst in insts {
-                    if let Inst::RegionReserve { result, mark, .. }
-                    | Inst::ArenaToken { result, mark } = *inst
+        // Reconstruct containment and storage flow independently of placement.
+        let mut users = vec![Vec::new(); unit.values.len()];
+        let mut flow = |from: ValueId, to: ValueId| {
+            users[from.index()].push(to);
+        };
+        for edge in &unit.tables.edges {
+            for (&a, &p) in edge
+                .arguments
+                .get(&unit.pools.values)
+                .unwrap_or(&[])
+                .iter()
+                .zip(
+                    unit.blocks[edge.target.index()]
+                        .parameters
+                        .get(&unit.pools.values)
+                        .unwrap_or(&[]),
+                )
+            {
+                flow(a, p);
+            }
+        }
+        for inst in &unit.instructions {
+            match *inst {
+                Inst::RegionReserve { result, mark, .. } | Inst::ArenaToken { result, mark } => {
+                    flow(mark, result)
+                }
+                Inst::Read {
+                    result, reaching, ..
+                }
+                | Inst::Copy {
+                    result, reaching, ..
+                } if matches!(self.ty(result).repr, ValueRepr::Uncounted) => flow(reaching, result),
+                Inst::Store { value, version, .. } | Inst::Replace { value, version, .. } => {
+                    flow(value, version)
+                }
+                Inst::Construct {
+                    result, construct, ..
+                } => {
+                    let c = &unit.tables.constructs[construct.index()];
+                    if c.constructor != ConstructorKind::Box
+                        && self
+                            .cx
+                            .layouts
+                            .get(c.layout)
+                            .is_some_and(|l| l.kind == LayoutKind::Flat)
                     {
-                        let regions = facts.regions[mark.index()].clone();
-                        facts.regions[result.index()].extend(regions);
+                        continue;
+                    }
+                    for f in c.fields.get(&unit.pools.fields).unwrap_or(&[]) {
+                        flow(f.value, result);
                     }
                 }
+                _ => {}
             }
-            propagate(self.cx, &facts.cfg, &mut facts.regions, |param, arg| {
-                param.union(arg).copied().collect()
-            });
-            if before == facts.regions {
-                break;
+        }
+        let mut queue: std::collections::VecDeque<_> = (0..unit.values.len())
+            .filter(|&v| !facts.regions[v].is_empty())
+            .collect();
+        let mut queued: Vec<_> = facts.regions.iter().map(|r| !r.is_empty()).collect();
+        while let Some(v) = queue.pop_front() {
+            queued[v] = false;
+            for &to in &users[v] {
+                let incoming = facts.regions[v].clone();
+                let old = facts.regions[to.index()].len();
+                facts.regions[to.index()].extend(incoming);
+                if facts.regions[to.index()].len() != old && !queued[to.index()] {
+                    queue.push_back(to.index());
+                    queued[to.index()] = true;
+                }
+            }
+        }
+        // Inline uncounted fields must have regional provenance; an ABI or
+        // static value with ordinary counted fields cannot acquire this shape.
+        for v in 0..unit.values.len() {
+            let value = ValueId(v as u32);
+            let layout = self.layout_of(value);
+            if self.ty(value).repr == ValueRepr::Uncounted
+                && self.cx.layouts.payload(layout).is_none()
+                && self.cx.layouts.get(layout).is_some_and(|l| {
+                    !l.scan.is_empty() || !l.drop.is_empty() || l.finalizer.is_some()
+                })
+                && facts.regions[v].is_empty()
+            {
+                self.add(Site::UNIT, K::Type("region construction field"));
+            }
+        }
+        // A headerless regional payload cannot own a heap child. Inline
+        // containers use the same rule before being stored into that payload.
+        for (b, block) in unit.blocks.iter().enumerate() {
+            for (i, inst) in block
+                .instructions
+                .get(&unit.instructions)
+                .unwrap_or(&[])
+                .iter()
+                .enumerate()
+            {
+                if let Inst::Construct {
+                    result, construct, ..
+                } = *inst
+                {
+                    let c = &unit.tables.constructs[construct.index()];
+                    let regional = self.ty(result).repr == ValueRepr::Uncounted
+                        && (self.cx.layouts.payload(self.layout_of(result)).is_none()
+                            || c.arena_no_drop);
+                    let encoded = c.constructor != ConstructorKind::Box
+                        && self
+                            .cx
+                            .layouts
+                            .get(c.layout)
+                            .is_some_and(|l| l.kind == LayoutKind::Flat);
+                    for f in c.fields.get(&unit.pools.fields).unwrap_or(&[]) {
+                        if encoded {
+                            continue;
+                        }
+                        let child_regions = &facts.regions[f.value.index()];
+                        let ok = if regional {
+                            self.cx.layouts.trivial(self.layout_of(f.value))
+                                || matches!(self.ty(f.value).repr, ValueRepr::Uncounted)
+                                    && !child_regions.is_empty()
+                                    && *child_regions == facts.regions[result.index()]
+                        } else {
+                            child_regions.is_empty()
+                        };
+                        if !ok {
+                            self.add(
+                                Site::at(BlockId(b as u32), i as u32),
+                                K::Type("region construction field"),
+                            );
+                        }
+                    }
+                    if regional && self.cx.layouts.destructible(c.layout) {
+                        self.add(
+                            Site::at(BlockId(b as u32), i as u32),
+                            K::Type("region construction finalizer"),
+                        );
+                    }
+                }
             }
         }
         for block in &unit.blocks {
