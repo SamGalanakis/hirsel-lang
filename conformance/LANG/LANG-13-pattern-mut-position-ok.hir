@@ -1,0 +1,6 @@
+// rule: LANG-13
+// expect: accept
+fn probe() {
+  let mut (stream, _) = (1u64, 2u64)
+  stream += 1
+}

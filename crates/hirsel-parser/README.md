@@ -44,3 +44,6 @@ MEM-12 validation. Item.name_span, SyntaxFile.symbols and has_syntax_errors are
 populated, including invalid lexical tokens in a recovered parse.
 
 Revision 7 accepts represented opaque @capability ordinary/resource declarations instead of restricting the attribute to bodyless types. @serializable is a zero-argument type attribute and serializable a contextual generic bound. Eligibility, ceilings, structural bounds and scopes remain semantic checks; parser/formatter pins use syntax-only fragments.
+
+Binding-level `mut` in a pattern reports LANG-13 with the accepted
+`let mut (stream, _) = ...` spelling; mutability still applies to the whole pattern.

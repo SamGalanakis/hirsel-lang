@@ -327,6 +327,12 @@ impl Parser<'_> {
         self.complete(result)
     }
     fn pattern_inner(&mut self) -> Parsed<PatternId> {
+        if self.at("mut") {
+            return self.fail(
+                const { RuleId::of("LANG-13") },
+                "binding-level `mut` is unsupported; put `mut` after `let`, as in `let mut (stream, _) = ...`",
+            );
+        }
         let start = self.pos;
         let kind = if self.eat("_") {
             PatternKind::Wildcard

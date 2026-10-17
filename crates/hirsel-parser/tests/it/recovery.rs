@@ -190,3 +190,21 @@ fn item_recovery_does_not_publish_nested_definitions_from_a_bad_header() {
     assert_eq!(output.syntax.roots.len(), 1);
     assert_eq!(output.syntax.tree.items[0].definition.0.name, "usable");
 }
+
+#[test]
+fn pattern_mut_suggests_let_mut_before_the_whole_pattern() {
+    let (accepted, _) = support::parse("fn probe() { let mut (stream, _) = (1u64, 2u64) }");
+    assert!(
+        accepted.diagnostics.is_empty(),
+        "{:?}",
+        accepted.diagnostics
+    );
+    let (rejected, _) = support::parse("fn probe() { let (mut stream, _) = (1u64, 2u64) }");
+    let first = &rejected.diagnostics[0];
+    assert_eq!(first.rule.as_str(), "LANG-13");
+    assert!(
+        first.message.contains("let mut (stream, _)"),
+        "{}",
+        first.message
+    );
+}
