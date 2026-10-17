@@ -177,9 +177,11 @@ when the context allows: post-order, as the runtime's worklist frees. A layout w
 empty program has no function, only the inline count test and the free. A child whose
 layout the record fixes (a `Block` field) is released by its own function, by native
 recursion under a budget of 64 nested frames, with the next sibling's header prefetched; a
-block that dies with the budget spent, a slice's owner, a callable's environment and a
-block of a layout without glue go to `hirsel_rt_v2_release` with the descriptor their own
-header names, so the stack is bounded and the order is the walk's. A layout whose release
+block that dies with the budget spent, and the final credit of a slice's owner, a callable's
+environment or a block of a layout without glue go to `hirsel_rt_v2_release` with the descriptor
+their own header names, so the stack is bounded and the order is the walk's. Shared and immortal
+erased owners use the same inline count edge; only a dying owner reads its descriptor and calls
+the runtime, which accounts for that edge in measurement builds. A layout whose release
 can never fail carries no status. A masked `Release`, `Reset` and a block of any other
 layout call the runtime with the descriptor index stored in the block header. An inline `Release` is the same walk
 over the value in its slot: handles

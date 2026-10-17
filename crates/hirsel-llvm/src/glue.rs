@@ -13,8 +13,9 @@
 //!
 //! The runtime keeps everything else. A holder whose block layout the record does not fix (a
 //! slice's owner, a callable's environment) and a block whose layout has a finalizer, an
-//! inline resource or structure-of-arrays columns are released by `hirsel_rt_v2_release`
-//! with the descriptor the block's own header names. Children are released by native
+//! inline resource or structure-of-arrays columns use the same inline count edge. Their
+//! final credit goes to `hirsel_rt_v2_release` with the descriptor their own header names.
+//! Children are released by native
 //! recursion under a budget of [`GLUE_MAX_DEPTH`] nested glue frames; a block that dies with
 //! the budget spent goes to `hirsel_rt_v2_release` too, whose worklist uses constant native
 //! stack and never calls glue, so the stack a release needs is bounded whatever the data.
@@ -396,7 +397,19 @@ impl<'m, 'g> Walk<'m, 'g> {
     pub(crate) fn release(&mut self, block: Value<'m>, payload: Option<LayoutId>) -> Glued {
         let ptr_ty = self.module.ptr_type();
         let Some(payload) = payload.filter(|payload| covered(self.layouts, *payload)) else {
-            // The header's own descriptor, which also serves an erased environment.
+            // The count word's contract is independent of the payload layout. Only
+            // the final credit needs its descriptor and the runtime's drop walk.
+            let done = drop_edge(
+                self.module,
+                self.builder,
+                self.function,
+                block,
+                self.runtime
+                    .measure_release
+                    .map(|hook| (hook, self.context)),
+            );
+            // The runtime accounts for this dying edge, exactly once.
+            // The header's own descriptor also serves an erased environment.
             let descriptor = self.builder.load(
                 self.module.int_type(32),
                 self.builder.offset(block, self.int(LAYOUT_OFFSET)),
@@ -410,6 +423,8 @@ impl<'m, 'g> Walk<'m, 'g> {
             let null = self.module.const_zero(ptr_ty);
             let arguments = [self.context, block, descriptor, null, self.anchor];
             self.accumulate(self.builder.call(self.runtime.release, &arguments));
+            self.builder.br(done);
+            self.builder.position(done);
             return Ok(());
         };
         let leaf = self

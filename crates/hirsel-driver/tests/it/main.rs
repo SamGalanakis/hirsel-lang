@@ -19,6 +19,7 @@ mod contract_diagnostics;
 mod contracts;
 mod depth;
 mod dictionaries;
+mod erased_release_ir;
 mod float_bits_ir;
 mod formatting;
 mod frozen_revision;

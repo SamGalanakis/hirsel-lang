@@ -2703,6 +2703,7 @@ conformance/OWN/OWN-3-spec-append.hir
 conformance/OWN/OWN-3-spec-saxpy.hir
 conformance/OWN/OWN-3-wave1-indexed-view-bad.hir
 conformance/OWN/OWN-3-wave1-indexed-view-run.hir
+conformance/OWN/OWN-3-wordfreq-owned-keys-run.hir
 conformance/OWN/OWN-4-copy-on-write-element.hir
 conformance/OWN/OWN-4-copy-on-write-nested.hir
 conformance/OWN/OWN-4-counted-explicit-copy.hir
