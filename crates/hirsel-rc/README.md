@@ -269,7 +269,7 @@ reuse, elided dups and kept fields through counters and the units.
   `float.to_i32` switches on its status into `Ok(result)`,
   `Error(NotFinite)` and `Error(OutOfRange)`: inline constructions joined in
   a block whose parameter is the call's result. Ordinary std reductions stay source calls.
-- `liveness::inst_defs` lists the result and the flag of `Convert` and
+- `hirsel_lir::ir::Inst::defs` lists the result and the flag of `Convert` and
   `IntArith`; renumbering and liveness read definitions only from it.
 
 `hirsel-pipeline-tests/tests/rc/rc_legalize.rs` runs source programs for every operation at every width

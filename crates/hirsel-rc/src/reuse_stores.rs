@@ -44,7 +44,7 @@ pub fn keep(mut unit: LirUnit<Reuse>, table: &LayoutTable) -> LirUnit<Reuse> {
         }
     }
     for (i, inst) in unit.instructions.iter().enumerate() {
-        for v in crate::liveness::inst_defs(inst) {
+        for v in Inst::defs(inst) {
             defs[v.index()] = Some(Def::Inst(i));
         }
     }

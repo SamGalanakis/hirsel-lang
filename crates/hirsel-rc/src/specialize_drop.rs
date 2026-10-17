@@ -134,11 +134,7 @@ fn candidate(
             })
             .collect();
         let mut failures = vec![failure];
-        failures.extend(
-            code[first..r]
-                .iter()
-                .filter_map(crate::liveness::inst_failure),
-        );
+        failures.extend(code[first..r].iter().filter_map(Inst::failure));
         if !failures.iter().all(|&f| clonable(ed, f, &copied)) {
             continue;
         }
@@ -166,7 +162,7 @@ fn mentioning(ed: &Editor<Reuse>, f: FailureId, values: &BTreeSet<ValueId>) -> B
     let succ = |b: BlockId| -> Vec<EdgeId> {
         let mut out: Vec<EdgeId> = ed.code[b.index()]
             .iter()
-            .filter_map(crate::liveness::inst_failure)
+            .filter_map(Inst::failure)
             .map(|f| unit.tables.failures[f.index()].cleanup)
             .collect();
         out.extend(crate::insert::terminator_edges(
@@ -229,14 +225,14 @@ fn clonable(ed: &Editor<Reuse>, f: FailureId, values: &BTreeSet<ValueId>) -> boo
             );
         plain
             && ed.code[b.index()].iter().all(|inst| {
-                crate::liveness::inst_defs(inst).is_empty()
+                Inst::defs(inst).is_empty()
                     && match inst {
                         Inst::Release { .. }
                         | Inst::Drop { .. }
                         | Inst::RegionExit { .. }
                         | Inst::Dup { .. } => true,
                         _ => {
-                            crate::liveness::inst_failure(inst).is_none() && {
+                            Inst::failure(inst).is_none() && {
                                 let mut hit = false;
                                 inst.visit(&mut |r| {
                                     if let Ref::Value(v) = r {

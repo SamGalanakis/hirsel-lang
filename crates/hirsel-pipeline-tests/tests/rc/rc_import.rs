@@ -179,8 +179,8 @@ fn a_counted_scrutinee_is_tested_through_a_view() {
 
 #[test]
 fn liveness_starts_at_definitions_and_covers_failure_only_uses() {
-    use hirsel_lir::ir::Terminator;
-    use hirsel_rc::liveness::{inst_defs, liveness, terminator_defs};
+    use hirsel_lir::ir::{Inst, Terminator};
+    use hirsel_rc::liveness::{liveness, terminator_defs};
     let (_, lowered) = lower_valid(
         "resource type R {n:u64} drop(x) {}\nfn keep(take r: R, n: u64) -> String { std@1/u64.to_string(n + r.n) }\nfn count(n: u64) -> u64 { let mut i = 0u64; let mut t = 0u64; while i < n { t = t + i; i = i + 1u64 }; t }\nfn main() -> u64 { string.byte_len(keep(R(n: 1u64), 2u64)) + count(3u64) }",
     );
@@ -207,7 +207,7 @@ fn liveness_starts_at_definitions_and_covers_failure_only_uses() {
         for (b, block) in unit.blocks.iter().enumerate() {
             defined.extend(block.parameters.get(&unit.pools.values).unwrap_or(&[]));
             for inst in block.instructions.get(&unit.instructions).unwrap_or(&[]) {
-                defined.extend(inst_defs(inst));
+                defined.extend(Inst::defs(inst));
             }
             defined.extend(terminator_defs(unit, &unit.terminators[b]));
         }

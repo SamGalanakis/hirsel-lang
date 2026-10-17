@@ -416,7 +416,7 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                     escaped.insert(Node::Value(token));
                 }
                 _ => {
-                    for v in crate::liveness::inst_defs(inst) {
+                    for v in Inst::defs(inst) {
                         define_foreign(v);
                     }
                     for v in crate::liveness::inst_uses(&unit, inst) {
@@ -426,7 +426,7 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                     }
                 }
             }
-            if let Some(f) = crate::liveness::inst_failure(inst) {
+            if let Some(f) = Inst::failure(inst) {
                 for &d in unit.tables.failures[f.index()]
                     .dispose
                     .get(&unit.pools.values)
@@ -443,8 +443,8 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
             .get(&unit.instructions)
             .unwrap_or(&[])
             .iter()
-            .filter_map(crate::liveness::inst_failure)
-            .chain(crate::liveness::terminator_failure(&unit.terminators[b]));
+            .filter_map(Inst::failure)
+            .chain(Terminator::failure(&unit.terminators[b]));
         for f in failures {
             let edge = &unit.tables.edges[unit.tables.failures[f.index()].cleanup.index()];
             let args = edge.arguments.get(&unit.pools.values).unwrap_or(&[]);
@@ -496,7 +496,7 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                 }
             }
         }
-        for e in crate::liveness::normal_edges(&unit, term) {
+        for e in Terminator::normal_edges(term, &unit.pools) {
             let edge = &unit.tables.edges[e.index()];
             let args = edge.arguments.get(&unit.pools.values).unwrap_or(&[]);
             let params = unit.blocks[edge.target.index()]

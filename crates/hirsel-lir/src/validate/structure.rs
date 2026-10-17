@@ -175,111 +175,13 @@ enum Usage {
     Argument,
 }
 
-pub(super) fn inst_failure(inst: &Inst) -> Option<FailureId> {
-    match *inst {
-        Inst::Unary { failure, .. }
-        | Inst::Binary { failure, .. }
-        | Inst::Compare { failure, .. }
-        | Inst::Hash { failure, .. }
-        | Inst::Check { failure, .. }
-        | Inst::Address { failure, .. }
-        | Inst::Copy { failure, .. }
-        | Inst::FlatCopy { failure, .. }
-        | Inst::UniqueCopy { failure, .. }
-        | Inst::Replace { failure, .. }
-        | Inst::Construct { failure, .. }
-        | Inst::Closure { failure, .. }
-        | Inst::Drop { failure, .. }
-        | Inst::Release { failure, .. }
-        | Inst::Reset { failure, .. }
-        | Inst::Reuse { failure, .. }
-        | Inst::RegionReserve { failure, .. }
-        | Inst::RegionExit { failure, .. }
-        | Inst::FrameEnter { failure } => Some(failure),
-        _ => None,
-    }
-}
-
-/// Values an instruction defines.
-pub(super) fn inst_defs(inst: &Inst) -> Vec<ValueId> {
-    match *inst {
-        Inst::Const { result, .. }
-        | Inst::FunctionRef { result, .. }
-        | Inst::ReadStatic { result, .. }
-        | Inst::Unary { result, .. }
-        | Inst::Binary { result, .. }
-        | Inst::Compare { result, .. }
-        | Inst::IsUnique { result, .. }
-        | Inst::Weaken { result, .. }
-        | Inst::Read { result, .. }
-        | Inst::Copy { result, .. }
-        | Inst::FlatCopy { result, .. }
-        | Inst::FlatView { result, .. }
-        | Inst::FlatLength { result, .. }
-        | Inst::FlatNext { result, .. }
-        | Inst::SeqLen { result, .. }
-        | Inst::SeqCapacity { result, .. }
-        | Inst::Hash { result, .. }
-        | Inst::Recast { result, .. }
-        | Inst::UniqueCopy { result, .. }
-        | Inst::UpdateMask { result, .. }
-        | Inst::Construct { result, .. }
-        | Inst::Closure { result, .. }
-        | Inst::Reset { result, .. }
-        | Inst::Reuse { result, .. }
-        | Inst::TokenNone { result }
-        | Inst::RegionEnter { result, .. }
-        | Inst::RegionReserve { result, .. }
-        | Inst::ArenaOpen { result }
-        | Inst::ArenaToken { result, .. } => vec![result],
-        Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
-            std::iter::once(result).chain(flag).collect()
-        }
-        Inst::MulAdd { result, .. } => vec![result],
-        Inst::Store { version, .. }
-        | Inst::SeqReserve { version, .. }
-        | Inst::SeqSetLen { version, .. }
-        | Inst::SeqAppend { version, .. }
-        | Inst::FlatAppend { version, .. }
-        | Inst::FlatField { version, .. }
-        | Inst::FlatClose { version, .. } => vec![version],
-        Inst::Replace {
-            version,
-            displaced_version,
-            ..
-        } => vec![version, displaced_version],
-        _ => Vec::new(),
-    }
-}
-
 /// The edges a terminator names, normal ones first.
 pub(super) fn terminator_edges<S>(cx: &Cx<'_, S>, term: &Terminator) -> Vec<EdgeId> {
-    let t = &cx.unit.tables;
-    let failure = |f: FailureId| t.failures[f.index()].cleanup;
-    match *term {
-        Terminator::Jump(e) => vec![e],
-        Terminator::Branch { yes, no, .. } => vec![yes, no],
-        Terminator::Switch {
-            arms, otherwise, ..
-        } => {
-            let mut edges: Vec<_> = arms
-                .get(&cx.unit.pools.switch_arms)
-                .unwrap_or(&[])
-                .iter()
-                .map(|a| a.edge)
-                .collect();
-            edges.push(otherwise);
-            edges
-        }
-        Terminator::Call {
-            normal, failure: f, ..
-        } => normal.into_iter().chain([failure(f)]).collect(),
-        Terminator::Raise(f) => vec![failure(f)],
-        Terminator::Return(_)
-        | Terminator::Propagate
-        | Terminator::Unreachable
-        | Terminator::InvariantFault { .. } => Vec::new(),
+    let mut edges = term.normal_edges(&cx.unit.pools);
+    if let Some(failure) = term.failure() {
+        edges.push(cx.unit.tables.failures[failure.index()].cleanup);
     }
+    edges
 }
 
 pub(super) fn overlap(a: &[Step], b: &[Step]) -> bool {
@@ -528,12 +430,12 @@ fn borrowed_holders<S: Stage>(cx: &Cx<'_, S>, facts: &mut Facts) {
                         }
                     }
                 }
-                for v in inst_defs(inst) {
+                for v in Inst::defs(inst) {
                     if let Some(slot) = facts.version[v.index()] {
                         state[slot.index()] = Version::One(v);
                     }
                 }
-                if let Some(failure) = inst_failure(inst) {
+                if let Some(failure) = Inst::failure(inst) {
                     let edge = u.tables.failures[failure.index()].cleanup;
                     edges.push((edge, edge_state(edge, &state)));
                 }
@@ -783,7 +685,7 @@ impl<S: Stage> Checker<'_, '_, S> {
             }
             let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
             for (i, inst) in insts.iter().enumerate() {
-                for v in inst_defs(inst) {
+                for v in Inst::defs(inst) {
                     self.define(v, Def::Inst(b, i as u32), Site::at(b, i as u32));
                 }
             }
@@ -817,7 +719,7 @@ impl<S: Stage> Checker<'_, '_, S> {
             let b = BlockId(b as u32);
             let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
             for (i, inst) in insts.iter().enumerate() {
-                if let Some(f) = inst_failure(inst) {
+                if let Some(f) = Inst::failure(inst) {
                     failure_uses[f.index()] += 1;
                     let edge = t.failures[f.index()].cleanup;
                     edge_uses[edge.index()] += 1;
@@ -2775,7 +2677,7 @@ impl<S: Stage> Checker<'_, '_, S> {
         for (b, block) in unit.blocks.iter().enumerate() {
             let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
             for (i, inst) in insts.iter().enumerate() {
-                if let Some(f) = inst_failure(inst) {
+                if let Some(f) = Inst::failure(inst) {
                     self.edge_types(
                         Site::at(BlockId(b as u32), i as u32),
                         unit.tables.failures[f.index()].cleanup,
@@ -3573,7 +3475,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                         | Inst::Copy { .. }
                 );
                 if !producer
-                    && inst_defs(inst).into_iter().any(|v| {
+                    && Inst::defs(inst).into_iter().any(|v| {
                         self.ty(v).repr == ValueRepr::Arena && facts.version[v.index()].is_none()
                     })
                 {
@@ -3708,7 +3610,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 for address in inst_addresses(self.cx, inst) {
                     self.use_address(facts, &prepared, at, address);
                 }
-                if let Some(f) = inst_failure(inst) {
+                if let Some(f) = Inst::failure(inst) {
                     self.failure_uses(facts, at, f);
                 }
             }

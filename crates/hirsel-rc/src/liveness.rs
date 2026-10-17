@@ -97,7 +97,7 @@ impl Liveness {
     fn exit<S: Stage>(&self, unit: &LirUnit<S>, block: BlockId) -> ValueSet {
         let mut live = self.live_out[block.index()].clone();
         let term = &unit.terminators[block.index()];
-        if let Some(f) = terminator_failure(term) {
+        if let Some(f) = Terminator::failure(term) {
             live.union(&self.failure_needs(unit, f));
         }
         for d in terminator_defs(unit, term) {
@@ -111,13 +111,13 @@ impl Liveness {
 
     /// Transfer backwards over one instruction.
     fn step<S: Stage>(&self, unit: &LirUnit<S>, inst: &Inst, live: &mut ValueSet) {
-        for d in inst_defs(inst) {
+        for d in Inst::defs(inst) {
             live.remove(d);
         }
         for u in inst_uses(unit, inst) {
             live.insert(u);
         }
-        if let Some(f) = inst_failure(inst) {
+        if let Some(f) = Inst::failure(inst) {
             live.union(&self.failure_needs(unit, f));
         }
     }
@@ -164,7 +164,7 @@ pub fn liveness<S: Stage>(unit: &LirUnit<S>) -> Liveness {
         for b in (0..n).rev() {
             let block = BlockId(b as u32);
             let mut out = ValueSet::with_capacity(values);
-            for e in normal_edges(unit, &unit.terminators[b]) {
+            for e in Terminator::normal_edges(&unit.terminators[b], &unit.pools) {
                 out.union(&l.edge_needs(unit, e));
             }
             changed |= l.live_out[b].union(&out);
@@ -189,86 +189,11 @@ pub fn liveness<S: Stage>(unit: &LirUnit<S>) -> Liveness {
     l
 }
 
-/// The edges a terminator takes when nothing fails.
-pub fn normal_edges<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -> Vec<EdgeId> {
-    match *term {
-        Terminator::Jump(e) => vec![e],
-        Terminator::Branch { yes, no, .. } => vec![yes, no],
-        Terminator::Switch {
-            arms, otherwise, ..
-        } => arms
-            .get(&unit.pools.switch_arms)
-            .unwrap_or(&[])
-            .iter()
-            .map(|a| a.edge)
-            .chain([otherwise])
-            .collect(),
-        Terminator::Call { normal, .. } => normal.into_iter().collect(),
-        Terminator::Return(_)
-        | Terminator::Raise(_)
-        | Terminator::Propagate
-        | Terminator::Unreachable
-        | Terminator::InvariantFault { .. } => Vec::new(),
-    }
-}
-
-/// The values an instruction defines.
-pub fn inst_defs(inst: &Inst) -> Vec<ValueId> {
-    match *inst {
-        Inst::Const { result, .. }
-        | Inst::FunctionRef { result, .. }
-        | Inst::ReadStatic { result, .. }
-        | Inst::Unary { result, .. }
-        | Inst::Binary { result, .. }
-        | Inst::Compare { result, .. }
-        | Inst::IsUnique { result, .. }
-        | Inst::Weaken { result, .. }
-        | Inst::Read { result, .. }
-        | Inst::Copy { result, .. }
-        | Inst::FlatCopy { result, .. }
-        | Inst::FlatView { result, .. }
-        | Inst::FlatLength { result, .. }
-        | Inst::FlatNext { result, .. }
-        | Inst::SeqLen { result, .. }
-        | Inst::SeqCapacity { result, .. }
-        | Inst::Hash { result, .. }
-        | Inst::Recast { result, .. }
-        | Inst::UniqueCopy { result, .. }
-        | Inst::UpdateMask { result, .. }
-        | Inst::Construct { result, .. }
-        | Inst::Closure { result, .. }
-        | Inst::Reset { result, .. }
-        | Inst::Reuse { result, .. }
-        | Inst::TokenNone { result }
-        | Inst::RegionEnter { result, .. }
-        | Inst::RegionReserve { result, .. }
-        | Inst::ArenaOpen { result }
-        | Inst::ArenaToken { result, .. }
-        | Inst::MulAdd { result, .. } => vec![result],
-        Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
-            std::iter::once(result).chain(flag).collect()
-        }
-        Inst::Store { version, .. }
-        | Inst::SeqReserve { version, .. }
-        | Inst::SeqSetLen { version, .. }
-        | Inst::SeqAppend { version, .. }
-        | Inst::FlatAppend { version, .. }
-        | Inst::FlatField { version, .. }
-        | Inst::FlatClose { version, .. } => vec![version],
-        Inst::Replace {
-            version,
-            displaced_version,
-            ..
-        } => vec![version, displaced_version],
-        _ => Vec::new(),
-    }
-}
-
 /// The values an instruction reads, including those named through its
 /// side-table rows (construction fields, captures) and the index operands
 /// and value bases of an address it prepares.
 pub fn inst_uses<S: Stage>(unit: &LirUnit<S>, inst: &Inst) -> Vec<ValueId> {
-    let defs = inst_defs(inst);
+    let defs = Inst::defs(inst);
     let mut out = Vec::new();
     inst.visit(&mut |r| {
         if let hirsel_lir::ir::Ref::Value(v) = r
@@ -327,31 +252,6 @@ pub fn inst_uses<S: Stage>(unit: &LirUnit<S>, inst: &Inst) -> Vec<ValueId> {
     out
 }
 
-pub fn inst_failure(inst: &Inst) -> Option<FailureId> {
-    match *inst {
-        Inst::Unary { failure, .. }
-        | Inst::Binary { failure, .. }
-        | Inst::Compare { failure, .. }
-        | Inst::Hash { failure, .. }
-        | Inst::Check { failure, .. }
-        | Inst::Address { failure, .. }
-        | Inst::Copy { failure, .. }
-        | Inst::FlatCopy { failure, .. }
-        | Inst::UniqueCopy { failure, .. }
-        | Inst::Replace { failure, .. }
-        | Inst::Construct { failure, .. }
-        | Inst::Closure { failure, .. }
-        | Inst::Drop { failure, .. }
-        | Inst::Release { failure, .. }
-        | Inst::Reset { failure, .. }
-        | Inst::Reuse { failure, .. }
-        | Inst::RegionReserve { failure, .. }
-        | Inst::RegionExit { failure, .. }
-        | Inst::FrameEnter { failure } => Some(failure),
-        _ => None,
-    }
-}
-
 /// Values a terminator defines: a call's result and its `mut` write-back
 /// versions.
 pub fn terminator_defs<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -> Vec<ValueId> {
@@ -396,12 +296,5 @@ pub fn terminator_uses<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -> Vec<Va
             out
         }
         _ => Vec::new(),
-    }
-}
-
-pub fn terminator_failure(term: &Terminator) -> Option<FailureId> {
-    match *term {
-        Terminator::Call { failure, .. } | Terminator::Raise(failure) => Some(failure),
-        _ => None,
     }
 }

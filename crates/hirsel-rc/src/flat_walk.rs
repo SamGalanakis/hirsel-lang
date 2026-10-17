@@ -2,7 +2,6 @@
 //! Packed sequences (MEM-13).
 //! Discovery and proof are read-only; only a complete plan may edit a unit.
 use crate::insert::{Editor, Facts};
-use crate::liveness::{inst_defs, normal_edges};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpec};
 use hirsel_lir::stage::Value;
@@ -54,7 +53,7 @@ impl Graph {
         let mut succ = vec![vec![]; u.blocks.len()];
         let mut pred = succ.clone();
         for (b, t) in u.terminators.iter().enumerate() {
-            for e in normal_edges(u, t) {
+            for e in Terminator::normal_edges(t, &u.pools) {
                 let to = u.tables.edges[e.index()].target.index();
                 succ[b].push((to, e));
                 pred[to].push((b, e));
@@ -175,7 +174,7 @@ pub(crate) fn scalar_source(u: &LirUnit<Value>, defs: &Values, mut v: ValueId) -
 pub(crate) fn definitions(u: &LirUnit<Value>) -> Values {
     let mut defs = vec![None; u.values.len()];
     for i in &u.instructions {
-        for v in inst_defs(i) {
+        for v in Inst::defs(i) {
             defs[v.index()] = Some(*i);
         }
     }

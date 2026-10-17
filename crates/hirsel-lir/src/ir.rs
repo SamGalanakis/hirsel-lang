@@ -1517,6 +1517,218 @@ impl MaskRef {
 }
 
 impl Inst {
+    /// Values defined by this instruction, in field order.
+    pub fn defs(&self) -> Vec<ValueId> {
+        match *self {
+            Inst::Const { result, .. }
+            | Inst::FunctionRef { result, .. }
+            | Inst::ReadStatic { result, .. }
+            | Inst::Unary { result, .. }
+            | Inst::Binary { result, .. }
+            | Inst::Compare { result, .. }
+            | Inst::IsUnique { result, .. }
+            | Inst::Weaken { result, .. }
+            | Inst::Read { result, .. }
+            | Inst::Copy { result, .. }
+            | Inst::FlatCopy { result, .. }
+            | Inst::FlatView { result, .. }
+            | Inst::FlatLength { result, .. }
+            | Inst::FlatNext { result, .. }
+            | Inst::SeqLen { result, .. }
+            | Inst::SeqCapacity { result, .. }
+            | Inst::Hash { result, .. }
+            | Inst::Recast { result, .. }
+            | Inst::UniqueCopy { result, .. }
+            | Inst::UpdateMask { result, .. }
+            | Inst::Construct { result, .. }
+            | Inst::Closure { result, .. }
+            | Inst::Reset { result, .. }
+            | Inst::Reuse { result, .. }
+            | Inst::TokenNone { result }
+            | Inst::RegionEnter { result, .. }
+            | Inst::RegionReserve { result, .. }
+            | Inst::ArenaOpen { result }
+            | Inst::ArenaToken { result, .. } => vec![result],
+            Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
+                std::iter::once(result).chain(flag).collect()
+            }
+            Inst::MulAdd { result, .. } => vec![result],
+            Inst::Store { version, .. }
+            | Inst::SeqReserve { version, .. }
+            | Inst::SeqSetLen { version, .. }
+            | Inst::SeqAppend { version, .. }
+            | Inst::FlatAppend { version, .. }
+            | Inst::FlatField { version, .. }
+            | Inst::FlatClose { version, .. } => vec![version],
+            Inst::Replace {
+                version,
+                displaced_version,
+                ..
+            } => vec![version, displaced_version],
+            Inst::Check { .. }
+            | Inst::StorageLive { .. }
+            | Inst::StorageDead { .. }
+            | Inst::EndScope { .. }
+            | Inst::Address { .. }
+            | Inst::BeginLoan { .. }
+            | Inst::EndLoan { .. }
+            | Inst::BindOrigin { .. }
+            | Inst::BindFields { .. }
+            | Inst::EndOrigin { .. }
+            | Inst::Drop { .. }
+            | Inst::Dup { .. }
+            | Inst::Release { .. }
+            | Inst::Dispose { .. }
+            | Inst::RegionPublish { .. }
+            | Inst::RegionExit { .. }
+            | Inst::Defuse { .. }
+            | Inst::FinalizeBegin { .. }
+            | Inst::FinalizeEnd { .. }
+            | Inst::Forget { .. }
+            | Inst::FrameEnter { .. }
+            | Inst::FrameLeave
+            | Inst::Unavailable { .. } => Vec::new(),
+        }
+    }
+
+    /// Explicit failure continuation, if this instruction can fail.
+    pub fn failure(&self) -> Option<FailureId> {
+        match *self {
+            Inst::Unary { failure, .. }
+            | Inst::Binary { failure, .. }
+            | Inst::Compare { failure, .. }
+            | Inst::Hash { failure, .. }
+            | Inst::Check { failure, .. }
+            | Inst::Address { failure, .. }
+            | Inst::Copy { failure, .. }
+            | Inst::FlatCopy { failure, .. }
+            | Inst::UniqueCopy { failure, .. }
+            | Inst::Replace { failure, .. }
+            | Inst::Construct { failure, .. }
+            | Inst::Closure { failure, .. }
+            | Inst::Drop { failure, .. }
+            | Inst::Release { failure, .. }
+            | Inst::Reset { failure, .. }
+            | Inst::Reuse { failure, .. }
+            | Inst::RegionReserve { failure, .. }
+            | Inst::RegionExit { failure, .. }
+            | Inst::FrameEnter { failure } => Some(failure),
+            Inst::Const { .. }
+            | Inst::FunctionRef { .. }
+            | Inst::ReadStatic { .. }
+            | Inst::Convert { .. }
+            | Inst::IntArith { .. }
+            | Inst::MulAdd { .. }
+            | Inst::StorageLive { .. }
+            | Inst::StorageDead { .. }
+            | Inst::EndScope { .. }
+            | Inst::Read { .. }
+            | Inst::FlatView { .. }
+            | Inst::FlatLength { .. }
+            | Inst::FlatNext { .. }
+            | Inst::SeqLen { .. }
+            | Inst::SeqCapacity { .. }
+            | Inst::SeqReserve { .. }
+            | Inst::SeqSetLen { .. }
+            | Inst::SeqAppend { .. }
+            | Inst::FlatAppend { .. }
+            | Inst::FlatField { .. }
+            | Inst::FlatClose { .. }
+            | Inst::Recast { .. }
+            | Inst::Store { .. }
+            | Inst::UpdateMask { .. }
+            | Inst::Weaken { .. }
+            | Inst::BeginLoan { .. }
+            | Inst::EndLoan { .. }
+            | Inst::BindOrigin { .. }
+            | Inst::BindFields { .. }
+            | Inst::EndOrigin { .. }
+            | Inst::Dup { .. }
+            | Inst::IsUnique { .. }
+            | Inst::Dispose { .. }
+            | Inst::TokenNone { .. }
+            | Inst::RegionEnter { .. }
+            | Inst::RegionPublish { .. }
+            | Inst::ArenaOpen { .. }
+            | Inst::ArenaToken { .. }
+            | Inst::Defuse { .. }
+            | Inst::FinalizeBegin { .. }
+            | Inst::FinalizeEnd { .. }
+            | Inst::Forget { .. }
+            | Inst::FrameLeave
+            | Inst::Unavailable { .. } => None,
+        }
+    }
+
+    /// Mutable explicit failure continuation.
+    pub fn failure_mut(&mut self) -> Option<&mut FailureId> {
+        match self {
+            Inst::Unary { failure, .. }
+            | Inst::Binary { failure, .. }
+            | Inst::Compare { failure, .. }
+            | Inst::Hash { failure, .. }
+            | Inst::Check { failure, .. }
+            | Inst::Address { failure, .. }
+            | Inst::Copy { failure, .. }
+            | Inst::FlatCopy { failure, .. }
+            | Inst::UniqueCopy { failure, .. }
+            | Inst::Replace { failure, .. }
+            | Inst::Construct { failure, .. }
+            | Inst::Closure { failure, .. }
+            | Inst::Drop { failure, .. }
+            | Inst::Release { failure, .. }
+            | Inst::Reset { failure, .. }
+            | Inst::Reuse { failure, .. }
+            | Inst::RegionReserve { failure, .. }
+            | Inst::RegionExit { failure, .. }
+            | Inst::FrameEnter { failure } => Some(failure),
+            Inst::Const { .. }
+            | Inst::FunctionRef { .. }
+            | Inst::ReadStatic { .. }
+            | Inst::Convert { .. }
+            | Inst::IntArith { .. }
+            | Inst::MulAdd { .. }
+            | Inst::StorageLive { .. }
+            | Inst::StorageDead { .. }
+            | Inst::EndScope { .. }
+            | Inst::Read { .. }
+            | Inst::FlatView { .. }
+            | Inst::FlatLength { .. }
+            | Inst::FlatNext { .. }
+            | Inst::SeqLen { .. }
+            | Inst::SeqCapacity { .. }
+            | Inst::SeqReserve { .. }
+            | Inst::SeqSetLen { .. }
+            | Inst::SeqAppend { .. }
+            | Inst::FlatAppend { .. }
+            | Inst::FlatField { .. }
+            | Inst::FlatClose { .. }
+            | Inst::Recast { .. }
+            | Inst::Store { .. }
+            | Inst::UpdateMask { .. }
+            | Inst::Weaken { .. }
+            | Inst::BeginLoan { .. }
+            | Inst::EndLoan { .. }
+            | Inst::BindOrigin { .. }
+            | Inst::BindFields { .. }
+            | Inst::EndOrigin { .. }
+            | Inst::Dup { .. }
+            | Inst::IsUnique { .. }
+            | Inst::Dispose { .. }
+            | Inst::TokenNone { .. }
+            | Inst::RegionEnter { .. }
+            | Inst::RegionPublish { .. }
+            | Inst::ArenaOpen { .. }
+            | Inst::ArenaToken { .. }
+            | Inst::Defuse { .. }
+            | Inst::FinalizeBegin { .. }
+            | Inst::FinalizeEnd { .. }
+            | Inst::Forget { .. }
+            | Inst::FrameLeave
+            | Inst::Unavailable { .. } => None,
+        }
+    }
+
     /// Visit every index the row names, in field order. Exhaustive: a new
     /// variant cannot compile without stating its references.
     pub fn visit(&self, f: &mut impl FnMut(Ref)) {
@@ -1913,6 +2125,43 @@ impl Inst {
 }
 
 impl Terminator {
+    /// Edges taken when the terminator succeeds, in declared order.
+    pub fn normal_edges(&self, pools: &Pools) -> Vec<EdgeId> {
+        match *self {
+            Terminator::Jump(e) => vec![e],
+            Terminator::Branch { yes, no, .. } => vec![yes, no],
+            Terminator::Switch {
+                arms, otherwise, ..
+            } => arms
+                .get(&pools.switch_arms)
+                .unwrap_or(&[])
+                .iter()
+                .map(|a| a.edge)
+                .chain([otherwise])
+                .collect(),
+            Terminator::Call { normal, .. } => normal.into_iter().collect(),
+            Terminator::Return(_)
+            | Terminator::Raise(_)
+            | Terminator::Propagate
+            | Terminator::Unreachable
+            | Terminator::InvariantFault { .. } => Vec::new(),
+        }
+    }
+
+    /// Explicit failure continuation, if any.
+    pub fn failure(&self) -> Option<FailureId> {
+        match *self {
+            Terminator::Call { failure, .. } | Terminator::Raise(failure) => Some(failure),
+            Terminator::Jump(_)
+            | Terminator::Branch { .. }
+            | Terminator::Switch { .. }
+            | Terminator::Return(_)
+            | Terminator::Propagate
+            | Terminator::Unreachable
+            | Terminator::InvariantFault { .. } => None,
+        }
+    }
+
     pub fn visit(&self, f: &mut impl FnMut(Ref)) {
         match *self {
             Self::Jump(edge) => f(Ref::Edge(edge)),

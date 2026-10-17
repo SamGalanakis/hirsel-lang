@@ -29,7 +29,6 @@
 //! The stage validator replays tokens, masks and kept fields independently.
 use crate::insert::Lay;
 use crate::insert::{Editor, Facts, owns};
-use crate::liveness::{inst_failure, normal_edges, terminator_failure};
 use hirsel_lir::ir::{
     BlockId, BlockKind, EdgeId, FailureId, Holding, Inst, LirTypeId, LirUnit, Placement, PoolRange,
     StorageOwner, TaskDomainId, Terminator, ValueId, ValueRepr,
@@ -124,18 +123,18 @@ impl Graph {
         let mut all = vec![Vec::new(); n];
         let mut preds = vec![Vec::new(); n];
         for b in 0..n {
-            for f in ed.code[b].iter().filter_map(inst_failure) {
+            for f in ed.code[b].iter().filter_map(Inst::failure) {
                 let e = unit.tables.failures[f.index()].cleanup;
                 all[b].push((e, unit.tables.edges[e.index()].target));
             }
             let term = &unit.terminators[b];
-            for e in normal_edges(unit, term) {
+            for e in Terminator::normal_edges(term, &unit.pools) {
                 let t = unit.tables.edges[e.index()].target;
                 normal[b].push((e, t));
                 all[b].push((e, t));
                 preds[t.index()].push((BlockId(b as u32), e));
             }
-            if let Some(f) = terminator_failure(term) {
+            if let Some(f) = Terminator::failure(term) {
                 let e = unit.tables.failures[f.index()].cleanup;
                 all[b].push((e, unit.tables.edges[e.index()].target));
             }
@@ -440,7 +439,7 @@ fn closure_drops<S: Stage>(
     let mut defs: BTreeMap<ValueId, Inst> = BTreeMap::new();
     for code in &ed.code {
         for inst in code {
-            for v in crate::liveness::inst_defs(inst) {
+            for v in Inst::defs(inst) {
                 defs.insert(v, *inst);
             }
         }
@@ -574,7 +573,7 @@ fn named<S: Stage>(ed: &Editor<S>, edge: EdgeId) -> bool {
     ed.unit
         .terminators
         .iter()
-        .any(|t| normal_edges(&ed.unit, t).contains(&edge))
+        .any(|t| Terminator::normal_edges(t, &ed.unit.pools).contains(&edge))
 }
 
 fn repr<S>(unit: &LirUnit<S>, v: ValueId) -> ValueRepr {
@@ -822,7 +821,7 @@ fn pair_tokens(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reus
                     }
                 }
                 _ => {
-                    if let Some(f) = crate::insert::inst_failure_mut(&mut inst) {
+                    if let Some(f) = Inst::failure_mut(&mut inst) {
                         let f = *f;
                         set_dispose(&mut ed, f, &live);
                     }

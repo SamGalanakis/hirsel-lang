@@ -704,35 +704,6 @@ pub(crate) fn call_arguments<S>(
         .unwrap_or(&[])
 }
 
-pub(crate) fn inst_failure(inst: &Inst) -> Option<FailureId> {
-    crate::liveness::inst_failure(inst)
-}
-
-pub(crate) fn inst_failure_mut(inst: &mut Inst) -> Option<&mut FailureId> {
-    match inst {
-        Inst::Unary { failure, .. }
-        | Inst::Binary { failure, .. }
-        | Inst::Compare { failure, .. }
-        | Inst::Hash { failure, .. }
-        | Inst::Check { failure, .. }
-        | Inst::Address { failure, .. }
-        | Inst::Copy { failure, .. }
-        | Inst::FlatCopy { failure, .. }
-        | Inst::UniqueCopy { failure, .. }
-        | Inst::Replace { failure, .. }
-        | Inst::Construct { failure, .. }
-        | Inst::Closure { failure, .. }
-        | Inst::Drop { failure, .. }
-        | Inst::Release { failure, .. }
-        | Inst::Reset { failure, .. }
-        | Inst::Reuse { failure, .. }
-        | Inst::RegionReserve { failure, .. }
-        | Inst::RegionExit { failure, .. }
-        | Inst::FrameEnter { failure } => Some(failure),
-        _ => None,
-    }
-}
-
 /// Owned values an operation consumes (fields, token, taken captures,
 /// replacement value, stored value, released value). A flat construction
 /// only reads the values it encodes into variable fields (LIR schema
@@ -966,7 +937,7 @@ impl<S: Stage> Editor<S> {
         let n = self.unit.blocks.len();
         let succ = |unit: &LirUnit<S>, code: &[Vec<Inst>], b: usize| -> Vec<BlockId> {
             let mut out = Vec::new();
-            for f in code[b].iter().filter_map(inst_failure) {
+            for f in code[b].iter().filter_map(Inst::failure) {
                 let e = unit.tables.failures[f.index()].cleanup;
                 out.push(unit.tables.edges[e.index()].target);
             }
@@ -996,14 +967,14 @@ impl<S: Stage> Editor<S> {
         let mut failure_used = vec![false; self.unit.tables.failures.len()];
         let mut edge_used = vec![false; self.unit.tables.edges.len()];
         for b in (0..n).filter(|&b| reach[b]) {
-            for f in self.code[b].iter().filter_map(inst_failure) {
+            for f in self.code[b].iter().filter_map(Inst::failure) {
                 failure_used[f.index()] = true;
             }
             let term = &self.unit.terminators[b];
-            if let Some(f) = crate::liveness::terminator_failure(term) {
+            if let Some(f) = Terminator::failure(term) {
                 failure_used[f.index()] = true;
             }
-            for e in crate::liveness::normal_edges(&self.unit, term) {
+            for e in Terminator::normal_edges(term, &self.unit.pools) {
                 edge_used[e.index()] = true;
             }
         }
@@ -1042,7 +1013,7 @@ impl<S: Stage> Editor<S> {
             }
             let start = instructions.len() as u32;
             for mut inst in insts {
-                if let Some(f) = inst_failure_mut(&mut inst) {
+                if let Some(f) = Inst::failure_mut(&mut inst) {
                     *f = fm(*f);
                 }
                 instructions.push(inst);
@@ -1118,8 +1089,8 @@ impl<S: Stage> Editor<S> {
 
 /// Every edge a terminator names, normal ones first, then its failure cleanup.
 pub(crate) fn terminator_edges<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -> Vec<EdgeId> {
-    let mut out = crate::liveness::normal_edges(unit, term);
-    if let Some(f) = crate::liveness::terminator_failure(term) {
+    let mut out = Terminator::normal_edges(term, &unit.pools);
+    if let Some(f) = Terminator::failure(term) {
         out.push(unit.tables.failures[f.index()].cleanup);
     }
     out
@@ -1415,18 +1386,18 @@ impl<S: Stage> Flow<'_, S> {
             .map(|b| {
                 let mut out: Vec<BlockId> = self.code[b]
                     .iter()
-                    .filter_map(inst_failure)
+                    .filter_map(Inst::failure)
                     .filter(|&f| f != PENDING_FAILURE)
                     .map(target)
                     .collect();
                 let term = &unit.terminators[b];
                 out.extend(
-                    crate::liveness::normal_edges(unit, term)
+                    Terminator::normal_edges(term, &unit.pools)
                         .into_iter()
                         .map(|e| unit.tables.edges[e.index()].target),
                 );
                 out.extend(
-                    crate::liveness::terminator_failure(term)
+                    Terminator::failure(term)
                         .filter(|&f| f != PENDING_FAILURE)
                         .map(target),
                 );
@@ -1516,7 +1487,7 @@ impl<S: Stage> Flow<'_, S> {
             let pre = st.clone();
             self.inst(inst, &mut st);
             visit(i, &pre, &st);
-            if let Some(failure) = inst_failure(inst)
+            if let Some(failure) = Inst::failure(inst)
                 && failure != PENDING_FAILURE
             {
                 let fst = match inst {
@@ -1593,7 +1564,7 @@ impl<S: Stage> Flow<'_, S> {
             _ => {}
         }
         visit(insts.len(), &pre, &st);
-        for e in crate::liveness::normal_edges(unit, term) {
+        for e in Terminator::normal_edges(term, &unit.pools) {
             let mut state = st.clone();
             self.switch_parts(term, e, &mut state);
             if let Terminator::Branch { condition, yes, .. } = *term
@@ -2241,7 +2212,7 @@ impl<S: Stage> Flow<'_, S> {
         for v in crate::liveness::terminator_uses(unit, term) {
             used.extend(self.view_slot(v));
         }
-        for e in crate::liveness::normal_edges(unit, term) {
+        for e in Terminator::normal_edges(term, &unit.pools) {
             for &a in unit.tables.edges[e.index()]
                 .arguments
                 .get(&unit.pools.values)
@@ -2276,7 +2247,7 @@ impl<S: Stage> Flow<'_, S> {
     fn exit_live(&self, live: &SlotLiveness, b: BlockId) -> SlotSet {
         let mut set = live.live_out[b.index()].clone();
         let term = &self.unit.terminators[b.index()];
-        if let Some(f) = crate::liveness::terminator_failure(term) {
+        if let Some(f) = Terminator::failure(term) {
             set.union(&self.failure_needs(live, f));
         }
         for s in self.terminator_uses(term) {
@@ -2293,7 +2264,7 @@ impl<S: Stage> Flow<'_, S> {
         for s in uses.used {
             live.insert(set, s);
         }
-        if let Some(f) = inst_failure(inst) {
+        if let Some(f) = Inst::failure(inst) {
             set.union(&self.failure_needs(live, f));
         }
     }
@@ -2321,7 +2292,7 @@ impl<S: Stage> Flow<'_, S> {
             for b in (0..n).rev() {
                 let block = BlockId(b as u32);
                 let mut out = SlotSet::default();
-                for e in crate::liveness::normal_edges(self.unit, &self.unit.terminators[b]) {
+                for e in Terminator::normal_edges(&self.unit.terminators[b], &self.unit.pools) {
                     out.union(&self.edge_needs(&live, e));
                 }
                 changed |= live.live_out[b].union(&out);
@@ -2474,7 +2445,7 @@ pub(crate) fn synthesize_failure<S: Stage>(
         let fe = ed.edge(next, &[]);
         let f = ed.failure(fe, at);
         let mut inst = inst;
-        if let Some(slot) = inst_failure_mut(&mut inst) {
+        if let Some(slot) = Inst::failure_mut(&mut inst) {
             *slot = f;
         }
         ed.code[b.index()].push(inst);
@@ -2656,7 +2627,7 @@ fn split_cleanups(
             )
             && ed.code[b.index()]
                 .iter()
-                .all(|inst| crate::liveness::inst_defs(inst).is_empty());
+                .all(|inst| Inst::defs(inst).is_empty());
         // The incoming edges by the initialization of each slot still to
         // drop, in the order the groups are first seen.
         let mut groups: Vec<(Vec<Tri>, Vec<(EdgeId, State)>)> = Vec::new();
@@ -2718,7 +2689,7 @@ fn clone_cleanup(ed: &mut Editor<Rc>, b: BlockId) -> BlockId {
     let c = ed.block(kind, &[], anchor);
     let mut code = ed.code[b.index()].clone();
     for inst in &mut code {
-        if let Some(f) = inst_failure_mut(inst)
+        if let Some(f) = Inst::failure_mut(inst)
             && *f != PENDING_FAILURE
         {
             let old = ed.unit.tables.failures[f.index()].clone();
@@ -2820,7 +2791,7 @@ fn release_pass(
         }
         let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); ed.unit.blocks.len()];
         for b in 0..ed.unit.blocks.len() {
-            for e in crate::liveness::normal_edges(&ed.unit, &ed.unit.terminators[b]) {
+            for e in Terminator::normal_edges(&ed.unit.terminators[b], &ed.unit.pools) {
                 preds[ed.unit.tables.edges[e.index()].target.index()].push(BlockId(b as u32));
             }
         }
@@ -2905,7 +2876,7 @@ fn release_pass(
                 .unit
                 .terminators
                 .iter()
-                .flat_map(|t| crate::liveness::normal_edges(&ed.unit, t))
+                .flat_map(|t| Terminator::normal_edges(t, &ed.unit.pools))
                 .filter(|e| ed.unit.tables.edges[e.index()].target == p.block)
                 .collect();
             for edge in edges {
@@ -3110,7 +3081,7 @@ fn release_pass(
         let at = ed.unit.blocks[b.index()].anchor;
         match synthesize_failure(&mut ed, lay, &mut facts, state, at) {
             Some(f) => {
-                if let Some(slot) = inst_failure_mut(&mut ed.code[b.index()][i]) {
+                if let Some(slot) = Inst::failure_mut(&mut ed.code[b.index()][i]) {
                     *slot = f;
                 }
             }
@@ -3531,7 +3502,7 @@ pub(crate) fn compact_values<S: Stage>(unit: &mut LirUnit<S>) {
         }
     }
     for inst in &unit.instructions {
-        for v in crate::liveness::inst_defs(inst) {
+        for v in Inst::defs(inst) {
             mark(v);
         }
     }
@@ -3596,7 +3567,7 @@ fn prune_phis<S: Stage>(ed: &mut Editor<S>, lay: Lay<'_>, facts: &mut Facts) {
             let Some(post) = post else {
                 continue;
             };
-            for e in crate::liveness::normal_edges(&ed.unit, &ed.unit.terminators[b]) {
+            for e in Terminator::normal_edges(&ed.unit.terminators[b], &ed.unit.pools) {
                 let edge = &ed.unit.tables.edges[e.index()];
                 let args = edge.arguments.get(&ed.unit.pools.values).unwrap_or(&[]);
                 for &(j, slot) in facts.phis_of(edge.target) {
@@ -4127,9 +4098,7 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
             })
         };
         let touches = |inst: &Inst| {
-            crate::liveness::inst_defs(inst)
-                .iter()
-                .any(|v| used.contains(v))
+            Inst::defs(inst).iter().any(|v| used.contains(v))
                 || match *inst {
                     Inst::Store { address, .. }
                     | Inst::Replace { address, .. }
@@ -4487,7 +4456,7 @@ fn rename_version<S: Stage>(
     let successors = |ed: &Editor<S>, b: usize| -> Vec<BlockId> {
         let mut out: Vec<BlockId> = ed.code[b]
             .iter()
-            .filter_map(inst_failure)
+            .filter_map(Inst::failure)
             .filter(|&f| f != PENDING_FAILURE)
             .map(|f| {
                 ed.unit.tables.edges[ed.unit.tables.failures[f.index()].cleanup.index()].target
@@ -4524,7 +4493,7 @@ fn rename_version<S: Stage>(
         let term = ed.unit.terminators[b].clone();
         let edges = ed.code[b]
             .iter()
-            .filter_map(inst_failure)
+            .filter_map(Inst::failure)
             .filter(|&f| f != PENDING_FAILURE)
             .map(|f| ed.unit.tables.failures[f.index()].cleanup)
             .chain(terminator_edges(&ed.unit, &term))
@@ -4569,7 +4538,7 @@ pub(crate) fn fill_pending(
                 let Some(inst) = code.get(i) else {
                     return;
                 };
-                if inst_failure(inst) != Some(PENDING_FAILURE) {
+                if Inst::failure(inst) != Some(PENDING_FAILURE) {
                     return;
                 }
                 let s = match inst {
@@ -4596,7 +4565,7 @@ pub(crate) fn fill_pending(
         let f = synthesize_failure(ed, lay, facts, &state, at).ok_or_else(|| {
             InsertError::Malformed("a failure whose cleanup cannot be synthesized".into())
         })?;
-        if let Some(slot) = inst_failure_mut(&mut ed.code[b.index()][i]) {
+        if let Some(slot) = Inst::failure_mut(&mut ed.code[b.index()][i]) {
             *slot = f;
         }
     }

@@ -25,7 +25,6 @@
 //! room for `m` bytes past its length word, and a push of the loop marks
 //! itself `spare`.
 use crate::flat_walk::{Graph, Values, code, definitions, integer, scalar_source};
-use crate::liveness::inst_defs;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, ScalarKind};
 use hirsel_lir::stage::Value;
@@ -142,7 +141,7 @@ fn def_blocks(u: &LirUnit<Value>) -> Vec<Option<usize>> {
             at[p.index()] = Some(b);
         }
         for inst in code(u, b) {
-            for v in inst_defs(inst) {
+            for v in Inst::defs(inst) {
                 at[v.index()] = Some(b);
             }
         }

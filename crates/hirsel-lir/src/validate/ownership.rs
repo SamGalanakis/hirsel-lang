@@ -12,8 +12,7 @@
 //! postorder fixes a block's credits and every other edge is compared to it.
 use super::flow;
 use super::structure::{
-    self, Backing, Facts, Root, Step, inst_failure, invalidates, overlap, terminator_edges,
-    through_slot,
+    self, Backing, Facts, Root, Step, invalidates, overlap, terminator_edges, through_slot,
 };
 use super::tokens;
 use super::{Cx, Report, Site, ViolationKind as K};
@@ -604,7 +603,7 @@ impl<S: Stage> Walker<'_, '_, S> {
             // before failing. Any other failing operation has disposed of
             // the owned operands it takes, as call entry transfers Take
             // actuals, and commits nothing else.
-            let failure = inst_failure(inst);
+            let failure = Inst::failure(inst);
             let finishes = matches!(
                 inst,
                 Inst::Release { .. }

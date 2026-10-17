@@ -184,7 +184,7 @@ fn retie_versions(ed: &mut Editor<Ready>, facts: &Facts, lay: Lay<'_>) {
         };
         flow.block(block, state, |i, pre, post| {
             if let Some(inst) = ed.code[b].get(i) {
-                if let Some(failure) = crate::insert::inst_failure(inst) {
+                if let Some(failure) = Inst::failure(inst) {
                     let state = if matches!(
                         inst,
                         Inst::Drop { .. }
@@ -200,10 +200,10 @@ fn retie_versions(ed: &mut Editor<Ready>, facts: &Facts, lay: Lay<'_>) {
                 }
             } else {
                 let term = &ed.unit.terminators[b];
-                for edge in crate::liveness::normal_edges(&ed.unit, term) {
+                for edge in Terminator::normal_edges(term, &ed.unit.pools) {
                     record(edge, post);
                 }
-                if let Some(failure) = crate::liveness::terminator_failure(term) {
+                if let Some(failure) = Terminator::failure(term) {
                     record(ed.unit.tables.failures[failure.index()].cleanup, post);
                 }
             }
@@ -414,7 +414,7 @@ fn version_source_join(
         };
         flow.block(block, state, |i, pre, post| {
             if let Some(inst) = ed.code[b].get(i) {
-                if let Some(f) = crate::insert::inst_failure(inst) {
+                if let Some(f) = Inst::failure(inst) {
                     let finishes = matches!(
                         inst,
                         Inst::Drop { .. }
@@ -429,10 +429,10 @@ fn version_source_join(
                 }
             } else {
                 let term = &ed.unit.terminators[b];
-                for edge in crate::liveness::normal_edges(&ed.unit, term) {
+                for edge in Terminator::normal_edges(term, &ed.unit.pools) {
                     record(edge, post);
                 }
-                if let Some(f) = crate::liveness::terminator_failure(term) {
+                if let Some(f) = Terminator::failure(term) {
                     record(ed.unit.tables.failures[f.index()].cleanup, post);
                 }
             }
@@ -475,7 +475,7 @@ fn edge_versions(
         };
         flow.block(block, state, |i, pre, post| {
             if let Some(inst) = ed.code[b].get(i) {
-                if let Some(f) = crate::insert::inst_failure(inst) {
+                if let Some(f) = Inst::failure(inst) {
                     let finishes = matches!(
                         inst,
                         Inst::Drop { .. }
@@ -491,10 +491,10 @@ fn edge_versions(
                 }
             } else {
                 let term = &ed.unit.terminators[b];
-                for edge in crate::liveness::normal_edges(&ed.unit, term) {
+                for edge in Terminator::normal_edges(term, &ed.unit.pools) {
                     record(edge, i, post);
                 }
-                if let Some(f) = crate::liveness::terminator_failure(term) {
+                if let Some(f) = Terminator::failure(term) {
                     record(ed.unit.tables.failures[f.index()].cleanup, i, post);
                 }
             }
@@ -517,7 +517,7 @@ fn version_defs(ed: &Editor<Ready>, facts: &Facts) -> BTreeMap<ValueId, (BlockId
             }
         }
         for (i, inst) in ed.code[x].iter().enumerate() {
-            for v in crate::liveness::inst_defs(inst) {
+            for v in Inst::defs(inst) {
                 if is_version(v) {
                     out.insert(v, (b, i + 1));
                 }
@@ -863,7 +863,7 @@ fn join_flags(
                     }
                 }
             }
-            if let Some(failure) = crate::insert::inst_failure(&inst)
+            if let Some(failure) = Inst::failure(&inst)
                 && failure != crate::insert::PENDING_FAILURE
             {
                 let cleanup = ed.unit.tables.failures[failure.index()].cleanup;
@@ -886,7 +886,7 @@ fn join_flags(
                     let mut copy = ed.unit.tables.failures[failure.index()].clone();
                     copy.cleanup = cleanup;
                     ed.unit.tables.failures.push(copy);
-                    *crate::insert::inst_failure_mut(&mut ed.code[b][i]).unwrap() =
+                    *Inst::failure_mut(&mut ed.code[b][i]).unwrap() =
                         FailureId(ed.unit.tables.failures.len() as u32 - 1);
                 }
             }
@@ -2397,7 +2397,7 @@ impl Lowering<'_, '_> {
             .map(|b| {
                 let mut out: Vec<usize> = self.ed.code[b]
                     .iter()
-                    .filter_map(crate::insert::inst_failure)
+                    .filter_map(Inst::failure)
                     .map(failure)
                     .collect();
                 match unit.terminators[b] {

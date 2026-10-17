@@ -2,7 +2,6 @@
 //! Discovery reads SSA versions, never source names or layout equality as code evidence.
 use crate::import::Lowered;
 use crate::instance::InstanceId;
-use crate::liveness::inst_defs;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::FnAbiId;
 use hirsel_lir::ir::*;
@@ -119,7 +118,7 @@ fn discover(
             constants[to.index()] = Code::Pending;
             inputs[to.index()].push(from);
         } else {
-            for v in inst_defs(inst) {
+            for v in Inst::defs(inst) {
                 constants[v.index()] = Code::Dynamic;
             }
             match *inst {
