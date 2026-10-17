@@ -2537,7 +2537,7 @@ impl Checker<'_> {
                 ExprKind::Unary {
                     op: UnaryOp::Take,
                     value,
-                } => (value, true),
+                } => (self.transparent_value(value), true),
                 _ => (e, false),
             };
             let Some(mut b) = self.binding(reference) else {

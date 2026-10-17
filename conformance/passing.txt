@@ -2779,6 +2779,8 @@ conformance/OWN/OWN-2-pathtime-duration-parse-reject.hir
 conformance/OWN/OWN-2-pathtime-time-parse-accept.hir
 conformance/OWN/OWN-2-pathtime-time-parse-reject.hir
 conformance/OWN/OWN-2-spec-save.hir
+conformance/OWN/OWN-2-taken-block-capture-run.hir
+conformance/OWN/OWN-2-taken-direct-capture-run.hir
 conformance/OWN/OWN-2-testhelpers-equal-accept.hir
 conformance/OWN/OWN-2-testhelpers-equal-reject.hir
 conformance/OWN/OWN-2-wave1-concat-bad.hir

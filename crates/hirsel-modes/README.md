@@ -856,3 +856,7 @@ An unqualified counted payload starts a separate root without that proof.
 Propagation owns its Result independently of the success value's consumer.
 Uniqueness diagnostic causes follow counted aggregate inputs separately from
 locality causes, so a plain sibling cannot become the cited counted alias.
+
+Explicit take capture classification follows transparent block tails (LANG-11),
+so `take { x }` captures the same owner as `take x`, including resource and task
+captures. Statements inside the block retain their ordinary evaluation order.

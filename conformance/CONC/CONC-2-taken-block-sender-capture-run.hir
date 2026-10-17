@@ -1,0 +1,24 @@
+// rule: CONC-2
+// expect: run
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (ta, ra): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let a = task.async(s, fn() {})
+      let b = task.async(
+        s,
+        fn() {
+          let owned = take {
+            ta
+            ta
+          }
+        }
+      )
+      task.await(s, take a)
+      task.await(s, take b)
+    }
+  )
+  Ok(())
+}
