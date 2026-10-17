@@ -635,6 +635,7 @@ hirsel_test(
         "docs/spec/**",
         "native-tests/**",
         "crates/**",
+        "docs/tour.md",
         "crates/hirsel-conformance/Cargo.toml",
     ]),
     runtime_archives = "//:hirsel-rt-archives",

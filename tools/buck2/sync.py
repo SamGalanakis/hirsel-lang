@@ -131,7 +131,8 @@ RUNTIME_DATA = {
 TEST_DATA = {
     "hirsel-conformance-test-it": ["crates/hirsel-conformance/tests/fixtures/**"],
     # Every rule ID any crate cites must resolve in docs/spec.
-    "hirsel-conformance-test-spec_links": ["crates/**"],
+    # Relative spec links reach the generated tour outside docs/spec.
+    "hirsel-conformance-test-spec_links": ["crates/**", "docs/tour.md"],
     # memcheck:: compiles a C program against the runtime header.
     "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**"],
     "hirsel-driver-test-it-stdlib": ["crates/hirsel-driver/tests/fixtures/**"],
