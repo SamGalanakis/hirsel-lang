@@ -756,19 +756,20 @@ fn unit_region(unit: &mut LirUnit<Placed>) -> RegionInstanceId {
 }
 
 /// Lower each `ArenaOpen` (only in an entry block, by the validator) to a
-/// region spanning the unit: its entry and token in place of the opening,
-/// and its exit on every return and propagation.
+/// region spanning the unit: its entry at the unit's start, its token in
+/// place of the opening (after the budget it reads), and its exit on every
+/// return and propagation.
 fn open_arenas(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed>, PlaceError> {
     let mut unit = unit;
     let entry = unit.entry.index();
-    let openings: Vec<(usize, ValueId)> = unit
+    let openings: Vec<(usize, ValueId, Option<ValueId>)> = unit
         .blocks
         .iter()
         .enumerate()
         .flat_map(|(b, block)| {
             let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
             insts.iter().filter_map(move |inst| match *inst {
-                Inst::ArenaOpen { result } => Some((b, result)),
+                Inst::ArenaOpen { result, budget } => Some((b, result, budget)),
                 _ => None,
             })
         })
@@ -776,7 +777,7 @@ fn open_arenas(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Pla
     if openings.is_empty() {
         return Ok(unit);
     }
-    if openings.iter().any(|&(b, _)| b != entry) {
+    if openings.iter().any(|&(b, _, _)| b != entry) {
         return Err(PlaceError::Unsupported(
             "an arena opened outside the entry block".into(),
         ));
@@ -787,25 +788,25 @@ fn open_arenas(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Pla
     let mut facts = Facts::new(&unit, table);
     let mut ed = Editor::new(unit);
     let mut marks = Vec::new();
-    for (&(_, token), &region) in openings.iter().zip(&regions) {
+    for (&(_, token, budget), &region) in openings.iter().zip(&regions) {
         let mark = ed.value(mark_ty, Holding::Owned);
         facts.marks[region.index()] = Some(mark);
         let at = ed.code[entry]
             .iter()
-            .position(|inst| matches!(*inst, Inst::ArenaOpen { result } if result == token))
+            .position(|inst| matches!(*inst, Inst::ArenaOpen { result, .. } if result == token))
             .expect("the opening is in the entry block");
-        ed.code[entry].splice(
-            at..=at,
-            [
-                Inst::RegionEnter {
-                    result: mark,
-                    region,
-                },
-                Inst::ArenaToken {
-                    result: token,
-                    mark,
-                },
-            ],
+        ed.code[entry][at] = Inst::ArenaToken {
+            result: token,
+            mark,
+            budget,
+        };
+        let enter = marks.len();
+        ed.code[entry].insert(
+            enter,
+            Inst::RegionEnter {
+                result: mark,
+                region,
+            },
         );
         marks.push(mark);
     }

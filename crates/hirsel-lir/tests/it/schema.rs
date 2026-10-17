@@ -836,10 +836,14 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
             region: RegionInstanceId(0),
             failure: f,
         },
-        Inst::ArenaOpen { result: v(26) },
+        Inst::ArenaOpen {
+            result: v(26),
+            budget: Some(v(1)),
+        },
         Inst::ArenaToken {
             result: v(27),
             mark: v(8),
+            budget: None,
         },
         Inst::Defuse { address: a(0) },
         Inst::FinalizeBegin {
@@ -1113,6 +1117,17 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     });
     u.terminators.push(Terminator::InvariantFault {
         reason: "container extent exceeds u32".into(),
+    });
+    u.blocks.push(Block {
+        kind: BlockKind::FailureCleanup,
+        parameters: PoolRange::EMPTY,
+        instructions: PoolRange::EMPTY,
+        anchor: SourceAnchorId(0),
+    });
+    u.terminators.push(Terminator::Recover {
+        arena: v(26),
+        caught: EdgeId(0),
+        failed: EdgeId(1),
     });
     u
 }

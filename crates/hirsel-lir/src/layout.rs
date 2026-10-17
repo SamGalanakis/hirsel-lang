@@ -483,3 +483,100 @@ impl LayoutTable {
             .map(|r| snapshot::digest("layout-record", r))
     }
 }
+
+/// The tag a variant is charged besides its largest variant's fields (MEM-6).
+pub const LOGICAL_VARIANT_TAG: u64 = 4;
+/// A block reference, an opaque owner, a handle, a path or an arena token.
+pub const LOGICAL_REFERENCE: u64 = 8;
+/// A callable (code and environment) or an erased iterator.
+pub const LOGICAL_CALLABLE: u64 = 16;
+
+/// The logical size of a value of `id` (MEM-6): the target-independent bytes a
+/// bounded arena charges, read from layout structure alone, and so independent
+/// of offsets, padding and niches. It is the table `hirsel_types::logical`
+/// computes from types. None for a layout that is no inline value (a block
+/// payload, a header or a flat encoding).
+pub fn logical_size(table: &LayoutTable, id: LayoutId) -> Option<u64> {
+    logical_at(table, id, 0)
+}
+
+fn logical_at(table: &LayoutTable, id: LayoutId, depth: usize) -> Option<u64> {
+    if depth > 256 {
+        return None;
+    }
+    let record = table.layout(id)?;
+    let sum = |fields: &[FieldLayout]| -> Option<u64> {
+        fields.iter().try_fold(0u64, |total, field| {
+            Some(total.saturating_add(logical_at(table, field.layout, depth + 1)?))
+        })
+    };
+    Some(match &record.kind {
+        LayoutKind::Unit => 0,
+        LayoutKind::Scalar(kind) => match kind {
+            ScalarKind::Bool | ScalarKind::U8 | ScalarKind::I8 => 1,
+            ScalarKind::U16 | ScalarKind::I16 => 2,
+            ScalarKind::U32 | ScalarKind::I32 | ScalarKind::F32 => 4,
+            ScalarKind::U64 | ScalarKind::I64 | ScalarKind::F64 | ScalarKind::Pointer => 8,
+            ScalarKind::U128 | ScalarKind::I128 => 16,
+        },
+        LayoutKind::Aggregate | LayoutKind::Resource => sum(&record.fields)?,
+        LayoutKind::Variant | LayoutKind::Packed => {
+            let mut largest = 0u64;
+            for variant in &record.tag.as_ref()?.variants {
+                largest = largest.max(sum(&variant.fields)?);
+            }
+            LOGICAL_VARIANT_TAG.saturating_add(largest)
+        }
+        LayoutKind::Inline { element, count } => {
+            count.saturating_mul(logical_at(table, *element, depth + 1)?)
+        }
+        LayoutKind::Simd { element, lanes } => {
+            u64::from(*lanes).saturating_mul(logical_at(table, *element, depth + 1)?)
+        }
+        LayoutKind::Block { .. }
+        | LayoutKind::Box { .. }
+        | LayoutKind::Slice { .. }
+        | LayoutKind::Opaque { .. }
+        | LayoutKind::Handle
+        | LayoutKind::Path
+        | LayoutKind::Arena => LOGICAL_REFERENCE,
+        LayoutKind::Callable { .. } | LayoutKind::Iterator { .. } => LOGICAL_CALLABLE,
+        LayoutKind::Environment { .. }
+        | LayoutKind::Header
+        | LayoutKind::Flat
+        | LayoutKind::SoaColumns { .. }
+        | LayoutKind::Sequence { .. }
+        | LayoutKind::Sequential { .. } => return None,
+    })
+}
+
+/// How a block of payload layout `payload` is charged (MEM-6): a sequence by
+/// its element count, anything else by its payload's logical size.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LogicalCharge {
+    Fixed(u64),
+    PerElement(u64),
+}
+
+impl LogicalCharge {
+    /// The bytes of a block holding `count` elements.
+    pub fn bytes(self, count: u64) -> u64 {
+        match self {
+            LogicalCharge::Fixed(n) => n,
+            LogicalCharge::PerElement(n) => n.saturating_mul(count),
+        }
+    }
+}
+
+/// The charge of a block whose payload layout is `payload`; None for a payload
+/// with no logical size (a flat encoding or an environment).
+pub fn block_charge(table: &LayoutTable, payload: LayoutId) -> Option<LogicalCharge> {
+    match &table.layout(payload)?.kind {
+        LayoutKind::Sequence { element }
+        | LayoutKind::Sequential { element }
+        | LayoutKind::SoaColumns { element } => {
+            Some(LogicalCharge::PerElement(logical_size(table, *element)?))
+        }
+        _ => Some(LogicalCharge::Fixed(logical_size(table, payload)?)),
+    }
+}

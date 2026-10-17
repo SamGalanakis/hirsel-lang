@@ -355,6 +355,16 @@ pub fn dump<S: Stage>(u: &LirUnit<S>) -> String {
                     edge(u, *otherwise)
                 )
             }
+            Terminator::Recover {
+                arena,
+                caught,
+                failed,
+            } => format!(
+                "recover v{} {} else {}",
+                arena.0,
+                edge(u, *caught),
+                edge(u, *failed)
+            ),
             Terminator::Call {
                 call,
                 normal,

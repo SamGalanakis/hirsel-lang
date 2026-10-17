@@ -441,6 +441,17 @@ pub(crate) struct Region {
     pub instance: RegionInstanceId,
     pub live: bool,
     pub allocations: Snapshot<AllocId>,
+    /// A bounded arena's budget (MEM-6).
+    pub budget: Option<Budget>,
+}
+
+/// What remains of a bounded arena's capacity, the number of failure records
+/// when it opened, and the record of its own `OutOfSpace`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Budget {
+    pub remaining: u64,
+    pub start: usize,
+    pub exhausted: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

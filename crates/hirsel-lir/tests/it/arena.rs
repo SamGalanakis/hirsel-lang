@@ -139,6 +139,7 @@ fn token_after_exit(mutant: bool) -> Vec<K> {
         Inst::ArenaToken {
             result: token,
             mark,
+            budget: None,
         },
     );
     let exit = |t: &mut Lir<Placed>, b: BlockId| {
@@ -195,7 +196,13 @@ fn opened(mutant: bool) -> Vec<K> {
     let token = t.plain(l::ARENA);
     let n = t.builder.block(BlockKind::Body, &[]);
     let at = if mutant { n } else { ENTRY };
-    t.builder.push(at, Inst::ArenaOpen { result: token });
+    t.builder.push(
+        at,
+        Inst::ArenaOpen {
+            result: token,
+            budget: None,
+        },
+    );
     t.builder.jump(ENTRY, n, &[]);
     t.builder.ret(n, None);
     t.check()
@@ -209,7 +216,13 @@ fn an_arena_opens_only_at_a_library_entry() {
     // A source unit never opens one.
     let mut t = Lir::<Value>::new(&[], None);
     let token = t.plain(l::ARENA);
-    t.builder.push(ENTRY, Inst::ArenaOpen { result: token });
+    t.builder.push(
+        ENTRY,
+        Inst::ArenaOpen {
+            result: token,
+            budget: None,
+        },
+    );
     t.builder.ret(ENTRY, None);
     assert!(t.check().contains(&K::Vocabulary(Opcode::ArenaOpen)));
 }

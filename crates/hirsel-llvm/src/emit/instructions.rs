@@ -1240,7 +1240,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             // Publication is static: nothing moves or writes published storage afterwards.
             Inst::RegionPublish { .. } => Ok(()),
             // A token is its region's record address.
-            Inst::ArenaToken { result, mark } => {
+            Inst::ArenaToken {
+                budget: Some(_), ..
+            } => self.unsupported("a bounded arena (MEM-6)"),
+            Inst::ArenaToken {
+                result,
+                mark,
+                budget: None,
+            } => {
                 let record = self.get(mark)?;
                 self.define(result, record)
             }

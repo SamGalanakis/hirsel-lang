@@ -804,7 +804,14 @@ impl<S: Stage> Checker<'_, '_, S> {
                         _ => false,
                     },
                 };
-                let ok = if failure_edge || kind == BlockKind::FailureCleanup {
+                // A recovery is the one way from failure cleanup back to ordinary code.
+                let recovered = matches!(
+                    (out.origin, term),
+                    (Origin::Terminator, Terminator::Recover { caught, .. }) if *caught == out.edge
+                );
+                let ok = if recovered {
+                    target == BlockKind::Body
+                } else if failure_edge || kind == BlockKind::FailureCleanup {
                     target == BlockKind::FailureCleanup
                 } else {
                     target != BlockKind::FailureCleanup
@@ -822,6 +829,10 @@ impl<S: Stage> Checker<'_, '_, S> {
                 Terminator::Propagate if kind != BlockKind::FailureCleanup => self.add(
                     Site::at(b, len),
                     K::BlockKind("propagate outside failure cleanup"),
+                ),
+                Terminator::Recover { .. } if kind != BlockKind::FailureCleanup => self.add(
+                    Site::at(b, len),
+                    K::BlockKind("recover outside failure cleanup"),
                 ),
                 _ => {}
             }
@@ -2164,7 +2175,7 @@ impl<S: Stage> Checker<'_, '_, S> {
             }
             // Only `arena.with`'s library body opens an arena, at its entry,
             // so that every exit of the unit closes it.
-            Inst::ArenaOpen { result } => {
+            Inst::ArenaOpen { result, budget } => {
                 self.library_only(site, Opcode::ArenaOpen);
                 if site.block != Some(unit.entry) {
                     self.add(
@@ -2175,15 +2186,30 @@ impl<S: Stage> Checker<'_, '_, S> {
                 if self.ty(result).repr != ValueRepr::Arena {
                     self.add(site, K::Type("arena opening"));
                 }
+                self.arena_budget(site, budget);
             }
-            Inst::ArenaToken { result, mark } => {
+            Inst::ArenaToken {
+                result,
+                mark,
+                budget,
+            } => {
                 if self.ty(mark).repr != ValueRepr::RegionMark
                     || self.ty(result).repr != ValueRepr::Arena
                 {
                     self.add(site, K::Type("arena token"));
                 }
+                self.arena_budget(site, budget);
             }
             Inst::Forget { .. } => {}
+        }
+    }
+
+    /// A bounded arena's budget is a u64 (MEM-6, LIR schema revision 26).
+    fn arena_budget(&mut self, site: Site, budget: Option<ValueId>) {
+        if let Some(budget) = budget
+            && self.scalar(budget) != Some(ScalarKind::U64)
+        {
+            self.add(site, K::Type("arena budget"));
         }
     }
 
@@ -2619,6 +2645,25 @@ impl<S: Stage> Checker<'_, '_, S> {
                 Terminator::Branch { condition, .. } => {
                     if self.scalar(condition) != Some(ScalarKind::Bool) {
                         self.add(site, K::Type("branch condition"));
+                    }
+                }
+                // MEM-6: only `arena.bounded`'s library body recovers, and only
+                // the failure of a bounded arena it opened itself.
+                Terminator::Recover { arena, .. } => {
+                    self.library_only(site, Opcode::Recover);
+                    if self.ty(arena).repr != ValueRepr::Arena {
+                        self.add(site, K::Type("recovered arena"));
+                    }
+                    let opened = unit.instructions.iter().any(|inst| {
+                        matches!(*inst,
+                            Inst::ArenaOpen { result, budget: Some(_) }
+                            | Inst::ArenaToken { result, budget: Some(_), .. } if result == arena)
+                    });
+                    if !opened {
+                        self.add(
+                            site,
+                            K::Placement("a recovery of an arena the unit did not open bounded"),
+                        );
                     }
                 }
                 Terminator::Switch { value, arms, .. } => {
@@ -3576,9 +3621,8 @@ impl<S: Stage> Checker<'_, '_, S> {
         }
         for inst in &unit.instructions {
             match *inst {
-                Inst::RegionReserve { result, mark, .. } | Inst::ArenaToken { result, mark } => {
-                    flow(mark, result)
-                }
+                Inst::RegionReserve { result, mark, .. }
+                | Inst::ArenaToken { result, mark, .. } => flow(mark, result),
                 Inst::Read {
                     result, reaching, ..
                 }
@@ -4072,7 +4116,12 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
         }
         Inst::Dispose { token } => out.push(op(token)),
         Inst::RegionReserve { mark, extent, .. } => out.extend([op(mark), op(extent)]),
-        Inst::RegionExit { mark, .. } | Inst::ArenaToken { mark, .. } => out.push(op(mark)),
+        Inst::RegionExit { mark, .. } => out.push(op(mark)),
+        Inst::ArenaToken { mark, budget, .. } => {
+            out.push(op(mark));
+            out.extend(budget.map(op));
+        }
+        Inst::ArenaOpen { budget, .. } => out.extend(budget.map(op)),
         _ => {}
     }
     out
@@ -4203,6 +4252,7 @@ fn terminator_operands<S>(cx: &Cx<'_, S>, term: &Terminator) -> Vec<(ValueId, Us
         Terminator::Branch { condition, .. } => vec![(condition, Usage::Operand)],
         Terminator::Switch { value, .. } => vec![(value, Usage::Operand)],
         Terminator::Return(Some(value)) => vec![(value, Usage::Operand)],
+        Terminator::Recover { arena, .. } => vec![(arena, Usage::Operand)],
         Terminator::Call { call, .. } => {
             let site = &unit.tables.calls[call.index()];
             let mut out = Vec::new();

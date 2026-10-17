@@ -45,6 +45,7 @@ fn open() -> Open {
     f.inst(Inst::ArenaToken {
         result: token,
         mark,
+        budget: None,
     });
     let slot = f.b.slot(TOKEN, arena, SlotKind::Local);
     f.b.unit.tables.arenas.push(ExternalInstance { slot });

@@ -1022,6 +1022,15 @@ impl<S: Stage> Editor<S> {
                     yes: em(yes),
                     no: em(no),
                 },
+                Terminator::Recover {
+                    arena,
+                    caught,
+                    failed,
+                } => Terminator::Recover {
+                    arena,
+                    caught: em(caught),
+                    failed: em(failed),
+                },
                 Terminator::Switch {
                     value,
                     arms,
@@ -2013,7 +2022,7 @@ impl<S: Stage> Flow<'_, S> {
                 self.create(st, result);
             }
             Inst::RegionReserve { result, .. }
-            | Inst::ArenaOpen { result }
+            | Inst::ArenaOpen { result, .. }
             | Inst::ArenaToken { result, .. } => self.create(st, result),
             Inst::RegionExit { mark, region, .. } => {
                 take_credit(&mut st.credits, mark);
@@ -3232,11 +3241,19 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             | Inst::FlatLength { result, .. }
             | Inst::Construct { result, .. }
             | Inst::Closure { result, .. }
-            | Inst::RegionEnter { result, .. }
-            | Inst::ArenaOpen { result } => *result = map(*result),
-            Inst::ArenaToken { result, mark } => {
+            | Inst::RegionEnter { result, .. } => *result = map(*result),
+            Inst::ArenaOpen { result, budget } => {
+                *result = map(*result);
+                *budget = budget.map(map);
+            }
+            Inst::ArenaToken {
+                result,
+                mark,
+                budget,
+            } => {
                 *result = map(*result);
                 *mark = map(*mark);
+                *budget = budget.map(map);
             }
             Inst::Unary {
                 result, operand, ..
@@ -3426,6 +3443,7 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
         match term {
             Terminator::Branch { condition, .. } => *condition = map(*condition),
             Terminator::Switch { value, .. } => *value = map(*value),
+            Terminator::Recover { arena, .. } => *arena = map(*arena),
             Terminator::Return(Some(v)) => *v = map(*v),
             Terminator::Jump(_)
             | Terminator::Call { .. }

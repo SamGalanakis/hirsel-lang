@@ -107,6 +107,15 @@ Invariants:
   region and allocates counted heap storage. Deep copies traverse headered arena
   owners as well as heap/static owners and allocate every copied block at the
   construction's destination, preserving sharing within the graph.
+  A bounded arena (MEM-6, `ArenaToken` with a budget) keeps its remaining
+  logical bytes, the failure count at its token and its own `OutOfSpace`
+  record. A construction, closure environment or deep copy into it is charged
+  (`hirsel_lir::layout::block_charge`; a copy charges every block once per
+  reference, a sequence by its length) before anything is placed or consumed;
+  an excess records `OutOfSpace` (rule MEM-6) and takes the instruction's
+  failure edge. `Recover` forgets that record and resumes ordinary code only
+  when it is the one failure since the token; a flat payload in a bounded arena
+  is `Unsupported`.
 - Terminal audit is compulsory on success and on language failure: observe the
   result, release harness roots, drain, then require no live heap allocation,
   raw storage, unconsumed token, open resource or handle, or live region.

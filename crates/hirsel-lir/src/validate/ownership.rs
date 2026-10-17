@@ -651,6 +651,7 @@ impl<S: Stage> Walker<'_, '_, S> {
             Terminator::Jump(_) | Terminator::Unreachable | Terminator::InvariantFault { .. } => {}
             Terminator::Branch { condition, .. } => self.borrow(site, &st, &cr, condition),
             Terminator::Switch { value, .. } => self.borrow(site, &st, &cr, value),
+            Terminator::Recover { arena, .. } => self.borrow(site, &st, &cr, arena),
             Terminator::Call {
                 call,
                 normal,
@@ -2644,9 +2645,21 @@ impl<S: Stage> Walker<'_, '_, S> {
                 }
                 st.regions[region.index()] = Tri::No;
             }
-            Inst::ArenaOpen { result } => self.create(site, st, cr, result),
-            Inst::ArenaToken { result, mark } => {
+            Inst::ArenaOpen { result, budget } => {
+                if let Some(budget) = budget {
+                    self.borrow(site, st, cr, budget);
+                }
+                self.create(site, st, cr, result);
+            }
+            Inst::ArenaToken {
+                result,
+                mark,
+                budget,
+            } => {
                 self.borrow(site, st, cr, mark);
+                if let Some(budget) = budget {
+                    self.borrow(site, st, cr, budget);
+                }
                 self.create(site, st, cr, result);
             }
             Inst::Forget { value } => self.consume(site, st, cr, value),

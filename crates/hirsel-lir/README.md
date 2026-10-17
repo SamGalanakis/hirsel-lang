@@ -53,8 +53,9 @@ Invariants:
   also names every row's `Opcode`, the vocabulary each stage admits.
 - Arenas. `LayoutKind::Arena` and
   `ValueRepr::Arena` are the one-word token. `ArenaOpen` (Value stage,
-  `arena.with`'s library body only, entry block) becomes `RegionEnter` plus
-  `ArenaToken` at placement; `Fixed(Arena(i))` placement reads the token in
+  `arena.with`'s and `arena.bounded`'s library bodies only, entry block)
+  becomes `RegionEnter` at the unit's start plus `ArenaToken` in its place at
+  placement; `Fixed(Arena(i))` placement reads the token in
   `tables.arenas[i].slot`.
 - Instance keys keep the definition, body index, binders, complete type structure,
   size actuals, declared callable convention and environment layout, and erase
@@ -481,3 +482,15 @@ LIR revision 25 adds `ConstantValue::Heap`, the distinguished inert Arena token.
 C admits that exact literal at Arena layout; integer bits and call results still
 cannot forge tokens. Scoped Arena tokens retain their open-region obligations.
 Runtime ABI 6 passes the destination token to both deep-copy entries.
+
+LIR revision 26 (MEM-6) adds an optional u64 `budget` operand to `ArenaOpen`
+and `ArenaToken`, the bounded arena's capacity in logical bytes (the table is
+in the runtime README; `layout::logical_size` and `layout::block_charge` read
+it from layouts, and `tests/it/logical.rs` holds them to
+`hirsel_types::logical`). `Terminator::Recover { arena, caught, failed }` is
+the one way from failure cleanup back to ordinary code: when the active failure
+is exactly the `OutOfSpace` of a bounded arena this unit opened, with no later
+failure, it is forgotten and control resumes on `caught`; otherwise it continues
+on `failed`. C admits it only in a library body's failure cleanup, with a
+`Body` target for `caught`, naming an arena opened with a budget in the unit;
+`tests/it/revision26.rs` pairs each rule with its valid twin.

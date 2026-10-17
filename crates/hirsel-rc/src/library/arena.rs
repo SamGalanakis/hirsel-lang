@@ -1,5 +1,6 @@
 //! `arena.with[R](body)`: open an arena, call `body` with its token, and
-//! close the arena on both outcomes (MEM-4).
+//! close the arena on both outcomes (MEM-4); `arena.bounded[R](cap, body)`
+//! opens it bounded and recovers its own `OutOfSpace` (MEM-6).
 //! The opening is `ArenaOpen` at the unit's entry; placement lowers it to a
 //! region entry and token, and closes that region on every return and
 //! propagation, before the result leaves the frame.
@@ -9,6 +10,7 @@ use crate::PassError;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
+use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
 use hirsel_types::TypeKind;
 
@@ -37,7 +39,13 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let token = b.fresh(token_parameter.layout);
     let entry = b.ed.unit.entry.index();
-    b.ed.code[entry].insert(0, Inst::ArenaOpen { result: token });
+    b.ed.code[entry].insert(
+        0,
+        Inst::ArenaOpen {
+            result: token,
+            budget: None,
+        },
+    );
     let (callee, loan) = b.borrow(b.parameters[0].address, false)?;
     let result = super::iter::call(
         &mut b,
@@ -52,6 +60,164 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     )?;
     b.ret(result);
     Ok(b.finish())
+}
+
+pub static BOUNDED: LibraryBody = LibraryBody {
+    path: || hirsel_syntax::DefPath::core("arena.bounded"),
+    build: bounded,
+};
+
+const RESULT_OK: u32 = 0;
+const RESULT_ERROR: u32 = 1;
+
+/// `arena.bounded[R](cap, body)` (MEM-6): `arena.with`'s shape over an arena
+/// bounded by `cap`. The callback's result is `Ok`; its failure ends the loan,
+/// then recovers exactly that arena's own `OutOfSpace` as `Error(OutOfSpace())`
+/// and propagates every other failure.
+fn bounded(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
+    let callback = match cx.store.get(cx.callable).map(|t| &t.kind) {
+        Some(TypeKind::Function(f)) if f.parameters.len() == 2 => f.parameters[1].ty,
+        _ => {
+            return Err(PassError::Malformed(
+                "arena.bounded takes a capacity and one callback".into(),
+            ));
+        }
+    };
+    let abi = cx
+        .layouts
+        .fn_abi(&cx.store, callback, CallableShape::Closure)
+        .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
+    let shape = cx.layouts.table().fn_abis[abi.0 as usize].clone();
+    let [token_parameter] = shape.parameters.as_slice() else {
+        return Err(PassError::Malformed(
+            "an arena.bounded callback takes one arena".into(),
+        ));
+    };
+    let Some(returned) = cx.fn_abi().result.map(|r| r.layout) else {
+        return Err(PassError::Malformed(
+            "arena.bounded returns a Result".into(),
+        ));
+    };
+    let mut b = Body::new(cx)?;
+    let token = b.fresh(token_parameter.layout);
+    // The opening follows the parameters' preparation, so it reads its budget.
+    let start = b.current();
+    b.at(b.ed.unit.entry);
+    let cap = b.read_bits(b.parameters[0].address)?;
+    b.push(Inst::ArenaOpen {
+        result: token,
+        budget: Some(cap),
+    });
+    b.at(start);
+    let (callee, loan) = b.borrow(b.parameters[1].address, false)?;
+    let call = b.current();
+    let result = super::iter::call(
+        &mut b,
+        callee,
+        abi,
+        vec![CallArgument {
+            parameter: 0,
+            passing: Passing::Borrow,
+            value: ArgumentValue::Value(token),
+        }],
+        &[loan],
+    )?;
+    let ok = match result {
+        Some(value) => vec![value],
+        None => match payload(&b, returned, RESULT_OK) {
+            Some(unit) => vec![b.constant(unit, ConstantValue::Unit)],
+            None => Vec::new(),
+        },
+    };
+    let value = variant(&mut b, returned, "Result", RESULT_OK, &ok);
+    b.ret(Some(value));
+    // The callback's failure path ends the loan, then recovers.
+    let Terminator::Call { failure, .. } = b.ed.unit.terminators[call.index()] else {
+        return Err(PassError::Malformed(
+            "arena.bounded calls its callback".into(),
+        ));
+    };
+    let ending = b.ed.unit.tables.failures[failure.index()].cleanup;
+    let ending = b.ed.unit.tables.edges[ending.index()].target;
+    let Terminator::Jump(failed) = b.ed.unit.terminators[ending.index()] else {
+        return Err(PassError::Malformed(
+            "arena.bounded's callback failure continues into cleanup".into(),
+        ));
+    };
+    let recovered = b.block(BlockKind::Body, &[]);
+    let caught = b.edge(recovered, &[]);
+    b.ed.unit.terminators[ending.index()] = Terminator::Recover {
+        arena: token,
+        caught,
+        failed,
+    };
+    b.at(recovered);
+    let error = payload(&b, returned, RESULT_ERROR).ok_or_else(|| {
+        PassError::Malformed("arena.bounded's Result has no error payload".into())
+    })?;
+    let out_of_space = variant(&mut b, error, "OutOfSpace", 0, &[]);
+    let value = variant(&mut b, returned, "Result", RESULT_ERROR, &[out_of_space]);
+    b.ret(Some(value));
+    Ok(b.finish())
+}
+
+/// The layout of field 0 of `layout`'s variant `ordinal`.
+fn payload(b: &Body<'_, '_>, layout: LayoutId, ordinal: u32) -> Option<LayoutId> {
+    let variant = b
+        .record(layout)
+        .tag
+        .as_ref()?
+        .variants
+        .iter()
+        .find(|v| v.ordinal == ordinal)?;
+    variant
+        .fields
+        .iter()
+        .find(|f| f.ordinal == 0)
+        .map(|f| f.layout)
+}
+
+/// Construct variant `variant` of the core type `name` at `layout`.
+fn variant(
+    b: &mut Body<'_, '_>,
+    layout: LayoutId,
+    name: &str,
+    variant: u32,
+    values: &[ValueId],
+) -> ValueId {
+    let definition = b.symbol(Symbol {
+        kind: SymbolKind::Type,
+        definition: hirsel_syntax::DefPath::core(name),
+        instance: None,
+    });
+    let fields = PoolRange::push(
+        &mut b.ed.unit.pools.fields,
+        values.iter().enumerate().map(|(i, &value)| FieldValue {
+            field: i as u32,
+            value,
+        }),
+    );
+    let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
+    b.ed.unit.tables.constructs.push(ConstructSite {
+        arena_no_drop: false,
+        constructor: ConstructorKind::Variant {
+            definition,
+            variant,
+        },
+        layout,
+        fields,
+        destination: DestinationClass::Inferred,
+        placement: None,
+        anchor: b.anchor,
+    });
+    let result = b.fresh(layout);
+    let failure = b.failure(None);
+    b.push(Inst::Construct {
+        result,
+        construct,
+        failure,
+    });
+    result
 }
 
 /// `heap` is an inert allocator token, represented independently of any region.

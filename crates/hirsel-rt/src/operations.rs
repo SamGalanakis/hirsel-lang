@@ -76,6 +76,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "slots.get"
             | "slots.remove"
             | "arena.with"
+            | "arena.bounded"
             | "copy_to"
             | "failure.check"
             | "sorted_map.insert"

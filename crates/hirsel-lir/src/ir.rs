@@ -871,16 +871,22 @@ pub enum Inst {
         failure: FailureId,
     },
     // Arenas (MEM-4).
-    /// Value stage, library bodies only: open an arena that every return and
-    /// propagation of the unit closes, and define its token. Placement lowers
-    /// it to a region entry and that region's `ArenaToken`.
+    /// Value stage, library bodies only, in the entry block: open an arena
+    /// that every return and propagation of the unit closes, and define its
+    /// token. Placement lowers it to a region entry at the unit's start and
+    /// that region's `ArenaToken` in its place. A `budget` (a u64) bounds the
+    /// logical bytes charged to the arena from its token on (MEM-6, LIR schema
+    /// revision 26); None is unbounded.
     ArenaOpen {
         result: ValueId,
+        budget: Option<ValueId>,
     },
-    /// The arena token of the region `mark` entered: its record's address.
+    /// The arena token of the region `mark` entered: its record's address,
+    /// with its opening's budget.
     ArenaToken {
         result: ValueId,
         mark: ValueId,
+        budget: Option<ValueId>,
     },
     // Finalization and cleanup continuations.
     /// Whole destructuring suppresses this resource's finalizer (#97),
@@ -964,6 +970,16 @@ pub enum Terminator {
     Raise(FailureId),
     /// Return failure status after failure cleanup finished.
     Propagate,
+    /// In failure cleanup: when the active failure is exactly the `OutOfSpace`
+    /// of the bounded arena `arena`, which this unit opened, with no failure
+    /// recorded after it, forget it and resume ordinary code on `caught`;
+    /// otherwise continue failure cleanup on `failed` (MEM-6, LIR schema
+    /// revision 26).
+    Recover {
+        arena: ValueId,
+        caught: EdgeId,
+        failed: EdgeId,
+    },
     /// Requires proof, not an optimizer guess.
     Unreachable,
     /// Implementation limit or broken invariant. No language failure or cleanup.
@@ -1550,7 +1566,7 @@ impl Inst {
             | Inst::TokenNone { result }
             | Inst::RegionEnter { result, .. }
             | Inst::RegionReserve { result, .. }
-            | Inst::ArenaOpen { result }
+            | Inst::ArenaOpen { result, .. }
             | Inst::ArenaToken { result, .. } => vec![result],
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
                 std::iter::once(result).chain(flag).collect()
@@ -2041,11 +2057,23 @@ impl Inst {
             | Self::Forget { value }
             | Self::RegionPublish { value }
             | Self::Dispose { token: value }
-            | Self::TokenNone { result: value }
-            | Self::ArenaOpen { result: value } => f(R::Value(value)),
-            Self::ArenaToken { result, mark } => {
+            | Self::TokenNone { result: value } => f(R::Value(value)),
+            Self::ArenaOpen { result, budget } => {
+                f(R::Value(result));
+                if let Some(budget) = budget {
+                    f(R::Value(budget));
+                }
+            }
+            Self::ArenaToken {
+                result,
+                mark,
+                budget,
+            } => {
                 f(R::Value(result));
                 f(R::Value(mark));
+                if let Some(budget) = budget {
+                    f(R::Value(budget));
+                }
             }
             Self::Release {
                 value,
@@ -2143,6 +2171,7 @@ impl Terminator {
                 .chain([otherwise])
                 .collect(),
             Terminator::Call { normal, .. } => normal.into_iter().collect(),
+            Terminator::Recover { caught, failed, .. } => vec![caught, failed],
             Terminator::Return(_)
             | Terminator::Raise(_)
             | Terminator::Propagate
@@ -2160,6 +2189,7 @@ impl Terminator {
             | Terminator::Switch { .. }
             | Terminator::Return(_)
             | Terminator::Propagate
+            | Terminator::Recover { .. }
             | Terminator::Unreachable
             | Terminator::InvariantFault { .. } => None,
         }
@@ -2199,6 +2229,15 @@ impl Terminator {
                 }
             }
             Self::Raise(failure) => f(Ref::Failure(failure)),
+            Self::Recover {
+                arena,
+                caught,
+                failed,
+            } => {
+                f(Ref::Value(arena));
+                f(Ref::Edge(caught));
+                f(Ref::Edge(failed));
+            }
             Self::Propagate | Self::Unreachable | Self::InvariantFault { .. } => {}
         }
     }
@@ -2677,8 +2716,12 @@ snapshot_enum!(Inst {
     RegionReserve { result, mark, layout, extent, failure },
     RegionPublish { value },
     RegionExit { mark, region, failure },
-    ArenaOpen { result },
-    ArenaToken { result, mark },
+    ArenaOpen { result, budget },
+    ArenaToken {
+        result,
+        mark,
+        budget
+    },
     Defuse { address },
     FinalizeBegin { address, anchor },
     FinalizeEnd { address, anchor },
@@ -2703,6 +2746,11 @@ snapshot_enum!(Terminator {
     Return(value),
     Raise(failure),
     Propagate,
+    Recover {
+        arena,
+        caught,
+        failed
+    },
     Unreachable,
     InvariantFault { reason },
 });

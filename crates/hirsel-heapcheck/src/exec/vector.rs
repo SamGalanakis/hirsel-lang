@@ -692,6 +692,7 @@ impl<'p> Runner<'p> {
                     instance: RegionInstanceId(g as u32),
                     live: true,
                     allocations: Default::default(),
+                    budget: None,
                 });
                 self.m.ledger.trace.push(Event::RegionEnter { region: rt });
                 self.regions.insert(0, (g, rt));

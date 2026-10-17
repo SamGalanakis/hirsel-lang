@@ -126,6 +126,7 @@ impl StageKind {
             | Opcode::Return
             | Opcode::Raise
             | Opcode::Propagate
+            | Opcode::Recover
             | Opcode::Unreachable
             | Opcode::InvariantFault => true,
         }

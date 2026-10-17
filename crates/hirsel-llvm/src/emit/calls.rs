@@ -194,6 +194,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.builder.br(block);
                 Ok(())
             }
+            Terminator::Recover { .. } => self.unsupported("a bounded arena's recovery (MEM-6)"),
             Terminator::Propagate => {
                 self.flush_on_return()?;
                 self.return_status(1, None)?;

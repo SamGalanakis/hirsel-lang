@@ -161,7 +161,8 @@ names every program of a group);
   `Heap` stays on the task heap, `Caller` becomes the hidden ABI destination,
   `Inferred` is placement's choice, `Arena(origin)` is
   `Fixed(Arena(i))` with `tables.arenas[i]` the slot holding the token, and
-  `arena.with`'s `ArenaOpen` becomes a region entry, its `ArenaToken` and an
+  `arena.with`'s `ArenaOpen` becomes a region entry at the unit's start, its
+  `ArenaToken` (with the opening's budget) in the opening's place and an
   exit on every return and propagation. Call sites into a callee
   with a hidden destination name `Heap`. With `Options::regions` (and always in
   a `noalloc` function, MEM-5) an inferred block whose flow class never leaves
@@ -284,6 +285,11 @@ interpreter agree on results and SEM-1 failures.
 `arena::COPY_TO` builds a deep `UniqueCopy` with the allocator parameter as its
 construction destination. `arena::HEAP` imports the inert counted-heap token as
 `ConstantValue::Heap` (LIR revision 25); scoped tokens still come from `ArenaOpen`.
+`arena::BOUNDED` (MEM-6) reads its capacity in the entry block, opens the arena
+with it as the budget and calls the callback; the callback's result becomes
+`Ok`, and its failure path ends the loan and then `Recover`s the arena: the
+arena's own `OutOfSpace` returns `Error(OutOfSpace())`, every other failure
+propagates.
 
 ## Native library (LIR schema revision 7)
 

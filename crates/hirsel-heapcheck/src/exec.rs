@@ -2436,6 +2436,36 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "a propagating failure edge with no failure active",
             );
         }
+        self.unwind(f, failure)
+    }
+
+    /// MEM-6: a bounded arena's charge exceeded its budget. Record its
+    /// `OutOfSpace` at the edge's site and take the edge.
+    fn exhaust(&mut self, f: &mut Frame, failure: FailureId, region: usize) -> Checked<Control> {
+        let u = self.unit(f.unit);
+        let anchor = u
+            .tables
+            .failures
+            .get(failure.index())
+            .ok_or_else(|| err(V::Malformed, format!("unknown failure {failure:?}")))?
+            .anchor;
+        let index = self.failures.len();
+        self.record_failure(f, "MEM-6", anchor);
+        if let Some(budget) = &mut self.ledger.regions[region].budget {
+            budget.exhausted = Some(index);
+        }
+        self.unwind(f, failure)?;
+        Ok(Control::Continue)
+    }
+
+    /// Dispose a failure edge's tokens and enter its cleanup.
+    fn unwind(&mut self, f: &mut Frame, failure: FailureId) -> Checked<()> {
+        let u = self.unit(f.unit);
+        let edge = u
+            .tables
+            .failures
+            .get(failure.index())
+            .ok_or_else(|| err(V::Malformed, format!("unknown failure {failure:?}")))?;
         for v in self.pool(edge.dispose, &u.pools.values)? {
             let m = self.take_value(f, *v)?;
             let Val::Token(token) = m.val else {
@@ -4020,6 +4050,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                     return fail(V::Unsupported, "shallow detach into a non-heap destination");
                 }
                 let val = self.read_use(f, value)?;
+                if deep && let Some(region) = self.bounded_region(f, site.placement)? {
+                    let bytes = self.copy_charge(&val)?;
+                    if !self.charge(region, bytes) {
+                        return self.exhaust(f, failure, region);
+                    }
+                }
                 let val = if deep {
                     self.deep_copy(f, site.placement, val)?
                 } else {
@@ -4219,18 +4255,35 @@ impl<'p, S: Stage> Machine<'p, S> {
             Inst::Construct {
                 result,
                 construct,
-                failure: _,
+                failure,
             } => {
                 let site = self.construct_site(unit, construct)?;
                 let layout = self.value_type(unit, result)?.layout;
+                if let Some(region) = self.bounded_region(f, site.placement)? {
+                    let bytes = self.construct_charge(f, site, layout)?;
+                    if !self.charge(region, bytes) {
+                        return self.exhaust(f, failure, region);
+                    }
+                }
                 let val = self.construct(f, site, None, layout)?;
                 self.define_fresh(f, result, val)?;
             }
             Inst::Closure {
                 result,
                 closure,
-                failure: _,
+                failure,
             } => {
+                let site = u
+                    .tables
+                    .closures
+                    .get(closure.index())
+                    .ok_or_else(|| err(V::Malformed, format!("unknown closure {closure:?}")))?;
+                if let Some(region) = self.bounded_region(f, site.placement)? {
+                    let bytes = self.environment_charge(site)?;
+                    if !self.charge(region, bytes) {
+                        return self.exhaust(f, failure, region);
+                    }
+                }
                 let val = self.closure(f, closure)?;
                 self.define_fresh(f, result, val)?;
             }
@@ -4509,6 +4562,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     instance: region,
                     live: true,
                     allocations: Default::default(),
+                    budget: None,
                 });
                 f.regions.push(rt);
                 self.ledger.trace.push(Event::RegionEnter { region: rt });
@@ -4532,8 +4586,26 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let p = self.region_alloc(rt, layout, size)?;
                 self.define_fresh(f, result, Val::Ptr(p))?;
             }
-            Inst::ArenaToken { result, mark } => {
+            Inst::ArenaToken {
+                result,
+                mark,
+                budget,
+            } => {
                 let rt = self.region_of(f, mark)?;
+                if let Some(budget) = budget {
+                    let Val::Bits {
+                        scalar: ScalarKind::U64,
+                        bits,
+                    } = self.read_use(f, budget)?
+                    else {
+                        return fail(V::TypeConfusion, "an arena budget is not a u64");
+                    };
+                    self.ledger.regions[rt].budget = Some(crate::ledger::Budget {
+                        remaining: bits as u64,
+                        start: self.failures.len(),
+                        exhausted: None,
+                    });
+                }
                 self.define_fresh(f, result, Val::Arena(Some(rt)))?;
             }
             Inst::ArenaOpen { .. } => {
@@ -4942,6 +5014,127 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     /// An arena block: immortal, owned by its arena's region, which frees it at
     /// close after dropping the payloads it holds (MEM-4).
+    /// The region of the bounded arena `placement` names, if it names one.
+    fn bounded_region(&self, f: &Frame, placement: Option<Placement>) -> Checked<Option<usize>> {
+        let Some(Placement::Fixed(StorageOwner::Arena(arena))) = placement else {
+            return Ok(None);
+        };
+        Ok(self
+            .arena_of(f, arena)?
+            .filter(|&region| self.ledger.regions[region].budget.is_some()))
+    }
+
+    /// Take `bytes` from a bounded arena's budget; false when they exceed it.
+    fn charge(&mut self, region: usize, bytes: u64) -> bool {
+        let Some(budget) = &mut self.ledger.regions[region].budget else {
+            return true;
+        };
+        match budget.remaining.checked_sub(bytes) {
+            Some(remaining) => {
+                budget.remaining = remaining;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The logical charge of a block of payload `payload` holding `count`
+    /// elements (MEM-6, the runtime README's table).
+    fn block_charge(&self, payload: LayoutId, count: u64) -> Checked<u64> {
+        hirsel_lir::layout::block_charge(&self.program.layouts, payload)
+            .map(|charge| charge.bytes(count))
+            .ok_or_else(|| err(V::Unsupported, "a bounded-arena charge of a flat payload"))
+    }
+
+    /// A construction's charge: its block's, before any operand is consumed.
+    fn construct_charge(&self, f: &Frame, site: &ConstructSite, result: LayoutId) -> Checked<u64> {
+        if !matches!(
+            self.record(result)?.kind,
+            LayoutKind::Block { .. } | LayoutKind::Box { .. }
+        ) {
+            return Ok(0);
+        }
+        let u = self.unit(f.unit);
+        let fields = self.pool(site.fields, &u.pools.fields)?;
+        self.block_charge(site.layout, fields.len() as u64)
+    }
+
+    /// A closure environment's charge: its captures'.
+    fn environment_charge(&self, site: &ClosureSite) -> Checked<u64> {
+        if self.size(site.environment)? == 0 {
+            return Ok(0);
+        }
+        let record = self.record(site.environment)?;
+        let mut total = 0u64;
+        for i in 0..site.captures.len {
+            let field = record
+                .fields
+                .iter()
+                .find(|fl| fl.ordinal == i)
+                .ok_or_else(|| err(V::Malformed, "a capture outside its environment"))?;
+            let size = hirsel_lir::layout::logical_size(&self.program.layouts, field.layout)
+                .ok_or_else(|| err(V::Unsupported, "a bounded-arena charge of a flat capture"))?;
+            total = total.saturating_add(size);
+        }
+        Ok(total)
+    }
+
+    /// A deep copy's charge: every block of the copied tree, once per
+    /// reference to it, independently of sharing.
+    fn copy_charge(&self, val: &Val) -> Checked<u64> {
+        let roots: Vec<Ptr> = match val {
+            Val::Callable {
+                env: Some(root), ..
+            }
+            | Val::Ptr(root) => vec![*root],
+            Val::Image(image) => image
+                .cells
+                .values()
+                .filter_map(|c| self.block_target(c))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let mut charges: BTreeMap<AllocId, u64> = BTreeMap::new();
+        let mut work: Vec<(Ptr, bool)> = roots.iter().map(|&p| (p, false)).collect();
+        while let Some((p, expanded)) = work.pop() {
+            if charges.contains_key(&p.alloc) {
+                continue;
+            }
+            let a = self.ledger.check(p)?;
+            let children: Vec<Ptr> = a
+                .extent
+                .cells
+                .values()
+                .filter_map(|c| self.holder_target(c))
+                .collect();
+            if !expanded {
+                work.push((p, true));
+                work.extend(
+                    children
+                        .into_iter()
+                        .filter(|c| !charges.contains_key(&c.alloc))
+                        .map(|c| (c, false)),
+                );
+                continue;
+            }
+            let layout = a.layout.expect("live");
+            let count = match self.record(layout)?.kind {
+                LayoutKind::Sequence { .. } | LayoutKind::Sequential { .. } => {
+                    self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64
+                }
+                _ => 1,
+            };
+            let mut total = self.block_charge(layout, count)?;
+            for c in children {
+                total = total.saturating_add(charges[&c.alloc]);
+            }
+            charges.insert(p.alloc, total);
+        }
+        Ok(roots
+            .iter()
+            .fold(0u64, |total, r| total.saturating_add(charges[&r.alloc])))
+    }
+
     fn arena_alloc(&mut self, region: usize, layout: LayoutId, size: u64) -> Checked<Ptr> {
         let record = self.record(layout)?;
         let (flat, align) = (record.kind == LayoutKind::Flat, record.align);
@@ -6106,6 +6299,32 @@ impl<'p, S: Stage> Machine<'p, S> {
                     );
                 }
                 return Ok(Control::Exit(Exit::Fail));
+            }
+            // MEM-6: the active failure is exactly this arena's own `OutOfSpace`,
+            // the first record since it opened, with no later one.
+            Terminator::Recover {
+                arena,
+                caught,
+                failed,
+            } => {
+                if !f.failing {
+                    return fail(V::Malformed, "recover without an active failure");
+                }
+                let Val::Arena(Some(region)) = self.read_use(f, arena)? else {
+                    return fail(V::TypeConfusion, "recover of no arena");
+                };
+                let Some(budget) = self.ledger.regions[region].budget else {
+                    return fail(V::Malformed, "recover of an unbounded arena");
+                };
+                if budget.exhausted == Some(budget.start) && self.failures.len() == budget.start + 1
+                {
+                    self.failures.truncate(budget.start);
+                    self.unanchored_failures.remove(&budget.start);
+                    f.failing = false;
+                    self.jump(f, caught)?;
+                } else {
+                    self.jump(f, failed)?;
+                }
             }
             Terminator::InvariantFault { ref reason } => {
                 return fail(V::Malformed, format!("invariant fault: {reason}"));

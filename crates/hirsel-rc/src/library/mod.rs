@@ -60,6 +60,7 @@ pub struct LibraryBody {
 /// one line here.
 pub const BODIES: &[&LibraryBody] = &[
     &arena::WITH,
+    &arena::BOUNDED,
     &arena::COPY_TO,
     &slots::INSERT,
     &slots::GET,
