@@ -19,7 +19,8 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
         tls: Plain(),
         connections: [Open([Send(b"hi"), Truncate()])]
       )
-    ]
+    ],
+    []
   )
   let s = net.connect(n, "example.com", 443u16, Unbounded())?
   let mut secure = tls.connect(n, take s, "example.com", WebPki())?

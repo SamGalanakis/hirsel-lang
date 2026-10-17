@@ -604,3 +604,40 @@ fn a_net_script_1_document_refuses_as_an_unknown_version_and_its_twin_admits() {
     validate(script()).unwrap();
     validate_net_grant(&serde_json::to_vec(&script()).unwrap()).unwrap();
 }
+
+#[test]
+fn scripted_listeners_are_script_only_canonical_and_round_trip() {
+    let listener = json!({"address": "127.0.0.1", "port": 8080, "clients": [
+        {"address": "192.0.2.1", "port": 40001, "steps": [{"send": [71]}, {"expect": [72]}, "close"]}
+    ]});
+    let mut net = script();
+    net["listeners"] = json!([listener]);
+    validate(net.clone()).unwrap();
+    let mut stream = grant("example.com");
+    stream["listeners"] = json!([listener]);
+    invalid(stream, "io.net.listeners");
+    for (field, value) in [
+        ("port", json!(0)),
+        ("address", json!("localhost")),
+        ("address", json!("::0001")),
+    ] {
+        let mut bad = listener.clone();
+        bad[field] = value;
+        let mut net = script();
+        net["listeners"] = json!([bad]);
+        invalid(net, "io.net.listeners");
+    }
+    let mut client = listener.clone();
+    client["clients"][0]["address"] = json!("192.000.2.1");
+    let mut net = script();
+    net["listeners"] = json!([client]);
+    invalid(net, "io.net.listeners");
+    let mut twice = script();
+    twice["listeners"] = json!([listener, listener]);
+    invalid(twice, "io.net.listeners");
+    let listeners: Vec<NetListener> = serde_json::from_value(json!([listener])).unwrap();
+    assert_eq!(
+        decode_net_listeners(&encode_net_listeners(&listeners)).unwrap(),
+        listeners
+    );
+}

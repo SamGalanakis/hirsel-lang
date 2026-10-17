@@ -23,6 +23,9 @@ pub struct NetGrant {
         deserialize_with = "peers"
     )]
     pub peers: Option<Vec<NetPeer>>,
+    /// Scripted incoming clients, allowed only for net.script@2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listeners: Vec<NetListener>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -34,6 +37,109 @@ pub struct NetPeer {
     pub resolves_to: Vec<String>,
     pub tls: PeerTls,
     pub connections: Vec<NetConnection>,
+}
+
+/// A scripted listen address and the clients that connect to it, in accept order.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetListener {
+    /// A canonical IP literal.
+    pub address: String,
+    pub port: u16,
+    pub clients: Vec<NetClient>,
+}
+
+/// One incoming connection: its source address and what it sends and expects.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetClient {
+    /// A canonical IP literal.
+    pub address: String,
+    pub port: u16,
+    pub steps: Vec<NetStep>,
+}
+
+/// Scripted listeners name canonical IP literals and nonzero ports, each address once.
+pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
+    let mut seen = std::collections::BTreeMap::new();
+    for (index, listener) in listeners.iter().enumerate() {
+        if let Some(first) = seen.insert((&listener.address, listener.port), index) {
+            return Err(format!(
+                "duplicate listener address at entries {first} and {index}"
+            ));
+        }
+        if listener.port == 0 {
+            return Err(format!("listener {index} has port 0"));
+        }
+        if !canonical_ip(&listener.address)
+            || !listener.clients.iter().all(|c| canonical_ip(&c.address))
+        {
+            return Err(format!("listener {index} has a noncanonical IP literal"));
+        }
+    }
+    Ok(())
+}
+
+/// The Test report of a scripted client whose `Expect` the program's writes contradict
+/// (docs/spec/core-library.md, scripted peers), with its trailing newline.
+pub fn net_client_mismatch(
+    client: usize,
+    listener: std::net::SocketAddr,
+    expected: &[u8],
+    wrote: &[u8],
+) -> String {
+    format!(
+        "test failure: net client {client} of {listener} expected {} but the program wrote {}\n",
+        byte_literal(expected),
+        byte_literal(wrote)
+    )
+}
+
+/// The Test report of an accepted stream closed before its client's `Expect` was met.
+pub fn net_client_unmet(
+    client: usize,
+    listener: std::net::SocketAddr,
+    expected: &[u8],
+    wrote: &[u8],
+) -> String {
+    format!(
+        "test failure: net client {client} of {listener} expected {} but the program closed after writing {}\n",
+        byte_literal(expected),
+        byte_literal(wrote)
+    )
+}
+
+/// The Test report of a listener closed before a client with an `Expect` connected.
+pub fn net_client_unaccepted(client: usize, listener: std::net::SocketAddr) -> String {
+    format!("test failure: net client {client} of {listener} was never accepted\n")
+}
+
+/// The first unaccepted client of `listener`, from `next` on, that expects bytes.
+pub fn first_expecting_client(listener: &NetListener, next: usize) -> Option<usize> {
+    (next..listener.clients.len()).find(|&i| {
+        listener.clients[i]
+            .steps
+            .iter()
+            .any(|step| matches!(step, NetStep::Expect(_)))
+    })
+}
+
+// A Hirsel byte-string literal: printable ASCII as is, other bytes escaped.
+fn byte_literal(bytes: &[u8]) -> String {
+    let mut out = String::from("b\"");
+    for &b in bytes {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x20..=0x7e => out.push(b as char),
+            _ => out.push_str(&format!("\\x{b:02x}")),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -93,6 +199,16 @@ pub fn decode_net_peers(bytes: &[u8]) -> Result<Vec<NetPeer>, RunRefusal> {
     serde_json::from_slice(bytes).map_err(|error| invalid("io.net.peers", &error.to_string()))
 }
 
+/// The ordered listener-data encoding used by scripted network tape requests.
+pub fn encode_net_listeners(listeners: &[NetListener]) -> Vec<u8> {
+    serde_json::to_vec(listeners).expect("listener data has no failing JSON values")
+}
+
+/// Decode listener data without validating it, as `decode_net_peers` does.
+pub fn decode_net_listeners(bytes: &[u8]) -> Result<Vec<NetListener>, RunRefusal> {
+    serde_json::from_slice(bytes).map_err(|error| invalid("io.net.listeners", &error.to_string()))
+}
+
 /// A launcher's standalone `io.net` grant: the JSON of a RunConfig's `io.net` field, admitted
 /// exactly as that field is (provider contract, canonical rules, peers only for
 /// net.script@2). Peers supply data and never widen the rules.
@@ -125,6 +241,13 @@ impl NetGrant {
                 "peers is required only for net.script@2",
             ));
         }
+        if !self.listeners.is_empty() && !script {
+            return Err(invalid(
+                "io.net.listeners",
+                "listeners are allowed only for net.script@2",
+            ));
+        }
+        check_net_listeners(&self.listeners).map_err(|e| invalid("io.net.listeners", &e))?;
         self.rules.sort();
         for rule in &self.rules {
             if !canonical_address(&rule.address) {

@@ -18,6 +18,7 @@ conformance/CAP/CAP-1-env-names-run.hir
 conformance/CAP/CAP-1-env-parameter-bad.hir
 conformance/CAP/CAP-1-env-parameter-ok.hir
 conformance/CAP/CAP-1-environment-parameter.hir
+conformance/CAP/CAP-1-hello-web-scripted-run.hir
 conformance/CAP/CAP-1-host-inputs-run.hir
 conformance/CAP/CAP-1-listen-not-granted-run.hir
 conformance/CAP/CAP-1-listen-parameter-bad.hir
@@ -34,6 +35,9 @@ conformance/CAP/CAP-1-net-projection-ok.hir
 conformance/CAP/CAP-1-net-read-chunks-run.hir
 conformance/CAP/CAP-1-net-refused-run.hir
 conformance/CAP/CAP-1-net-script-roundtrip-run.hir
+conformance/CAP/CAP-1-net-scripted-listen-granted-run.hir
+conformance/CAP/CAP-1-net-scripted-listen-ungranted-run.hir
+conformance/CAP/CAP-1-net-scripted-server-run.hir
 conformance/CAP/CAP-1-net-timeout-run.hir
 conformance/CAP/CAP-1-net-tls-name-mismatch-run.hir
 conformance/CAP/CAP-1-net-tls-peer-fails-run.hir
@@ -1341,6 +1345,11 @@ conformance/LANG/LANG-9-native-for-all-run.hir
 conformance/LANG/LANG-9-native-test-check-fail.hir
 conformance/LANG/LANG-9-native-test-check-run.hir
 conformance/LANG/LANG-9-native-test-dir-run.hir
+conformance/LANG/LANG-9-net-client-expect-met-run.hir
+conformance/LANG/LANG-9-net-client-mismatch-fail.hir
+conformance/LANG/LANG-9-net-client-unaccepted-fail.hir
+conformance/LANG/LANG-9-net-client-unmet-close-fail.hir
+conformance/LANG/LANG-9-net-client-unmet-drop-fail.hir
 conformance/LANG/LANG-9-pure-test-function.hir
 conformance/LANG/LANG-9-test-passing-mut-run.hir
 conformance/LANG/LANG-9-test-passing-take-run.hir

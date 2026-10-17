@@ -454,7 +454,8 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
           Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Close()])
         ]
       )
-    ]
+    ],
+    []
   )
   let response = http.fetch(
     n,

@@ -176,7 +176,7 @@ test.check	0e563a8f64a2dd1dee3c6109d904d6fa37698f826cdfdf075d5fc1ce9bf1016a	0:b:
 test.check_case	eb9c4607198bd7e38cbf9c2f04a56be3511d7cfbef768dfd7755f21fa5c709bc	0:b:n;1:b:n;2:b:n->n
 test.dir	9bd537dd4832e08e4dea6d9c92504da1beed8e3ffffac29f5be4be7c64df7a5a	0:b:n;1:b:n->n
 test.fail	11842a5a8d68eb589d13709233b805348b9404fe735bd871176904785073f80d	0:b:n->n
-test.net	eccaa463a07a271c2e15cc871cd82efc4817a972f43cf981dc67a2edef2d17e8	0:b:n;1:b:n->n
+test.net	c678d691a62e27e07ad6c58943207173909814d32cf68011792bb985079acf1c	0:b:n;1:b:n;2:b:n->n
 test.process	a66c5a80054d583fcfc2415b7631ae7dc7f3ab37b02381fe059b69cbafb7524e	0:b:n;1:b:n->n
 tls.close	6ad9a723e768f045d66c29a289edf368a8e2880f9e2b5c4c35e155a0a9ba7052	0:b:n;1:t:n->n
 tls.connect	19f1cbdba0955dfb708e8bc060a1efe2da234b1d2be47123fcd163d50ebc970b	0:b:n;1:t:n;2:b:n;3:b:n->n

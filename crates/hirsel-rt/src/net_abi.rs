@@ -214,6 +214,22 @@ pub(crate) unsafe fn text(owner: *mut Header, start: u64, len: u64) -> String {
         .unwrap_or_else(|_| crate::fault("String operand is not UTF-8"))
         .to_owned()
 }
+/// A call whose manifest row names no failure rule: the runtime records its own,
+/// CAP-2 for a refused handle and LANG-9 for a scripted client's Test failure, at
+/// site 0 for the caller's failure edge to anchor.
+pub(crate) unsafe fn call_recording(ctx: *mut RunCtx, request: Request) -> Option<Completion> {
+    match unsafe { crate::io::capability_call(ctx, request) } {
+        Ok(Completion::Checked(false)) => {
+            crate::failure::record_runtime(ctx, "LANG-9", 0);
+            None
+        }
+        Ok(completion) => Some(completion),
+        Err(()) => {
+            crate::failure::record_runtime(ctx, "CAP-2", 0);
+            None
+        }
+    }
+}
 pub(crate) fn mismatch() -> ! {
     crate::fault("network completion type mismatch")
 }
@@ -450,8 +466,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write(
         stream: unsafe { s.read() },
         bytes: unsafe { crate::io::slice_bytes(owner, start, len) }.to_vec(),
     };
-    let Some(Completion::Count(value)) = (unsafe { call(ctx, request) }) else {
+    let Some(completion) = (unsafe { call_recording(ctx, request) }) else {
         return STATUS_FAILURE;
+    };
+    let Completion::Count(value) = completion else {
+        mismatch()
     };
     unsafe { out.write(NetWordResult::of(value)) };
     STATUS_OK
@@ -476,8 +495,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_write_all(
         stream: unsafe { s.read() },
         bytes: unsafe { crate::io::slice_bytes(owner, start, len) }.to_vec(),
     };
-    let Some(Completion::NetUnit(value)) = (unsafe { call(ctx, request) }) else {
+    let Some(completion) = (unsafe { call_recording(ctx, request) }) else {
         return STATUS_FAILURE;
+    };
+    let Completion::NetUnit(value) = completion else {
+        mismatch()
     };
     unsafe { out.write(NetUnitResult::of(value)) };
     STATUS_OK
@@ -579,7 +601,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
     let handle = unsafe { s.read() };
     // Erasing the transferred word makes accidental reuse fail closed.
     unsafe { s.write(0) };
-    match unsafe { call(ctx, Request::Close { handle }) } {
+    match unsafe { call_recording(ctx, Request::Close { handle }) } {
         Some(Completion::Unit(Ok(()))) => STATUS_OK,
         Some(_) => mismatch(),
         None => STATUS_FAILURE,

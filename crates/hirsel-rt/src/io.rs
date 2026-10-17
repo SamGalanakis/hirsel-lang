@@ -145,6 +145,7 @@ pub enum Request {
     TestNet {
         test: u64,
         peers: Vec<hirsel_run_config::NetPeer>,
+        listeners: Vec<hirsel_run_config::NetListener>,
     },
     TestDir {
         test: u64,
@@ -1364,15 +1365,19 @@ impl Binding {
 pub unsafe extern "C" fn hirsel_rt_v2_io_close(
     ctx: *mut crate::RunCtx,
     handle: u64,
-    _anchor: u64,
+    anchor: u64,
 ) -> u8 {
     let binding = unsafe { Binding::get(ctx) };
     match binding.adapter.call(Request::Close { handle }) {
-        Ok(Completion::Unit(Ok(()))) => {}
+        Ok(Completion::Unit(Ok(()))) => crate::STATUS_OK,
+        // A dropped accepted stream or listener left a scripted client's Expect unmet.
+        Ok(Completion::Checked(false)) => {
+            crate::failure::record_runtime(ctx, "LANG-9", anchor);
+            crate::STATUS_FAILURE
+        }
         Err(error) => adapter_refusal(binding, error),
         _ => crate::fault("invalid handle cleanup completion"),
     }
-    crate::STATUS_OK
 }
 /// The inline bytes of `Result[(), E]` for `E = Fault(u32) | Canceled(CancelCause)`
 /// (`OutputError`, `FileError`): three u32 ordinals, the Result's (0 Ok, 1 Error), the

@@ -11,26 +11,40 @@ use super::{
 };
 use crate::{Error, Integer, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
-    NetConnection, NetGrant, NetPeer, NetRule, NetStep, PeerTls, ProviderContract, TlsFailure,
-    canonical_net_address as canonical_address,
+    NetClient, NetConnection, NetGrant, NetListener, NetPeer, NetRule, NetStep, PeerTls,
+    ProviderContract, TlsFailure, canonical_net_address as canonical_address,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct World {
     peers: Vec<NetPeer>,
     next: Vec<usize>,
+    listeners: Vec<NetListener>,
+    /// The next client of each scripted listener address.
+    accepted: Vec<usize>,
 }
 impl World {
-    pub fn new(peers: Vec<NetPeer>) -> Self {
-        let next = vec![0; peers.len()];
-        Self { peers, next }
+    pub fn new(peers: Vec<NetPeer>, listeners: Vec<NetListener>) -> Self {
+        Self {
+            next: vec![0; peers.len()],
+            peers,
+            accepted: vec![0; listeners.len()],
+            listeners,
+        }
     }
+}
+/// An open listener: its Net, world and address.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ScriptListener {
+    pub net: u64,
+    world: u64,
+    address: SocketAddr,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScriptStream {
@@ -47,6 +61,10 @@ pub(super) struct ScriptStream {
     write_timeout: Option<u64>,
     read_closed: bool,
     write_closed: bool,
+    /// An accepted stream's client index and listen address: its `Expect`
+    /// mismatches fail the test instead of resetting.
+    client: Option<(usize, SocketAddr)>,
+    mismatch: Option<String>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum NetFault {
@@ -57,6 +75,12 @@ enum NetFault {
     ConnectionReset,
     BrokenPipe,
     TimedOut,
+    ConnectionAborted,
+    AddrInUse,
+    /// A scripted client's Expect failed: the Test report of the LANG-9 failure.
+    Mismatch(String),
+    /// An accepted stream closed before its client's Expect was met (LANG-9).
+    Unmet(String),
     Canceled(u32),
     Fault(u32),
     Tls(TlsFailure),
@@ -86,6 +110,8 @@ impl ScriptStream {
             write_timeout: None,
             read_closed: false,
             write_closed: false,
+            client: None,
+            mismatch: None,
         }
     }
     fn advance(&mut self) {
@@ -98,6 +124,13 @@ impl ScriptStream {
                 Some(NetStep::Expect(b)) if self.written.len() >= b.len() => {
                     let matches = self.written.iter().take(b.len()).eq(b.iter());
                     if !matches {
+                        if let Some((client, listener)) = self.client {
+                            let wrote: Vec<u8> =
+                                self.written.iter().take(b.len()).copied().collect();
+                            self.mismatch = Some(hirsel_run_config::net_client_mismatch(
+                                client, listener, b, &wrote,
+                            ));
+                        }
                         self.steps.clear();
                         self.steps.push_back(NetStep::Reset);
                         break;
@@ -108,6 +141,24 @@ impl ScriptStream {
                 _ => break,
             }
         }
+    }
+    /// The Test report of closing an accepted stream whose client still expects
+    /// bytes before any Reset step.
+    fn unmet(&mut self) -> Option<String> {
+        let (client, listener) = self.client?;
+        self.advance();
+        let expected = self
+            .steps
+            .iter()
+            .take_while(|step| !matches!(step, NetStep::Reset))
+            .find_map(|step| match step {
+                NetStep::Expect(b) => Some(b),
+                _ => None,
+            })?;
+        let wrote: Vec<u8> = self.written.iter().copied().collect();
+        Some(hirsel_run_config::net_client_unmet(
+            client, listener, expected, &wrote,
+        ))
     }
     fn check(&mut self) -> NetResult<()> {
         if self.requires_tls && !self.tls {
@@ -153,6 +204,9 @@ impl ScriptStream {
         }
         self.written.extend(bytes);
         self.advance();
+        if let Some(report) = self.mismatch.take() {
+            return Err(NetFault::Mismatch(report));
+        }
         Ok(bytes.len() as u64)
     }
 }
@@ -244,6 +298,47 @@ fn addr_value(ip: IpAddr, port: u16) -> Value {
         ],
     }
 }
+fn steps(v: &Value) -> Result<Vec<NetStep>, Error> {
+    collection::elements(v, BuiltinType::List)?
+        .iter()
+        .map(|v| {
+            let (tag, p) = variant_fields(v)?;
+            Ok(match (tag, p) {
+                (0, [Some(b)]) => NetStep::Send(bytes(b)?.to_vec()),
+                (1, [Some(b)]) => NetStep::Expect(bytes(b)?.to_vec()),
+                (2, []) => NetStep::Stall,
+                (3, []) => NetStep::Close,
+                (4, []) => NetStep::Reset,
+                (5, []) => NetStep::Truncate,
+                _ => return Err(invalid("NetStep representation")),
+            })
+        })
+        .collect()
+}
+fn socket_addr(v: &Value) -> Result<SocketAddr, Error> {
+    let f = fields(v, "SocketAddr", 2)?;
+    Ok(SocketAddr::new(ip(f[0])?, port(f[1])?))
+}
+fn listener(v: &Value) -> Result<NetListener, Error> {
+    let f = fields(v, "NetListener", 2)?;
+    let address = socket_addr(f[0])?;
+    Ok(NetListener {
+        address: address.ip().to_string(),
+        port: address.port(),
+        clients: collection::elements(f[1], BuiltinType::List)?
+            .iter()
+            .map(|c| {
+                let f = fields(c, "NetClient", 2)?;
+                let from = socket_addr(f[0])?;
+                Ok(NetClient {
+                    address: from.ip().to_string(),
+                    port: from.port(),
+                    steps: steps(f[1])?,
+                })
+            })
+            .collect::<Result<_, Error>>()?,
+    })
+}
 fn peer(v: &Value) -> Result<NetPeer, Error> {
     let f = fields(v, "NetPeer", 5)?;
     let (tag, tls) = variant_fields(f[3])?;
@@ -264,23 +359,7 @@ fn peer(v: &Value) -> Result<NetPeer, Error> {
         connections.push(match (tag, params) {
             (0, []) => NetConnection::Refused,
             (1, []) => NetConnection::Unanswered,
-            (2, [Some(steps)]) => NetConnection::Open(
-                collection::elements(steps, BuiltinType::List)?
-                    .iter()
-                    .map(|v| {
-                        let (tag, p) = variant_fields(v)?;
-                        Ok(match (tag, p) {
-                            (0, [Some(b)]) => NetStep::Send(bytes(b)?.to_vec()),
-                            (1, [Some(b)]) => NetStep::Expect(bytes(b)?.to_vec()),
-                            (2, []) => NetStep::Stall,
-                            (3, []) => NetStep::Close,
-                            (4, []) => NetStep::Reset,
-                            (5, []) => NetStep::Truncate,
-                            _ => return Err(invalid("NetStep representation")),
-                        })
-                    })
-                    .collect::<Result<_, Error>>()?,
-            ),
+            (2, [Some(s)]) => NetConnection::Open(steps(s)?),
             _ => return Err(invalid("NetConnection representation")),
         });
     }
@@ -364,7 +443,7 @@ fn injected(fault: Fault) -> Result<NetFault, Error> {
 }
 fn result(value: NetResult<Value>) -> Result<Value, NetFault> {
     value.map(ok).or_else(|e| match e {
-        NetFault::Blocked => Err(e),
+        NetFault::Blocked | NetFault::Mismatch(_) | NetFault::Unmet(_) => Err(e),
         NetFault::Canceled(cause) => Ok(error(variant(1, vec![variant(cause, vec![])]))),
         NetFault::Fault(code) => Ok(error(variant(17, vec![super::u32_value(code)]))),
         NetFault::NotGranted => Ok(error(variant(0, vec![]))),
@@ -372,12 +451,33 @@ fn result(value: NetResult<Value>) -> Result<Value, NetFault> {
         NetFault::UnknownHost => Ok(error(variant(3, vec![]))),
         NetFault::ConnectionRefused => Ok(error(variant(5, vec![]))),
         NetFault::ConnectionReset => Ok(error(variant(6, vec![]))),
+        NetFault::ConnectionAborted => Ok(error(variant(7, vec![]))),
+        NetFault::AddrInUse => Ok(error(variant(9, vec![]))),
         NetFault::BrokenPipe => Ok(error(variant(14, vec![]))),
         NetFault::TimedOut => Ok(error(variant(15, vec![]))),
         NetFault::Tls(failure) => Ok(error(variant(16, vec![tls_failure_value(failure)]))),
     })
 }
 impl Simulation {
+    /// Close a scripted stream or listener: the Test report when a client it
+    /// leaves still expects bytes (docs/spec/core-library.md, scripted peers).
+    pub(super) fn close_net(&mut self, id: u64) -> Option<String> {
+        self.grants.remove(&id);
+        if let Some(mut stream) = self.net_streams.remove(&id) {
+            return stream.unmet();
+        }
+        let listener = self.net_listeners.remove(&id)?;
+        let world = &self.net_worlds[&listener.world];
+        let i = world.listeners.iter().position(|l| {
+            l.address == listener.address.ip().to_string() && l.port == listener.address.port()
+        })?;
+        let client =
+            hirsel_run_config::first_expecting_client(&world.listeners[i], world.accepted[i])?;
+        Some(hirsel_run_config::net_client_unaccepted(
+            client,
+            listener.address,
+        ))
+    }
     pub(super) fn net_root(&mut self) -> Value {
         let rules = self
             .config
@@ -393,6 +493,13 @@ impl Simulation {
             return Err(invalid("Net grant"));
         };
         Ok((id, *world, rules.clone()))
+    }
+    fn listener_id(&self, n: u64, v: &Value) -> Result<u64, Error> {
+        let id = self.id(v, "Listener")?;
+        if self.net_listeners.get(&id).is_none_or(|l| l.net != n) {
+            return Err(invalid("wrong listener Net"));
+        }
+        Ok(id)
     }
     fn stream_id(&self, n: u64, v: &Value) -> Result<u64, Error> {
         let id = self.id(v, "Stream")?;
@@ -415,7 +522,12 @@ impl Simulation {
                 .iter()
                 .map(peer)
                 .collect::<Result<Vec<_>, _>>()?;
+            let listeners = collection::elements(arg(a, 2)?, BuiltinType::List)?
+                .iter()
+                .map(listener)
+                .collect::<Result<Vec<_>, _>>()?;
             validate_peers(&peers)?;
+            hirsel_run_config::check_net_listeners(&listeners).map_err(invalid)?;
             let rules = peers
                 .iter()
                 .map(|p| NetRule {
@@ -428,9 +540,14 @@ impl Simulation {
                     }
                     .into(),
                 })
+                .chain(listeners.iter().map(|l| NetRule {
+                    address: l.address.clone(),
+                    service: l.port.to_string(),
+                    operation: "listen".into(),
+                }))
                 .collect();
             let world = self.next_id;
-            self.net_worlds.insert(world, World::new(peers));
+            self.net_worlds.insert(world, World::new(peers, listeners));
             let value = self.handle("Net", Grant::Net { world, rules });
             self.record("Test", name, encode_arguments(a), encode_value(&value), cx)?;
             return Ok(OperationResult::returned(value));
@@ -551,35 +668,106 @@ impl Simulation {
                     }
                 }
                 "net.listen" => {
-                    let f = fields(arg(a, 1)?, "SocketAddr", 2)?;
-                    let host = ip(f[0])?.to_string();
-                    let service = port(f[1])?.to_string();
+                    let address = socket_addr(arg(a, 1)?)?;
+                    let host = address.ip().to_string();
+                    let service = address.port().to_string();
                     if !ruleset.iter().any(|r| {
                         r.address == host && r.service == service && r.operation == "listen"
                     }) {
                         Err(NetFault::NotGranted)
+                    } else if self
+                        .net_listeners
+                        .values()
+                        .any(|l| l.world == world && l.address == address)
+                    {
+                        Err(NetFault::AddrInUse)
                     } else {
-                        return Err(Error::Unavailable(
-                            "scripted listeners have no incoming peers".into(),
-                        ));
+                        let listener = self.handle("Listener", Grant::Listener { net });
+                        let Value::Handle { id, .. } = &listener else {
+                            unreachable!()
+                        };
+                        self.net_listeners.insert(
+                            *id,
+                            ScriptListener {
+                                net,
+                                world,
+                                address,
+                            },
+                        );
+                        Ok(listener)
                     }
                 }
-                "net.accept" | "net.local_addr" => {
-                    return Err(Error::Unavailable(
-                        "scripted listeners have no incoming peers".into(),
-                    ));
+                "net.local_addr" => {
+                    let id = self.listener_id(net, arg(a, 1)?)?;
+                    let address = self.net_listeners[&id].address;
+                    Ok(addr_value(address.ip(), address.port()))
+                }
+                "net.accept" => {
+                    let id = self.listener_id(net, arg(a, 1)?)?;
+                    if let Some(fault) = cancellation
+                        .map(Fault::Canceled)
+                        .or_else(|| self.fault(name))
+                    {
+                        break 'operation Err(injected(fault)?);
+                    }
+                    let address = self.net_listeners[&id].address;
+                    let w = self.net_worlds.get_mut(&world).unwrap();
+                    let next = w
+                        .listeners
+                        .iter()
+                        .position(|l| {
+                            l.address == address.ip().to_string() && l.port == address.port()
+                        })
+                        .and_then(|i| {
+                            let index = w.accepted[i];
+                            let client = w.listeners[i].clients.get(index)?.clone();
+                            w.accepted[i] += 1;
+                            Some((index, client))
+                        });
+                    let Some((index, client)) = next else {
+                        break 'operation Err(NetFault::ConnectionAborted);
+                    };
+                    let from = SocketAddr::new(
+                        client.address.parse().expect("validated client address"),
+                        client.port,
+                    );
+                    let stream = self.handle("Stream", Grant::Stream { net });
+                    let Value::Handle { id: stream_id, .. } = &stream else {
+                        unreachable!()
+                    };
+                    let mut script = ScriptStream::new(
+                        net,
+                        client.address,
+                        client.port,
+                        PeerTls::Plain,
+                        false,
+                        client.steps,
+                    );
+                    script.client = Some((index, address));
+                    self.net_streams.insert(*stream_id, script);
+                    Ok(Value::Tuple(vec![
+                        Some(stream),
+                        Some(addr_value(from.ip(), from.port())),
+                    ]))
                 }
                 _ => {
                     let id = self.stream_id(net, arg(a, 1)?)?;
                     if name == "net.close" {
-                        self.record("Net", name, id.to_le_bytes().to_vec(), vec![], cx)?;
-                        self.net_streams.remove(&id);
-                        self.grants.remove(&id);
+                        let report = self.close_net(id);
+                        let output = match &report {
+                            Some(_) => b"failure:LANG-9".to_vec(),
+                            None => vec![],
+                        };
+                        self.record("Net", name, id.to_le_bytes().to_vec(), output, cx)?;
+                        if let Some(report) = report {
+                            break 'operation Err(NetFault::Unmet(report));
+                        }
                         return Ok(OperationResult::returned(Value::Unit).transferring([1]));
                     }
                     if name == "tls.close" && !self.net_streams[&id].tls {
-                        self.net_streams.remove(&id);
-                        self.grants.remove(&id);
+                        if let Some(report) = self.close_net(id) {
+                            break 'operation Err(NetFault::Unmet(report));
+                        }
                         break 'operation Ok(Value::Unit);
                     }
                     if (name == "net.read" && index(arg(a, 3)?)? == 0)
@@ -659,8 +847,13 @@ impl Simulation {
                         {
                             let data = bytes(arg(a, 2)?)?;
                             let s = self.net_streams.get_mut(&id).unwrap();
-                            s.write(&data[..data.len().min(*partial)])
-                                .map_err(|_| invalid("fault write failed after preflight"))?;
+                            match s.write(&data[..data.len().min(*partial)]) {
+                                Ok(_) => {}
+                                Err(e @ NetFault::Mismatch(_)) => break 'operation Err(e),
+                                Err(_) => {
+                                    return Err(invalid("fault write failed after preflight"));
+                                }
+                            }
                         }
                         if matches!(name, "tls.connect" | "tls.close") {
                             self.net_streams.remove(&id);
@@ -705,9 +898,10 @@ impl Simulation {
                         }
                         "tls.close" => {
                             let outcome = s.check().map(|()| Value::Unit);
-                            self.net_streams.remove(&id);
-                            self.grants.remove(&id);
-                            outcome
+                            match self.close_net(id) {
+                                Some(report) => Err(NetFault::Unmet(report)),
+                                None => outcome,
+                            }
                         }
                         "net.read" | "net.read_into" => {
                             let max = if name == "net.read" {
@@ -797,6 +991,21 @@ impl Simulation {
         };
         let value = match result(outcome) {
             Ok(v) => v,
+            Err(NetFault::Mismatch(report) | NetFault::Unmet(report)) => {
+                cx.stdout.extend_from_slice(report.as_bytes());
+                let failure =
+                    super::dispatch::fail(call, cx, "LANG-9", "scripted net client unmet");
+                if name != "net.close" {
+                    self.record(
+                        "Net",
+                        name,
+                        encode_arguments(a),
+                        b"failure:LANG-9".to_vec(),
+                        cx,
+                    )?;
+                }
+                return Ok(OperationResult::Failed(failure));
+            }
             Err(NetFault::Blocked) => {
                 let anchor = cx.anchor().cloned().unwrap_or(crate::observation::Anchor {
                     definition: call.path.clone(),
@@ -888,6 +1097,7 @@ pub(super) fn configured_world(grant: Option<&NetGrant>) -> Result<BTreeMap<u64,
         if let Some(peers) = &grant.peers {
             validate_peers(peers)?;
         }
+        hirsel_run_config::check_net_listeners(&grant.listeners).map_err(invalid)?;
         if grant.rules.iter().any(|r| {
             !canonical_address(&r.address)
                 || r.service.parse::<u16>().is_err()
@@ -905,9 +1115,12 @@ pub(super) fn configured_world(grant: Option<&NetGrant>) -> Result<BTreeMap<u64,
             peers: Some(peers),
             ..
         }) if ProviderContract::parse(provider) == Some(ProviderContract::NetScript) => {
-            Ok(BTreeMap::from([(0, World::new(peers.clone()))]))
+            Ok(BTreeMap::from([(
+                0,
+                World::new(peers.clone(), grant.unwrap().listeners.clone()),
+            )]))
         }
-        None => Ok(BTreeMap::from([(0, World::new(vec![]))])),
+        None => Ok(BTreeMap::from([(0, World::new(vec![], vec![]))])),
         _ => Err(Error::Unavailable(format!(
             "interpreter requires {}",
             ProviderContract::NetScript.name()

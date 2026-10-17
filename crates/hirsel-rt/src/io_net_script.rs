@@ -10,13 +10,26 @@ use super::{
     },
 };
 use hirsel_run_config::{
-    NetConnection, NetPeer, NetStep, PeerTls, canonical_net_address as canonical_address,
+    NetConnection, NetListener, NetPeer, NetStep, PeerTls,
+    canonical_net_address as canonical_address,
 };
 use std::{collections::BTreeMap, net::IpAddr};
 
+/// Who is at the other end: a scripted peer the program connected to, or the
+/// scripted client a listener accepted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Remote {
+    Peer(usize),
+    Client {
+        index: usize,
+        listener: SocketAddr,
+        from: SocketAddr,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Connection {
-    peer: usize,
+    remote: Remote,
     tls: bool,
     steps: Vec<NetStep>,
     step: usize,
@@ -27,15 +40,45 @@ struct Connection {
     read_timeout: bool,
     read_closed: bool,
     write_closed: bool,
+    /// A scripted client's failed Expect: the Test report of the LANG-9 failure.
+    mismatch: Option<String>,
 }
 impl Connection {
+    fn new(remote: Remote, steps: Vec<NetStep>) -> Self {
+        Self {
+            remote,
+            tls: false,
+            steps,
+            step: 0,
+            offset: 0,
+            written: vec![],
+            consumed: 0,
+            reset: false,
+            read_timeout: false,
+            read_closed: false,
+            write_closed: false,
+            mismatch: None,
+        }
+    }
     fn progress(&mut self) {
         while let Some(step) = self.steps.get(self.step) {
             match step {
                 NetStep::Expect(expected)
                     if self.written.len() - self.consumed >= expected.len() =>
                 {
-                    if self.written[self.consumed..][..expected.len()] != *expected {
+                    let wrote = &self.written[self.consumed..][..expected.len()];
+                    if wrote != *expected {
+                        if let Remote::Client {
+                            index, listener, ..
+                        } = self.remote
+                        {
+                            self.mismatch = Some(hirsel_run_config::net_client_mismatch(
+                                index,
+                                listener.std(),
+                                expected,
+                                wrote,
+                            ));
+                        }
                         self.reset = true;
                         return;
                     }
@@ -66,10 +109,15 @@ impl Connection {
 pub struct ScriptNet {
     peers: Vec<NetPeer>,
     next_connection: Vec<usize>,
+    listeners: Vec<NetListener>,
+    /// The next client of each scripted listener address.
+    next_client: Vec<usize>,
+    open_listeners: BTreeMap<u64, SocketAddr>,
     streams: BTreeMap<u64, Connection>,
 }
 impl ScriptNet {
-    pub fn new(peers: Vec<NetPeer>) -> Result<Self, AdapterError> {
+    pub fn new(peers: Vec<NetPeer>, listeners: Vec<NetListener>) -> Result<Self, AdapterError> {
+        hirsel_run_config::check_net_listeners(&listeners).map_err(AdapterError::Unsupported)?;
         let mut endpoints = BTreeMap::new();
         for (index, p) in peers.iter().enumerate() {
             if let Some(first) = endpoints.insert((&p.address, p.port), index) {
@@ -91,8 +139,53 @@ impl ScriptNet {
         Ok(Self {
             next_connection: vec![0; peers.len()],
             peers,
+            next_client: vec![0; listeners.len()],
+            listeners,
+            open_listeners: BTreeMap::new(),
             streams: BTreeMap::new(),
         })
+    }
+    /// The Test report of closing `handle` while a scripted client it leaves still
+    /// expects bytes: an accepted stream short of its Expect, or a listener with an
+    /// unaccepted client that has one (docs/spec/core-library.md, scripted peers).
+    pub(crate) fn unmet(&mut self, handle: u64) -> Option<String> {
+        if let Some(s) = self.streams.get_mut(&handle) {
+            let Remote::Client {
+                index, listener, ..
+            } = s.remote
+            else {
+                return None;
+            };
+            s.progress();
+            if s.reset {
+                return None;
+            }
+            let expected = s.steps[s.step..]
+                .iter()
+                .take_while(|step| !matches!(step, NetStep::Reset))
+                .find_map(|step| match step {
+                    NetStep::Expect(b) => Some(b),
+                    _ => None,
+                })?;
+            return Some(hirsel_run_config::net_client_unmet(
+                index,
+                listener.std(),
+                expected,
+                &s.written[s.consumed..],
+            ));
+        }
+        let addr = *self.open_listeners.get(&handle)?;
+        let i = self
+            .listeners
+            .iter()
+            .position(|l| l.address == addr.ip.to_string() && l.port == addr.port)?;
+        let client =
+            hirsel_run_config::first_expecting_client(&self.listeners[i], self.next_client[i])?;
+        Some(hirsel_run_config::net_client_unaccepted(client, addr.std()))
+    }
+    /// The Test report of the write that just contradicted a scripted client's Expect.
+    pub(crate) fn take_mismatch(&mut self, stream: u64) -> Option<String> {
+        self.streams.get_mut(&stream)?.mismatch.take()
     }
     fn connection(&mut self, handle: u64) -> Result<&mut Connection, AdapterError> {
         self.streams
@@ -117,22 +210,8 @@ impl ScriptNet {
         self.next_connection[i] += 1;
         match entry {
             Some(NetConnection::Open(steps)) => {
-                self.streams.insert(
-                    id,
-                    Connection {
-                        peer: i,
-                        tls: false,
-                        steps: steps.clone(),
-                        step: 0,
-                        offset: 0,
-                        written: vec![],
-                        consumed: 0,
-                        reset: false,
-                        read_timeout: false,
-                        read_closed: false,
-                        write_closed: false,
-                    },
-                );
+                self.streams
+                    .insert(id, Connection::new(Remote::Peer(i), steps.clone()));
                 Ok(Ok(()))
             }
             Some(NetConnection::Unanswered) => {
@@ -243,7 +322,10 @@ impl NetProvider for ScriptNet {
         if let Err(e) = s.check() {
             return Ok(Err(e));
         }
-        let peer_index = s.peer;
+        let peer_index = match s.remote {
+            Remote::Peer(i) => i,
+            Remote::Client { from, .. } => return Ok(Ok(from)),
+        };
         let peer = &self.peers[peer_index];
         let ip = peer
             .address
@@ -274,7 +356,10 @@ impl NetProvider for ScriptNet {
                 Err(AdapterError::Blocked)
             };
         }
-        let peer_index = s.peer;
+        // An accepted stream has no TLS: its client is a plain peer.
+        let Remote::Peer(peer_index) = s.remote else {
+            return Ok(Err(NetError::Tls(TlsFailure::HandshakeFailure)));
+        };
         let peer = &self.peers[peer_index];
         Ok(match &peer.tls {
             PeerTls::Plain => Err(NetError::Tls(TlsFailure::HandshakeFailure)),
@@ -290,23 +375,58 @@ impl NetProvider for ScriptNet {
         let s = self.connection(id)?;
         Ok(if s.tls { s.check() } else { Ok(()) })
     }
-    fn listen(&mut self, _id: u64, _addr: SocketAddr) -> Provided<()> {
-        Err(AdapterError::Unsupported(
-            "net.listen requires M2 runtime".into(),
-        ))
+    fn listen(&mut self, id: u64, addr: SocketAddr) -> Provided<()> {
+        if self.open_listeners.contains_key(&id) || self.streams.contains_key(&id) {
+            return Err(AdapterError::InvalidHandle(id));
+        }
+        if self.open_listeners.values().any(|open| *open == addr) {
+            return Ok(Err(NetError::AddrInUse));
+        }
+        self.open_listeners.insert(id, addr);
+        Ok(Ok(()))
     }
-    fn accept(&mut self, _listener: u64, _id: u64) -> Provided<SocketAddr> {
-        Err(AdapterError::Unsupported(
-            "net.accept requires M2 runtime".into(),
-        ))
+    fn accept(&mut self, listener: u64, id: u64) -> Provided<SocketAddr> {
+        let addr = *self
+            .open_listeners
+            .get(&listener)
+            .ok_or(AdapterError::InvalidHandle(listener))?;
+        if self.streams.contains_key(&id) {
+            return Err(AdapterError::InvalidHandle(id));
+        }
+        let Some(i) = self
+            .listeners
+            .iter()
+            .position(|l| l.address == addr.ip.to_string() && l.port == addr.port)
+        else {
+            return Ok(Err(NetError::ConnectionAborted));
+        };
+        let index = self.next_client[i];
+        let Some(client) = self.listeners[i].clients.get(index) else {
+            return Ok(Err(NetError::ConnectionAborted));
+        };
+        self.next_client[i] += 1;
+        let from = SocketAddr {
+            ip: client.address.parse().expect("validated client address"),
+            port: client.port,
+        };
+        let remote = Remote::Client {
+            index,
+            listener: addr,
+            from,
+        };
+        self.streams
+            .insert(id, Connection::new(remote, client.steps.clone()));
+        Ok(Ok(from))
     }
-    fn local_addr(&mut self, _listener: u64) -> Provided<SocketAddr> {
-        Err(AdapterError::Unsupported(
-            "net.local_addr requires M2 runtime".into(),
-        ))
+    fn local_addr(&mut self, listener: u64) -> Provided<SocketAddr> {
+        self.open_listeners
+            .get(&listener)
+            .map(|addr| Ok(*addr))
+            .ok_or(AdapterError::InvalidHandle(listener))
     }
     fn close(&mut self, id: u64) {
         self.streams.remove(&id);
+        self.open_listeners.remove(&id);
     }
 }
 
@@ -319,6 +439,10 @@ pub struct ScriptIo {
     state: crate::io::State,
 }
 impl ScriptIo {
+    /// The Test reports the model's calls appended since the last take.
+    pub fn take_report(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.state.stdout)
+    }
     pub fn new(test_seed: Option<u64>) -> Self {
         let mut model = Self::default();
         if let Some(seed) = test_seed {

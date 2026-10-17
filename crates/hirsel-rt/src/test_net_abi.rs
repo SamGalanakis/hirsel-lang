@@ -1,12 +1,16 @@
 //! Fixed core@1 `test.net` ABI. The layouts are the ordinary repr-C core layouts:
 //! NetPeer (64 bytes), IpAddr (20), NetConnection (16), NetStep (32), PeerTls (16:
-//! u32 tag, payload at 8) and TlsFailure (8: u32 tag, AlertReceived's u8 at 4).
+//! u32 tag, payload at 8), TlsFailure (8: u32 tag, AlertReceived's u8 at 4),
+//! SocketAddr (24: IpAddr, port at 20), NetListener (32: SocketAddr, clients at 24)
+//! and NetClient (32: SocketAddr, steps at 24).
 //! Native campaign programs exercise these layouts.
 use crate::{
     Header, RunCtx,
     io::{Completion, Request},
 };
-use hirsel_run_config::{NetConnection, NetPeer, NetStep, PeerTls, TlsFailure};
+use hirsel_run_config::{
+    NetClient, NetConnection, NetListener, NetPeer, NetStep, PeerTls, TlsFailure,
+};
 
 unsafe fn list<T>(
     owner: *mut Header,
@@ -101,6 +105,28 @@ unsafe fn peer(at: *const u8) -> NetPeer {
         connections: unsafe { list(pointer(at.add(56)), 16, |at| connection(at)) },
     }
 }
+unsafe fn socket_addr(at: *const u8) -> (String, u16) {
+    (unsafe { ip(at) }, unsafe {
+        at.add(20).cast::<u16>().read()
+    })
+}
+unsafe fn listener(at: *const u8) -> NetListener {
+    let (address, port) = unsafe { socket_addr(at) };
+    NetListener {
+        address,
+        port,
+        clients: unsafe {
+            list(pointer(at.add(24)), 32, |at| {
+                let (address, port) = socket_addr(at);
+                NetClient {
+                    address,
+                    port,
+                    steps: list(pointer(at.add(24)), 32, |at| step(at)),
+                }
+            })
+        },
+    }
+}
 
 /// # Safety
 /// Context is bound; Test and the complete nested core peer lists are borrowed live
@@ -112,10 +138,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_net(
     out: *mut u64,
     test: *const u64,
     peers: *mut Header,
+    listeners: *mut Header,
 ) -> u8 {
     let request = Request::TestNet {
         test: unsafe { test.read() },
         peers: unsafe { list(peers, 64, |at| peer(at)) },
+        listeners: unsafe { list(listeners, 32, |at| listener(at)) },
     };
     let completion = match unsafe { crate::io::capability_call(ctx, request) } {
         Ok(completion) => completion,

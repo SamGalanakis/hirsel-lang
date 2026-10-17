@@ -1,0 +1,60 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+pub type ServerError = Network(NetError) | Http(http.HttpError)
+
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+fn client(port: u16, take body: Bytes, take response: Bytes) -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port),
+    steps: [Send(body), Expect(response), Close()]
+  )
+}
+
+fn serve_one(n: Net, mut listener: Listener of n) -> Result[u16, ServerError] {
+  let mut (stream, from) = net.accept(n, mut listener) ? Network
+  let incoming = http.receive_request(n, mut stream, 1024, 1024) ? Http
+  http.respond(n, mut stream, 200u16, [], incoming.body) ? Http
+  net.close(n, take stream)
+  Ok(from.port)
+}
+
+pub fn main(t: Test) -> Result[(), ServerError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: home(),
+        clients: [
+          client(
+            40001u16,
+            b"POST /a HTTP/1.1\r\nContent-Length: 3\r\n\r\none",
+            b"HTTP/1.1 200 \r\nContent-Length: 3\r\nConnection: close\r\n\r\none"
+          ),
+          client(
+            40002u16,
+            b"POST /b HTTP/1.1\r\nContent-Length: 3\r\n\r\ntwo",
+            b"HTTP/1.1 200 \r\nContent-Length: 3\r\nConnection: close\r\n\r\ntwo"
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home()) ? Network
+  match net.local_addr(n, listener) {
+    Ok(bound) => test.check(t, bound.port == 8080u16),
+    Error(_) => test.check(t, false),
+  }
+  let first = serve_one(n, mut listener)?
+  let second = serve_one(n, mut listener)?
+  test.check(t, first == 40001u16 && second == 40002u16)
+  match net.accept(n, mut listener) {
+    Error(ConnectionAborted()) => (),
+    _ => test.check(t, false),
+  }
+  Ok(())
+}

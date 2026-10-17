@@ -1,6 +1,8 @@
 //! Boundary tests for frozen scripted-network semantics, independent of source lowering.
 use hirsel_interp::{library::*, *};
-use hirsel_run_config::{NetConnection, NetGrant, NetPeer, NetRule, NetStep, PeerTls};
+use hirsel_run_config::{
+    NetClient, NetConnection, NetGrant, NetListener, NetPeer, NetRule, NetStep, PeerTls,
+};
 use hirsel_span::{SourceMap, Span};
 use hirsel_tir::RunConfiguration;
 use hirsel_types::{BuiltinType, Primitive, Type, TypeKind, TypeStore};
@@ -15,6 +17,9 @@ struct Harness {
 }
 impl Harness {
     fn new(peers: Vec<NetPeer>, rules: Vec<NetRule>) -> Self {
+        Self::scripted(peers, vec![], rules)
+    }
+    fn scripted(peers: Vec<NetPeer>, listeners: Vec<NetListener>, rules: Vec<NetRule>) -> Self {
         let run = RunConfiguration {
             entry: hirsel_syntax::DefPath::core("main"),
             hash_seed: 0,
@@ -25,6 +30,7 @@ impl Harness {
                 provider: "net.script@2".into(),
                 rules,
                 peers: Some(peers),
+                listeners,
             }),
             ..Default::default()
         };
@@ -743,4 +749,73 @@ fn return_cleanup_records_real_stream_closes_in_the_requested_reverse_order() {
         .map(|e| u64::from_le_bytes(e.input.clone().try_into().unwrap()))
         .collect();
     assert_eq!(closed, ids);
+}
+
+fn loopback(port: u16) -> Value {
+    Value::Record {
+        definition: hirsel_syntax::DefPath::core("SocketAddr"),
+        fields: vec![
+            Some(v(
+                0,
+                vec![collection::sequence(
+                    BuiltinType::Inline,
+                    [127u8, 0, 0, 1]
+                        .map(|b| Value::Integer(Integer::new(Primitive::U8, b.into()).unwrap())),
+                )],
+            )),
+            Some(p(port)),
+        ],
+    }
+}
+#[test]
+fn script_provider_listeners_serve_granted_addresses_and_never_widen_rules() {
+    let listen = |port: u16| NetRule {
+        address: "127.0.0.1".into(),
+        service: port.to_string(),
+        operation: "listen".into(),
+    };
+    let scripted = |port: u16| NetListener {
+        address: "127.0.0.1".into(),
+        port,
+        clients: vec![NetClient {
+            address: "192.0.2.1".into(),
+            port: 40001,
+            steps: vec![NetStep::Send(b"hi".to_vec())],
+        }],
+    };
+    // 8080 is granted and scripted, 9090 granted with no clients, 6060 scripted
+    // but ungranted: listener data never widens the rules.
+    let mut h = Harness::scripted(
+        vec![],
+        vec![scripted(8080), scripted(6060)],
+        vec![listen(8080), listen(9090)],
+    );
+    let n = h.net();
+    assert_eq!(
+        h.value("net.listen", vec![n.clone(), loopback(6060)]),
+        denied()
+    );
+    assert_eq!(
+        h.value("net.listen", vec![n.clone(), loopback(7070)]),
+        denied()
+    );
+    let served = unok(h.value("net.listen", vec![n.clone(), loopback(8080)]));
+    let Value::Tuple(accepted) = unok(h.value("net.accept", vec![n.clone(), served.clone()]))
+    else {
+        panic!("accept returns (Stream, SocketAddr)")
+    };
+    let Some(Value::Record { fields, .. }) = &accepted[1] else {
+        panic!("peer address")
+    };
+    assert_eq!(fields[1], Some(p(40001)));
+    assert_eq!(
+        h.value("net.accept", vec![n.clone(), served]),
+        error(v(7, vec![]))
+    );
+    let idle = unok(h.value("net.listen", vec![n.clone(), loopback(9090)]));
+    assert_eq!(
+        h.value("net.local_addr", vec![n.clone(), idle.clone()]),
+        ok(loopback(9090))
+    );
+    assert_eq!(h.value("net.accept", vec![n, idle]), error(v(7, vec![])));
 }

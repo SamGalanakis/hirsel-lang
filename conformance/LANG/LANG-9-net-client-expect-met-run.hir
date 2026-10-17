@@ -1,0 +1,46 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+// The accepted twin of the scripted-client failures. Every Expect is met before
+// its stream closes, and the one client left unaccepted expects nothing.
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+fn client(port: u16, take steps: List[NetStep]) -> NetClient uses {} {
+  NetClient(from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port), steps: steps)
+}
+
+fn serve(n: Net) -> Result[(), NetError] {
+  let mut listener = net.listen(n, home())?
+  let mut (first, _) = net.accept(n, mut listener)?
+  let mut request: List[u8] = []
+  net.read(n, mut first, mut request, 4u64)?
+  net.write_all(n, mut first, b"po")?
+  net.write_all(n, mut first, b"ng")?
+  net.close(n, take first)
+  let mut (second, _) = net.accept(n, mut listener)?
+  let mut again: List[u8] = []
+  net.read(n, mut second, mut again, 4u64)?
+  net.write_all(n, mut second, b"pong")?
+  Ok(())
+}
+
+pub fn trial(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: home(),
+        clients: [
+          client(40001u16, [Send(b"ping"), Expect(b"pong")]),
+          client(40002u16, [Send(b"ping"), Expect(b"pong"), Close()]),
+          client(40003u16, [Send(b"ping")])
+        ]
+      )
+    ]
+  )
+  serve(n)?
+  Ok(())
+}

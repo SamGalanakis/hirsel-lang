@@ -127,7 +127,7 @@ fn loopback_recording_replays_without_sockets() {
     let (rules, port, tape, chunks) = record_exchange();
     // The server is gone: replay must not touch the network at all.
     let text = render_tape(&tape).unwrap();
-    assert!(text.starts_with("hirsel-io-tape 5\n"));
+    assert!(text.starts_with("hirsel-io-tape 6\n"));
     let parsed = parse_tape(&text).unwrap();
     assert_eq!(parsed, tape);
     let mut sim = replay(&rules, parsed);
@@ -696,7 +696,7 @@ fn listeners_accept_under_a_listen_rule() {
 }
 
 #[test]
-fn tape_v4_round_trips_every_network_event_and_other_versions_are_refused() {
+fn tape_v6_round_trips_every_network_event_and_other_versions_are_refused() {
     let a4 = loopback(8080);
     let a6 = SocketAddr {
         ip: "2001:db8::1".parse().unwrap(),
@@ -732,6 +732,22 @@ fn tape_v4_round_trips_every_network_event_and_other_versions_are_refused() {
         NetError::Fault(7),
     ];
     let requests = vec![
+        Request::TestNet {
+            test: 1,
+            peers: vec![],
+            listeners: vec![hirsel_run_config::NetListener {
+                address: "::1".into(),
+                port: 8080,
+                clients: vec![hirsel_run_config::NetClient {
+                    address: "192.0.2.1".into(),
+                    port: 40001,
+                    steps: vec![
+                        hirsel_run_config::NetStep::Send(b"GET".to_vec()),
+                        hirsel_run_config::NetStep::Expect(vec![0, 0xff]),
+                    ],
+                }],
+            }],
+        },
         Request::NetNarrow {
             net: 2,
             rules: vec![
@@ -844,14 +860,14 @@ fn tape_v4_round_trips_every_network_event_and_other_versions_are_refused() {
     let text = render_tape(&events).unwrap();
     assert_eq!(parse_tape(&text).unwrap(), events);
 
-    assert!(parse_tape("hirsel-io-tape 4\n").is_err());
-    assert!(parse_tape("hirsel-io-tape 6\n").is_err());
+    assert!(parse_tape("hirsel-io-tape 5\n").is_err());
+    assert!(parse_tape("hirsel-io-tape 7\n").is_err());
     // Exactly one spelling of each value.
     for bad in [
-        "hirsel-io-tape 5\nnet_read 2 3 01 -> net_bytes ok \n",
-        "hirsel-io-tape 5\nlisten 2 [0::1]:80 -> net_handle ok 3\n",
-        "hirsel-io-tape 5\nnet_read 2 3 1 -> net_bytes err not_granted\n",
-        "hirsel-io-tape 5\nnet_read 2 3 1 -> net_unit ok x\n",
+        "hirsel-io-tape 6\nnet_read 2 3 01 -> net_bytes ok \n",
+        "hirsel-io-tape 6\nlisten 2 [0::1]:80 -> net_handle ok 3\n",
+        "hirsel-io-tape 6\nnet_read 2 3 1 -> net_bytes err not_granted\n",
+        "hirsel-io-tape 6\nnet_read 2 3 1 -> net_unit ok x\n",
     ] {
         assert!(parse_tape(bad).is_err(), "{bad}");
     }

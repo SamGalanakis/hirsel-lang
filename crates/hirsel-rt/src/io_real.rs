@@ -52,8 +52,9 @@ impl RealIo {
     pub fn set_net_script(
         &mut self,
         peers: Vec<hirsel_run_config::NetPeer>,
+        listeners: Vec<hirsel_run_config::NetListener>,
     ) -> Result<(), AdapterError> {
-        self.state.set_net_script(peers)
+        self.state.set_net_script(peers, listeners)
     }
     /// The admitted `io.process` grant. Absent, the root Proc runs nothing.
     pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
@@ -464,13 +465,9 @@ impl Adapter for RealIo {
             }
             Err(error) => return Err(error),
         };
-        if matches!(
-            request,
-            Request::TestCheckCase {
-                condition: false,
-                ..
-            }
-        ) {
+        // A Test report (a failed check_case, a scripted client's unmet Expect) is
+        // the only stdout a request other than Print appends.
+        if !matches!(request, Request::Print { .. }) && self.state.stdout.len() > before {
             self.output
                 .write_all(&self.state.stdout[before..])
                 .and_then(|()| self.output.flush())

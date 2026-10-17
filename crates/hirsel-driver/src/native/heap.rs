@@ -76,22 +76,31 @@ impl Operations for Io {
             .get(id.checked_sub(1)? as usize)
             .map(String::as_str)
     }
-    fn close_handle(&mut self, handle: u64) -> Result<(), String> {
+    fn close_handle(
+        &mut self,
+        handle: u64,
+        output: &mut Vec<u8>,
+    ) -> Result<Option<String>, String> {
         if let Some(id) = self.network_handles.remove(&handle) {
-            return self
+            let completion = self
                 .network
-                .call(hirsel_rt::io::Request::Close { handle: id })
-                .map(|_| ())
-                .map_err(|e| format!("network close: {e:?}"));
+                .call(hirsel_rt::io::Request::Close { handle: id });
+            output.extend(self.network.take_report());
+            return match completion {
+                // A dropped accepted stream or listener left a scripted client's Expect unmet.
+                Ok(hirsel_rt::io::Completion::Checked(false)) => Ok(Some("LANG-9".into())),
+                Ok(_) => Ok(None),
+                Err(e) => Err(format!("network close: {e:?}")),
+            };
         }
         match self.grants.remove(&handle) {
-            Some(IoGrant::File { .. }) => Ok(()),
+            Some(IoGrant::File { .. }) => Ok(None),
             Some(IoGrant::Atomic {
                 tree, temporary, ..
             }) => {
                 self.trees.get_mut(&tree).unwrap().1.remove(&temporary);
                 self.files.remove(&(tree, temporary));
-                Ok(())
+                Ok(None)
             }
             _ => Err(format!("model close of unknown handle {handle}")),
         }
@@ -108,6 +117,7 @@ impl Operations for Io {
             }
         }
         if let Some(outcome) = self.net(module, &path.name, args) {
+            output.extend(self.network.take_report());
             return outcome;
         }
         if let Some(outcome) = self.process(module, &path.name, args) {
@@ -1421,7 +1431,7 @@ mod mount_rights {
                 } = outcome
                 {
                     if let OpValue::OpenHandle(id) = *file {
-                        io.close_handle(id).unwrap();
+                        io.close_handle(id, &mut vec![]).unwrap();
                     }
                 } else {
                     panic!("writable twin");
@@ -1474,7 +1484,7 @@ mod mount_rights {
             assert_eq!(tag, expected_tag);
             assert_eq!(consumed, [1]);
             if let OpValue::OpenHandle(file) = *value {
-                io.close_handle(file).unwrap();
+                io.close_handle(file, &mut vec![]).unwrap();
             }
         }
     }

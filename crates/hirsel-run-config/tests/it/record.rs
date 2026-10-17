@@ -211,6 +211,7 @@ fn overlapping_mounts_traversal_and_wildcards_have_controls() {
     let mut net = NetGrant {
         provider: "p".into(),
         peers: None,
+        listeners: vec![],
         rules: vec![NetRule {
             address: "*".into(),
             service: "80".into(),
@@ -571,6 +572,7 @@ fn unenforceable_tasks_net_and_scheduler_policy_refuses() {
                 record.io.as_mut().unwrap().net = Some(NetGrant {
                     provider: "net@1".into(),
                     peers: None,
+                    listeners: vec![],
                     rules: vec![NetRule {
                         address: "127.0.0.1".into(),
                         service: "80".into(),

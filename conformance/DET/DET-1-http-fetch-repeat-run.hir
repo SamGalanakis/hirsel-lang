@@ -24,7 +24,8 @@ pub fn exercise(t: Test) -> Result[(), http.HttpError] {
           )
         ]
       )
-    ]
+    ],
+    []
   )
   let response = http.fetch(
     n,

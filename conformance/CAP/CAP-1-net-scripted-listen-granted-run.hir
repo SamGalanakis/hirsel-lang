@@ -1,0 +1,34 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// The granted twin of CAP-1-net-scripted-listen-ungranted-run. The scripted address
+// listens, a second listen while it is open is AddrInUse, a narrowed Net keeps the
+// Listen rule but cannot widen it to Connect, and after the drop it listens again.
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+fn rule(take operation: NetOperation) -> NetRule uses {} {
+  NetRule(address: "127.0.0.1", port: 8080u16, operation: operation)
+}
+
+fn reopen(n: Net) -> Result[(), NetError] {
+  let listener = net.listen(n, home())?
+  match net.listen(n, home()) {
+    Error(AddrInUse()) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(t, [], [NetListener(address: home(), clients: [])])
+  reopen(n)?
+  match net.narrow(n, [rule(Connect())]) {
+    Error(NotGranted()) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  let narrowed = net.narrow(n, [rule(Listen())])?
+  reopen(narrowed)?
+  Ok(())
+}

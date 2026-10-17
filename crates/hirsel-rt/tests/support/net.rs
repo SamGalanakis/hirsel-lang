@@ -12,7 +12,7 @@ use hirsel_rt::{
     io::{Completion as C, Event, Request as R},
     net::*,
 };
-use hirsel_run_config::{NetConnection, NetGrant, NetPeer, NetStep, PeerTls};
+use hirsel_run_config::{NetConnection, NetGrant, NetListener, NetPeer, NetStep, PeerTls};
 use hirsel_types::{BuiltinType, Primitive};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -200,6 +200,7 @@ pub fn fixture(tape: &[Event], granted: &BTreeSet<NetRule>) -> Result<NetGrant, 
         provider: "net.script@2".into(),
         rules: rules(granted),
         peers: Some(peers),
+        listeners: vec![],
     })
 }
 fn handle(kind: &str, id: u64) -> Value {
@@ -299,18 +300,37 @@ fn peer(p: &NetPeer) -> Value {
             list(p.connections.iter().map(|c| match c {
                 NetConnection::Refused => variant(0, vec![]),
                 NetConnection::Unanswered => variant(1, vec![]),
-                NetConnection::Open(steps) => variant(
-                    2,
-                    vec![list(steps.iter().map(|s| match s {
-                        NetStep::Send(b) => variant(0, vec![Value::Bytes(b.clone())]),
-                        NetStep::Expect(b) => variant(1, vec![Value::Bytes(b.clone())]),
-                        NetStep::Stall => variant(2, vec![]),
-                        NetStep::Close => variant(3, vec![]),
-                        NetStep::Reset => variant(4, vec![]),
-                        NetStep::Truncate => variant(5, vec![]),
-                    }))],
-                ),
+                NetConnection::Open(s) => variant(2, vec![steps(s)]),
             })),
+        ],
+    )
+}
+fn steps(steps: &[NetStep]) -> Value {
+    list(steps.iter().map(|s| match s {
+        NetStep::Send(b) => variant(0, vec![Value::Bytes(b.clone())]),
+        NetStep::Expect(b) => variant(1, vec![Value::Bytes(b.clone())]),
+        NetStep::Stall => variant(2, vec![]),
+        NetStep::Close => variant(3, vec![]),
+        NetStep::Reset => variant(4, vec![]),
+        NetStep::Truncate => variant(5, vec![]),
+    }))
+}
+fn listener(l: &NetListener) -> Value {
+    let at = |ip_text: &str, port| {
+        address(SocketAddr {
+            ip: ip_text.parse().unwrap(),
+            port,
+        })
+    };
+    record(
+        "NetListener",
+        vec![
+            at(&l.address, l.port),
+            list(
+                l.clients
+                    .iter()
+                    .map(|c| record("NetClient", vec![at(&c.address, c.port), steps(&c.steps)])),
+            ),
         ],
     )
 }
@@ -320,9 +340,17 @@ pub fn arguments(event: &Event, pem_roots: &[&[u8]]) -> (&'static str, Vec<Value
     let n = |id| handle("Net", id);
     let s = |id| handle("Stream", id);
     match &event.request {
-        R::TestNet { test, peers } => (
+        R::TestNet {
+            test,
+            peers,
+            listeners,
+        } => (
             "test.net",
-            vec![handle("Test", *test), list(peers.iter().map(peer))],
+            vec![
+                handle("Test", *test),
+                list(peers.iter().map(peer)),
+                list(listeners.iter().map(listener)),
+            ],
         ),
         R::NetNarrow { net, rules } => (
             "net.narrow",
@@ -438,9 +466,12 @@ pub fn arguments(event: &Event, pem_roots: &[&[u8]]) -> (&'static str, Vec<Value
             )
         }
         R::TlsClose { net, stream } => ("tls.close", vec![n(*net), s(*stream)]),
-        R::Listen { .. } | R::Accept { .. } | R::LocalAddr { .. } => {
-            panic!("listener execution requires M2")
-        }
+        R::Listen { net, addr } => ("net.listen", vec![n(*net), address(*addr)]),
+        R::Accept { net, listener } => ("net.accept", vec![n(*net), handle("Listener", *listener)]),
+        R::LocalAddr { net, listener } => (
+            "net.local_addr",
+            vec![n(*net), handle("Listener", *listener)],
+        ),
         _ => panic!("not a network request"),
     }
 }

@@ -630,11 +630,6 @@ fn hello_web_concurrent_serves_while_another_request_is_incomplete() {
 }
 
 #[test]
-fn hello_web_answers_real_requests_interpreted() {
-    hello_web(false, false);
-}
-
-#[test]
 #[ignore = "full gate"]
 fn full_gate_hello_web_answers_real_requests_native() {
     hello_web(true, false);

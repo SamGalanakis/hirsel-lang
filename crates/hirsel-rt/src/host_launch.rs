@@ -75,7 +75,7 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
     if let Some(grant) = run.net_grant() {
         io.set_net_rules(NetRule::from_config(grant));
         if let Some(peers) = &grant.peers {
-            io.set_net_script(peers.clone())
+            io.set_net_script(peers.clone(), grant.listeners.clone())
                 .map_err(|_| RunRefusal::Unsupported {
                     field: "io.net.peers".into(),
                 })?;
@@ -183,7 +183,7 @@ impl HostAuthority for HostGrants {
         if let Some(grant) = run.net_grant() {
             io.set_net_rules(NetRule::from_config(grant));
             if let Some(peers) = &grant.peers {
-                io.set_net_script(peers.clone())
+                io.set_net_script(peers.clone(), grant.listeners.clone())
                     .map_err(|_| RunRefusal::Unsupported {
                         field: "io.net.peers".into(),
                     })?;

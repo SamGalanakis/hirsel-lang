@@ -45,7 +45,8 @@ pub fn exercise(t: Test) -> Result[(), ()] {
         tls: Plain(),
         connections: []
       )
-    ]
+    ],
+    []
   )
   test.check(t, true)
   Ok(())

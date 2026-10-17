@@ -127,7 +127,11 @@ faults preserve the accepted prefix. TLS scripts use certificate names without
 crypto; a `Fails(f)` peer fails every handshake with `Tls(f)`, and a `Truncate()`
 step makes reads of a secured stream `Tls(Truncated())`; request events retain the verification name and SHA-256 PEM root digest.
 Read and read_into share a canonical byte-delivery event, and explicit/implicit
-close share the same handle event. Listener execution remains M2-owned.
+close share the same handle event. Scripted listeners (test.net's third argument or
+`listeners` of `net.script@2`) accept their clients in list order, then return
+ConnectionAborted. A client's Expect is an assertion: a contradicting write, or a close
+or drop that leaves it unmet, fails LANG-9 after its Test report on stdout; a drop's
+failure reaches the evaluator through `Operations::take_drop_failure`.
 
 `file.rs` implements incremental read/seek/write/append over retained inode
 contents. File grants preserve position and read/write mode across narrowing;

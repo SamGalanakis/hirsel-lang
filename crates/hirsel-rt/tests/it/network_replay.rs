@@ -17,16 +17,19 @@ fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest) -> RealIo {
         }]
         .into(),
     );
-    io.set_net_script(vec![NetPeer {
-        address: "127.0.0.1".into(),
-        port: 443,
-        resolves_to: vec![],
-        tls: peer_tls,
-        connections: vec![NetConnection::Open(vec![
-            NetStep::Send(b"tls".to_vec()),
-            NetStep::Close,
-        ])],
-    }])
+    io.set_net_script(
+        vec![NetPeer {
+            address: "127.0.0.1".into(),
+            port: 443,
+            resolves_to: vec![],
+            tls: peer_tls,
+            connections: vec![NetConnection::Open(vec![
+                NetStep::Send(b"tls".to_vec()),
+                NetStep::Close,
+            ])],
+        }],
+        vec![],
+    )
     .unwrap();
     let Completion::Handle(Ok(net)) = io.call(Request::Net { io: 1 }).unwrap() else {
         panic!()
@@ -152,17 +155,20 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
             }]
             .into(),
         );
-        io.set_net_script(vec![NetPeer {
-            address: "127.0.0.1".into(),
-            port: 443,
-            resolves_to: vec![],
-            tls: PeerTls::Certificate(vec!["localhost".into()]),
-            connections: vec![NetConnection::Open(vec![
-                NetStep::Send(b"tls".to_vec()),
-                NetStep::Truncate,
-                NetStep::Send(b"unreached".to_vec()),
-            ])],
-        }])
+        io.set_net_script(
+            vec![NetPeer {
+                address: "127.0.0.1".into(),
+                port: 443,
+                resolves_to: vec![],
+                tls: PeerTls::Certificate(vec!["localhost".into()]),
+                connections: vec![NetConnection::Open(vec![
+                    NetStep::Send(b"tls".to_vec()),
+                    NetStep::Truncate,
+                    NetStep::Send(b"unreached".to_vec()),
+                ])],
+            }],
+            vec![],
+        )
         .unwrap();
         let Completion::Handle(Ok(net)) = io.call(Request::Net { io: 1 }).unwrap() else {
             panic!()
@@ -266,13 +272,16 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
             }]
             .into(),
         );
-        io.set_net_script(vec![NetPeer {
-            address: "127.0.0.1".into(),
-            port: 443,
-            resolves_to: vec![],
-            tls: PeerTls::Certificate(vec!["localhost".into()]),
-            connections: vec![NetConnection::Open(vec![]); 2],
-        }])
+        io.set_net_script(
+            vec![NetPeer {
+                address: "127.0.0.1".into(),
+                port: 443,
+                resolves_to: vec![],
+                tls: PeerTls::Certificate(vec!["localhost".into()]),
+                connections: vec![NetConnection::Open(vec![]); 2],
+            }],
+            vec![],
+        )
         .unwrap();
         let Completion::Handle(Ok(net)) = io.call(Request::Net { io: 1 }).unwrap() else {
             panic!()

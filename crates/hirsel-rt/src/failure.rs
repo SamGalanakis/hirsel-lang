@@ -73,6 +73,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_begin(
     STATUS_FAILURE
 }
 
+/// Record a failure the runtime raises itself, at its fixed runtime code
+/// (`hirsel_core_contract::RUNTIME_RULES`). Site 0 is anchored by the caller's
+/// failure edge. The kind is FAIL-1's `bug`, the one category.
+pub(crate) fn record_runtime(ctx: *mut RunCtx, rule: &str, site: u64) {
+    let rule = hirsel_core_contract::runtime_rule_code(rule)
+        .unwrap_or_else(|| crate::fault("a rule the runtime does not record"));
+    unsafe {
+        (*ctx).failure.record(FailureRecord {
+            kind: 1,
+            rule,
+            site,
+        })
+    };
+}
+
 /// Append a failure produced elsewhere (a callback or nested context) with the same rule as
 /// `hirsel_rt_v2_failure_begin`.
 ///

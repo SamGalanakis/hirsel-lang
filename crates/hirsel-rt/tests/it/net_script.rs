@@ -13,7 +13,7 @@ fn peer(connections: Vec<NetConnection>) -> NetPeer {
     }
 }
 fn stream(steps: Vec<NetStep>) -> ScriptNet {
-    let mut net = ScriptNet::new(vec![peer(vec![NetConnection::Open(steps)])]).unwrap();
+    let mut net = ScriptNet::new(vec![peer(vec![NetConnection::Open(steps)])], vec![]).unwrap();
     assert_eq!(
         net.connect(1, "example.com", 80, NetTimeout::Unbounded),
         Ok(Ok(()))
@@ -90,12 +90,15 @@ fn net_script_buffered_expectations_and_persistent_reset() {
 }
 #[test]
 fn net_script_connection_queue_timeout_refusal_and_exhaustion() {
-    let mut net = ScriptNet::new(vec![peer(vec![
-        NetConnection::Unanswered,
-        NetConnection::Refused,
-        NetConnection::Unanswered,
-        NetConnection::Open(vec![]),
-    ])])
+    let mut net = ScriptNet::new(
+        vec![peer(vec![
+            NetConnection::Unanswered,
+            NetConnection::Refused,
+            NetConnection::Unanswered,
+            NetConnection::Open(vec![]),
+        ])],
+        vec![],
+    )
     .unwrap();
     assert_eq!(
         net.connect(1, "example.com", 80, NetTimeout::Nanos(0)),
@@ -128,9 +131,9 @@ fn net_script_connection_queue_timeout_refusal_and_exhaustion() {
 fn net_script_resolver_order_peer_address_and_duplicate_rejection() {
     let p = peer(vec![]);
     assert!(
-        matches!(ScriptNet::new(vec![p.clone(),p.clone()]),Err(AdapterError::Unsupported(s)) if s.contains("entries 0 and 1"))
+        matches!(ScriptNet::new(vec![p.clone(),p.clone()], vec![]),Err(AdapterError::Unsupported(s)) if s.contains("entries 0 and 1"))
     );
-    let mut net = ScriptNet::new(vec![p]).unwrap();
+    let mut net = ScriptNet::new(vec![p], vec![]).unwrap();
     let addresses = net.resolve("example.com", 80).unwrap().unwrap();
     assert_eq!(
         addresses
@@ -142,7 +145,7 @@ fn net_script_resolver_order_peer_address_and_duplicate_rejection() {
     assert_eq!(net.resolve("other.com", 80), Ok(Err(NetError::UnknownHost)));
     let mut p = peer(vec![NetConnection::Open(vec![])]);
     p.resolves_to.clear();
-    let mut net = ScriptNet::new(vec![p]).unwrap();
+    let mut net = ScriptNet::new(vec![p], vec![]).unwrap();
     net.connect(1, "example.com", 80, NetTimeout::Unbounded)
         .unwrap()
         .unwrap();
@@ -153,7 +156,7 @@ fn net_script_tls_checks_names_and_ignores_roots() {
     let roots = RootsDigest::Pem([0; 32]);
     let mut p = peer(vec![NetConnection::Open(vec![])]);
     p.tls = PeerTls::Certificate(vec!["example.com".into()]);
-    let mut net = ScriptNet::new(vec![p]).unwrap();
+    let mut net = ScriptNet::new(vec![p], vec![]).unwrap();
     net.connect(1, "example.com", 80, NetTimeout::Unbounded)
         .unwrap()
         .unwrap();
@@ -170,11 +173,11 @@ fn net_script_tls_checks_names_and_ignores_roots() {
 }
 
 #[test]
-fn net_script_literal_addresses_write_all_close_and_m2_refusal() {
+fn net_script_literal_addresses_write_all_close_and_an_unscripted_listener() {
     let mut p = peer(vec![NetConnection::Open(vec![])]);
     p.address = "127.0.0.1".into();
     p.resolves_to.clear();
-    let mut net = ScriptNet::new(vec![p]).unwrap();
+    let mut net = ScriptNet::new(vec![p], vec![]).unwrap();
     let address = SocketAddr {
         ip: "127.0.0.1".parse().unwrap(),
         port: 80,
@@ -191,18 +194,11 @@ fn net_script_literal_addresses_write_all_close_and_m2_refusal() {
     assert_eq!(net.write_all(1, b"bytes"), Ok(Ok(())));
     assert_eq!(net.tls_close(1), Ok(Ok(())));
     assert_eq!(net.shutdown(1, ShutdownHow::Both), Ok(Ok(())));
-    assert!(matches!(
-        net.listen(2, address),
-        Err(AdapterError::Unsupported(_))
-    ));
-    assert!(matches!(
-        net.accept(2, 3),
-        Err(AdapterError::Unsupported(_))
-    ));
-    assert!(matches!(
-        net.local_addr(2),
-        Err(AdapterError::Unsupported(_))
-    ));
+    // A listen address with no scripted listener has no clients.
+    assert_eq!(net.listen(2, address), Ok(Ok(())));
+    assert_eq!(net.listen(4, address), Ok(Err(NetError::AddrInUse)));
+    assert_eq!(net.local_addr(2), Ok(Ok(address)));
+    assert_eq!(net.accept(2, 3), Ok(Err(NetError::ConnectionAborted)));
 }
 
 fn script_adapter() -> hirsel_rt::io_real::RealIo {
@@ -219,7 +215,8 @@ fn repeated_tls_upgrade_is_invalid_and_consumes_the_script_stream() {
     assert_eq!(
         io.call(R::TestNet {
             test: 1,
-            peers: vec![p]
+            peers: vec![p],
+            listeners: vec![]
         }),
         Ok(C::Handle(Ok(2)))
     );
@@ -267,7 +264,8 @@ fn tls_only_script_can_set_timeouts_before_a_stalled_handshake() {
     assert_eq!(
         io.call(R::TestNet {
             test: 1,
-            peers: vec![p]
+            peers: vec![p],
+            listeners: vec![]
         }),
         Ok(C::Handle(Ok(2)))
     );
@@ -319,7 +317,11 @@ fn net_script_test_worlds_are_isolated_and_recordings_rederive_script_outcomes()
         NetStep::Expect(b"ping".to_vec()),
         NetStep::Send(b"reply".to_vec()),
     ])])];
-    let make = R::TestNet { test: 1, peers };
+    let make = R::TestNet {
+        test: 1,
+        peers,
+        listeners: vec![],
+    };
     assert_eq!(real.call(make.clone()), Ok(C::Handle(Ok(2))));
     assert_eq!(real.call(make.clone()), Ok(C::Handle(Ok(3))));
     assert_eq!(
@@ -401,7 +403,8 @@ fn net_script_quiescence_retains_the_native_prefix_and_live_stream_without_clean
             peers: vec![peer(vec![NetConnection::Open(vec![
                 NetStep::Send(b"prefix".to_vec()),
                 NetStep::Stall,
-            ])])]
+            ])])],
+            listeners: vec![]
         }),
         Ok(C::Handle(Ok(2)))
     );
@@ -439,7 +442,7 @@ fn net_script_quiescence_retains_the_native_prefix_and_live_stream_without_clean
 fn net_script_configured_peers_do_not_widen_explicit_root_rules() {
     use hirsel_rt::io::{Adapter, Completion as C, Request as R};
     let mut real = script_adapter();
-    real.set_net_script(vec![peer(vec![NetConnection::Open(vec![])])])
+    real.set_net_script(vec![peer(vec![NetConnection::Open(vec![])])], vec![])
         .unwrap();
     assert_eq!(real.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
     assert_eq!(
@@ -467,7 +470,7 @@ fn net_script_configured_root_executes_and_replays_with_explicit_policy() {
     }]
     .into();
     let mut real = script_adapter();
-    real.set_net_script(peers.clone()).unwrap();
+    real.set_net_script(peers.clone(), vec![]).unwrap();
     real.set_net_rules(rules);
     assert_eq!(real.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
     assert_eq!(
@@ -489,7 +492,7 @@ fn net_script_configured_root_executes_and_replays_with_explicit_policy() {
     );
     let tape = real.tape().to_vec();
     let mut sim = SimIo::new(Tree::default(), tape.clone());
-    sim.set_net_script(peers).unwrap();
+    sim.set_net_script(peers, vec![]).unwrap();
     sim.set_net_rules(
         [NetRule {
             address: "example.com".into(),

@@ -326,7 +326,7 @@ language failure and 3 for a refused launch. With `HIRSEL_RT_OBSERVATION` it
 writes the observation record (`hirsel-observation 1`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
-(`hirsel-io-tape 5`: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
+(`hirsel-io-tape 6`: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
 Io that accepts exactly a recorded tape and refuses a mismatch, a missing event
 and an unconsumed one. Each completion is appended and flushed before delivery; an abort preserves its confirmed prefix. A missing trailer marks an unknown suffix and refuses complete replay or any resumability claim. Native stdout uses raw OS writes, so EPIPE and EBADF become recorded OutputError outcomes; generated main ignores SIGPIPE before entry. Replay divergence exits 3 with confirmed stdout, including during handle cleanup.
 
@@ -582,6 +582,14 @@ consume `--hirsel-run /absolute/run.json`, verify its embedded identity and seed
 admit it before entry. Args come from that record. The differential harness retains its
 explicit fixture launch profile. Listener listen/accept/local_addr exports use the same
 Net policy path as streams, including the listener's brand on accepted streams.
+`ScriptNet` serves scripted listeners (test.net's listeners, `net.script@2`'s
+`listeners`): accept takes the address's next client, then `ConnectionAborted`. A write
+contradicting a client's Expect, and a close or drop leaving one unmet, complete as
+`Checked(false)` after the Test report. Their exports (`net.write`, `net.write_all`,
+`net.close`, `tls.close` and the handle close thunk) have no manifest failure rule and
+record the failure themselves at the fixed runtime codes of
+`hirsel_core_contract::RUNTIME_RULES` (CAP-2 for a refused handle, LANG-9 for a Test
+failure), at site 0 for the caller's failure edge to anchor, or the drop's anchor.
 
 Standalone launch uses `hirsel_rt_v2_launch_standalone`, bound to semantic code
 and the exact entry. `--hirsel-run /absolute/run.json [args...]` selects the shared

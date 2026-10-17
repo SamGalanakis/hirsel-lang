@@ -2461,6 +2461,48 @@ impl<'p, S: Stage> Machine<'p, S> {
         });
     }
 
+    /// A handle close failing inside a drop, anchored at the cleanup anchor of the
+    /// instruction that began the drop, as the native close thunk's failure is.
+    fn record_close_failure(&mut self, rule: &str) -> Checked<()> {
+        let Some(f) = self.stack.iter().rev().find_map(|a| match a {
+            Activity::Frame(f) => Some(f),
+            Activity::Drain(_) => None,
+        }) else {
+            return fail(V::Malformed, "a handle close failed outside a frame's drop");
+        };
+        let u = self.unit(f.unit);
+        let block = u
+            .blocks
+            .get(f.block.index())
+            .ok_or_else(|| err(V::Malformed, format!("unknown block {:?}", f.block)))?;
+        let anchor = match self
+            .pool(block.instructions, &u.instructions)?
+            .get(f.statement as usize)
+        {
+            Some(
+                Inst::Drop { anchor, .. }
+                | Inst::Release { anchor, .. }
+                | Inst::Reset { anchor, .. },
+            ) => *anchor,
+            _ => return fail(V::Malformed, "a handle close failed outside a drop"),
+        };
+        let site = u
+            .tables
+            .cleanup_anchors
+            .get(anchor.index())
+            .map_or((0, 0), |a| (a.site.start, a.site.end));
+        self.full_recount_due = true;
+        self.failures.push(ObservedFailure {
+            rule: rule.to_string(),
+            definition: u.header.definition.clone(),
+            site,
+        });
+        self.ledger.trace.push(Event::Failure {
+            rule: rule.to_string(),
+        });
+        Ok(())
+    }
+
     /// Take a failure edge: record its failure, dispose its tokens, enter cleanup.
     fn take_failure(&mut self, f: &mut Frame, failure: FailureId, injected: bool) -> Checked<()> {
         let u = self.unit(f.unit);
@@ -8182,9 +8224,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                                     return fail(V::ForgedPointer, format!("unknown handle {h}"));
                                 }
                             }
-                            self.ops
-                                .close_handle(h)
-                                .map_err(|message| err(V::Malformed, message))?;
+                            if let Some(rule) = self
+                                .ops
+                                .close_handle(h, &mut self.output)
+                                .map_err(|message| err(V::Malformed, message))?
+                            {
+                                self.record_close_failure(&rule)?;
+                                d.failed = true;
+                            }
                             self.ledger.get_mut(base.alloc).extent.take(
                                 base.offset + offset,
                                 8,

@@ -23,8 +23,9 @@ impl SimIo {
     pub fn set_net_script(
         &mut self,
         peers: Vec<hirsel_run_config::NetPeer>,
+        listeners: Vec<hirsel_run_config::NetListener>,
     ) -> Result<(), AdapterError> {
-        self.state.set_net_script(peers)
+        self.state.set_net_script(peers, listeners)
     }
     /// Replay uses the admitted projection set, independently of tape completions.
     pub fn set_projections(&mut self, projections: std::collections::BTreeSet<String>) {

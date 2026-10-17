@@ -53,7 +53,7 @@ N fn test.check(t: Test, condition: bool) -> ()
 N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
-fn test.net(t: Test, peers: List[NetPeer]) -> Net
+fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript]) -> Proc
 
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
@@ -265,6 +265,8 @@ NetPeer       = { address: String, port: u16, resolves_to: List[IpAddr],
 PeerTls       = Plain() | Certificate(List[String]) | Fails(TlsFailure)
 NetConnection = Refused() | Unanswered() | Open(List[NetStep])
 NetStep       = Send(Bytes) | Expect(Bytes) | Stall() | Close() | Reset() | Truncate()
+NetListener   = { address: SocketAddr, clients: List[NetClient] }
+NetClient     = { from: SocketAddr, steps: List[NetStep] }
 ```
 
 `arg.count` counts the ordered launch arguments, excluding the executable and tool options.
@@ -420,8 +422,9 @@ others never return `Canceled`.
 
 **Scripted peers.** `test.net` returns a fake `Net` served by its peers, whose rules are
 `(address, port, ConnectTls())` for a `Certificate` or `Fails` peer and
-`(address, port, Connect())` for a `Plain` peer. Duplicate `(address, port)` peers are
-invalid input.
+`(address, port, Connect())` for a `Plain` peer, plus `(literal, port, Listen())` for each
+listener's address. Duplicate `(address, port)` peers, duplicate listener addresses and a
+listener on port 0 are invalid input.
 
 - Resolving a peer's address returns `resolves_to` with the peer's port; other names are
   `UnknownHost()`. `peer_addr` is a literal-address peer's literal, or a host-name peer's
@@ -437,13 +440,31 @@ invalid input.
   nothing, so a read times out or never completes. The end of the steps is `Close()`.
 - Written bytes accumulate and are compared with the next `Expect(b)` once `b`'s length of
   them exist; a mismatch is `Reset()` at that point. Writes are otherwise accepted.
+- `net.listen` on a scripted listener's address succeeds; a second listen on it while the
+  first listener is open is `AddrInUse()`. A granted listen on an address with no scripted
+  listener has no clients. `net.local_addr` is the listen address.
+- `net.accept` takes the address's next client in list order, across every listener opened
+  on it. The stream follows the client's steps as `Open(steps)` does, and the accepted
+  address and `peer_addr` are `from`. After the last client, accept returns
+  `ConnectionAborted()`. An accepted stream has no TLS: `tls.connect` on it is
+  `Tls(HandshakeFailure())`.
+- A client's `Expect` is an assertion about the program: a mismatch fails LANG-9 at the
+  write that completes it, after reporting `test failure: net client C of A expected E but
+  the program wrote W` and a newline through Test reporting, where `C` is the zero-based
+  client index, `A` the listen address and `E` and `W` byte-string literals of the expected
+  bytes and of the same number of written bytes. Closing an accepted stream, by `net.close`,
+  `tls.close` or drop, while its client has an unmet `Expect` fails LANG-9 the same way,
+  reporting `test failure: net client C of A expected E but the program closed after
+  writing W`, with `W` the bytes written toward it. Closing a listener while its address
+  has an unaccepted client with an `Expect` fails LANG-9 after reporting
+  `test failure: net client C of A was never accepted`.
 - `tls.connect` to a `Certificate(names)` peer succeeds exactly when `server_name` is in
   `names`, otherwise `Tls(NameMismatch())`; to a `Plain()` peer it is
   `Tls(HandshakeFailure())`; to a `Fails(f)` peer it is `Tls(f)`, after the same grant checks
   and with the same consumed stream and recorded events as any handshake failure. `roots`
   is not consulted, and script bytes are plaintext.
 
-Every operation against a scripted peer is recorded as the same request and completion a
+Every operation against a scripted peer or listener is recorded as the same request and completion a
 real network produces, so a simulated run yields a recording that replays like a real one
 ([network recording](determinism.md#network-recording)).
 

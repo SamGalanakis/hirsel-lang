@@ -281,6 +281,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "program: String,args: List[String],outcome: Result[ProcessOutput,ProcessError]",
         ),
+        ("NetClient", "", "from: SocketAddr,steps: List[NetStep]"),
+        (
+            "NetListener",
+            "",
+            "address: SocketAddr,clients: List[NetClient]",
+        ),
     ] {
         let mut b = Builder::new(generic)
             .with_declarations(&out)

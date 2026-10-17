@@ -12,7 +12,8 @@ fn scripted(t: Test, connections: List[NetConnection], tls: PeerTls) -> Net {
         tls: tls,
         connections: connections
       )
-    ]
+    ],
+    []
   )
 }
 

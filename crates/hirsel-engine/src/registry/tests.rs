@@ -111,7 +111,7 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
 fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
     let r = BuiltinRegistry::new();
     assert_eq!(loop_protocols().len(), 6);
-    assert_eq!(r.signatures().count(), 303);
+    assert_eq!(r.signatures().count(), 305);
     let mut symbols = Interner::default();
     for ((protocol, open, next), generics) in loop_protocols().into_iter().zip([2, 2, 1, 1, 1, 2]) {
         assert_eq!(open.0.modules, ["$intrinsic"]);
@@ -672,6 +672,11 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
             "NetPeer",
             "{address:String,port:U16,resolves_to:List[IpAddr[]],tls:PeerTls[],connections:List[NetConnection[]]}",
         ),
+        (
+            "NetListener",
+            "{address:SocketAddr[],clients:List[NetClient[]]}",
+        ),
+        ("NetClient", "{from:SocketAddr[],steps:List[NetStep[]]}"),
         (
             "PeerTls",
             "Plain()|Certificate(List[String])|Fails(TlsFailure[])",

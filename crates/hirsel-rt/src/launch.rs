@@ -91,7 +91,7 @@ pub type Entry = unsafe extern "C" fn(
 ) -> u8;
 
 /// The tape file's first line.
-pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 5";
+pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 6";
 
 /// An adapter the launcher still holds after binding it.
 struct Shared<A>(Rc<RefCell<A>>);
@@ -1113,7 +1113,7 @@ unsafe fn execute(
     };
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
-    let net_peers = net.and_then(|grant| grant.peers);
+    let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
     let mut initial_tree = Tree::new(Default::default()).expect("empty tree");
     let mut real = None;
     let mut zero_recording = None;
@@ -1162,8 +1162,8 @@ unsafe fn execute(
                 if let Some(grant) = &process {
                     io.set_process_grant(grant);
                 }
-                if let Some(peers) = net_peers.clone()
-                    && let Err(error) = io.set_net_script(peers)
+                if let Some((peers, listeners)) = net_script.clone()
+                    && let Err(error) = io.set_net_script(peers, listeners)
                 {
                     return refuse(&format!("the network script: {error:?}"));
                 }
@@ -1212,8 +1212,8 @@ unsafe fn execute(
                     if let Some(grant) = &process {
                         io.set_process_grant(grant);
                     }
-                    if let Some(peers) = net_peers.clone()
-                        && let Err(error) = io.set_net_script(peers)
+                    if let Some((peers, listeners)) = net_script.clone()
+                        && let Err(error) = io.set_net_script(peers, listeners)
                     {
                         return refuse(&format!("the network script: {error:?}"));
                     }

@@ -511,9 +511,10 @@ owners such as mutexes use it to retain the final payload without rollback;
 abandoned payloads return to the evaluator's explicit cleanup worklist.
 
 Production host operations are supplied by the driver's Operations adapter; this crate
-remains host-independent. Scripted `net.listen` checks the exact grant before reporting
-that scripted incoming peers are unavailable, so an empty rule set returns NotGranted
-without a provider effect.
+remains host-independent. Scripted `net.listen` checks the exact grant before any
+provider effect, so an empty rule set returns NotGranted. A handle drop that raises a
+language failure (a scripted client's unmet Expect) reports it through
+`take_drop_failure`; the evaluator records it at the drop's anchor.
 
 `library::process` is the reference Process provider. `SimulationConfig.process`
 holds the `io.process` grant; the `process` projection mints the root Proc with its

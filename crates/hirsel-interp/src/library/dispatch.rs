@@ -22,6 +22,8 @@ pub struct Library {
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
     pub(super) next_shared: u64,
+    /// A scripted client's unmet Expect at the last handle drop (LANG-9).
+    pub(super) drop_failure: Option<(String, String)>,
 }
 impl Library {
     pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
@@ -34,6 +36,7 @@ impl Library {
             callbacks: Default::default(),
             next_callback: 0,
             next_shared: 0,
+            drop_failure: None,
         })
     }
     /// `stdin.read` over the configured input; a host adapter resumes a parked read here.
@@ -876,6 +879,10 @@ impl Operations for Library {
         std::mem::take(&mut self.channels.released)
     }
 
+    fn take_drop_failure(&mut self) -> Option<(String, String)> {
+        self.drop_failure.take()
+    }
+
     fn take_tasks(&mut self) -> Vec<crate::TaskStart> {
         self.tasks.take_starts()
     }
@@ -984,17 +991,29 @@ impl Operations for Library {
             self.channels.close(kind, id)?;
             return Ok(());
         }
-        if kind == "Stream" {
-            if self.simulation.net_streams.contains_key(&id) {
+        if matches!(kind, "Stream" | "Listener") {
+            let open = if kind == "Stream" {
+                self.simulation.net_streams.contains_key(&id)
+            } else {
+                self.simulation.net_listeners.contains_key(&id)
+            };
+            if open {
+                let report = self.simulation.close_net(id);
+                if let Some(report) = &report {
+                    context.stdout.extend_from_slice(report.as_bytes());
+                    self.drop_failure = Some(("LANG-9".into(), "scripted net client unmet".into()));
+                }
                 self.simulation.record(
                     "Net",
                     "net.close",
                     id.to_le_bytes().to_vec(),
-                    vec![],
+                    if report.is_some() {
+                        b"failure:LANG-9".to_vec()
+                    } else {
+                        vec![]
+                    },
                     context,
                 )?;
-                self.simulation.net_streams.remove(&id);
-                self.simulation.grants.remove(&id);
             }
             return Ok(());
         }

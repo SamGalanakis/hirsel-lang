@@ -256,9 +256,15 @@ pub trait Operations {
     }
 
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome;
-    /// Implicit File close/AtomicFile abort, after H has checked its linear identity.
-    fn close_handle(&mut self, _handle: u64) -> Result<(), String> {
-        Ok(())
+    /// Implicit File close/AtomicFile abort or network close, after H has checked its
+    /// linear identity. `Some(rule)`: the close raised that language failure, after
+    /// appending its report to `output`.
+    fn close_handle(
+        &mut self,
+        _handle: u64,
+        _output: &mut Vec<u8>,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
     }
 }
 

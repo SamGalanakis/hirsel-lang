@@ -100,6 +100,9 @@ pub(crate) enum Grant {
         world: u64,
         rules: Vec<hirsel_run_config::ProcessRule>,
     },
+    Listener {
+        net: u64,
+    },
     Root(String),
     Dir {
         tree: u64,
@@ -128,6 +131,7 @@ pub struct Simulation {
     pub(super) net_streams: BTreeMap<u64, super::net::ScriptStream>,
     pub(super) process_worlds: BTreeMap<u64, super::process::World>,
     pub(super) supplied_process: Option<hirsel_run_config::ProcessOutcome>,
+    pub(super) net_listeners: BTreeMap<u64, super::net::ScriptListener>,
     pub config: SimulationConfig,
     pub events: Vec<CapabilityEvent>,
     pub stderr: Vec<u8>,
@@ -163,6 +167,9 @@ pub enum ObservedGrant {
     Proc {
         world: u64,
         rules: Vec<hirsel_run_config::ProcessRule>,
+    },
+    Listener {
+        net: u64,
     },
     Root(String),
     Directory {
@@ -208,6 +215,7 @@ impl Simulation {
                             world: *world,
                             rules: rules.clone(),
                         },
+                        Grant::Listener { net } => ObservedGrant::Listener { net: *net },
                         Grant::Root(kind) => ObservedGrant::Root(kind.clone()),
                         Grant::Dir { tree, root, access } => ObservedGrant::Directory {
                             tree: *tree,
@@ -311,6 +319,7 @@ impl Simulation {
             net_streams: BTreeMap::new(),
             process_worlds,
             supplied_process: None,
+            net_listeners: BTreeMap::new(),
             config,
             events: vec![],
             stderr: Vec::new(),
@@ -557,6 +566,7 @@ impl Simulation {
                 Some(Grant::Net { .. }) => kind == "Net",
                 Some(Grant::Stream { .. }) => kind == "Stream",
                 Some(Grant::Proc { .. }) => kind == "Proc",
+                Some(Grant::Listener { .. }) => kind == "Listener",
                 Some(Grant::Root(name)) => name == kind,
                 Some(Grant::Dir { .. }) => kind == "Dir",
                 Some(Grant::File { .. }) => kind == "File",

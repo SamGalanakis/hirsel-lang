@@ -81,10 +81,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_close(
         net: unsafe { n.read() },
         stream,
     };
-    let done = match unsafe { crate::io::capability_call(ctx, request) } {
-        Ok(Completion::NetUnit(done)) => done,
-        Ok(_) => crate::fault("TLS completion type mismatch"),
-        Err(()) => return STATUS_FAILURE,
+    let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
+        Some(Completion::NetUnit(done)) => done,
+        Some(_) => crate::fault("TLS completion type mismatch"),
+        None => return STATUS_FAILURE,
     };
     unsafe { out.write(NetUnitResult::of(done)) };
     STATUS_OK

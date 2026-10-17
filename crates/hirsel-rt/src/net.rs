@@ -341,8 +341,9 @@ impl crate::io::State {
     pub(crate) fn set_net_script(
         &mut self,
         peers: Vec<hirsel_run_config::NetPeer>,
+        listeners: Vec<hirsel_run_config::NetListener>,
     ) -> Result<(), AdapterError> {
-        let script = crate::io_net_script::ScriptNet::new(peers)?;
+        let script = crate::io_net_script::ScriptNet::new(peers, listeners)?;
         self.net_scripts.insert(0, script);
         self.net_world = NetWorld::Script(0);
         Ok(())
@@ -394,6 +395,16 @@ impl crate::io::State {
             },
         }
     }
+    /// Before closing a scripted stream or listener: a client left with an unmet
+    /// Expect fails LANG-9 after its Test report.
+    fn unmet(&mut self, world: NetWorld, handle: u64) -> Option<crate::io::Completion> {
+        let NetWorld::Script(id) = world else {
+            return None;
+        };
+        let report = self.net_scripts.get_mut(&id)?.unmet(handle)?;
+        self.stdout.extend_from_slice(report.as_bytes());
+        Some(crate::io::Completion::Checked(false))
+    }
     fn mark_tls(&mut self, stream: u64) {
         if let Some(crate::handles::Grant::Stream { tls, .. }) = self.handles.rows.get_mut(&stream)
         {
@@ -411,11 +422,16 @@ impl crate::io::State {
         use crate::io::{Completion as C, Request as R};
         let zero = |t: &NetTimeout| *t == NetTimeout::Nanos(0);
         match request {
-            R::TestNet { test, peers } => {
+            R::TestNet {
+                test,
+                peers,
+                listeners,
+            } => {
                 if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
                     return Err(AdapterError::InvalidHandle(*test));
                 }
-                let script = crate::io_net_script::ScriptNet::new(peers.clone())?;
+                let script =
+                    crate::io_net_script::ScriptNet::new(peers.clone(), listeners.clone())?;
                 let rules = peers
                     .iter()
                     .map(|peer| NetRule {
@@ -427,6 +443,11 @@ impl crate::io::State {
                             | hirsel_run_config::PeerTls::Fails(_) => NetOperation::ConnectTls,
                         },
                     })
+                    .chain(listeners.iter().map(|listener| NetRule {
+                        address: listener.address.clone(),
+                        port: listener.port,
+                        operation: NetOperation::Listen,
+                    }))
                     .collect();
                 let id = self.handles.next();
                 self.handles.insert(Grant::Net {
@@ -546,7 +567,7 @@ impl crate::io::State {
                     None
                 };
                 let provider = self.world(grant.world, host)?;
-                Ok(match request {
+                let completion = match request {
                     R::NetRead { max, .. } => C::NetBytes(match refuse {
                         Some(e) => Err(e),
                         None => provided(provider.read(*stream, *max))?.and_then(|bytes| {
@@ -578,7 +599,19 @@ impl crate::io::State {
                         None => provided(provider.peer_addr(*stream))?,
                     }),
                     _ => unreachable!(),
-                })
+                };
+                // A write that contradicts a scripted client's Expect fails LANG-9 after
+                // its Test report (docs/spec/core-library.md, scripted peers).
+                if let NetWorld::Script(world) = grant.world
+                    && let Some(report) = self
+                        .net_scripts
+                        .get_mut(&world)
+                        .and_then(|script| script.take_mismatch(*stream))
+                {
+                    self.stdout.extend_from_slice(report.as_bytes());
+                    return Ok(C::Checked(false));
+                }
+                Ok(completion)
             }
             R::TlsConnect {
                 net,
@@ -613,8 +646,9 @@ impl crate::io::State {
                 let grant = self.stream_grant(*net, *stream)?;
                 let value = provided(self.world(grant.world, host)?.tls_close(*stream))?;
                 self.handles.rows.remove(stream);
+                let unmet = self.unmet(grant.world, *stream);
                 self.world(grant.world, host)?.close(*stream);
-                Ok(C::NetUnit(value))
+                Ok(unmet.unwrap_or(C::NetUnit(value)))
             }
             R::Listen { net, addr } => {
                 let (rules, world) = self.net_grant(*net)?;
@@ -657,8 +691,9 @@ impl crate::io::State {
                     }
                     _ => return Err(AdapterError::InvalidHandle(*handle)),
                 };
+                let unmet = self.unmet(world, *handle);
                 self.world(world, host)?.close(*handle);
-                Ok(C::Unit(Ok(())))
+                Ok(unmet.unwrap_or(C::Unit(Ok(()))))
             }
             _ => Err(AdapterError::InvalidCompletion),
         }

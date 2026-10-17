@@ -1,0 +1,25 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 23
+// stdout: test failure: net client 0 of 127.0.0.1:8080 expected b"pong" but the program wrote b"pang"
+// entry: trial
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+fn client() -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40001u16),
+    steps: [Send(b"ping"), Expect(b"pong")]
+  )
+}
+
+pub fn trial(t: Test) -> Result[(), NetError] {
+  let n = test.net(t, [], [NetListener(address: home(), clients: [client()])])
+  let mut listener = net.listen(n, home())?
+  let mut (stream, _) = net.accept(n, mut listener)?
+  let mut request: List[u8] = []
+  net.read(n, mut stream, mut request, 4u64)?
+  net.write_all(n, mut stream, b"pa")?
+  net.write_all(n, mut stream, b"ng")?
+  Ok(())
+}

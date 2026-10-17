@@ -333,6 +333,7 @@ pub fn replay_interpreter_with_fixture(
                         ObservedGrant::File { .. } => "File",
                         ObservedGrant::AtomicFile { .. } => "AtomicFile",
                         ObservedGrant::Stream { .. } => "Stream",
+                        ObservedGrant::Listener { .. } => "Listener",
                         _ => panic!("unsupported closed handle: {grant:?}"),
                     };
                     library
@@ -494,8 +495,8 @@ pub fn replay_interpreter_with_fixture(
                         hirsel_rt::handles::Grant::Stream { net, .. } => {
                             ObservedGrant::Stream { net: *net }
                         }
-                        hirsel_rt::handles::Grant::Listener { .. } => {
-                            panic!("listener execution requires M2")
+                        hirsel_rt::handles::Grant::Listener { net } => {
+                            ObservedGrant::Listener { net: *net }
                         }
                         hirsel_rt::handles::Grant::Test { .. } => {
                             ObservedGrant::Root("Test".into())

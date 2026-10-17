@@ -9,8 +9,10 @@ mod program;
 pub use program::{ProgramNode, ProgramRevision, RevisionError};
 mod net;
 pub use net::{
-    NetConnection, NetGrant, NetPeer, NetRule, NetStep, PeerTls, TlsFailure,
-    canonical_address as canonical_net_address, decode_net_peers, encode_net_peers,
+    NetClient, NetConnection, NetGrant, NetListener, NetPeer, NetRule, NetStep, PeerTls,
+    TlsFailure, canonical_address as canonical_net_address, check_net_listeners,
+    decode_net_listeners, decode_net_peers, encode_net_listeners, encode_net_peers,
+    first_expecting_client, net_client_mismatch, net_client_unaccepted, net_client_unmet,
     validate_net_grant,
 };
 mod process;

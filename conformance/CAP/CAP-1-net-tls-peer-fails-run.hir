@@ -12,7 +12,8 @@ fn failing(t: Test, failure: TlsFailure) -> Result[bool, NetError] {
         tls: Fails(failure),
         connections: [Open([Send(b"unread")]), Open([])]
       )
-    ]
+    ],
+    []
   )
   let s = net.connect(n, "example.com", 443u16, Unbounded())?
   let failed = match tls.connect(n, take s, "example.com", WebPki()) {

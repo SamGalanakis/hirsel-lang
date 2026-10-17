@@ -7,7 +7,7 @@ use hirsel_rt::{
     io::{Completion as C, Request as R},
     net::*,
 };
-use hirsel_run_config::{NetConnection, NetPeer, NetStep, PeerTls};
+use hirsel_run_config::{NetClient, NetConnection, NetListener, NetPeer, NetStep, PeerTls};
 
 fn word(v: &OpValue) -> Option<u64> {
     match v {
@@ -96,6 +96,46 @@ fn tls_failure(v: &OpValue) -> Option<TlsFailure> {
         _ => return None,
     })
 }
+fn steps(v: &OpValue) -> Option<Vec<NetStep>> {
+    sequence(v)?
+        .iter()
+        .map(|s| {
+            Some(match variant(s)? {
+                (0, b) => NetStep::Send(bytes(b)?),
+                (1, b) => NetStep::Expect(bytes(b)?),
+                (2, _) => NetStep::Stall,
+                (3, _) => NetStep::Close,
+                (4, _) => NetStep::Reset,
+                (5, _) => NetStep::Truncate,
+                _ => return None,
+            })
+        })
+        .collect()
+}
+fn listener(v: &OpValue) -> Option<NetListener> {
+    let [address, clients] = fields(v)? else {
+        return None;
+    };
+    let address = addr(address)?;
+    Some(NetListener {
+        address: address.ip.to_string(),
+        port: address.port,
+        clients: sequence(clients)?
+            .iter()
+            .map(|c| {
+                let [from, s] = fields(c)? else {
+                    return None;
+                };
+                let from = addr(from)?;
+                Some(NetClient {
+                    address: from.ip.to_string(),
+                    port: from.port,
+                    steps: steps(s)?,
+                })
+            })
+            .collect::<Option<_>>()?,
+    })
+}
 fn peer(v: &OpValue) -> Option<NetPeer> {
     let [address, port, resolves, tls, connections] = fields(v)? else {
         return None;
@@ -114,22 +154,7 @@ fn peer(v: &OpValue) -> Option<NetPeer> {
             Some(match variant(v)? {
                 (0, _) => NetConnection::Refused,
                 (1, _) => NetConnection::Unanswered,
-                (2, steps) => NetConnection::Open(
-                    sequence(steps)?
-                        .iter()
-                        .map(|s| {
-                            Some(match variant(s)? {
-                                (0, b) => NetStep::Send(bytes(b)?),
-                                (1, b) => NetStep::Expect(bytes(b)?),
-                                (2, _) => NetStep::Stall,
-                                (3, _) => NetStep::Close,
-                                (4, _) => NetStep::Reset,
-                                (5, _) => NetStep::Truncate,
-                                _ => return None,
-                            })
-                        })
-                        .collect::<Option<_>>()?,
-                ),
+                (2, s) => NetConnection::Open(steps(s)?),
                 _ => return None,
             })
         })
@@ -259,12 +284,16 @@ impl Io {
         args: &[OpValue],
     ) -> Option<OpOutcome> {
         let request = match (module, name, args) {
-            (Some("test"), "net", [OpValue::Handle(test), peers])
+            (Some("test"), "net", [OpValue::Handle(test), peers, listeners])
                 if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
             {
                 R::TestNet {
                     test: 1,
                     peers: sequence(peers)?.iter().map(peer).collect::<Option<_>>()?,
+                    listeners: sequence(listeners)?
+                        .iter()
+                        .map(listener)
+                        .collect::<Option<_>>()?,
                 }
             }
             (Some("io"), "net", [OpValue::Handle(1)]) => R::Net { io: 1 },
@@ -419,6 +448,17 @@ impl Io {
                 OpValue::Aggregate(vec![self.network_handle(id, true), address(a)])
             }),
             C::Unit(Ok(())) => OpValue::Unit,
+            // A scripted client's unmet Expect (docs/spec/core-library.md).
+            C::Checked(false) if name == "close" => {
+                if let OpValue::Handle(h) = args[1] {
+                    self.network_handles.remove(&h);
+                }
+                return Some(OpOutcome::Complete {
+                    result: Err("LANG-9".into()),
+                    consumed: vec![1],
+                });
+            }
+            C::Checked(false) => return Some(OpOutcome::Fail("LANG-9".into())),
             _ => return Some(OpOutcome::Unsupported),
         };
         let consumed = module == Some("tls")
@@ -459,7 +499,11 @@ mod tests {
             OpValue::Sequence(connections),
         ])]);
         let OpOutcome::Value(n) = io
-            .net(Some("test"), "net", &[OpValue::Handle(1), peers])
+            .net(
+                Some("test"),
+                "net",
+                &[OpValue::Handle(1), peers, OpValue::Sequence(vec![])],
+            )
             .unwrap()
         else {
             panic!()

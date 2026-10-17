@@ -950,6 +950,17 @@ fn execute_frames(
                                 .work
                                 .push_front(crate::resources::Work::Release(value, anchor.clone()));
                         }
+                        if let Some((rule, kind)) = operations.take_drop_failure() {
+                            let mut at = anchor.clone();
+                            at.site = dropped_binding_site(frame, &anchor).unwrap_or(anchor.site);
+                            record_failure(
+                                runtime.trace_mode,
+                                execution,
+                                failure(sources, at.site, &rule, &kind)?,
+                                at,
+                            );
+                            frame.ending = Some(crate::resources::Ending::Failed);
+                        }
                         continue;
                     }
                     if let Some(check) = &frame.check {
@@ -1878,6 +1889,21 @@ fn record_failure(
         cause: None,
         spawn_path: vec![],
     });
+}
+/// The binding whose Drop action a cleanup anchor names: a drop's own failure is
+/// reported there, as the LIR cleanup anchor of that drop is.
+fn dropped_binding_site(frame: &Frame, anchor: &crate::observation::Anchor) -> Option<Span> {
+    let (id, index) = anchor.cleanup?;
+    let body = frame.body();
+    let mut node = body.cleanups.get(id.0 as usize)?.head?;
+    for _ in 0..index {
+        node = body.cleanup_nodes.get(node.0 as usize)?.parent?;
+    }
+    let CleanupAction::Drop { place, .. } = &body.cleanup_nodes.get(node.0 as usize)?.action else {
+        return None;
+    };
+    let root = body.places.get(place.0 as usize)?.root;
+    Some(body.locals.get(root.0 as usize)?.span)
 }
 fn enqueue_cleanup(frame: &mut Frame, id: CleanupId, site: Span) -> Result<(), Error> {
     let head = frame

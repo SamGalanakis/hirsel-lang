@@ -1234,15 +1234,22 @@ pub fn observe(
             ["result", hex] => result = Some(*hex),
             ["failure", _kind, rule, site] => {
                 let rule = rule
-                    .parse::<usize>()
+                    .parse::<u32>()
                     .ok()
-                    .and_then(|r| rules.get(r.checked_sub(1)?))
+                    .and_then(
+                        |r| match r.checked_sub(hirsel_core_contract::RUNTIME_RULE_BASE) {
+                            Some(i) => hirsel_core_contract::RUNTIME_RULES
+                                .get(i as usize)
+                                .map(|r| r.to_string()),
+                            None => rules.get(r.checked_sub(1)? as usize).cloned(),
+                        },
+                    )
                     .ok_or_else(|| bad(format!("an unknown failure rule code in `{line}`")))?;
                 let (definition, range) = u64::from_str_radix(site, 16)
                     .ok()
                     .and_then(|code| codes.get(&code))
                     .ok_or_else(|| bad(format!("an unknown failure site code in `{line}`")))?;
-                failures.push(sites.failure(rule, definition, *range)?);
+                failures.push(sites.failure(&rule, definition, *range)?);
             }
             ["audit", live_blocks, _bytes, _immortal, regions, retained] => {
                 audit = Some((*live_blocks, *regions, *retained));

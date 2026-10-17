@@ -1,0 +1,33 @@
+// rule: CAP-1
+// expect: run
+// exit: 1
+// entry: exercise
+// A scripted listener grants Listen on its own address only, so 127.0.0.1 port 8081
+// is not granted.
+fn expected_error(e: NetError) -> () uses {} {
+  failure.check(
+    match e {
+      NotGranted() => true,
+      _ => false,
+    },
+    Arithmetic()
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), ()] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16),
+        clients: []
+      )
+    ]
+  )
+  let listener = net.listen(
+    n,
+    SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8081u16)
+  ) ? expected_error
+  Ok(())
+}

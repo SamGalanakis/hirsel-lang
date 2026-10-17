@@ -1,0 +1,34 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 17
+// stdout: test failure: net client 1 of 127.0.0.1:8080 was never accepted
+// entry: trial
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+fn client(port: u16) -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port),
+    steps: [Send(b"ping"), Expect(b"pong")]
+  )
+}
+
+fn serve_one(n: Net) -> Result[(), NetError] {
+  let mut listener = net.listen(n, home())?
+  let mut (stream, _) = net.accept(n, mut listener)?
+  let mut request: List[u8] = []
+  net.read(n, mut stream, mut request, 4u64)?
+  net.write_all(n, mut stream, b"pong")?
+  net.close(n, take stream)
+  Ok(())
+}
+
+pub fn trial(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: home(), clients: [client(40001u16), client(40002u16)])]
+  )
+  serve_one(n)?
+  Ok(())
+}

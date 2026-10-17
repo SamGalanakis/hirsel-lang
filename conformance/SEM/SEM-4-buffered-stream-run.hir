@@ -13,7 +13,8 @@ pub fn main(t: Test) -> Result[(), ReadFailure] {
         tls: Plain(),
         connections: [Open([Send(b"a"), Send(b"\nbc\nxy"), Close()])]
       )
-    ]
+    ],
+    []
   )
   let mut stream = net.connect(n, "example.com", 80u16, Unbounded()) ? Network
   let mut r = bufio.new(2)

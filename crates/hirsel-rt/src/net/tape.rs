@@ -1,4 +1,4 @@
-//! Tape version 4 network events: one line per event, as the
+//! Tape version 6 network events: one line per event, as the
 //! file events, with hex strings and bytes, canonical socket addresses and named errors.
 use super::*;
 use crate::io::{Completion, Request};
@@ -215,9 +215,14 @@ fn which(w: TimeoutKind) -> &'static str {
 pub(crate) fn render_request(request: &Request) -> String {
     use Request as R;
     match request {
-        R::TestNet { test, peers } => format!(
-            "test_net {test} {}",
-            hex(&hirsel_run_config::encode_net_peers(peers))
+        R::TestNet {
+            test,
+            peers,
+            listeners,
+        } => format!(
+            "test_net {test} {} {}",
+            hex(&hirsel_run_config::encode_net_peers(peers)),
+            hex(&hirsel_run_config::encode_net_listeners(listeners))
         ),
         R::NetNarrow { net, rules: r } => format!("net_narrow {net} {}", rules(r)),
         R::Resolve { net, host, port } => format!("resolve {net} {} {port}", hex(host.as_bytes())),
@@ -292,9 +297,11 @@ pub(crate) fn render_completion(completion: &Completion) -> String {
 pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
     use Request as R;
     Ok(Some(match words {
-        ["test_net", test, peers] => R::TestNet {
+        ["test_net", test, peers, listeners] => R::TestNet {
             test: number(test)?,
             peers: hirsel_run_config::decode_net_peers(&unhex(peers)?)
+                .map_err(|e| e.to_string())?,
+            listeners: hirsel_run_config::decode_net_listeners(&unhex(listeners)?)
                 .map_err(|e| e.to_string())?,
         },
         ["net_narrow", n, r] => R::NetNarrow {

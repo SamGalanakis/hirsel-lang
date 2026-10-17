@@ -172,6 +172,19 @@ impl EngineDispositions {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct RuleCode(pub String);
 
+/// Rules the runtime records itself, inside an export whose row names no rule, at fixed
+/// codes: `RUNTIME_RULE_BASE + i` is `RUNTIME_RULES[i]`. Per-program codes stay below it.
+pub const RUNTIME_RULE_BASE: u32 = 1 << 31;
+pub const RUNTIME_RULES: [&str; 2] = ["CAP-2", "LANG-9"];
+
+/// The fixed runtime code of `rule`, if the runtime may record it.
+pub fn runtime_rule_code(rule: &str) -> Option<u32> {
+    RUNTIME_RULES
+        .iter()
+        .position(|r| *r == rule)
+        .map(|i| RUNTIME_RULE_BASE + i as u32)
+}
+
 /// One manifest row per registry operation.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct OperationRow {

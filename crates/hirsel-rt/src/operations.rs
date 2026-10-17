@@ -201,6 +201,14 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
     {
         row.failure = Some(hirsel_core_contract::RuleCode("CAP-2".into()));
     }
+    // A scripted client's unmet Expect fails these LANG-9, so the runtime records
+    // their failures itself (`hirsel_core_contract::RUNTIME_RULES`).
+    if matches!(
+        name.as_str(),
+        "net.write" | "net.write_all" | "net.close" | "tls.close"
+    ) {
+        row.failure = None;
+    }
     if matches!(
         name.as_str(),
         "test.check" | "test.check_case" | "test.fail"
@@ -627,7 +635,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_test_net",
         destination: true,
         result: Some((8, 8)),
-        parameters: &[Physical::Pointer, Physical::Pointer],
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_io_dir",

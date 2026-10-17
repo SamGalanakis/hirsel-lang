@@ -249,6 +249,10 @@ operation_boundary! {
     fn take_releases(&mut self) -> Vec<Value> {
         vec![]
     }
+    /// The rule and kind of a language failure the last handle drop raised.
+    fn take_drop_failure(&mut self) -> Option<(String, String)> {
+        None
+    }
     fn take_tasks(&mut self) -> Vec<TaskStart> {
         vec![]
     }

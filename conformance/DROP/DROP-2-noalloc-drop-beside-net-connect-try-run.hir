@@ -22,7 +22,8 @@ fn scripted(t: Test, address: String) -> Net {
         tls: Plain(),
         connections: [Open([])]
       )
-    ]
+    ],
+    []
   )
 }
 
