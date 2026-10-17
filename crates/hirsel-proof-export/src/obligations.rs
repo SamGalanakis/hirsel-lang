@@ -142,6 +142,7 @@ snapshot_struct!(Obligation {
 pub(crate) struct Table {
     pub obligations: Vec<(ObligationId, Vec<Site>, Detail)>,
     pub callees: BTreeSet<DefPath>,
+    projected: BTreeMap<ObligationId, (BodyId, PlaceId)>,
 }
 
 fn function(signature: Option<&Signature>) -> Option<&hirsel_types::FunctionType> {
@@ -353,6 +354,10 @@ pub(crate) fn table<'a>(
             .collect::<Vec<_>>()
     };
     let mut obligations = clause_obligations(ContractKind::Requires, ObligationKind::Requires);
+    let projected = builder.places.iter().map(|((body, root, projection, _), index)| {
+        let place = definition.bodies[*body].places.iter().position(|p| p.root == *root && p.projection.as_ref() == projection.as_slice()).expect("an inventoried place");
+        (builder.obligations[*index].0.clone(), (BodyId(*body as u32), PlaceId(place as u32)))
+    }).collect();
     obligations.extend(builder.obligations);
     obligations.extend(clause_obligations(
         ContractKind::Ensures,
@@ -361,6 +366,7 @@ pub(crate) fn table<'a>(
     Table {
         obligations,
         callees,
+        projected,
     }
 }
 
@@ -535,4 +541,11 @@ fn terminator_places(terminator: &Terminator) -> Vec<PlaceId> {
         | Terminator::Fail { .. }
         | Terminator::Unreachable => vec![],
     }
+}
+
+/// The canonical place of a MEM-13/14 obligation: the first PlaceId with
+/// its (body, root, projection), ignoring bindings and loans, as PS-2 does.
+/// This reuses the obligation traversal; no export or identity changes.
+pub fn projected_place(definition: &Definition, id: &ObligationId) -> Option<(BodyId, PlaceId)> {
+    table(definition, |_| None).projected.get(id).copied()
 }

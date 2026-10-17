@@ -8,7 +8,7 @@ mod obligations;
 pub mod sidecar;
 pub mod wire;
 
-pub use obligations::{Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition};
+pub use obligations::{Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition, projected_place};
 pub use wire::{Cx, Locator};
 
 use hirsel_codec::{DecodeError, Observe, Reader, Snapshot, Writer, line_column, snapshot_struct};
