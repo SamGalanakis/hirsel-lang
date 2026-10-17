@@ -513,12 +513,22 @@ pub fn replay_history(
     let toolchain =
         hirsel_driver::native::Toolchain::for_matrix(&native::runtime_cache()?, &matrix)
             .map_err(|e| e.to_string())?;
-    let results = native::run_cases(
+    // Each case names itself as it finishes, so a shard stopped by its pool
+    // timeout still shows which sources it completed and how long each took.
+    let results = native::run_cases_with(
         &cases,
-        &matrix,
-        &toolchain,
         &native::scratch("history-replay")?,
         4,
+        |case, dir| {
+            let started = std::time::Instant::now();
+            let result = case.run(&matrix, &toolchain, dir);
+            eprintln!(
+                "native-select: history {} {:.1}s",
+                case.id,
+                started.elapsed().as_secs_f64()
+            );
+            result
+        },
     );
     let exclusions = native::read_exclusions(root)?;
     let findings = |result: &native::CaseResult| -> BTreeSet<_> {

@@ -21,7 +21,7 @@ ADD = 'conformance/SEM/SEM-1-signed-add-fail.hir'
 # observable resource finalizers, rather than merely leaking a copyable list.
 COUNT = 'conformance/DROP/DROP-2-map-replaced-value.hir'
 sys.path.insert(0, str(ROOT / 'tools/buck2'))
-from gating import PASS, test_results  # noqa: E402
+from gating import PASS, TIMEOUT, test_results  # noqa: E402
 from sync import NATIVE_FULL_SHARDS  # noqa: E402
 PLANTS = [
     ('aarch64-add', ADD, 'crates/hirsel-llvm/src/emit.rs',
@@ -49,8 +49,9 @@ PLANTS = [
 def pool(targets, config, arguments, output):
     output.mkdir(parents=True, exist_ok=True)
     events = output / 'events.pb.zst'
+    # The full gate's own per-test budget, not the pool's shorter default.
     command = [str(BUCK), 'test', *config, '--event-log', str(events), *targets,
-               '--', *['--test-arg=' + arg for arg in arguments]]
+               '--', '--timeout', str(TIMEOUT), *['--test-arg=' + arg for arg in arguments]]
     with (output / 'run.log').open('w') as log:
         subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
     results = test_results(events)
