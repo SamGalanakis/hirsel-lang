@@ -240,6 +240,11 @@ AGREE_NATIVE_FULL_TIMEOUT = 3600
 # under its Buck2 timeout; gate-native-full stays whole for --bless and for a
 # lane's filtered run.
 NATIVE_FULL_SHARDS = 8
+# The historical replay (tools/native-plants.py --history-only) runs every
+# protected source under the exhaustive matrix at one CPU; single sources take
+# up to 15 minutes, so 32 path-hash shards keep each under the gate's budget.
+# 32 refines 8: an 8-way shard is the union of four 32-way shards.
+HISTORY_SHARDS = 32
 GATE_TESTS = [
     *(dict(name=f"gate-conformance-shard-{index}", binary="//:hirsel-conformance-bin-hirsel-conformance",
            args=["--check-format", "--shard", f"{index}/{CONFORMANCE_SHARDS}"], **GATE)
@@ -265,9 +270,9 @@ GATE_TESTS = [
            runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
       for index in range(1, NATIVE_FULL_SHARDS + 1)),
     *(dict(name=f"gate-native-history-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native-select",
-           args=["--replay-history", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
+           args=["--replay-history", "--shard", f"{index}/{HISTORY_SHARDS}"], release=True,
            runtime_archives=RUNTIME_ARCHIVES, **GATE)
-      for index in range(1, NATIVE_FULL_SHARDS + 1)),
+      for index in range(1, HISTORY_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",

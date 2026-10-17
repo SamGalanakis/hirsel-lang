@@ -22,7 +22,7 @@ ADD = 'conformance/SEM/SEM-1-signed-add-fail.hir'
 COUNT = 'conformance/DROP/DROP-2-map-replaced-value.hir'
 sys.path.insert(0, str(ROOT / 'tools/buck2'))
 from gating import PASS, TIMEOUT, test_results  # noqa: E402
-from sync import NATIVE_FULL_SHARDS  # noqa: E402
+from sync import HISTORY_SHARDS  # noqa: E402
 PLANTS = [
     ('aarch64-add', ADD, 'crates/hirsel-llvm/src/emit.rs',
      'scalar::binary(&self.builder, op, kind, l, r, &mut guard)',
@@ -100,7 +100,7 @@ def matrix(config, program, output, exhaustive):
 
 def replay(args, selected, output, config):
     if args.history_only:
-        targets = [f'//:gate-native-history-shard-{index}' for index in range(1, NATIVE_FULL_SHARDS + 1)]
+        targets = [f'//:gate-native-history-shard-{index}' for index in range(1, HISTORY_SHARDS + 1)]
         results = pool(targets, config, [], output)
         reports = [report(result['details'], 'historical_programs') for result in results.values()]
         total = reports[0]['historical_programs']
