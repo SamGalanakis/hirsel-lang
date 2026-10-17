@@ -111,6 +111,8 @@ at each stage and H against the interpreter, and keeps the declined twins.
   check cannot fail, and later operand reads of those places reuse
   them while their slot keeps that version (FACT-3). Such facts flow only along
   single-predecessor TIR edges, so the preparing point dominates every reuse.
+  A pattern tag already proved at the current version is not tested again,
+  avoiding infeasible edges that would restore absent payload fields.
   A temporary assigned views of places under loans on
   several paths is a joined view: an SSA value carried on edges and joined
   into a borrowed block parameter declaring the least of its loans, never

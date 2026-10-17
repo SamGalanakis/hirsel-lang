@@ -1,0 +1,16 @@
+// rule: DROP-2
+// expect: run
+// entry: trial
+fn can_open(d: Dir, p: Path) -> Result[bool, ()] {
+  match file.open(d, p) {
+    Ok(f) => Ok(true),
+    Error(NotGranted()) => Ok(false),
+    Error(_) => Error(()),
+  }
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let d = test.dir(t, [(path.of("a"), b"")])
+  test.check(t, can_open(d, path.of("a"))? == true)
+  Ok(())
+}

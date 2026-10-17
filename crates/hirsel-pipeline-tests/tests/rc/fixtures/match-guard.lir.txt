@@ -99,47 +99,46 @@ unit area params (v0)
     branch v15 b6 b3
   b3 Body:
     EndScope { scope: ScopeId(2) }
-    v16 = read Bits a1 @v2
-    switch v16 [0 => b18, 1 => b17] else b13
-  b4 Body(v17):
+    jump b5(v2)
+  b4 Body(v16):
     BindFields { source: AddressId(1), fields: 0..+2 }
     StorageLive { slot: SlotId(12) }
     prepare a11 fail MEM-13 -> b16
-    v18 = read Take a11 @v17
-    a12 := v18 as v19
+    v17 = read Take a11 @v16
+    a12 := v17 as v18
     BindOrigin { source: AddressId(12), place: AddressId(12), kind: Alias }
     StorageLive { slot: SlotId(13) }
     prepare a13 fail MEM-13 -> b16
-    v20 = read Take a13 @v17
-    a14 := v20 as v21
+    v19 = read Take a13 @v16
+    a14 := v19 as v20
     BindOrigin { source: AddressId(14), place: AddressId(14), kind: Alias }
     StorageLive { slot: SlotId(14) }
-    v22 = read Bits a12 @v19
-    a15 := v22 as v23
+    v21 = read Bits a12 @v18
+    a15 := v21 as v22
     StorageLive { slot: SlotId(15) }
-    v24 = read Bits a14 @v21
-    a16 := v24 as v25
+    v23 = read Bits a14 @v20
+    a16 := v23 as v24
     StorageLive { slot: SlotId(16) }
-    v26 = read Take a15 @v23
-    v27 = read Take a16 @v25
-    v28 = Mul v26 v27 fail SEM-1 -> b16
-    a17 := v28 as v29
+    v25 = read Take a15 @v22
+    v26 = read Take a16 @v24
+    v27 = Mul v25 v26 fail SEM-1 -> b16
+    a17 := v27 as v28
     BindOrigin { source: AddressId(17), place: AddressId(17), kind: Fresh }
-    v30 = read Take a17 @v29
-    a18 := v30 as v31
+    v29 = read Take a17 @v28
+    a18 := v29 as v30
     EndScope { scope: ScopeId(4) }
-    jump b8(v17, v31)
-  b5 Body(v32):
+    jump b8(v16, v30)
+  b5 Body(v31):
     BindFields { source: AddressId(1), fields: 2..+1 }
     StorageLive { slot: SlotId(11) }
     prepare a20 fail MEM-13 -> b16
-    v33 = read Take a20 @v32
-    a21 := v33 as v34
+    v32 = read Take a20 @v31
+    a21 := v32 as v33
     BindOrigin { source: AddressId(21), place: AddressId(21), kind: Alias }
-    v35 = read Bits a21 @v34
-    a18 := v35 as v36
+    v34 = read Bits a21 @v33
+    a18 := v34 as v35
     EndScope { scope: ScopeId(3) }
-    jump b8(v32, v36)
+    jump b8(v31, v35)
   b6 Body:
     EndScope { scope: ScopeId(2) }
     jump b7
@@ -147,34 +146,34 @@ unit area params (v0)
     prepare a22 fail MEM-13 -> b16
     BindFields { source: AddressId(1), fields: 3..+1 }
     StorageLive { slot: SlotId(7) }
-    v37 = read Take a22 @v2
-    a23 := v37 as v38
+    v36 = read Take a22 @v2
+    a23 := v36 as v37
     BindOrigin { source: AddressId(23), place: AddressId(23), kind: Alias }
     StorageLive { slot: SlotId(8) }
-    v39 = read Bits a23 @v38
-    a24 := v39 as v40
+    v38 = read Bits a23 @v37
+    a24 := v38 as v39
     StorageLive { slot: SlotId(9) }
-    v41 = read Bits a23 @v38
-    a25 := v41 as v42
+    v40 = read Bits a23 @v37
+    a25 := v40 as v41
     StorageLive { slot: SlotId(10) }
-    v43 = read Take a24 @v40
-    v44 = read Take a25 @v42
-    v45 = Mul v43 v44 fail SEM-1 -> b16
-    a26 := v45 as v46
+    v42 = read Take a24 @v39
+    v43 = read Take a25 @v41
+    v44 = Mul v42 v43 fail SEM-1 -> b16
+    a26 := v44 as v45
     BindOrigin { source: AddressId(26), place: AddressId(26), kind: Fresh }
-    v47 = read Take a26 @v46
-    a18 := v47 as v48
+    v46 = read Take a26 @v45
+    a18 := v46 as v47
     EndScope { scope: ScopeId(2) }
-    jump b8(v2, v48)
-  b8 Body(v49, v50):
+    jump b8(v2, v47)
+  b8 Body(v48, v49):
     BindOrigin { source: AddressId(18), place: AddressId(18), kind: Fresh }
     StorageLive { slot: SlotId(17) }
-    v51 = read Take a18 @v50
-    a27 := v51 as v52
+    v50 = read Take a18 @v49
+    a27 := v50 as v51
     EndScope { scope: ScopeId(1) }
     BindOrigin { source: AddressId(27), place: AddressId(27), kind: Fresh }
-    v53 = read Take a27 @v52
-    return v53
+    v52 = read Take a27 @v51
+    return v52
   b9 Body:
     jump b1
   b10 FailureCleanup:
@@ -192,10 +191,6 @@ unit area params (v0)
     jump b5(v2)
   b16 FailureCleanup:
     propagate
-  b17 Body:
-    jump b4(v2)
-  b18 Body:
-    jump b5(v2)
 
 unit main params 
   slot s0: Temporary scope 1 ty t0

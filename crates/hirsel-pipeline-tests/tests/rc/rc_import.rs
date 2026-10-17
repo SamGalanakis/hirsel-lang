@@ -121,9 +121,9 @@ fn match_tables_become_ordered_switches_with_guard_continuations() {
         .iter()
         .filter(|t| matches!(t, hirsel_lir::ir::Terminator::Switch { .. }))
         .count();
-    // One tag test per tested arm, the last arm being exhaustive: arms 0 and
-    // 1 from the start, and arm 1 again after the guard of arm 0 fails.
-    assert_eq!(switches, 3, "{}", dump(area));
+    // Arms 0 and 1 are tested from the start. After arm 0's guard fails,
+    // its tag is still proved: arm 1 enters without another switch or fallback.
+    assert_eq!(switches, 2, "{}", dump(area));
 }
 
 /// A match arm's fields are prepared once, in the block that binds them, where the

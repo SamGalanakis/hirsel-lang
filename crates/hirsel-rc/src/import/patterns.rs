@@ -11,6 +11,25 @@ impl Importer<'_, '_> {
             return malformed("a match continuation with no arms");
         };
         for arm in tested {
+            let proven = if irrefutable(m, arm.pattern) {
+                true
+            } else if let tir::MatchPatternKind::Variant {
+                variant, fields, ..
+            } = &m.patterns[arm.pattern.0 as usize].kind
+                && fields.iter().all(|(_, sub)| irrefutable(m, *sub))
+            {
+                let p = self.place(m.patterns[arm.pattern.0 as usize].place)?;
+                self.proven_variant(&p) == Some(*variant)
+            } else {
+                false
+            };
+            if proven {
+                // A failed guard resumes through its own TIR continuation.
+                // No pattern-failure block is reachable from this arm.
+                let edge = self.enter(arm.guard.unwrap_or(arm.target));
+                self.terminate(Terminator::Jump(edge));
+                return Ok(());
+            }
             let next = self.block(BlockKind::Body);
             // `next` holds what held before the test, and when only the tag
             // test of a variant pattern can fail, that it holds another variant.
@@ -156,6 +175,11 @@ impl Importer<'_, '_> {
     /// variant is read through a synthetic loan ended on every arm.
     pub(super) fn tag(&mut self, place: tir::PlaceId, variant: u32, fail: BlockId) -> R<()> {
         let p = self.place(place)?;
+        // Earlier arms may already have proved this tag at the current
+        // version. Retesting it would introduce infeasible variant edges.
+        if self.proven_variant(&p) == Some(variant) {
+            return Ok(());
+        }
         let address = self.address(&p)?;
         let reaching = self.reaching(p.slot)?;
         let variants: Vec<u32> = match &self.record(p.ty).tag {

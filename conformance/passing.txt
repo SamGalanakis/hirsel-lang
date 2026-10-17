@@ -483,6 +483,7 @@ conformance/DROP/DROP-2-loop-break.hir
 conformance/DROP/DROP-2-loop-continue.hir
 conformance/DROP/DROP-2-map-cursor-empty-join-run.hir
 conformance/DROP/DROP-2-map-replaced-value.hir
+conformance/DROP/DROP-2-match-resource-binder-drop-run.hir
 conformance/DROP/DROP-2-move-argument.hir
 conformance/DROP/DROP-2-move-binding.hir
 conformance/DROP/DROP-2-moved-storage-failure-mixed.hir
