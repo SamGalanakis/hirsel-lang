@@ -312,8 +312,11 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let opt = t.variant(&[&[], &[i64_]]);
     let arr = t.inline(i64_, 4);
     let wire_path = wire_owner(&mut schema.owners);
-    let wire = schema.types.named(&wire_path);
-    let callback = schema.types.function(&[(Borrow, i64_)], i64_);
+    let wire = schema.types.named(&wire_path, Vec::new());
+    let callback =
+        schema
+            .types
+            .function(&[(Borrow, i64_)], i64_, hirsel_types::Multiplicity::Many, 0);
     schema.name("pair", pair);
     schema.name("opt", opt);
     schema.name("arr", arr);

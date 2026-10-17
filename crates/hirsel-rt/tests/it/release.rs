@@ -697,14 +697,14 @@ mod schema_release {
         let res = nominal(&mut owners, "Res", finalized, |t| {
             let (u, f) = (t.p(U64), t.p(F64));
             let a = t.boxed(u);
-            let s = t.named(&socket);
+            let s = t.named(&socket, Vec::new());
             let b = t.boxed(f);
             t.record(&[a, s, b])
         });
         let rec = nominal(&mut owners, "Rec", Nominal::default(), |t| {
             let u = t.p(U64);
             let a = t.boxed(u);
-            let r = t.named(&res);
+            let r = t.named(&res, Vec::new());
             let three = t.inline(a, 3);
             let opt = t.variant(&[&[], &[a, r], &[three]]);
             let name = t.p(Str);
@@ -714,7 +714,7 @@ mod schema_release {
             let u = t.p(U64);
             let a = t.boxed(u);
             let two = t.inline(a, 2);
-            let r = t.named(&res);
+            let r = t.named(&res, Vec::new());
             t.record(&[two, r])
         });
         let particle = nominal(
@@ -735,17 +735,17 @@ mod schema_release {
         let res_enum = nominal(&mut owners, "ResEnum", finalized, |t| {
             let u = t.p(U64);
             let a = t.boxed(u);
-            let r = t.named(&res);
+            let r = t.named(&res, Vec::new());
             t.variant(&[&[a], &[r], &[]])
         });
         let mut t = Ty::default();
         let (u, r, rc, pr, pa, re) = (
             t.p(U64),
-            t.named(&res),
-            t.named(&rec),
-            t.named(&pair),
-            t.named(&particle),
-            t.named(&res_enum),
+            t.named(&res, Vec::new()),
+            t.named(&rec, Vec::new()),
+            t.named(&pair, Vec::new()),
+            t.named(&particle, Vec::new()),
+            t.named(&res_enum, Vec::new()),
         );
         let leaf = t.boxed(u);
         let grid = t.inline(r, 2);
@@ -874,12 +874,12 @@ mod schema_release {
         let mut owners = Owners::default();
         let chain = support::schema::path("Chain");
         nominal(&mut owners, "Chain", Nominal::default(), |t| {
-            let next = t.named(&chain);
+            let next = t.named(&chain, Vec::new());
             let next = t.boxed(next);
             t.variant(&[&[], &[next]])
         });
         let mut t = Ty::default();
-        let named = t.named(&chain);
+        let named = t.named(&chain, Vec::new());
         let boxed = t.boxed(named);
         let (d, ids) = derive(&owners, &t.store, &[boxed]);
         let payload = d.payload(ids[0]);

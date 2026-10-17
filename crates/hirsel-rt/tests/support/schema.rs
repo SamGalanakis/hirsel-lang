@@ -16,10 +16,7 @@ use hirsel_lir::rt_program::{self, Descriptor, StepKind};
 use hirsel_rt::{Config, Header, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, RunCtx, Step};
 use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
 use hirsel_tir::{BodyId, RepresentationRecord};
-use hirsel_types::{
-    BuiltinType, Field, GenericArgument, Layout as Promises, Primitive, Size, Type, TypeId,
-    TypeKind, TypeStore, Variant,
-};
+use hirsel_types::{Layout as Promises, TypeId, TypeStore};
 
 use super::{Ctx, leak};
 
@@ -34,72 +31,7 @@ pub fn path(name: &str) -> DefPath {
     })
 }
 
-/// A hand-built type store.
-#[derive(Default)]
-pub struct Ty {
-    pub store: TypeStore,
-}
-
-impl Ty {
-    pub fn add(&mut self, kind: TypeKind) -> TypeId {
-        self.store.push(Type::with_kind(kind))
-    }
-    pub fn p(&mut self, p: Primitive) -> TypeId {
-        self.add(TypeKind::Primitive(p))
-    }
-    pub fn record(&mut self, fields: &[TypeId]) -> TypeId {
-        self.add(TypeKind::Record(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, &ty)| Field {
-                    growable: false,
-                    name: format!("f{i}"),
-                    ty,
-                })
-                .collect(),
-        ))
-    }
-    pub fn variant(&mut self, variants: &[&[TypeId]]) -> TypeId {
-        self.add(TypeKind::Variant(
-            variants
-                .iter()
-                .enumerate()
-                .map(|(i, fields)| Variant {
-                    name: format!("V{i}"),
-                    fields: fields.iter().map(|&t| (None, t)).collect(),
-                })
-                .collect(),
-        ))
-    }
-    pub fn named(&mut self, definition: &DefPath) -> TypeId {
-        self.add(TypeKind::Named {
-            definition: definition.clone(),
-            arguments: Vec::new().into(),
-        })
-    }
-    fn builtin(&mut self, kind: BuiltinType, arguments: Vec<GenericArgument>) -> TypeId {
-        self.add(TypeKind::Builtin {
-            kind,
-            arguments: arguments.into(),
-        })
-    }
-    pub fn list(&mut self, element: TypeId) -> TypeId {
-        self.builtin(BuiltinType::List, vec![GenericArgument::Type(element)])
-    }
-    pub fn inline(&mut self, element: TypeId, n: u64) -> TypeId {
-        self.builtin(
-            BuiltinType::Inline,
-            vec![
-                GenericArgument::Type(element),
-                GenericArgument::Size(Size::Constant(n)),
-            ],
-        )
-    }
-    pub fn boxed(&mut self, inner: TypeId) -> TypeId {
-        self.add(TypeKind::Box(inner))
-    }
-}
+pub use hirsel_types::testing::Types as Ty;
 
 /// How a nominal is represented.
 #[derive(Clone, Copy, Default)]
@@ -607,13 +539,13 @@ pub fn resources(unsafe_ffi: bool) -> Resources {
         |t| {
             let (u, f) = (t.p(U64), t.p(F64));
             let a = t.boxed(u);
-            let s = t.named(&socket);
+            let s = t.named(&socket, Vec::new());
             let b = t.boxed(f);
             t.record(&[a, s, b])
         },
     );
     let mut t = Ty::default();
-    let r = t.named(&res);
+    let r = t.named(&res, Vec::new());
     let boxed = t.boxed(r);
     let (derived, ids) = derive(&owners, &t.store, &[boxed]);
     Resources {

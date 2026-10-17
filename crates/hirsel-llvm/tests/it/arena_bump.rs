@@ -28,7 +28,7 @@ fn program(target: &TargetSpec) -> Program {
             resource: false,
         },
     );
-    let arena = schema.types.named(&arena_path);
+    let arena = schema.types.named(&arena_path, Vec::new());
     schema.name("arena", arena);
     for (name, primitive) in [("word", Primitive::U64), ("wide", Primitive::U128)] {
         let element = schema.types.p(primitive);
@@ -213,7 +213,7 @@ fn credit_program(target: &TargetSpec, elided: bool, heap_child: bool) -> Progra
             resource: false,
         },
     );
-    let arena = schema.types.named(&arena_path);
+    let arena = schema.types.named(&arena_path, Vec::new());
     schema.name("arena", arena);
     let scalar = schema.types.p(Primitive::U64);
     let leaf = schema.types.boxed(scalar);

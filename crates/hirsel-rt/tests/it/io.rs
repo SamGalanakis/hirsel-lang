@@ -284,7 +284,7 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
         let u64ty = ty.p(Primitive::U64);
         let cancel = ty.variant(&[&[], &[], &[]]);
         let error = ty.variant(&[&[u32ty], &[cancel]]);
-        let file = ty.named(&support::schema::path("File"));
+        let file = ty.named(&support::schema::path("File"), Vec::new());
         let mut owners = Owners::default();
         owners.nominals.insert(
             support::schema::path("File"),
@@ -299,7 +299,10 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
         let unit = ty.variant(&[&[], &[error]]);
         let bytes = ty.p(Primitive::Bytes);
         let bytes_result = ty.variant(&[&[bytes], &[error]]);
-        let path = ty.named(&support::schema::handle(&mut owners, "Path", false));
+        let path = ty.named(
+            &support::schema::handle(&mut owners, "Path", false),
+            Vec::new(),
+        );
         let item = ty.variant(&[&[path], &[error]]);
         let iter = ty.add(hirsel_types::TypeKind::Builtin {
             kind: hirsel_types::BuiltinType::Iter,

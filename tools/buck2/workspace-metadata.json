@@ -833,6 +833,13 @@
         },
         {
           "kind": "dev",
+          "name": "hirsel-types",
+          "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
           "name": "serde_json",
           "req": "^1",
           "uses_default_features": true

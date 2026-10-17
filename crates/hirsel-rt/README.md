@@ -471,3 +471,6 @@ before entry, independently of explicit `set_net_rules` policy.
 oracles. It shares State's network policy and ScriptNet worlds with native
 execution, accepts typed network requests/projection/close, and never calls
 production allocation/count/drop helpers or acquires host network authority.
+
+Type-store test fixtures use `hirsel_types::testing::Types` through the test-only
+`testing` feature; layout derivation and validation remain in this suite.

@@ -23,132 +23,7 @@ fn path(name: &str) -> DefPath {
     })
 }
 
-/// A hand-built type store.
-#[derive(Default)]
-struct Ty {
-    store: TypeStore,
-}
-
-impl Ty {
-    fn add_with(&mut self, kind: TypeKind, modes: Modes) -> TypeId {
-        self.store.push(Type {
-            modes,
-            ..Type::with_kind(kind)
-        })
-    }
-    fn add(&mut self, kind: TypeKind) -> TypeId {
-        self.add_with(kind, Modes::global())
-    }
-    fn p(&mut self, p: Primitive) -> TypeId {
-        self.add(TypeKind::Primitive(p))
-    }
-    fn tuple(&mut self, items: &[TypeId]) -> TypeId {
-        self.add(TypeKind::Tuple(items.to_vec().into()))
-    }
-    fn record(&mut self, fields: &[TypeId]) -> TypeId {
-        self.add(TypeKind::Record(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, &ty)| Field {
-                    growable: false,
-                    name: format!("f{i}"),
-                    ty,
-                })
-                .collect(),
-        ))
-    }
-    fn growable_record(&mut self, fields: &[TypeId]) -> TypeId {
-        let last = fields.len() - 1;
-        self.add(TypeKind::Record(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, &ty)| Field {
-                    growable: i == last,
-                    name: format!("f{i}"),
-                    ty,
-                })
-                .collect(),
-        ))
-    }
-    fn variant(&mut self, variants: &[&[TypeId]]) -> TypeId {
-        self.add(TypeKind::Variant(
-            variants
-                .iter()
-                .enumerate()
-                .map(|(i, fields)| Variant {
-                    name: format!("V{i}"),
-                    fields: fields.iter().map(|&t| (None, t)).collect(),
-                })
-                .collect(),
-        ))
-    }
-    fn named(&mut self, definition: &DefPath, arguments: Vec<GenericArgument>) -> TypeId {
-        self.add(TypeKind::Named {
-            definition: definition.clone(),
-            arguments: arguments.into(),
-        })
-    }
-    fn builtin(&mut self, kind: BuiltinType, arguments: Vec<GenericArgument>) -> TypeId {
-        self.add(TypeKind::Builtin {
-            kind,
-            arguments: arguments.into(),
-        })
-    }
-    fn list(&mut self, element: TypeId) -> TypeId {
-        self.builtin(BuiltinType::List, vec![GenericArgument::Type(element)])
-    }
-    fn inline(&mut self, element: TypeId, n: u64) -> TypeId {
-        self.builtin(
-            BuiltinType::Inline,
-            vec![
-                GenericArgument::Type(element),
-                GenericArgument::Size(Size::Constant(n)),
-            ],
-        )
-    }
-    fn boxed(&mut self, inner: TypeId) -> TypeId {
-        self.add(TypeKind::Box(inner))
-    }
-    fn param(&mut self, i: u32) -> TypeId {
-        self.add(TypeKind::Parameter(BinderRef::bound(TypeParamId(i))))
-    }
-    fn function(
-        &mut self,
-        parameters: &[(PassingMode, TypeId)],
-        result: TypeId,
-        m: Multiplicity,
-    ) -> TypeId {
-        self.add_with(
-            TypeKind::Function(FunctionType {
-                state_promises: Default::default(),
-                generics: Vec::new().into(),
-                parameters: parameters
-                    .iter()
-                    .map(|&(passing, ty)| Parameter {
-                        name: None,
-                        label: None,
-                        passing,
-                        ty,
-                    })
-                    .collect(),
-                result,
-                error: None,
-                allocation: Allocation::MayAllocate,
-                authority: AuthoritySummary::inert(),
-                uses: Uses::Unrestricted,
-                contracts: Vec::new().into(),
-                incomplete: false,
-                foreign: None,
-            }),
-            Modes {
-                multiplicity: m,
-                ..Modes::global()
-            },
-        )
-    }
-}
+use hirsel_types::testing::Types as Ty;
 
 #[derive(Default)]
 struct OwnerSpec {
@@ -1208,7 +1083,7 @@ fn closure_and_iterator_environments_carry_captures_and_sizes() {
     assert_eq!(b.environment(&shape(&[4])).unwrap(), env);
     let many = b.closure(env, hirsel_lir::abi_types::CallMultiplicity::Many);
     let once = b.closure(env, hirsel_lir::abi_types::CallMultiplicity::Once);
-    let f = t.function(&[(PassingMode::Borrow, i64_)], i64_, Multiplicity::Many);
+    let f = t.function(&[(PassingMode::Borrow, i64_)], i64_, Multiplicity::Many, 0);
     let erased = b.layout(&t.store, f).unwrap();
     let iter = t.builtin(BuiltinType::Iter, vec![GenericArgument::Type(string)]);
     let it = b.layout(&t.store, iter).unwrap();
@@ -1651,7 +1526,7 @@ fn golden_corpus(target: &TargetSpec) -> LayoutTable {
     let inline = t.inline(string, 2);
     let list = t.list(bx);
     let m = t.named(&message, vec![]);
-    let f = t.function(&[(PassingMode::Take, string)], u8_, Multiplicity::Once);
+    let f = t.function(&[(PassingMode::Take, string)], u8_, Multiplicity::Once, 0);
     let iter = t.builtin(BuiltinType::Iter, vec![GenericArgument::Type(u8_)]);
     let all = t.record(&[u8_, i128_, string, bx, v, inline, list, m, f, iter]);
     b.layout(&t.store, all).unwrap();

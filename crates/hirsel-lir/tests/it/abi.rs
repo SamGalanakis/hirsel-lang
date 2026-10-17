@@ -22,87 +22,7 @@ fn path(name: &str) -> DefPath {
     })
 }
 
-#[derive(Default)]
-struct Ty {
-    store: TypeStore,
-}
-
-impl Ty {
-    fn add_with(&mut self, kind: TypeKind, modes: Modes) -> TypeId {
-        self.store.push(Type {
-            modes,
-            ..Type::with_kind(kind)
-        })
-    }
-    fn add(&mut self, kind: TypeKind) -> TypeId {
-        self.add_with(kind, Modes::global())
-    }
-    fn p(&mut self, p: Primitive) -> TypeId {
-        self.add(TypeKind::Primitive(p))
-    }
-    fn record(&mut self, fields: &[TypeId]) -> TypeId {
-        self.add(TypeKind::Record(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, &ty)| Field {
-                    growable: false,
-                    name: format!("f{i}"),
-                    ty,
-                })
-                .collect(),
-        ))
-    }
-    fn named(&mut self, definition: &DefPath) -> TypeId {
-        self.add(TypeKind::Named {
-            definition: definition.clone(),
-            arguments: Vec::new().into(),
-        })
-    }
-    fn function_with(
-        &mut self,
-        parameters: &[(PassingMode, TypeId)],
-        result: TypeId,
-        m: Multiplicity,
-        generics: u32,
-    ) -> TypeId {
-        self.add_with(
-            TypeKind::Function(FunctionType {
-                state_promises: Default::default(),
-                generics: (0..generics)
-                    .map(|i| GenericParameter::Type {
-                        name: format!("T{i}"),
-                        bounds: Vec::new().into(),
-                    })
-                    .collect(),
-                parameters: parameters
-                    .iter()
-                    .map(|&(passing, ty)| Parameter {
-                        name: None,
-                        label: None,
-                        passing,
-                        ty,
-                    })
-                    .collect(),
-                result,
-                error: None,
-                allocation: Allocation::MayAllocate,
-                authority: AuthoritySummary::inert(),
-                uses: Uses::Unrestricted,
-                contracts: Vec::new().into(),
-                incomplete: false,
-                foreign: None,
-            }),
-            Modes {
-                multiplicity: m,
-                ..Modes::global()
-            },
-        )
-    }
-    fn function(&mut self, parameters: &[(PassingMode, TypeId)], result: TypeId) -> TypeId {
-        self.function_with(parameters, result, Multiplicity::Many, 0)
-    }
-}
+use hirsel_types::testing::Types as Ty;
 
 fn owner(
     owners: &mut Owners,
@@ -175,7 +95,7 @@ fn scalars_and_block_references_pass_by_value() {
         t.add(TypeKind::Tuple(Vec::new().into())),
     );
     let bx = t.add(TypeKind::Box(f64_));
-    let callback = t.function(&[(PassingMode::Borrow, i8_)], unit);
+    let callback = t.function(&[(PassingMode::Borrow, i8_)], unit, Multiplicity::Many, 0);
     let iter = t.add(TypeKind::Builtin {
         kind: BuiltinType::Iter,
         arguments: vec![GenericArgument::Type(i8_)].into(),
@@ -194,6 +114,8 @@ fn scalars_and_block_references_pass_by_value() {
             (PassingMode::Borrow, unit),
         ],
         unit,
+        Multiplicity::Many,
+        0,
     );
     let id = b.fn_abi(&t.store, f, CallableShape::Definition).unwrap();
     let table = checked(b);
@@ -274,8 +196,8 @@ fn aggregates_and_nominals_pass_by_address_by_convention() {
     let mut t = Ty::default();
     let (i64_, s) = (t.p(Primitive::I64), t.p(Primitive::String));
     let pair = t.record(&[i64_, s]);
-    let meters = t.named(&path("Meters"));
-    let packet = t.named(&path("Packet"));
+    let meters = t.named(&path("Meters"), Vec::new());
+    let packet = t.named(&path("Packet"), Vec::new());
     let f = t.function(
         &[
             (PassingMode::Borrow, pair),
@@ -287,9 +209,11 @@ fn aggregates_and_nominals_pass_by_address_by_convention() {
             (PassingMode::Take, packet),
         ],
         pair,
+        Multiplicity::Many,
+        0,
     );
-    let scalar_result = t.function(&[], i64_);
-    let named_result = t.function(&[], meters);
+    let scalar_result = t.function(&[], i64_, Multiplicity::Many, 0);
+    let named_result = t.function(&[], meters, Multiplicity::Many, 0);
     let id = b.fn_abi(&t.store, f, CallableShape::Definition).unwrap();
     let sid = b
         .fn_abi(&t.store, scalar_result, CallableShape::Definition)
@@ -344,9 +268,9 @@ fn thunks_take_an_environment_and_keep_multiplicity() {
         t.p(Primitive::I64),
         t.add(TypeKind::Tuple(Vec::new().into())),
     );
-    let many = t.function_with(&[(PassingMode::Borrow, i64_)], i64_, Multiplicity::Many, 0);
-    let once = t.function_with(&[(PassingMode::Borrow, i64_)], i64_, Multiplicity::Once, 0);
-    let generic = t.function_with(&[], unit, Multiplicity::Many, 1);
+    let many = t.function(&[(PassingMode::Borrow, i64_)], i64_, Multiplicity::Many, 0);
+    let once = t.function(&[(PassingMode::Borrow, i64_)], i64_, Multiplicity::Once, 0);
+    let generic = t.function(&[], unit, Multiplicity::Many, 1);
     let def = b.fn_abi(&t.store, many, CallableShape::Definition).unwrap();
     let clo = b.fn_abi(&t.store, many, CallableShape::Closure).unwrap();
     let onc = b.fn_abi(&t.store, once, CallableShape::Closure).unwrap();
@@ -402,9 +326,9 @@ fn relations_never_change_an_fn_abi_but_conventions_do() {
     let s1 = t.add_with(TypeKind::Primitive(Primitive::String), rel(1));
     let r0 = t.record(&[s0]);
     let r1 = t.record(&[s1]);
-    let f0 = t.function(&[(PassingMode::Borrow, r0)], s0);
-    let f1 = t.function(&[(PassingMode::Borrow, r1)], s1);
-    let taken = t.function(&[(PassingMode::Take, r1)], s1);
+    let f0 = t.function(&[(PassingMode::Borrow, r0)], s0, Multiplicity::Many, 0);
+    let f1 = t.function(&[(PassingMode::Borrow, r1)], s1, Multiplicity::Many, 0);
+    let taken = t.function(&[(PassingMode::Take, r1)], s1, Multiplicity::Many, 0);
     let a = b.fn_abi(&t.store, f0, CallableShape::Definition).unwrap();
     assert_eq!(
         b.fn_abi(&t.store, f1, CallableShape::Definition).unwrap(),
@@ -429,12 +353,17 @@ fn signature(padding: usize) -> (Ty, TypeId) {
     for _ in 0..padding {
         t.p(Primitive::Bool);
     }
-    let id = t.named(&path("Id"));
+    let id = t.named(&path("Id"), Vec::new());
     let list = t.add(TypeKind::Builtin {
         kind: BuiltinType::List,
         arguments: vec![GenericArgument::Type(id)].into(),
     });
-    let f = t.function(&[(PassingMode::Borrow, id), (PassingMode::Take, list)], id);
+    let f = t.function(
+        &[(PassingMode::Borrow, id), (PassingMode::Take, list)],
+        id,
+        Multiplicity::Many,
+        0,
+    );
     (t, f)
 }
 
@@ -494,6 +423,8 @@ fn the_validator_rejects_abi_mutations() {
             (PassingMode::Mut, s),
         ],
         s,
+        Multiplicity::Many,
+        0,
     );
     b.fn_abi(&t.store, f, CallableShape::Closure).unwrap();
     let table = checked(b);
@@ -526,7 +457,12 @@ fn direct_capture_parameters_have_no_hidden_environment_or_owned_result_loan() {
     let mut types = Ty::default();
     let scalar = types.p(Primitive::U64);
     let text = types.p(Primitive::String);
-    let callable = types.function(&[(PassingMode::Borrow, scalar)], text);
+    let callable = types.function(
+        &[(PassingMode::Borrow, scalar)],
+        text,
+        Multiplicity::Many,
+        0,
+    );
     let base = builder
         .fn_abi(&types.store, callable, CallableShape::Definition)
         .unwrap();

@@ -448,3 +448,6 @@ share: `LOOP_PROTOCOLS`/`loop_protocols()` (the borrowed-loop protocols and thei
 role of each core operation). The registry declares the operations; these tables
 are the only source of their roles, so check and modes tests read them without the
 driver.
+
+The opt-in `testing` feature exports `testing::Types`, the hand-built type-store
+fixture used by the LIR, LLVM and runtime test suites. It derives no property evidence.

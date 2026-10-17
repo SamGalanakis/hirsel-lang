@@ -17,4 +17,4 @@ llvm-sys = { version = "=211.0.1", default-features = false, features = ["strict
 hirsel-heapcheck = { path = "../hirsel-heapcheck" }
 hirsel-interp = { path = "../hirsel-interp" }
 hirsel-tir = { path = "../hirsel-tir" }
-hirsel-types = { path = "../hirsel-types" }
+hirsel-types = { path = "../hirsel-types", features = ["testing"] }

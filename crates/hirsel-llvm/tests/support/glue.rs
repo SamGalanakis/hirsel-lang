@@ -120,7 +120,7 @@ pub fn corpus(target: &TargetSpec) -> Corpus {
     let socket = path("Socket");
     let res = nominal(owners, "Res", true, false, |t| {
         let (u, f) = (t.p(U64), t.p(F64));
-        let (a, s, b) = (t.boxed(u), t.named(&socket), t.boxed(f));
+        let (a, s, b) = (t.boxed(u), t.named(&socket, Vec::new()), t.boxed(f));
         t.record(&[a, s, b])
     });
     let particle = nominal(owners, "Particle", false, true, |t| {
@@ -131,53 +131,53 @@ pub fn corpus(target: &TargetSpec) -> Corpus {
     });
     let chain = path("Chain");
     nominal(owners, "Chain", false, false, |t| {
-        let (i, next) = (t.p(I64), t.named(&chain));
+        let (i, next) = (t.p(I64), t.named(&chain, Vec::new()));
         let next = t.boxed(next);
         t.variant(&[&[], &[i, next]])
     });
     let tree = path("Tree");
     nominal(owners, "Tree", false, false, |t| {
-        let node = t.named(&tree);
+        let node = t.named(&tree, Vec::new());
         let child = t.boxed(node);
         t.variant(&[&[], &[child, child]])
     });
     let rose = path("Rose");
     nominal(owners, "Rose", false, false, |t| {
-        let (u, r) = (t.p(U64), t.named(&rose));
+        let (u, r) = (t.p(U64), t.named(&rose, Vec::new()));
         let kids = t.list(r);
         t.record(&[u, kids])
     });
     // The rc-trace object shape: a block of 0 to 3 counted fields, or one resource.
     let obj = path("Obj");
     nominal(owners, "Obj", false, false, |t| {
-        let (o, r) = (t.named(&obj), t.named(&res));
+        let (o, r) = (t.named(&obj, Vec::new()), t.named(&res, Vec::new()));
         let (o, r) = (t.boxed(o), t.boxed(r));
         t.variant(&[&[], &[o], &[o, o], &[o, o, o], &[r]])
     });
     let t = &mut schema.types;
-    let opaque_leaf = t.named(&opaque_leaf);
+    let opaque_leaf = t.named(&opaque_leaf, Vec::new());
     schema.named.push(("opaque_leaf", opaque_leaf));
     let (u64_, i64_) = (t.p(U64), t.p(I64));
     let leaf = t.boxed(u64_);
-    let r = t.named(&res);
+    let r = t.named(&res, Vec::new());
     let box_res = t.boxed(r);
     let three = t.inline(leaf, 3);
     let opt = t.variant(&[&[], &[leaf, box_res], &[three]]);
     let string = t.p(Primitive::String);
     let rec = t.record(&[leaf, string, box_res, three, opt]);
-    let fun = t.function(&[(Borrow, i64_)], i64_);
+    let fun = t.function(&[(Borrow, i64_)], i64_, hirsel_types::Multiplicity::Many, 0);
     let inner = t.record(&[r, leaf]);
     let box_inner = t.boxed(inner);
     let wide = t.inline(leaf, 6);
     let wide = t.inline(wide, 5);
     let niche = t.variant(&[&[leaf, leaf], &[]]);
     let (chain, tree, rose, obj, particle, socket) = (
-        t.named(&chain),
-        t.named(&tree),
-        t.named(&rose),
-        t.named(&obj),
-        t.named(&particle),
-        t.named(&socket),
+        t.named(&chain, Vec::new()),
+        t.named(&tree, Vec::new()),
+        t.named(&rose, Vec::new()),
+        t.named(&obj, Vec::new()),
+        t.named(&particle, Vec::new()),
+        t.named(&socket, Vec::new()),
     );
     let particles = t.list(particle);
     let held = t.record(&[socket, leaf, fun]);
@@ -254,11 +254,11 @@ pub fn binarytrees_corpus(target: &TargetSpec) -> Corpus {
     let mut schema = Schema::new();
     let tree_path = path("Tree");
     nominal(&mut schema.owners, "Tree", false, false, |t| {
-        let tree = t.named(&tree_path);
+        let tree = t.named(&tree_path, Vec::new());
         let child = t.boxed(tree);
         t.variant(&[&[], &[child, child]])
     });
-    let tree = schema.types.named(&tree_path);
+    let tree = schema.types.named(&tree_path, Vec::new());
     let tree = schema.types.boxed(tree);
     let i64_ = schema.types.p(Primitive::I64);
     schema.name("tree", tree);

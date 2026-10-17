@@ -14,5 +14,6 @@ hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types" }
 
 [dev-dependencies]
+hirsel-types = { path = "../hirsel-types", features = ["testing"] }
 hirsel-diag = { path = "../hirsel-diag" }
 serde_json = "1"

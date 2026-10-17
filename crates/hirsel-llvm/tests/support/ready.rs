@@ -325,7 +325,7 @@ fn chain_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
     let definition = path("Chain");
     let mut t = Types::default();
     let i64_ = t.p(Primitive::I64);
-    let own = t.named(&definition);
+    let own = t.named(&definition, Vec::new());
     let link = t.boxed(own);
     let shape = t.variant(&[&[], &[i64_, link]]);
     owners.nominals.insert(
@@ -436,7 +436,7 @@ fn item_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
 /// `flat type Items { items: List[Item] }`.
 fn items_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
     flat_owner(owners, "Items", |t| {
-        let item = t.named(&path("Item"));
+        let item = t.named(&path("Item"), Vec::new());
         vec![t.list(item)]
     })
 }
@@ -451,7 +451,7 @@ fn point_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
 /// `flat type Outer { item: Item, k: i64 }`: a variable flat record inside another.
 fn outer_owner(owners: &mut hirsel_lir::layout::Owners) -> DefPath {
     flat_owner(owners, "Outer", |t| {
-        vec![t.named(&path("Item")), t.p(Primitive::I64)]
+        vec![t.named(&path("Item"), Vec::new()), t.p(Primitive::I64)]
     })
 }
 
@@ -474,7 +474,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let i64_ = t.p(Primitive::I64);
     let rec1 = t.record(&[i64_]);
     let box_rec1 = t.boxed(rec1);
-    let fun = t.function(&[(Borrow, i64_)], i64_);
+    let fun = t.function(&[(Borrow, i64_)], i64_, hirsel_types::Multiplicity::Many, 0);
     let box_fun = t.boxed(fun);
     let box_i64 = schema.types.boxed(i64_);
     schema.name("box_i64", box_i64);
@@ -508,7 +508,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let string = t.p(Primitive::String);
     let chain_path = chain_owner(&mut schema.owners);
     let t = &mut schema.types;
-    let chain = t.named(&chain_path);
+    let chain = t.named(&chain_path, Vec::new());
     let box_chain = t.boxed(chain);
     schema.name("once_fun", once_fun);
     schema.name("box_once", box_once);
@@ -522,14 +522,14 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     schema.name("string", string);
     schema.name("u8", u8_);
     let res_path = resource_owner(&mut schema.owners);
-    let res = schema.types.named(&res_path);
+    let res = schema.types.named(&res_path, Vec::new());
     let box_res = schema.types.boxed(res);
     let unit_ = schema.types.unit();
     schema.name("res", res);
     schema.name("box_res", box_res);
     schema.signature("drop Res", &[(Borrow, res)], unit_);
     let trace_path = trace_owner(&mut schema.owners);
-    let trace = schema.types.named(&trace_path);
+    let trace = schema.types.named(&trace_path, Vec::new());
     let box_trace = schema.types.boxed(trace);
     schema.name("trace", trace);
     schema.name("box_trace", box_trace);
@@ -550,19 +550,19 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let items_path = items_owner(&mut schema.owners);
     let file_path = file_owner(&mut schema.owners);
     let t = &mut schema.types;
-    let item = t.named(&item_path);
-    let items = t.named(&items_path);
+    let item = t.named(&item_path, Vec::new());
+    let items = t.named(&items_path, Vec::new());
     let point_path = point_owner(&mut schema.owners);
     let t = &mut schema.types;
-    let point = t.named(&point_path);
-    let file = t.named(&file_path);
+    let point = t.named(&point_path, Vec::new());
+    let file = t.named(&file_path, Vec::new());
     let held_file = t.record(&[file, box_rec1]);
     // A dynamic flat value is a block reference to its FlatFormatV0 body.
     schema.name("item", item);
     schema.name("items", items);
     schema.name("point", point);
     let outer_path = outer_owner(&mut schema.owners);
-    let outer = schema.types.named(&outer_path);
+    let outer = schema.types.named(&outer_path, Vec::new());
     schema.name("outer", outer);
     let simd4 = schema.types.simd(i64_, 4);
     schema.name("simd4", simd4);

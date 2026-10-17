@@ -72,112 +72,7 @@ pub fn failure_codes() -> FailureCodes {
     FailureCodes { codes }
 }
 
-/// A type store under construction.
-#[derive(Default)]
-pub struct Types {
-    pub store: TypeStore,
-}
-
-impl Types {
-    pub fn add(&mut self, kind: TypeKind) -> TypeId {
-        self.add_with(kind, Modes::global())
-    }
-    pub fn add_with(&mut self, kind: TypeKind, modes: Modes) -> TypeId {
-        self.store.push(Type {
-            modes,
-            ..Type::with_kind(kind)
-        })
-    }
-    pub fn p(&mut self, p: Primitive) -> TypeId {
-        self.add(TypeKind::Primitive(p))
-    }
-    pub fn unit(&mut self) -> TypeId {
-        self.add(TypeKind::Tuple(Vec::new().into()))
-    }
-    pub fn record(&mut self, fields: &[TypeId]) -> TypeId {
-        self.add(TypeKind::Record(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, &ty)| Field {
-                    growable: false,
-                    name: format!("f{i}"),
-                    ty,
-                })
-                .collect(),
-        ))
-    }
-    pub fn variant(&mut self, variants: &[&[TypeId]]) -> TypeId {
-        self.add(TypeKind::Variant(
-            variants
-                .iter()
-                .enumerate()
-                .map(|(i, fields)| Variant {
-                    name: format!("V{i}"),
-                    fields: fields.iter().map(|&t| (None, t)).collect(),
-                })
-                .collect(),
-        ))
-    }
-    pub fn named(&mut self, definition: &DefPath) -> TypeId {
-        self.add(TypeKind::Named {
-            definition: definition.clone(),
-            arguments: Vec::new().into(),
-        })
-    }
-    pub fn inline(&mut self, element: TypeId, n: u64) -> TypeId {
-        self.add(TypeKind::Builtin {
-            kind: BuiltinType::Inline,
-            arguments: vec![
-                GenericArgument::Type(element),
-                GenericArgument::Size(Size::Constant(n)),
-            ]
-            .into(),
-        })
-    }
-    pub fn simd(&mut self, element: TypeId, lanes: u64) -> TypeId {
-        self.add(TypeKind::Builtin {
-            kind: BuiltinType::Simd,
-            arguments: vec![
-                GenericArgument::Type(element),
-                GenericArgument::Size(Size::Constant(lanes)),
-            ]
-            .into(),
-        })
-    }
-    pub fn boxed(&mut self, payload: TypeId) -> TypeId {
-        self.add(TypeKind::Box(payload))
-    }
-    pub fn list(&mut self, element: TypeId) -> TypeId {
-        self.add(TypeKind::Builtin {
-            kind: BuiltinType::List,
-            arguments: vec![GenericArgument::Type(element)].into(),
-        })
-    }
-    pub fn function(&mut self, parameters: &[(PassingMode, TypeId)], result: TypeId) -> TypeId {
-        self.add(TypeKind::Function(FunctionType {
-            state_promises: Default::default(),
-            generics: Vec::new().into(),
-            parameters: parameters
-                .iter()
-                .map(|&(passing, ty)| Parameter {
-                    name: None,
-                    label: None,
-                    passing,
-                    ty,
-                })
-                .collect(),
-            result,
-            error: None,
-            allocation: Allocation::MayAllocate,
-            authority: AuthoritySummary::inert(),
-            uses: Uses::Unrestricted,
-            contracts: Vec::new().into(),
-            incomplete: false,
-            foreign: None,
-        }))
-    }
-}
+pub use hirsel_types::testing::Types;
 
 /// A `@packed` nominal record `Wire { u8, u64, u16 }`.
 pub fn wire_owner(owners: &mut Owners) -> DefPath {
@@ -303,7 +198,9 @@ impl Schema {
         parameters: &[(PassingMode, TypeId)],
         result: TypeId,
     ) -> TypeId {
-        let ty = self.types.function(parameters, result);
+        let ty = self
+            .types
+            .function(parameters, result, Multiplicity::Many, 0);
         self.signatures.push((name, ty, shape));
         ty
     }

@@ -17,7 +17,9 @@ fn schema() -> Schema {
     s.name("number", number);
     let block = s.types.boxed(number);
     s.name("block", block);
-    let many = s.types.function(&[], unit);
+    let many = s
+        .types
+        .function(&[], unit, hirsel_types::Multiplicity::Many, 0);
     s.name("many", many);
     let mut once = s.types.store.get(many).unwrap().clone();
     once.modes.multiplicity = Multiplicity::Once;

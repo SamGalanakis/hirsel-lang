@@ -453,3 +453,6 @@ C independently requires a u8 sequence payload, the whole sequence's start
 exact owner SSA value as length. This transfers its existing credit
 without allocating or inspecting a runtime descriptor. Hand-built controls in
 `tests/it/byte_freeze.rs` reject other payloads and forged intervals.
+
+Type-store test fixtures use `hirsel_types::testing::Types` through the test-only
+`testing` feature; layout derivation and validation remain in this suite.

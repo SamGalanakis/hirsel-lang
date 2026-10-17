@@ -469,3 +469,6 @@ targets and the steady-loop and shared spare-capacity paths.
 Buck2's test launcher provides the pinned LLVM, AArch64 compiler/sysroot and
 qemu as absolute input paths. Native helpers use those paths directly; native
 cases run on pool workers, including when `--include-ignored` selects them.
+
+Type-store test fixtures use `hirsel_types::testing::Types` through the test-only
+`testing` feature; layout derivation and validation remain in this suite.
