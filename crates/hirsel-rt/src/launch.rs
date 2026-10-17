@@ -34,6 +34,7 @@ use crate::io_real::RealIo;
 use crate::io_sim::SimIo;
 use crate::net::NetRule;
 use crate::{ABI_VERSION, Layout, RunCtx, STATUS_FAILURE, STATUS_OK};
+use hirsel_run_config::hex;
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::rc::Rc;
@@ -86,10 +87,6 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         self.0.borrow_mut().call(request)
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Complete typed completion tape. Hex fields preserve empty paths and arbitrary bytes.

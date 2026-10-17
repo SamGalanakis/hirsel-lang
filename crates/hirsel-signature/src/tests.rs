@@ -1,5 +1,6 @@
 use super::*;
 use hirsel_intern::Interner;
+use hirsel_run_config::hex;
 use hirsel_types::encoding::{EncodingError, canonical_encoding};
 fn def(name: &str) -> ast::DefPath {
     ast::DefPath(ast::ItemPath {
@@ -891,9 +892,6 @@ fn golden_fixtures() -> Vec<(&'static str, Signature)> {
         ("record", record),
         ("variant", variant),
     ]
-}
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 #[test]
 fn golden_vectors() {

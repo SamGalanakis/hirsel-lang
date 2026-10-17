@@ -190,6 +190,13 @@
         },
         {
           "kind": null,
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
           "name": "hirsel-span",
           "path": "crates/hirsel-span",
           "req": "*",
@@ -1606,6 +1613,13 @@
           "kind": null,
           "name": "hirsel-types",
           "path": "crates/hirsel-types",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
           "req": "*",
           "uses_default_features": true
         }

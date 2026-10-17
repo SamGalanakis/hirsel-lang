@@ -7,6 +7,7 @@ rust-version.workspace = true
 default-run = "hirsel-conformance"
 
 [dependencies]
+hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-driver = { path = "../hirsel-driver" }
 hirsel-engine = { path = "../hirsel-engine" }

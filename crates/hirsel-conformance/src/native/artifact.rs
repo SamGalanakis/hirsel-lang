@@ -8,6 +8,7 @@ use hirsel_driver::native::{
     Configuration, MATRIX_VERSION, OBSERVATION_SCHEMA, Observation, Outcome, Toolchain,
     full_matrix, topology_matrix,
 };
+use hirsel_run_config::hex;
 use std::path::Path;
 
 /// What two engines disagreed about, independent of line shifts: which parts
@@ -166,10 +167,6 @@ pub fn write(
             actual.render()
         ),
     )
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A stored artifact.

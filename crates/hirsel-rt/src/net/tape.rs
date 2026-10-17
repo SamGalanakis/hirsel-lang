@@ -2,10 +2,8 @@
 //! file events, with hex strings and bytes, canonical socket addresses and named errors.
 use super::*;
 use crate::io::{Completion, Request};
+use hirsel_run_config::hex;
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
 fn unhex(word: &str) -> Result<Vec<u8>, String> {
     if !word.is_ascii() || word.len() % 2 != 0 {
         return Err("bad tape bytes".into());

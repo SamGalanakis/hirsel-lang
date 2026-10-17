@@ -2,7 +2,7 @@
 
 Validate rule-linked corpus headers, classify compiler results and enforce the additive passing ratchet.
 
-Allowed dependencies: hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, serde_json; no phase internals.
+Allowed dependencies: hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, hirsel-run-config, serde_json; no phase internals.
 
 Invariants and boundary:
 
