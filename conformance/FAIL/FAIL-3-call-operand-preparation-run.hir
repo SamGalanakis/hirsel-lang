@@ -1,0 +1,8 @@
+// rule: FAIL-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let headers: List[String] = ["name"]
+  let mut object: Map[String, box String] = map.empty()
+  map.insert(mut object, headers[0], box "Ada")
+  Ok(())
+}

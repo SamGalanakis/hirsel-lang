@@ -139,6 +139,8 @@ at each stage and H against the interpreter, and keeps the declined twins.
   A taken indirect callee moves into a fresh invocation temporary in the call's
   scope. The call borrows it, then releases it before caller cleanup on either
   outcome; its later slot ordinal preserves reverse temporary destruction order.
+  Native call operand preparation cleans current caller storage on failure;
+  only an entered call uses TIR cleanup that excludes its taken inputs.
 - `statics`: `lower` encodes every constant a unit reads (`ReadStatic`) from
   its materialized value as `hirsel_lir::statics` blocks at its layouts:
   scalars, aggregates, variants (tag form included), inline repeats and Simd

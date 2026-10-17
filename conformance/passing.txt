@@ -601,6 +601,7 @@ conformance/FAIL/FAIL-1-contract-evaluation-source.hir
 conformance/FAIL/FAIL-1-contract-source.hir
 conformance/FAIL/FAIL-1-expected-result.hir
 conformance/FAIL/FAIL-1-program-order.hir
+conformance/FAIL/FAIL-3-call-operand-preparation-run.hir
 conformance/FAIL/FAIL-3-iterator-callback-mut-state-bad.hir
 conformance/FAIL/FAIL-3-iterator-callback-mut-state-ok.hir
 conformance/FAIL/FAIL-3-map-displaced-finalizer.hir

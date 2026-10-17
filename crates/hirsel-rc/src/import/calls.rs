@@ -151,6 +151,10 @@ impl Importer<'_, '_> {
                 return Ok(());
             }
         }
+        // Native operand preparation can still fail before the call is
+        // entered. Its TIR failure chain already excludes all taken inputs;
+        // until they transfer, clean the storage actually owned here instead.
+        let entered_cleanup = self.failure.cleanup.take();
         let mut taken_callee: Option<(LoanId, PlaceRef)> = None;
         let mut capture_args = Vec::new();
         let mut capture_loans = Vec::new();
@@ -358,6 +362,7 @@ impl Importer<'_, '_> {
                 Ok::<_, PassError>((dest, address))
             })
             .transpose()?;
+        self.failure.cleanup = entered_cleanup;
         for a in &args {
             if let ArgumentValue::Value(v) = a.value {
                 self.consumed(v);
