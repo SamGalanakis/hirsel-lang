@@ -458,8 +458,11 @@ Type-store test fixtures use `hirsel_types::testing::Types` through the test-onl
 `testing` feature; layout derivation and validation remain in this suite.
 
 The opt-in `hirsel_lir::testing::UnitBuilder` buffers hand-built LIR blocks,
-instructions and terminators for validator and backend tests. Suite-specific
-layout tables, identities, cleanup recipes and assertions remain in test support.
+instructions and terminators for validator, backend and heap-checker tests.
+It also assembles values, slots, addresses and side-table entries, and can bind
+a finished unit to a layout table. Helpers use anchor, scope and ABI zero;
+callers provide those entries. Suite-specific layout tables, identities, cleanup
+recipes and assertions remain in test support.
 
 Operation actuals use LIR-owned Primitive/BuiltinType tags. Validators receive
 `operation::OperationDeclarations` and compare the derived declaration ABI
