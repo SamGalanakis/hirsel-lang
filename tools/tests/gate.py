@@ -435,6 +435,8 @@ class Scripts(unittest.TestCase):
         git(self.root, 'branch', '-q', '--set-upstream-to=origin/main')
         self.commands = top / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands)}
+        # Scratch gates must not acquire a slot held by the gate running this test.
+        self.env.pop('HIRSEL_GATE_SLOTS', None)
         # A sibling's clone, to move main.
         self.sibling = top / 'sibling'
         subprocess.run(['git', 'clone', '-q', str(self.origin), str(self.sibling)], check=True)

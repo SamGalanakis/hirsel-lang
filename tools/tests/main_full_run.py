@@ -34,6 +34,7 @@ class MainFullRun(unittest.TestCase):
             'HIRSEL_MAIN_RUNS': str(self.runs),
             'HIRSEL_MAIN_WORKTREES': str(self.trees),
         }
+        self.env.pop('HIRSEL_GATE_SLOTS', None)
         self.scope_args = self.root / 'scope-args'
         self.env['SCOPE_ARGS'] = str(self.scope_args)
         scope = self.bin / 'systemd-run'
@@ -275,6 +276,8 @@ sys.exit(subprocess.call(sys.argv[sys.argv.index("--run") + 1:]))
         gate.chmod(0o755)
         self.commands = self.root / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands), 'HIRSEL_TEST_SEED': '7'}
+        # Scratch gates must not acquire a slot held by the gate running this test.
+        self.env.pop('HIRSEL_GATE_SLOTS', None)
         buck2 = self.root / '.buck2/bin/buck2'
         buck2.write_text('''#!/usr/bin/env bash
 if [[ $1 == uquery ]]; then
@@ -355,6 +358,7 @@ class NativeGate(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.commands = self.root / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands)}
+        self.env.pop('HIRSEL_GATE_SLOTS', None)
         (self.root / 'tools').mkdir()
         (self.root / 'tools/check-native.sh').write_text((RUNNER.parent / 'check-native.sh').read_text())
         for tool in ('.buck2/bin/buck2', 'proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh'):
