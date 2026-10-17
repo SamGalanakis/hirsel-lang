@@ -178,6 +178,19 @@ pub fn ascii_upper(s: String) -> String uses {} {
   ascii_case(s, false)
 }
 
+// Rust str Ord: byte-lexicographic, a proper prefix first, as `<` orders
+// String. Returns -1, 0 or 1, the comparator shape std@1/list.sort takes.
+@noalloc
+pub fn compare(a: String, b: String) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if b < a {
+    1
+  } else {
+    0
+  }
+}
+
 pub fn concat(a: String, b: String) -> String uses {} {
   let mut builder: List[u8] = []
   std@1/text.append(mut builder, a)

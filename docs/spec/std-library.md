@@ -174,7 +174,9 @@ empty fields; an empty separator fails SEM-3), `find` (the first match as a `Str
 `split_ascii_whitespace(take s: String) -> List[String]` (on ASCII tab, LF,
 form feed, CR and space; omitting empty fields and preserving vertical tab and
 non-ASCII whitespace), `starts_with`, `ends_with`, `trim` (ASCII space and `\t` to `\r`, a slice related to the
-source), `ascii_lower`, `ascii_upper`, `concat` and `join`. `std@1/text` treats a
+source), `ascii_lower`, `ascii_upper`, `concat`, `join` and `compare(a, b) -> i32`
+(byte-lexicographic, a proper prefix first, as `<` orders `String`; -1, 0 or 1, so
+it is a `sort` comparator). `std@1/text` treats a
 `List[u8]` as a UTF-8 builder: `append` appends a string's bytes and `finish` validates the
 builder into a `String` or returns the bytes.
 
