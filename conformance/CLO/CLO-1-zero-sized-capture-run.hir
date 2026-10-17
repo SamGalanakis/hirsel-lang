@@ -1,0 +1,19 @@
+// rule: CLO-1
+// expect: run
+// A closure whose captures are all zero-sized has no environment block.
+fn look[T](x: T) -> bool {
+  true
+}
+
+fn round[T](x: T) -> bool {
+  let again = fn() {
+    look(x)
+  }
+  again()
+}
+
+pub fn main() -> Result[(), ()] {
+  let zero: Inline[u8, 0] = []
+  failure.check(round(()) && round(zero), Arithmetic())
+  Ok(())
+}

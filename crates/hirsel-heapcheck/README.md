@@ -185,7 +185,8 @@ producer that differs changes this crate or the producer):
   stays readable), and the fieldless variant when its bytes are zero;
   constructing the fieldless variant writes the null word.
 - A `SlotKind::Capture(i)` slot names field `i` of the closure environment the
-  callee was entered with. A `mut` or address argument arrives as a checked
+  callee was entered with; a zero-sized environment is no block, so each of its
+  (zero-sized) capture slots gets empty frame storage. A `mut` or address argument arrives as a checked
   pointer, borrowed for the callee's lifetime; a pointer-typed address base whose
   layout is not a block layout points at that layout itself.
 - A finalizer unit's header names the finalizer's definition and takes its

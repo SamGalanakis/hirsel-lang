@@ -266,6 +266,7 @@ conformance/CLO/CLO-1-store-scoped-parameter-bad.hir
 conformance/CLO/CLO-1-store-scoped-parameter-ok.hir
 conformance/CLO/CLO-1-written-recursive-retention-bad.hir
 conformance/CLO/CLO-1-written-recursive-retention-ok.hir
+conformance/CLO/CLO-1-zero-sized-capture-run.hir
 conformance/CLO/CLO-2-allocation-join-bad.hir
 conformance/CLO/CLO-2-allocation-join-ok.hir
 conformance/CLO/CLO-2-annotation-nested-uses-part-bad.hir

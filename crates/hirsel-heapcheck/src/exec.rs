@@ -435,8 +435,25 @@ impl<'p, S: Stage> Machine<'p, S> {
         let u = self.unit(f.unit);
         for (index, slot) in u.slots.iter().enumerate() {
             if let SlotKind::Capture(i) = slot.kind {
+                let version = *u
+                    .captures
+                    .get(i as usize)
+                    .ok_or_else(|| err(V::Malformed, format!("no version for capture {i}")))?;
                 let Some(env) = f.env else {
-                    return fail(V::Malformed, "capture slot in a call without environment");
+                    // A zero-sized environment is no block (`closure`): each of
+                    // its captures is zero-sized, with empty frame storage.
+                    let layout = self.lir_type(f.unit, slot.ty)?.layout;
+                    if self.size(layout)? != 0 {
+                        return fail(V::Malformed, "capture slot in a call without environment");
+                    }
+                    let align = self.record(layout)?.align;
+                    let ptr = self
+                        .ledger
+                        .alloc(Owner::Frame, Some(layout), 0, 0, align, None);
+                    f.slots[index] = SlotStore::Own(ptr);
+                    f.versions[index] = Some(version);
+                    self.define_version(f, version)?;
+                    continue;
                 };
                 let layout = self
                     .ledger
@@ -462,10 +479,6 @@ impl<'p, S: Stage> Machine<'p, S> {
                     field.offset,
                     ProjectionStep::Field(field.ordinal),
                 ));
-                let version = *u
-                    .captures
-                    .get(i as usize)
-                    .ok_or_else(|| err(V::Malformed, format!("no version for capture {i}")))?;
                 f.versions[index] = Some(version);
                 self.define_version(f, version)?;
             }
