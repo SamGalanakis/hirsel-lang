@@ -187,7 +187,7 @@ impl Checker<'_, '_> {
             ));
         }
         let mut inferred = vec![None; function.generics.len()];
-        if !self.infer(parameter.ty, actual, &mut inferred) || inferred.iter().any(Option::is_none)
+        if !self.infer(parameter.ty, actual, &mut inferred)? || inferred.iter().any(Option::is_none)
         {
             return Err(protocol_error(
                 "cursor operation does not specialize to its actual",

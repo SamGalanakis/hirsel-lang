@@ -77,8 +77,13 @@ impl Checker<'_, '_> {
             TypeKind::Function(f) => f,
             TypeKind::Named {
                 definition,
-                arguments: args,
+                arguments: mut args,
             } => {
+                // A contextual Result with a fresh error still needs constructor
+                // inference: its payload may determine that error type.
+                if self.partial_result(callee_ty).is_some() {
+                    args.clear();
+                }
                 let s = self.snapshot(&definition)?;
                 let SignatureKind::Type(td) = &s.kind else {
                     self.report(
@@ -304,7 +309,7 @@ impl Checker<'_, '_> {
         let mut inferred = vec![None; f.generics.len()];
         if let Some(e) = expected {
             let constraint = self.crossing_inference_constraint(&f, f.result, e, false)?;
-            self.infer(f.result, constraint, &mut inferred);
+            self.infer(f.result, constraint, &mut inferred)?;
         }
         // An expected type fixes a parameter's modes only where it occurs as a
         // type contract; the modes of the expected value itself are its
@@ -500,7 +505,7 @@ impl Checker<'_, '_> {
                         inferred[ordinal] = Some(GenericArgument::Type(actual));
                     }
                 }
-                if !self.infer(template, constraint, &mut inferred) {
+                if !self.infer(template, constraint, &mut inferred)? {
                     let expected = self
                         .partial_substitute(template, &inferred, &function.generics)?
                         .unwrap_or(template);
@@ -752,7 +757,13 @@ impl Checker<'_, '_> {
         let parameters = c.function.parameters.clone();
         let missing_capabilities = c.missing_capabilities;
         let generics = c.function.generics.clone();
-        if !bad && inferred.iter().any(Option::is_none) {
+        if !bad
+            && inferred.iter().any(|argument| match argument {
+                None => true,
+                Some(GenericArgument::Type(ty)) => self.partial_result(*ty).is_some(),
+                Some(GenericArgument::Size(_)) => false,
+            })
+        {
             self.report(
                 const { RuleId::of("LANG-2") },
                 self.span(id),
@@ -951,15 +962,21 @@ impl Checker<'_, '_> {
     }
     /// Inference changes only the call's fresh variables, never a declaration.
     pub(super) fn infer(
-        &self,
+        &mut self,
         template: TypeId,
         actual: TypeId,
         args: &mut [Option<GenericArgument>],
-    ) -> bool {
+    ) -> Result<bool, QueryError> {
         let mut todo = vec![(template, actual, 0)];
         let mut seen = BTreeSet::new();
         while let Some((a, b, depth)) = todo.pop() {
-            if !seen.insert((a, b, depth)) || self.invalid(a) || self.invalid(b) || self.bottom(b) {
+            if !seen.insert((a, b, depth))
+                || self.invalid(a)
+                || self.invalid(b)
+                || self.bottom(b)
+                || self.inference_variable(a)
+                || self.inference_variable(b)
+            {
                 continue;
             }
             match (self.kind(a), self.kind(b)) {
@@ -970,10 +987,11 @@ impl Checker<'_, '_> {
                     let slot = &mut args[p.parameter().0 as usize];
                     if let Some(GenericArgument::Type(t)) = slot {
                         if !self.compatible(*t, b) {
-                            return false;
+                            return Ok(false);
                         }
+                        *t = self.resolve_result_context(*t, b)?;
                     } else if slot.is_some() {
-                        return false;
+                        return Ok(false);
                     } else {
                         *slot = Some(GenericArgument::Type(b));
                     }
@@ -993,7 +1011,7 @@ impl Checker<'_, '_> {
                     },
                 ) if a == b => {
                     if !infer_arguments(aa.to_vec(), bb.to_vec(), args, depth, &mut todo) {
-                        return false;
+                        return Ok(false);
                     }
                 }
                 (
@@ -1007,14 +1025,14 @@ impl Checker<'_, '_> {
                     },
                 ) if a == b => {
                     if !infer_arguments(aa.to_vec(), bb.to_vec(), args, depth, &mut todo) {
-                        return false;
+                        return Ok(false);
                     }
                 }
                 (TypeKind::Function(a), TypeKind::Function(b))
                     if a.parameters.len() == b.parameters.len() =>
                 {
                     if a.generics != b.generics {
-                        return false;
+                        return Ok(false);
                     } else {
                         // Passing modes are part of a function type's shape.
                         if a.parameters
@@ -1022,7 +1040,7 @@ impl Checker<'_, '_> {
                             .zip(&b.parameters)
                             .any(|(a, b)| a.passing != b.passing)
                         {
-                            return false;
+                            return Ok(false);
                         }
                         todo.push((a.result, b.result, depth + 1));
                         todo.extend(
@@ -1035,12 +1053,12 @@ impl Checker<'_, '_> {
                 }
                 _ => {
                     if !self.compatible(a, b) {
-                        return false;
+                        return Ok(false);
                     }
                 }
             }
         }
-        true
+        Ok(true)
     }
     pub(super) fn result_parts(
         &mut self,
@@ -1143,8 +1161,8 @@ impl Checker<'_, '_> {
                 // The propagated error is a temporary, never a `mut` place (OWN-3).
                 let matches = f.parameters.len() == 1
                     && f.parameters[0].passing != ast::PassingMode::Mut
-                    && self.infer(f.parameters[0].ty, error, &mut args)
-                    && self.infer(f.result, expected, &mut args)
+                    && self.infer(f.parameters[0].ty, error, &mut args)?
+                    && self.infer(f.result, expected, &mut args)?
                     && args.iter().all(Option::is_some);
                 if !matches {
                     self.report(

@@ -1,0 +1,27 @@
+// rule: LANG-2
+// expect: accept
+fn operand() -> Result[bool, ()] {
+  Ok(true)
+}
+
+fn example() -> Result[bool, ()] {
+  let value: bool = operand()?
+  Ok(value)
+}
+
+// The Error payload determines the fresh error of a contextual constructor.
+fn constructed() -> Result[bool, ()] {
+  let value: bool = Error(())?
+  Ok(value)
+}
+
+// A contextual callback resolves its error from its checked body result.
+fn scoped(tasks: Tasks) -> Result[bool, ()] {
+  let value: bool = task.scope(
+    tasks,
+    fn(s: Scope) {
+      operand()
+    }
+  )?
+  Ok(value)
+}

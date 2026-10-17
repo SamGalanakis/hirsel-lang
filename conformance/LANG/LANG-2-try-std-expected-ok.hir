@@ -1,0 +1,23 @@
+// rule: LANG-2
+// expect: accept
+fn example(xs: List[bool]) -> Result[bool, ()] {
+  let value: bool = std@1/list.fold(
+    xs,
+    Error(()),
+    fn(take acc: Result[bool, ()], x: bool) {
+      take acc
+    }
+  )?
+  Ok(value)
+}
+
+// Both generic library results are determined by this expected u64 alone.
+fn bounded() -> Result[u64, OutOfSpace] {
+  let value: u64 = arena.bounded(
+    0,
+    fn(a: Arena) {
+      int.widen(1u8)
+    }
+  )?
+  Ok(value)
+}

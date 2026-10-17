@@ -89,6 +89,7 @@ fn check_inner(
         ranges: BTreeMap::new(),
         range_sources: BTreeSet::new(),
         expected_sites: BTreeMap::new(),
+        inference_variables: BTreeSet::new(),
         mut_aliases: BTreeSet::new(),
         proof_failure: failure,
     };
@@ -290,6 +291,7 @@ struct Checker<'a, 'p> {
     ranges: BTreeMap<ast::ExprId, TypeId>,
     range_sources: BTreeSet<ast::ExprId>,
     expected_sites: BTreeMap<ast::ExprId, (Span, RuleId)>,
+    inference_variables: BTreeSet<TypeParameterRef>,
     mut_aliases: BTreeSet<LocalId>,
     proof_failure: &'p std::cell::RefCell<Option<QueryError>>,
 }
@@ -684,9 +686,15 @@ impl Checker<'_, '_> {
                 }
                 _ => (),
             }
+            // `?` owns the registered-Result prerequisite. Its success context
+            // must not turn a wrong operand family into a secondary LANG-7.
+            let wrong_try_family = self.partial_result(expected).is_some_and(|(definition, _)| {
+                !matches!(self.kind(ty), TypeKind::Named { definition: actual, .. } if actual == definition)
+            });
             if !self.invalid(ty)
                 && !self.invalid(expected)
                 && !self.bottom(ty)
+                && !wrong_try_family
                 && !self.compatible(ty, expected)
             {
                 let (span, rule) = self
@@ -694,12 +702,27 @@ impl Checker<'_, '_> {
                     .get(&id)
                     .cloned()
                     .unwrap_or((self.span(id), const { RuleId::of("LANG-7") }));
+                // A `?` context fixes the success contract; the fresh error
+                // variable is inference machinery, not part of that mismatch.
+                let (actual, required) = match (self.partial_result(expected), self.kind(ty)) {
+                    (
+                        Some((definition, success)),
+                        TypeKind::Named {
+                            definition: actual,
+                            arguments,
+                        },
+                    ) if definition == actual => match arguments.as_slice() {
+                        [GenericArgument::Type(ok), GenericArgument::Type(_)] => (*ok, success),
+                        _ => (ty, expected),
+                    },
+                    _ => (ty, expected),
+                };
                 self.type_mismatch(
                     rule,
                     span,
                     "expression does not have the expected type",
-                    ty,
-                    expected,
+                    actual,
+                    required,
                 );
                 ty = self.error();
             }
@@ -1002,7 +1025,26 @@ impl Checker<'_, '_> {
             E::Before(value) | E::Comptime(value) => {
                 self.schedule(id, expected, frame, vec![(value, expected)])
             }
-            E::Try { value, .. } => self.schedule(id, expected, frame, vec![(value, None)]),
+            E::Try { value, .. } => {
+                let operand = if let (Some(ok), Some(result)) =
+                    (expected, self.frames[frame].result)
+                    && let Some((definition, _, _)) = self.result_parts(result)?
+                {
+                    // The try expression owns a fresh inference scope, separate
+                    // from every declared generic binder and enclosing error.
+                    let variable = TypeParameterRef::body(NameSite::Expression(id), TypeParamId(0));
+                    self.inference_variables.insert(variable);
+                    let error = self.ty(TypeKind::Parameter(variable));
+                    Some(self.ty(TypeKind::Named {
+                        definition,
+                        arguments:
+                            vec![GenericArgument::Type(ok), GenericArgument::Type(error)].into(),
+                    }))
+                } else {
+                    None
+                };
+                self.schedule(id, expected, frame, vec![(value, operand)]);
+            }
             E::Field { base, .. } => self.schedule(id, expected, frame, vec![(base, None)]),
             E::Index { base, index } => {
                 let index_name = self.input_name(index).map(|(_, name)| name.clone());
@@ -1917,6 +1959,14 @@ impl Checker<'_, '_> {
                     unreachable!()
                 };
                 let result = self.value(body);
+                if let Some(expected) = self.frames[child].result {
+                    let resolved = self.resolve_result_context(expected, result)?;
+                    if resolved != expected {
+                        self.frames[child].result = Some(resolved);
+                        self.frames[child].error =
+                            self.result_parts(resolved)?.map(|(_, _, error)| error);
+                    }
+                }
                 if self.frames[child].result.is_none() {
                     f.result = result;
                     self.frames[child].result = Some(result);

@@ -156,6 +156,12 @@ Inference never overwrites a contextual argument with a qualified actual value.
 Pending call expectations containing an uninferred type or size parameter are
 withheld until actual argument types bind those parameters.
 
+An expected success type flows through `?` as a registered Result context with
+an error variable scoped to that try expression. Operand signatures, constructor
+payloads and contextual callback results resolve the error independently of the
+frame's channel. Known nested type shape stays exact; published decisions contain
+resolved actuals, and propagation retains its LANG-8 prerequisite diagnostics.
+
 Signature and body checking use shared declaration-based Plain, Copyable and
 Sendable proofs from hirsel-types. Generic substitution derives property summaries
 through the shared normalizer; concrete Plain callback parameters use Global

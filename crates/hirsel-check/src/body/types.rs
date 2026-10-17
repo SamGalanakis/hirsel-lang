@@ -89,6 +89,14 @@ impl Checker<'_, '_> {
         root: TypeId,
         arguments: &[GenericArgument],
     ) -> Result<TypeId, QueryError> {
+        self.substitute_at(root, arguments, GenericBinder::Bound(0))
+    }
+    pub(super) fn substitute_at(
+        &mut self,
+        root: TypeId,
+        arguments: &[GenericArgument],
+        binder: GenericBinder,
+    ) -> Result<TypeId, QueryError> {
         // Authority checking belongs to J; preserve the declared substitution channel.
         let authorities: Vec<_> = arguments
             .iter()
@@ -98,7 +106,7 @@ impl Checker<'_, '_> {
             &mut self.body.types,
             root,
             Substitution {
-                binder: Some(hirsel_types::GenericBinder::Bound(0)),
+                binder: Some(binder),
                 roles: &self.input.signature.metadata.roles,
                 arguments,
                 authorities: &authorities,
@@ -142,12 +150,84 @@ impl Checker<'_, '_> {
             Ok((None, ty))
         }
     }
+    pub(super) fn inference_variable(&self, ty: TypeId) -> bool {
+        matches!(self.kind(ty), TypeKind::Parameter(p) if self.inference_variables.contains(&p))
+    }
+    /// A Result context from `?` fixes only its success type. Its fresh error
+    /// is resolved by the operand, independently of the enclosing error channel.
+    pub(super) fn partial_result(&self, ty: TypeId) -> Option<(ast::DefPath, TypeId)> {
+        let TypeKind::Named {
+            definition,
+            arguments,
+        } = self.kind(ty)
+        else {
+            return None;
+        };
+        match arguments.as_slice() {
+            [GenericArgument::Type(ok), GenericArgument::Type(error)]
+                if self.inference_variable(*error) =>
+            {
+                Some((definition, *ok))
+            }
+            _ => None,
+        }
+    }
+    /// Bind a partial Result's error from actual evidence, including its
+    /// conditional cleanup and sendability summaries.
+    pub(super) fn resolve_result_context(
+        &mut self,
+        expected: TypeId,
+        actual: TypeId,
+    ) -> Result<TypeId, QueryError> {
+        let Some((definition, _)) = self.partial_result(expected) else {
+            return Ok(expected);
+        };
+        let TypeKind::Named {
+            definition: actual_definition,
+            arguments,
+        } = self.kind(actual)
+        else {
+            return Ok(expected);
+        };
+        let [GenericArgument::Type(_), GenericArgument::Type(error)] = arguments.as_slice() else {
+            return Ok(expected);
+        };
+        if definition != actual_definition || self.inference_variable(*error) {
+            return Ok(expected);
+        }
+        let TypeKind::Named { arguments, .. } = self.kind(expected) else {
+            unreachable!()
+        };
+        let GenericArgument::Type(variable) = arguments[1] else {
+            unreachable!()
+        };
+        let TypeKind::Parameter(variable) = self.kind(variable) else {
+            unreachable!()
+        };
+        self.substitute_at(
+            expected,
+            &[GenericArgument::Type(*error)],
+            variable.binder(),
+        )
+    }
     pub(super) fn compatible(&self, a: TypeId, b: TypeId) -> bool {
-        if self.invalid(a) || self.invalid(b) || self.bottom(a) {
+        if self.invalid(a)
+            || self.invalid(b)
+            || self.bottom(a)
+            || self.inference_variable(a)
+            || self.inference_variable(b)
+        {
             return true;
         }
         // H compares the type shape. I/J separately judge modes, origin and effects.
-        shape_equal(&self.body.types, a, &self.body.types, b).unwrap_or(false)
+        shape_equal_with_holes(
+            &self.body.types,
+            a,
+            &self.body.types,
+            b,
+            |kind| matches!(kind, TypeKind::Parameter(p) if self.inference_variables.contains(p)),
+        )
+        .unwrap_or(false)
     }
     /// A pattern's provisional local that its checked pattern replaced by a
     /// nullary variant: resolution introduced it, and no binding holds it.
@@ -257,7 +337,18 @@ impl Checker<'_, '_> {
                         .push((site.clone(), ContextualName::Variant { owner, variant }));
                 }
                 self.body.resolution.deferred.retain(|d| d.site != site);
-                return Ok(Some(if callee { nominal } else { t }));
+                return Ok(Some(if callee {
+                    if let Some((definition, _)) = self.partial_result(nominal) {
+                        self.ty(TypeKind::Named {
+                            definition,
+                            arguments: vec![].into(),
+                        })
+                    } else {
+                        nominal
+                    }
+                } else {
+                    t
+                }));
             }
         }
         Ok(None)
@@ -452,6 +543,7 @@ impl Checker<'_, '_> {
                     }
                     SignatureKind::Type(t) => {
                         let args = expected
+                            .filter(|t| !callee || self.partial_result(*t).is_none())
                             .and_then(|t| match self.kind(self.packed_payload(t).unwrap_or(t)) {
                                 TypeKind::Named {
                                     definition,
@@ -528,6 +620,7 @@ impl Checker<'_, '_> {
                 ) = ctx
                 {
                     let args = expected
+                        .filter(|t| !callee || self.partial_result(*t).is_none())
                         .and_then(|t| match self.kind(self.packed_payload(t).unwrap_or(t)) {
                             TypeKind::Named {
                                 definition,

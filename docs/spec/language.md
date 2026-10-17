@@ -227,6 +227,9 @@ a one-argument variant or function, before propagating; a plain `e?` requires id
 error types. An error mapper may borrow or take its owned error; a mapper that requires
 `mut` access is LANG-8.
 
+When `e?` has expected type `T` in a Result-returning function, `e` is checked with
+expected type `Result[T, F]` for a fresh `F`, then the existing error rules apply.
+
 ```hirsel
 type ParseError = Empty | TooLong(u64)
 type AppError = Input(ParseError) | Other

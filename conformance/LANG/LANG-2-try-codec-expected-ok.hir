@@ -1,0 +1,29 @@
+// rule: LANG-2
+// expect: accept
+fn decoded(data: Bytes) -> Result[bool, DecodeError] {
+  let value: bool = codec.decode(data)?
+  Ok(value)
+}
+
+// The operand error remains DecodeError even when the enclosing error differs.
+type AppError = Decode(DecodeError)
+
+fn mapped(data: Bytes) -> Result[bool, AppError] {
+  let value: bool = codec.decode(data) ? Decode
+  Ok(value)
+}
+
+// A generic error is inferred from the operand's arguments, never the frame.
+fn failure[T, E](take error: E) -> Result[T, E] {
+  Error(take error)
+}
+
+type InnerError = Inner()
+
+type OuterError = Outer(InnerError)
+
+fn inferred_error() -> Result[bool, OuterError] {
+  let error: InnerError = Inner()
+  let value: bool = failure(take error) ? Outer
+  Ok(value)
+}
