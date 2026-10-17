@@ -263,8 +263,10 @@ GATE_TESTS = [
            args=["--native", "full", "--shard", f"{index}/{AGREE_NATIVE_FULL_SHARDS}"],
            release=True, runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
       for index in range(1, AGREE_NATIVE_FULL_SHARDS + 1)),
+    # Test-runner filters arrive after the build graph is fixed. Keep the whole
+    # target free of the global cover; an unfiltered CLI run derives it itself.
     dict(name="gate-native-full", full=True, binary="//:hirsel-conformance-bin-native", args=["--full"], release=True,
-         runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, **GATE),
     *(dict(name=f"gate-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
            args=["--full", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
            runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)

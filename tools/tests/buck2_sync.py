@@ -18,6 +18,13 @@ class NativePoolRouting(unittest.TestCase):
         for stage in sync.GATE_TESTS:
             self.assertFalse(stage.get('host', False), stage['name'])
 
+    def test_filtered_native_entry_has_no_global_cover_dependency(self):
+        stages = {stage['name']: stage for stage in sync.GATE_TESTS}
+        self.assertNotIn('native_selection', stages['gate-native-full'])
+        for index in range(1, sync.NATIVE_FULL_SHARDS + 1):
+            self.assertEqual(stages[f'gate-native-full-shard-{index}']['native_selection'],
+                             '//:native-selection')
+
     def test_generated_tests_have_no_host_partition(self):
         buck = (sync.ROOT / 'BUCK').read_text()
         self.assertNotIn('host_cases =', buck)

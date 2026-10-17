@@ -352,9 +352,12 @@ Generate the cached coverage artifact without executing programs:
 ```
 
 A direct native CLI invocation without `HIRSEL_NATIVE_SELECTION` derives its
-cover in its own scratch directory. Buck2 campaigns receive the generated
-artifact as an input. Its action key includes the compiler and all corpus,
-package and library sources, so changing them regenerates the cover.
+cover in its own scratch directory. Unfiltered Buck2 campaign shards receive
+the generated artifact as an input. Its action key includes the compiler and
+all corpus, package and library sources, so changing them regenerates the cover.
+The whole `gate-native-full` target omits that dependency: explicit `--filter`
+values select programs without loading or deriving a cover, while an unfiltered
+whole-target run derives the same cover in scratch.
 
 `native-select --replay-history` executes every reconstructable historical
 source under the exhaustive matrix once and checks that all findings survive

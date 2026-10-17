@@ -6290,7 +6290,6 @@ hirsel_command_test(
     args = ["--full"],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
-    native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",

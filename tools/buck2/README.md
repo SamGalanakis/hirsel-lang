@@ -435,8 +435,8 @@ shard prints its stage times, slowest variants and costliest programs to stderr,
 and names any variant still running after 30 s.
 
 
-Full native campaigns consume `//:native-selection`, a cached derived coverage
-artifact built from the collector binary and the complete corpus. It selects
+Unfiltered native campaign shards consume `//:native-selection`, a cached
+derived coverage artifact built from the collector binary and the complete corpus. It selects
 an inclusion-minimal feature cover after historical pins. Each selected
 baseline/generated program runs a rotating feasible-pair configuration cover;
 topology partitions and named exclusion cells remain present. `--exhaustive`
@@ -444,3 +444,9 @@ on the campaign binary restores the previous exhaustive release check. The
 campaign seed defaults to the full run's `PROPTEST_RNG_SEED`; `--seed N` makes a
 run reproducible. The source/IR full agreement keeps all programs and budgets
 96 mutations each; `--exhaustive` restores its complete catalogue.
+
+The whole `gate-native-full` target has no coverage-artifact dependency, since
+Buck2 fixes its build graph before it receives test-runner arguments. Explicit
+`--filter` values are the program selection and skip coverage collection. An
+unfiltered whole-target run derives the same inclusion-minimal cover in its
+own scratch directory; full-gate shards continue to share the cached artifact.

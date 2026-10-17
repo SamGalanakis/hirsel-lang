@@ -40,18 +40,18 @@ cases() {
   case "$1" in
     heap) echo "//:hirsel-heapcheck-test-it heap::" ;;
     layout) echo "//:hirsel-lir-test-it layout::" ;;
-    rc-import) echo "//:hirsel-pipeline-tests-test-rc-shard-1 rc_import::" ;;
+    rc-import) echo "//:hirsel-pipeline-tests-test-rc rc_import::" ;;
     wire) echo "//:hirsel-types-test-wire recursive_canonical_golden_vectors" ;;
     replay) echo "//:hirsel-conformance-test-it native_gate::a_stored_artifact_replays_from_another_path_and_arena_numbering" ;;
     signatures) echo "//:hirsel-signature-unittest tests::golden_vectors" ;;
     core-review) echo "//:hirsel-engine-unittest registry::tests::every_declared_signature_matches_the_review_table_and_canonical_hash" ;;
-    native-inventory) echo "//:hirsel-pipeline-tests-test-front-shard-1 rt_operations::declaration_digests_match_the_reviewed_native_inventory" ;;
+    native-inventory) echo "//:hirsel-pipeline-tests-test-front rt_operations::declaration_digests_match_the_reviewed_native_inventory" ;;
     ownership-passing) echo "//:hirsel-modes-unittest ownership::tests::corpus::source_corpus_ratchets_rule_and_primary_line" ;;
     authority-corpus) echo "//:hirsel-modes-unittest authority::corpus::real_phase_corpus_ratchet" ;;
     snapshots)
       echo "//:hirsel-lower-unittest tests::"
       echo "//:hirsel-parser-test-it grammar_examples::"
-      echo "//:hirsel-pipeline-tests-test-front-shard-1 modes_explanations::"
+      echo "//:hirsel-pipeline-tests-test-front modes_explanations::"
       ;;
     *) return 1 ;;
   esac
@@ -65,6 +65,15 @@ in_test=(heap layout rc-import wire replay signatures core-review native-invento
 run_cases() {
   local target=$1 filter=$2 config=()
   shift 2
+  # Resolve the generated test target: sync may shard or unshard this binary
+  # as its measured cost changes. A filtered sharded test runs in shard 1.
+  local resolved
+  resolved="$("$buck2" uquery "attrregexfilter(name, \"^${target#//:}(-shard-1)?$\", kind(\"_rust_test\", //:))")"
+  if [[ -z $resolved || $resolved == *$'\n'* ]]; then
+    echo "bless.sh: expected one test target for $target, got: $resolved" >&2
+    exit 1
+  fi
+  target=$resolved
   (( $# == 0 )) || config=(-c hirsel.tests=host)
   if ! "$buck2" test "${config[@]}" "$target" -- "$@" --test-arg="$filter" 2>&1 | tee "$log"; then
     echo "bless.sh: $target $filter failed" >&2

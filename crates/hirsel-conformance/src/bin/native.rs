@@ -349,7 +349,7 @@ fn full(
         .filter(|c| engine.is_none_or(|e| e.keeps(c)))
         .collect();
     let toolchain = toolchain(&matrix)?;
-    let selection = if exhaustive {
+    let selection = if exhaustive || !filter.is_empty() {
         None
     } else {
         Some(native::diet::Selection::load(root)?)
