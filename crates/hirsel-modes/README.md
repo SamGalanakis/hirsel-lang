@@ -838,3 +838,8 @@ that complete context, while the empty construction retains no source lifetime.
 `LANG-2-option-comparison-context-run` covers bare/called `None`, operand order,
 block wrappers, generic results and map lookup; the Slots control checks the
 original static case without depending on unfinished Slots execution.
+Mutable yielded bindings separately retain their collection's write path. Item
+writes and `mut` calls renew that collection through ordinary alias detachment,
+while the item's fresh value identity still types position-returning calls.
+The existing mutable-container PROV controls and mutable-item call twins cover
+both assignment and call mutation without weakening their expected diagnostics.

@@ -938,6 +938,18 @@ impl Checker<'_> {
         {
             return;
         }
+        let iteration_source = match &self.source_place(e).root {
+            SourceRoot::Binding { owner, binding } => self
+                .root_binding(*owner, binding)
+                .and_then(|binding| self.iteration_sources.get(&binding_key(binding)))
+                .copied(),
+            _ => None,
+        };
+        if let Some(source) = iteration_source {
+            // Renew the storage owner through its ordinary copy-detachment
+            // rules as well as the yielded value's independent name below.
+            self.invalidate(source, span, true);
+        }
         if let Some(o) = self.mutation_identity(e) {
             let binding = match &self.source_place(e).root {
                 SourceRoot::Binding { owner, binding } => {

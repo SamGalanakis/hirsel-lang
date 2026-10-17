@@ -86,6 +86,9 @@ pub(super) struct Checker<'a> {
     /// parameters (CLO-1).
     capture_views: BTreeSet<BindingKey>,
     identities: Identities,
+    /// A mutable yielded view has a fresh value name but writes its source
+    /// collection. Mutable aliases keep that storage path separately.
+    iteration_sources: BTreeMap<BindingKey, ExprId>,
     identity_paths: BTreeSet<Vec<FieldId>>,
     /// The identity paths a brand or relation names, directly or under a
     /// projected prefix.
@@ -334,6 +337,7 @@ impl<'a> Checker<'a> {
             binding_types,
             capture_views: BTreeSet::new(),
             identities,
+            iteration_sources: BTreeMap::new(),
             identity_paths,
             branded_paths,
             expression_partitions: BTreeMap::new(),

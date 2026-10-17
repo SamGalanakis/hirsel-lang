@@ -248,9 +248,21 @@ impl Checker<'_> {
             .frames
             .last()
             .map(|frame| (frame.owner, self.used(value)));
+        let writes_iteration = iteration
+            || match &self.source_place(value).root {
+                SourceRoot::Binding { owner, binding } => {
+                    self.root_binding(*owner, binding).is_some_and(|binding| {
+                        self.iteration_sources.contains_key(&binding_key(binding))
+                    })
+                }
+                _ => false,
+            };
         if let Some(index) = self.binding_site_index(NameSite::Pattern(pattern)) {
             let row = &mut self.out.body.bindings[index];
             row.ty = received;
+            if row.usage == UseKind::Mut && writes_iteration {
+                self.iteration_sources.insert(binding_key(row), value);
+            }
             if owned_call {
                 row.usage = UseKind::Take;
             }
