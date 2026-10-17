@@ -181,80 +181,112 @@ pub struct TaskStart {
     pub id: u64,
     pub callee: Value,
 }
-/// Extension boundary for the library: names and signatures come from its registry.
-/// Return None for an ordinary TIR definition. Arguments are in parameter order,
-/// already extracted with their explicit use modes. Returning Failed unwinds the
-/// call's cleanup; it must carry the defining operation's rule and source site.
-pub trait Operations {
-    /// Mutable callback state is delivered even when failure/tooling prevents a
-    /// success result. Returned owners join the evaluator's cleanup worklist.
-    fn callback_finished(
-        &mut self,
+// One inventory defines the extension boundary and its forwarding adapter. A new
+// operation hook therefore delegates automatically instead of inheriting a no-op.
+macro_rules! operation_boundary {
+    (shared { $( $(#[$smeta:meta])* fn $shared:ident(&self $(, $sa:ident: $st:ty)*) -> $sr:ty $sb:block)* }
+     mutable { $( $(#[$mmeta:meta])* fn $mutable:ident(&mut self $(, $ma:ident: $mt:ty)*) $(-> $mr:ty)? $mb:block)* }
+     required { $( $(#[$rmeta:meta])* fn $required:ident(&mut self $(, $ra:ident: $rt:ty)*) -> $rr:ty;)* }) => {
+        /// Extension boundary for the library: names and signatures come from its registry.
+        /// Return None for an ordinary TIR definition. Arguments are in parameter order,
+        /// already extracted with their explicit use modes. Returning Failed unwinds the
+        /// call's cleanup; it must carry the defining operation's rule and source site.
+        pub trait Operations {
+            $($(#[$smeta])* fn $shared(&self, $($sa: $st),*) -> $sr $sb)*
+            $($(#[$mmeta])* fn $mutable(&mut self, $($ma: $mt),*) $(-> $mr)? $mb)*
+            $($(#[$rmeta])* fn $required(&mut self, $($ra: $rt),*) -> $rr;)*
+        }
+        /// An operation layer overrides only the hooks it intercepts. Every other
+        /// hook, including future additions, forwards to the underlying provider.
+        pub trait OperationsAdapter {
+            fn operations(&self) -> &dyn Operations;
+            fn operations_mut(&mut self) -> &mut dyn Operations;
+            $(fn $shared(&self, $($sa: $st),*) -> $sr {
+                self.operations().$shared($($sa),*)
+            })*
+            $(fn $mutable(&mut self, $($ma: $mt),*) $(-> $mr)? {
+                self.operations_mut().$mutable($($ma),*)
+            })*
+            $(fn $required(&mut self, $($ra: $rt),*) -> $rr {
+                self.operations_mut().$required($($ra),*)
+            })*
+        }
+        impl<T: OperationsAdapter> Operations for T {
+            $(fn $shared(&self, $($sa: $st),*) -> $sr {
+                OperationsAdapter::$shared(self, $($sa),*)
+            })*
+            $(fn $mutable(&mut self, $($ma: $mt),*) $(-> $mr)? {
+                OperationsAdapter::$mutable(self, $($ma),*)
+            })*
+            $(fn $required(&mut self, $($ra: $rt),*) -> $rr {
+                OperationsAdapter::$required(self, $($ra),*)
+            })*
+        }
+    };
+}
+operation_boundary! {
+    shared {
+    fn choose_task(&self, _runnable: &[u64]) -> Result<usize, Error> {
+        Ok(0)
+    }
+    fn handles_failure(&self, _token: u64) -> bool {
+        false
+    }
+    }
+    mutable {
+    /// Publish callback snapshots even on failure/abandonment; return displaced owners.
+    fn callback_finished(&mut self,
         _token: u64,
         _updates: &[(usize, Value)],
-        _abandoned: bool,
-    ) -> Result<Vec<Value>, Error> {
+        _abandoned: bool) -> Result<Vec<Value>, Error> {
         Ok(vec![])
     }
-
-    /// Owners displaced by a handle's runtime cleanup, in creation order.
+    /// Owners displaced by runtime cleanup, in creation order.
     fn take_releases(&mut self) -> Vec<Value> {
         vec![]
     }
-
     fn take_tasks(&mut self) -> Vec<TaskStart> {
         vec![]
     }
     fn enter_task(&mut self, _id: u64, _shielded: bool) {}
-    fn choose_task(&self, _runnable: &[u64]) -> Result<usize, Error> {
-        Ok(0)
-    }
     fn task_resumed(&mut self, _id: u64, _context: &mut OperationContext<'_>) -> Result<(), Error> {
         Ok(())
     }
-    fn task_finished(
-        &mut self,
+    fn task_finished(&mut self,
         _id: u64,
         _result: OperationResult,
-        _context: &mut OperationContext<'_>,
-    ) -> Result<(), Error> {
+        _context: &mut OperationContext<'_>) -> Result<(), Error> {
         Err(invalid("unexpected task completion"))
     }
     fn take_yield(&mut self) -> bool {
         false
     }
-    fn handles_failure(&self, _token: u64) -> bool {
-        false
-    }
-    fn poll(
-        &mut self,
+    fn poll(&mut self,
         _token: u64,
-        _context: &mut OperationContext<'_>,
-    ) -> Result<Option<OperationResult>, Error> {
+        _context: &mut OperationContext<'_>) -> Result<Option<OperationResult>, Error> {
         Err(invalid("unexpected parked operation"))
     }
-
-    fn drop_handle(
-        &mut self,
+    fn drop_handle(&mut self,
         _kind: &str,
         _id: u64,
-        _context: &mut OperationContext<'_>,
-    ) -> Result<(), Error> {
+        _context: &mut OperationContext<'_>) -> Result<(), Error> {
         Ok(())
     }
-    fn resume(
-        &mut self,
+    fn resume(&mut self,
         _continuation: u64,
         _result: OperationResult,
-        _context: &mut OperationContext<'_>,
-    ) -> Result<OperationResult, Error> {
+        _context: &mut OperationContext<'_>) -> Result<OperationResult, Error> {
         Err(invalid("operation continuation is not implemented"))
     }
-    fn call(
-        &mut self,
+    /// Wait for external readiness only after runnable work is exhausted.
+    /// False means no external source can make progress (CONC-8).
+    fn wait(&mut self) -> Result<bool, Error> { Ok(false) }
+    }
+    required {
+    fn call(&mut self,
         call: OperationCall<'_>,
-        context: &mut OperationContext<'_>,
-    ) -> Result<Option<OperationResult>, Error>;
+        _context: &mut OperationContext<'_>) -> Result<Option<OperationResult>, Error> ;
+    }
 }
 pub struct OperationCall<'a> {
     pub path: &'a DefPath,

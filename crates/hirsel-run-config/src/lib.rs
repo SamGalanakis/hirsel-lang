@@ -21,6 +21,7 @@ pub const IDENTITY_DOMAIN: &str = "hirsel.run-config.v1";
 /// Execution origin never changes the requested provider contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderContract {
+    TasksCooperative,
     StdinBytes,
     StderrBytes,
     StdoutBytes,
@@ -31,7 +32,8 @@ pub enum ProviderContract {
     NetScript,
 }
 impl ProviderContract {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
+        Self::TasksCooperative,
         Self::StdinBytes,
         Self::StderrBytes,
         Self::StdoutBytes,
@@ -43,6 +45,7 @@ impl ProviderContract {
     ];
     pub const fn name(self) -> &'static str {
         match self {
+            Self::TasksCooperative => "tasks.cooperative@1",
             Self::StdinBytes => "stdin.bytes@1",
             Self::StderrBytes => "stderr.bytes@1",
             Self::StdoutBytes => "stdout.bytes@1",
@@ -715,7 +718,11 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
             ("io.stdin", &io.stdin, Some(ProviderContract::StdinBytes)),
             ("io.stderr", &io.stderr, Some(ProviderContract::StderrBytes)),
             ("io.stdout", &io.stdout, Some(ProviderContract::StdoutBytes)),
-            ("io.tasks", &io.tasks, None),
+            (
+                "io.tasks",
+                &io.tasks,
+                Some(ProviderContract::TasksCooperative),
+            ),
             (
                 "io.monotonic_clock",
                 &io.monotonic_clock,

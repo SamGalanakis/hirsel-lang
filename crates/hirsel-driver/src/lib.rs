@@ -214,7 +214,7 @@ pub fn run_path_with_config(
         .map(|record| record.read(&revision))
         .transpose()
         .map_err(|e| ToolError::Runtime(e.to_string()))?;
-    let mut host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
+    let mut host = hirsel_rt::host_launch::HostGrants::cooperative(std::io::sink());
     let admitted = hirsel_engine::admit_run(
         &signature,
         &revision,

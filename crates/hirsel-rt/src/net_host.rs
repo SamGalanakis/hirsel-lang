@@ -575,3 +575,6 @@ impl NetProvider for HostNet {
         self.sockets.remove(&handle);
     }
 }
+
+mod cooperative;
+pub use cooperative::{CooperativeNet, Readiness};

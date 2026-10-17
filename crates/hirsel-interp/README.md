@@ -509,3 +509,9 @@ UTF-8 argument text, and distinct stderr capture in ObservedSimulation. Each
 operation records its typed input and completion through the ordinary replay
 check. `supply_stdin` lets a host adapter provide one already-read chunk without
 changing authority or replay state; it then uses the same operation implementation.
+
+`OperationsAdapter` forwards every hook from the Operations method inventory; operation
+layers override only intercepted hooks. `Operations::wait` is called only after all
+runnable work is exhausted. The simulation returns false (CONC-8); a host adapter may
+wait for external readiness and ask the scheduler to poll again. Parked operations are
+polled only at suspension points, so pure code does not issue readiness syscalls.

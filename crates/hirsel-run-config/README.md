@@ -51,10 +51,10 @@ artifact/compiler/position/instance details never belong in those fields.
 `ValidatedRun::check_revision` checks its digest, entry and launch kind.
 
 Known provider contracts have one closed enumeration, `ProviderContract`:
-`stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1` and
+`tasks.cooperative@1`, `stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1` and
 `clock.wall.unix_ns@1`, `net.stream@1` and `net.script@2`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin
-belongs to tooling provenance. Unknown contracts and versions, Tasks and
+belongs to tooling provenance. Unknown contracts and versions and
 scheduler policy refuse as Unsupported until adapters can enforce them.
 Revocation references remain external host evidence selectors, not provider names.
 

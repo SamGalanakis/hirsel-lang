@@ -225,37 +225,41 @@ fn execute_frames(
             start.callee.discard();
             runnable.push_back((start.id, vec![child], vec![]));
         }
-        // Poll each runtime-owned wait once after a scheduling transition. There
-        // is no host waiting: exhausted readiness is the CONC-8 observation.
-        let mut waiting = vec![];
-        for (id, mut stack, failures) in parked.drain(..) {
-            operations.enter_task(id, stack.iter().any(|f| f.finalized.is_some()));
-            let frame: &mut Frame = stack.last_mut().unwrap();
-            let (OperationResult::Park { token, .. }, state) = frame.operation.as_ref().unwrap()
-            else {
-                return Err(invalid("parked task has no wait"));
-            };
-            let result = operations.poll(
-                *token,
-                &mut OperationContext {
-                    configuration,
-                    sources,
-                    stdout: &mut execution.stdout,
-                    trace: &mut execution.trace,
-                    trace_mode: runtime.trace_mode,
-                    anchor: Some(&state.anchor),
-                },
-            )?;
-            if let Some(result) = result {
-                frame.operation.as_mut().unwrap().0 = result;
-                runnable.push_back((id, stack, failures));
-            } else {
-                waiting.push((id, stack, failures));
-            }
-        }
-        parked = waiting;
-        operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
         let yield_now = operations.take_yield();
+        // Poll only at suspension points. Pure code may starve other tasks;
+        // checking host readiness on every interpreter instruction would make
+        // a waiting socket slow all pure computation.
+        if yield_now || frames.is_empty() {
+            let mut waiting = vec![];
+            for (id, mut stack, failures) in parked.drain(..) {
+                operations.enter_task(id, stack.iter().any(|f| f.finalized.is_some()));
+                let frame: &mut Frame = stack.last_mut().unwrap();
+                let (OperationResult::Park { token, .. }, state) =
+                    frame.operation.as_ref().unwrap()
+                else {
+                    return Err(invalid("parked task has no wait"));
+                };
+                let result = operations.poll(
+                    *token,
+                    &mut OperationContext {
+                        configuration,
+                        sources,
+                        stdout: &mut execution.stdout,
+                        trace: &mut execution.trace,
+                        trace_mode: runtime.trace_mode,
+                        anchor: Some(&state.anchor),
+                    },
+                )?;
+                if let Some(result) = result {
+                    frame.operation.as_mut().unwrap().0 = result;
+                    runnable.push_back((id, stack, failures));
+                } else {
+                    waiting.push((id, stack, failures));
+                }
+            }
+            parked = waiting;
+        }
+        operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
         if frames.is_empty() || (yield_now && !runnable.is_empty()) {
             if !frames.is_empty() {
                 runnable.push_back((
@@ -293,6 +297,9 @@ fn execute_frames(
                     },
                 )?;
             } else {
+                if operations.wait()? {
+                    continue;
+                }
                 let waits = parked
                     .iter()
                     .filter_map(|(_, stack, _)| match &stack.last()?.operation.as_ref()?.0 {

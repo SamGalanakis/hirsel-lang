@@ -526,3 +526,12 @@ by the memory tree and checked-heap model. Tape result/fault records preserve ea
 condition and committed write prefix. FileFault remains the fallback and confinement
 refusal; output and stdin keep their own fault domains. The Result ABI keeps the
 existing FileFault/Canceled/NotGranted ordinals and appends five nullary variants.
+
+`net_host::CooperativeNet` reuses HostNet's socket conventions and immediate operations
+with nonblocking sockets, retained connect/write/TLS progress and readiness tokens.
+`Readiness` exposes zero-wait polling and an idle-only wait to the interpreter's driver.
+DNS runs outside the evaluator and signals a descriptor; relative timeouts retain one
+deadline across readiness retries. Partially published writes/TLS exchanges cannot be
+reported as effect-free cancellation. HostNet remains the native blocking provider.
+`HostGrants::cooperative` admits `tasks.cooperative@1` for the interpreter;
+`HostGrants::new` refuses Tasks until native scheduling supports that contract.

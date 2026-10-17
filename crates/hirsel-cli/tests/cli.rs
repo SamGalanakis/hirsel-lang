@@ -503,23 +503,33 @@ fn run_record(source: &std::path::Path, grants: serde_json::Value) -> std::path:
 }
 
 #[test]
+fn hello_web_concurrent_serves_while_another_request_is_incomplete() {
+    hello_web(false, true);
+}
+
+#[test]
 fn hello_web_answers_real_requests_interpreted() {
-    hello_web(false);
+    hello_web(false, false);
 }
 
 #[test]
 #[ignore = "full gate"]
 fn full_gate_hello_web_answers_real_requests_native() {
-    hello_web(true);
+    hello_web(true, false);
 }
 
-fn hello_web(native: bool) {
+fn hello_web(native: bool, concurrent: bool) {
     use std::io::{BufRead, Read, Write};
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     use std::time::Duration;
     {
-        let source = include_str!("../../../examples/hello-web/main.hir")
+        let original = if concurrent {
+            include_str!("../../../examples/hello-web-concurrent/main.hir")
+        } else {
+            include_str!("../../../examples/hello-web/main.hir")
+        };
+        let source = original
             .replace("8080u16", "0u16")
             .replace(
                 "while true",
@@ -528,9 +538,18 @@ let bound = net.local_addr(n, listener) ? Network
 let output = io.stdout(rt) ? Grant
 let _ = out.print(output, std@1/u16.to_string(bound.port))
 let _ = out.print(output, "\n")
-for i in 0u64..3u64
+for i in 0u64..COUNTu64
 "#,
-            );
+            )
+            .replace("COUNTu64", if concurrent { "4u64" } else { "3u64" });
+        let source = if concurrent {
+            source.replace(
+                "net.local_addr(n, listener)",
+                "net.local_addr(n, accepting)",
+            )
+        } else {
+            source
+        };
         let path = file(&source);
         let manifest = path.with_extension("hir.json");
         let stdlib = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -538,9 +557,14 @@ for i in 0u64..3u64
             .canonicalize()
             .unwrap();
         std::fs::write(&manifest,serde_json::json!({"schema":1,"package":{"name":"hello_web","version":"1"},"sources":[{"path":path.file_name().unwrap().to_str().unwrap(),"module":[]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let tasks = if concurrent {
+            serde_json::json!("tasks.cooperative@1")
+        } else {
+            serde_json::Value::Null
+        };
         let record = run_record(
             &path,
-            serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}),
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":tasks,"dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}),
         );
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command.arg("run").arg(&path).arg("--run").arg(&record);
@@ -584,6 +608,16 @@ for i in 0u64..3u64
             .recv_timeout(Duration::from_secs(90))
             .unwrap_or_else(|e| panic!("server readiness native={native}: {e}"));
         let port: u16 = port.trim().parse().unwrap();
+        // An incomplete first request must not prevent later clients completing.
+        let mut held = concurrent.then(|| {
+            let mut stream =
+                std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            stream.write_all(b"GET / HTTP/1.1\r\nHost:").unwrap();
+            stream
+        });
         for (request,expected) in [
             (&b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"[..],&b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world"[..]),
             (b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\nabc",b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world"),
@@ -594,6 +628,13 @@ for i in 0u64..3u64
             stream.write_all(request).unwrap();
             stream.shutdown(std::net::Shutdown::Write).unwrap();
             let mut response=vec![];stream.read_to_end(&mut response).unwrap();assert_eq!(response,expected,"native={native}");
+        }
+        if let Some(held) = &mut held {
+            held.write_all(b" localhost\r\n\r\n").unwrap();
+            held.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut response = vec![];
+            held.read_to_end(&mut response).unwrap();
+            assert!(response.ends_with(b"Hello, world"));
         }
         let status = server.0.wait().unwrap();
         server.1 = true;
@@ -1417,4 +1458,171 @@ fn file_errors_cli_reports_permission_denied_for_a_chmod_zero_host_file() {
         }
         std::fs::remove_dir_all(root).unwrap();
     });
+}
+
+#[test]
+fn real_host_child_await() {
+    let source = file(include_str!("../../../conformance/CONC/CONC-2-await.hir"));
+    let record = run_record(
+        &source,
+        serde_json::json!({
+            "io": {"tasks": "tasks.cooperative@1", "dirs": []}, "args": []
+        }),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--run")
+        .arg(&record)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let native = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--run")
+        .arg(&record)
+        .arg("--native")
+        .output()
+        .unwrap();
+    assert!(!native.status.success());
+    assert!(
+        String::from_utf8_lossy(&native.stderr).contains("io.tasks"),
+        "{native:?}"
+    );
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
+}
+
+#[test]
+fn real_host_tasks_accept_and_connect_as_siblings() {
+    let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    let source = file(&format!(
+        r#"
+fn grant(e: GrantError) -> () uses {{}} {{ () }}
+fn network(e: NetError) -> () uses {{}} {{ () }}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
+  let n = io.net(rt) ? grant
+  let tasks = io.tasks(rt) ? grant
+  let address = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: {port}u16)
+  let listener = net.listen(n, address) ? network
+  task.scope(tasks, fn(s: Scope) -> Result[(), ()] {{
+    let server = task.async(s, fn() -> Result[(), ()] {{
+      let mut owned_listener = take listener
+      let mut (stream, _) = net.accept(n, mut owned_listener) ? network
+      let mut bytes: List[u8] = []
+      let count = net.read(n, mut stream, mut bytes, 1) ? network
+      failure.check(count == 1 && bytes[0] == 120u8, Arithmetic())
+      net.write_all(n, mut stream, b"y") ? network
+      net.close(n, take stream)
+      Ok(())
+    }})
+    let client = task.async(s, fn() -> Result[(), ()] {{
+      let mut stream = net.connect_addr(n, address, Unbounded()) ? network
+      net.write_all(n, mut stream, b"x") ? network
+      let mut bytes: List[u8] = []
+      let count = net.read(n, mut stream, mut bytes, 1) ? network
+      failure.check(count == 1 && bytes[0] == 121u8, Arithmetic())
+      net.close(n, take stream)
+      Ok(())
+    }})
+    task.await(s, take server)?
+    task.await(s, take client)?
+    Ok(())
+  }})
+}}
+"#
+    ));
+    let record = run_record(
+        &source,
+        serde_json::json!({
+            "io": {"tasks": "tasks.cooperative@1", "dirs": [], "net": {
+                "provider": "net.stream@1", "rules": [
+                    {"address": "127.0.0.1", "service": port.to_string(), "operation": "listen"},
+                    {"address": "127.0.0.1", "service": port.to_string(), "operation": "connect"}
+                ]
+            }}, "args": []
+        }),
+    );
+    drop(reservation);
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--run")
+        .arg(&record)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
+}
+
+#[test]
+fn real_host_cancel_parked_accept_is_level_triggered() {
+    let source = file(
+        r#"
+fn grant(e: GrantError) -> () uses {} { () }
+fn network(e: NetError) -> () uses {} { () }
+fn canceled(e: NetError) -> () uses {} {
+  failure.check(match e { Canceled(_) => true, _ => false }, Arithmetic())
+}
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let n = io.net(rt) ? grant
+  let tasks = io.tasks(rt) ? grant
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 0u16)) ? network
+  let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+  task.scope(tasks, fn(s: Scope) -> Result[(), ()] {
+    let mut rx = take receiver
+    let child = task.async(s, fn() -> Result[(), ()] {
+      let mut tx = take sender
+      let mut owned_listener = take listener
+      let _ = channel.send(tasks, mut tx, 1u8)
+      let first = net.accept(n, mut owned_listener)
+      match first { Error(e) => canceled(e), Ok(pair) => failure.check(false, Arithmetic()) }
+      let second = net.accept(n, mut owned_listener)
+      match second { Error(e) => canceled(e), Ok(pair) => failure.check(false, Arithmetic()) }
+      Ok(())
+    })
+    let _ = channel.receive(tasks, mut rx)
+    task.cancel(s, child)
+    task.await(s, take child)
+  })
+}
+"#,
+    );
+    let record = run_record(
+        &source,
+        serde_json::json!({"io": {
+        "tasks": "tasks.cooperative@1", "dirs": [], "net": {"provider": "net.stream@1", "rules": [
+            {"address": "127.0.0.1", "service": "0", "operation": "listen"}
+        ]}}, "args": []}),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--run")
+        .arg(&record)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
 }

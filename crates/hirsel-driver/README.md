@@ -85,3 +85,10 @@ while retaining the same bytes for native observations and launch diagnostics.
 no-record simulation and admitted host path. CLI callers supply one billion
 unless overridden. `run_path`, `run_path_with_simulation`, and interpreter
 `Limits::default` retain their existing test/conformance budgets.
+
+HostLibrary implements OperationsAdapter, whose forwarding implementation is generated
+from the same inventory as Operations. Scheduler and cleanup hooks therefore cannot
+silently inherit no-op defaults. Host sockets use CooperativeNet: parked operations
+retain typed snapshots while the evaluator retains owners and mutable loans. Socket
+readiness and relative timeouts are polled at scheduling points; the scheduler waits
+only when no task is runnable. Effect-free waits observe level-triggered cancellation.

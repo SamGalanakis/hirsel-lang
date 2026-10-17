@@ -110,6 +110,7 @@ hirsel_test(
     crate_root = "crates/hirsel-cli/tests/cli.rs",
     srcs = glob(["crates/hirsel-cli/tests/**"]) + [
         "conformance/CAP/CAP-1-host-inputs-run.hir",
+        "conformance/CONC/CONC-2-await.hir",
         "examples/adventure/demo.json",
         "examples/adventure/hirsel.json",
         "examples/adventure/main.hir",
@@ -121,6 +122,7 @@ hirsel_test(
         "examples/csvjson/demo.json",
         "examples/csvjson/hirsel.json",
         "examples/csvjson/main.hir",
+        "examples/hello-web-concurrent/main.hir",
         "examples/hello-web/main.hir",
         "examples/httpget/demo.json",
         "examples/httpget/hirsel.json",
@@ -174,6 +176,7 @@ hirsel_test(
     crate_root = "crates/hirsel-cli/tests/examples.rs",
     srcs = glob(["crates/hirsel-cli/tests/**"]) + [
         "conformance/CAP/CAP-1-host-inputs-run.hir",
+        "conformance/CONC/CONC-2-await.hir",
         "examples/adventure/demo.json",
         "examples/adventure/hirsel.json",
         "examples/adventure/main.hir",
@@ -185,6 +188,7 @@ hirsel_test(
         "examples/csvjson/demo.json",
         "examples/csvjson/hirsel.json",
         "examples/csvjson/main.hir",
+        "examples/hello-web-concurrent/main.hir",
         "examples/hello-web/main.hir",
         "examples/httpget/demo.json",
         "examples/httpget/hirsel.json",

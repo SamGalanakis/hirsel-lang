@@ -845,6 +845,16 @@ impl Library {
         }
     }
 }
+impl Library {
+    /// Cancellation of the currently entered task, suppressed during destruction.
+    pub fn cancellation(&self) -> Option<u32> {
+        self.tasks.canceled()
+    }
+    /// Stable spawn path for diagnostics of host-owned waits.
+    pub fn task_path(&self) -> Vec<u32> {
+        self.tasks.path()
+    }
+}
 impl Operations for Library {
     fn callback_finished(
         &mut self,

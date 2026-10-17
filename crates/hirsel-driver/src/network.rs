@@ -186,12 +186,20 @@ pub(crate) struct HostLibrary<'a> {
     io: RealIo,
     handles: BTreeMap<u64, u64>,
     next: u64,
+    next_wait: u64,
+    readiness: hirsel_rt::net_host::Readiness,
+    waits: BTreeMap<u64, HostWait>,
+    yield_now: bool,
+}
+struct HostWait {
+    name: String,
+    arguments: Vec<Value>,
 }
 impl<'a> HostLibrary<'a> {
     pub fn new(
         run: &hirsel_tir::RunConfiguration,
         admitted: &hirsel_run_config::ValidatedRun,
-        io: RealIo,
+        mut io: RealIo,
         output: &'a mut dyn std::io::Write,
     ) -> Result<Self, Error> {
         let record = admitted.record();
@@ -222,7 +230,13 @@ impl<'a> HostLibrary<'a> {
             test_seed: record.inputs.test_seed,
             ..Default::default()
         };
+        let (provider, readiness) = hirsel_rt::net_host::CooperativeNet::new();
+        io.set_net_provider(provider);
         Ok(Self {
+            readiness,
+            next_wait: 1 << 62,
+            waits: BTreeMap::new(),
+            yield_now: false,
             output,
             written: 0,
             library: Library::new(run, config)?,
@@ -363,6 +377,36 @@ impl<'a> HostLibrary<'a> {
         self.library.call(call, cx)
     }
     fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
+        self.yield_now = true;
+        if !matches!(
+            name,
+            "io.dir"
+                | "dir.narrow"
+                | "file.narrow"
+                | "io.monotonic_clock"
+                | "io.wall_clock"
+                | "clock.monotonic"
+                | "clock.wall"
+        ) && let Some(cause) = self.library.cancellation()
+        {
+            if name == "file.commit" {
+                let handle = self.id(&a[1])?;
+                self.io
+                    .call(R::Close { handle })
+                    .map_err(|e| Error::Unavailable(format!("host close: {e:?}")))?;
+                if let Value::Handle { id, .. } = a[1] {
+                    self.handles.remove(&id);
+                }
+            }
+            return Ok(
+                OperationResult::returned(file_error(hirsel_rt::io::IoError::Canceled(cause)))
+                    .transferring(if name == "file.commit" {
+                        vec![1]
+                    } else {
+                        vec![]
+                    }),
+            );
+        }
         let path = |v: &Value| text(fields(v)?[0]);
         let request = match name {
             "io.dir" => R::Directory {
@@ -539,7 +583,51 @@ impl<'a> HostLibrary<'a> {
             released: vec![],
         })
     }
-    fn network(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
+    fn host_network(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        cx: &OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        self.yield_now = true;
+        let token = self.next_wait;
+        self.next_wait += 1;
+        match self.try_network(name, a, token) {
+            Err(Error::Blocked(_)) => {
+                self.waits.insert(
+                    token,
+                    HostWait {
+                        name: name.into(),
+                        arguments: a.to_vec(),
+                    },
+                );
+                Ok(OperationResult::Park {
+                    token,
+                    wait: hirsel_interp::BlockedWait {
+                        spawn_path: self.library.task_path(),
+                        anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                        kind: name.into(),
+                        targets: vec![],
+                    },
+                })
+            }
+            result => result,
+        }
+    }
+    fn try_network(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        token: u64,
+    ) -> Result<OperationResult, Error> {
+        self.readiness.enter(token);
+        let result = self.network(name, a, token);
+        if !matches!(result, Err(Error::Blocked(_))) {
+            self.readiness.finish(token);
+        }
+        result
+    }
+    fn network(&mut self, name: &str, a: &[Value], token: u64) -> Result<OperationResult, Error> {
         let request = match name {
             "io.net" => R::Net { io: 1 },
             "net.narrow" => R::NetNarrow {
@@ -659,10 +747,49 @@ impl<'a> HostLibrary<'a> {
             }
             _ => return Err(Error::Unavailable(format!("host network {name}"))),
         };
-        let completion = self
-            .io
-            .call(request)
-            .map_err(|e| Error::Unavailable(format!("host network: {e:?}")))?;
+        let cancellation = self
+            .library
+            .cancellation()
+            .filter(|_| self.readiness.cancellable(token));
+        let completion = if let Some(cause) = cancellation.filter(|_| {
+            matches!(
+                name,
+                "net.resolve"
+                    | "net.connect"
+                    | "net.connect_addr"
+                    | "net.listen"
+                    | "net.accept"
+                    | "net.read"
+                    | "net.read_into"
+                    | "net.write"
+                    | "net.write_all"
+                    | "tls.connect"
+                    | "tls.close"
+            )
+        }) {
+            let e = NetError::Canceled(cause);
+            match name {
+                "net.resolve" => C::Addresses(Err(e)),
+                "net.connect" | "net.connect_addr" | "net.listen" => C::NetHandle(Err(e)),
+                "net.accept" => C::Accepted(Err(e)),
+                "net.read" | "net.read_into" => C::NetBytes(Err(e)),
+                "net.write" => C::Count(Err(e)),
+                "tls.connect" | "tls.close" => {
+                    self.io
+                        .call(R::Close {
+                            handle: self.id(&a[1])?,
+                        })
+                        .map_err(|e| Error::Unavailable(format!("host close: {e:?}")))?;
+                    C::NetUnit(Err(e))
+                }
+                _ => C::NetUnit(Err(e)),
+            }
+        } else {
+            self.io.call(request).map_err(|e| match e {
+                hirsel_rt::io::AdapterError::Blocked => Error::Blocked(vec![]),
+                e => Error::Unavailable(format!("host network: {e:?}")),
+            })?
+        };
         let mut updates = vec![];
         let value = match completion {
             C::Handle(r) => match r {
@@ -740,7 +867,49 @@ impl<'a> HostLibrary<'a> {
         })
     }
 }
-impl Operations for HostLibrary<'_> {
+impl hirsel_interp::OperationsAdapter for HostLibrary<'_> {
+    fn operations(&self) -> &dyn Operations {
+        &self.library
+    }
+    fn operations_mut(&mut self) -> &mut dyn Operations {
+        &mut self.library
+    }
+    fn take_yield(&mut self) -> bool {
+        let host = std::mem::take(&mut self.yield_now);
+        self.library.take_yield() || host
+    }
+    fn wait(&mut self) -> Result<bool, Error> {
+        self.readiness
+            .wait()
+            .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))
+    }
+    fn poll(
+        &mut self,
+        token: u64,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let Some(wait) = self.waits.get(&token) else {
+            return self.library.poll(token, cx);
+        };
+        let canceled = self.library.cancellation().is_some() && self.readiness.cancellable(token);
+        if !canceled
+            && !self
+                .readiness
+                .ready(token)
+                .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))?
+        {
+            return Ok(None);
+        }
+        let name = wait.name.clone();
+        let arguments = wait.arguments.clone();
+        match self.try_network(&name, &arguments, token) {
+            Err(Error::Blocked(_)) => Ok(None),
+            result => {
+                self.waits.remove(&token);
+                result.map(Some)
+            }
+        }
+    }
     fn call(
         &mut self,
         call: OperationCall<'_>,
@@ -786,12 +955,12 @@ impl Operations for HostLibrary<'_> {
                     },
                     cx,
                 )?;
-                return self.network(&name, call.arguments).map(Some);
+                return self.host_network(&name, call.arguments, cx).map(Some);
             }
             if (name.starts_with("net.") || name.starts_with("tls."))
                 && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
-                return self.network(&name, call.arguments).map(Some);
+                return self.host_network(&name, call.arguments, cx).map(Some);
             }
         }
         let result = self.library.call(call, cx);
@@ -800,14 +969,6 @@ impl Operations for HostLibrary<'_> {
             .map_err(|e| Error::Unavailable(format!("stdout: {e}")))?;
         self.written = cx.stdout.len();
         result
-    }
-    fn resume(
-        &mut self,
-        t: u64,
-        r: OperationResult,
-        cx: &mut OperationContext<'_>,
-    ) -> Result<OperationResult, Error> {
-        self.library.resume(t, r, cx)
     }
     fn drop_handle(
         &mut self,

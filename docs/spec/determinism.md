@@ -92,7 +92,12 @@ without leading zeros, and `operation` one of `connect`, `connect_tls` and `list
 
 **Providers** name versioned observable contracts, identical for real hosts, simulation and
 replay: `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1`,
-`clock.wall.unix_ns@1`, `net.stream@1` and `net.script@2`. `net.stream@1` is the host
+`clock.wall.unix_ns@1`, `tasks.cooperative@1`, `net.stream@1` and `net.script@2`.
+`tasks.cooperative@1` supplies structured tasks with cooperative scheduling at the
+suspension points of [CONC-1](concurrency.md#conc-1-runtime). Host readiness waits
+suspend only their task; the provider waits for external readiness only when no task
+is runnable. Cancellation is checked before blocking effects and when an effect-free
+wait resumes, with destruction shielded as required by CONC-3. `net.stream@1` is the host
 network with the [network semantics of the core library](core-library.md#network).
 `net.script@2` additionally takes `peers`, an array of scripted peer records in schema
 order, and serves the program from them exactly as `test.net` does; `peers` is invalid under

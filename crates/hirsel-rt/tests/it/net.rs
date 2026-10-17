@@ -856,3 +856,113 @@ fn tape_v4_round_trips_every_network_event_and_other_versions_are_refused() {
         assert!(parse_tape(bad).is_err(), "{bad}");
     }
 }
+
+/// Ported from Rust std tcp nonblocking tests; additionally exercise RealIo's
+/// logical handle allocation while a provider operation is suspended.
+#[test]
+fn cooperative_accept_read_timeout_and_interleaved_handles() {
+    use hirsel_rt::net_host::CooperativeNet;
+    let mut io = real([rule("127.0.0.1", 0, NetOperation::Listen)]);
+    let (provider, ready) = CooperativeNet::new();
+    io.set_net_provider(provider);
+    let n = net(&mut io);
+    ready.enter(1);
+    let listener = handle(io.call(Request::Listen {
+        net: n,
+        addr: loopback(0),
+    }));
+    ready.finish(1);
+    let address = match io.call(Request::LocalAddr { net: n, listener }).unwrap() {
+        Completion::Address(Ok(a)) => a,
+        other => panic!("{other:?}"),
+    };
+    ready.enter(2);
+    let accept = Request::Accept { net: n, listener };
+    assert_eq!(io.call(accept.clone()), Err(AdapterError::Blocked));
+    assert!(!ready.ready(2).unwrap());
+    // No identity was published by the blocked accept. An unrelated projection
+    // can allocate the next identity before this accept completes.
+    let other_net = net(&mut io);
+    let mut peer = std::net::TcpStream::connect(address.std()).unwrap();
+    assert!(ready.wait().unwrap());
+    let stream = match io.call(accept).unwrap() {
+        Completion::Accepted(Ok((id, _))) => id,
+        other => panic!("{other:?}"),
+    };
+    assert_ne!(stream, other_net);
+    ready.finish(2);
+    ready.enter(3);
+    let read = Request::NetRead {
+        net: n,
+        stream,
+        max: 4,
+    };
+    assert_eq!(io.call(read.clone()), Err(AdapterError::Blocked));
+    assert!(!ready.ready(3).unwrap());
+    peer.write_all(b"ping").unwrap();
+    assert!(ready.wait().unwrap());
+    assert_eq!(
+        io.call(read.clone()),
+        Ok(Completion::NetBytes(Ok(b"ping".to_vec())))
+    );
+    ready.finish(3);
+    assert_eq!(
+        io.call(Request::SetTimeout {
+            net: n,
+            stream,
+            which: TimeoutKind::Read,
+            timeout: NetTimeout::Nanos(1)
+        }),
+        Ok(Completion::NetUnit(Ok(())))
+    );
+    ready.enter(4);
+    let mut result = io.call(read.clone());
+    if result == Err(AdapterError::Blocked) {
+        assert!(ready.wait().unwrap());
+        result = io.call(read);
+    }
+    assert_eq!(result, Ok(Completion::NetBytes(Err(NetError::TimedOut))));
+    ready.finish(4);
+    assert!(!ready.wait().unwrap());
+    io.call(Request::Close { handle: stream }).unwrap();
+    io.call(Request::Close { handle: listener }).unwrap();
+}
+
+#[test]
+fn cooperative_connect_retains_socket_across_handle_allocation() {
+    use hirsel_rt::net_host::CooperativeNet;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = SocketAddr::of(listener.local_addr().unwrap());
+    let mut io = real([rule("127.0.0.1", addr.port, NetOperation::Connect)]);
+    let (provider, ready) = CooperativeNet::new();
+    io.set_net_provider(provider);
+    let n = net(&mut io);
+    ready.enter(1);
+    let request = Request::ConnectAddr {
+        net: n,
+        addr,
+        timeout: NetTimeout::Nanos(5_000_000_000),
+    };
+    let mut result = io.call(request.clone());
+    let other_net = net(&mut io);
+    if result == Err(AdapterError::Blocked) {
+        assert!(ready.wait().unwrap());
+        result = io.call(request);
+    }
+    let stream = handle(result);
+    assert_ne!(stream, other_net);
+    ready.finish(1);
+    let (mut peer, _) = listener.accept().unwrap();
+    assert_eq!(
+        io.call(Request::NetWriteAll {
+            net: n,
+            stream,
+            bytes: b"ok".to_vec()
+        }),
+        Ok(Completion::NetUnit(Ok(())))
+    );
+    let mut bytes = [0; 2];
+    peer.read_exact(&mut bytes).unwrap();
+    assert_eq!(&bytes, b"ok");
+    io.call(Request::Close { handle: stream }).unwrap();
+}

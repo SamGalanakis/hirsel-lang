@@ -3,14 +3,24 @@ use crate::{host_paths::PinnedDirectory, io_real::RealIo, net::NetRule};
 use hirsel_run_config::{HostAuthority, RevocationEvidence, RunConfig, RunRefusal};
 
 pub struct HostGrants {
+    cooperative_tasks: bool,
     io: Option<RealIo>,
     output: Option<Box<dyn std::io::Write>>,
 }
 impl HostGrants {
     pub fn new(output: impl std::io::Write + 'static) -> Self {
         Self {
+            cooperative_tasks: false,
             io: None,
             output: Some(Box::new(output)),
+        }
+    }
+    /// Interpreter admission for the cooperative scheduler. Native callers keep
+    /// the default refusal until their own task contexts are implemented.
+    pub fn cooperative(output: impl std::io::Write + 'static) -> Self {
+        Self {
+            cooperative_tasks: true,
+            ..Self::new(output)
         }
     }
     pub fn into_io(self) -> RealIo {
@@ -19,6 +29,11 @@ impl HostGrants {
 }
 impl HostAuthority for HostGrants {
     fn authorize(&mut self, record: &RunConfig) -> Result<(), RunRefusal> {
+        if record.io.as_ref().is_some_and(|io| io.tasks.is_some()) && !self.cooperative_tasks {
+            return Err(RunRefusal::Unsupported {
+                field: "io.tasks".into(),
+            });
+        }
         let mounts = record
             .io
             .as_ref()
