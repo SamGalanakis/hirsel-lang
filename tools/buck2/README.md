@@ -351,6 +351,20 @@ A request is part of the test's action key: resizing reruns those tests once.
 pool's reserved CPU-hours by repository and hirsel's reserved against used
 CPU-hours and GiB-hours per lane and target over the last N hours.
 
+It also sums execution wall seconds and CPU seconds per action category,
+excluding queue time. For rustc compile/link phases and first-party target
+names, add exported Buck2 event logs:
+
+```sh
+.buck2/bin/buck2 log show /tmp/build.pb.zst > /tmp/build.jsonl
+python3 tools/buck2/pool_usage.py --hours 6 --trace /tmp/trace-*.jsonl \
+  --usage /tmp/usage-*.log --events /tmp/build.jsonl
+```
+
+This reuses the compile-sizing tool's unique time/request match; unmatched or
+ambiguous rustc measurements stay in `rustc (phase unknown)`. Rustc's link
+action includes compiling the executable, so its time is not linker-only.
+
 ## Measured compile requests
 
 `action-sizes.json` keeps dev/release budgets per target, with phase timings,

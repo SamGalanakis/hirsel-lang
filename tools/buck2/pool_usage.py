@@ -14,6 +14,10 @@ CPUs x wall and memory x wall, and uses its CPU time and PSS peak x wall (an
 upper bound). The report prints the pool's reserved CPU-hours by repository,
 the repository's share of them, and its reserved and used CPU-hours and
 GiB-hours per lane and per target, a test target's shards as one row.
+It also sums execution wall seconds and CPU seconds per action category;
+queueing is excluded. With --events (exported Buck2 JSONL logs), uniquely
+matched rustc actions are split into compile and link. Rustc's link action
+includes compiling the executable; it is not a linker-only measurement.
 """
 
 import argparse
@@ -22,6 +26,8 @@ import json
 from pathlib import Path
 import re
 import subprocess
+
+from action_sizes_from_log import events as rustc_events, join
 
 TRACE_DIR = '/var/lib/kiln-resource-hints/trace'
 USAGE_LOGS = ('/workspace/kiln-executor/usage/actions.log.1', '/workspace/kiln-executor/usage/actions.log')
@@ -45,23 +51,59 @@ def executions(lines):
     return list(seen.values())
 
 
-def names(lines):
-    """Each operation's name from the workers' rows: its test binary, or its category."""
+def operations(lines, wanted):
+    """Worker measurements by operation, including their finish timestamps."""
     found = {}
     for line in lines:
-        fields = line.split('\t')
+        fields = line.rstrip('\n').split('\t')
+        if not fields[0].isdigit():
+            continue
         row = dict(field.split('=', 1) for field in fields[1:] if '=' in field)
         op = row.get('op')
-        if not op or op == '-':
-            continue
+        if op in wanted:
+            found[op] = found.get(op, {}) | {key: value for key, value in row.items() if value != '-'} | {'end': int(fields[0])}
+    return found
+
+
+def names(rows):
+    """Each operation's name: its test binary, or its category and crate."""
+    found = {}
+    for op, row in rows.items():
         test = re.fullmatch(r'run:[^:]*:root//:(.*)', row.get('test', ''))
         if test:
             found[op] = re.sub(r'-shard-\d+$', '', test.group(1))
-        elif op not in found:
+        else:
             category = row.get('category', '-')
             crate = row.get('crate', '-')
             found[op] = f'{category} {crate}' if crate != '-' else f'{category if category != "-" else "other"} actions'
     return found
+
+
+def categories(rows):
+    found = {}
+    for op, row in rows.items():
+        category = row.get('category', '-')
+        if row.get('test', '-').startswith('run:'):
+            category = 'test'
+        elif category == 'rustc':
+            category = 'rustc (phase unknown)'
+        found[op] = category if category != '-' else 'other'
+    return found
+
+
+def attribute_rustc(paths, rows, operation_names, operation_categories):
+    """Use the sizing tool's conservative join; leave ambiguous phases unknown."""
+    records = {op: row for op, row in rows.items()
+               if row.get('category') == 'rustc' and row.get('exit') == '0'
+               and all(row.get(key, '-').isdigit() for key in
+                       ('wall_ms', 'cpu_usec', 'peak_bytes', 'requested_cpu', 'requested_kb'))}
+    for path in paths:
+        for action, row in join(rustc_events(Path(path)), records):
+            if row is None:
+                continue
+            op = row['op']
+            operation_names[op] = f"rustc {action['profile']} {action['target']} {action['phase']}"
+            operation_categories[op] = 'rustc link' if action['phase'].split()[0] == 'link' else 'rustc compile'
 
 
 def field(identity, key):
@@ -71,18 +113,22 @@ def field(identity, key):
     return '-'
 
 
-def report(events, operation_names, repo, hours, top):
+def report(events, operation_names, operation_categories, repo, hours, top):
     newest = max(event['end_s'] for event in events)
     window = [event for event in events if event['end_s'] >= newest - hours * 3600]
     by_repo = defaultdict(float)
     lanes = defaultdict(lambda: [0, 0.0, 0.0, 0.0, 0.0])
     targets = defaultdict(lambda: [0, 0.0, 0.0, 0.0, 0.0])
+    action_categories = defaultdict(lambda: [0, 0.0, 0.0])
     for event in window:
         wall_h = event['wall_time_ms'] / HOUR_MS
         reserved_cpu = event['effective_cpu'] * wall_h
         by_repo[field(event['identity'], 'repo')] += reserved_cpu
         if field(event['identity'], 'repo') != repo:
             continue
+        category = operation_categories.get(event['operation'], 'unknown (no worker row)')
+        execution = (1, event['wall_time_ms'] / 1000, event.get('cpu_time_ms', 0) / 1000)
+        action_categories[category] = [a + b for a, b in zip(action_categories[category], execution)]
         row = (1, reserved_cpu, event.get('cpu_time_ms', 0) / HOUR_MS,
                event['effective_memory_kb'] / GIB_KB * wall_h, event.get('peak_memory_kb', 0) / GIB_KB * wall_h)
         for table, key in ((lanes, field(event['identity'], 'lane')),
@@ -102,6 +148,9 @@ def report(events, operation_names, repo, hours, top):
     out.append(f'{repo}: {total[1]:.1f} reserved CPU-hours, {total[1] / pool if pool else 0:.1%} of the pool\'s; '
                f'used {total[2]:.1f} ({total[2] / total[1] if total[1] else 0:.0%}); '
                f'{total[3]:.1f} reserved GiB-hours, at most {total[4]:.1f} used')
+    out.append(f'{"action category":44s} {"runs":>6s} {"exec wall s":>12s} {"CPU s":>12s}')
+    for name, (n, wall, cpu) in sorted(action_categories.items(), key=lambda x: -x[1][1])[:top]:
+        out.append(f'{name:44s} {n:6d} {wall:12.2f} {cpu:12.2f}')
     out += table('lane', lanes) + table('target', targets)
     return '\n'.join(out)
 
@@ -113,9 +162,12 @@ def main():
     parser.add_argument('--top', type=int, default=40, help='rows per table')
     parser.add_argument('--trace', nargs='*', default=[], help='copies of the scheduler\'s usage-event trace files')
     parser.add_argument('--usage', nargs='*', default=[], help='copies of the workers\' actions.log')
+    parser.add_argument('--events', nargs='*', default=[], help='Buck2 JSONL logs exported with buck2 log show; attribute rustc compile/link phases')
     parser.add_argument('--ssh-cache', help=f'read {TRACE_DIR} on this host with ssh and sudo -n')
     parser.add_argument('--ssh-workers', nargs='*', default=[], help='read the usage logs on these hosts')
     args = parser.parse_args()
+    if any(path.endswith('.pb.zst') for path in args.events):
+        parser.error('--events takes JSONL: export binary logs with buck2 log show first')
     trace = [line for path in args.trace for line in Path(path).read_text().splitlines()]
     if args.ssh_cache:
         trace += ssh_cat(args.ssh_cache, f'cd {TRACE_DIR} && sudo -n cat *.jsonl').splitlines()
@@ -125,7 +177,10 @@ def main():
     events = executions(trace)
     if not events:
         parser.error('no usage events: pass --trace or --ssh-cache')
-    print(report(events, names(usage), args.repo, args.hours, args.top))
+    rows = operations(usage, {event['operation'] for event in events if field(event['identity'], 'repo') == args.repo})
+    operation_names, operation_categories = names(rows), categories(rows)
+    attribute_rustc(args.events, rows, operation_names, operation_categories)
+    print(report(events, operation_names, operation_categories, args.repo, args.hours, args.top))
 
 
 if __name__ == '__main__':
