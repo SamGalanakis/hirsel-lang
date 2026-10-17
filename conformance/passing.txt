@@ -63,6 +63,7 @@ conformance/CAP/CAP-1-tasks-parameter-ok.hir
 conformance/CAP/CAP-1-tasks-projection-bad.hir
 conformance/CAP/CAP-1-tasks-projection-ok.hir
 conformance/CAP/CAP-1-test-directory-example.hir
+conformance/CAP/CAP-1-tour-10-inputs-run.hir
 conformance/CAP/CAP-1-unsafe-parameter.hir
 conformance/CAP/CAP-2-aggregate-summary-bad.hir
 conformance/CAP/CAP-2-aggregate-summary-ok.hir
@@ -375,6 +376,7 @@ conformance/CLO/CLO-5-direct-scoped-call.hir
 conformance/CLO/CLO-5-recursive-cycle.hir
 conformance/CONC/CONC-2-scope-owned-capture.hir
 conformance/CONC/CONC-2-sizes-example.hir
+conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
 conformance/CONC/CONC-2-unconsumed-handle-ok.hir
 conformance/CONC/CONC-3-child-local-scope.hir
@@ -1094,6 +1096,7 @@ conformance/LANG/LANG-2-recursive-shared-checker-ok.hir
 conformance/LANG/LANG-2-size-value-u64.hir
 conformance/LANG/LANG-2-string-context-bad.hir
 conformance/LANG/LANG-2-string-context-ok.hir
+conformance/LANG/LANG-2-tour-01-values-run.hir
 conformance/LANG/LANG-2-untyped-binary-bad.hir
 conformance/LANG/LANG-2-untyped-binary-ok.hir
 conformance/LANG/LANG-2-untyped-range-bad.hir
@@ -1287,6 +1290,9 @@ conformance/LANG/LANG-8-mapping-output-ok.hir
 conformance/LANG/LANG-8-network-constructor-map-bad.hir
 conformance/LANG/LANG-8-network-constructor-map-run.hir
 conformance/LANG/LANG-8-propagation-runtime.hir
+conformance/LANG/LANG-8-tour-03-errors-run.hir
+conformance/LANG/LANG-8-tour-06-json-run.hir
+conformance/LANG/LANG-8-tour-07-path-time-run.hir
 conformance/LANG/LANG-8-variant-map.hir
 conformance/LANG/LANG-9-explicit-check.hir
 conformance/LANG/LANG-9-fake-directory.hir
@@ -1323,6 +1329,9 @@ conformance/LANG/LANG-9-testhelpers-for-all-case-fail.hir
 conformance/LANG/LANG-9-testhelpers-for-all-generator-fail.hir
 conformance/LANG/LANG-9-testhelpers-for-all-law-fail.hir
 conformance/LANG/LANG-9-testhelpers-for-all-run.hir
+conformance/LANG/LANG-9-tour-08-http-run.hir
+conformance/LANG/LANG-9-tour-09-files-bufio-run.hir
+conformance/LANG/LANG-9-tour-13-testing-run.hir
 conformance/MEM/MEM-1-last-surviving-holder.hir
 conformance/MEM/MEM-1-moved-variant-payload-run.hir
 conformance/MEM/MEM-1-projection-survives-owner-move.hir
@@ -1540,6 +1549,7 @@ conformance/MEM/MEM-4-named-arena.hir
 conformance/MEM/MEM-4-seal-definition.hir
 conformance/MEM/MEM-4-seal-noalloc-bad.hir
 conformance/MEM/MEM-4-seal-noalloc-ok.hir
+conformance/MEM/MEM-4-tour-12-arenas-run.hir
 conformance/MEM/MEM-5-allocating-signature-call-bad.hir
 conformance/MEM/MEM-5-allocating-signature-call-ok.hir
 conformance/MEM/MEM-5-array-bad.hir
@@ -2817,6 +2827,7 @@ conformance/OWN/OWN-4-nested-markers-run.hir
 conformance/OWN/OWN-4-plain-implicit-copy.hir
 conformance/OWN/OWN-4-static-copy-write-run.hir
 conformance/OWN/OWN-4-static-map-copy-insert-run.hir
+conformance/OWN/OWN-4-tour-02-modes-run.hir
 conformance/OWN/OWN-4-unique-across-plain-call-run.hir
 conformance/OWN/OWN-5-arena-copy-bad.hir
 conformance/OWN/OWN-5-arena-copy-ok.hir
@@ -3606,6 +3617,7 @@ conformance/SEM/SEM-3-scalar-safe-slices.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir
 conformance/SEM/SEM-3-string-compare-run.hir
+conformance/SEM/SEM-3-tour-05-text-run.hir
 conformance/SEM/SEM-3-unicode-positions.hir
 conformance/SEM/SEM-3-unicode-scalars.hir
 conformance/SEM/SEM-3-wave1-byte-alias-run.hir
@@ -3749,6 +3761,7 @@ conformance/SEM/SEM-5-short-byte-equality-run.hir
 conformance/SEM/SEM-5-sorted-brand-signature.hir
 conformance/SEM/SEM-5-sorted-map-projected-and-consuming-run.hir
 conformance/SEM/SEM-5-sorted-map-resource-modes-run.hir
+conformance/SEM/SEM-5-tour-04-collections-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-counted-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-empty-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-nan-run.hir

@@ -4,3 +4,4 @@ mod file_identity;
 mod native_gate;
 mod packages;
 mod runner;
+mod tour;

@@ -1,0 +1,28 @@
+// rule: LANG-8
+// expect: run
+// stdout: input error
+pub type ParseError = Empty | TooLong(u64)
+
+pub type AppError = Input(ParseError) | Grant(GrantError) | Output(OutputError)
+
+fn parse(text: String) -> Result[u64, ParseError] {
+  if string.byte_len(text) == 0 {
+    return Error(Empty())
+  }
+  Ok(string.byte_len(text))
+}
+
+fn count(text: String) -> Result[u64, AppError] {
+  let n = parse(text) ? Input
+  Ok(n + 1)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let message = match count("") {
+    Ok(_) => "success\n",
+    Error(Input(Empty())) => "input error\n",
+    Error(_) => "other error\n",
+  }
+  out.print(io.stdout(rt) ? Grant, message) ? Output
+  Ok(())
+}

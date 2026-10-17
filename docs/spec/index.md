@@ -82,6 +82,8 @@ not use it. Cost reports (where layer-0 code counts, copies or keeps checks) are
 | [Implementation](implementation.md): the reference interpreter, checked execution, the conformance corpus, native code | |
 | [The proof seam](proof-seam.md): obligation ids, content hashes, the TIR export | PS-1 to PS-16 |
 
+For complete runnable examples, start with the [language tour](../tour.md).
+
 ## Reading this specification
 
 A rule is a heading `RULE-N: Title` followed by its normative statement. Rule IDs are

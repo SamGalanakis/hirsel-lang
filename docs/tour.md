@@ -1,0 +1,683 @@
+# Hirsel in one page
+
+Start here when writing Hirsel. The [specification](spec/index.md) defines the
+rules; [building](building.md) covers toolchains and launch details. The programs
+below are small enough to copy and run from the repository root with
+`hirsel run <linked-source.hir>`. Each selects
+`std@1` through its adjacent `.hir.json` manifest; copy that sidecar too, and
+adjust its source and dependency paths when moving a program. There are no imports
+or dependency downloads. `std@1/json.parse` names a selected package definition;
+`out.print` is supplied by `core@1`.
+
+The mistakes to avoid first:
+
+- Give numeric literals a context: `let n = 3u64` or `let n: u64 = 3`.
+  `let n = 3` has no default integer type (LANG-2). Type arguments belong in
+  types, never calls: `let xs: List[u64] = []`, then `list.push(mut xs, 1)`.
+- Every top-level function has a complete signature. An omitted result means
+  `()`, not an inferred result. Use the last expression for a block's value;
+  a final `return` is rejected (LANG-6, LANG-11).
+- Functions are module-qualified, not methods. Build records with labelled
+  fields; write variants bare, such as `Ok(())`, never `Result.Ok(())`.
+  Match refutable patterns; there is no `if let` (LANG-4, LANG-12, LANG-13).
+- Reading a parameter borrows it. `let y = x` moves counted data;
+  `copy x` shares it; `unique x` deep-copies when necessary. `copy` does not
+  extend local lifetimes. Match `mut` and `take` at the declaration and call.
+- A normal `?` needs the same error type. Use `? Variant` to wrap another
+  error type. Integer overflow and failed assertions are language failures,
+  not `Result` errors caught by `?` (LANG-8, SEM-1, FAIL-1).
+- Selecting code grants no I/O. Pass capabilities and supply launch grants.
+  A `Path` is a name, not filesystem authority (CAP-1, PROG-3).
+
+## Values and types
+
+Records, variants, tuples and sized scalars have value semantics. `match` is
+exhaustive, and arithmetic uses one integer width at a time. Overflow fails;
+choose `int.checked_add` or `int.wrapping_add` explicitly when needed. A public
+signature may mention only public types.
+
+Run `hirsel run conformance/LANG/LANG-2-tour-01-values-run.hir`.
+The default source runner uses a simulated world; it grants no host access.
+
+<!-- tour: conformance/LANG/LANG-2-tour-01-values-run.hir -->
+[Runnable source](../conformance/LANG/LANG-2-tour-01-values-run.hir)
+
+```hirsel
+type Point {
+  x: u64,
+  y: u64,
+}
+
+type Figure = Dot(Point) | Empty
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn score(item: Figure) -> u64 {
+  match item {
+    Dot(p) => p.x + p.y,
+    Empty() => 0,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let p = Point(x: 3, y: 4)
+  let n = score(Dot(p))
+  let output = io.stdout(rt) ? Grant
+  out.print(output, std@1/u64.to_string(n)) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+7
+```
+<!-- /tour -->
+
+## Ownership and modes in practice
+
+A borrowed parameter is read-only. `mut` changes caller storage exclusively;
+`take` transfers ownership on both success and error. Copying a list preserves
+independent value semantics: mutation detaches shared storage as needed. The
+program keeps `xs`, changes `ys`, then moves `ys` into `keep`.
+
+A counted result derived from a borrowed parameter needs a relation, for example
+`fn view(xs: List[u64]) -> List[u64] in xs { xs }`. Its live result freezes `xs`
+until last use. Returning it without `in xs` is MODE-1; adding `copy` cannot fix
+that. A plain scalar result, like `first` below, is independent. Use
+`fn keep(take xs: List[u64]) -> List[u64]` when ownership should leave the caller.
+
+<!-- tour: conformance/OWN/OWN-4-tour-02-modes-run.hir -->
+[Runnable source](../conformance/OWN/OWN-4-tour-02-modes-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn grow(mut xs: List[u64]) {
+  list.push(mut xs, 3)
+}
+
+fn keep(take xs: List[u64]) -> List[u64] {
+  take xs
+}
+
+fn first(xs: List[u64]) -> u64 {
+  xs[0]
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let xs: List[u64] = [1, 2]
+  let mut ys = copy xs
+  ys[0] = 9
+  grow(mut ys)
+  let kept = keep(take ys)
+  let output = io.stdout(rt) ? Grant
+  out.print(output, std@1/u64.to_string(first(xs))) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, std@1/u64.to_string(list.len(kept))) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+1
+3
+```
+<!-- /tour -->
+
+## Errors and variant mappers
+
+Expected failures are ordinary `Result[T, E]` values. `parse(text) ? Input`
+wraps its `ParseError` in `AppError.Input`, then propagates. Plain `?` performs
+no implicit conversion. A mapper may also be a named one-argument borrowed or
+taken function; it cannot require `mut`. Every early exit still cleans up owned
+resources. An entry returning `Error` exits 1 and prints nothing implicitly.
+
+<!-- tour: conformance/LANG/LANG-8-tour-03-errors-run.hir -->
+[Runnable source](../conformance/LANG/LANG-8-tour-03-errors-run.hir)
+
+```hirsel
+pub type ParseError = Empty | TooLong(u64)
+
+pub type AppError = Input(ParseError) | Grant(GrantError) | Output(OutputError)
+
+fn parse(text: String) -> Result[u64, ParseError] {
+  if string.byte_len(text) == 0 {
+    return Error(Empty())
+  }
+  Ok(string.byte_len(text))
+}
+
+fn count(text: String) -> Result[u64, AppError] {
+  let n = parse(text) ? Input
+  Ok(n + 1)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let message = match count("") {
+    Ok(_) => "success\n",
+    Error(Input(Empty())) => "input error\n",
+    Error(_) => "other error\n",
+  }
+  out.print(io.stdout(rt) ? Grant, message) ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+input error
+```
+<!-- /tour -->
+
+## Collections
+
+`List[T]` grows, `Array[T]` is a heap sequence, and `Inline[T, n]` has its size in
+its type. Indexes are checked. Borrowed loops read elements, `for x in mut xs`
+updates element places, and `for x in take xs` consumes the collection.
+
+Maps iterate in insertion order; replacement preserves a key's position.
+`map.get` returns `Option[V] in m`. Map equality is order-sensitive;
+`std@1/map.same_entries` ignores insertion order. Sets ignore order for equality.
+`std@1/list` provides sorting, filtering and folds with explicit callbacks.
+
+<!-- tour: conformance/SEM/SEM-5-tour-04-collections-run.hir -->
+[Runnable source](../conformance/SEM/SEM-5-tour-04-collections-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let mut xs: List[u64] = [1, 2]
+  for x in mut xs {
+    x += 1
+  }
+  let mut counts: Map[String, u64] = map.empty()
+  map.insert(mut counts, "pear", xs[0])
+  map.insert(mut counts, "apple", xs[1])
+  map.insert(mut counts, "pear", 4)
+  let mut seen: Set[String] = set.empty()
+  let output = io.stdout(rt) ? Grant
+  for (key, value) in counts {
+    if !set.contains(seen, key) {
+      out.print(output, key) ? Output
+      out.print(output, "\n") ? Output
+      set.insert(mut seen, unique key)
+    }
+  }
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+pear
+apple
+```
+<!-- /tour -->
+
+## Strings and bytes
+
+`String` is valid UTF-8; `Bytes` may contain arbitrary bytes. There is no generic
+string length or integer string indexing. Choose byte length, Unicode scalar
+iteration or `std@1/unicode.graphemes`. A `StrPos of text` comes from that exact
+string and permits a boundary-safe slice. Position 1 is inside `é` and would
+return `None()`. Slices keep their owner alive and retain its locality.
+`string.from_bytes(take data)` returns the original bytes on invalid UTF-8.
+
+When a consuming string operation follows a borrowed view, make ownership explicit:
+`words` below borrows its input for `trim`, then uses `unique` to make the owned
+string required by `split`. `copy` would only share the borrowed blocks and keep
+their locality; it would not satisfy the taken global input.
+
+<!-- tour: conformance/SEM/SEM-3-tour-05-text-run.hir -->
+[Runnable source](../conformance/SEM/SEM-3-tour-05-text-run.hir)
+
+```hirsel
+pub type AppError = Boundary | Grant(GrantError) | Output(OutputError)
+
+fn words(line: String) -> List[String] {
+  std@1/string.split(unique std@1/string.trim(line), " ")
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  failure.check(words("  é sheep  ") == ["é", "sheep"], TextInvariant())
+  let text = "é"
+  let start = match string.position(text, 0) {
+    Some(p) => p,
+    None() => return Error(Boundary()),
+  }
+  let end = match string.position(text, 2) {
+    Some(p) => p,
+    None() => return Error(Boundary()),
+  }
+  let part = string.slice(text, start, end)
+  let mut scalars: u64 = 0
+  for scalar in string.scalars(part) {
+    scalars += 1
+  }
+  let raw: Bytes = b"\xff"
+  let invalid = string.from_bytes(copy raw)
+  failure.check(invalid == Error(raw), TextInvariant())
+  let output = io.stdout(rt) ? Grant
+  out.print(output, part) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, std@1/u64.to_string(string.byte_len(part))) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, std@1/u64.to_string(scalars)) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+é
+2
+1
+```
+<!-- /tour -->
+
+## Standard library: JSON
+
+`std@1` is ordinary Hirsel source. JSON numbers retain their decimal spelling;
+objects retain insertion order and duplicate keys are rejected. There is no
+automatic conversion of application records to JSON: construct or inspect
+`std@1/json.Value`, whose nested arrays and objects contain `box Value`.
+
+<!-- tour: conformance/LANG/LANG-8-tour-06-json-run.hir -->
+[Runnable source](../conformance/LANG/LANG-8-tour-06-json-run.hir)
+
+```hirsel
+pub type AppError = Json(std@1/json.JsonError) | Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let value = std@1/json.parse("{\"n\": 1, \"ok\": true}") ? Json
+  let text = std@1/json.stringify(value) ? Json
+  out.print(io.stdout(rt) ? Grant, text) ? Output
+  out.print(io.stdout(rt) ? Grant, "\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+{"n":1,"ok":true}
+```
+<!-- /tour -->
+
+## Standard library: paths and time
+
+Path normalization and RFC 3339 parsing are pure algorithms. Normalizing a path
+does not grant access or resolve symlinks. `std@1/time.Duration` is a signed
+nanosecond value used for formatting and parsing; core `Duration` is a separate
+type. Sampling real time needs `io.monotonic_clock` or `io.wall_clock` and its
+explicit grant. An `Instant of clock` belongs to that clock; time sampling is
+never an ambient pure operation.
+
+<!-- tour: conformance/LANG/LANG-8-tour-07-path-time-run.hir -->
+[Runnable source](../conformance/LANG/LANG-8-tour-07-path-time-run.hir)
+
+```hirsel
+pub type AppError = PathError(std@1/path.PathError) | Parse(std@1/scalar.ParseError) | Time(
+  std@1/time.TimeError
+) | Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let p = std@1/path.normalize(path.of("notes/./draft/../tour.txt")) ? PathError
+  let stamp = std@1/time.parse("1970-01-01T01:00:00+01:00") ? Parse
+  let text = std@1/time.format(stamp) ? Time
+  let duration = std@1/duration.parse("1.500s") ? Parse
+  let output = io.stdout(rt) ? Grant
+  out.print(output, path.text(p)) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, text) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, std@1/duration.format(duration)) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+notes/tour.txt
+1970-01-01T00:00:00Z
+1.5s
+```
+<!-- /tour -->
+
+## Standard library: HTTP
+
+`http.fetch` needs a `Net`, a config, a method, a URL, headers and an optional
+body. Network authority is a finite set of exact address/port/operation rules;
+a URL cannot widen it, including on redirects. This complete program uses a
+scripted peer from `Test`, so it needs no live server. Run a Test entry with
+`hirsel run` just like the other source fixtures: the simulator supplies Test.
+
+<!-- tour: conformance/LANG/LANG-9-tour-08-http-run.hir -->
+[Runnable source](../conformance/LANG/LANG-9-tour-08-http-run.hir)
+
+```hirsel
+pub fn main(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "tour.test",
+        port: 80,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [
+          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Close()])
+        ]
+      )
+    ]
+  )
+  let response = std@1/http.fetch(
+    n,
+    std@1/http.default_config(),
+    Get(),
+    "http://tour.test/",
+    [],
+    None()
+  )?
+  test.check(t, response.status == 200u16)
+  test.check(t, response.body == b"ok")
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
+For a real server, see [hello-web](../examples/hello-web/main.hir),
+[hello-web-concurrent](../examples/hello-web-concurrent/main.hir) and
+[todo-api](../examples/todo-api/main.hir). They show listen/accept,
+`http.receive_request` with head/body limits, `http.respond`, connection cleanup
+and application routing. The concurrent examples currently run in the interpreter.
+
+## Files and buffered I/O
+
+File operations need both the `Dir` and its branded `File of dir`.
+`file.open` reads; `file.create` creates/truncates an append-only output.
+Keep one `bufio.Reader` per source while unread bytes remain. Reads may be short;
+line helpers keep their newline. Bound accumulated input separately from buffer
+capacity. Discard buffer state before seeking or reading the file directly.
+
+The fake directory below confines effects to the test. `file.create_atomic`
+starts a replacement, `file.write_all` supplies its bytes, and consuming
+`file.commit` publishes it. Dropping an uncommitted atomic file aborts it,
+including on an early `?`.
+
+<!-- tour: conformance/LANG/LANG-9-tour-09-files-bufio-run.hir -->
+[Runnable source](../conformance/LANG/LANG-9-tour-09-files-bufio-run.hir)
+
+```hirsel
+pub type AppError = Files(FileError) | Read(std@1/bufio.ReadError[FileError])
+
+pub fn main(t: Test) -> Result[(), AppError] {
+  let dir = test.dir(t, [(path.of("input.txt"), b"one\ntwo\n")])
+  let mut f = file.open(dir, path.of("input.txt")) ? Files
+  let mut reader = std@1/bufio.new(4)
+  let first = std@1/bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
+  let second = std@1/bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
+  test.check(t, first == "one\n")
+  test.check(t, second == "two\n")
+  let mut output = file.create_atomic(dir, path.of("output.txt")) ? Files
+  file.write_all(dir, mut output, string.as_bytes(first)) ? Files
+  file.commit(dir, take output) ? Files
+  test.check(t, file.read_bytes(dir, path.of("output.txt")) == Ok(b"one\n"))
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
+## Capabilities, grants, stdin, arguments and environment
+
+Roots arrive as entry parameters; each Io projection is fallible. `arg.count`
+and `arg.text` use the explicit zero-based argument snapshot, excluding the
+executable. `env.get` distinguishes a denied key (`Error(NotGranted())`) from a
+granted unset key (`Ok(None())`). Io alone grants neither stdin nor stdout.
+`input.read_line` returns `Some` for a final unterminated line and `None` at EOF.
+
+Run the following in the default simulator (empty Args, Env and stdin), or use
+`hirsel run conformance/CAP/CAP-1-tour-10-inputs-run.hir --grants docs/tour/inputs.json </dev/null`
+for the same output with host streams. The checked-in template grants stdout,
+stdin, empty Args and empty Env; it grants no files or network. To exercise data,
+put strings in its `args` array and exact key/value snapshots in `env`, then pipe
+input to the command. Environment snapshots never fall back to process variables.
+
+<!-- tour: conformance/CAP/CAP-1-tour-10-inputs-run.hir -->
+[Runnable source](../conformance/CAP/CAP-1-tour-10-inputs-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Environment(EnvError) | Input(
+  InputError
+) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), AppError] {
+  let name = if arg.count(args) == 0 {
+    "tour"
+  } else {
+    arg.text(args, 0) ? Arguments
+  }
+  let label = match env.get(environment, "TOUR_LABEL") {
+    Ok(Some(value)) => take value,
+    Ok(None()) => "unset",
+    Error(NotGranted()) => "unset",
+    Error(e) => return Error(Environment(e)),
+  }
+  let output = io.stdout(rt) ? Grant
+  out.print(output, name) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, label) ? Output
+  out.print(output, "\n") ? Output
+  let input = io.stdin(rt) ? Grant
+  while true {
+    match std@1/input.read_line(input) ? Input {
+      Some(line) => out.print(output, line) ? Output,
+      None() => return Ok(()),
+    }
+  }
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+tour
+unset
+```
+<!-- /tour -->
+
+For host files, add a mount such as
+`{"path":"data","host":"/absolute/host/directory","access":"read"}`
+to `io.dirs`, acquire `io.dir(rt, path.of("data"))`, then use a relative filename
+inside it. Use `read_write` when writes are intended. Paths cannot escape their
+directory capability. [Building](building.md#build-and-launch-a-program) explains
+grants templates and bound run records in detail.
+
+## Tasks, channels and mutexes
+
+`task.scope` joins all children before it exits. Await or detach every handle;
+detach still keeps a child inside the scope. Child captures must be sendable:
+plain values, moved unique data, copied `Shared` roots and scheduling handles.
+A child cannot borrow a parent's counted list. Receivers may move into task
+captures but cannot travel as channel payloads. A task closure may take an
+immutable capture and rebind it mutable inside its own body.
+
+A mutex body has `uses {}`: no captured authority, I/O, channel operations or
+other lock acquisitions. Compute under the lock, then perform effects outside.
+A failed mutex body kills the mutex. A channel send consumes its payload and
+returns it with the error if delivery fails. This example returns one value
+through a channel and explicitly joins the child; its output is independent of
+which task gets scheduled first. Run this section in the interpreter; native
+structured tasks are not available yet.
+
+<!-- tour: conformance/CONC/CONC-2-tour-11-concurrency-run.hir -->
+[Runnable source](../conformance/CONC/CONC-2-tour-11-concurrency-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError) | Channel(ChannelError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let received = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[u64, ChannelError] {
+      let total: Mutex[u64] = mutex.create(tasks, 0u64)
+      let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() -> () {
+          let value = mutex.with(
+            tasks,
+            total,
+            fn(mut n: unique u64) -> u64 uses {} {
+              n += 7
+              n
+            }
+          )
+          let mut sender = take tx
+          let _ = channel.send(tasks, mut sender, value)
+        }
+      )
+      let mut receiver = take rx
+      let value = channel.receive(tasks, mut receiver)?
+      task.await(s, take child)
+      Ok(value)
+    }
+  ) ? Channel
+  let output = io.stdout(rt) ? Grant
+  out.print(output, std@1/u64.to_string(received)) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+7
+```
+<!-- /tour -->
+
+## Arenas
+
+Ordinary code needs no arena annotation. When storage lifetime matters,
+`arena.with` supplies a scoped `Arena`; `T in a` places fresh blocks there.
+Such data cannot leave the arena, even after `copy` or `unique`. Copy it to the
+heap explicitly to keep it. Arenas contain no resources. A unique arena builder
+may update its root; a nested arena mutation detaches to the heap.
+
+<!-- tour: conformance/MEM/MEM-4-tour-12-arenas-run.hir -->
+[Runnable source](../conformance/MEM/MEM-4-tour-12-arenas-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let text: String = arena.with(
+    fn(a: Arena) -> String {
+      let local_text: String in a = "kept"
+      copy_to(heap, local_text)
+    }
+  )
+  let output = io.stdout(rt) ? Grant
+  out.print(output, text) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+kept
+```
+<!-- /tour -->
+
+## Testing with `test.*`
+
+Tests are ordinary functions with an explicit `Test`, not a special syntax.
+Core `test.check`, `test.dir` and `test.net` provide assertions and confined
+fakes. `std@1/test` adds structural equality, approximate floats, error extraction
+and property checks. `for_all` runs exactly 100 cases from the explicit generator
+and reports the Test seed and case index on failure. A false check fails LANG-9.
+
+<!-- tour: conformance/LANG/LANG-9-tour-13-testing-run.hir -->
+[Runnable source](../conformance/LANG/LANG-9-tour-13-testing-run.hir)
+
+```hirsel
+fn generate(t: Test) -> u64 {
+  7
+}
+
+fn law(n: u64) -> bool uses {} {
+  n + 0 == n
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, 2u64 + 2 == 4)
+  let xs: List[u64] = [1, 2]
+  std@1/test.equal(t, xs, [1, 2])
+  std@1/test.approx(t, 0.1f64 + 0.2, 0.3, 0.000001, 0.0)
+  std@1/test.for_all(t, generate, law)
+  let rejected: Result[u64, String] = Error("bad input")
+  let error = std@1/test.expect_error(t, take rejected)
+  test.check(t, error == "bad input")
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
+## Native builds
+
+Build the complete values program above into a standalone executable:
+
+```sh
+hirsel build conformance/LANG/LANG-2-tour-01-values-run.hir -o /tmp/tour-values
+/tmp/tour-values --hirsel-grants docs/tour/stdout.json
+```
+
+Expected stdout is `7` followed by a newline, exit 0, exactly as in the values
+section. The checked-in stdout template grants only stdout. Use `--release`
+for LLVM O3, `--debug` for O0 with source line tables, or
+`--target aarch64-linux` for the supported cross target. The executable still
+requires explicit launch grants; building it grants no authority.
+
+## Keeping this page runnable
+
+Every Hirsel block above is rendered from its linked conformance program,
+including the expected stdout. Run `python3 docs/tour/render.py` after editing a
+source. The tour integration tests reject stale, missing or extra blocks and run
+every listed program through both ordinary and checked interpretation. The normal
+gate also enforces canonical source formatting and the passing ratchet. These
+are ordinary corpus inputs for the on-demand native campaign. An additional
+full-gate tour test retains every native-capable snippet even when corpus
+coverage minimization would omit it; native tasks remain unavailable.
+
+Continue with the [dogfood tools](../examples/README.md) for complete programs
+that read files, build text, parse JSON and implement a command loop.

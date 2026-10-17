@@ -1,5 +1,8 @@
 # Building Hirsel
 
+New to the language? Start with the [runnable language tour](tour.md), then
+try the [runnable tools](../examples/README.md).
+
 Hirsel is a systems-level, general-purpose language whose primary user is a
 coding agent. Its fixed goals:
 

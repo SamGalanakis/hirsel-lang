@@ -1,0 +1,38 @@
+// rule: CONC-2
+// expect: run
+// stdout: 7
+pub type AppError = Grant(GrantError) | Output(OutputError) | Channel(ChannelError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let received = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[u64, ChannelError] {
+      let total: Mutex[u64] = mutex.create(tasks, 0u64)
+      let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() -> () {
+          let value = mutex.with(
+            tasks,
+            total,
+            fn(mut n: unique u64) -> u64 uses {} {
+              n += 7
+              n
+            }
+          )
+          let mut sender = take tx
+          let _ = channel.send(tasks, mut sender, value)
+        }
+      )
+      let mut receiver = take rx
+      let value = channel.receive(tasks, mut receiver)?
+      task.await(s, take child)
+      Ok(value)
+    }
+  ) ? Channel
+  let output = io.stdout(rt) ? Grant
+  out.print(output, std@1/u64.to_string(received)) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}

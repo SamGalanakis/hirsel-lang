@@ -1,0 +1,18 @@
+// rule: LANG-9
+// expect: run
+pub type AppError = Files(FileError) | Read(std@1/bufio.ReadError[FileError])
+
+pub fn main(t: Test) -> Result[(), AppError] {
+  let dir = test.dir(t, [(path.of("input.txt"), b"one\ntwo\n")])
+  let mut f = file.open(dir, path.of("input.txt")) ? Files
+  let mut reader = std@1/bufio.new(4)
+  let first = std@1/bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
+  let second = std@1/bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
+  test.check(t, first == "one\n")
+  test.check(t, second == "two\n")
+  let mut output = file.create_atomic(dir, path.of("output.txt")) ? Files
+  file.write_all(dir, mut output, string.as_bytes(first)) ? Files
+  file.commit(dir, take output) ? Files
+  test.check(t, file.read_bytes(dir, path.of("output.txt")) == Ok(b"one\n"))
+  Ok(())
+}

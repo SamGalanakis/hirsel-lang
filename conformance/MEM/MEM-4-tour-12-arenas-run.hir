@@ -1,0 +1,17 @@
+// rule: MEM-4
+// expect: run
+// stdout: kept
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let text: String = arena.with(
+    fn(a: Arena) -> String {
+      let local_text: String in a = "kept"
+      copy_to(heap, local_text)
+    }
+  )
+  let output = io.stdout(rt) ? Grant
+  out.print(output, text) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}

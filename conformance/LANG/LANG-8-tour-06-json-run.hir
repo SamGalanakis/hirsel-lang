@@ -1,0 +1,12 @@
+// rule: LANG-8
+// expect: run
+// stdout: {"n":1,"ok":true}
+pub type AppError = Json(std@1/json.JsonError) | Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let value = std@1/json.parse("{\"n\": 1, \"ok\": true}") ? Json
+  let text = std@1/json.stringify(value) ? Json
+  out.print(io.stdout(rt) ? Grant, text) ? Output
+  out.print(io.stdout(rt) ? Grant, "\n") ? Output
+  Ok(())
+}

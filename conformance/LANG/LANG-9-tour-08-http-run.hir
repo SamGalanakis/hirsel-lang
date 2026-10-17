@@ -1,0 +1,29 @@
+// rule: LANG-9
+// expect: run
+pub fn main(t: Test) -> Result[(), std@1/http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "tour.test",
+        port: 80,
+        resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+        tls: Plain(),
+        connections: [
+          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Close()])
+        ]
+      )
+    ]
+  )
+  let response = std@1/http.fetch(
+    n,
+    std@1/http.default_config(),
+    Get(),
+    "http://tour.test/",
+    [],
+    None()
+  )?
+  test.check(t, response.status == 200u16)
+  test.check(t, response.body == b"ok")
+  Ok(())
+}

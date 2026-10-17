@@ -1,0 +1,26 @@
+// rule: SEM-5
+// expect: run
+// stdout: pear
+// stdout: apple
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let mut xs: List[u64] = [1, 2]
+  for x in mut xs {
+    x += 1
+  }
+  let mut counts: Map[String, u64] = map.empty()
+  map.insert(mut counts, "pear", xs[0])
+  map.insert(mut counts, "apple", xs[1])
+  map.insert(mut counts, "pear", 4)
+  let mut seen: Set[String] = set.empty()
+  let output = io.stdout(rt) ? Grant
+  for (key, value) in counts {
+    if !set.contains(seen, key) {
+      out.print(output, key) ? Output
+      out.print(output, "\n") ? Output
+      set.insert(mut seen, unique key)
+    }
+  }
+  Ok(())
+}

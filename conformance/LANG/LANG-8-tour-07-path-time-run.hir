@@ -1,0 +1,23 @@
+// rule: LANG-8
+// expect: run
+// stdout: notes/tour.txt
+// stdout: 1970-01-01T00:00:00Z
+// stdout: 1.5s
+pub type AppError = PathError(std@1/path.PathError) | Parse(std@1/scalar.ParseError) | Time(
+  std@1/time.TimeError
+) | Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let p = std@1/path.normalize(path.of("notes/./draft/../tour.txt")) ? PathError
+  let stamp = std@1/time.parse("1970-01-01T01:00:00+01:00") ? Parse
+  let text = std@1/time.format(stamp) ? Time
+  let duration = std@1/duration.parse("1.500s") ? Parse
+  let output = io.stdout(rt) ? Grant
+  out.print(output, path.text(p)) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, text) ? Output
+  out.print(output, "\n") ? Output
+  out.print(output, std@1/duration.format(duration)) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}
