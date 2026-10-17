@@ -1164,9 +1164,8 @@ impl Model {
                 }
                 Ok(())
             });
-            if names.is_empty() {
-                continue;
-            }
+            // Captures and header names were installed after the initial proofs.
+            // Rebuild even when they already supplied every enclosing name.
             for name in names {
                 let identity = Origin {
                     root: name.clone(),

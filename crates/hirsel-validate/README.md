@@ -765,3 +765,7 @@ Source accept/reject twins.
 Call validation replays every declared schema constraint through `schema_failure`,
 including the integer/float domains of `float.from_int`, alongside generic bounds.
 Hand-built domain controls accept the same invalid call only when its rule is removed.
+
+Closure parameter origin proofs are rebuilt after installing capture identities and
+header names. A captured owner already present in the entry map still supplies the
+parameter proof; a same-typed capture from another owner cannot claim that identity.

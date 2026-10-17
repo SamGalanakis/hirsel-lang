@@ -8266,3 +8266,84 @@ fn a_mut_argument_keeps_its_root_callable_multiplicity_exact() {
         }
     }
 }
+
+#[test]
+fn closure_parameter_brands_use_the_installed_capture_identity() {
+    let mut f = Fixture::unit();
+    let owner = f.slot(TypeKind::Primitive(Primitive::U32), Storage::Parameter);
+    let other = f.slot(TypeKind::Primitive(Primitive::U32), Storage::Parameter);
+    f.body().parameters = vec![LocalId(owner), LocalId(other)];
+    let origin = Origin {
+        root: OriginRoot::Parameter(ParameterRef::body(f.body().parameter_scope, ParamId(0))),
+        fields: vec![].into(),
+    };
+    f.body().places[owner as usize].binding = Some(origin.clone());
+    let mut other_origin = origin.clone();
+    other_origin.root =
+        OriginRoot::Parameter(ParameterRef::body(f.body().parameter_scope, ParamId(1)));
+    f.body().places[other as usize].binding = Some(other_origin);
+    let scalar = f.body().places[owner as usize].ty;
+    let mut branded = ty(TypeKind::Primitive(Primitive::U32));
+    branded.brand.alternatives.push(origin.clone());
+    let branded = f.definition.types.push(branded);
+    let mut child = empty_body(&mut f);
+    child.parameter_scope = NameSite::Expression(hirsel_syntax::ExprId(7));
+    child.locals[0].ty = branded;
+    child.locals[0].storage = Storage::Parameter;
+    child.places[0].ty = branded;
+    child.parameters = vec![LocalId(0)];
+    child.result = branded;
+    child.blocks[0] = block(
+        vec![],
+        Terminator::Return {
+            value: copy(0),
+            cleanup: CleanupId(0),
+        },
+    );
+    child.rvalues.clear();
+    let capture = add_capture(&mut child, scalar);
+    child.places[capture as usize].binding = Some(origin);
+    f.definition.bodies.push(child);
+    let SignatureKind::Function(mut fun) =
+        function_signature("callback", vec![], TypeKind::Tuple(vec![].into())).kind
+    else {
+        unreachable!()
+    };
+    fun.parameters = vec![Parameter {
+        name: None,
+        label: None,
+        passing: PassingMode::Borrow,
+        ty: branded,
+    }]
+    .into();
+    fun.result = branded;
+    let closure = f.slot(TypeKind::Function(fun), Storage::Temporary);
+    let old = f.body().places[closure as usize].ty;
+    let mut scoped = f.definition.types.get(old).unwrap().clone();
+    scoped.modes.relation = Relation::environment();
+    let scoped = f.definition.types.push(scoped);
+    f.body().places[closure as usize].ty = scoped;
+    f.body().locals[closure as usize].ty = scoped;
+    f.assign(
+        closure,
+        Rvalue::Closure {
+            body: BodyId(1),
+            captures: vec![copy(owner)],
+            destination: Destination::Inferred,
+        },
+        0,
+    );
+    let cleanup = f.cleanup(vec![drop(closure)]);
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    owner_signature(&mut f, PassingMode::Borrow);
+    f.valid();
+    let Rvalue::Closure { captures, .. } = f.body().rvalues.last_mut().unwrap() else {
+        unreachable!()
+    };
+    captures[0] = copy(other);
+    assert!(
+        f.kinds()
+            .contains(&ViolationKind::InvalidOrigin(PlaceId(other))),
+        "a same-typed capture cannot claim another owner's identity"
+    );
+}
