@@ -1,0 +1,7 @@
+// rule: LANG-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, std@1/string.starts_with("abc", "a"))
+  test.check(t, std@2/string.marker() == 2)
+  Ok(())
+}

@@ -726,6 +726,17 @@ impl Graph {
                 Some(&expected),
             )?;
             dependencies.push(selected.clone());
+            // Module heads are source conveniences; package/version identity is
+            // still pinned by this dependency's manifest selection.
+            for (_, context) in &self.packages[&selected].sources {
+                if let Some(head) = context.modules.first() {
+                    exposures.push(DependencyExposure {
+                        head: head.clone(),
+                        package: selected.clone(),
+                        modules: vec![head.clone()],
+                    });
+                }
+            }
             for exposure in array(required(d, "expose")?)? {
                 let e = object_value(exposure, &["head", "module"])?;
                 exposures.push(DependencyExposure {
@@ -733,6 +744,17 @@ impl Graph {
                     package: selected.clone(),
                     modules: modules(required(e, "module")?)?,
                 });
+            }
+        }
+        if package.name_is("std") {
+            for (_, context) in &sources {
+                if let Some(head) = context.modules.first() {
+                    exposures.push(DependencyExposure {
+                        head: head.clone(),
+                        package: package.clone(),
+                        modules: vec![head.clone()],
+                    });
+                }
             }
         }
         self.active.pop();

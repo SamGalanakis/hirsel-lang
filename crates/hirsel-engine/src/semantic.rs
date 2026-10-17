@@ -1,6 +1,7 @@
 //! Driver-owned syntax snapshots, header isolation and explicit manifest composition.
 use crate::*;
 use hirsel_resolve::{DefinitionEntry, ManifestFixture, ManifestIndex, Namespace};
+use hirsel_span::Span;
 use hirsel_syntax::{ItemKind, TypeBody, Visibility};
 use hirsel_types::{DeclarationSite, DefinitionMetadata, Metadata};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
@@ -139,14 +140,41 @@ impl CompilerState {
                 .insert(path.clone(), row.metadata.clone());
             entries.push(row.entry.clone());
         }
-        let core_heads: std::collections::BTreeSet<_> = crate::registry::BuiltinRegistry::new()
+        let registry = crate::registry::BuiltinRegistry::new();
+        // Index core declarations alongside source metadata, so merged heads
+        // resolve members through the same lookup and visibility path.
+        entries.extend(registry.signatures().filter_map(|signature| {
+            if signature
+                .definition
+                .0
+                .modules
+                .iter()
+                .any(|m| m.starts_with('$'))
+            {
+                return None;
+            }
+            Some(DefinitionEntry {
+                definition: signature.definition.clone(),
+                namespace: if matches!(signature.kind, hirsel_types::SignatureKind::Type(_)) {
+                    Namespace::Type
+                } else {
+                    Namespace::Value
+                },
+                visibility: Visibility::Public,
+                span: Span::default(),
+            })
+        }));
+        let core_heads: std::collections::BTreeSet<_> = registry
             .signatures()
             .filter_map(|s| s.definition.0.modules.first().cloned())
             .filter(|head| !head.starts_with('$'))
             .collect();
         let complete_heads = |mut heads: Vec<hirsel_resolve::DependencyExposure>| {
             for head in &core_heads {
-                if !heads.iter().any(|e| &e.head == head) {
+                if !heads
+                    .iter()
+                    .any(|e| &e.head == head && !e.package.name_is("std"))
+                {
                     heads.push(hirsel_resolve::DependencyExposure {
                         head: head.clone(),
                         package: hirsel_syntax::DefPath::core("Result").0.package,

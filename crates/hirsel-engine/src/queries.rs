@@ -1263,6 +1263,23 @@ impl DefinitionQueries for QueryEngine {
         };
         let mut diagnostics = tokens.diagnostics;
         diagnostics.append(&mut output.diagnostics);
+        if context.package.name_is("std") {
+            for id in &output.value.roots {
+                let item = &output.value.tree.items[id.0 as usize];
+                let mut core = item.definition.clone();
+                core.0.package = DefPath::core("Result").0.package;
+                if !core.0.modules.is_empty() && self.registry.get(&core).is_some() {
+                    diagnostics.push(Diagnostic::error(
+                        const { hirsel_diag::RuleId::of("LANG-4") },
+                        item.name_span,
+                        format!(
+                            "std definition {} duplicates {core} in their shared module head",
+                            item.definition
+                        ),
+                    ));
+                }
+            }
+        }
         output.diagnostics = diagnostics;
         let result = if has_errors(&output.diagnostics) {
             Err(QueryError::Diagnostics(output.diagnostics.clone()))

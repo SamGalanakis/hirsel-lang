@@ -306,25 +306,40 @@ impl ManifestIndex {
             let Some(exposed) = self.heads.get(&segments[0]) else {
                 return Err(LookupError::Missing);
             };
-            // Ambiguity is about the head, regardless of which member exists.
-            if exposed.len() > 1 {
-                return Err(LookupError::Ambiguous);
-            }
-            exposed
+            let candidates: Vec<_> = exposed
                 .iter()
                 .map(|(package, prefix)| {
                     let mut module = prefix.clone();
                     module.extend_from_slice(&segments[1..segments.len() - 1]);
                     make(package.clone(), module)
                 })
-                .collect()
+                .collect();
+            // Only identical core/std module paths share a namespace. Two std
+            // majors remain ambiguous even if only one declares this member.
+            let merged = exposed.len() == 2
+                && exposed.iter().any(|(p, _)| p.package_is("core", "1"))
+                && exposed.iter().any(|(p, _)| p.name_is("std"))
+                && exposed
+                    .iter()
+                    .map(|(_, m)| m)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    == 1;
+            if exposed.len() > 1 && !merged {
+                return Err(LookupError::Ambiguous(candidates));
+            }
+            candidates
         };
-        for candidate in candidates {
-            if self.entries.contains_key(&candidate) {
-                return self.access(context, &candidate);
+        for candidate in &candidates {
+            if self.entries.contains_key(candidate) {
+                return self.access(context, candidate);
             }
         }
-        Err(LookupError::Missing)
+        if package.is_none() {
+            Err(LookupError::MissingMember(candidates))
+        } else {
+            Err(LookupError::Missing)
+        }
     }
 
     pub fn access(

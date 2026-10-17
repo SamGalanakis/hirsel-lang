@@ -94,3 +94,33 @@ fn packaged_replay_moves_without_original_manifest_paths() {
         std::fs::remove_dir_all(moved).unwrap();
     });
 }
+
+#[test]
+fn short_and_qualified_std_calls_keep_the_same_definition_dependencies() {
+    with_compiler_stack(|| {
+        let path = root().join("conformance/LANG/LANG-4-std-short-run.hir");
+        let source = std::fs::read_to_string(&path).unwrap();
+        let qualified = source
+            .replace("string.find(", "std@1/string.find(")
+            .replace("string.starts_with(", "std@1/string.starts_with(")
+            .replace("string.split(", "std@1/string.split(")
+            .replace("bytes.replace(", "std@1/bytes.replace(");
+        let mut dependencies = Vec::new();
+        for text in [&source, &qualified] {
+            let mut program = load_program_source(&path, Some(text)).unwrap();
+            let resolution = program.engine.resolve_definition(&program.entry).unwrap();
+            assert!(resolution.diagnostics.is_empty());
+            let paths: std::collections::BTreeSet<_> = resolution
+                .value
+                .dependencies
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            assert!(paths.contains("std@1/string/find"));
+            assert!(paths.contains("core@1/string/byte_len"));
+            assert!(paths.contains("std@1/bytes/replace"));
+            dependencies.push(paths);
+        }
+        assert_eq!(dependencies[0], dependencies[1]);
+    });
+}

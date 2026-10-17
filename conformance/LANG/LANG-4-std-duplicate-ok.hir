@@ -1,0 +1,6 @@
+// rule: LANG-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, string.length("abc") == string.byte_len("abc"))
+  Ok(())
+}

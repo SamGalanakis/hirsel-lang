@@ -727,3 +727,9 @@ hirsel-check-protocol; the three implementations do not depend on one another.
 Local binding reservations use ordinary fully qualified lookups in their declaring
 module. Their negative reads and namespace inputs share normal cache validation;
 a shadowed root fallback does not enter the semantic dependency closure.
+
+Selected dependencies automatically expose their top-level source module heads alongside
+explicit manifest aliases, scoped to the importing package. Core and std heads merge
+through the resolver's ordinary declaration index. Parsing std rejects a definition
+whose module and name duplicate core, including unused and private declarations;
+versioned DefPaths and signature identities remain unchanged.

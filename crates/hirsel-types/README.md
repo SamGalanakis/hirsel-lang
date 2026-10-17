@@ -60,7 +60,9 @@ Wire tests use run-config's shared `hex` formatter as a dev dependency.
 
 SignatureProvider returns Arc `SignatureRef`; lookup returns `LookupOutput` with
 a manifest revision even on an error. `DependencyRead::ProviderLookup` can retain
-that result separately from resolver-index reads. QueryOutput carries successful
+that result separately from resolver-index reads. Missing module members and ambiguous
+heads retain their versioned candidate DefPaths in LookupError, so diagnostics and
+cache receipt replay observe the same selected namespace. QueryOutput carries successful
 signature dependencies; record failures outside the Result as well. QueryError
 separates diagnostics, unavailable implementation and OperationalFailure. Only
 diagnostic errors are deterministic rejection-cache candidates; operational

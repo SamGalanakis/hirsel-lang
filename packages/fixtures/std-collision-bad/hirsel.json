@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "std",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "string.hir",
+      "module": [
+        "string"
+      ]
+    }
+  ],
+  "dependencies": []
+}

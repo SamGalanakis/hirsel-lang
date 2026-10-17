@@ -1,0 +1,7 @@
+// rule: LANG-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, string.value() == 42)
+  test.check(t, core@1/string.byte_len("abc") == 3)
+  Ok(())
+}

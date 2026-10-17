@@ -78,7 +78,10 @@ pub struct GenericBinding {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LookupError {
     Missing,
-    Ambiguous,
+    /// A known module head was searched, retaining its candidates for diagnostics
+    /// and cache invalidation when selected dependencies change.
+    MissingMember(Vec<DefPath>),
+    Ambiguous(Vec<DefPath>),
     Invisible(DefPath),
     /// Provider diagnostics are emitted only at a real use, never a reservation probe.
     Provider(Vec<Diagnostic>),

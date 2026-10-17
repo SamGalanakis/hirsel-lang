@@ -74,14 +74,24 @@ is not plain lends from its evaluation; a plain argument is a snapshot and lends
 ### LANG-4: Names
 
 Names resolve against the program's definitions; there are no import statements. Module
-path heads live in their own namespace and resolve only before a `.`. A head exposed by
-two dependencies is an error at its use, resolved by writing the package path
-(`json@1/value.parse`). Variants are written bare (`Ok(x)`, `Usage`, `true`) and resolved
-through the expected type. A local may not shadow another local or a top-level value
-declared in the same module. It may shadow a top-level value from any other module,
-including the package root. Unqualified value lookup checks locals, then the current
-module, then the package root; the root fallback applies only when no local or current-module
-value matches. Dependencies are reached by qualified paths.
+path heads live in their own namespace and resolve only before a `.`. Each directly
+selected dependency supplies its top-level module heads, with additional aliases from
+its manifest `expose` entries. A head naming several distinct dependency targets is
+LANG-4 at its use, even if only one target contains the member; the diagnostic names
+the candidates. Writing the full package/version path disambiguates.
+
+The exception is matching core and std modules: their identical module paths form one
+head namespace, so `string.byte_len` names core and `string.find` names std. A definition name
+present in both is LANG-4 when std is checked, even if unused. An unknown member under
+a merged head lists the module paths searched. Fully versioned paths, including
+`std@1/string.find`, remain legal; the version remains part of DefPath identity.
+
+Variants are written bare (`Ok(x)`, `Usage`, `true`) and resolved through the expected
+type. A local may not shadow another local or a top-level value declared in the same
+module. It may shadow a top-level value from any other module, including the package
+root. Unqualified value lookup checks locals, then the current module, then the package
+root; the root fallback applies only when no local or current-module value matches.
+Same-package lookup precedes dependency lookup.
 
 Core library roles such as `Unsafe`, `Result` and the capability types are identified by
 fully qualified definition paths, never by spelling alone; a user type with the same name

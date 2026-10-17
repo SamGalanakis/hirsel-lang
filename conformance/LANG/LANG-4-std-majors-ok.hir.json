@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "std_names",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "LANG-4-std-majors-ok.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    },
+    {
+      "manifest": "../../packages/fixtures/std@2/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "2"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

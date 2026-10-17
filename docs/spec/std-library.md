@@ -1,11 +1,16 @@
 # Standard library
 
 The standard library is the ordinary source package `std@1`, at
-`stdlib/std@1/hirsel.json`. A program selects it like any other dependency
-([packages](programs.md#package-selection)); it has no core aliases, no builtin bodies and no
-privileged hooks, and it uses no `Unsafe`. It raises language failures only through
-`failure.check` ([core library](core-library.md#memory-and-iteration)). Its algorithms
-follow named reference implementations, ported with their tests.
+`stdlib/std@1/hirsel.json`, pinned exactly by the selecting manifest
+([packages](programs.md#package-selection)). Programs use short module names such as
+`string.find` and `json.parse`; the catalogue uses these source spellings. Definition
+identity, proof obligation ids and cache keys retain `std@1/...`. The fully versioned
+spelling stays legal and is required to disambiguate multiple selected majors. Core
+and std modules of the same path share a head namespace under
+[LANG-4](language.md#lang-4-names). Std has no builtin bodies or privileged hooks and
+uses no `Unsafe`. It raises language failures only through `failure.check`
+([core library](core-library.md#memory-and-iteration)). Its algorithms follow named
+reference implementations, ported with their tests.
 
 ## The catalogue
 
@@ -13,32 +18,32 @@ These declarations are normative: the source package must declare exactly these
 signatures. `N` keeps the ledger's meaning of an explicit `@noalloc` promise.
 
 ```text
-fn std@1/path.normalize(p: Path) -> Result[Path, std@1/path.PathError] uses {}
-fn std@1/path.join(base: Path, child: Path) -> Result[Path, std@1/path.PathError] uses {}
-fn std@1/path.parent(p: Path) -> Option[Path] uses {}
-fn std@1/path.filename(p: Path) -> String uses {}
-fn std@1/path.extension(p: Path) -> String uses {}
-fn std@1/path.components(p: Path) -> List[String] uses {}
-N fn std@1/duration.from_parts(seconds: i64, nanoseconds: i32) -> std@1/time.Duration uses {}
-N fn std@1/duration.parse(text: String) -> Result[std@1/time.Duration, std@1/scalar.ParseError] uses {}
-fn std@1/duration.format(value: std@1/time.Duration) -> String uses {}
-N fn std@1/time.parse(text: String) -> Result[std@1/time.Timestamp, std@1/scalar.ParseError] uses {}
-fn std@1/time.format(value: std@1/time.Timestamp) -> Result[String, std@1/time.TimeError] uses {}
-N fn std@1/time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[Duration, ClockError]
-N fn std@1/time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> Duration
-N fn std@1/time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32
-fn std@1/bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src
-N fn std@1/map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
-N fn std@1/unicode.graphemes(s: String) -> GraphemeView in s
-fn std@1/json.parse(take text: String) -> Result[Value, JsonError] uses {}
-fn std@1/json.stringify(value: Value) -> Result[String, JsonError] uses {}
-fn std@1/json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}
-N fn std@1/test.equal[T: data](t: Test, actual: T, expected: T) -> ()
-N fn std@1/test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
-fn std@1/test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
-fn std@1/test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
-fn std@1/input.read_all(s: Stdin) -> Result[Bytes, InputError]
-fn std@1/input.read_line(s: Stdin) -> Result[Option[String], InputError]
+fn path.normalize(p: Path) -> Result[Path, path.PathError] uses {}
+fn path.join(base: Path, child: Path) -> Result[Path, path.PathError] uses {}
+fn path.parent(p: Path) -> Option[Path] uses {}
+fn path.filename(p: Path) -> String uses {}
+fn path.extension(p: Path) -> String uses {}
+fn path.components(p: Path) -> List[String] uses {}
+N fn duration.from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {}
+N fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {}
+fn duration.format(value: time.Duration) -> String uses {}
+N fn time.parse(text: String) -> Result[time.Timestamp, scalar.ParseError] uses {}
+fn time.format(value: time.Timestamp) -> Result[String, time.TimeError] uses {}
+N fn time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[Duration, ClockError]
+N fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> Duration
+N fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32
+fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src
+N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
+N fn unicode.graphemes(s: String) -> GraphemeView in s
+fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
+fn json.stringify(value: Value) -> Result[String, JsonError] uses {}
+fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}
+N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
+N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
+fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
+fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
+fn input.read_all(s: Stdin) -> Result[Bytes, InputError]
+fn input.read_line(s: Stdin) -> Result[Option[String], InputError]
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`

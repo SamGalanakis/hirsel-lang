@@ -81,6 +81,11 @@ Diagnostics preserve AST origins. Header names, labels, generic entries, uses
 paths and variant names recover exact sites through SyntaxFile token-origin
 helpers. Hand-built trees without a tape retain the containing-origin fallback.
 
+Matching core/std module paths share one head; all other distinct targets remain
+ambiguous before member lookup. Missing-member and ambiguity receipts retain the
+versioned candidates, so diagnostics and cache validation observe the selected heads.
+Core declarations are ordinary metadata entries supplied by the engine.
+
 The index enforces package privacy and `internal` ancestry. Public signatures
 cannot mention indexed private types, including nested generic/function types.
 Public opaque representations are hidden outside their package; their nominal

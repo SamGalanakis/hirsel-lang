@@ -99,11 +99,21 @@ impl QueryEngine {
             return Err(LookupError::Missing);
         };
         let result = index.lookup_spelling(context, package.as_ref(), segments);
-        if !matches!(result, Err(LookupError::Missing)) {
+        if !matches!(
+            result,
+            Err(LookupError::Missing | LookupError::MissingMember(_))
+        ) {
             return result;
         }
         match self.provider_result(context, package, segments) {
-            Ok(path) => index.access(context, &path),
+            Ok(path) => {
+                if matches!(&result, Err(LookupError::MissingMember(candidates)) if !candidates.contains(&path))
+                {
+                    result
+                } else {
+                    index.access(context, &path)
+                }
+            }
             Err(QueryError::Diagnostics(ds)) if !ds.is_empty() => Err(LookupError::Provider(ds)),
             _ => result,
         }

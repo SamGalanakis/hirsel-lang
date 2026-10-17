@@ -1,0 +1,19 @@
+// rule: LANG-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let s = "abc"
+  test.check(t, string.byte_len(s) == 3)
+  test.check(t, string.starts_with(s, "a"))
+  test.check(
+    t,
+    match string.find(s, "b") {
+      Some(_) => true,
+      None() => false,
+    }
+  )
+  test.check(t, list.len(string.split(take s, "b")) == 2)
+  let b = bytes.replace(b"aba", b"a", b"c")
+  test.check(t, bytes.len(b) == 3)
+  test.check(t, b == b"cbc")
+  Ok(())
+}

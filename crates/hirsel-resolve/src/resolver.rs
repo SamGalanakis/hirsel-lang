@@ -244,7 +244,10 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         let mut result = self.index.lookup(&self.context, path, symbols);
         // The provider can supply builtin/driver-owned names absent from this
         // manifest snapshot. It is never allowed to override ambiguity/privacy.
-        if matches!(result, Err(LookupError::Missing)) {
+        if matches!(
+            result,
+            Err(LookupError::Missing | LookupError::MissingMember(_))
+        ) {
             let lookup = self.provider.lookup(&self.context, path, symbols);
             self.output.reads.push(DependencyRead::ProviderLookup {
                 context: self.context.clone(),
@@ -257,7 +260,14 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 output: lookup.clone(),
             });
             match lookup.result {
-                Ok(definition) => result = self.index.access(&self.context, &definition),
+                Ok(definition) => {
+                    // Provider-only declarations must belong to the selected
+                    // module targets; an alias cannot fall through to core.
+                    if !matches!(&result, Err(LookupError::MissingMember(candidates)) if !candidates.contains(&definition))
+                    {
+                        result = self.index.access(&self.context, &definition);
+                    }
+                }
                 Err(ty::QueryError::Diagnostics(diagnostics)) => {
                     if !diagnostics.is_empty() {
                         result = Err(LookupError::Provider(diagnostics));
@@ -297,10 +307,29 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             LookupError::Missing => {
                 self.diagnostic(const { RuleId::of("LANG-4") }, span, "unresolved name")
             }
-            LookupError::Ambiguous => self.diagnostic(
+            LookupError::MissingMember(candidates) => self.diagnostic(
                 const { RuleId::of("LANG-4") },
                 span,
-                "ambiguous module head; write a full package/version path",
+                format!(
+                    "unresolved module member; looked for {}",
+                    candidates
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
+            LookupError::Ambiguous(candidates) => self.diagnostic(
+                const { RuleId::of("LANG-4") },
+                span,
+                format!(
+                    "ambiguous module head: {}; write a full package/version path",
+                    candidates
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             ),
             LookupError::Invisible(_) => self.diagnostic(
                 const { RuleId::of("PROG-2") },

@@ -1150,6 +1150,16 @@ conformance/LANG/LANG-4-qualified-variant-ok.hir
 conformance/LANG/LANG-4-root-module-shadow-run.hir
 conformance/LANG/LANG-4-same-module-shadow-bad.hir
 conformance/LANG/LANG-4-same-module-shadow-ok.hir
+conformance/LANG/LANG-4-std-alias-core-bad.hir
+conformance/LANG/LANG-4-std-alias-core-ok.hir
+conformance/LANG/LANG-4-std-duplicate-bad.hir
+conformance/LANG/LANG-4-std-duplicate-ok.hir
+conformance/LANG/LANG-4-std-majors-bad.hir
+conformance/LANG/LANG-4-std-majors-ok.hir
+conformance/LANG/LANG-4-std-member-bad.hir
+conformance/LANG/LANG-4-std-member-ok.hir
+conformance/LANG/LANG-4-std-qualified-run.hir
+conformance/LANG/LANG-4-std-short-run.hir
 conformance/LANG/LANG-4-top-level-shadow-bad.hir
 conformance/LANG/LANG-4-top-level-shadow-ok.hir
 conformance/LANG/LANG-5-borrowed-parameter-bad.hir

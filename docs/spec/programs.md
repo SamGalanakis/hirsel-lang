@@ -53,17 +53,19 @@ malformed metadata are tool-input errors, not language diagnostics.
 
 ## Dependency exposure
 
-Each `expose` entry is exactly `{head, module}`, interpreted within that dependency's
-package. It exposes a module head, never unqualified values. Exposures belong to the
-importing package and never leak into another package's view. Same-package lookup precedes
-dependency lookup. Several distinct package and module targets for one head are LANG-4 at
-its use, even if only one target contains the requested member; repeated identical targets
-are not ambiguous. Full versioned paths can name selected public definitions, including
-transitive public signature types, without exposing a short head. Publicness, opacity and
-internal ancestry remain [PROG-2](#prog-2-visibility). Only the compiler's `core@1`
-supplies nominal roles; a source package cannot select `core@1`, and names such as
-`Result`, `Io` or `std` grant no roles or privileges. Core module heads keep their default
-exposures unless an explicit dependency head replaces them.
+Each directly selected dependency implicitly exposes the first module segment of its
+declared source modules. Each `expose` entry adds a `{head, module}` alias within that
+dependency. It exposes a module head, never unqualified values. Exposures belong to the
+importing package and never leak into another package's view. Same-package lookup
+precedes dependency lookup. Identical targets deduplicate; distinct targets remain
+ambiguous independent of member membership, except matching core/std modules merge as
+[LANG-4](language.md#lang-4-names) specifies. Core module heads keep their default
+exposures; a non-std dependency head can replace a core default as before. Full versioned
+paths still reach selected public definitions, including transitive public signature
+types, without exposing a short head. Publicness, opacity and internal ancestry remain
+[PROG-2](#prog-2-visibility). Only the compiler's `core@1` supplies nominal roles; a source
+package cannot select `core@1`, and names such as `Result`, `Io` or `std` grant no roles
+or privileges.
 
 ## Launch
 

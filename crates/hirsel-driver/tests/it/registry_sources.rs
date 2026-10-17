@@ -54,7 +54,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 .strip_prefix("fn ")
                 .unwrap();
             let qualified = text.split(['[', '(']).next().unwrap();
-            let name = qualified.strip_prefix("std@1/").unwrap();
+            let name = qualified;
             let mut path = hirsel_syntax::DefPath::core(name);
             path.0.package.name = "std".into();
             let context = FileContext {
@@ -107,37 +107,37 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 registry.get(&hirsel_syntax::DefPath::core(name)).is_none(),
                 "core alias: {name}"
             );
-            checked.push(qualified.to_owned());
+            checked.push(name.to_owned());
         }
         assert_eq!(
             checked,
             [
-                "std@1/path.normalize",
-                "std@1/path.join",
-                "std@1/path.parent",
-                "std@1/path.filename",
-                "std@1/path.extension",
-                "std@1/path.components",
-                "std@1/duration.from_parts",
-                "std@1/duration.parse",
-                "std@1/duration.format",
-                "std@1/time.parse",
-                "std@1/time.format",
-                "std@1/time.elapsed",
-                "std@1/time.between",
-                "std@1/time.compare",
-                "std@1/bytes.replace",
-                "std@1/map.same_entries",
-                "std@1/unicode.graphemes",
-                "std@1/json.parse",
-                "std@1/json.stringify",
-                "std@1/json.write",
-                "std@1/test.equal",
-                "std@1/test.approx",
-                "std@1/test.for_all",
-                "std@1/test.expect_error",
-                "std@1/input.read_all",
-                "std@1/input.read_line"
+                "path.normalize",
+                "path.join",
+                "path.parent",
+                "path.filename",
+                "path.extension",
+                "path.components",
+                "duration.from_parts",
+                "duration.parse",
+                "duration.format",
+                "time.parse",
+                "time.format",
+                "time.elapsed",
+                "time.between",
+                "time.compare",
+                "bytes.replace",
+                "map.same_entries",
+                "unicode.graphemes",
+                "json.parse",
+                "json.stringify",
+                "json.write",
+                "test.equal",
+                "test.approx",
+                "test.for_all",
+                "test.expect_error",
+                "input.read_all",
+                "input.read_line"
             ]
         );
     });

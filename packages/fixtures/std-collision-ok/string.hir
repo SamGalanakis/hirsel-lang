@@ -1,0 +1,3 @@
+pub fn length(s: String) -> u64 uses {} {
+  core@1/string.byte_len(s)
+}
