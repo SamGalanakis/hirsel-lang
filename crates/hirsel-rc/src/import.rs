@@ -1688,24 +1688,6 @@ fn rvalue_operands(value: &tir::Rvalue) -> Vec<&tir::Operand> {
     }
 }
 
-/// The successors of a TIR block (Match: each candidate arm's guard or target).
-fn tir_successors(body: &tir::Body, block: &tir::Block) -> Vec<tir::BlockId> {
-    use tir::Terminator as T;
-    match &block.terminator {
-        T::Goto(b) => vec![*b],
-        T::Branch { yes, no, .. } => vec![*yes, *no],
-        T::Switch {
-            arms, otherwise, ..
-        } => arms.iter().map(|a| a.1).chain([*otherwise]).collect(),
-        T::Call { returns, .. } => returns.iter().map(|r| r.next).collect(),
-        T::Match { table, from } => body.matches[table.0 as usize].arms[*from as usize..]
-            .iter()
-            .map(|arm| arm.guard.unwrap_or(arm.target))
-            .collect(),
-        T::Return { .. } | T::Fail { .. } | T::Unreachable => Vec::new(),
-    }
-}
-
 fn lir_binary(op: hirsel_syntax::BinaryOp) -> Option<BinaryOp> {
     use hirsel_syntax::BinaryOp as S;
     Some(match op {
@@ -1792,7 +1774,8 @@ impl Importer<'_, '_> {
             {
                 return vec![self.body.entry];
             }
-            tir_successors(self.body, &self.body.blocks[b.0 as usize])
+            self.body
+                .successors(&self.body.blocks[b.0 as usize].terminator)
         };
         let mut seen = vec![false; n];
         let mut post = Vec::new();

@@ -735,29 +735,6 @@ fn graph_valid(store: &TypeStore) -> bool {
     true
 }
 
-pub(crate) fn successors(body: &Body, t: &Terminator) -> Vec<BlockId> {
-    match t {
-        Terminator::Goto(b) => vec![*b],
-        Terminator::Match { table, from } => body
-            .matches
-            .get(table.0 as usize)
-            .map(|t| {
-                t.arms
-                    .iter()
-                    .skip(*from as usize)
-                    .map(|a| a.guard.unwrap_or(a.target))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        Terminator::Branch { yes, no, .. } => vec![*yes, *no],
-        Terminator::Switch {
-            arms, otherwise, ..
-        } => arms.iter().map(|a| a.1).chain([*otherwise]).collect(),
-        Terminator::Call { returns, .. } => returns.iter().map(|r| r.next).collect(),
-        _ => vec![],
-    }
-}
-
 /// Cheap interpreter boundary check. Checks all references, provenance and
 /// scopes, but makes no signature, reachability, type or ownership claim. The
 /// strict API remains the lowering/publication oracle. One terminator is encoded
@@ -979,7 +956,7 @@ pub fn validate_structure(definition: &Definition) -> Vec<Violation> {
                     }
                 }
             }
-            for target in successors(body, &block.terminator) {
+            for target in body.successors(&block.terminator) {
                 refs.push((block_id, None, "block", target.0));
             }
             let mut operand = |o: &Operand| refs.push((block_id, None, "place", o.place.0));

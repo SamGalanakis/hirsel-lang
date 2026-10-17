@@ -345,6 +345,31 @@ pub struct CleanupNode {
     pub parent: Option<CleanupNodeId>,
 }
 impl Body {
+    /// Normal successors in terminator order. A match names each remaining
+    /// candidate arm's guard or target; an invalid match table names none.
+    pub fn successors(&self, terminator: &Terminator) -> Vec<BlockId> {
+        match terminator {
+            Terminator::Goto(b) => vec![*b],
+            Terminator::Match { table, from } => self
+                .matches
+                .get(table.0 as usize)
+                .map(|t| {
+                    t.arms
+                        .iter()
+                        .skip(*from as usize)
+                        .map(|a| a.guard.unwrap_or(a.target))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Terminator::Branch { yes, no, .. } => vec![*yes, *no],
+            Terminator::Switch {
+                arms, otherwise, ..
+            } => arms.iter().map(|a| a.1).chain([*otherwise]).collect(),
+            Terminator::Call { returns, .. } => returns.iter().map(|r| r.next).collect(),
+            Terminator::Return { .. } | Terminator::Fail { .. } | Terminator::Unreachable => vec![],
+        }
+    }
+
     /// Walk a cleanup without allocating or expanding its shared suffix.
     pub fn cleanup_actions(&self, id: CleanupId) -> impl Iterator<Item = &CleanupAction> {
         let mut next = self.cleanups[id.0 as usize].head;

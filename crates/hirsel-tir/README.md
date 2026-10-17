@@ -4,6 +4,10 @@ Own typed, ordered, ownership-explicit IR and deterministic runtime boundary dat
 
 Allowed dependencies: hirsel-span, hirsel-syntax, hirsel-types, hirsel-diag; no implementation crates.
 
+`Body::successors` is the exhaustive normal-edge vocabulary in terminator order,
+including each remaining match candidate's guard or target. Failure cleanup chains
+remain separate. An invalid match table names no successors for structural checking.
+
 Invariants and boundary:
 
 - All IDs address Vec arenas in the same Body, except BodyId which addresses Definition.bodies; TypeIds address Definition.types; match pattern IDs address their table.

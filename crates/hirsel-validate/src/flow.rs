@@ -1236,7 +1236,7 @@ fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
         .blocks
         .iter()
         .map(|block| {
-            successors(body, &block.terminator)
+            body.successors(&block.terminator)
                 .into_iter()
                 .map(|b| b.0 as usize)
                 .collect()
@@ -1479,7 +1479,7 @@ impl Checker<'_> {
                 return arms.iter().map(|a| a.1).collect();
             }
         }
-        successors(self.body, terminator)
+        self.body.successors(terminator)
     }
 
     fn environment(

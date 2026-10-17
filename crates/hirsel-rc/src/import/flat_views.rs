@@ -72,7 +72,7 @@ fn stable_owned_roots(
 ) -> Vec<bool> {
     let nodes: Vec<_> = (0..body.blocks.len()).map(|i| BlockId(i as u32)).collect();
     let successors = |b: BlockId| {
-        tir_successors(body, &body.blocks[b.index()])
+        body.successors(&body.blocks[b.index()].terminator)
             .into_iter()
             .map(|b| BlockId(b.0))
             .collect::<Vec<_>>()

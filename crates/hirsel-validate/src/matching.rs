@@ -329,7 +329,7 @@ impl Checker<'_> {
                 && self.guard_preserves_scrutinee(guard, BlockId(index as u32), self.body.matches[id.0 as usize].scrutinee)
                 && self.dominates(BlockId(index as u32), restart)
                 && guard != self.body.entry
-                && self.body.blocks.iter().enumerate().filter(|(_, b)| successors(self.body, &b.terminator).contains(&guard)).all(|(_, b)| matches!(b.terminator, Terminator::Match { table, from: start } if table == id && start < from))
+                && self.body.blocks.iter().enumerate().filter(|(_, b)| self.body.successors(&b.terminator).contains(&guard)).all(|(_, b)| matches!(b.terminator, Terminator::Match { table, from: start } if table == id && start < from))
         });
         // No unrelated predecessor may bypass the failed-guard branch.
         if !valid {
@@ -414,7 +414,8 @@ impl Checker<'_> {
                         .iter()
                         .enumerate()
                         .filter_map(|(index, b)| {
-                            successors(self.body, &b.terminator)
+                            self.body
+                                .successors(&b.terminator)
                                 .contains(&block)
                                 .then_some(BlockId(index as u32))
                         }),
@@ -430,7 +431,7 @@ impl Checker<'_> {
             // Every entry to the continuation must cross this false edge.
             if self.body.blocks.iter().enumerate().any(|(index, b)| {
                 BlockId(index as u32) != previous
-                    && successors(self.body, &b.terminator).contains(&block)
+                    && self.body.successors(&b.terminator).contains(&block)
             }) {
                 return false;
             }
@@ -491,10 +492,10 @@ impl Checker<'_> {
             if b == target {
                 return false;
             }
-            pending.extend(successors(
-                self.body,
-                &self.body.blocks[b.0 as usize].terminator,
-            ));
+            pending.extend(
+                self.body
+                    .successors(&self.body.blocks[b.0 as usize].terminator),
+            );
         }
         true
     }

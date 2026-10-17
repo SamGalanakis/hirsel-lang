@@ -111,7 +111,8 @@ impl Builder<'_, '_> {
             .blocks
             .iter()
             .map(|block| {
-                super::loans::successors(&self.body, &block.terminator)
+                self.body
+                    .successors(&block.terminator)
                     .into_iter()
                     .map(|b| b.0 as usize)
                     .collect()

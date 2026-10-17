@@ -536,7 +536,7 @@ pub(super) fn loop_expirations(body: &Body) -> BTreeMap<(u32, u32), BTreeSet<Ori
     let graph: Vec<_> = body
         .blocks
         .iter()
-        .map(|b| successors(body, &b.terminator))
+        .map(|b| body.successors(&b.terminator))
         .collect();
     let mut reverse = vec![vec![]; graph.len()];
     for (a, targets) in graph.iter().enumerate() {

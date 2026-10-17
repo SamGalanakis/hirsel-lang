@@ -507,7 +507,7 @@ impl Importer<'_, '_> {
                     break;
                 }
                 region.insert(b);
-                for s in tir_successors(body, block) {
+                for s in body.successors(&block.terminator) {
                     if entered.insert(s.0 as usize) {
                         work.push((s.0 as usize, 0));
                     }

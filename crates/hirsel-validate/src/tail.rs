@@ -384,36 +384,30 @@ fn live_at_call(body: &Body, target: BlockId) -> Option<BTreeSet<u32>> {
                 _ => (),
             }
         }
-        let successors = match &b.terminator {
-            Terminator::Goto(next) => vec![*next],
-            Terminator::Branch { yes, no, .. } => vec![*yes, *no],
-            Terminator::Switch {
-                arms, otherwise, ..
-            } => arms.iter().map(|a| a.1).chain([*otherwise]).collect(),
-            Terminator::Call {
-                arguments, returns, ..
-            } => {
-                for arg in arguments {
-                    take(body, &mut live, &arg.value);
-                }
-                if id == target {
-                    if let Some(previous) = &mut at_target {
-                        previous.extend(&live);
-                    } else {
-                        at_target = Some(live.clone());
-                    }
-                }
-                match returns {
-                    Some(CallReturn { destination, next }) => {
-                        live.insert(body.places.get(destination.0 as usize)?.root.0);
-                        vec![*next]
-                    }
-                    None => vec![],
+        // This replay conservatively stops at pattern decisions: it does not
+        // model the arm's binding transfers.
+        if matches!(b.terminator, Terminator::Match { .. }) {
+            continue;
+        }
+        if let Terminator::Call {
+            arguments, returns, ..
+        } = &b.terminator
+        {
+            for arg in arguments {
+                take(body, &mut live, &arg.value);
+            }
+            if id == target {
+                if let Some(previous) = &mut at_target {
+                    previous.extend(&live);
+                } else {
+                    at_target = Some(live.clone());
                 }
             }
-            _ => vec![],
-        };
-        for next in successors {
+            if let Some(CallReturn { destination, .. }) = returns {
+                live.insert(body.places.get(destination.0 as usize)?.root.0);
+            }
+        }
+        for next in body.successors(&b.terminator) {
             let slot = incoming.get_mut(next.0 as usize)?;
             let changed = if let Some(previous) = slot {
                 let len = previous.len();

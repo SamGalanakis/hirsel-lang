@@ -40,30 +40,7 @@ impl Presence {
         }
     }
 }
-pub(super) fn successors(body: &Body, terminator: &Terminator) -> Vec<BlockId> {
-    match terminator {
-        Terminator::Goto(next)
-        | Terminator::Call {
-            returns: Some(CallReturn { next, .. }),
-            ..
-        } => vec![*next],
-        Terminator::Branch { yes, no, .. } => vec![*yes, *no],
-        Terminator::Switch {
-            arms, otherwise, ..
-        } => arms
-            .iter()
-            .map(|(_, target)| *target)
-            .chain([*otherwise])
-            .collect(),
-        Terminator::Match { table, from } => body.matches[table.0 as usize]
-            .arms
-            .iter()
-            .skip(*from as usize)
-            .map(|arm| arm.guard.unwrap_or(arm.target))
-            .collect(),
-        _ => vec![],
-    }
-}
+
 #[derive(Default)]
 struct CleanupTransport {
     // Each original chain node is rewritten once. Non-loan suffixes and the
@@ -200,7 +177,7 @@ impl Builder<'_, '_> {
             for instruction in &self.body.blocks[index].instructions {
                 state.instruction(&self.body, &instruction.kind);
             }
-            for target in successors(&self.body, &self.body.blocks[index].terminator) {
+            for target in self.body.successors(&self.body.blocks[index].terminator) {
                 let changed = if let Some(previous) = &mut incoming[target.0 as usize] {
                     previous.join(&state)
                 } else {

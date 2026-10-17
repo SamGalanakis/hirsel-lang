@@ -435,10 +435,10 @@ impl<'a> Checker<'a> {
             if std::mem::replace(&mut seen[b.0 as usize], true) {
                 continue;
             }
-            pending.extend(successors(
-                self.body,
-                &self.body.blocks[b.0 as usize].terminator,
-            ));
+            pending.extend(
+                self.body
+                    .successors(&self.body.blocks[b.0 as usize].terminator),
+            );
         }
         for (i, block) in self.body.blocks.iter().enumerate() {
             // Empty dead sentinels are valid defaults after exhaustive switches.
