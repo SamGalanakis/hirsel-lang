@@ -684,6 +684,17 @@ pub fn link_objects(
     toolchain: &Toolchain,
     dir: &Path,
 ) -> Result<PathBuf, NativeError> {
+    link_objects_with_run(program, entry, objects, toolchain, dir, None)
+}
+
+pub(crate) fn link_objects_with_run(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+) -> Result<PathBuf, NativeError> {
     let (symbol, result_size) = entry_result(program, entry)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
@@ -774,9 +785,12 @@ pub fn link_objects(
                 .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?,
         );
     }
-    let run = record
+    let default = record
         .validated()
         .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?;
+    let run = requested.unwrap_or(&default);
+    run.check_revision(revision, launch)
+        .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
     std::fs::write(dir.join("run.json"), run.canonical())
         .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
     let config = run.config();
@@ -914,6 +928,19 @@ pub fn launch_with(
     diagnostic: bool,
     tape: Tape<'_>,
 ) -> Result<Launched, NativeError> {
+    launch_impl(executable, target, toolchain, dir, diagnostic, tape, None)
+}
+
+/// Harness execution or a user launch with an explicit admitted run record.
+fn launch_impl(
+    executable: &Path,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    dir: &Path,
+    diagnostic: bool,
+    tape: Tape<'_>,
+    live: Option<LiveRun<'_>>,
+) -> Result<Launched, NativeError> {
     let root = dir.join("root");
     let record = dir.join("observation");
     let _ = std::fs::remove_dir_all(&root);
@@ -938,6 +965,9 @@ pub fn launch_with(
         .env_clear()
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record);
+    if live.is_some() {
+        command.arg("--hirsel-run").arg(dir.join("run.json"));
+    }
     if !toolchain.wrapper.is_empty() {
         command
             .env("VALGRIND_LIB", &toolchain.valgrind_lib)
@@ -958,13 +988,88 @@ pub fn launch_with(
             command.env("HIRSEL_RT_REPLAY", path);
         }
     }
-    let output = bounded(&mut command, toolchain.launch_timeout)?;
+    let output = if let Some(live) = live {
+        run_live(&mut command, live.stdout)?
+    } else {
+        bounded(&mut command, toolchain.launch_timeout)?
+    };
     Ok(Launched {
         audit_required: toolchain.runtime_build.diagnostic || toolchain.runtime_build.measurement,
         exit: output.status.code(),
         stdout: output.stdout,
         stderr: output.stderr,
         record: std::fs::read_to_string(&record).unwrap_or_default(),
+    })
+}
+
+struct LiveRun<'a> {
+    run: &'a hirsel_run_config::ValidatedRun,
+    stdout: &'a mut dyn std::io::Write,
+}
+
+/// A user's server runs until it exits or is interrupted; harness timeouts remain tooling.
+pub(crate) fn launch_live(
+    executable: &Path,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    dir: &Path,
+    run: &hirsel_run_config::ValidatedRun,
+    stdout: &mut dyn std::io::Write,
+) -> Result<Launched, NativeError> {
+    launch_impl(
+        executable,
+        target,
+        toolchain,
+        dir,
+        false,
+        Tape::None,
+        Some(LiveRun { run, stdout }),
+    )
+}
+fn run_live(
+    command: &mut Command,
+    stdout: &mut dyn std::io::Write,
+) -> Result<std::process::Output, NativeError> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(io)?;
+    let mut err = child.stderr.take().expect("stderr pipe");
+    let stderr = std::thread::spawn(move || {
+        let mut bytes = vec![];
+        let _ = err.read_to_end(&mut bytes);
+        bytes
+    });
+    let mut out = child.stdout.take().expect("stdout pipe");
+    let mut captured = vec![];
+    let mut buffer = [0; 8192];
+    let read_result = (|| -> Result<(), std::io::Error> {
+        loop {
+            let n = out.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            stdout.write_all(&buffer[..n])?;
+            stdout.flush()?;
+            captured.extend_from_slice(&buffer[..n]);
+        }
+        Ok(())
+    })();
+    if read_result.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait().map_err(io)?;
+    let stderr = stderr.join().unwrap_or_default();
+    read_result.map_err(io)?;
+    Ok(std::process::Output {
+        status,
+        stdout: captured,
+        stderr,
     })
 }
 

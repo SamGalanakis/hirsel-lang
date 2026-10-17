@@ -330,3 +330,32 @@ key, with public authority `{EnvKey}`, a private `Env` ceiling and truthful `cop
 that can replace the stored key. Construction validates that the key is granted; a granted
 but unset key stays distinct from a denied one. Facets receive actual grants and cannot
 reconstruct authority from a run record.
+
+## HTTP server
+
+The server helpers share the client's wire parser and error type:
+
+```text
+RequestLine = { method_start: u64, method_end: u64, target_start: u64, target_end: u64, version: u8 }
+N fn std@1/http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut headers: Inline[RawHeader, k], mut count: u64) -> Result[ParseStatus, HeadError] uses {}
+ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes }
+fn std@1/http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
+fn std@1/http.receive_request(n: Net, mut s: Stream of n, max_head_bytes: u64, max_body_bytes: u64) -> Result[ServerRequest, HttpError]
+fn std@1/http.respond(n: Net, mut s: Stream of n, status: u16, headers: List[Header], body: Bytes) -> Result[(), HttpError]
+```
+
+`parse_request` follows httparse's strict request-line delimiters, accepts HTTP/1.0 and
+HTTP/1.1, and reuses `parse_headers`. Its initialized-header count and absolute consumed
+head offset follow `parse_response`. `parse_server_request` returns an owned request and
+the consumed head-plus-body byte count, or `None` for incomplete input. It accepts at most
+16 headers, checks the caller's head and body byte limits, and reads a Content-Length body
+(zero bytes when absent). Malformed heads and framing fail; transfer codings are
+unsupported. Bytes after the declared body are excluded from the request.
+
+`receive_request` reads until that request completes; EOF before completion is `Truncated`.
+`respond` validates status and headers, writes the body with its exact Content-Length and
+`Connection: close`, and rejects caller-supplied Content-Length, Transfer-Encoding and
+Connection headers. The caller owns the stream, closes it after the response, and owns the
+sequential listen/accept loop. A server maps malformed requests to a 400 response before
+invoking application handling. No routing, concurrency or persistent-connection framework
+is implied.

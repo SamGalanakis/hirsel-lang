@@ -121,8 +121,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "test.net" | "file.read_bytes" | "file.walk" => {
             Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
         }
-        // Listeners execute after M2; TLS upgrades share the stream handle.
-        "net.narrow"
+        // Streams and listeners use the same explicit Net policy.
+        "net.listen"
+        | "net.accept"
+        | "net.local_addr"
+        | "net.narrow"
         | "net.resolve"
         | "net.connect"
         | "net.connect_addr"
@@ -196,6 +199,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
 /// `SeqLen`, and the `simd` operations legalization builds. No call remains.
 /// Network operations with a Hirsel-ABI runtime entry (`net_abi.rs`).
 pub const NET_EXPORTS: &[&str] = &[
+    "net.listen",
+    "net.accept",
+    "net.local_addr",
     "net.narrow",
     "net.resolve",
     "net.connect",
@@ -391,6 +397,24 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         symbol: "hirsel_rt_v2_net_peer_addr",
+        destination: true,
+        result: Some((28, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_net_listen",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_net_accept",
+        destination: true,
+        result: Some((40, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_net_local_addr",
         destination: true,
         result: Some((28, 4)),
         parameters: &[Physical::Pointer, Physical::Pointer],

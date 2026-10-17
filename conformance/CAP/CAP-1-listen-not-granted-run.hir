@@ -1,0 +1,19 @@
+// rule: CAP-1
+// expect: run
+// exit: 1
+// entry: exercise
+fn expected_error(e: NetError) -> () uses {} {
+  failure.check(
+    match e {
+      NotGranted() => true,
+      _ => false,
+    },
+    Arithmetic()
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), ()] {
+  let n = test.net(t, [])
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 0u16)) ? expected_error
+  Ok(())
+}

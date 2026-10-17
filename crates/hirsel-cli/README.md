@@ -73,3 +73,13 @@ An explicit empty simulation `projections` array grants no Io projections. Its
 allowed names are stdout, tasks, net, random and dir; an unknown name refuses
 the simulation input. Root Io and Args grants remain separate. This fake-input
 seam is independent of the production RunConfig admission contract.
+
+Production source runs use `hirsel run <source|manifest> --run /absolute/run.json`,
+with optional `--native`. The shared RunConfig parser binds the semantic program and
+entry, validates every grant and snapshot, and completes host admission before entry.
+Without a record, roots are denied. `--simulation` remains an explicit fake-provider seam
+and cannot combine with `--run` or `--native`.
+
+`hirsel export --run <source|manifest> -o run.json` writes the current semantic binding
+with empty grants. A launcher can explicitly fill its Io projections and Args/Env
+snapshots before supplying that record; selecting the source grants no authority.

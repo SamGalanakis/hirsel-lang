@@ -63,6 +63,15 @@ const HELPERS: &str = r#"
 fn empty() -> std@1/http_wire.RawHeader {
   std@1/http_wire.RawHeader(name_start: 0, name_end: 0, value_start: 0, value_end: 0)
 }
+fn server_parse(t: Test, buf: Bytes, head: u64, body: u64, expected: Result[Option[(std@1/http.ServerRequest, u64)], std@1/http.HttpError]) {
+  test.check(t, std@1/http.parse_server_request(buf, head, body) == expected)
+}
+fn request(t: Test, buf: Bytes, expected: Result[std@1/http_wire.ParseStatus, std@1/http_wire.HeadError]) {
+  let mut line = std@1/http_wire.RequestLine(method_start: 0, method_end: 0, target_start: 0, target_end: 0, version: 0)
+  let mut headers: Inline[std@1/http_wire.RawHeader, 4] = [empty(), empty(), empty(), empty()]
+  let mut count: u64 = 99
+  test.check(t, std@1/http_wire.parse_request(buf, mut line, mut headers, mut count) == expected)
+}
 fn response(t: Test, buf: Bytes, expected: Result[std@1/http_wire.ParseStatus, std@1/http_wire.HeadError]) {
   let mut line = std@1/http_wire.StatusLine(version: 0, code: 0, reason_start: 0, reason_end: 0)
   let mut headers: Inline[std@1/http_wire.RawHeader, 4] = [empty(), empty(), empty(), empty()]
@@ -637,5 +646,78 @@ test.check(t, std@1/http_wire.next_header(buf, mut invalid) == None())
 test.check(t, std@1/http_wire.parse_chunk_size(buf, 18446744073709551615) == Ok(Partial()))
 "#,
         )
+    });
+}
+
+// httparse's Request vectors: simple/query/WHATWG target, OWS, LF, empty
+// prefix, one-byte method, partial prefixes and strict delimiter errors.
+#[test]
+fn httparse_request_vectors_and_content_length_boundaries() {
+    with_compiler_stack(|| {
+        let mut body = String::new();
+        for input in [
+            &b"GET / HTTP/1.1\r\n\r\n"[..],
+            b"GET /thing?data=a HTTP/1.1\r\n\r\n",
+            b"GET /thing?data=a^ HTTP/1.1\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: \tfoo.com\t \r\nCookie: \t \r\n\r\n",
+            b"GET / HTTP/1.0\n\n",
+            b"\r\n\r\nGET / HTTP/1.1\r\n\r\n",
+            b"A / HTTP/1.1\r\n\r\n",
+            b"GET /a\\b HTTP/1.1\r\n\r\n",
+        ] {
+            body.push_str(&format!(
+                "request(t, {}, Ok(Complete({})))\n",
+                literal(input),
+                input.len()
+            ));
+            // Every proper prefix must remain partial, including split CRLF.
+            for end in 0..input.len() {
+                body.push_str(&format!(
+                    "request(t, {}, Ok(Partial()))\n",
+                    literal(&input[..end])
+                ));
+            }
+        }
+        for (input, error) in [
+            (&b" / HTTP/1.1\r\n\r\n"[..], "Token"),
+            (b"GET  HTTP/1.1\r\n\r\n", "Token"),
+            (b"GE(T / HTTP/1.1\r\n\r\n", "Token"),
+            (b"GET / HTTP/1.2\r\n\r\n", "Version"),
+            (b"GET / HTTP/1.1\rX", "NewLine"),
+            (b"GET / HTTP/1.1\r\nHost : x\r\n\r\n", "HeaderName"),
+            (b"GET / HTTP/1.1\r\n x: y\r\n\r\n", "Continuation"),
+            (b"GET / HTTP/1.1\r\nX: \0\r\n\r\n", "HeaderValue"),
+        ] {
+            body.push_str(&format!(
+                "request(t, {}, Error({error}()))\n",
+                literal(input)
+            ));
+        }
+        body.push_str(r#"
+let request_bytes: Bytes = b"POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabcNEXT"
+match std@1/http.parse_server_request(request_bytes, 1024, 3) {
+  Ok(Some((r, consumed))) => {
+    test.check(t, r.method == "POST" && r.target == "/" && r.body == b"abc")
+    match r.version { Http11() => (), _ => test.check(t, false) }
+    test.check(t, consumed == bytes.len(request_bytes) - 4)
+  },
+  _ => test.check(t, false),
+}
+server_parse(t, b"POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nab", 1024, 3, Ok(None()))
+server_parse(t, request_bytes, 1024, 2, Error(BodyTooLarge()))
+server_parse(t, b"GET / HTTP/1.1\r\n\r\n", 17, 0, Error(HeadTooLarge()))
+let invalid_lengths: List[String] = ["-1", "3x", "18446744073709551616", ""]
+for value in invalid_lengths {
+  let mut b: List[u8] = []
+  std@1/text.append(mut b, "POST / HTTP/1.1\r\nContent-Length: ")
+  std@1/text.append(mut b, value)
+  std@1/text.append(mut b, "\r\n\r\n")
+  server_parse(t, bytes.from_list(take b), 1024, 99, Error(Malformed(ContentLength())))
+}
+server_parse(t, b"POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nxx", 1024, 99, Error(Malformed(ContentLength())))
+server_parse(t, b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n", 1024, 99, Error(UnsupportedTransferEncoding()))
+server_parse(t, b"POST / HTTP/1.1\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n", 1024, 99, Error(Malformed(TransferEncoding())))
+"#);
+        execute(&body);
     });
 }

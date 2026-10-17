@@ -13,7 +13,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> | fmt [--check] <file> | export --tir <source|manifest.json> -o <file>\n",
+            b"usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -155,7 +155,10 @@ fn real_pipeline_accepts_clean_source_and_checks_launch_shape() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("entry must be pub fn"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("expected a public, complete, monomorphic")
+    );
     std::fs::remove_file(path).unwrap();
     // A program without its entry checks, and running it names the entry.
     let path = file("fn probe() -> u64 {\n  1\n}\n");
@@ -301,8 +304,10 @@ fn unavailable_execution_preserves_stdout_before_the_tool_error() {
     let source = file(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let s: Slots[u8] = slots.empty(); Ok(()) }",
     );
+    let config = file(r#"{"grants":["Io","Args"],"projections":["stdout"]}"#);
     let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
+        .args(["run", "--simulation"])
+        .arg(&config)
         .arg(&source)
         .output()
         .unwrap();
@@ -315,6 +320,7 @@ fn unavailable_execution_preserves_stdout_before_the_tool_error() {
     assert_eq!(result.stdout, b"before unavailable\n");
     assert!(String::from_utf8_lossy(&result.stderr).contains("not implemented"));
     std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(config).unwrap();
 }
 
 #[test]
@@ -393,7 +399,24 @@ fn native_run_matches_the_reference_run() {
         if native {
             command.arg("--native");
         }
-        command.arg(path).output().unwrap()
+        // Rejected source still reaches the same first source diagnostics.
+        let export = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["check"])
+            .arg(path)
+            .output()
+            .unwrap();
+        if export.status.success() {
+            let record = run_record(
+                path,
+                serde_json::json!({"io":{"stdout":"stdout.bytes@1","net":{"provider":"net.stream@1","rules":[]},"dirs":[]},"args":[]}),
+            );
+            command.arg(path).arg("--run").arg(&record);
+            let output = command.output().unwrap();
+            std::fs::remove_file(record).unwrap();
+            output
+        } else {
+            command.arg(path).output().unwrap()
+        }
     };
     let prints = file(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let _ = out.print(io.stdout(rt)?, \"hi\\n\")\n  Ok(())\n}\n",
@@ -469,4 +492,298 @@ fn source_projection_controls_distinguish_granted_and_empty_io() {
         }
         std::fs::remove_file(source).unwrap();
     }
+}
+
+/// Generate the real semantic binding through the public CLI, then select grants.
+fn run_record(source: &std::path::Path, grants: serde_json::Value) -> std::path::PathBuf {
+    let record = source.with_extension("run.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["export", "--run"])
+        .arg(source)
+        .arg("-o")
+        .arg(&record)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    for (key, value_grant) in grants.as_object().unwrap() {
+        value[key] = value_grant.clone();
+    }
+    std::fs::write(&record, serde_json::to_vec(&value).unwrap()).unwrap();
+    record
+}
+
+#[test]
+fn hello_web_answers_real_requests_interpreted() {
+    hello_web(false);
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_hello_web_answers_real_requests_native() {
+    hello_web(true);
+}
+
+fn hello_web(native: bool) {
+    use std::io::{BufRead, Read, Write};
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    use std::time::Duration;
+    {
+        let source = include_str!("../../../examples/hello-web/main.hir")
+            .replace("8080u16", "0u16")
+            .replace(
+                "while true",
+                r#"
+let bound = net.local_addr(n, listener) ? network_error
+let output = io.stdout(rt) ? grant_error
+let _ = out.print(output, std@1/u16.to_string(bound.port))
+let _ = out.print(output, "\n")
+for i in 0u64..3u64
+"#,
+            );
+        let path = file(&source);
+        let manifest = path.with_extension("hir.json");
+        let stdlib = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stdlib/std@1/hirsel.json")
+            .canonicalize()
+            .unwrap();
+        std::fs::write(&manifest,serde_json::json!({"schema":1,"package":{"name":"hello_web","version":"1"},"sources":[{"path":path.file_name().unwrap().to_str().unwrap(),"module":[]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let record = run_record(
+            &path,
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}),
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.arg("run").arg(&path).arg("--run").arg(&record);
+        if native {
+            command.arg("--native");
+        }
+        let child = command
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        struct Server(std::process::Child, bool);
+        impl Drop for Server {
+            fn drop(&mut self) {
+                if !self.1 {
+                    unsafe {
+                        libc_kill_group(self.0.id());
+                    }
+                }
+                let _ = self.0.wait();
+            }
+        }
+        unsafe fn libc_kill_group(pid: u32) {
+            unsafe extern "C" {
+                fn kill(pid: i32, signal: i32) -> i32;
+            }
+            unsafe {
+                kill(-(pid as i32), 9);
+            }
+        }
+        let mut server = Server(child, false);
+        let stdout = server.0.stdout.take().unwrap();
+        let (send, recv) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = std::io::BufReader::new(stdout).read_line(&mut line);
+            let _ = send.send((result, line));
+        });
+        let (_, port) = recv
+            .recv_timeout(Duration::from_secs(90))
+            .unwrap_or_else(|e| panic!("server readiness native={native}: {e}"));
+        let port: u16 = port.trim().parse().unwrap();
+        for (request,expected) in [
+            (&b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"[..],&b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world"[..]),
+            (b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\nabc",b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world"),
+            (b"BAD\0 / HTTP/1.1\r\n\r\n",b"HTTP/1.1 400 \r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request"),
+        ] {
+            let mut stream=std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST,port)).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            stream.write_all(request).unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+            let mut response=vec![];stream.read_to_end(&mut response).unwrap();assert_eq!(response,expected,"native={native}");
+        }
+        let status = server.0.wait().unwrap();
+        server.1 = true;
+        let mut stderr = String::new();
+        server
+            .0
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        assert!(status.success(), "native={native}: {stderr}");
+        assert!(stderr.is_empty(), "{stderr}");
+        reader.join().unwrap();
+        for path in [path, manifest, record] {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+}
+
+#[test]
+fn run_records_enforce_exact_listen_grants_and_admission_in_both_engines() {
+    let source = file(
+        r#"
+fn expected_error(e: NetError) -> () uses {} {
+  failure.check(match e { NotGranted() => true, _ => false }, Arithmetic())
+}
+fn grant_error(e: GrantError) -> () uses {} { () }
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let n = io.net(rt) ? grant_error
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 0u16)) ? expected_error
+  Ok(())
+}
+"#,
+    );
+    for native in [false, true] {
+        for (address, service, operation, allowed) in [
+            ("127.0.0.1", "0", "listen", true),
+            ("127.0.0.2", "0", "listen", false),
+            ("127.0.0.1", "1", "listen", false),
+            ("127.0.0.1", "0", "connect", false),
+            ("127.0.0.1", "0", "connect_tls", false),
+        ] {
+            let record = run_record(
+                &source,
+                serde_json::json!({"io":{"dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":address,"service":service,"operation":operation}]}},"args":[if allowed {"allow"}else{"deny"}]}),
+            );
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run").arg(&source).arg("--run").arg(&record);
+            if native {
+                command.arg("--native");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(if allowed { 0 } else { 1 }),
+                "native={native} {address}:{service}/{operation}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty());
+            std::fs::remove_file(record).unwrap();
+        }
+        for grants in [
+            serde_json::json!({"io":{"dirs":[],"net":{"provider":"net.stream@1","rules":[]}},"args":["deny"]}),
+            serde_json::json!({"io":{"dirs":[]},"args":["deny"]}),
+        ] {
+            let record = run_record(&source, grants);
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run").arg(&source).arg("--run").arg(&record);
+            if native {
+                command.arg("--native");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                output.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::remove_file(record).unwrap();
+        }
+        // These refuse before the entry can bind a socket.
+        for grants in [
+            serde_json::json!({"args":[]}),
+            serde_json::json!({"io":{"dirs":[]}}),
+            serde_json::json!({"io":{"dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"*","service":"0","operation":"listen"}]}},"args":[]}),
+            serde_json::json!({"io":{"dirs":[]},"args":[],"admission":{"expires":0}}),
+            serde_json::json!({"io":{"dirs":[]},"args":[],"program":"0000000000000000000000000000000000000000000000000000000000000000"}),
+        ] {
+            let record = run_record(&source, grants);
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run").arg(&source).arg("--run").arg(&record);
+            if native {
+                command.arg("--native");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            assert!(!output.stderr.is_empty());
+            std::fs::remove_file(record).unwrap();
+        }
+    }
+    std::fs::remove_file(source).unwrap();
+}
+
+#[test]
+fn run_records_pin_directory_rights_and_args_in_both_engines() {
+    let source = file(
+        r#"
+fn file_error(e: FileError) -> () uses {} { () }
+fn grant_error(e: GrantError) -> () uses {} { () }
+fn arg_error(e: ArgError) -> () uses {} { () }
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let d = io.dir(rt, path.of("data")) ? file_error
+  let input = arg.path(args, 0) ? arg_error
+  let data = file.read_bytes(d, input) ? file_error
+  if data != b"input" { return Error(()) }
+  let written: bool = match file.write_bytes(d, path.of("output.txt"), b"written") { Ok(()) => true, Error(NotGranted()) => false, Error(_) => return Error(()) }
+  let output = io.stdout(rt) ? grant_error
+  let _ = out.print(output, if written { "written" } else { "read only" })
+  Ok(())
+}
+"#,
+    );
+    let root = source.with_extension("root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("input.txt"), b"input").unwrap();
+    for native in [false, true] {
+        for access in ["read", "read_write"] {
+            let record = run_record(
+                &source,
+                serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"data","host":root,"access":access}]},"args":["input.txt"]}),
+            );
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run").arg(&source).arg("--run").arg(&record);
+            if native {
+                command.arg("--native");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "native={native}, {access}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                output.stdout,
+                if access == "read" {
+                    b"read only".as_slice()
+                } else {
+                    b"written"
+                }
+            );
+            assert!(output.stderr.is_empty());
+            if access == "read" {
+                assert!(!root.join("output.txt").exists());
+            } else {
+                assert_eq!(std::fs::read(root.join("output.txt")).unwrap(), b"written");
+                std::fs::remove_file(root.join("output.txt")).unwrap();
+            }
+            std::fs::remove_file(record).unwrap();
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_file(source).unwrap();
 }

@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: accept
+pub fn probe(n: Net, address: SocketAddr) {
+  let _ = net.listen(n, address)
+}

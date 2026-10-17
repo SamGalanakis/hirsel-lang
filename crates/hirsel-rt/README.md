@@ -482,3 +482,11 @@ Type-store test fixtures use `hirsel_types::testing::Types` through the test-onl
 `testing` feature; layout derivation and validation remain in this suite.
 
 Type-store test fixtures use `hirsel-layout` for type-to-layout and ABI derivation.
+
+`host_launch::HostGrants` implements production RunConfig authorization: it pins every
+explicit directory mount, sets exact projection and clock grants, and installs the
+validated Net rules and optional scripted peers in RealIo. Native source-run launches
+consume `--hirsel-run /absolute/run.json`, verify its embedded identity and seeds, and
+admit it before entry. Args come from that record. The differential harness retains its
+explicit fixture launch profile. Listener listen/accept/local_addr exports use the same
+Net policy path as streams, including the listener's brand on accepted streams.

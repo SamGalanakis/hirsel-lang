@@ -1,7 +1,7 @@
 //! `hirsel run --native`: the checked program as an optimized host executable.
 use super::{
     NativeError, Observation, OptLevel, Options, Partition, Sites, StageName, TargetSpec,
-    Toolchain, build, launch, link, observe,
+    Toolchain, build, observe,
 };
 use hirsel_engine::{RunOutcome, ToolError};
 use std::io::Write;
@@ -20,8 +20,36 @@ pub fn run_path_native(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
+    run_path_native_with_config(path, None, stdout, stderr)
+}
+
+pub fn run_path_native_with_config(
+    path: &Path,
+    record: Option<&Path>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let mut loaded = crate::load_program(path)?;
     loaded.check_for_execution()?;
+    let signature = crate::launch_signature(&mut loaded)?;
+    let revision = loaded
+        .engine
+        .semantic_program_revision(&loaded.entry)
+        .map_err(|e| loaded.error(e))?;
+    let requested = record
+        .map(hirsel_engine::read_run_record)
+        .transpose()
+        .map_err(|e| ToolError::Runtime(e.to_string()))?;
+    let mut host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
+    let admitted = hirsel_engine::admit_run(
+        &signature,
+        &revision,
+        hirsel_run_config::LaunchKind::Main,
+        requested.as_ref(),
+        &mut host,
+        crate::admission_time()?,
+    )
+    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
     let entry = loaded.entry;
     let mut engine = loaded.engine;
     let query = |engine: &hirsel_engine::QueryEngine, error| ToolError::Query {
@@ -42,40 +70,45 @@ pub fn run_path_native(
             )));
         }
     };
-    Ok(run(&validated, &entry).and_then(|(observation, launched)| {
-        let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
-        stdout.write_all(&launched).map_err(io)?;
-        for failure in &observation.failures {
-            writeln!(
-                stderr,
-                "runtime failure[{}] at line {}",
-                failure.rule, failure.line
-            )
-            .map_err(io)?;
-        }
-        Ok(
-            match (observation.exit_code, observation.failures.first()) {
-                (Some(code), _) => RunOutcome::Exit(code),
-                (None, Some(failure)) => RunOutcome::Failure {
-                    rule: hirsel_diag::RuleId::new(&failure.rule)
-                        .map_err(|_| NativeError::new(StageName::Launch, "a failure of no rule"))?,
-                    line: failure.line as usize,
+    Ok(
+        run(&validated, &entry, admitted.run(), stdout).and_then(|observation| {
+            let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
+
+            for failure in &observation.failures {
+                writeln!(
+                    stderr,
+                    "runtime failure[{}] at line {}",
+                    failure.rule, failure.line
+                )
+                .map_err(io)?;
+            }
+            Ok(
+                match (observation.exit_code, observation.failures.first()) {
+                    (Some(code), _) => RunOutcome::Exit(code),
+                    (None, Some(failure)) => RunOutcome::Failure {
+                        rule: hirsel_diag::RuleId::new(&failure.rule).map_err(|_| {
+                            NativeError::new(StageName::Launch, "a failure of no rule")
+                        })?,
+                        line: failure.line as usize,
+                    },
+                    (None, None) => {
+                        return Err(NativeError::new(
+                            StageName::Launch,
+                            "neither an exit code nor a failure",
+                        ));
+                    }
                 },
-                (None, None) => {
-                    return Err(NativeError::new(
-                        StageName::Launch,
-                        "neither an exit code nor a failure",
-                    ));
-                }
-            },
-        )
-    }))
+            )
+        }),
+    )
 }
 
 fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
     entry: &hirsel_engine::DefPath,
-) -> Result<(Observation, Vec<u8>), NativeError> {
+    run: &hirsel_run_config::ValidatedRun,
+    stdout: &mut dyn Write,
+) -> Result<Observation, NativeError> {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let program = build(validated, &Options::new(target.clone()))?;
     let scratch = std::env::temp_dir().join(format!("hirsel-native-{}", std::process::id()));
@@ -86,17 +119,20 @@ fn run(
     std::fs::create_dir_all(&scratch).map_err(io)?;
     let result = (|| {
         let toolchain = Toolchain::in_tree(&cache, &[&target])?;
-        let executable = link(
+        let objects =
+            super::link::emit_objects(&program, OptLevel::Speed, Partition::Whole, false, None)?;
+        let executable = super::link::link_objects_with_run(
             &program,
             entry,
-            OptLevel::Speed,
-            Partition::Whole,
+            &objects,
             &toolchain,
             &scratch,
+            Some(run),
         )?;
-        let launched = launch(&executable, &target, &toolchain, &scratch, false)?;
+        let launched =
+            super::link::launch_live(&executable, &target, &toolchain, &scratch, run, stdout)?;
         let observation = observe(&launched, &program, &Sites::new(validated.snapshot()))?;
-        Ok((observation, launched.stdout))
+        Ok(observation)
     })();
     let _ = std::fs::remove_dir_all(&scratch);
     result

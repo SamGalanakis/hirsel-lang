@@ -987,3 +987,173 @@ pub fn fetch(
     )
   )
 }
+
+// A sequential, one-request-per-connection server. Header syntax and framing
+// share the client wire parser. Transfer codings are deliberately unsupported.
+pub type ServerRequest {
+  method: String,
+  target: String,
+  version: Version,
+  headers: List[Header],
+  body: Bytes,
+}
+
+// Complete includes the consumed body; subsequent bytes belong to another request.
+pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[
+  Option[(ServerRequest, u64)],
+  HttpError
+] uses {} {
+  let empty = std@1/http_wire.RawHeader(
+    name_start: 0,
+    name_end: 0,
+    value_start: 0,
+    value_end: 0
+  )
+  let mut raw: Inline[std@1/http_wire.RawHeader, 16] = [
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty
+  ]
+  let mut line = std@1/http_wire.RequestLine(
+    method_start: 0,
+    method_end: 0,
+    target_start: 0,
+    target_end: 0,
+    version: 0
+  )
+  let mut count: u64 = 0
+  let end = match std@1/http_wire.parse_request(buf, mut line, mut raw, mut count) {
+    Ok(Partial()) => {
+      if core@1/bytes.len(buf) >= max_head_bytes {
+        return Error(HeadTooLarge())
+      }
+      return Ok(None())
+    },
+    Ok(Complete(end)) => end,
+    Error(e) => return Error(Malformed(e)),
+  }
+  if end > max_head_bytes {
+    return Error(HeadTooLarge())
+  }
+  let frame = match std@1/http_wire.framing(buf, line.version, raw, count) {
+    Ok(f) => f,
+    Error(e) => return Error(Malformed(e)),
+  }
+  if frame.chunked {
+    return Error(UnsupportedTransferEncoding())
+  }
+  let length = match frame.content_length {
+    Some(n) => n,
+    None() => 0,
+  }
+  if length > max_body_bytes {
+    return Error(BodyTooLarge())
+  }
+  // Subtract before adding, so an advertised u64::MAX length cannot overflow.
+  if length > core@1/bytes.len(buf) - end {
+    return Ok(None())
+  }
+  let mut headers: List[Header] = []
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(
+      mut headers,
+      Header(
+        name: http_text(buf, raw[i].name_start, raw[i].name_end)?,
+        value: http_text(buf, raw[i].value_start, raw[i].value_end)?
+      )
+    )
+    i += 1
+  }
+  Ok(
+    Some(
+      (
+        ServerRequest(
+          method: http_text(buf, line.method_start, line.method_end)?,
+          target: http_text(buf, line.target_start, line.target_end)?,
+          version: if line.version == 1 {
+            Http11()
+          } else {
+            Http10()
+          },
+          headers: take headers,
+          body: unique core@1/bytes.slice(buf, end, end + length)
+        ),
+        end + length
+      )
+    )
+  )
+}
+
+// Read an owned, bounded Content-Length request. The caller owns the Stream and
+// closes it after responding; malformed/truncated requests never invoke a handler.
+pub fn receive_request(
+  n: Net,
+  mut s: Stream of n,
+  max_head_bytes: u64,
+  max_body_bytes: u64
+) -> Result[ServerRequest, HttpError] {
+  let mut input: List[u8] = []
+  while true {
+    let buf = http_owned_input(input)
+    match parse_server_request(buf, max_head_bytes, max_body_bytes)? {
+      Some((incoming, _)) => return Ok(take incoming),
+      None() => (),
+    }
+    if core@1/net.read(n, mut s, mut input, 4096) ? http_net_error == 0 {
+      return Error(Truncated())
+    }
+  }
+  Error(Truncated())
+}
+
+// The writer owns framing: callers cannot inject a second length or encoding.
+pub fn respond(
+  n: Net,
+  mut s: Stream of n,
+  status: u16,
+  headers: List[Header],
+  body: Bytes
+) -> Result[(), HttpError] {
+  if status < 200 || status > 599 || (status == 204 || status == 304) && core@1/bytes.len(
+    body
+  ) != 0 {
+    return Error(Malformed(Status()))
+  }
+  http_validate_headers(headers)?
+  let mut out: List[u8] = []
+  std@1/text.append(mut out, "HTTP/1.1 ")
+  std@1/u16.format_into(status, mut out)
+  std@1/text.append(mut out, " \r\n")
+  for h in headers {
+    if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
+      h.name,
+      "connection"
+    ) {
+      return Error(Malformed(ContentLength()))
+    }
+    std@1/text.append(mut out, h.name)
+    std@1/text.append(mut out, ": ")
+    std@1/text.append(mut out, h.value)
+    std@1/text.append(mut out, "\r\n")
+  }
+  std@1/text.append(mut out, "Content-Length: ")
+  std@1/u64.format_into(core@1/bytes.len(body), mut out)
+  std@1/text.append(mut out, "\r\nConnection: close\r\n\r\n")
+  core@1/net.write_all(n, mut s, core@1/bytes.from_list(take out)) ? http_net_error
+  core@1/net.write_all(n, mut s, body) ? http_net_error
+  Ok(())
+}

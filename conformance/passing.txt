@@ -15,6 +15,9 @@ conformance/CAP/CAP-1-clock-projection-ok.hir
 conformance/CAP/CAP-1-directory-projection-bad.hir
 conformance/CAP/CAP-1-directory-projection-ok.hir
 conformance/CAP/CAP-1-environment-parameter.hir
+conformance/CAP/CAP-1-listen-not-granted-run.hir
+conformance/CAP/CAP-1-listen-parameter-bad.hir
+conformance/CAP/CAP-1-listen-parameter-ok.hir
 conformance/CAP/CAP-1-net-connect-parameter-bad.hir
 conformance/CAP/CAP-1-net-connect-parameter-ok.hir
 conformance/CAP/CAP-1-net-connect-tls-rule-run.hir
@@ -3280,6 +3283,7 @@ conformance/SEM/SEM-1-format-into-appends-run.hir
 conformance/SEM/SEM-1-format-into-fused-append-run.hir
 conformance/SEM/SEM-1-hex-suffix-like-digits-bad.hir
 conformance/SEM/SEM-1-hex-suffix-like-digits-run.hir
+conformance/SEM/SEM-1-http-server-wire-run.hir
 conformance/SEM/SEM-1-http-wire-run.hir
 conformance/SEM/SEM-1-left-bit-loss.hir
 conformance/SEM/SEM-1-min-remainder.hir

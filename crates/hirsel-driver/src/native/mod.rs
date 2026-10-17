@@ -34,7 +34,7 @@ pub use link::{
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
 pub use stages::{NativeError, Options, ReadyProgram, StageName, build, build_program};
-pub use tool::run_path_native;
+pub use tool::{run_path_native, run_path_native_with_config};
 
 /// The pinned LLVM release emission binds, for reports and artifacts.
 pub fn llvm_version() -> String {

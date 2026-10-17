@@ -545,8 +545,24 @@ impl Simulation {
                         Err(NetFault::NotGranted)
                     }
                 }
-                "net.listen" | "net.accept" | "net.local_addr" => {
-                    return Err(Error::Unavailable(format!("{name} requires M2 runtime")));
+                "net.listen" => {
+                    let f = fields(arg(a, 1)?, "SocketAddr", 2)?;
+                    let host = ip(f[0])?.to_string();
+                    let service = port(f[1])?.to_string();
+                    if !ruleset.iter().any(|r| {
+                        r.address == host && r.service == service && r.operation == "listen"
+                    }) {
+                        Err(NetFault::NotGranted)
+                    } else {
+                        return Err(Error::Unavailable(
+                            "scripted listeners have no incoming peers".into(),
+                        ));
+                    }
+                }
+                "net.accept" | "net.local_addr" => {
+                    return Err(Error::Unavailable(
+                        "scripted listeners have no incoming peers".into(),
+                    ));
                 }
                 _ => {
                     let id = self.stream_id(net, arg(a, 1)?)?;

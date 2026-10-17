@@ -687,6 +687,41 @@ unsafe fn launch(
     let Some(launch_config) = (unsafe { launch_config.as_ref() }) else {
         return refuse("missing launch configuration");
     };
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let requested = if arguments.first().is_some_and(|arg| arg == "--hirsel-run") {
+        let [_, path] = arguments.as_slice() else {
+            return refuse("expected only --hirsel-run /absolute/run.json");
+        };
+        match hirsel_run_config::RunConfig::read_path(std::path::Path::new(path)) {
+            Ok(run) => Some(run),
+            Err(e) => return refuse(&e.to_string()),
+        }
+    } else {
+        None
+    };
+    let mut production_io = None;
+    if let Some(run) = &requested {
+        if run.identity() != launch_config.run_identity
+            || run.config().hash_seed() != launch_config.hash_seed
+            || run.config().random_seed() != launch_config.random_seed
+            || run.config().test_seed() != launch_config.test_seed
+        {
+            return refuse("run record binding mismatch");
+        }
+        let mut host = crate::host_launch::HostGrants::new(RawStdout);
+        let now = match std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|n| i64::try_from(n.as_nanos()).ok())
+        {
+            Some(now) => now,
+            None => return refuse("admission clock out of range"),
+        };
+        if let Err(e) = run.admit(&mut host, now) {
+            return refuse(&e.to_string());
+        }
+        production_io = Some(host.into_io());
+    }
     let seed = launch_config.test_seed;
     if !(4..=RESULT_MAX).contains(&result_size) {
         return refuse("the entry result is not a Result of at most 64 bytes");
@@ -699,7 +734,9 @@ unsafe fn launch(
         .iter()
         .map(|(name, file)| (*name, file))
         .collect();
-    let mut arguments = if matches!(entry, Launch::Zero(_)) {
+    let mut arguments = if let Some(run) = &requested {
+        run.record().args.clone().unwrap_or_default()
+    } else if matches!(entry, Launch::Zero(_)) {
         vec![]
     } else {
         match std::env::args_os()
@@ -729,91 +766,47 @@ unsafe fn launch(
     let mut real = None;
     let mut zero_recording = None;
     let mut replay = None;
-    let adapter: Box<dyn Adapter> = match std::env::var_os("HIRSEL_RT_REPLAY") {
-        Some(path) => {
-            let tape = match std::fs::read_to_string(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|text| parse_recording(&text))
-            {
-                Ok(recording) => recording,
-                Err(error) => return refuse(&format!("the replayed tape: {error}")),
-            };
-            if tape.run_identity != launch_config.run_identity
-                || tape.hash_seed != launch_config.hash_seed
-                || tape.random_seed != launch_config.random_seed
-                || tape.test_seed != launch_config.test_seed
-            {
-                return refuse("recording configuration mismatch");
-            }
-            arguments = tape.arguments;
-            let mut io = SimIo::new(tape.tree, tape.events);
-            io.set_net_rules(net_rules.clone());
-            if let Some(peers) = net_peers.clone()
-                && let Err(error) = io.set_net_script(peers)
-            {
-                return refuse(&format!("the network script: {error:?}"));
-            }
-            if matches!(entry, Launch::Test(_)) {
-                io.test_context(seed);
-            }
-            let io = Rc::new(RefCell::new(io));
-            replay = Some(io.clone());
-            Box::new(Shared(io))
-        }
-        None if matches!(entry, Launch::Zero(_)) => {
-            if let Some(path) = std::env::var_os("HIRSEL_RT_TAPE") {
-                let record = Recording {
-                    arguments: vec![],
-                    run_identity: launch_config.run_identity,
-                    hash_seed: launch_config.hash_seed,
-                    random_seed: launch_config.random_seed,
-                    test_seed: launch_config.test_seed,
-                    tree: initial_tree.clone(),
-                    events: vec![],
+    let adapter: Box<dyn Adapter> = if let Some(mut io) = production_io {
+        io.discard_history();
+        let io = Rc::new(RefCell::new(io));
+        real = Some(io.clone());
+        Box::new(Shared(io))
+    } else {
+        match std::env::var_os("HIRSEL_RT_REPLAY") {
+            Some(path) => {
+                let tape = match std::fs::read_to_string(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|text| parse_recording(&text))
+                {
+                    Ok(recording) => recording,
+                    Err(error) => return refuse(&format!("the replayed tape: {error}")),
                 };
-                let file =
-                    match crate::host_paths::RecorderDestination::pin(std::path::Path::new(&path))
-                        .and_then(|destination| destination.open_with_files(&[], &output_grants))
-                    {
-                        Ok(file) => file,
-                        Err(error) => return refuse(&error.to_string()),
-                    };
-                match RecordingWriter::new(file, &record) {
-                    Ok(writer) => zero_recording = Some(writer),
-                    Err(error) => return refuse(&format!("the Io tape: {error}")),
+                if tape.run_identity != launch_config.run_identity
+                    || tape.hash_seed != launch_config.hash_seed
+                    || tape.random_seed != launch_config.random_seed
+                    || tape.test_seed != launch_config.test_seed
+                {
+                    return refuse("recording configuration mismatch");
                 }
-            }
-            Box::new(SimIo::new(initial_tree.clone(), vec![]))
-        }
-        None => match RealIo::grant_with_output(
-            std::path::Path::new(&std::env::var_os("HIRSEL_RT_ROOT").unwrap_or_else(|| ".".into())),
-            RawStdout,
-        ) {
-            Ok(mut io) => {
+                arguments = tape.arguments;
+                let mut io = SimIo::new(tape.tree, tape.events);
                 io.set_net_rules(net_rules.clone());
                 if let Some(peers) = net_peers.clone()
                     && let Err(error) = io.set_net_script(peers)
                 {
                     return refuse(&format!("the network script: {error:?}"));
                 }
-                let tape = match std::env::var_os("HIRSEL_RT_TAPE") {
-                    Some(path) => match io
-                        .prepare_recording_with_files(std::path::Path::new(&path), &output_grants)
-                    {
-                        Ok(file) => Some(file),
-                        Err(error) => return refuse(&error.to_string()),
-                    },
-                    None => None,
-                };
-                if tape.is_some() {
-                    initial_tree = match io.snapshot() {
-                        Ok(tree) => tree,
-                        Err(error) => return refuse(&format!("initial recording tree: {error:?}")),
-                    };
+                if matches!(entry, Launch::Test(_)) {
+                    io.test_context(seed);
                 }
-                if let Some(file) = tape {
+                let io = Rc::new(RefCell::new(io));
+                replay = Some(io.clone());
+                Box::new(Shared(io))
+            }
+            None if matches!(entry, Launch::Zero(_)) => {
+                if let Some(path) = std::env::var_os("HIRSEL_RT_TAPE") {
                     let record = Recording {
-                        arguments: arguments.clone(),
+                        arguments: vec![],
                         run_identity: launch_config.run_identity,
                         hash_seed: launch_config.hash_seed,
                         random_seed: launch_config.random_seed,
@@ -821,22 +814,79 @@ unsafe fn launch(
                         tree: initial_tree.clone(),
                         events: vec![],
                     };
-                    let writer = RecordingWriter::new(file, &record);
-                    match writer {
-                        Ok(writer) => io.record_to(writer),
+                    let file = match crate::host_paths::RecorderDestination::pin(
+                        std::path::Path::new(&path),
+                    )
+                    .and_then(|destination| destination.open_with_files(&[], &output_grants))
+                    {
+                        Ok(file) => file,
+                        Err(error) => return refuse(&error.to_string()),
+                    };
+                    match RecordingWriter::new(file, &record) {
+                        Ok(writer) => zero_recording = Some(writer),
                         Err(error) => return refuse(&format!("the Io tape: {error}")),
                     }
                 }
-                if matches!(entry, Launch::Test(_)) {
-                    io.test_context(seed);
-                }
-                io.discard_history();
-                let io = Rc::new(RefCell::new(io));
-                real = Some(io.clone());
-                Box::new(Shared(io))
+                Box::new(SimIo::new(initial_tree.clone(), vec![]))
             }
-            Err(error) => return refuse(&format!("the granted directory: {error}")),
-        },
+            None => match RealIo::grant_with_output(
+                std::path::Path::new(
+                    &std::env::var_os("HIRSEL_RT_ROOT").unwrap_or_else(|| ".".into()),
+                ),
+                RawStdout,
+            ) {
+                Ok(mut io) => {
+                    io.set_net_rules(net_rules.clone());
+                    if let Some(peers) = net_peers.clone()
+                        && let Err(error) = io.set_net_script(peers)
+                    {
+                        return refuse(&format!("the network script: {error:?}"));
+                    }
+                    let tape = match std::env::var_os("HIRSEL_RT_TAPE") {
+                        Some(path) => match io.prepare_recording_with_files(
+                            std::path::Path::new(&path),
+                            &output_grants,
+                        ) {
+                            Ok(file) => Some(file),
+                            Err(error) => return refuse(&error.to_string()),
+                        },
+                        None => None,
+                    };
+                    if tape.is_some() {
+                        initial_tree = match io.snapshot() {
+                            Ok(tree) => tree,
+                            Err(error) => {
+                                return refuse(&format!("initial recording tree: {error:?}"));
+                            }
+                        };
+                    }
+                    if let Some(file) = tape {
+                        let record = Recording {
+                            arguments: arguments.clone(),
+                            run_identity: launch_config.run_identity,
+                            hash_seed: launch_config.hash_seed,
+                            random_seed: launch_config.random_seed,
+                            test_seed: launch_config.test_seed,
+                            tree: initial_tree.clone(),
+                            events: vec![],
+                        };
+                        let writer = RecordingWriter::new(file, &record);
+                        match writer {
+                            Ok(writer) => io.record_to(writer),
+                            Err(error) => return refuse(&format!("the Io tape: {error}")),
+                        }
+                    }
+                    if matches!(entry, Launch::Test(_)) {
+                        io.test_context(seed);
+                    }
+                    io.discard_history();
+                    let io = Rc::new(RefCell::new(io));
+                    real = Some(io.clone());
+                    Box::new(Shared(io))
+                }
+                Err(error) => return refuse(&format!("the granted directory: {error}")),
+            },
+        }
     };
     let prepare_tool_file = |path: &std::path::Path| {
         if let Some(io) = &real {

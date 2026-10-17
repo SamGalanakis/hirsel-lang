@@ -483,3 +483,8 @@ and lowering changes exist, native concurrency remains explicitly unavailable.
 failure and tooling abandonment before the continuation resumes. Runtime-managed
 owners such as mutexes use it to retain the final payload without rollback;
 abandoned payloads return to the evaluator's explicit cleanup worklist.
+
+Production host operations are supplied by the driver's Operations adapter; this crate
+remains host-independent. Scripted `net.listen` checks the exact grant before reporting
+that scripted incoming peers are unavailable, so an empty rule set returns NotGranted
+without a provider effect.

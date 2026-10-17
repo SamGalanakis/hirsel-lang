@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> | fmt [--check] <file> | export --tir <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
 
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))
@@ -10,6 +10,7 @@ fn main() -> ExitCode {
 enum Command {
     Help,
     Export {
+        run: bool,
         entry: OsString,
         output: OsString,
     },
@@ -17,8 +18,10 @@ enum Command {
         config: OsString,
         file: OsString,
     },
-    Native {
+    Run {
         file: OsString,
+        record: Option<OsString>,
+        native: bool,
     },
     Source {
         command: &'static str,
@@ -33,14 +36,18 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
         Some(Long("help")) => Command::Help,
         Some(Value(command)) if command == "help" => Command::Help,
         Some(Value(command)) if command == "export" => {
-            if !matches!(args.next()?, Some(Long("tir"))) {
-                return Err("export requires --tir".into());
-            }
+            let run = match args.next()? {
+                Some(Long("tir")) => false,
+                Some(Long("run")) => true,
+                Some(arg) => return Err(arg.unexpected()),
+                None => return Err("export requires --tir or --run".into()),
+            };
             let entry = args.value()?;
             if !matches!(args.next()?, Some(Short('o'))) {
                 return Err("export requires -o".into());
             }
             Command::Export {
+                run,
                 entry,
                 output: args.value()?,
             }
@@ -51,31 +58,61 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 Some("run") => "run",
                 _ => "fmt",
             };
-            match args.next()? {
-                Some(Long("simulation")) if name == "run" => Command::Simulation {
-                    config: args.value()?,
-                    file: args.value()?,
-                },
-                Some(Long("native")) if name == "run" => Command::Native {
-                    file: args.value()?,
-                },
-                Some(Long("json")) if name == "check" => Command::Source {
-                    command: name,
-                    flag: Some("--json"),
-                    file: source_arg(&mut args)?,
-                },
-                Some(Long("check")) if name == "fmt" => Command::Source {
-                    command: name,
-                    flag: Some("--check"),
-                    file: source_arg(&mut args)?,
-                },
-                Some(Value(file)) if !file.to_string_lossy().starts_with('-') => Command::Source {
-                    command: name,
-                    flag: None,
-                    file,
-                },
-                Some(arg) => return Err(arg.unexpected()),
-                None => return Err("missing source path".into()),
+            if name == "run" {
+                let mut record = None;
+                let mut native = false;
+                let mut simulation = None;
+                let mut file = None;
+                while let Some(arg) = args.next()? {
+                    match arg {
+                        Long("native") if !native => native = true,
+                        Long("run") if record.is_none() => record = Some(args.value()?),
+                        Long("simulation") if simulation.is_none() => {
+                            simulation = Some(args.value()?)
+                        }
+                        Value(path)
+                            if file.is_none() && !path.to_string_lossy().starts_with('-') =>
+                        {
+                            file = Some(path)
+                        }
+                        arg => return Err(arg.unexpected()),
+                    }
+                }
+                let file = file.ok_or("missing source path")?;
+                if let Some(config) = simulation {
+                    if native || record.is_some() {
+                        return Err("--simulation cannot combine with --native or --run".into());
+                    }
+                    Command::Simulation { config, file }
+                } else {
+                    Command::Run {
+                        file,
+                        record,
+                        native,
+                    }
+                }
+            } else {
+                match args.next()? {
+                    Some(Long("json")) if name == "check" => Command::Source {
+                        command: name,
+                        flag: Some("--json"),
+                        file: source_arg(&mut args)?,
+                    },
+                    Some(Long("check")) if name == "fmt" => Command::Source {
+                        command: name,
+                        flag: Some("--check"),
+                        file: source_arg(&mut args)?,
+                    },
+                    Some(Value(file)) if !file.to_string_lossy().starts_with('-') => {
+                        Command::Source {
+                            command: name,
+                            flag: None,
+                            file,
+                        }
+                    }
+                    Some(arg) => return Err(arg.unexpected()),
+                    None => return Err("missing source path".into()),
+                }
             }
         }
         Some(arg) => return Err(arg.unexpected()),
@@ -108,7 +145,16 @@ fn execute(args: Vec<OsString>) -> u8 {
             println!("{USAGE}");
             return 0;
         }
-        Command::Export { entry, output } => {
+        Command::Export { run, entry, output } => {
+            if run {
+                return match hirsel_driver::export_run_path(Path::new(&entry)) {
+                    Ok(bytes) => match std::fs::write(output, bytes) {
+                        Ok(()) => 0,
+                        Err(e) => tool_error(ToolError::Io(e), false),
+                    },
+                    Err(e) => tool_error(e, false),
+                };
+            }
             // The prover-neutral TIR export: a tool artifact,
             // never a source verdict, so diagnostics come first as for `run`.
             return match hirsel_driver::export_tir_path(Path::new(&entry)) {
@@ -127,41 +173,23 @@ fn execute(args: Vec<OsString>) -> u8 {
                     return 2;
                 }
             };
-            return match hirsel_driver::run_path_with_simulation(
+            return run_result(hirsel_driver::run_path_with_simulation(
                 Path::new(&file),
                 simulation,
                 &mut std::io::stdout().lock(),
-            ) {
-                Ok(RunOutcome::Exit(code)) => u8::from(code != 0),
-                Ok(RunOutcome::Failure { rule, line }) => {
-                    eprintln!("runtime failure[{rule}] at line {line}");
-                    1
-                }
-                Ok(RunOutcome::UndefinedBehavior(detected)) => {
-                    eprintln!("{detected}");
-                    2
-                }
-                Ok(RunOutcome::Trapped(trap)) => {
-                    eprintln!("{trap}");
-                    2
-                }
-                Ok(RunOutcome::Blocked(waits)) => {
-                    eprintln!("Blocked: {waits:?}");
-                    2
-                }
-                Ok(RunOutcome::ToolingLimit(limit)) => {
-                    eprintln!("evaluator tooling limit: {:?}", limit.kind);
-                    2
-                }
-                Err(error) => tool_error(error, false),
-            };
+            ));
         }
-        Command::Native { file } => {
+        Command::Run {
+            file,
+            record,
+            native: true,
+        } => {
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
             // program yet is a tool outcome (exit 2).
-            return match hirsel_driver::native::run_path_native(
+            return match hirsel_driver::native::run_path_native_with_config(
                 Path::new(&file),
+                record.as_deref().map(Path::new),
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
             ) {
@@ -173,6 +201,17 @@ fn execute(args: Vec<OsString>) -> u8 {
                 }
                 Err(error) => tool_error(error, false),
             };
+        }
+        Command::Run {
+            file,
+            record,
+            native: false,
+        } => {
+            return run_result(hirsel_driver::run_path_with_config(
+                Path::new(&file),
+                record.as_deref().map(Path::new),
+                &mut std::io::stdout().lock(),
+            ));
         }
         Command::Source {
             command,
@@ -207,31 +246,6 @@ fn execute(args: Vec<OsString>) -> u8 {
                 )
             }
             Err(error) => tool_error(error, json),
-        },
-        "run" => match hirsel_driver::run_path(path, &mut std::io::stdout().lock()) {
-            Ok(RunOutcome::UndefinedBehavior(detected)) => {
-                eprintln!("{detected}");
-                2
-            }
-            Ok(RunOutcome::Trapped(trap)) => {
-                eprintln!("{trap}");
-                2
-            }
-            Ok(RunOutcome::Blocked(waits)) => {
-                eprintln!("Blocked: {waits:?}");
-                2
-            }
-            Ok(RunOutcome::ToolingLimit(limit)) => {
-                eprintln!("evaluator tooling limit: {:?}", limit.kind);
-                2
-            }
-            Ok(RunOutcome::Exit(0)) => 0,
-            Ok(RunOutcome::Exit(_)) => 1,
-            Ok(RunOutcome::Failure { rule, line }) => {
-                eprintln!("runtime failure[{rule}] at line {line}");
-                1
-            }
-            Err(error) => tool_error(error, false),
         },
         "fmt" => match hirsel_driver::format_path(path) {
             Ok(formatted) if flag.is_some() => match std::fs::read_to_string(path) {
@@ -362,4 +376,31 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
         }
     }
     Ok(config)
+}
+
+fn run_result(result: Result<RunOutcome, ToolError>) -> u8 {
+    match result {
+        Ok(RunOutcome::Exit(code)) => u8::from(code != 0),
+        Ok(RunOutcome::Failure { rule, line }) => {
+            eprintln!("runtime failure[{rule}] at line {line}");
+            1
+        }
+        Ok(RunOutcome::UndefinedBehavior(u)) => {
+            eprintln!("{u}");
+            2
+        }
+        Ok(RunOutcome::Trapped(t)) => {
+            eprintln!("{t}");
+            2
+        }
+        Ok(RunOutcome::Blocked(w)) => {
+            eprintln!("Blocked: {w:?}");
+            2
+        }
+        Ok(RunOutcome::ToolingLimit(l)) => {
+            eprintln!("evaluator tooling limit: {:?}", l.kind);
+            2
+        }
+        Err(e) => tool_error(e, false),
+    }
 }

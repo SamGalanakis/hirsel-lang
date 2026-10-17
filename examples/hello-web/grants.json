@@ -1,0 +1,1 @@
+{"io":{"stdout":"stdout.bytes@1","dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}]}},"args":[]}

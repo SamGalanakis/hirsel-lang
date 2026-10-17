@@ -108,7 +108,7 @@ hirsel_test(
     runtime_archives = "//:hirsel-rt-archives",
     crate = "cli",
     crate_root = "crates/hirsel-cli/tests/cli.rs",
-    srcs = glob(["crates/hirsel-cli/tests/**"]),
+    srcs = glob(["crates/hirsel-cli/tests/**"]) + ["examples/hello-web/main.hir"],
     features = [],
     manifest_dir = "crates/hirsel-cli",
     package_name = "hirsel-cli",

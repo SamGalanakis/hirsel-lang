@@ -603,3 +603,94 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
         None => STATUS_FAILURE,
     }
 }
+
+/// `net.listen(n, addr) -> Result[Listener of n, NetError]`.
+/// # Safety
+/// Context bound; n and addr readable; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    addr: *const SocketAddrAbi,
+) -> u8 {
+    let request = Request::Listen {
+        net: unsafe { n.read() },
+        addr: unsafe { (*addr).get() },
+    };
+    let Some(Completion::NetHandle(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    unsafe { out.write(NetWordResult::of(value)) };
+    STATUS_OK
+}
+/// `net.local_addr(n, listener) -> Result[SocketAddr, NetError]`.
+/// # Safety
+/// Context bound; n and listener readable; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_local_addr(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetAddrResult,
+    n: *const u64,
+    listener: *const u64,
+) -> u8 {
+    let request = Request::LocalAddr {
+        net: unsafe { n.read() },
+        listener: unsafe { listener.read() },
+    };
+    let Some(Completion::Address(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    unsafe { out.write(NetAddrResult::of(value)) };
+    STATUS_OK
+}
+/// `Result[(Stream,SocketAddr),NetError]`: eight-byte-aligned payload at 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NetAcceptedResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub stream: u64,
+    pub address: SocketAddrAbi,
+}
+/// `net.accept(n, mut listener)`.
+/// # Safety
+/// Context bound; n and listener readable; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_accept(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetAcceptedResult,
+    n: *const u64,
+    listener: *const u64,
+) -> u8 {
+    let request = Request::Accept {
+        net: unsafe { n.read() },
+        listener: unsafe { listener.read() },
+    };
+    let Some(Completion::Accepted(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    let mut result = NetAcceptedResult::default();
+    match value {
+        Ok((stream, addr)) => {
+            result.stream = stream;
+            result.address = SocketAddrAbi::of(addr);
+        }
+        Err(e) => {
+            result.tag = 1;
+            let error = NetErrorAbi::of(e);
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (&raw const error).cast::<u8>(),
+                    (&raw mut result.stream).cast::<u8>(),
+                    std::mem::size_of::<NetErrorAbi>(),
+                )
+            };
+        }
+    }
+    unsafe { out.write(result) };
+    STATUS_OK
+}

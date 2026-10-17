@@ -3,10 +3,11 @@
 //! compile its validated native input. Callers import engine items from
 //! hirsel-engine itself; this crate exports only the wiring.
 use hirsel_engine::{
-    CheckOutput, Compiler, LoadedProgram, NotImplemented, PackageCache, PhaseAdapters, RunOutcome,
-    SimulationConfig, ToolError,
+    CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PackageCache,
+    PhaseAdapters, RunOutcome, SimulationConfig, ToolError,
 };
 pub mod native;
+mod network;
 mod pipeline;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
 use std::{io::Write, path::Path};
@@ -45,7 +46,7 @@ pub fn format_path(path: &Path) -> Result<String, ToolError> {
     COMPILER.format_path(path)
 }
 pub fn run_path(path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, ToolError> {
-    COMPILER.run_path(path, stdout)
+    run_path_with_config(path, None, stdout)
 }
 pub fn run_path_with_simulation(
     path: &Path,
@@ -72,5 +73,114 @@ pub fn check_file(path: &Path) -> Result<CheckOutput, NotImplemented> {
     check_path(path).map_err(|_| NotImplemented)
 }
 pub fn run_file(path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented> {
-    run_path(path, stdout).map_err(|_| NotImplemented)
+    COMPILER.run_path(path, stdout).map_err(|_| NotImplemented)
+}
+
+pub(crate) fn launch_signature(
+    program: &mut LoadedProgram,
+) -> Result<hirsel_types::SignatureRef, ToolError> {
+    program
+        .engine
+        .item_signature(&program.entry)
+        .map(|q| q.value)
+        .map_err(|e| match e {
+            hirsel_types::QueryError::NotImplemented => ToolError::Runtime(format!(
+                "launch: the program declares no entry `pub fn {}`",
+                program.entry.0.name
+            )),
+            e => program.error(e),
+        })
+}
+/// Export the semantic binding and denial defaults; callers explicitly select grants.
+pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
+    let mut program = load_program(path)?;
+    program.check_for_execution()?;
+    let revision = program
+        .engine
+        .semantic_program_revision(&program.entry)
+        .map_err(|e| program.error(e))?;
+    Ok(
+        hirsel_run_config::RunConfig::for_program(&revision, hirsel_run_config::LaunchKind::Main)
+            .validated()
+            .map_err(|e| ToolError::Runtime(e.to_string()))?
+            .canonical()
+            .to_vec(),
+    )
+}
+/// Execute checked TIR with freshly admitted host grants and exact snapshots.
+pub fn run_path_with_config(
+    path: &Path,
+    record: Option<&Path>,
+    stdout: &mut dyn Write,
+) -> Result<RunOutcome, ToolError> {
+    use hirsel_interp::Outcome;
+    let mut program = load_program(path)?;
+    program.check_for_execution()?;
+    let signature = launch_signature(&mut program)?;
+    let revision = program
+        .engine
+        .semantic_program_revision(&program.entry)
+        .map_err(|e| program.error(e))?;
+    let requested = record
+        .map(hirsel_engine::read_run_record)
+        .transpose()
+        .map_err(|e| ToolError::Runtime(e.to_string()))?;
+    let mut host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
+    let admitted = hirsel_engine::admit_run(
+        &signature,
+        &revision,
+        hirsel_run_config::LaunchKind::Main,
+        requested.as_ref(),
+        &mut host,
+        admission_time()?,
+    )
+    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+    let config = admitted.run().record();
+    let run = hirsel_tir::RunConfiguration {
+        entry: program.entry.clone(),
+        hash_seed: config.inputs.hash_seed,
+        inputs: vec![],
+    };
+    let mut runtime = program
+        .engine
+        .runtime_types()
+        .map_err(|e| program.error(e))?;
+    runtime.trace_mode = hirsel_interp::TraceMode::Effects;
+    let mut operations = network::HostLibrary::new(&run, admitted.run(), host.into_io(), stdout)
+        .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
+    let args = operations
+        .library
+        .entry_arguments(&signature)
+        .map_err(|e| ToolError::Runtime(format!("launch: {e:?}")))?;
+    let sources = program.engine.sources.clone();
+    let execution = hirsel_interp::run_with_runtime(
+        &mut program.engine,
+        &sources,
+        &run,
+        args,
+        hirsel_interp::Limits {
+            steps: u64::MAX,
+            call_depth: 256,
+        },
+        &mut operations,
+        &runtime,
+    )
+    .map_err(|e| ToolError::Runtime(format!("interpret: {:?}", e.error)))?;
+    Ok(match execution.outcome {
+        Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
+        Outcome::Failed(f) => RunOutcome::Failure {
+            rule: f.rule,
+            line: f.line as usize,
+        },
+        Outcome::ToolingLimit(l) => RunOutcome::ToolingLimit(l),
+        Outcome::UndefinedBehavior(u) => RunOutcome::UndefinedBehavior(u),
+        Outcome::Trapped(t) => RunOutcome::Trapped(t),
+        Outcome::Blocked(_) => RunOutcome::Blocked(vec![]),
+    })
+}
+pub(crate) fn admission_time() -> Result<i64, ToolError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| ToolError::Runtime(e.to_string()))?;
+    i64::try_from(now.as_nanos()).map_err(|e| ToolError::Runtime(e.to_string()))
 }

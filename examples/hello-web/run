@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+hirsel export --run main.hir -o run.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+record = json.loads(Path('run.json').read_text())
+record.update(json.loads(Path('grants.json').read_text()))
+Path('run.json').write_text(json.dumps(record))
+PY
+exec hirsel run main.hir --run "$PWD/run.json" "$@"

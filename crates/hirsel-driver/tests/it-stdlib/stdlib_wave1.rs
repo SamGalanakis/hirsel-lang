@@ -29,7 +29,12 @@ fn callback_failure_releases_current_remaining_and_retained_resources_in_order()
             ("DROP-2-wave1-fold-resource-run", b"A\n".as_slice(), false),
         ] {
             let mut output = Vec::new();
-            let outcome = run_path(&source("DROP", name), &mut output).unwrap();
+            let outcome = run_path_with_simulation(
+                &source("DROP", name),
+                SimulationConfig::default(),
+                &mut output,
+            )
+            .unwrap();
             assert_eq!(output, expected, "{name}");
             if failure {
                 assert!(
