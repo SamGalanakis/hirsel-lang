@@ -30,7 +30,9 @@ pub(super) fn suffix(text: &str) -> Option<Primitive> {
 pub(super) fn fixed_primitive(l: &ast::Literal) -> Option<Primitive> {
     match l {
         ast::Literal::Integer(s) | ast::Literal::Float(s) => suffix(s),
-        ast::Literal::String(_) | ast::Literal::Bytes(_) | ast::Literal::Bool(_) => None,
+        ast::Literal::String(_) => Some(Primitive::String),
+        ast::Literal::Bytes(_) => Some(Primitive::Bytes),
+        ast::Literal::Bool(_) => Some(Primitive::Bool),
     }
 }
 fn width(p: Primitive) -> Option<(u32, bool)> {

@@ -1031,6 +1031,7 @@ conformance/LANG/LANG-2-generic-function-value-ok.hir
 conformance/LANG/LANG-2-generic-inference-sources.hir
 conformance/LANG/LANG-2-integer-context-bad.hir
 conformance/LANG/LANG-2-integer-context-ok.hir
+conformance/LANG/LANG-2-intrinsic-literals-run.hir
 conformance/LANG/LANG-2-later-call-argument-bad.hir
 conformance/LANG/LANG-2-later-call-argument-ok.hir
 conformance/LANG/LANG-2-later-local-bad.hir
@@ -1158,6 +1159,8 @@ conformance/LANG/LANG-7-inline-literal-generic-size-bad.hir
 conformance/LANG/LANG-7-inline-literal-generic-size-ok.hir
 conformance/LANG/LANG-7-inline-literal-length-bad.hir
 conformance/LANG/LANG-7-inline-literal-length-ok.hir
+conformance/LANG/LANG-7-intrinsic-literal-mismatch-bad.hir
+conformance/LANG/LANG-7-intrinsic-literal-mismatch-ok.hir
 conformance/LANG/LANG-7-iterator-callback-mode.hir
 conformance/LANG/LANG-7-map-key-capability-field-bad.hir
 conformance/LANG/LANG-7-map-key-capability-field-run.hir
@@ -2868,6 +2871,7 @@ conformance/PROG/PROG-3-entry-main.hir
 conformance/PROG/PROG-3-entry-ok.hir
 conformance/PROG/PROG-3-entry-root-env.hir
 conformance/PROG/PROG-3-entry-root-unsafe.hir
+conformance/PROG/PROG-3-grants-template-entry-run.hir
 conformance/PROG/PROG-3-main-mut-args-run.hir
 conformance/PROG/PROG-3-main-mut-io-run.hir
 conformance/PROG/PROG-3-main-take-args-run.hir

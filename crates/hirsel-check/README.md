@@ -326,3 +326,7 @@ Generic inference keeps written refinements supplied by a type-contract occurren
 A concrete type argument drops the Environment access marker of a borrowed callback
 parameter while retaining its crossing requirement, uniqueness and explicit placement.
 This lets one T describe both a generator result and its borrowed consumer input.
+
+Literal kinds with a single type (bool, String and Bytes) supply that intrinsic
+type, including the first branch of a match or conditional. Numeric literals and
+bare variants remain contextual under LANG-2.

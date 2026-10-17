@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn probe() {
+  let request_bytes: Bytes = b"GET"
+}

@@ -12,8 +12,10 @@ arguments are never written in expressions, so a postfix `[` is always indexing.
 `shape(T)` is reserved syntax for future type-shape reflection
 ([CT-3](compile-time.md#ct-3-shapes)), not an executable API.
 
-A literal or a bare variant takes its type from the expected type or, in `a..b`, a binary
-operator or `==`, from the other operand; with neither, it is an error. A size parameter
+Boolean, byte-string and string literals intrinsically have types `bool`, `Bytes` and
+`String`. A numeric literal without a suffix or a bare variant takes its type from the
+expected type or, in `a..b`, a binary operator or `==`, from the other operand; with neither,
+it is an error. A size parameter
 used as a value is a `u64`. Parameters are in scope only after their declaration, and
 local definitions precede their use.
 
@@ -22,6 +24,7 @@ fn literals() -> u64 {
   let a: u64 = 3          // expected type
   let b = a + 4           // the other operand
   let c = 5u64            // a suffix
+  let ready = true       // intrinsically bool
   a + b + c
 }
 ```
