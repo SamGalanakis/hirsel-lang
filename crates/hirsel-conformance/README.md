@@ -357,7 +357,7 @@ source under the exhaustive matrix once and checks that all findings survive
 every rotating slim configuration cover. It reports source snapshots it could
 not execute. `--filter TEXT` or `--shard I/N` bounds this replay. `tools/native-plants.py --selection FILE --output DIR` starts
 from a clean worktree and a frozen healthy selection, checks healthy controls,
-then temporarily plants real AArch64 add lowering, system-allocator dup-count
+then temporarily plants real AArch64 add lowering, system-allocator initial-count
 and regions-off release omissions. It restores each source byte-for-byte and
 requires identical full/slim finding sets for each plant. The script runs bounded Buck2 pool tests at lane priority with one CPU each,
 and freezes the healthy cover as a declared source input. Add `--history-only`
