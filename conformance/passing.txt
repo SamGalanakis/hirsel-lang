@@ -3604,6 +3604,7 @@ conformance/SEM/SEM-3-positions-empty-terminal.hir
 conformance/SEM/SEM-3-positions-terminal.hir
 conformance/SEM/SEM-3-scalar-safe-slices.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
+conformance/SEM/SEM-3-split-once-run.hir
 conformance/SEM/SEM-3-string-compare-run.hir
 conformance/SEM/SEM-3-unicode-positions.hir
 conformance/SEM/SEM-3-unicode-scalars.hir

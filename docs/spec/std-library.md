@@ -171,6 +171,8 @@ of input sorted by the same comparator), `find`, `map`, `filter`, `fold`, `all`,
 `partition`, `concat` and `dedup` (removing consecutive equal elements). `std@1/string`
 provides `split` (on a nonempty separator, nonoverlapping, keeping leading, trailing and
 empty fields; an empty separator fails SEM-3), `find` (the first match as a `StrPos`),
+`split_once(s, separator) -> Option[(String, String)] in s` (the text before and after the
+first match, `None()` without one; an empty separator matches at the start, as in Rust),
 `split_ascii_whitespace(take s: String) -> List[String]` (on ASCII tab, LF,
 form feed, CR and space; omitting empty fields and preserving vertical tab and
 non-ASCII whitespace), `starts_with`, `ends_with`, `trim` (ASCII space and `\t` to `\r`, a slice related to the

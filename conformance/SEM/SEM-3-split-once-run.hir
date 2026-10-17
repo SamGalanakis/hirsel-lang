@@ -1,0 +1,23 @@
+// rule: SEM-3
+// expect: run
+// Rust alloctests test_split_once vectors, plus a multibyte separator.
+fn parts(s: String, separator: String) -> Option[(String, String)] {
+  match std@1/string.split_once(s, separator) {
+    Some((head, rest)) => Some((unique head, unique rest)),
+    None() => None(),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(parts("", "->") == None(), TextInvariant())
+  failure.check(parts("-", "->") == None(), TextInvariant())
+  failure.check(parts("->", "->") == Some(("", "")), TextInvariant())
+  failure.check(parts("a->", "->") == Some(("a", "")), TextInvariant())
+  failure.check(parts("->b", "->") == Some(("", "b")), TextInvariant())
+  failure.check(parts("a->b", "->") == Some(("a", "b")), TextInvariant())
+  failure.check(parts("a->b->c", "->") == Some(("a", "b->c")), TextInvariant())
+  failure.check(parts("---", "--") == Some(("", "-")), TextInvariant())
+  failure.check(parts("abc", "") == Some(("", "abc")), TextInvariant())
+  failure.check(parts("é→ü→", "→") == Some(("é", "ü→")), TextInvariant())
+  Ok(())
+}

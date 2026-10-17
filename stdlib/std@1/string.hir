@@ -105,6 +105,20 @@ pub fn find(s: String, pattern: String) -> Option[StrPos of s] uses {} {
   None()
 }
 
+// Rust str::split_once: the text before and after the first separator match.
+// An empty separator matches at the start, as in Rust and `find`.
+@noalloc
+pub fn split_once(s: String, separator: String) -> Option[(String, String)] in s uses {} {
+  match find(s, separator) {
+    Some(at) => {
+      let start = core@1/string.byte_offset(s, at)
+      let end = start + core@1/string.byte_len(separator)
+      Some((piece(s, 0, start), piece(s, end, core@1/string.byte_len(s))))
+    },
+    None() => None(),
+  }
+}
+
 @noalloc
 pub fn starts_with(s: String, pattern: String) -> bool uses {} {
   matches_at(core@1/string.as_bytes(s), core@1/string.as_bytes(pattern), 0)
