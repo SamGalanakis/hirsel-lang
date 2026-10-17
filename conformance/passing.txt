@@ -1063,6 +1063,7 @@ conformance/LANG/LANG-2-nested-call-type-run.hir
 conformance/LANG/LANG-2-operand-context.hir
 conformance/LANG/LANG-2-option-comparison-context-run.hir
 conformance/LANG/LANG-2-option-comparison-slots-ok.hir
+conformance/LANG/LANG-2-option-comparison-slots-run.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-ok.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-bad.hir
 conformance/LANG/LANG-2-provisional-pattern-variant-statement-ok.hir

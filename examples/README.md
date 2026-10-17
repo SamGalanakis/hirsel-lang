@@ -24,7 +24,7 @@ from pathlib import Path
 path = Path('/tmp/wordscan-run.json')
 record = json.loads(path.read_text())
 record.update(io={"stdout": "stdout.bytes@1", "dirs": [
-    {"path": "", "host": str(Path.cwd()), "access": "read_only"}
+    {"path": "", "host": str(Path.cwd()), "access": "read"}
 ]}, args=["README.md", "Hirsel"])
 path.write_text(json.dumps(record))
 PY_RECORD

@@ -1,0 +1,16 @@
+// rule: LANG-2
+// expect: run
+fn slot_absent(s: Slots[List[Bytes]], id: SlotId[List[Bytes]] of s) -> bool {
+  slots.get(s, id) == None
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut s: Slots[List[Bytes]] = slots.empty()
+  let value: List[Bytes] = [b"x"]
+  let id = slots.insert(mut s, take value)
+  failure.check(!slot_absent(s, id), Bounds())
+  let removed = slots.remove(mut s, id)
+  failure.check(removed != None, Bounds())
+  failure.check(slot_absent(s, id), Bounds())
+  Ok(())
+}
