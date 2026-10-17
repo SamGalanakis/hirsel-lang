@@ -2311,6 +2311,7 @@ hirsel_test(
         "conformance/DROP/DROP-2-noalloc-drop-beside-net-connect-try-run.hir",
         "conformance/DROP/DROP-2-sorted-map-replaced-value.hir",
         "conformance/DROP/DROP-2-sorted-map-retained-key.hir",
+        "conformance/FACT/FACT-3-match-tag-retested-each-pass-run.hir",
         "conformance/FAIL/FAIL-3-sorted-insert-taken-callback.hir",
         "conformance/GEN/GEN-1-capture-data-borrow-run.hir",
         "conformance/GEN/GEN-1-capture-data-finalizer-run.hir",

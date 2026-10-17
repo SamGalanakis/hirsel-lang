@@ -814,3 +814,13 @@ fn mutable_callable_multiplicity_is_invariant_at_source() {
         "../../../../conformance/MODE/MODE-3-mut-callable-multiplicity-run.hir"
     ));
 }
+
+/// The importer reruns a body until its entry states converge. A tag fact
+/// left from an earlier pass names this pass's versions (value ids restart),
+/// so it must not elide the match's tag switch and orphan the Error arm.
+#[test]
+fn a_match_tag_is_tested_again_on_every_import_pass() {
+    lower_valid(include_str!(
+        "../../../../conformance/FACT/FACT-3-match-tag-retested-each-pass-run.hir"
+    ));
+}

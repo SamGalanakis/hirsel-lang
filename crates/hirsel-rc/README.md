@@ -110,7 +110,8 @@ at each stage and H against the interpreter, and keeps the declined twins.
   earlier arms' tag tests): its field addresses are prepared there, where the
   check cannot fail, and later operand reads of those places reuse
   them while their slot keeps that version (FACT-3). Such facts flow only along
-  single-predecessor TIR edges, so the preparing point dominates every reuse.
+  single-predecessor TIR edges, so the preparing point dominates every reuse,
+  and each emission pass starts with none: value ids restart every pass.
   A pattern tag already proved at the current version is not tested again,
   avoiding infeasible edges that would restore absent payload fields.
   A temporary assigned views of places under loans on

@@ -1,0 +1,21 @@
+// rule: FACT-3
+// expect: run
+// "An implementation may remove a check it proves cannot fail." Nothing
+// proves the tag of the result of `choose()`, so the Error arm still runs; a
+// body imported over several passes keeps no tag fact from an earlier pass.
+fn choose() -> Result[(), ()] {
+  Error(())
+}
+
+fn input(demo: u64) -> u64 {
+  let p = match choose() {
+    Ok(p) => p,
+    Error(_) => return demo,
+  }
+  demo
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(input(4) == 4, Bounds())
+  Ok(())
+}

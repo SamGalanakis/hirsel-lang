@@ -15,6 +15,9 @@ impl Importer<'_, '_> {
         };
         self.views = PVec::filled(locals, None);
         self.versions = PVec::default();
+        // Value ids restart each pass, so an earlier pass's facts would name
+        // this pass's versions and prove tags no test here established.
+        self.facts = Vec::new();
         self.versioned.clear();
         self.constant_version = PVec::default();
         self.chain_memo.clear();

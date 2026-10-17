@@ -615,6 +615,7 @@ conformance/FACT/FACT-2-plain-record-base.hir
 conformance/FACT/FACT-3-known-false-requires.hir
 conformance/FACT/FACT-3-known-invalid-fact.hir
 conformance/FACT/FACT-3-known-true-contract.hir
+conformance/FACT/FACT-3-match-tag-retested-each-pass-run.hir
 conformance/FACT/FACT-3-reserved-push-run.hir
 conformance/FAIL/FAIL-1-contract-evaluation-source.hir
 conformance/FAIL/FAIL-1-contract-source.hir
