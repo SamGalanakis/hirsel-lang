@@ -365,6 +365,8 @@ when content must survive a join with different moved parts, `join_flags` adds
 bool SSA parameters for the whole slot or individual inline parts. Edges pass
 true, false or the current flag. Cleanup branches on each flag before preparing
 and dropping that part, preserving reverse field order and failure cleanup.
+Field flags stop at counted storage; a Box retains its container ownership
+regardless of which payload variant is active.
 Variants use ordinary absent-field masks, and fixed inline elements are handled
 individually. There is no moved-on-some-paths Unsupported case. C's existing address-layout
 checks exclude partial transfers from scalar/block-reference frame storage, and

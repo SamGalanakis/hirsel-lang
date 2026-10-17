@@ -614,23 +614,20 @@ fn owner_presence(
     }
 }
 
+/// A finite part of frame-owned inline storage. Counted payloads and
+/// dynamic elements are released by their owning container, not frame flags.
 fn inline_part_layout(
     lay: Lay<'_>,
     mut layout: LayoutId,
     path: &[Step],
-) -> Result<LayoutId, PassError> {
+) -> Result<Option<LayoutId>, PassError> {
     for step in path {
+        if lay.payload(layout).is_some() {
+            return Ok(None);
+        }
         let record = lay.get(layout);
         let found = match *step {
-            Step::Payload => {
-                layout = match record.map(|r| &r.kind) {
-                    Some(LayoutKind::Box { payload }) => *payload,
-                    _ => {
-                        return Err(PassError::Malformed("Payload outside Box storage".into()));
-                    }
-                };
-                continue;
-            }
+            Step::Payload => return Ok(None),
             Step::Field(f) => record.and_then(|r| r.fields.iter().find(|x| x.ordinal == f)),
             Step::Variant(v, f) => record
                 .and_then(|r| r.tag.as_ref())
@@ -647,17 +644,13 @@ fn inline_part_layout(
                 };
                 continue;
             }
-            Step::Index | Step::Slot => {
-                return Err(PassError::Malformed(
-                    "a dynamic element moved out of frame-owned storage".into(),
-                ));
-            }
+            Step::Index | Step::Slot => return Ok(None),
         };
         layout = found
             .map(|x| x.layout)
             .ok_or_else(|| PassError::Malformed(format!("no {step:?} of {layout:?}")))?;
     }
-    Ok(layout)
+    Ok(Some(layout))
 }
 
 fn join_flags(
@@ -680,7 +673,9 @@ fn join_flags(
             wanted.insert((slot, Vec::new()));
         }
         for (path, &moved) in &s.moved {
-            if moved == Tri::Maybe && !lay.trivial(inline_part_layout(lay, layout, path)?) {
+            if moved == Tri::Maybe
+                && inline_part_layout(lay, layout, path)?.is_some_and(|l| !lay.trivial(l))
+            {
                 wanted.insert((slot, path.clone()));
             }
         }
@@ -2177,7 +2172,8 @@ impl Lowering<'_, '_> {
             self.lay,
             unit.types[unit.slots[slot.index()].ty.index()].layout,
             path,
-        )
+        )?
+        .ok_or_else(|| PassError::Unsupported("a drop through counted or dynamic storage".into()))
     }
 
     /// A field-path address of `slot`, prepared at entry beside the slot's

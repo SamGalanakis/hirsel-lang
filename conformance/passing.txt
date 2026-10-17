@@ -2762,6 +2762,7 @@ conformance/OWN/OWN-7-nested-arena-detach.hir
 conformance/OWN/OWN-7-single-holder-update.hir
 conformance/OWN/OWN-8-assign-resource-field-bad.hir
 conformance/OWN/OWN-8-assign-resource-field-ok.hir
+conformance/OWN/OWN-8-boxed-variant-take-run.hir
 conformance/OWN/OWN-8-counted-field-locality.hir
 conformance/OWN/OWN-8-library-moved-payloads.hir
 conformance/OWN/OWN-8-local-aggregate-bad.hir

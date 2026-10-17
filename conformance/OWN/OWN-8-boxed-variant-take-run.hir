@@ -1,0 +1,19 @@
+// rule: OWN-8
+// expect: run
+type Value = Text(String) | Flag(bool)
+
+fn unbox(take value: box Value) -> Value {
+  match take value {
+    Text(s) => Text(take s),
+    Flag(b) => Flag(b),
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let value = unbox(box Text("x"))
+  match value {
+    Text(s) => failure.check(s == "x", Bounds()),
+    Flag(_) => failure.check(false, Bounds()),
+  }
+  Ok(())
+}
