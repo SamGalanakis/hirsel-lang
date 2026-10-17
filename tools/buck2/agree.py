@@ -94,7 +94,8 @@ def merge_native(outputs, shards, listed):
     errors = []
     clusters = {}
     complete = set()
-    totals = {key: 0 for key in ('checked', 'valid', 'executed', 'native_agreed')}
+    sample = None
+    totals = {key: 0 for key in ('checked', 'skipped', 'valid', 'executed', 'native_agreed')}
     for name, output in sorted(outputs.items()):
         try:
             report = report_from_output(output)
@@ -106,9 +107,14 @@ def merge_native(outputs, shards, listed):
             if shard.get('count') != shards or index not in range(1, shards + 1) or index in complete:
                 errors.append(f'{name}: duplicate or invalid native agreement shard: {shard}')
                 continue
-            if report.get('seed') != 1 or report.get('limit') != UNLIMITED or report.get('hash_seed') != 0:
+            # The seed rotates per full run, so the shards must agree on it,
+            # on the cover they sampled and on its budget, not on one value.
+            parameters = {key: report.get(key) for key in GLOBAL}
+            if report.get('limit') != UNLIMITED or report.get('hash_seed') != 0 or (
+                    sample is not None and parameters != sample):
                 errors.append(f'{name}: agreement parameters differ from the gate')
                 continue
+            sample = parameters
             complete.add(index)
             for key in totals:
                 totals[key] += report.get(key, 0)
@@ -124,13 +130,17 @@ def merge_native(outputs, shards, listed):
         missing = sorted(set(range(1, shards + 1)) - complete)
         errors.append(f'{shards - len(missing)} of {shards} native agreement shards reported; '
                       f'missing {missing}')
+    elif totals['checked'] + totals['skipped'] != min(sample['limit'], sample['eligible']):
+        errors.append(f"native agreement shards checked and skipped {totals['checked'] + totals['skipped']} "
+                      f"of {sample['eligible']} eligible variants")
     kinds = {kind for kind, _ in clusters}
     for kind in sorted(kinds - listed):
         errors.append(f'new discrepancy kind: {kind}')
     if len(complete) == shards:
         for kind in sorted(listed - kinds):
             errors.append(f'{kind} no longer occurs; delete it from {KNOWN.relative_to(ROOT)}')
-    merged = dict(totals, shards=shards, complete=len(complete), known_kinds=len(listed),
+    merged = dict(totals, seed=sample and sample['seed'], eligible=sample and sample['eligible'],
+                  shards=shards, complete=len(complete), known_kinds=len(listed),
                   clusters=[clusters[key] for key in sorted(clusters)])
     return merged, errors
 

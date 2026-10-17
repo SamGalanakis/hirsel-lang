@@ -454,12 +454,13 @@ class NativeAgreementShards(unittest.TestCase):
         self.agree = agree
         self.known = {'native/heap/a', 'native/llvm/b'}
 
-    def report(self, index, *kinds):
+    def report(self, index, *kinds, **changed):
         clusters = [dict(kind=kind, edit='mode', count=1, path=f'{kind}.hir', source='reduced', detail='')
                     for kind in kinds]
         return '---- STDOUT ----\n' + json.dumps(dict(
-            seed=1, limit=self.agree.UNLIMITED, hash_seed=0, checked=3, valid=2, executed=2,
-            native_agreed=4, clusters=clusters, shard=dict(index=index, count=2)), indent=2)
+            seed=1, limit=self.agree.UNLIMITED, hash_seed=0, programs=2, generated=9, eligible=7,
+            variants_per_program=96, checked=3, skipped=index - 1, valid=2, executed=2,
+            native_agreed=4, clusters=clusters, shard=dict(index=index, count=2)) | changed, indent=2)
 
     def streamed(self, *kinds):
         lines = ['---- STDERR ----', 'agree: variants: x.hir mode 1..2 running for 30 s']
@@ -473,7 +474,28 @@ class NativeAgreementShards(unittest.TestCase):
             2, self.known)
         self.assertEqual(errors, [])
         self.assertEqual([c['kind'] for c in merged['clusters']], ['native/heap/a', 'native/llvm/b'])
-        self.assertEqual((merged['checked'], merged['complete'], merged['known_kinds']), (6, 2, 2))
+        self.assertEqual((merged['checked'], merged['skipped'], merged['eligible'], merged['complete'],
+                          merged['known_kinds']), (6, 1, 7, 2, 2))
+
+    def test_shards_share_a_rotated_seed_and_its_cover(self):
+        merged, errors = self.agree.merge_native(
+            {'shard-1': self.report(1, seed=7), 'shard-2': self.report(2, seed=7)}, 2, set())
+        self.assertEqual((errors, merged['seed']), ([], 7))
+        for changed in [dict(seed=8), dict(eligible=8), dict(programs=3), dict(variants_per_program=64)]:
+            with self.subTest(changed=changed):
+                _, errors = self.agree.merge_native(
+                    {'shard-1': self.report(1, seed=7), 'shard-2': self.report(2, **dict(seed=7) | changed)},
+                    2, set())
+                self.assertIn('shard-2: agreement parameters differ from the gate', errors)
+
+    def test_complete_shards_must_check_or_skip_every_eligible_variant(self):
+        for skipped, eligible in [(0, 7), (2, 7), (1, 8)]:
+            with self.subTest(skipped=skipped, eligible=eligible):
+                _, errors = self.agree.merge_native(
+                    {'shard-1': self.report(1, eligible=eligible),
+                     'shard-2': self.report(2, skipped=skipped, eligible=eligible)}, 2, set())
+                self.assertEqual(errors, [f'native agreement shards checked and skipped {6 + skipped} '
+                                          f'of {eligible} eligible variants'])
 
     def test_a_new_kind_and_a_kind_no_longer_seen_fail(self):
         _, errors = self.agree.merge_native(
