@@ -76,15 +76,15 @@ fn check(body: &str, built: [usize; 4]) {
     );
 }
 
-/// records-messages/flat's construction, at a size H's fault campaign
-/// covers quickly.
+/// records-messages/flat's construction with realistic payloads and enough
+/// messages to exercise repeated builder growth under H's fault campaign.
 const BUILT: &str = "fn value() -> u64 {
-  let n: u64 = 12
+  let n: u64 = 64
   let mut items: List[Message] = []
   list.reserve(mut items, n)
   for i in 0u64..n {
     let mut payload: List[u8] = []
-    let length = 3u64 + i % 11u64
+    let length = 8u64 + i % 25u64
     list.reserve(mut payload, length)
     for j in 0u64..length { list.push(mut payload, int.narrow(97u64 + (i + j * 7u64) % 26u64)) }
     list.push(mut items, Message(id: i, kind: i % 7u64, payload: bytes.from_list(take payload)))
@@ -100,7 +100,7 @@ fn a_byte_list_frozen_into_a_built_element_is_written_in_place() {
     check(
         "fn value() -> u64 {
   let mut items: List[Message] = []
-  for i in 0u64..12u64 {
+  for i in 0u64..32u64 {
     let mut payload: List[u8] = []
     for j in 0u64..i * 3u64 {
       if j % 3u64 != 1u64 {
@@ -118,7 +118,7 @@ fn a_byte_list_frozen_into_a_built_element_is_written_in_place() {
     check(
         "fn value() -> u64 {
   let mut items: List[Message] = []
-  for i in 0u64..14u64 {
+  for i in 0u64..48u64 {
     let mut payload: List[u8] = []
     list.reserve(mut payload, 2u64)
     for j in 0u64..i { list.push(mut payload, int.narrow(j)) }
