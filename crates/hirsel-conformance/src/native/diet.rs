@@ -25,6 +25,9 @@ impl Selection {
     pub fn read(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        if !value["shard"].is_null() {
+            return Err("a partial native observation is not a program selection".into());
+        }
         if value["version"] != 1 {
             return Err("unsupported native selection version".into());
         }
@@ -172,9 +175,46 @@ fn protected(root: &Path) -> Result<BTreeSet<String>, String> {
     Ok(paths)
 }
 
+#[derive(Default)]
+struct Collected {
+    inventory: serde_json::Value,
+    total: usize,
+    costs: BTreeMap<String, usize>,
+    pinned: BTreeSet<String>,
+    dictionary: BTreeMap<String, usize>,
+    features: BTreeMap<String, BTreeSet<usize>>,
+    errors: BTreeMap<String, Vec<String>>,
+}
+
+impl Collected {
+    fn json(&self) -> serde_json::Value {
+        let mut names = vec![String::new(); self.dictionary.len()];
+        for (feature, index) in &self.dictionary {
+            names[*index] = feature.clone();
+        }
+        let programs: Vec<_> = self
+            .features
+            .iter()
+            .map(|(path, seen)| {
+                json!({
+                    "path": path, "features": seen, "errors": self.errors[path],
+                    "variants": self.costs.get(path).copied().unwrap_or(0)
+                })
+            })
+            .collect();
+        json!({"version": 1, "protected": self.pinned, "features": names,
+               "programs": programs, "programs_total": self.total, "inventory": self.inventory})
+    }
+}
+
 /// Build a derived coverage artifact. The Buck2 action key includes the
 /// collector binary and every source input; no checked-in selection goes stale.
 pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
+    derive_shard(root, None)
+}
+
+/// Observe a stable stripe independently; reduction happens only after merge.
+pub fn derive_shard(root: &Path, shard: Option<crate::Shard>) -> Result<serde_json::Value, String> {
     let inventory = inventory(root)?;
     let mut cases: BTreeMap<_, _> = native::baseline(root)?
         .into_iter()
@@ -222,6 +262,8 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
             );
         }
     }
+    let total = cases.len();
+    cases.retain(|id, _| shard.is_none_or(|s| s.holds(id)));
     let mut dictionary = BTreeMap::<String, usize>::new();
     let mut features = BTreeMap::new();
     let mut errors = BTreeMap::new();
@@ -271,14 +313,107 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
         features.insert(path.clone(), indices);
         errors.insert(path.clone(), failures);
     }
-    let selected = cover(&features, &pinned, &costs);
-    let mut names = vec![String::new(); dictionary.len()];
-    for (feature, index) in dictionary {
-        names[index] = feature;
+    let collected = Collected {
+        inventory,
+        total,
+        costs,
+        pinned,
+        dictionary,
+        features,
+        errors,
+    };
+    if let Some(shard) = shard {
+        let mut value = collected.json();
+        value["shard"] = json!({"index": shard.index, "count": shard.count});
+        return Ok(value);
     }
-    let programs: Vec<_> = features.iter().map(|(path, seen)| json!({
-        "path": path, "features": seen, "errors": errors[path], "variants": costs.get(path).copied().unwrap_or(0)
-    })).collect();
+    finish(root, collected)
+}
+
+/// Reconcile shard inventories and intern their vocabularies, then choose one
+/// global cover. Independently minimized shard unions would not be minimal.
+pub fn merge(root: &Path, shards: &[serde_json::Value]) -> Result<serde_json::Value, String> {
+    let first = shards.first().ok_or("no native coverage shards")?;
+    let count = first["shard"]["count"]
+        .as_u64()
+        .ok_or("missing coverage shard count")?;
+    if count as usize != shards.len() {
+        return Err("missing native coverage shards".into());
+    }
+    let mut c = Collected {
+        inventory: first["inventory"].clone(),
+        total: first["programs_total"]
+            .as_u64()
+            .ok_or("missing program count")? as usize,
+        ..Default::default()
+    };
+    for program in c.inventory["programs"]
+        .as_array()
+        .ok_or("missing inventory")?
+    {
+        c.costs.insert(
+            program["path"].as_str().ok_or("invalid path")?.into(),
+            program["variants"]
+                .as_u64()
+                .ok_or("invalid variant count")? as usize,
+        );
+    }
+    let mut seen = BTreeSet::new();
+    for shard in shards {
+        let index = shard["shard"]["index"]
+            .as_u64()
+            .ok_or("missing shard index")?;
+        if shard["version"] != 1
+            || shard["shard"]["count"] != count
+            || index < 1
+            || index > count
+            || !seen.insert(index)
+            || shard["inventory"] != c.inventory
+            || shard["programs_total"] != c.total
+        {
+            return Err("inconsistent native coverage shards".into());
+        }
+        for pin in shard["protected"].as_array().ok_or("missing pins")? {
+            c.pinned.insert(pin.as_str().ok_or("invalid pin")?.into());
+        }
+        let dictionary = shard["features"].as_array().ok_or("missing vocabulary")?;
+        for program in shard["programs"].as_array().ok_or("missing programs")? {
+            let path = program["path"].as_str().ok_or("invalid path")?.to_string();
+            if !(crate::Shard { index, count }).holds(&path) || c.features.contains_key(&path) {
+                return Err("duplicate or misplaced native coverage program".into());
+            }
+            let mut features = BTreeSet::new();
+            for id in program["features"]
+                .as_array()
+                .ok_or("missing program features")?
+            {
+                let feature = dictionary
+                    .get(id.as_u64().ok_or("invalid feature index")? as usize)
+                    .and_then(|f| f.as_str())
+                    .ok_or("unknown feature")?;
+                let next = c.dictionary.len();
+                features.insert(*c.dictionary.entry(feature.into()).or_insert(next));
+            }
+            let errors = program["errors"]
+                .as_array()
+                .ok_or("missing stage outcomes")?
+                .iter()
+                .map(|e| e.as_str().map(str::to_owned).ok_or("invalid stage outcome"))
+                .collect::<Result<Vec<_>, _>>()?;
+            c.errors.insert(path.clone(), errors);
+            c.features.insert(path, features);
+        }
+    }
+    if c.features.len() != c.total {
+        return Err("coverage shards omitted a program".into());
+    }
+    finish(root, c)
+}
+
+fn finish(root: &Path, c: Collected) -> Result<serde_json::Value, String> {
+    let selected = cover(&c.features, &c.pinned, &c.costs);
+    let inventory = &c.inventory;
+    let costs = &c.costs;
     let matrix = hirsel_driver::native::full_matrix();
     let baseline = native::baseline(root)?;
     let baseline_selected: Vec<_> = baseline
@@ -328,9 +463,9 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
     let mut fixtures = Vec::new();
     discover(&root.join("native-tests/regressions"), &mut fixtures)?;
     let exact = fixtures.len();
-    Ok(
-        json!({ "version": 1, "selected": selected, "protected": pinned, "features": names, "programs": programs,
-        "counts": {"baseline_before": baseline.len(), "baseline_after": baseline_selected.len(), "seed": 1,
+    let mut value = c.json();
+    value["selected"] = json!(selected);
+    value["counts"] = json!({"baseline_before": baseline.len(), "baseline_after": baseline_selected.len(), "seed": 1,
             "baseline_configurations_before": baseline.len() * matrix.len(), "baseline_configurations_after": slim_attempts,
             "baseline_llvm_before": baseline.len() * matrix.iter().filter(|c| matches!(c.engine, hirsel_driver::native::Engine::Native { .. })).count(), "baseline_llvm_after": slim_llvm,
             "native_full_configurations_after": slim_attempts + generated_attempts + topology_attempts,
@@ -339,9 +474,8 @@ pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
             "agreement_run_variants_after": run_variants,
             "agreement_llvm_attempt_upper_bound_after": (run_variants + exact) * 2,
             "agreement_total_eligible_after": after_selection + exact,
-            "agreement_variants_before": before_budget, "agreement_after_budget": after_budget, "agreement_after_selection": after_selection},
-        "inventory": inventory }),
-    )
+            "agreement_variants_before": before_budget, "agreement_after_budget": after_budget, "agreement_after_selection": after_selection});
+    Ok(value)
 }
 
 /// Replay the exact historical sources once under the exhaustive matrix, then
@@ -528,6 +662,18 @@ mod tests {
                 .iter()
                 .any(|f| f.as_str().unwrap().starts_with("native-full/"))
         );
+        let shards: Vec<_> = (1..=2)
+            .map(|index| {
+                hirsel_engine::with_compiler_stack(|| {
+                    derive_shard(&root, Some(crate::Shard { index, count: 2 }))
+                })
+                .unwrap()
+            })
+            .collect();
+        let merged = merge(&root, &shards).unwrap();
+        assert_eq!(merged["selected"], value["selected"]);
+        assert_eq!(merged["counts"], value["counts"]);
+        assert!(merge(&root, &shards[..1]).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 

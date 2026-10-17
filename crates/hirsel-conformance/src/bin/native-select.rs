@@ -7,6 +7,7 @@ fn run() -> Result<(), String> {
     let mut program = None;
     let mut derive = None;
     let mut replay = false;
+    let mut chunks = Vec::<PathBuf>::new();
     let mut filters = Vec::new();
     let mut seed = 1;
     let mut shard = None;
@@ -16,6 +17,11 @@ fn run() -> Result<(), String> {
             "--program" => program = Some(args.next().ok_or("--program needs a path")?),
             "--derive" => derive = Some(args.next().ok_or("--derive needs an output path")?),
             "--replay-history" => replay = true,
+            "--merge" => chunks.push(
+                args.next()
+                    .ok_or("--merge needs an observation path")?
+                    .into(),
+            ),
             "--filter" => filters.push(args.next().ok_or("--filter needs text")?),
             "--shard" => {
                 shard = Some(
@@ -45,7 +51,18 @@ fn run() -> Result<(), String> {
             return Err("slim campaign lost historical findings".into());
         }
     } else if let Some(output) = derive {
-        let selection = hirsel_conformance::native::diet::derive(&root)?;
+        let selection = if chunks.is_empty() {
+            hirsel_conformance::native::diet::derive_shard(&root, shard)?
+        } else {
+            let values = chunks
+                .iter()
+                .map(|path| {
+                    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                    serde_json::from_str(&text).map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            hirsel_conformance::native::diet::merge(&root, &values)?
+        };
         std::fs::write(output, serde_json::to_vec(&selection).unwrap())
             .map_err(|e| e.to_string())?;
     } else if let Some(program) = program {
