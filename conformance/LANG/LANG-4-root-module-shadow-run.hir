@@ -1,0 +1,17 @@
+// rule: LANG-4
+// expect: run
+fn parameter(input: u64) -> u64 {
+  input
+}
+
+fn fallback() -> u64 {
+  input()
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let input: u64 = 2
+  test.check(t, input + parameter(1) == 3)
+  test.check(t, fallback() == 7)
+  test.check(t, shadowing@1/input() == 7)
+  Ok(())
+}

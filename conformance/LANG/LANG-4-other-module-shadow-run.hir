@@ -1,0 +1,17 @@
+// rule: LANG-4
+// expect: run
+fn parameter(input: u64) -> u64 {
+  input
+}
+
+fn pattern() -> u64 {
+  let (input, _) = (3u64, 4u64)
+  input
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let input: u64 = 2
+  test.check(t, input + parameter(1) + pattern() == 6)
+  test.check(t, common.input() == 7)
+  Ok(())
+}

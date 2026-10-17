@@ -1,6 +1,6 @@
 // rule: LANG-4
 // expect: accept
-// Shows "A local may not shadow another local or a same-package top-level value."
+// Shows "A local may not shadow another local or a same-module top-level value."
 @noalloc
 fn example() -> u32 {
   let x: u32 = 1

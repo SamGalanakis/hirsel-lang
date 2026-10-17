@@ -1,0 +1,3 @@
+pub fn input() -> u64 {
+  7u64
+}

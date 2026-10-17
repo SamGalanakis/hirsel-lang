@@ -47,7 +47,6 @@ pub struct ManifestIndex {
     pub revision: ContentHash,
     entries: Arc<BTreeMap<DefPath, DefinitionEntry>>,
     heads: Arc<BTreeMap<String, BTreeSet<(PackageId, Vec<String>)>>>,
-    reserved_values: Arc<BTreeMap<PackageId, BTreeSet<String>>>,
     module_heads: Arc<BTreeMap<(PackageId, Vec<String>), BTreeSet<String>>>,
 }
 
@@ -58,7 +57,7 @@ mod package_view_tests {
     use super::*;
 
     #[test]
-    fn package_views_share_rows_and_keep_reservations_package_scoped() {
+    fn package_views_share_rows_and_keep_lookup_package_scoped() {
         let package = |name: &str| PackageId {
             name: name.into(),
             version: "1".into(),
@@ -89,10 +88,24 @@ mod package_view_tests {
         });
         assert!(diagnostics.is_empty());
         let view = index.for_package(right);
-        assert!(index.reserves_value("left_value"));
-        assert!(!index.reserves_value("right_value"));
-        assert!(view.reserves_value("right_value"));
-        assert!(!view.reserves_value("left_value"));
+        for (selected, own, foreign) in [
+            (&index, "left_value", "right_value"),
+            (&view, "right_value", "left_value"),
+        ] {
+            let context = FileContext {
+                package: selected.package.clone(),
+                modules: vec![],
+            };
+            assert!(
+                selected
+                    .lookup_spelling(&context, None, &[own.into()])
+                    .is_ok()
+            );
+            assert_eq!(
+                selected.lookup_spelling(&context, None, &[foreign.into()]),
+                Err(LookupError::Missing)
+            );
+        }
         assert!(Arc::ptr_eq(&index.entries, &view.entries));
         assert_eq!(index.entry(&left_definition), view.entry(&left_definition));
     }
@@ -175,16 +188,6 @@ impl ManifestIndex {
                 entries.insert(entry.definition.clone(), entry);
             }
         }
-        let mut reserved_values: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-        for entry in entries
-            .values()
-            .filter(|entry| entry.namespace == Namespace::Value)
-        {
-            reserved_values
-                .entry(entry.definition.0.package.clone())
-                .or_default()
-                .insert(entry.definition.0.name.clone());
-        }
         let mut module_heads: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
         for definition in entries.keys() {
             for (i, head) in definition.0.modules.iter().enumerate() {
@@ -210,7 +213,6 @@ impl ManifestIndex {
                 revision: fixture.revision,
                 entries: Arc::new(entries),
                 heads: Arc::new(heads),
-                reserved_values: Arc::new(reserved_values),
                 module_heads: Arc::new(module_heads),
             },
             diagnostics,
@@ -242,14 +244,6 @@ impl ManifestIndex {
 
     pub fn entry(&self, definition: &DefPath) -> Option<&DefinitionEntry> {
         self.entries.get(definition)
-    }
-
-    /// Same-package values reserve local names throughout the package, including
-    /// other modules. Types and module heads live in distinct namespaces.
-    pub fn reserves_value(&self, name: &str) -> bool {
-        self.reserved_values
-            .get(&self.package)
-            .is_some_and(|values| values.contains(name))
     }
 
     pub fn has_head(&self, context: &FileContext, head: &str) -> bool {

@@ -1,0 +1,6 @@
+// rule: LANG-4
+// expect: accept
+pub fn main() -> Result[(), ()] {
+  let number: u64 = 2
+  Ok(())
+}

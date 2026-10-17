@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "shadowing",
+    "version": "1"
+  },
+  "entry": {
+    "module": [
+      "common"
+    ],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "LANG-4-same-module-shadow-ok.hir",
+      "module": [
+        "common"
+      ]
+    },
+    {
+      "path": "../../packages/module_shadow/common.hir",
+      "module": [
+        "common"
+      ]
+    }
+  ],
+  "dependencies": []
+}

@@ -1,0 +1,6 @@
+// rule: LANG-4
+// expect: reject LANG-4 at line 4
+pub fn main() -> Result[(), ()] {
+  let input: u64 = 2
+  Ok(())
+}

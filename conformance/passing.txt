@@ -1097,8 +1097,12 @@ conformance/LANG/LANG-4-local-shadow-ok.hir
 conformance/LANG/LANG-4-module-head-namespace.hir
 conformance/LANG/LANG-4-nested-shadow-bad.hir
 conformance/LANG/LANG-4-nested-shadow-ok.hir
+conformance/LANG/LANG-4-other-module-shadow-run.hir
 conformance/LANG/LANG-4-qualified-variant-bad.hir
 conformance/LANG/LANG-4-qualified-variant-ok.hir
+conformance/LANG/LANG-4-root-module-shadow-run.hir
+conformance/LANG/LANG-4-same-module-shadow-bad.hir
+conformance/LANG/LANG-4-same-module-shadow-ok.hir
 conformance/LANG/LANG-4-top-level-shadow-bad.hir
 conformance/LANG/LANG-4-top-level-shadow-ok.hir
 conformance/LANG/LANG-5-borrowed-parameter-bad.hir

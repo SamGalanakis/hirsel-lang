@@ -77,8 +77,11 @@ Names resolve against the program's definitions; there are no import statements.
 path heads live in their own namespace and resolve only before a `.`. A head exposed by
 two dependencies is an error at its use, resolved by writing the package path
 (`json@1/value.parse`). Variants are written bare (`Ok(x)`, `Usage`, `true`) and resolved
-through the expected type. A local may not shadow another local or a same-package
-top-level value. Lookup order is locals, then the own package, then dependencies by path.
+through the expected type. A local may not shadow another local or a top-level value
+declared in the same module. It may shadow a top-level value from any other module,
+including the package root. Unqualified value lookup checks locals, then the current
+module, then the package root; the root fallback applies only when no local or current-module
+value matches. Dependencies are reached by qualified paths.
 
 Core library roles such as `Unsafe`, `Result` and the capability types are identified by
 fully qualified definition paths, never by spelling alone; a user type with the same name

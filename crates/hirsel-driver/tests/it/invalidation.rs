@@ -43,10 +43,11 @@ fn unrelated_definition_membership_does_not_recompute_semantic_queries() {
     });
 }
 #[test]
-fn a_value_added_in_another_module_invalidates_local_reservation_reads() {
+fn local_reservation_reads_track_only_the_declaring_module() {
     with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         assert!(check(&mut engine, "fn f(x:u8) {}\n").diagnostics.is_empty());
+        let before = counts(&engine, "f");
         let file = engine
             .sources
             .add("other.hir", "fn x() {}\n".into())
@@ -54,12 +55,24 @@ fn a_value_added_in_another_module_invalidates_local_reservation_reads() {
         let mut context = default_context();
         context.modules.push("other".into());
         engine.parse_file(file, &context).unwrap();
+        engine.check_definition(&path("f")).unwrap();
+        assert_eq!(
+            counts(&engine, "f"),
+            before,
+            "a qualified-only value must not invalidate the local binding"
+        );
+        let file = engine
+            .sources
+            .add("same.hir", "fn x() {}\n".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
         let Err(QueryError::Diagnostics(ds)) = engine.check_definition(&path("f")) else {
-            panic!("same-package value must reserve x across modules")
+            panic!("a same-module value must still reserve x")
         };
         assert_eq!(ds[0].rule.as_str(), "LANG-4");
     });
 }
+
 #[test]
 fn changing_a_type_to_a_value_invalidates_namespace_reads() {
     with_compiler_stack(|| {
@@ -128,5 +141,36 @@ fn cached_materializations_validate_type_signatures_and_survive_owner_moves() {
         let restored = original.replace("fn prefix() {}", "fn prefix() { let x:u8 = 2u8; }");
         assert!(check(&mut engine, &restored).diagnostics.is_empty());
         assert_eq!(engine.materialize_constant(&path("VALUE")).unwrap(), value);
+    });
+}
+
+#[test]
+fn shadowed_root_values_do_not_enter_the_semantic_revision() {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let root = default_context();
+        let mut nested = root.clone();
+        nested.modules.push("repl".into());
+        let file = engine
+            .sources
+            .add("root-shadow.hir", "pub fn input() -> u64 { 1u64 }".into())
+            .unwrap();
+        engine.parse_file(file, &root).unwrap();
+        let file = engine
+            .sources
+            .add(
+                "nested-shadow.hir",
+                "pub fn main() -> Result[(), ()] { let input: u64 = 0; Ok(()) }".into(),
+            )
+            .unwrap();
+        engine.parse_file(file, &nested).unwrap();
+        let entry = entry_path(&nested);
+        let first = engine.semantic_program_revision(&entry).unwrap();
+        let file = engine
+            .sources
+            .add("root-shadow.hir", "pub fn input() -> u64 { 2u64 }".into())
+            .unwrap();
+        engine.parse_file(file, &root).unwrap();
+        assert_eq!(first, engine.semantic_program_revision(&entry).unwrap());
     });
 }

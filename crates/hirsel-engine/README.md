@@ -110,8 +110,7 @@ Implemented session API:
   successful/failed manifest lookups even when a phase returns diagnostics.
   Cached keys validate every read signature and all explicit environment revisions;
   Lookup receipts are replayed against the current manifest; unrelated membership
-  changes retain results. Module-head and package-wide value reservations are
-  validated too. These reads follow decisions through check, modes and lowering.
+  changes retain results. Module-head reads and same-module value probes are validated too. These reads follow decisions through check, modes and lowering.
   Function signature input text excludes the body but includes written contracts.
   An unchanged definition keeps its arena IDs. On indexing a new revision, the
   driver re-spans reused owners, diagnostics and lowered sites to current bytes.
@@ -724,3 +723,7 @@ owner directly; no hirsel-check facade remains for signatures or lowering.
 
 Checker plans and private fact conventions come directly from shared
 hirsel-check-protocol; the three implementations do not depend on one another.
+
+Local binding reservations use ordinary fully qualified lookups in their declaring
+module. Their negative reads and namespace inputs share normal cache validation;
+a shadowed root fallback does not enter the semantic dependency closure.

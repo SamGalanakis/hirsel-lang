@@ -8,7 +8,7 @@ Invariants and boundary:
 
 - Consumes SyntaxFile/item and SignatureProvider; produces Resolution and diagnostics/dependency reads.
 - Lookup order and module-head namespace obey LANG-4; package version is part of identity.
-- Locals precede use and do not shadow locals or same-package values; local recursion is rejected (LANG-10).
+- Locals precede use and do not shadow locals or same-module values; local recursion is rejected (LANG-10).
 - Expected-type variants may remain unresolved until checking; do not infer through bodies.
 - No parser or checker internals. Record unresolved lookups against the manifest revision.
 
@@ -26,11 +26,11 @@ produce LANG-7 diagnostics with both declaration name spans (the specialized
 no-overloading obligation, matching signature normalization); malformed canonical
 paths cite PROG-1.
 
-The immutable index precomputes same-package value reservations and module
-heads at each module prefix. Replaying a cached negative read therefore uses
-indexed membership, rather than rescanning every definition for each binding.
-`for_package` selects a current package while sharing immutable tables; value
-reservations remain separately indexed by package.
+The immutable index precomputes module heads at each module prefix. Binding
+reservations use ordinary fully qualified lookups in the declaring module; those
+positive/negative reads and namespace facts drive cache validation. No package-wide
+reservation table or special cache input is needed. `for_package` selects a current
+package while sharing immutable tables.
 
 `resolve_item(file, item, symbols, index, provider)` resolves one definition at a
 time. This makes lexical IDs independent of top-level declaration order. The
@@ -85,7 +85,8 @@ The index enforces package privacy and `internal` ancestry. Public signatures
 cannot mention indexed private types, including nested generic/function types.
 Public opaque representations are hidden outside their package; their nominal
 names remain usable. Local bindings cannot shadow any live local or a
-same-package top-level value, including values in another module. Module heads
+same-module top-level value. Locals may shadow values from other modules, including
+the root fallback. Module heads
 are a separate namespace and take precedence before a dot.
 
 ## Verification and corpus responsibility

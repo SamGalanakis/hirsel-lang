@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "shadowing",
+    "version": "1"
+  },
+  "entry": {
+    "module": [
+      "repl"
+    ],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "LANG-4-other-module-shadow-run.hir",
+      "module": [
+        "repl"
+      ]
+    },
+    {
+      "path": "../../packages/module_shadow/common.hir",
+      "module": [
+        "common"
+      ]
+    }
+  ],
+  "dependencies": []
+}

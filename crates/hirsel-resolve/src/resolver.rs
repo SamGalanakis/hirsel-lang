@@ -233,23 +233,26 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .push(Diagnostic::error(rule, span, message));
     }
     fn lookup(&mut self, path: &Path, _span: Span) -> Result<DefPath, LookupError> {
+        self.lookup_using(path, self.symbols)
+    }
+    fn lookup_using(&mut self, path: &Path, symbols: &Interner) -> Result<DefPath, LookupError> {
         let segments = path
             .segments
             .iter()
-            .map(|s| self.spelling(*s))
+            .map(|s| symbols.resolve(*s).unwrap_or("<invalid symbol>").to_owned())
             .collect::<Vec<_>>();
-        let mut result = self.index.lookup(&self.context, path, self.symbols);
+        let mut result = self.index.lookup(&self.context, path, symbols);
         // The provider can supply builtin/driver-owned names absent from this
         // manifest snapshot. It is never allowed to override ambiguity/privacy.
         if matches!(result, Err(LookupError::Missing)) {
-            let lookup = self.provider.lookup(&self.context, path, self.symbols);
+            let lookup = self.provider.lookup(&self.context, path, symbols);
             self.output.reads.push(DependencyRead::ProviderLookup {
                 context: self.context.clone(),
                 package: path.package.clone(),
                 segments: path
                     .segments
                     .iter()
-                    .map(|s| self.symbols.resolve(*s).unwrap_or("").to_owned())
+                    .map(|s| symbols.resolve(*s).unwrap_or("").to_owned())
                     .collect(),
                 output: lookup.clone(),
             });
@@ -385,23 +388,34 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             self.output.query.diagnostics.push(d);
             return;
         }
-        // This negative read matters when a same-package value is added later.
+        // Probe exactly the declaration module. Ordinary value lookup may fall
+        // back to the package root; a local is allowed to shadow that fallback.
+        // The normal lookup read records both absence and namespace for caching.
+        let mut symbols = Interner::default();
+        let mut segments: Vec<_> = self
+            .context
+            .modules
+            .iter()
+            .map(|m| symbols.intern(m))
+            .collect();
+        segments.push(symbols.intern(&self.spelling(name)));
         let path = Path {
-            package: None,
-            segments: vec![name],
+            package: Some(self.context.package.clone()),
+            segments,
         };
-        let read = self.lookup(&path, binding.span);
+        let read = self.lookup_using(&path, &symbols);
         let provider_value = if let Ok(definition) = &read {
             definition.0.package == self.context.package
+                && definition.0.modules == self.context.modules
                 && self.namespace(definition) == Some(Namespace::Value)
         } else {
             false
         };
-        if self.index.reserves_value(&self.spelling(name)) || provider_value {
+        if provider_value {
             self.diagnostic(
                 const { RuleId::of("LANG-4") },
                 binding.span,
-                "a local cannot shadow a same-package top-level value",
+                "a local cannot shadow a top-level value in the same module",
             );
             return;
         }

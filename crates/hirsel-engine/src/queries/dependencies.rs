@@ -12,13 +12,11 @@ pub(crate) struct ExecutionReads {
 #[derive(Clone, Default)]
 pub(super) struct LookupInputs {
     namespaces: BTreeMap<DefPath, Option<Namespace>>,
-    reservations: BTreeMap<(PackageId, String), bool>,
 }
 impl LookupInputs {
-    /// Every namespace and reservation input lies in packages `inside` accepts.
+    /// Every namespace input lies in packages `inside` accepts.
     pub(super) fn closed(&self, inside: &impl Fn(&PackageId) -> bool) -> bool {
         self.namespaces.keys().all(|p| inside(&p.0.package))
-            && self.reservations.keys().all(|(p, _)| inside(p))
     }
 }
 impl ExecutionReads {
@@ -114,11 +112,7 @@ impl QueryEngine {
         let mut inputs = LookupInputs::default();
         for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
             if let DependencyRead::Lookup {
-                context,
-                package,
-                segments,
-                result,
-                ..
+                context, result, ..
             } = read
                 && let Some(index) = self.manifest_index(&context.package)
             {
@@ -126,14 +120,6 @@ impl QueryEngine {
                     inputs
                         .namespaces
                         .insert(path.clone(), index.entry(path).map(|e| e.namespace));
-                }
-                // Reservation probes consult all same-package modules, beyond
-                // the ordinary path lookup. Keep that negative input explicitly.
-                if package.is_none() && segments.len() == 1 {
-                    inputs.reservations.insert(
-                        (context.package.clone(), segments[0].clone()),
-                        index.reserves_value(&segments[0]),
-                    );
                 }
             }
         }
@@ -179,14 +165,6 @@ impl QueryEngine {
                 .manifest_index(&owner.0.package)
                 .and_then(|i| i.entry(path).map(|e| e.namespace))
                 != *previous
-            {
-                return false;
-            }
-        }
-        for ((package, name), previous) in &inputs.reservations {
-            if !self
-                .manifest_index(package)
-                .is_some_and(|i| i.reserves_value(name) == *previous)
             {
                 return false;
             }
