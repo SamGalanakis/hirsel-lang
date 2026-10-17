@@ -28,14 +28,9 @@ pub fn format_into(value: i32, mut out: List[u8]) -> () uses {} {
 }
 
 pub fn to_string(value: i32) -> String uses {} {
-  let wide: i128 = core@1/int.widen(value)
-  let raw: u128 = core@1/int.truncate(wide)
-  let magnitude = if value < 0 {
-    core@1/int.wrapping_add(~raw, 1)
-  } else {
-    raw
-  }
-  std@1/internal.decimal.exact_text(magnitude, value < 0)
+  let mut out: List[u8] = []
+  std@1/i32.format_into(value, mut out)
+  std@1/internal.decimal.finish(take out)
 }
 
 @noalloc

@@ -22,6 +22,7 @@ the license named in its row; the license texts follow once each.
 | Rust standard library | `library/alloc/src/rcs/arc.rs` `Arc::make_mut` isolation examples | heapcheck persistent snapshots and fork-isolation controls in `crates/hirsel-heapcheck/src/{snapshot,ledger}.rs` | same | MIT |
 | Rust standard library | `library/core/src/time.rs` | std@1 Duration text and tests | same | MIT |
 | Rust standard library | `library/core/src/fmt/num.rs`, `library/coretests/tests/fmt/num.rs` | `stdlib/std@1/decimal.hir`, `conformance/SEM/SEM-1-format-into-appends-run.hir` | same | MIT |
+| Rust standard library | integer Display buffer formatting and integer-limit vectors | std@1 integer `to_string`/`format_into` share the decimal appender; `crates/hirsel-pipeline-tests/tests/rc/rc_append_into.rs` checks consumers that only select `to_string` | same | MIT |
 | unicode-segmentation | `src/grapheme.rs`, `src/tables.rs`, `tests/test.rs` | `stdlib/std@1/graphemes.hir` and its tests | unicode-rs/unicode-segmentation `ff47b3187adddb14813e6fb2cfc1a079f58cfddc` | MIT |
 | Unicode Character Database 16.0.0 | data files and generated tables | `stdlib/unicode16/`, `stdlib/std@1/{unicode_tables,grapheme_tables}.hir` | Unicode 16.0.0 | Unicode, `stdlib/unicode16/LICENSE.txt` |
 | serde_json | `src/{de,read,ser}.rs`, `tests/test.rs` | std@1 JSON parsing, escaping and writing | serde-rs/json `20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8` | MIT |

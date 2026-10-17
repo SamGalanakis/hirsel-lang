@@ -206,6 +206,27 @@ fn copied_results_append_into_the_list_they_were_copied_onto() {
     assert!(!calls(&fused, &into).iter().any(|c| c == "bytes.from_list"));
 }
 
+/// A package consumer that names only to_string must still select its appender.
+/// ENTRY names format_into directly, which used to hide the missing dependency.
+#[test]
+fn to_string_only_consumers_select_the_appending_implementation() {
+    let entry = ENTRY.replace(
+        "  std@1/u64.format_into(value(), mut line)",
+        "  let digits = string.as_bytes(std@1/u64.to_string(value()))\n  for i in 0u64..bytes.len(digits) { list.push(mut line, digits[i]) }",
+    );
+    let source = format!("{SHARED}{EMIT}{entry}");
+    let program = compile(&source);
+    let fused = fuse(&program);
+    checked(&source, &program, &fused);
+    for name in ["number", "number$into"] {
+        let c = calls(&fused, name);
+        assert!(c.iter().any(|c| c == "u64.format_into"), "{name}: {c:?}");
+        assert!(!c.iter().any(|c| c == "u64.to_string"), "{name}: {c:?}");
+        assert!(!c.iter().any(|c| c == "string.as_bytes"), "{name}: {c:?}");
+    }
+    agree(&source, "to-string-only-append");
+}
+
 /// Fusing these would reorder or drop an observable effect, or read bytes
 /// the copy no longer holds: each call stays as it was.
 #[test]
