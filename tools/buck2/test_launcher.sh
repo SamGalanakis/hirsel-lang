@@ -56,17 +56,18 @@ else
 fi
 LLVM_SYS_211_PREFIX="$(cd "$LLVM_SYS_211_PREFIX" && pwd)"
 export LLVM_SYS_211_PREFIX
-if [ -n "${HIRSEL_AARCH64_TOOLCHAIN:-}" ]; then
-  arm="$(cd "$HIRSEL_AARCH64_TOOLCHAIN" && pwd)"
-  qemu="$(cd "$HIRSEL_QEMU_TOOLCHAIN" && pwd)"
-  valgrind="$(cd "$HIRSEL_VALGRIND_TOOLCHAIN" && pwd)"
-  export HIRSEL_AARCH64_CC="$arm/bin/aarch64-none-linux-gnu-gcc"
-  export HIRSEL_AARCH64_SYSROOT="$arm/aarch64-none-linux-gnu/libc"
-  export HIRSEL_QEMU_AARCH64="$qemu/qemu-aarch64"
-  export HIRSEL_VALGRIND="$valgrind/bin/valgrind"
-  export VALGRIND_LIB="$valgrind/libexec/valgrind"
-  export HIRSEL_VALGRIND_RUNTIME="$valgrind/lib/x86_64-linux-gnu"
-  unset HIRSEL_AARCH64_TOOLCHAIN HIRSEL_QEMU_TOOLCHAIN HIRSEL_VALGRIND_TOOLCHAIN
+if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then
+  # Each row of tools/buck2/native-toolchain/environment.tsv is a variable, the
+  # toolchain whose tree HIRSEL_TOOLCHAIN_<TARGET> names, and a path inside it.
+  trees=""
+  while IFS="$(printf '\t')" read -r variable target path; do
+    case "$variable" in "" | "#"*) continue ;; esac
+    name="HIRSEL_TOOLCHAIN_$(printf '%s' "$target" | tr '[:lower:]' '[:upper:]')"
+    eval "tree=\${$name}"
+    export "$variable=$(cd "$tree" && pwd)/$path"
+    trees="$trees $name"
+  done < "$HIRSEL_NATIVE_ENVIRONMENT"
+  unset HIRSEL_NATIVE_ENVIRONMENT $trees
 fi
 export PATH="$LLVM_SYS_211_PREFIX/bin:${PATH:-/usr/bin:/bin}"
 export LD_LIBRARY_PATH="$LLVM_SYS_211_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

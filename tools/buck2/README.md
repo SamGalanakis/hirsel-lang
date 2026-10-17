@@ -88,10 +88,11 @@ configured. Native changes use a filtered campaign:
 Native tests receive LLVM 21.1.8, Arm GNU 14.3.Rel1 with its Linux sysroot,
 static AArch64 qemu and Valgrind as SHA-pinned Buck2 downloads. No worker
 image changes, PATH lookup or binfmt registration are needed. The launcher
-resolves `LLVM_SYS_211_PREFIX`, `HIRSEL_AARCH64_CC`,
-`HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND`,
-`VALGRIND_LIB` and `HIRSEL_VALGRIND_RUNTIME` to absolute input paths before
-changing directory. The driver's
+resolves `LLVM_SYS_211_PREFIX` and each variable of
+`native-toolchain/environment.tsv` (`HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`,
+`HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND`, `VALGRIND_LIB`,
+`HIRSEL_VALGRIND_RUNTIME`: a path inside one toolchain) to absolute input paths
+before changing directory; `bench/native/suite.py` sets the same table. The driver's
 clang launcher selects the input lld. Native launches preserve the selected
 Valgrind support directory when clearing the child's environment.
 

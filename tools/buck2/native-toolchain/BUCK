@@ -16,3 +16,4 @@ unpack_toolchain(
 
 export_file(name = "unpack.py")
 toolchain_proof(name = "proof", tools = [":llvm", ":arm", ":qemu", ":valgrind"], script = "proof.sh")
+export_file(name = "environment.tsv", visibility = ["PUBLIC"])

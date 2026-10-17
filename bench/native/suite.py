@@ -128,15 +128,16 @@ def buck2_build(*args):
             (line.rsplit(' ',1) for line in out.splitlines() if line.startswith('root//'))}
 
 def native_environment(extra=None):
-    """controlled_environment plus the pinned native tools and runtime archives, as the Buck2 test launcher sets them."""
-    tools=buck2_build(*('//tools/buck2/native-toolchain:'+t for t in ('llvm','arm','qemu','valgrind')))
-    llvm,arm,qemu,valgrind=(tools[t] for t in ('llvm','arm','qemu','valgrind'))
+    """controlled_environment plus the pinned native tools and runtime archives, as the Buck2 test launcher sets them
+    from tools/buck2/native-toolchain/environment.tsv."""
+    table=ROOT.parent.parent/'tools/buck2/native-toolchain/environment.tsv'
+    rows=[line.split('\t') for line in table.read_text().splitlines() if line and not line.startswith('#')]
+    tools=buck2_build(*('//tools/buck2/native-toolchain:'+t for t in sorted({'llvm',*(target for _,target,_ in rows)})))
+    llvm=tools['llvm']
     archives=buck2_build('//:hirsel-rt-archives')['hirsel-rt-archives']
     env=controlled_environment(extra)
+    env.update({variable:tools[target]+'/'+path for variable,target,path in rows})
     env.update(LLVM_SYS_211_PREFIX=llvm,HIRSEL_RUNTIME_ARCHIVES=archives,
-               HIRSEL_AARCH64_CC=arm+'/bin/aarch64-none-linux-gnu-gcc',HIRSEL_AARCH64_SYSROOT=arm+'/aarch64-none-linux-gnu/libc',
-               HIRSEL_QEMU_AARCH64=qemu+'/qemu-aarch64',HIRSEL_VALGRIND=valgrind+'/bin/valgrind',
-               VALGRIND_LIB=valgrind+'/libexec/valgrind',HIRSEL_VALGRIND_RUNTIME=valgrind+'/lib/x86_64-linux-gnu',
                PATH=llvm+'/bin:'+env.get('PATH','/usr/bin:/bin'),
                LD_LIBRARY_PATH=llvm+'/lib'+(':'+env['LD_LIBRARY_PATH'] if env.get('LD_LIBRARY_PATH') else ''))
     return env

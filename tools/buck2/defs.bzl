@@ -186,10 +186,11 @@ def hirsel_binary(name, bin_name, crate, crate_root, srcs, features, deps, manif
     )
 
 def native_tool_inputs():
+    """The unpacked toolchains a native test reads, as `HIRSEL_TOOLCHAIN_<TARGET>`: the
+    launcher sets the variables of `native-toolchain/environment.tsv` from them."""
     return {
-        "HIRSEL_AARCH64_TOOLCHAIN": "root//tools/buck2/native-toolchain:arm",
-        "HIRSEL_QEMU_TOOLCHAIN": "root//tools/buck2/native-toolchain:qemu",
-        "HIRSEL_VALGRIND_TOOLCHAIN": "root//tools/buck2/native-toolchain:valgrind",
+        "HIRSEL_TOOLCHAIN_" + name.upper(): "root//tools/buck2/native-toolchain:" + name
+        for name in ["arm", "qemu", "valgrind"]
     }
 
 def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
@@ -265,6 +266,9 @@ def _rust_test_impl(ctx):
         "TEST_TARGET": str(ctx.label.raw_target()),
     }
     env.update({name: cmd_args(tree) for name, tree in tools.items()})
+    if tools:
+        inputs.append(ctx.attrs._native_environment)
+        env["HIRSEL_NATIVE_ENVIRONMENT"] = cmd_args(ctx.attrs._native_environment)
     if exes:
         env["HIRSEL_TEST_BIN_EXE_DIR"] = ctx.attrs.bin_exe_dir
         env["HIRSEL_TEST_BIN_EXES"] = cmd_args([cmd_args(bin, "=", exe, delimiter = "") for bin, exe in sorted(exes.items())], delimiter = " ")
@@ -335,6 +339,7 @@ _rust_test = rule(
         "test_binary": attrs.string(default = ""),
         "_launcher": attrs.source(default = "root//tools/buck2:test_launcher.sh"),
         "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
+        "_native_environment": attrs.source(default = "root//tools/buck2/native-toolchain:environment.tsv"),
     },
 )
 
