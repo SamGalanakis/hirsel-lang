@@ -1,9 +1,9 @@
 use hirsel_cli_args::{
     CommonOption, CommonOptions,
-    lexopt::{Arg::*, Parser},
+    lexopt::{Arg::*, Parser, ValueExt},
     parse_or_exit,
 };
-use hirsel_conformance::{SeededCompiler, Status, run_suite_shard};
+use hirsel_conformance::{SeededCompiler, Status, run_suite_selected};
 use std::{env, process::ExitCode};
 
 fn main() -> ExitCode {
@@ -11,6 +11,7 @@ fn main() -> ExitCode {
 }
 fn main_on_compiler_thread() -> ExitCode {
     let mut common = CommonOptions::default();
+    let mut paths = Vec::new();
     let mut json = false;
     let mut verbose = false;
     let mut update = false;
@@ -23,6 +24,7 @@ fn main_on_compiler_thread() -> ExitCode {
                 continue;
             }
             match arg {
+                Long("path") => paths.push(args.value()?.string()?),
                 Long("json") => json = true,
                 Long("verbose") => verbose = true,
                 Long("update-passing") => update = true,
@@ -35,7 +37,7 @@ fn main_on_compiler_thread() -> ExitCode {
     })());
     if help {
         println!(
-            "usage: hirsel-conformance [--json] [--verbose] [--update-passing] [--check-format] [--root <repo>] [--hash-seed N] [--shard I/N]"
+            "usage: hirsel-conformance [--json] [--verbose] [--update-passing] [--check-format] [--path PREFIX]... [--root <repo>] [--hash-seed N] [--shard I/N]"
         );
         return ExitCode::SUCCESS;
     }
@@ -56,9 +58,17 @@ fn main_on_compiler_thread() -> ExitCode {
                     .to_path_buf()
             }
         };
-        let mut report = run_suite_shard(&root, &SeededCompiler(hash_seed), update, shard)?;
+        let selection = hirsel_conformance::Selection {
+            shard,
+            paths: &paths,
+        };
+        let mut report = run_suite_selected(&root, &SeededCompiler(hash_seed), update, selection)?;
         if check_format {
-            hirsel_conformance::corpus_format::check_canonical_shard(&root, &mut report, shard)?;
+            hirsel_conformance::corpus_format::check_canonical_selected(
+                &root,
+                &mut report,
+                selection,
+            )?;
         }
         Ok::<_, String>(report)
     })();

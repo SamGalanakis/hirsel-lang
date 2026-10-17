@@ -527,6 +527,35 @@ fn in_shard(shard: Option<Shard>, path: &str) -> bool {
     shard.is_none_or(|shard| shard.holds(path))
 }
 
+/// A corpus selection shared by execution, formatting and the passing ratchet.
+#[derive(Clone, Copy, Default)]
+pub struct Selection<'a> {
+    pub shard: Option<Shard>,
+    pub paths: &'a [String],
+}
+impl Selection<'_> {
+    pub fn holds(self, path: &str) -> bool {
+        in_shard(self.shard, path)
+            && (self.paths.is_empty() || self.paths.iter().any(|prefix| path.starts_with(prefix)))
+    }
+    fn whole(self) -> bool {
+        self.shard.is_none() && self.paths.is_empty()
+    }
+    pub(crate) fn files(self, root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+        let mut files = Vec::new();
+        discover(&root.join("conformance"), &mut files)?;
+        files.retain(|file| self.holds(&relative(root, file)));
+        files.sort();
+        if !self.paths.is_empty() && files.is_empty() {
+            return Err(format!(
+                "--path {:?} selected no corpus files in this shard",
+                self.paths
+            ));
+        }
+        Ok(files)
+    }
+}
+
 /// The ratchet over one shard: every listed path is still validated, but only
 /// the shard's listed paths must be present and passing.
 pub fn ratchet_within(
@@ -534,6 +563,15 @@ pub fn ratchet_within(
     tests: &[TestResult],
     update: bool,
     shard: Option<Shard>,
+) -> Result<String, Vec<String>> {
+    ratchet_selected(existing, tests, update, Selection { shard, paths: &[] })
+}
+
+fn ratchet_selected(
+    existing: &str,
+    tests: &[TestResult],
+    update: bool,
+    selection: Selection<'_>,
 ) -> Result<String, Vec<String>> {
     let mut listed = BTreeSet::new();
     let mut errors = Vec::new();
@@ -557,7 +595,7 @@ pub fn ratchet_within(
         listed.insert(line.to_owned());
     }
     let statuses: BTreeMap<_, _> = tests.iter().map(|t| (t.path.as_str(), &t.status)).collect();
-    for path in listed.iter().filter(|path| in_shard(shard, path)) {
+    for path in listed.iter().filter(|path| selection.holds(path)) {
         match statuses.get(path.as_str()) {
             Some(Status::Pass) => {}
             Some(status) => errors.push(format!("{path}: ratchet requires pass, got {status:?}")),
@@ -589,14 +627,23 @@ pub fn run_suite_shard(
     update: bool,
     shard: Option<Shard>,
 ) -> Result<Report, String> {
-    if update && shard.is_some() {
-        return Err("--update-passing needs the whole corpus, not a shard".into());
+    run_suite_selected(root, driver, update, Selection { shard, paths: &[] })
+}
+
+/// Execute precisely a selection; filtered runs cannot update the passing ratchet.
+pub fn run_suite_selected(
+    root: &Path,
+    driver: &impl Driver,
+    update: bool,
+    selection: Selection<'_>,
+) -> Result<Report, String> {
+    if update && !selection.whole() {
+        return Err(
+            "--update-passing needs the whole corpus, not a shard or --path selection".into(),
+        );
     }
     let rules = spec_rules(root)?;
-    let mut files = Vec::new();
-    discover(&root.join("conformance"), &mut files)?;
-    files.retain(|file| in_shard(shard, &relative(root, file)));
-    files.sort();
+    let files = selection.files(root)?;
     let mut report = Report::default();
     let runtime =
         fs::read_to_string(root.join("conformance/m2-runtime.txt")).map_err(|e| e.to_string())?;
@@ -651,7 +698,7 @@ pub fn run_suite_shard(
     let passing = root.join("conformance/passing.txt");
     let existing =
         fs::read_to_string(&passing).map_err(|e| format!("{}: {e}", passing.display()))?;
-    match ratchet_within(&existing, &report.tests, update, shard) {
+    match ratchet_selected(&existing, &report.tests, update, selection) {
         Ok(updated) if update && report.success() => {
             fs::write(&passing, updated).map_err(|e| format!("{}: {e}", passing.display()))?
         }

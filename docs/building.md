@@ -215,6 +215,21 @@ whole-shard request waits for a worker to free its CPUs (median edit-to-result
 38 s against 114 s over twelve paired edits). Leave `-c hirsel.full=true` and
 `tools/gate` for the finished change.
 
+Run one corpus program, including its expected outcome, checked execution and
+canonical formatter check, on the pool:
+
+```sh
+.buck2/bin/buck2 test -c hirsel.tests=focus //:gate-conformance-shard-1 -- \
+  --test-arg=--shard --test-arg=1/1 \
+  --test-arg=--path --test-arg=conformance/SEM/SEM-1-format-into-appends-run.hir
+```
+
+`--path` matches repository-relative prefixes, may repeat, and fails if no files
+match. A complete filename selects that program. The explicit `1/1` overrides
+the target's default shard so that a selected file always runs. The runner
+checks only matched files and their ratchet entries; filtered runs cannot update
+`passing.txt`.
+
 ## Gates
 
 `tools/gate` checks a finished change, once. It diffs the worktree against

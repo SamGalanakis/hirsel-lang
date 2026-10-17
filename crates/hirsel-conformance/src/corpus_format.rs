@@ -586,10 +586,16 @@ pub fn check_canonical_shard(
     report: &mut Report,
     shard: Option<crate::Shard>,
 ) -> Result<(), String> {
-    let mut files = Vec::new();
-    discover(&root.join("conformance"), &mut files)?;
-    files.retain(|file| shard.is_none_or(|shard| shard.holds(&crate::relative(root, file))));
-    files.sort();
+    check_canonical_selected(root, report, crate::Selection { shard, paths: &[] })
+}
+
+/// Check exactly the same selection as execution, including unratcheted files.
+pub fn check_canonical_selected(
+    root: &Path,
+    report: &mut Report,
+    selection: crate::Selection<'_>,
+) -> Result<(), String> {
+    let files = selection.files(root)?;
     for path in files {
         let old = fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let canonical = match hirsel_driver::format_path(&path) {

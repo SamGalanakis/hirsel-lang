@@ -16,6 +16,10 @@ The binaries use `hirsel-cli-args` and pinned lexopt for argument parsing.
 Common `--root`, `--hash-seed` and `--shard` values share validation and
 argument errors print to stderr and exit 2. Paths retain OS bytes.
 
+`--path PREFIX` selects only matching repository-relative corpus files for both
+execution and `--check-format`. Prefixes may repeat; a selection matching zero
+files fails. It intersects `--shard`, and cannot update the ratchet.
+
 The runner prints `whole corpus` and `in-gate corpus` counts. JSON retains
 `summary` for the whole corpus and adds `in_gate`, plus each test's `in_gate`,
 `exclusions`, `actual`, `phase` and `unchecked`. Verbose output lists exclusions

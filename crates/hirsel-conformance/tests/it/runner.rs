@@ -703,3 +703,83 @@ fn blocked_header_requires_noncompletion_and_the_exact_effect_prefix() {
     ));
     assert!(header("// rule: OWN-6\n// expect: blocked\n// exit: 0\nfn main() {}\n").is_err());
 }
+
+#[test]
+fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
+    use hirsel_conformance::{Selection, run_suite_selected};
+    let root = Fixture::new();
+    let paths = ["conformance/OWN/accept.hir".to_owned()];
+    let selection = Selection {
+        shard: None,
+        paths: &paths,
+    };
+    fs::write(
+        root.0.join("conformance/passing.txt"),
+        "conformance/OWN/accept.hir\nconformance/OWN/reject.hir\n",
+    )
+    .unwrap();
+    let report = run_suite_selected(&root.0, &fake(), false, selection).unwrap();
+    assert!(report.success(), "{:?}", report.errors);
+    assert_eq!(report.counts.validated, 1);
+    assert_eq!(report.tests[0].path, paths[0]);
+    assert!(run_suite_selected(&root.0, &fake(), true, selection).is_err());
+    let empty = ["conformance/absent".to_owned()];
+    assert!(
+        run_suite_selected(
+            &root.0,
+            &fake(),
+            false,
+            Selection {
+                shard: None,
+                paths: &empty
+            }
+        )
+        .unwrap_err()
+        .contains("selected no corpus files")
+    );
+    let mut failing = fake();
+    failing
+        .diagnostics
+        .push(diagnostic(Some("OWN-6"), 3, Severity::Error));
+    let report = run_suite_selected(&root.0, &failing, false, selection).unwrap();
+    assert_eq!(report.counts.failing, 1);
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.contains("ratchet requires pass"))
+    );
+    // Formatting shares the filter: an unrelated malformed file cannot enter it.
+    let mut report = hirsel_conformance::Report::default();
+    hirsel_conformance::corpus_format::check_canonical_selected(&root.0, &mut report, selection)
+        .unwrap();
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    fs::write(
+        root.0.join("conformance/OWN/reject.hir"),
+        "malformed unrelated source",
+    )
+    .unwrap();
+    fs::write(
+        root.0.join(&paths[0]),
+        "// rule: OWN-6\n// expect: accept\nfn accepted()   {}\n",
+    )
+    .unwrap();
+    let mut report = hirsel_conformance::Report::default();
+    hirsel_conformance::corpus_format::check_canonical_selected(&root.0, &mut report, selection)
+        .unwrap();
+    assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+    assert!(report.errors[0].contains("accept.hir: corpus source is not formatter-canonical"));
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel-conformance"))
+        .args([
+            "--root",
+            root.0.to_str().unwrap(),
+            "--path",
+            &paths[0],
+            "--check-format",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 validated / 1 passing"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not formatter-canonical"));
+}
