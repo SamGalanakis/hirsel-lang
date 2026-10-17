@@ -645,13 +645,31 @@ pub struct DropSyntax {
     pub binding: Symbol,
     pub body: ExprId,
 }
+/// An `extern` function's ABI string and the doc comment attached to the
+/// declaration, which states its aliasing contract (PROG-4, MEM-9).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignAbi {
+    /// The ABI string literal as written, quotes included.
+    pub literal: String,
+    /// The attached doc comment's text without its delimiters, or None.
+    pub contract: Option<String>,
+}
+impl ForeignAbi {
+    /// The ABI name inside the literal's quotes.
+    pub fn name(&self) -> &str {
+        self.literal
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(&self.literal)
+    }
+}
 /// Top-level declaration payload (LANG-6, PROG-4, CT-1).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ItemKind {
     Function {
         signature: FunctionSyntax,
         body: Option<ExprId>,
-        abi: Option<String>,
+        abi: Option<ForeignAbi>,
     },
     Const {
         ty: TypeExprId,

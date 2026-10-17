@@ -311,7 +311,6 @@ fn generic_foreign_calls_report_gen4_at_the_call() {
         abi: "C".into(),
         blocking: false,
         aliasing_contract: "none".into(),
-        deterministic_model: None,
     });
     let path = super::support::path("foreign");
     f.provider.signatures.insert(

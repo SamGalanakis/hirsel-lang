@@ -14,11 +14,11 @@ Wire tests use run-config's shared `hex` formatter as a dev dependency.
   assertions.
 - `Signature` is self-contained. Fixed header defaults never come from bodies
   (LANG-6). `SignatureMetadata` carries visibility, transparent-alias status,
-  unsafe_ffi/exported_c facts and nominal Unsafe/Result roles. Opaque representation
-  details, including whether the hidden representation is an alias, are private.
-  `FunctionType.foreign` is the existing explicit ForeignContract. Manifest
-  `Metadata`/`DefinitionMetadata`/`DeclarationSite` are shared inputs; no new #6 ABI
-  or callback policy is invented.
+  the `unsafe ffi` package fact, a safe wrapper's trusted kind and model, and nominal
+  Unsafe/Result roles. Opaque representation details, including whether the hidden
+  representation is an alias, are private. `FunctionType.foreign` is an extern's
+  ForeignContract (PROG-4). Manifest `Metadata` (with each selected `unsafe ffi`
+  package's wrappers)/`DefinitionMetadata`/`DeclarationSite` are shared inputs.
 - `Type.drop_allocation` is independent of function invocation allocation:
   NoAlloc, MayAllocate, or a conjunction of generic NoallocDrop obligations.
   Unproved erased cleanup defaults to MayAllocate. Resource

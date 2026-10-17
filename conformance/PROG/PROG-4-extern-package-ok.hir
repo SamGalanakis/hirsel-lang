@@ -1,0 +1,4 @@
+// rule: PROG-4
+// expect: accept
+/// Reads its arguments during the call and retains nothing.
+extern "c" fn add(u: Unsafe, a: i32, b: i32) -> i32

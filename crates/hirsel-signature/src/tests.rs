@@ -378,7 +378,10 @@ fn diagnostic_gen4_generic_ffi_cites_header_span() {
         kind: ast::GenericKind::Type(vec![]),
     });
     if let ast::ItemKind::Function { abi, .. } = &mut f.tree.items[0].kind {
-        *abi = Some("c".into());
+        *abi = Some(ast::ForeignAbi {
+            literal: "\"c\"".into(),
+            contract: None,
+        });
     }
     let span = Span::new(hirsel_span::FileId(3), 10, 20).unwrap();
     f.tree.items[0].origin.span = span;
@@ -388,7 +391,10 @@ fn diagnostic_gen4_generic_ffi_cites_header_span() {
 fn diagnostic_prog4_extern_requires_package_metadata() {
     let mut f = Fixture::new();
     if let ast::ItemKind::Function { abi, .. } = &mut f.tree.items[0].kind {
-        *abi = Some("c".into());
+        *abi = Some(ast::ForeignAbi {
+            literal: "\"c\"".into(),
+            contract: None,
+        });
     }
     let span = Span::new(hirsel_span::FileId(4), 10, 12).unwrap();
     f.tree.items[0].origin.span = span;
@@ -443,51 +449,81 @@ fn opaque_public_signatures_require_authority_and_hide_representation() {
     assert_eq!(a.fingerprint, b.fingerprint);
     assert!(typedef(&b).representation.is_none());
 }
-#[test]
-fn foreign_signature_requires_unsafe_and_explicit_aliasing_contract() {
+fn foreign_fixture() -> Fixture {
     let mut f = Fixture::new();
-    f.metadata.unsafe_ffi = true;
     if let ast::ItemKind::Function { abi, .. } = &mut f.tree.items[0].kind {
-        *abi = Some("c".into());
+        *abi = Some(ast::ForeignAbi {
+            literal: "\"c\"".into(),
+            contract: None,
+        });
     }
-    error(&mut f, "PROG-4", Span::default());
+    f
+}
+fn unsafe_ffi_package(f: &mut Fixture) {
+    let package = f.tree.items[0].definition.0.package.clone();
+    f.metadata.unsafe_ffi.insert(package, UnsafeFfi::default());
+}
+fn foreign_contract(f: &mut Fixture, text: &str) {
+    if let ast::ItemKind::Function { abi: Some(abi), .. } = &mut f.tree.items[0].kind {
+        abi.contract = Some(text.into());
+    }
+}
+fn unsafe_parameter(f: &mut Fixture) {
     f.metadata.unsafe_capability = Some(f.dependency("Unsafe", Some(CapabilityKind::Global), true));
     let ty = f.named("Unsafe");
     f.param("u", ty, PassingMode::Borrow);
-    error(&mut f, "PROG-4", Span::default());
-    f.metadata.foreign = Some(ForeignContract {
-        abi: "c".into(),
-        blocking: false,
-        aliasing_contract: "borrow does not retain; take transfers ownership".into(),
-        deterministic_model: None,
-    });
-    f.attr("blocking");
-    let s = f.sig();
-    assert!(function(&s).foreign.as_ref().unwrap().blocking);
 }
 #[test]
-fn foreign_rejects_counted_strings_and_accepts_sized_numeric_and_ptr() {
-    let mut f = Fixture::new();
-    f.metadata.exported_c = true;
-    f.metadata.foreign = Some(ForeignContract {
-        abi: "c".into(),
-        blocking: false,
-        aliasing_contract: "explicit parameter ownership".into(),
-        deterministic_model: None,
-    });
+fn foreign_signature_requires_package_unsafe_and_a_doc_contract() {
+    let mut f = foreign_fixture();
+    unsafe_parameter(&mut f);
+    foreign_contract(&mut f, "reads nothing");
+    error(&mut f, "PROG-4", Span::default());
+    unsafe_ffi_package(&mut f);
+    let s = f.sig();
+    assert!(s.metadata.unsafe_ffi);
+    let mut f = foreign_fixture();
+    unsafe_ffi_package(&mut f);
+    foreign_contract(&mut f, "reads nothing");
+    error(&mut f, "PROG-4", Span::default());
+    let mut f = foreign_fixture();
+    unsafe_ffi_package(&mut f);
+    unsafe_parameter(&mut f);
+    error(&mut f, "PROG-4", Span::default());
+    foreign_contract(&mut f, "borrow does not retain");
+    f.attr("blocking");
+    let s = f.sig();
+    let foreign = function(&s).foreign.as_ref().unwrap();
+    assert!(foreign.blocking);
+    assert_eq!(foreign.aliasing_contract, "borrow does not retain");
+}
+#[test]
+fn foreign_rejects_strings_and_taken_bytes_and_accepts_numerics_and_pointers() {
+    let foreign = || {
+        let mut f = foreign_fixture();
+        unsafe_ffi_package(&mut f);
+        unsafe_parameter(&mut f);
+        foreign_contract(&mut f, "explicit parameter ownership");
+        f
+    };
+    let mut f = foreign();
     let ty = f.named("String");
+    f.param("x", ty, PassingMode::Borrow);
+    error(&mut f, "PROG-4", Span::default());
+    let mut f = foreign();
+    let ty = f.named("Bytes");
     f.param("x", ty, PassingMode::Take);
     error(&mut f, "PROG-4", Span::default());
-    let mut f = Fixture::new();
-    f.metadata.exported_c = true;
-    f.metadata.foreign = Some(ForeignContract {
-        abi: "c".into(),
-        blocking: false,
-        aliasing_contract: "explicit parameter ownership".into(),
-        deterministic_model: None,
-    });
+    let mut f = foreign();
+    let ty = f.named("Bytes");
+    f.param("x", ty, PassingMode::Borrow);
+    f.result(ty);
+    error(&mut f, "PROG-4", Span::default());
+    let mut f = foreign();
+    let bytes = f.named("Bytes");
+    f.param("x", bytes, PassingMode::Borrow);
     let ty = f.named("u32");
-    f.param("n", ty, PassingMode::Borrow);
+    f.param("n", ty, PassingMode::Take);
     let ptr = f.application("Ptr", vec![ast::TypeArgument::Type(ty)]);
     f.result(ptr);
     f.sig();
@@ -1051,10 +1087,11 @@ hash_component!(hash_changes_with_unsafe_ffi_metadata, |s| s
     .metadata
     .unsafe_ffi =
     true);
-hash_component!(hash_changes_with_exported_c_metadata, |s| s
-    .metadata
-    .exported_c =
-    true);
+hash_component!(hash_changes_with_wrapper_metadata, |s| s.metadata.wrapper =
+    Some(ForeignWrapper {
+        kind: WrapperKind::Pure,
+        deterministic: true,
+    }));
 hash_component!(hash_changes_with_unsafe_nominal_role, |s| s
     .metadata
     .roles
@@ -1270,7 +1307,6 @@ hash_component!(hash_changes_with_foreign_contract, |s| {
             abi: "c".into(),
             blocking: false,
             aliasing_contract: "no memory access".into(),
-            deterministic_model: None,
         });
     }
 });

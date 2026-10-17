@@ -457,6 +457,47 @@ fn execute(args: Vec<OsString>) -> u8 {
                         eprint!("{}", d.render_human(&output.sources));
                     }
                 }
+                // Every foreign library in the program is visible at check (PROG-4).
+                for package in &output.unsafe_ffi {
+                    let link: Vec<String> = package
+                        .link
+                        .iter()
+                        .map(|l| match l {
+                            hirsel_engine::LinkInput::Library(name) => format!("-l{name}"),
+                            hirsel_engine::LinkInput::File(path) => path.display().to_string(),
+                        })
+                        .collect();
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "schema_version": 1,
+                                "unsafe_ffi_package": {
+                                    "name": package.package.name,
+                                    "version": package.package.version,
+                                    "link": link,
+                                    "headers_checked": package.headers_checked,
+                                },
+                            })
+                        );
+                    } else {
+                        eprintln!(
+                            "note: {}@{} is an unsafe ffi package (links {}; headers {})",
+                            package.package.name,
+                            package.package.version,
+                            if link.is_empty() {
+                                "nothing".into()
+                            } else {
+                                link.join(" ")
+                            },
+                            if package.headers_checked {
+                                "checked"
+                            } else {
+                                "not checked"
+                            },
+                        );
+                    }
+                }
                 if output.diagnostics.is_empty() {
                     if let hirsel_engine::CheckCompletion::Incomplete { phase } = output.completion
                     {

@@ -76,6 +76,7 @@ impl Compiler {
     ) -> Result<RunOutcome, ToolError> {
         let mut program = self.load_program(path)?;
         program.check_for_execution()?;
+        program.refuse_foreign_interpretation()?;
         let config = RunConfiguration {
             entry: program.entry,
             hash_seed: 0,

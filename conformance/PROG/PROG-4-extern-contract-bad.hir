@@ -1,0 +1,3 @@
+// rule: PROG-4
+// expect: reject PROG-4 at line 3
+extern "c" fn add(u: Unsafe, a: i32, b: i32) -> i32

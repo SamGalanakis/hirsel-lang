@@ -76,6 +76,7 @@ fn run_simulation(
 ) -> Result<RunOutcome, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
+    program.refuse_foreign_interpretation()?;
     if let Some(steps) = max_steps {
         program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
             limits: hirsel_interp::Limits {
@@ -293,6 +294,7 @@ pub fn run_path_on_host(
     use hirsel_interp::Outcome;
     let mut program = load_program(path)?;
     program.check_for_execution()?;
+    program.refuse_foreign_interpretation()?;
     let signature = launch_signature(&mut program)?;
     let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
     let (run, io, readiness) = match bind_host_run(&mut program, launch, host)? {

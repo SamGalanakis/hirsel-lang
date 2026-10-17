@@ -113,6 +113,10 @@ fn normalize_inner(
         ));
     }
     let attrs = n.attributes(&item.attributes, &item.kind)?;
+    let unsafe_ffi = input
+        .metadata
+        .unsafe_ffi
+        .contains_key(&item.definition.0.package);
     let mut implementation_authority = None;
     let mut kind = match &item.kind {
         ast::ItemKind::Function { signature, abi, .. } => {
@@ -124,70 +128,56 @@ fn normalize_inner(
                 ));
             }
             let mut f = n.function(signature, &attrs, false)?;
-            if abi.is_some() || input.metadata.exported_c {
+            if let Some(abi) = abi {
+                let foreign = |message: &str| {
+                    Err(diagnostic(
+                        const { RuleId::of("PROG-4") },
+                        item.origin.span,
+                        message,
+                    ))
+                };
                 if !f.generics.is_empty() {
                     return Err(diagnostic(
                         const { RuleId::of("GEN-4") },
                         item.origin.span,
-                        "foreign and exported C functions must be monomorphic",
+                        "foreign functions must be monomorphic",
                     ));
                 }
-                if abi.is_some() && !input.metadata.unsafe_ffi {
-                    return Err(diagnostic(
-                        const { RuleId::of("PROG-4") },
-                        item.origin.span,
-                        "extern requires an unsafe ffi package",
-                    ));
+                if !unsafe_ffi {
+                    return foreign("extern requires an unsafe ffi package");
                 }
-                if abi.as_deref().is_some_and(|s| s != "c") {
-                    return Err(diagnostic(
-                        const { RuleId::of("PROG-4") },
-                        item.origin.span,
-                        "only the c ABI is supported",
-                    ));
+                if abi.name() != "c" {
+                    return foreign("only the c ABI is supported");
                 }
-                if abi.is_some() && !f.parameters.iter().any(|p| n.is_unsafe(p.ty)) {
-                    return Err(diagnostic(
-                        const { RuleId::of("PROG-4") },
-                        item.origin.span,
-                        "extern requires a declared Unsafe capability parameter",
-                    ));
+                if !f.parameters.iter().any(|p| n.is_unsafe(p.ty)) {
+                    return foreign("extern requires a declared Unsafe capability parameter");
                 }
                 for p in &f.parameters {
-                    if !n.is_unsafe(p.ty) && !n.ffi_type(p.ty, &mut BTreeSet::new()) {
-                        return Err(diagnostic(
-                            const { RuleId::of("PROG-4") },
-                            item.origin.span,
-                            "type is not permitted by the foreign interface",
-                        ));
+                    if n.is_unsafe(p.ty) || n.ffi_context(p) {
+                        continue;
+                    }
+                    match n.ffi_class(p.ty) {
+                        None => return foreign("type is not permitted by the foreign interface"),
+                        Some(class) if !class.permits(p.passing) => {
+                            return foreign(
+                                "this parameter mode cannot pass the type to C: take transfers \
+                                 only numbers and pointers, and a byte view is only borrowed",
+                            );
+                        }
+                        Some(_) => {}
                     }
                 }
-                if !n.ffi_type(f.result, &mut BTreeSet::new()) {
-                    return Err(diagnostic(
-                        const { RuleId::of("PROG-4") },
-                        item.origin.span,
-                        "foreign result type is not permitted",
-                    ));
+                if !n.ffi_class(f.result).is_some_and(FfiClass::result) {
+                    return foreign("foreign result type is not permitted");
                 }
-                {
-                    let abi = abi.as_deref().unwrap_or("c");
-                    let mut foreign = input.metadata.foreign.clone().ok_or_else(|| {
-                        diagnostic(
-                            const { RuleId::of("PROG-4") },
-                            item.origin.span,
-                            "foreign aliasing contract must be supplied explicitly",
-                        )
-                    })?;
-                    if foreign.abi != abi || foreign.aliasing_contract.is_empty() {
-                        return Err(diagnostic(
-                            const { RuleId::of("PROG-4") },
-                            item.origin.span,
-                            "invalid foreign contract",
-                        ));
-                    }
-                    foreign.blocking = attrs.blocking;
-                    f.foreign = Some(foreign);
-                }
+                let Some(contract) = &abi.contract else {
+                    return foreign("an extern states its aliasing contract in a doc comment");
+                };
+                f.foreign = Some(ForeignContract {
+                    abi: abi.name().to_owned(),
+                    blocking: attrs.blocking,
+                    aliasing_contract: contract.clone(),
+                });
             }
             SignatureKind::Function(f)
         }
@@ -483,8 +473,13 @@ fn normalize_inner(
                     }
                 ),
             schema: vec![],
-            unsafe_ffi: input.metadata.unsafe_ffi,
-            exported_c: input.metadata.exported_c,
+            unsafe_ffi,
+            wrapper: input
+                .metadata
+                .unsafe_ffi
+                .get(&item.definition.0.package)
+                .and_then(|p| p.wrappers.get(&item.definition))
+                .copied(),
             roles: NominalRoles {
                 unsafe_capability: input.metadata.unsafe_capability.clone(),
                 result_type: input.metadata.result_type.clone(),
@@ -2335,25 +2330,86 @@ impl Normalizer<'_, '_> {
     fn is_unsafe(&self, t: TypeId) -> bool {
         matches!(&self.types.get(t).unwrap().kind,TypeKind::Named{definition,..} if self.input.metadata.unsafe_capability.as_ref()==Some(definition) && self.capability(t).is_some())
     }
-    fn ffi_type(&self, t: TypeId, seen: &mut BTreeSet<TypeId>) -> bool {
-        if !seen.insert(t) {
-            return false;
-        }
-        match &self.types.get(t).unwrap().kind {
-            TypeKind::Primitive(p) => {
-                !matches!(p, Primitive::String | Primitive::Bool | Primitive::Never)
-            }
-            TypeKind::Tuple(ts) => ts.is_empty(),
-            TypeKind::Builtin { kind, .. } => matches!(kind, BuiltinType::Ptr | BuiltinType::FnPtr),
-            TypeKind::Named { definition, .. } => self.snapshots.get(definition).is_some_and(|s| {
-                if let SignatureKind::Type(d) = &s.kind {
-                    d.layout.flat || (d.layout.c && implies(&d.bounds, Bound::Data))
-                } else {
-                    false
+    /// The foreign ABI class of `t`, or None outside PROG-4's types.
+    fn ffi_class(&self, t: TypeId) -> Option<FfiClass> {
+        match &self.types.get(t)?.kind {
+            TypeKind::Primitive(Primitive::Bytes) => Some(FfiClass::Bytes),
+            TypeKind::Primitive(Primitive::String | Primitive::Bool | Primitive::Never) => None,
+            TypeKind::Primitive(_) => Some(FfiClass::Numeric),
+            TypeKind::Tuple(ts) if ts.is_empty() => Some(FfiClass::Unit),
+            TypeKind::Builtin {
+                kind: BuiltinType::Ptr,
+                ..
+            } => Some(FfiClass::Pointer),
+            TypeKind::Builtin {
+                kind: BuiltinType::FnPtr,
+                arguments,
+            } => match arguments.as_ref() {
+                [GenericArgument::Type(f)] if self.ffi_callback(*f) => Some(FfiClass::Pointer),
+                _ => None,
+            },
+            TypeKind::Named { definition, .. } => match &self.snapshots.get(definition)?.kind {
+                SignatureKind::Type(d) if d.layout.flat => Some(FfiClass::Record),
+                SignatureKind::Type(d) if d.layout.c && implies(&d.bounds, Bound::Data) => {
+                    Some(FfiClass::Record)
                 }
-            }),
-            _ => false,
+                _ => None,
+            },
+            _ => None,
         }
+    }
+    /// A callback context, `mut ctx: unique C` of any type: C receives its
+    /// exclusive address and may only hand it back to a callback (PROG-4).
+    /// `mut` is already exclusive, and `unique` is canonical on plain types.
+    /// A byte view is never a context: `mut` of one is refused.
+    fn ffi_context(&self, p: &Parameter) -> bool {
+        p.passing == PassingMode::Mut
+            && matches!(self.ffi_class(p.ty), None | Some(FfiClass::Record))
+    }
+    /// A C-callable callback: `fn(mut ctx: unique C, ...) -> R` over foreign
+    /// argument and result types, with no state promises (PROG-4).
+    fn ffi_callback(&self, f: TypeId) -> bool {
+        let Some(TypeKind::Function(f)) = self.types.get(f).map(|t| &t.kind) else {
+            return false;
+        };
+        let Some((ctx, rest)) = f.parameters.split_first() else {
+            return false;
+        };
+        self.ffi_context(ctx)
+            && f.generics.is_empty()
+            && f.state_promises.is_empty()
+            && rest.iter().all(|p| {
+                self.ffi_class(p.ty)
+                    .is_some_and(|c| FfiClass::permits(c, p.passing))
+            })
+            && self.ffi_class(f.result).is_some_and(FfiClass::result)
+    }
+}
+/// How a foreign parameter or result crosses the C ABI (PROG-4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FfiClass {
+    /// A sized integer or float.
+    Numeric,
+    /// `Ptr[T]` or a callback `FnPtr`.
+    Pointer,
+    /// A byte view: a pointer and a length.
+    Bytes,
+    /// A `@layout(c)` or flat record, passed by address.
+    Record,
+    Unit,
+}
+impl FfiClass {
+    /// `take` transfers only values with no counted storage; `mut` passes a
+    /// writable address of storage C may fill.
+    fn permits(self, passing: PassingMode) -> bool {
+        match passing {
+            PassingMode::Borrow => self != Self::Unit,
+            PassingMode::Take => matches!(self, Self::Numeric | Self::Pointer),
+            PassingMode::Mut => matches!(self, Self::Numeric | Self::Pointer | Self::Record),
+        }
+    }
+    fn result(self) -> bool {
+        matches!(self, Self::Numeric | Self::Pointer | Self::Unit)
     }
 }
 fn implies(bs: &[Bound], b: Bound) -> bool {

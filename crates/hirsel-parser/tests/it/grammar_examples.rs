@@ -271,3 +271,32 @@ fn serializable_has_no_attribute_payload_or_value_modifier_form() {
     clean("type serializable { n: u8 }\nfn f(x: serializable) {}");
     clean("@serializable type Row { n: u8 }");
 }
+
+#[test]
+fn an_extern_carries_its_attached_doc_comments_as_its_contract() {
+    let contract = |source: &str| {
+        let file = clean(source);
+        let item = file.tree.items.last().unwrap();
+        let ItemKind::Function { abi: Some(abi), .. } = &item.kind else {
+            panic!("expected an extern");
+        };
+        assert_eq!(abi.name(), "c");
+        abi.contract.clone()
+    };
+    assert_eq!(
+        contract(
+            "/// Reads `p`.\n///\n/// Retains nothing.\n@blocking\nextern \"c\" fn f(u: Unsafe)"
+        ),
+        Some("Reads `p`.\n\nRetains nothing.".into())
+    );
+    assert_eq!(
+        contract("/** Borrowed only. */ extern \"c\" fn f(u: Unsafe)"),
+        Some("Borrowed only.".into())
+    );
+    // A plain comment between the doc and the item detaches the doc.
+    assert_eq!(
+        contract("/// Earlier.\n// note\nextern \"c\" fn f(u: Unsafe)"),
+        None
+    );
+    assert_eq!(contract("fn g()\n///\nextern \"c\" fn f(u: Unsafe)"), None);
+}

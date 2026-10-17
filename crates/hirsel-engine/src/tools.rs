@@ -324,6 +324,7 @@ pub(crate) fn check_file_lowering(
         sources: engine.sources.clone(),
         diagnostics: select_diagnostics(diagnostics, Some(&engine.sources)),
         completion,
+        unsafe_ffi: vec![],
     })
 }
 /// Compatibility helper for execution: only a complete, error-free check may run.

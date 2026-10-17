@@ -468,8 +468,25 @@ pub struct Contract {
 pub struct ForeignContract {
     pub abi: String,
     pub blocking: bool,
+    /// The extern's doc comment.
     pub aliasing_contract: String,
-    pub deterministic_model: Option<DefPath>,
+}
+/// A safe wrapper's trusted kind and model (PROG-4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForeignWrapper {
+    pub kind: WrapperKind,
+    /// Its results and effects are a function of its arguments, so replay
+    /// may run it again.
+    pub deterministic: bool,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WrapperKind {
+    /// The result depends only on the arguments.
+    Pure,
+    /// It acts on foreign state reachable from the handles it is given.
+    Handle,
+    /// It acts on the host outside Hirsel's capabilities.
+    Effect,
 }
 /// Complete callable signature. Error is None for non-Result results, otherwise matches Result's E (LANG-6/8).
 #[derive(Clone, Debug, Eq, PartialEq)]

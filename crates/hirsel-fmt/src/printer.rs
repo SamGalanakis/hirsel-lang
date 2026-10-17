@@ -293,7 +293,7 @@ impl<'a> Printer<'a> {
                 abi,
             } => {
                 if let Some(a) = abi {
-                    ds.extend([token("extern"), Space, token(a), Space]);
+                    ds.extend([token("extern"), Space, token(&a.literal), Space]);
                 }
                 ds.extend([
                     token("fn"),

@@ -18,6 +18,19 @@ pub(crate) struct SemanticProgram {
     nodes: Vec<ProgramNode>,
     /// Every definition the closure visited.
     pub(crate) definitions: BTreeSet<DefPath>,
+    /// Each visited definition's direct dependencies.
+    uses: BTreeMap<DefPath, BTreeSet<DefPath>>,
+}
+
+/// The foreign functions a program reaches (PROG-4).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ForeignUse {
+    /// Every reachable `extern`.
+    pub externs: BTreeSet<DefPath>,
+    /// Each definition that uses an extern without being a safe wrapper with a
+    /// deterministic model, beside one extern it uses. A run reaching any of
+    /// them cannot be recorded or replayed.
+    pub unmodeled: BTreeMap<DefPath, DefPath>,
 }
 
 impl SemanticProgram {
@@ -49,6 +62,7 @@ impl QueryEngine {
             dependencies: vec![],
         }];
         let mut visited = BTreeSet::new();
+        let mut uses = BTreeMap::new();
         let mut pending: Vec<_> = roots.into_iter().collect();
         while let Some(path) = pending.pop() {
             if !visited.insert(path.clone()) {
@@ -132,6 +146,7 @@ impl QueryEngine {
                 dependencies.extend(declaration.drop.iter().cloned());
             }
             pending.extend(dependencies.iter().cloned());
+            uses.insert(path.clone(), dependencies.clone());
             let mut dependencies: Vec<_> = dependencies.iter().map(ToString::to_string).collect();
             dependencies.push("$hirsel/runtime@1".into());
             nodes.push(ProgramNode {
@@ -143,7 +158,36 @@ impl QueryEngine {
         Ok(SemanticProgram {
             nodes,
             definitions: visited,
+            uses,
         })
+    }
+
+    /// The externs `entry` reaches and the definitions using them outside a
+    /// deterministic safe wrapper.
+    pub fn foreign_use(&mut self, entry: &DefPath) -> Result<ForeignUse, QueryError> {
+        let program = self.semantic_program([entry.clone()])?;
+        let mut foreign = ForeignUse::default();
+        for path in &program.definitions {
+            if matches!(&self.item_signature(path)?.value.kind, SignatureKind::Function(f) if f.foreign.is_some())
+            {
+                foreign.externs.insert(path.clone());
+            }
+        }
+        for (user, uses) in &program.uses {
+            let Some(called) = uses.iter().find(|d| foreign.externs.contains(*d)) else {
+                continue;
+            };
+            let modeled = self
+                .item_signature(user)?
+                .value
+                .metadata
+                .wrapper
+                .is_some_and(|w| w.deterministic);
+            if !modeled {
+                foreign.unmodeled.insert(user.clone(), called.clone());
+            }
+        }
+        Ok(foreign)
     }
 
     fn semantic_tokens(

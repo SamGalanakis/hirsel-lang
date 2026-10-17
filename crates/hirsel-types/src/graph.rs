@@ -1193,7 +1193,6 @@ mod shape_tests {
                     abi: "c".into(),
                     blocking: true,
                     aliasing_contract: "alias".into(),
-                    deterministic_model: Some(path("model")),
                 })
             },
         ] {

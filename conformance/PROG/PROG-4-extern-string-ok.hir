@@ -1,0 +1,4 @@
+// rule: PROG-4
+// expect: accept
+/// Reads the text during the call and retains nothing.
+extern "c" fn length(u: Unsafe, text: Bytes) -> u64

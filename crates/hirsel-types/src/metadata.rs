@@ -17,22 +17,26 @@ pub struct DeclarationSite {
     pub definition: ast::DefPath,
     pub name_span: Span,
 }
+/// A package's `unsafe ffi` manifest metadata (PROG-4).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct UnsafeFfi {
+    /// The package's declared safe wrappers.
+    pub wrappers: BTreeMap<ast::DefPath, ForeignWrapper>,
+}
 /// Metadata comes from the manifest and written foreign contract, never a body.
-/// The package/wrapper spelling remains spec issue #6; these are explicit build inputs.
 #[derive(Clone, Debug, Default)]
 pub struct Metadata {
     pub definitions: BTreeMap<ast::DefPath, DefinitionMetadata>,
     /// All module declarations in source order. Empty uses the tree item order.
     pub declarations: Vec<DeclarationSite>,
-    pub unsafe_ffi: bool,
+    /// The selected packages marked `unsafe ffi`.
+    pub unsafe_ffi: BTreeMap<ast::PackageId, UnsafeFfi>,
     /// Canonical library identities; matching a spelling is insufficient.
     pub unsafe_capability: Option<ast::DefPath>,
     pub result_type: Option<ast::DefPath>,
     pub tasks_capability: Option<ast::DefPath>,
     pub scope_capability: Option<ast::DefPath>,
     pub heap: Option<HeapRole>,
-    pub exported_c: bool,
-    pub foreign: Option<ForeignContract>,
 }
 /// Persistent semantic declaration metadata. Locations/build manifest maps stay outside.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,7 +44,8 @@ pub struct SignatureMetadata {
     pub visibility: ast::Visibility,
     pub alias: bool,
     pub unsafe_ffi: bool,
-    pub exported_c: bool,
+    /// The trusted safe-wrapper declaration of the package manifest (PROG-4).
+    pub wrapper: Option<ForeignWrapper>,
     pub roles: NominalRoles,
     /// Intrinsic declaration constraints, supplied by the declaring registry.
     /// Ordinary declarations have no schema constraints.
@@ -52,7 +57,7 @@ impl Default for SignatureMetadata {
             visibility: ast::Visibility::Private,
             alias: false,
             unsafe_ffi: false,
-            exported_c: false,
+            wrapper: None,
             roles: NominalRoles::default(),
             schema: vec![],
         }

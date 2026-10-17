@@ -22,13 +22,13 @@ use hirsel_tir::{
 use hirsel_types::{
     Allocation, AllocationTarget, AuthoritySummary, AuthorityTerm, BinderRef, Brand,
     CapabilityKind, Contract, Destination, DropAllocation, ErasedCaptures, Field, FieldId,
-    ForeignContract, FunctionType, GenericArgument, GenericParameter, HeapRole, Layout,
-    LoopSourceDeclaration, Modes, Multiplicity, NameSite, NominalRoles, Origin, OriginRoot,
+    ForeignContract, ForeignWrapper, FunctionType, GenericArgument, GenericParameter, HeapRole,
+    Layout, LoopSourceDeclaration, Modes, Multiplicity, NameSite, NominalRoles, Origin, OriginRoot,
     ParamId, Parameter, ProtocolAssociation, Reach, RegionId, Relation, RelationPlace,
     ScalarDomain, SchemaConstraint, Sendability, SendabilityRequirement, SharedPath, SharedSlice,
     Signature, SignatureDependency, SignatureKind, SignatureMetadata, Size, SizeParamId,
     StatePromise, Type, TypeDefinition, TypeId, TypeKind, TypeParamId, TypeStore, Uniqueness,
-    UseKind, Uses, Variant, VariantId,
+    UseKind, Uses, Variant, VariantId, WrapperKind,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -491,9 +491,10 @@ snapshot_struct!(Contract {
 snapshot_struct!(ForeignContract {
     abi,
     blocking,
-    aliasing_contract,
-    deterministic_model
+    aliasing_contract
 } in Cx);
+snapshot_enum!(WrapperKind { Pure, Handle, Effect } in Cx);
+snapshot_struct!(ForeignWrapper { kind, deterministic } in Cx);
 snapshot_struct!(StatePromise {
     selector,
     advance_only,
@@ -574,7 +575,7 @@ snapshot_struct!(SignatureMetadata {
     visibility,
     alias,
     unsafe_ffi,
-    exported_c,
+    wrapper,
     roles,
     schema
 } in Cx);

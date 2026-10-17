@@ -14,8 +14,9 @@ annotations, and its `fact` module owns private predicate conventions.
 interner, FileContext, shared Resolution, shared Metadata and ordered declaration
 sites for the queried owner. Metadata supplies
 public visibility and alias status per DefPath, canonical Unsafe/Result roles,
-package unsafe_ffi, exported_c and
-an explicit ForeignContract; these facts are never read from bodies. Normalization
+the selected `unsafe ffi` packages and their declared safe wrappers; an extern's
+ForeignContract is its ABI and attached doc comment (PROG-4). These facts are never
+read from bodies. Normalization
 uses fixed grammar defaults and records all named-type/contract signature reads.
 The sibling body checker owns todo marking validation and incomplete-call checks.
 `hirsel_types::encoding::canonical_encoding` and `fingerprint` accept a Signature plus its dependency list;

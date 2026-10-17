@@ -85,6 +85,26 @@ pub struct CheckOutput {
     pub completion: CheckCompletion,
     pub sources: SourceMap,
     pub diagnostics: Vec<Diagnostic>,
+    /// Every selected package marked `unsafe ffi`, which `hirsel check` reports (PROG-4).
+    pub unsafe_ffi: Vec<UnsafeFfiPackage>,
+}
+/// A selected package's `unsafe ffi` manifest metadata (PROG-4).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnsafeFfiPackage {
+    pub package: hirsel_syntax::PackageId,
+    /// Native link inputs in manifest order.
+    pub link: Vec<LinkInput>,
+    /// Trusted and reported, never verified.
+    pub headers_checked: bool,
+    pub wrappers: std::collections::BTreeMap<DefPath, hirsel_types::ForeignWrapper>,
+}
+/// One native library an `unsafe ffi` package links against.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LinkInput {
+    /// `-l<name>`.
+    Library(String),
+    /// An archive, object or shared library, canonical.
+    File(std::path::PathBuf),
 }
 /// Completion is per check, carried beside all diagnostics obtained so far.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

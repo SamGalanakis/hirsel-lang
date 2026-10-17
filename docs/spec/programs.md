@@ -145,8 +145,69 @@ model; those declarations are trusted. Packages containing externs declare `unsa
 Foreign declarations are monomorphic and state an explicit aliasing contract. An
 `extern` outside a package marked `unsafe ffi` is PROG-4.
 
-**Unspecified:** the `unsafe ffi` package metadata, wrapper kind and model metadata, and the
-complete foreign ABI for `FnPtr` callbacks, exports and retention.
+**Package metadata.** A package manifest marks its package `unsafe ffi` with one more
+field, `"unsafe_ffi": {"link": [...], "headers_checked": false, "wrappers": [...]}`. `link`
+lists the native libraries its externs resolve against, in link order: a library name
+(`"z"`, linked as `-lz`) or a manifest-relative path to a `.a`, `.o` or `.so` file.
+`headers_checked` states whether the declarations were checked against the C headers; it
+is trusted and reported, never verified. Only the root launch manifest may select a package
+marked `unsafe ffi`, as itself or as a dependency; a dependency manifest selecting one is a
+tool-input error, so every foreign library of a program is chosen at its root.
+`hirsel check` reports each `unsafe ffi` package in the selected closure with its link
+inputs and `headers_checked`.
+
+```json
+"unsafe_ffi": {"link": ["z"], "headers_checked": false,
+               "wrappers": [{"module": ["zlib"], "name": "crc32", "kind": "pure",
+                             "model": "deterministic"}]}
+```
+
+**Aliasing contract.** An extern's doc comment is its aliasing contract
+([MEM-9](memory.md#mem-9-unsafe)); an extern without one is PROG-4.
+
+**Wrappers.** Each `wrappers` entry `{module, name, kind, model}` declares an ordinary
+function of the package a safe wrapper. `kind` is `"pure"` (its result depends only on its
+arguments), `"handle"` (it acts on foreign state reachable from the handles it is given) or
+`"effect"` (it acts on the host outside Hirsel's capabilities); `model` is
+`"deterministic"` (its results and effects are a function of its arguments) or `"none"`.
+Both are trusted. An entry naming no function of the package, or an extern, is a
+tool-input error.
+
+**Foreign ABI.** An extern is a direct call of the C function with its name in the
+platform C calling convention. Capability parameters are not passed. A sized integer or
+float passes as the C type of its width (`i32` as `int32_t`, `f64` as `double`); `Ptr[T]`
+and `FnPtr[...]` as pointers; a borrowed `Bytes` as two arguments, `const uint8_t *` and
+`size_t`; a `@layout(c)` or flat record as its address (read-only when borrowed, writable
+for `mut`); and a `mut` number or pointer as its writable address. A result is `()`
+(`void`), a sized numeric or a raw pointer.
+
+**Retention.** A borrowed or `mut` argument is valid only for the call; C must not retain
+it. `take` passes only numbers and pointers, whose transfer carries no release, so C never
+holds counted storage: taking a byte view or a record is PROG-4, and so is `mut` of a byte
+view. A foreign handle is a raw pointer held by a resource whose `drop` releases it through
+the library.
+
+**Callbacks.** A callback type is `FnPtr[fn(mut ctx: C, ...) -> R]` whose first parameter
+is the context and whose other parameters and result follow the extern rules. Any other
+`mut` parameter of an extern is a context `mut ctx: unique C`, passed as an opaque
+exclusive address that C only hands back to a callback; `unique` is canonical for a plain
+`C`. Every other `FnPtr`, a closure type `fn(...)`, and a context that is not `mut` are
+PROG-4. C calls a callback as `R (*)(void *ctx, ...)` on the calling thread during the
+extern call. A language failure inside a callback ends the process, as a failing
+`unsafe ffi` finalizer does ([FAIL-3](failure.md#fail-3-what-runs)): the C frames in
+between cannot run cleanup.
+
+**Exports.** Hirsel definitions are not exported to C: C reaches Hirsel code only through
+callbacks.
+
+**Determinism.** Foreign calls are outside DET-1. A run may be recorded and replayed only
+if every definition that calls an extern is a safe wrapper with a deterministic model, and
+replay calls that wrapper again; any other reachable use of an extern makes the program
+non-replayable, and recording or replaying it is a launch refusal naming that use.
+
+**Engines.** The reference interpreter does not call C: launching a program whose entry
+reaches an extern in the interpreter is a tooling refusal naming the extern. Native builds
+link the root's `unsafe ffi` libraries after the runtime.
 
 ### PROG-5: Topology
 

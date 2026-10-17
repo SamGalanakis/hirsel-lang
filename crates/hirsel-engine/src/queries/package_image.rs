@@ -20,6 +20,8 @@ pub(crate) struct ImagePackage {
 /// What an image is built from. Program files are placements only: their text
 /// and paths never enter an image or its identity.
 pub(crate) struct ImageInput {
+    /// Selected `unsafe ffi` packages; their manifests are in `manifests`.
+    pub unsafe_ffi: BTreeMap<PackageId, hirsel_types::UnsafeFfi>,
     pub environment: QueryEnvironment,
     pub limits: hirsel_interp::Limits,
     pub manifests: BTreeMap<PackageId, ContentHash>,
@@ -206,13 +208,16 @@ impl PackageImage {
         let mut engine = QueryEngine::new(input.environment.clone(), adapters);
         engine.comptime_limits = input.limits;
         engine.package_manifests = input.manifests.clone();
-        engine
-            .adapters
-            .compiler_state
-            .as_ref()
-            .expect("package images need compiler state")
-            .borrow_mut()
-            .package_exposures = input.exposures.clone();
+        {
+            let mut state = engine
+                .adapters
+                .compiler_state
+                .as_ref()
+                .expect("package images need compiler state")
+                .borrow_mut();
+            state.package_exposures = input.exposures.clone();
+            state.signature_metadata.unsafe_ffi = input.unsafe_ffi.clone();
+        }
         for (path, _, text) in &input.files {
             engine
                 .sources

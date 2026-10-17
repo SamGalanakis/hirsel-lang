@@ -36,7 +36,7 @@ pub fn canonical_encoding(
         visibility,
         alias,
         unsafe_ffi,
-        exported_c,
+        wrapper,
         roles,
         schema,
     } = metadata;
@@ -57,7 +57,22 @@ pub fn canonical_encoding(
     });
     e.boolean(*alias);
     e.boolean(*unsafe_ffi);
-    e.boolean(*exported_c);
+    // None encodes as the retired exported-C flag's false.
+    e.option(
+        wrapper.as_ref(),
+        |e,
+         ForeignWrapper {
+             kind,
+             deterministic,
+         }| {
+            e.tag(match kind {
+                WrapperKind::Pure => "pure",
+                WrapperKind::Handle => "handle",
+                WrapperKind::Effect => "effect",
+            });
+            e.boolean(*deterministic);
+        },
+    );
     e.option(unsafe_capability.as_ref(), |e, p| e.path(p));
     e.option(result_type.as_ref(), |e, p| e.path(p));
     e.option(tasks_capability.as_ref(), |e, p| e.path(p));
@@ -714,13 +729,11 @@ impl Encoder {
             abi,
             blocking,
             aliasing_contract,
-            deterministic_model,
         }) = foreign
         {
             self.tag(abi);
             self.boolean(*blocking);
             self.tag(aliasing_contract);
-            self.option(deterministic_model.as_ref(), |e, p| e.path(p));
         }
         Ok(())
     }

@@ -2328,3 +2328,31 @@ fn host_quiescence_matches_simulation_and_retains_waits_without_cleanup() {
         }
     }
 }
+#[test]
+fn check_reports_each_unsafe_ffi_package_in_both_formats() {
+    let path = file(
+        "/// Reads its arguments and retains nothing.\nextern \"c\" fn demo_add(u: Unsafe, a: i32, b: i32) -> i32\n",
+    );
+    let sidecar = format!("{}.json", path.display());
+    std::fs::write(&sidecar, format!(r#"{{"schema":1,"package":{{"name":"app","version":"1"}},"entry":{{"module":[],"name":"main"}},"sources":[{{"path":"{}","module":[]}}],"dependencies":[],"unsafe_ffi":{{"link":["demo"],"headers_checked":false,"wrappers":[]}}}}"#, path.display())).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("check")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "note: app@1 is an unsafe ffi package (links -ldemo; headers not checked)\n"
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["check", "--json"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "{\"schema_version\":1,\"unsafe_ffi_package\":{\"headers_checked\":false,\"link\":[\"-ldemo\"],\"name\":\"app\",\"version\":\"1\"}}\n"
+    );
+}

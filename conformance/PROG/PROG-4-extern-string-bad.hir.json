@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "PROG-4-extern-string-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "unsafe_ffi": {
+    "link": [],
+    "headers_checked": false,
+    "wrappers": []
+  }
+}

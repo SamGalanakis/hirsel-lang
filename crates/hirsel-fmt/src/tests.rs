@@ -1181,7 +1181,10 @@ fn all_declaration_bodies_and_resource_drop() {
         ItemKind::Function {
             signature: FunctionSyntax::default(),
             body: None,
-            abi: Some("\"c\"".into()),
+            abi: Some(hirsel_syntax::ForeignAbi {
+                literal: "\"c\"".into(),
+                contract: None,
+            }),
         },
     );
     let x = f.value("x");

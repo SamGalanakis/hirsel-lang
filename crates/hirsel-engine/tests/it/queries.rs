@@ -113,7 +113,10 @@ impl ParserPhase for Fake {
                 kind: ItemKind::Function {
                     signature: FunctionSyntax::default(),
                     body: Some(body),
-                    abi: Some(line[..line.find('{').unwrap()].into()),
+                    abi: Some(hirsel_syntax::ForeignAbi {
+                        literal: line[..line.find('{').unwrap()].into(),
+                        contract: None,
+                    }),
                 },
             });
             offset += line.len();
@@ -181,7 +184,7 @@ impl SignaturePhase for Fake {
         let fingerprint = match &item.kind {
             ItemKind::Function {
                 abi: Some(header), ..
-            } => ContentHash::of_bytes(header.as_bytes()),
+            } => ContentHash::of_bytes(header.literal.as_bytes()),
             _ => unreachable!(),
         };
         let mut types = TypeStore::default();
@@ -538,6 +541,7 @@ fn missing_stages_remain_unavailable_and_diagnostic_sources_survive_edits_on_com
 
         sources: engine.sources.clone(),
         diagnostics,
+        unsafe_ffi: vec![],
     };
     assert_eq!(output.sources.file(old).unwrap().text(), "fn a () { 1 }\n");
     assert_eq!(
@@ -590,7 +594,7 @@ impl SignaturePhase for ContractSignatures {
         else {
             unreachable!()
         };
-        let mut fingerprint = ContentHash::of_bytes(header.as_bytes());
+        let mut fingerprint = ContentHash::of_bytes(header.literal.as_bytes());
         let mut contracts = vec![];
         if item.definition == path("a") {
             let used = provider.signature(&path("contract"))?;

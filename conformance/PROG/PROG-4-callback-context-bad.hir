@@ -1,0 +1,13 @@
+// rule: PROG-4
+// expect: reject PROG-4 at line 8
+type Count {
+  calls: u32,
+}
+
+/// Calls each once during the call and retains neither the callback nor ctx.
+extern "c" fn each(
+  u: Unsafe,
+  f: FnPtr[fn(ctx: Count, x: i32) -> i32],
+  mut ctx: unique Count,
+  n: i32
+) -> ()

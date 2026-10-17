@@ -15,6 +15,8 @@ pub struct LoadedProgram {
     pub files: Vec<(FileId, FileContext)>,
     pub entry: DefPath,
     pub primary: FileId,
+    /// The selected packages marked `unsafe ffi`, in package order (PROG-4).
+    pub unsafe_ffi: Vec<UnsafeFfiPackage>,
     packages: Vec<crate::package_cache::PackageRevision>,
     cache: PackageCache,
     indexed_revision: u64,
@@ -70,6 +72,7 @@ impl LoadedProgram {
                 diagnostics: select_diagnostics(diagnostics, Some(&self.engine.sources)),
                 completion,
                 sources: self.engine.sources.clone(),
+                unsafe_ffi: self.unsafe_ffi.clone(),
             });
         }
         let mut outputs = BTreeMap::new();
@@ -223,6 +226,7 @@ impl LoadedProgram {
             diagnostics: select_diagnostics(diagnostics, Some(&self.engine.sources)),
             completion,
             sources: self.engine.sources.clone(),
+            unsafe_ffi: self.unsafe_ffi.clone(),
         })
     }
     pub fn check_for_execution(&mut self) -> Result<(), ToolError> {
@@ -236,6 +240,23 @@ impl LoadedProgram {
             }
         });
         result.map_err(|error| self.error(error))
+    }
+    /// The reference interpreter calls no C: a program whose entry reaches an
+    /// extern refuses before entry (PROG-4).
+    pub fn refuse_foreign_interpretation(&mut self) -> Result<(), ToolError> {
+        // Externs check only inside `unsafe ffi` packages.
+        if self.unsafe_ffi.is_empty() {
+            return Ok(());
+        }
+        let entry = self.entry.clone();
+        let foreign = self.engine.foreign_use(&entry).map_err(|e| self.error(e))?;
+        match foreign.externs.first() {
+            Some(extern_) => Err(ToolError::Runtime(format!(
+                "launch: the reference interpreter does not call C, and {extern_} is an \
+                 extern \"c\" function; build or run the program natively (PROG-4)"
+            ))),
+            None => Ok(()),
+        }
     }
     pub fn error(&self, error: QueryError) -> ToolError {
         ToolError::Query {
@@ -333,6 +354,7 @@ pub(crate) fn load_program_source_with_cache(
                 files: vec![(file, default_context())],
                 entry: entry_path(&default_context()),
                 primary: file,
+                unsafe_ffi: vec![],
                 packages: vec![],
                 cache: cache.clone(),
                 indexed_revision: 0,
@@ -343,6 +365,7 @@ pub(crate) fn load_program_source_with_cache(
             files: vec![(file, default_context())],
             entry: entry_path(&default_context()),
             primary: file,
+            unsafe_ffi: vec![],
             packages: vec![],
             cache: cache.clone(),
             indexed_revision: 0,
@@ -432,7 +455,32 @@ pub(crate) fn load_program_source_with_cache(
             diagnostics: None,
         });
     }
+    let unsafe_ffi: Vec<UnsafeFfiPackage> = graph
+        .packages
+        .iter()
+        .filter_map(|(id, p)| {
+            let (link, headers_checked, wrappers) = p.unsafe_ffi.clone()?;
+            Some(UnsafeFfiPackage {
+                package: id.clone(),
+                link,
+                headers_checked,
+                wrappers,
+            })
+        })
+        .collect();
+    let unsafe_ffi_metadata: BTreeMap<_, _> = unsafe_ffi
+        .iter()
+        .map(|p| {
+            (
+                p.package.clone(),
+                hirsel_types::UnsafeFfi {
+                    wrappers: p.wrappers.clone(),
+                },
+            )
+        })
+        .collect();
     let input = crate::queries::ImageInput {
+        unsafe_ffi: unsafe_ffi_metadata.clone(),
         environment: QueryEnvironment {
             package_manifest_hash: ContentHash::of_bytes(b"hirsel.package-image.v1"),
             ..environment.clone()
@@ -469,17 +517,20 @@ pub(crate) fn load_program_source_with_cache(
     let mut engine = QueryEngine::new(environment, compiler.adapters());
     engine.comptime_limits = limits;
     engine.package_manifests = manifests;
-    engine
-        .adapters
-        .compiler_state
-        .as_ref()
-        .unwrap()
-        .borrow_mut()
-        .package_exposures = graph
-        .packages
-        .iter()
-        .map(|(id, p)| (id.clone(), p.exposures.clone()))
-        .collect();
+    {
+        let mut state = engine
+            .adapters
+            .compiler_state
+            .as_ref()
+            .unwrap()
+            .borrow_mut();
+        state.package_exposures = graph
+            .packages
+            .iter()
+            .map(|(id, p)| (id.clone(), p.exposures.clone()))
+            .collect();
+        state.signature_metadata.unsafe_ffi = unsafe_ffi_metadata;
+    }
     let mut primary = None;
     let mut ids = Vec::new();
     for ((source, context), text) in files.iter().zip(texts) {
@@ -498,6 +549,7 @@ pub(crate) fn load_program_source_with_cache(
         files: ids,
         entry,
         primary: primary.ok_or_else(|| invalid("missing primary source"))?,
+        unsafe_ffi,
         packages: vec![],
         cache: cache.clone(),
         indexed_revision: 0,
@@ -513,6 +565,23 @@ pub(crate) fn load_program_source_with_cache(
             .engine
             .reparse_file(*file, context)
             .map_err(|e| program.error(e))?;
+    }
+    // A declared wrapper names an ordinary function of its own package.
+    for package in &program.unsafe_ffi {
+        let functions: BTreeMap<_, _> = program
+            .files
+            .iter()
+            .filter(|(_, c)| c.package == package.package)
+            .flat_map(|(file, _)| program.engine.file_functions(*file))
+            .collect();
+        for wrapper in package.wrappers.keys() {
+            if functions.get(wrapper) != Some(&false) {
+                return Err(invalid(&format!(
+                    "unsafe_ffi wrapper {wrapper} is not a non-extern function of {}@{}",
+                    package.package.name, package.package.version
+                )));
+            }
+        }
     }
     for mut revision in revisions {
         revision.proven = image.proven(&revision.package);
@@ -606,7 +675,14 @@ struct SelectedPackage {
     exposures: Vec<DependencyExposure>,
     entry: Option<DefPath>,
     dependencies: Vec<PackageId>,
+    unsafe_ffi: Option<ForeignManifest>,
 }
+/// `unsafe_ffi`: link inputs, headers_checked and wrappers (PROG-4).
+type ForeignManifest = (
+    Vec<LinkInput>,
+    bool,
+    BTreeMap<DefPath, hirsel_types::ForeignWrapper>,
+);
 #[derive(Default)]
 struct Graph {
     packages: BTreeMap<PackageId, SelectedPackage>,
@@ -663,7 +739,14 @@ impl Graph {
             .map_err(|e| invalid(&format!("{}: {e}", path.display())))?;
         let object = object_value(
             &value.0,
-            &["schema", "package", "sources", "dependencies", "entry"],
+            &[
+                "schema",
+                "package",
+                "sources",
+                "dependencies",
+                "entry",
+                "unsafe_ffi",
+            ],
         )?;
         if object.get("schema").and_then(Value::as_u64) != Some(1) {
             return Err(invalid("package schema must be 1"));
@@ -725,6 +808,13 @@ impl Graph {
                 &base.join(string(required(d, "manifest")?)?),
                 Some(&expected),
             )?;
+            // Every foreign library of a program is chosen by its root (PROG-4).
+            if self.active.len() > 1 && self.packages[&selected].unsafe_ffi.is_some() {
+                return Err(invalid(&format!(
+                    "only the root launch manifest may select the unsafe ffi package {}@{}",
+                    selected.name, selected.version
+                )));
+            }
             dependencies.push(selected.clone());
             // Module heads are source conveniences; package/version identity is
             // still pinned by this dependency's manifest selection.
@@ -757,6 +847,10 @@ impl Graph {
                 }
             }
         }
+        let unsafe_ffi = object
+            .get("unsafe_ffi")
+            .map(|v| foreign_manifest(v, base, &package))
+            .transpose()?;
         self.active.pop();
         self.packages.insert(
             package.clone(),
@@ -767,10 +861,67 @@ impl Graph {
                 exposures,
                 entry,
                 dependencies,
+                unsafe_ffi,
             },
         );
         Ok(package)
     }
+}
+/// Parse `{"link": [..], "headers_checked": b, "wrappers": [..]}` (PROG-4).
+fn foreign_manifest(
+    v: &Value,
+    base: &Path,
+    package: &PackageId,
+) -> Result<ForeignManifest, ToolError> {
+    let o = object_value(v, &["link", "headers_checked", "wrappers"])?;
+    let link = array(required(o, "link")?)?
+        .iter()
+        .map(|l| {
+            let l = string(l)?;
+            if l.contains('/') || [".a", ".o", ".so"].iter().any(|s| l.ends_with(s)) {
+                Ok(LinkInput::File(std::fs::canonicalize(base.join(l))?))
+            } else if l
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.+-".contains(&b))
+                && !l.starts_with('-')
+            {
+                Ok(LinkInput::Library(l.into()))
+            } else {
+                Err(invalid(&format!("invalid link library {l:?}")))
+            }
+        })
+        .collect::<Result<Vec<_>, ToolError>>()?;
+    let headers_checked = required(o, "headers_checked")?
+        .as_bool()
+        .ok_or_else(|| invalid("headers_checked must be a boolean"))?;
+    let mut wrappers = BTreeMap::new();
+    for w in array(required(o, "wrappers")?)? {
+        let w = object_value(w, &["module", "name", "kind", "model"])?;
+        let definition = DefPath(hirsel_syntax::ItemPath {
+            package: package.clone(),
+            modules: modules(required(w, "module")?)?,
+            name: identifier(required(w, "name")?)?,
+        });
+        let kind = match string(required(w, "kind")?)? {
+            "pure" => hirsel_types::WrapperKind::Pure,
+            "handle" => hirsel_types::WrapperKind::Handle,
+            "effect" => hirsel_types::WrapperKind::Effect,
+            other => return Err(invalid(&format!("unknown wrapper kind {other:?}"))),
+        };
+        let deterministic = match string(required(w, "model")?)? {
+            "deterministic" => true,
+            "none" => false,
+            other => return Err(invalid(&format!("unknown wrapper model {other:?}"))),
+        };
+        let wrapper = hirsel_types::ForeignWrapper {
+            kind,
+            deterministic,
+        };
+        if wrappers.insert(definition.clone(), wrapper).is_some() {
+            return Err(invalid(&format!("duplicate wrapper {definition}")));
+        }
+    }
+    Ok((link, headers_checked, wrappers))
 }
 fn invalid(message: &str) -> ToolError {
     ToolError::Runtime(format!("package manifest: {message}"))

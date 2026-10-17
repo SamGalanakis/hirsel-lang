@@ -99,6 +99,28 @@ impl QueryEngine {
             .collect()
     }
 
+    /// Every function of an indexed file, and whether it is an `extern`.
+    pub(crate) fn file_functions(&self, file: FileId) -> Vec<(DefPath, bool)> {
+        let Some((_, _, Ok(parsed))) = self.parsed.get(&file) else {
+            return vec![];
+        };
+        let tree = &parsed.value.tree;
+        parsed
+            .value
+            .roots
+            .iter()
+            .filter_map(|id| {
+                let item = &tree.items[id.0 as usize];
+                match &item.kind {
+                    ItemKind::Function { abi, .. } => {
+                        Some((item.definition.clone(), abi.is_some()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     /// Lower and validate every executable body reachable from `roots`. This is
     /// the closure the semantic program revision encodes: calls, generic
     /// dictionary and function references, closures (bodies of their owner),

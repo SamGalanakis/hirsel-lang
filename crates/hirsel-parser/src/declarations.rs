@@ -256,9 +256,12 @@ impl Parser<'_> {
                 if !matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::String)) {
                     return self.fail(const { RuleId::of("PROG-4") }, "extern requires ABI string");
                 }
-                let text = self.text_at(0).to_owned();
+                let literal = self.text_at(0).to_owned();
                 self.pos += 1;
-                Some(text)
+                Some(ForeignAbi {
+                    literal,
+                    contract: self.doc_comment(start),
+                })
             } else {
                 None
             };
@@ -343,6 +346,31 @@ impl Parser<'_> {
             attributes,
             kind,
         })
+    }
+    /// The doc comments directly before the item starting at significant
+    /// position `start`, without delimiters, joined by newlines (PROG-4).
+    fn doc_comment(&self, start: usize) -> Option<String> {
+        let first = *self.significant.get(start)?;
+        let mut docs = vec![];
+        for t in self.tokens[..first].iter().rev() {
+            match t.kind {
+                TokenKind::Trivia(TriviaKind::Space | TriviaKind::Newline) => {}
+                TokenKind::Trivia(TriviaKind::DocLine) => {
+                    let text = self.sources.slice(t.span)?;
+                    let text = text.strip_prefix("///")?;
+                    docs.push(text.strip_prefix(' ').unwrap_or(text).trim_end().to_owned());
+                }
+                TokenKind::Trivia(TriviaKind::DocBlock) => {
+                    let text = self.sources.slice(t.span)?;
+                    let text = text.strip_prefix("/**")?;
+                    docs.push(text.strip_suffix("*/").unwrap_or(text).trim().to_owned());
+                }
+                _ => break,
+            }
+        }
+        docs.reverse();
+        let text = docs.join("\n").trim().to_owned();
+        (!text.is_empty()).then_some(text)
     }
     fn validate_attributes(
         &mut self,

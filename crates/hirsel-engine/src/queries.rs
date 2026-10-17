@@ -8,6 +8,7 @@ pub(crate) use package_image::{ImageInput, ImagePackage, PackageImage};
 mod package_snapshot;
 mod positions;
 mod program_revision;
+pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
 mod signature_input;
 pub(crate) use dependencies::ExecutionReads;

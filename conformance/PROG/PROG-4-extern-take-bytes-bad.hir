@@ -1,0 +1,4 @@
+// rule: PROG-4
+// expect: reject PROG-4 at line 4
+/// Reads the bytes during the call and retains nothing.
+extern "c" fn length(u: Unsafe, take data: Bytes) -> u64

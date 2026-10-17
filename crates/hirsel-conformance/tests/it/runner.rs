@@ -47,6 +47,7 @@ impl Driver for Fake {
 
             sources,
             diagnostics: self.diagnostics.clone(),
+            unsafe_ffi: vec![],
         })
     }
     fn run(&self, _: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented> {

@@ -264,9 +264,6 @@ than supply a language-visible answer.
 - Constructor-tail loop eligibility ([LANG-10](language.md#lang-10-recursion)).
 - Complete layout composition rules for `@soa`, variants and flat types, and the native
   data ABI ([MEM-7](memory.md#mem-7-layout)).
-- The complete foreign-function ABI: `unsafe ffi` package metadata, wrapper kind and
-  model declarations, `FnPtr` callbacks, exports and retention
-  ([PROG-4](programs.md#prog-4-interop)).
 
 ## Prior art
 
