@@ -361,6 +361,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
         "//third-party:serde_json",
