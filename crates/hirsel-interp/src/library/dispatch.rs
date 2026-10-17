@@ -60,7 +60,12 @@ impl Library {
         let completion = match replay {
             Some(bytes) => decode_stdin_completion(bytes)?,
             None if max == 0 => Err((2, 0)),
-            None => match self.simulation.fault("stdin.read") {
+            None => match self
+                .tasks
+                .canceled()
+                .map(Fault::Canceled)
+                .or_else(|| self.simulation.fault("stdin.read"))
+            {
                 Some(Fault::Canceled(cause)) => Err((1, cause)),
                 Some(Fault::Fault { code, .. }) => Err((0, code)),
                 Some(Fault::File { .. }) => return Err(invalid("file error supplied to stdin")),

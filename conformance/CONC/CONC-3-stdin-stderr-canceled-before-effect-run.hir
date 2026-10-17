@@ -1,0 +1,44 @@
+// rule: CONC-3
+// expect: run
+// Canceled input and stderr calls have no effect; the parent remains uncanceled.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let input = io.stdin(rt)?
+  let errors = io.stderr(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() -> bool {
+          let mut r = take receiver
+          let _ = channel.receive(tasks, mut r)
+          let mut buffer: List[u8] = []
+          let no_input: bool = match stdin.read(input, mut buffer, 1) {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          let no_output: bool = match err.print(errors, "unreachable") {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          no_input && no_output
+        }
+      )
+      task.cancel(s, h)
+      failure.check(task.await(s, take h), Arithmetic())
+    }
+  )
+  let mut buffer: List[u8] = []
+  let accepted_input: bool = match stdin.read(input, mut buffer, 1) {
+    Ok(_) => true,
+    _ => false,
+  }
+  let accepted_output: bool = match err.print(errors, "") {
+    Ok(()) => true,
+    _ => false,
+  }
+  failure.check(accepted_input && accepted_output, Arithmetic())
+  Ok(())
+}

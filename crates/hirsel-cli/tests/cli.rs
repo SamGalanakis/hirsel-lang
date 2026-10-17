@@ -1626,3 +1626,45 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }
+
+#[test]
+fn real_host_canceled_stdin_and_stderr_have_no_effects() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let source = file(
+        &include_str!(
+            "../../../conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir"
+        )
+        .replace(
+            "Ok(_) => true,",
+            "Ok(count) => count == 1 && buffer[0] == 120u8,",
+        ),
+    );
+    let record = run_record(
+        &source,
+        serde_json::json!({"io": {
+        "tasks":"tasks.cooperative@1", "stdin":"stdin.bytes@1", "stderr":"stderr.bytes@1", "dirs":[]
+    }, "args":[]}),
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--run")
+        .arg(&record)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"x").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
+}

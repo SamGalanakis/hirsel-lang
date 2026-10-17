@@ -230,7 +230,7 @@ impl<'a> HostLibrary<'a> {
             test_seed: record.inputs.test_seed,
             ..Default::default()
         };
-        let (provider, readiness) = hirsel_rt::net_host::CooperativeNet::new();
+        let (provider, readiness) = hirsel_rt::net_host::CooperativeNet::with_readiness();
         io.set_net_provider(provider);
         Ok(Self {
             readiness,
@@ -328,6 +328,11 @@ impl<'a> HostLibrary<'a> {
                 return Err(invalid());
             }
             return Ok(result);
+        }
+        // The library validates the handle/schema and returns Canceled without
+        // consuming input or publishing stderr. Destruction's entered task is shielded.
+        if matches!(name, "stdin.read" | "err.print") && self.library.cancellation().is_some() {
+            return self.library.call(call, cx);
         }
         let request = match name {
             "stdin.read" => R::ReadStdin {
@@ -757,7 +762,6 @@ impl<'a> HostLibrary<'a> {
                 "net.resolve"
                     | "net.connect"
                     | "net.connect_addr"
-                    | "net.listen"
                     | "net.accept"
                     | "net.read"
                     | "net.read_into"
@@ -770,7 +774,7 @@ impl<'a> HostLibrary<'a> {
             let e = NetError::Canceled(cause);
             match name {
                 "net.resolve" => C::Addresses(Err(e)),
-                "net.connect" | "net.connect_addr" | "net.listen" => C::NetHandle(Err(e)),
+                "net.connect" | "net.connect_addr" => C::NetHandle(Err(e)),
                 "net.accept" => C::Accepted(Err(e)),
                 "net.read" | "net.read_into" => C::NetBytes(Err(e)),
                 "net.write" => C::Count(Err(e)),

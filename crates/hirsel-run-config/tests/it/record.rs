@@ -495,6 +495,7 @@ fn known_provider_contracts_are_shared_by_live_and_replayed_runs() {
 #[test]
 fn unknown_versions_and_wrong_projection_contracts_refuse_with_supported_twins() {
     for (field, contract) in [
+        ("io.tasks", ProviderContract::TasksCooperative),
         ("io.stdin", ProviderContract::StdinBytes),
         ("io.stderr", ProviderContract::StderrBytes),
         ("io.stdout", ProviderContract::StdoutBytes),
@@ -512,6 +513,7 @@ fn unknown_versions_and_wrong_projection_contracts_refuse_with_supported_twins()
             let mut record = empty();
             let mut io = IoGrants::default();
             let slot = match field {
+                "io.tasks" => &mut io.tasks,
                 "io.stdin" => &mut io.stdin,
                 "io.stderr" => &mut io.stderr,
                 "io.stdout" => &mut io.stdout,
@@ -529,6 +531,7 @@ fn unknown_versions_and_wrong_projection_contracts_refuse_with_supported_twins()
                 })
             );
             let slot = match field {
+                "io.tasks" => &mut io.tasks,
                 "io.stdin" => &mut io.stdin,
                 "io.stderr" => &mut io.stderr,
                 "io.stdout" => &mut io.stdout,

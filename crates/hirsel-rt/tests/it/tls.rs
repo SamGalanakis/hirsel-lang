@@ -432,3 +432,40 @@ fn tls_abi_uses_the_core_roots_and_result_layouts() {
         (16, 4)
     );
 }
+
+#[test]
+fn cooperative_tls_retains_handshake_and_plaintext_across_readiness() {
+    use hirsel_rt::net_host::{CooperativeNet, Readiness};
+    struct Pump {
+        io: RealIo,
+        ready: Readiness,
+        next: u64,
+    }
+    impl Adapter for Pump {
+        fn tls_roots(&mut self, pem: &[u8]) {
+            self.io.tls_roots(pem);
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            self.next += 1;
+            self.ready.enter(self.next);
+            loop {
+                let result = self.io.call(request.clone());
+                if result == Err(AdapterError::Blocked) {
+                    assert!(self.ready.wait().unwrap());
+                } else {
+                    self.ready.finish(self.next);
+                    return result;
+                }
+            }
+        }
+    }
+    for (truncated, tls12) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (port, server) = server(truncated, tls12);
+        let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+        io.set_net_rules(rules(port));
+        let (provider, ready) = CooperativeNet::with_readiness();
+        io.set_net_provider(provider);
+        exchange(&mut Pump { io, ready, next: 0 }, port, truncated);
+        server.join().unwrap();
+    }
+}

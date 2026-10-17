@@ -36,16 +36,22 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
     n,
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
   ) ? network_error
-  task.scope(io.tasks(rt) ? grant_error, fn(s: Scope) -> Result[(), ServerError] {
-    let mut accepting = take listener
-    while true {
-      let (stream, _) = net.accept(n, mut accepting) ? network_error
-      let child = task.async(s, fn() -> Result[(), ServerError] {
-        serve(n, take stream)
-      })
-      task.detach(s, take child)
+  task.scope(
+    io.tasks(rt) ? grant_error,
+    fn(s: Scope) -> Result[(), ServerError] {
+      let mut accepting = take listener
+      while true {
+        let (stream, _) = net.accept(n, mut accepting) ? network_error
+        let child = task.async(
+          s,
+          fn() -> Result[(), ServerError] {
+            serve(n, take stream)
+          }
+        )
+        task.detach(s, take child)
+      }
+      Ok(())
     }
-    Ok(())
-  })?
+  )?
   Ok(())
 }

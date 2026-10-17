@@ -42,8 +42,8 @@ impl Readiness {
     pub fn finish(&self, token: u64) {
         self.0.borrow_mut().pending.remove(&token);
     }
-    /// A partially published write or TLS exchange must complete with its own
-    /// outcome; it cannot be reported as a cancellation with no effect.
+    /// After a packet is sent or a write is accepted, the operation must complete
+    /// with its own outcome rather than report an effect-free cancellation.
     pub fn cancellable(&self, token: u64) -> bool {
         self.0
             .borrow()
@@ -122,7 +122,7 @@ pub struct CooperativeNet {
     timeouts: BTreeMap<u64, (NetTimeout, NetTimeout)>,
 }
 impl CooperativeNet {
-    pub fn new() -> (Self, Readiness) {
+    pub fn with_readiness() -> (Self, Readiness) {
         let readiness = Readiness::default();
         (
             Self {
@@ -184,7 +184,7 @@ impl CooperativeNet {
                     let _ = send.send(resolve(&host, port));
                     let _ = notify.write_all(&[1]);
                 }) {
-                Ok(_) => {}
+                Ok(_) => pending.committed = true,
                 Err(_) => return Ok(Err(NetError::Fault(1))),
             }
             pending.interest = Some((wake.as_raw_fd(), libc::POLLIN));
@@ -251,6 +251,9 @@ impl CooperativeNet {
             let (storage, len) = to_c(address);
             // SAFETY: storage contains a sockaddr of len bytes.
             let n = unsafe { libc::connect(fd, (&raw const storage).cast(), len) };
+            // Once connect may have sent a packet, cancellation cannot promise
+            // no effect (core network contract), even while readiness is pending.
+            pending.committed = true;
             if n == 0 {
                 drop(pending);
                 self.host.sockets.insert(id, socket);
@@ -471,12 +474,12 @@ impl NetProvider for CooperativeNet {
             Ok(fd) => fd,
             Err(e) => return Ok(Err(e)),
         };
-        if !self.host.tls.contains_key(&stream) {
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.host.tls.entry(stream) {
             let conn = match crate::net_tls::client(name, roots, self.host.pem.take()) {
                 Ok(c) => c,
                 Err(e) => return Ok(Err(e)),
             };
-            self.host.tls.insert(stream, conn);
+            entry.insert(conn);
         }
         loop {
             match self.flush_tls(stream)? {
@@ -515,7 +518,11 @@ impl NetProvider for CooperativeNet {
             Ok(()) => {}
             Err(e) => return Ok(Err(e)),
         }
-        Ok(set_nonblocking(self.host.socket(id).unwrap(), true))
+        if let Err(e) = set_nonblocking(self.host.socket(id).unwrap(), true) {
+            self.host.close(id);
+            return Ok(Err(e));
+        }
+        Ok(Ok(()))
     }
     fn accept(&mut self, listener: u64, id: u64) -> Provided<SocketAddr> {
         // The listener is nonblocking. accept4 itself never waits.
