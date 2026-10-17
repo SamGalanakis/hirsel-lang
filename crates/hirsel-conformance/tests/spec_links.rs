@@ -143,23 +143,23 @@ fn every_corpus_header_cites_a_defined_rule() {
 /// Rule IDs the code cites: a defined family prefix, `-`, and a valid number,
 /// as a whole word.
 fn cited(text: &str, prefixes: &BTreeSet<&str>) -> Vec<String> {
-    let bytes = text.as_bytes();
-    let word = |i: usize| {
-        bytes
-            .get(i)
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-    };
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut ids = vec![];
     for (dash, _) in text.match_indices('-') {
         let start = text[..dash]
-            .rfind(|c: char| !c.is_ascii_uppercase())
-            .map_or(0, |i| i + 1);
+            .char_indices()
+            .rfind(|(_, c)| !c.is_ascii_uppercase())
+            .map_or(0, |(i, c)| i + c.len_utf8());
         let end = dash
             + 1
             + text[dash + 1..]
                 .find(|c: char| !c.is_ascii_digit())
                 .unwrap_or(text.len() - dash - 1);
-        if start == dash || end == dash + 1 || (start > 0 && word(start - 1)) || word(end) {
+        if start == dash
+            || end == dash + 1
+            || text[..start].chars().next_back().is_some_and(word)
+            || text[end..].chars().next().is_some_and(word)
+        {
             continue;
         }
         if prefixes.contains(&text[start..dash]) && RuleId::new(&text[start..end]).is_ok() {
@@ -243,6 +243,16 @@ fn every_relative_spec_link_resolves() {
         broken.is_empty(),
         "spec links that resolve nowhere: {broken:#?}"
     );
+}
+
+#[test]
+fn cited_rejects_a_non_ascii_rule_prefix() {
+    assert!(cited("ÖWN-6", &BTreeSet::from(["OWN"])).is_empty());
+}
+
+#[test]
+fn cited_accepts_an_ascii_rule_id_next_to_utf8() {
+    assert_eq!(cited("🐑 OWN-6 é", &BTreeSet::from(["OWN"])), ["OWN-6"]);
 }
 
 #[test]
