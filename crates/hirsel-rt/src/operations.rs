@@ -72,7 +72,10 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
     }
     if matches!(
         name.as_str(),
-        "arena.with"
+        "slots.insert"
+            | "slots.get"
+            | "slots.remove"
+            | "arena.with"
             | "failure.check"
             | "sorted_map.insert"
             | "$intrinsic.SortedMapOrder_open"
@@ -230,6 +233,7 @@ pub(crate) const MAP_BODIES: &[&str] = &[
 ];
 
 pub const INLINE_OPERATIONS: &[&str] = &[
+    "slots.empty",
     "bytes.from_list",
     "bytes.len",
     "map.empty",

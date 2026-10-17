@@ -299,7 +299,7 @@ fn simulation_input_errors_are_tool_errors() {
 #[test]
 fn unavailable_execution_preserves_stdout_before_the_tool_error() {
     let source = file(
-        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let s: Slots[u8] = slots.empty(); Ok(()) }",
+        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let text: String = copy_to(heap, \"gap\"); Ok(()) }",
     );
     let config = run_record(
         &source,

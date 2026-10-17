@@ -2,11 +2,6 @@
 conformance/MEM/MEM-11-shared-index-example.hir	Shared runtime
 conformance/MEM/MEM-11-thaw-last-root.hir	Shared runtime
 conformance/MEM/MEM-11-thaw-shared-root.hir	Shared runtime
-conformance/MEM/MEM-14-insert-keeps-brand.hir	Slots/container runtime
-conformance/MEM/MEM-14-remove-other-keeps-brand.hir	Slots/container runtime
-conformance/MEM/MEM-14-slot-example.hir	Slots/container runtime
-conformance/MEM/MEM-14-stale-after-remove.hir	Slots/container runtime
-conformance/MEM/MEM-14-stale-after-reuse.hir	Slots/container runtime
 conformance/MEM/MEM-4-copy-out.hir	arena/region runtime
 conformance/MEM/MEM-4-heap-keyword.hir	arena/region runtime
 conformance/MEM/MEM-6-empty-positive-cap.hir	arena/region runtime

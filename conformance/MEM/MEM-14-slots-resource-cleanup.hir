@@ -1,0 +1,25 @@
+// rule: MEM-14
+// expect: run
+// stdout: removed
+// stdout: retained
+// Removed resources transfer ownership; reused slots drop only their new payload.
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+  ()
+}
+
+fn probe(stdout: Stdout) {
+  let mut s: Slots[Trace] = slots.empty()
+  let first = slots.insert(mut s, Trace(stdout: stdout, text: "removed\n"))
+  let removed = slots.remove(mut s, first)
+  let second = slots.insert(mut s, Trace(stdout: stdout, text: "retained\n"))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  probe(io.stdout(rt)?)
+  Ok(())
+}

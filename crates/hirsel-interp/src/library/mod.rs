@@ -13,6 +13,7 @@ mod launch;
 pub use launch::{LaunchError, LaunchedExecution, core_runtime_types, launch, launch_with_runtime};
 
 mod callbacks;
+mod slots;
 
 mod cursors;
 

@@ -854,6 +854,9 @@ primary_operations! { self, call, context, name, a, value;
         if !a.is_empty() { return Err(invalid("heap operation arity")); }
         Value::Handle { kind: "$Heap".into(), id: 0 }
     },
+    Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
+        return super::slots::call(name, a).map(Some);
+    },
     Capability: "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
@@ -873,7 +876,7 @@ primary_operations! { self, call, context, name, a, value;
     Capability: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
     Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { return self.channel_call(name, &call, context).map(Some); },
     Capability: "mutex.create" | "mutex.with" | "atomic.create" | "atomic.load" | "atomic.store" => { return self.synchronization_call(name, &call, context).map(Some); },
-    Unavailable: "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Unavailable: "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" => {
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
         let result = self.simulation.net_call(name, &call, context).map(Some);

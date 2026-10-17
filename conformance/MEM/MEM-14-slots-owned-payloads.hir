@@ -1,0 +1,33 @@
+// rule: MEM-14
+// expect: run
+// stdout: ok
+// Removed payloads survive reuse and stale reads never acquire the new payload.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut s: Slots[List[Bytes]] = slots.empty()
+  let first = slots.insert(mut s, [b"first", b"kept"])
+  let removed = slots.remove(mut s, first)
+  let second = slots.insert(mut s, [b"second"])
+  let again = slots.remove(mut s, first)
+  let old = slots.get(s, first)
+  let current = slots.get(s, second)
+  let absent: Option[List[Bytes]] = None
+  let valid = removed == Some([b"first", b"kept"]) && old == absent && again == absent && current == Some(
+    [b"second"]
+  ) && slots.get(s, second) == Some([b"second"])
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

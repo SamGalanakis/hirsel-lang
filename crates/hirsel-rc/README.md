@@ -546,3 +546,10 @@ existing inline layouts; their copies and ownership takes become plain reads
 and their drops disappear. A foreign child or escaping container keeps the entire
 class counted. Flat encodings read their inputs without retaining references,
 so they do not join those inputs' placement classes.
+
+Slots use library-owned `List[(u64, Option[T])]` storage and two-word
+`SlotId` values (index, generation). Insertion scans reusable vacancies before
+growing; removal transfers the Option and advances its generation.
+Generation zero is reserved: the first id uses one, and removal at the maximum
+wraps to zero and retires that vacancy. Reads check both words before observing
+the payload. Ordinary placement, COW, counting and drop passes own all storage.

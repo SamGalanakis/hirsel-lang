@@ -284,7 +284,7 @@ mod tests {
                 "hirsel-conformance-api-error-{}.hir",
                 std::process::id()
             ));
-            fs::write(&path, "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let s: Slots[u8] = slots.empty(); Ok(()) }").unwrap();
+            fs::write(&path, "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let text: String = copy_to(heap, \"gap\"); Ok(()) }").unwrap();
             let (status, observation) = evaluate(
                 &path,
                 &Expect::Run {

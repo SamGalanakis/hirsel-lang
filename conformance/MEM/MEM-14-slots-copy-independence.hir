@@ -1,0 +1,29 @@
+// rule: MEM-14
+// expect: run
+// stdout: ok
+// A copied container has independent mutations and retains the original's payloads.
+fn output_error[E](take e: E) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut s: Slots[Bytes] = slots.empty()
+  let first = slots.insert(mut s, b"first")
+  let mut other = copy s
+  let second = slots.insert(mut other, b"second")
+  let valid = slots.get(s, first) == Some(b"first") && slots.get(other, second) == Some(
+    b"second"
+  )
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if valid {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

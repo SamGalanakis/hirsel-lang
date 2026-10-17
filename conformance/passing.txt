@@ -1394,6 +1394,7 @@ conformance/MEM/MEM-14-dynamic-list-read-fail.hir
 conformance/MEM/MEM-14-dynamic-list-read-run.hir
 conformance/MEM/MEM-14-dynamic-list-replace-fail.hir
 conformance/MEM/MEM-14-dynamic-list-replace-run.hir
+conformance/MEM/MEM-14-insert-keeps-brand.hir
 conformance/MEM/MEM-14-list-checked-index.hir
 conformance/MEM/MEM-14-list-out-of-bounds.hir
 conformance/MEM/MEM-14-move-ends-brand-bad.hir
@@ -1407,8 +1408,15 @@ conformance/MEM/MEM-14-owned-replacement-other-take.hir
 conformance/MEM/MEM-14-owned-replacement-repeated-copy.hir
 conformance/MEM/MEM-14-owned-replacement-self-copy.hir
 conformance/MEM/MEM-14-owned-replacement-self-move.hir
+conformance/MEM/MEM-14-remove-other-keeps-brand.hir
 conformance/MEM/MEM-14-replace-ends-brand-bad.hir
 conformance/MEM/MEM-14-replace-ends-brand-ok.hir
+conformance/MEM/MEM-14-slot-example.hir
+conformance/MEM/MEM-14-slots-copy-independence.hir
+conformance/MEM/MEM-14-slots-owned-payloads.hir
+conformance/MEM/MEM-14-slots-resource-cleanup.hir
+conformance/MEM/MEM-14-stale-after-remove.hir
+conformance/MEM/MEM-14-stale-after-reuse.hir
 conformance/MEM/MEM-14-wave1-all-callback-fail.hir
 conformance/MEM/MEM-14-wave1-all-callback-run.hir
 conformance/MEM/MEM-14-wave1-any-callback-fail.hir

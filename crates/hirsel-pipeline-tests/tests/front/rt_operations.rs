@@ -172,6 +172,9 @@ fn inventory_set_equality_and_digest_control() {
     }
     for name in [
         "arena.with",
+        "slots.insert",
+        "slots.get",
+        "slots.remove",
         "iter.from",
         "iter.map",
         "$intrinsic.ArrayConsume_open",
@@ -197,7 +200,6 @@ fn inventory_set_equality_and_digest_control() {
         "mutex.with",
         "atomic.load",
         "shared.thaw",
-        "slots.get",
     ] {
         assert!(matches!(
             native

@@ -48,6 +48,10 @@ through one lookup (`collection::find`), which first walks the key through the
 structural depth limit as a hash would: a key past it is MEM-3 Depth whatever
 the container holds. `map.get` returns a semantic copy of the stored value.
 
+Slots use generation-checked entries. Removal increments the generation; wrapping
+into reserved zero retires the vacancy. Insertion reuses an earlier vacancy before
+appending, and stale ids return None after removal and reuse.
+
 Task scopes, cooperative children, joins, cancellation and isolation execute through
 `tasks.rs` and the evaluator scheduler. `channels.rs` owns moved FIFO buffers,
 independent duplicated sender endpoints and suspended mutable receiver loans.

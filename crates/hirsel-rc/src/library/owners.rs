@@ -1,4 +1,4 @@
-//! The library's owner representations: the private shapes of `Map`, `Set` and `SortedMap`, the borrowed
+//! The library's owner representations: the private shapes of `Map`, `Set`, `SortedMap`, `Slots` and `SlotId`, the borrowed
 //! cursor, the three consuming-cursor records with their finalizer paths,
 //! the two string views and `StrPos`.
 //!
@@ -184,7 +184,7 @@ fn record(
     }
 }
 
-/// The library's owner representations: the four containers, the cursor
+/// The library's owner representations: the containers and SlotId, the cursor
 /// types and the string views. `signatures` are the program's
 /// registry declarations; a type the program does not declare gets no row.
 pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
@@ -251,6 +251,44 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
             "SortedMap",
             None,
             type_parameters(&["K", "V"]),
+            s,
+            shape,
+        ),
+    );
+
+    // A slot retains its generation even while vacant. Zero is reserved for
+    // retirement after the maximum generation is removed.
+    let mut s = Shape::default();
+    let element = s.parameter(0);
+    let generation = s.primitive(Primitive::U64);
+    let option = s.add(TypeKind::Named {
+        definition: DefPath::core("Option"),
+        arguments: vec![GenericArgument::Type(element)].into(),
+    });
+    let entry = s.add(TypeKind::Tuple(vec![generation, option].into()));
+    let entries = s.builtin(BuiltinType::List, &[entry]);
+    let shape = s.record(&[("entries", entries)]);
+    out.containers.insert(
+        Container::Slots,
+        record(
+            DefPath::core("Slots"),
+            "Slots",
+            None,
+            type_parameters(&["T"]),
+            s,
+            shape,
+        ),
+    );
+    let mut s = Shape::default();
+    let word = s.primitive(Primitive::U64);
+    let shape = s.add(TypeKind::Tuple(vec![word, word].into()));
+    out.containers.insert(
+        Container::SlotId,
+        record(
+            DefPath::core("SlotId"),
+            "SlotId",
+            None,
+            type_parameters(&["T"]),
             s,
             shape,
         ),
