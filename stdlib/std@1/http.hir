@@ -64,8 +64,7 @@ pub opaque resource type Request: noalloc_drop uses {Net} {
   redirects: u32,
   state: u8,
   sent_body: bool,
-  input: List[u8],
-  offset: u64,
+  input: std@1/bufio.Reader,
   body_kind: u8,
   remaining: u64,
   chunk_suffix: bool,
@@ -293,8 +292,7 @@ pub fn request(
       redirects: config.max_redirects,
       state: 0,
       sent_body: false,
-      input: [],
-      offset: 0,
+      input: std@1/bufio.new(4096),
       body_kind: 0,
       remaining: 0,
       chunk_suffix: false,
@@ -644,38 +642,37 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
   Ok(None())
 }
 
-// A borrowed request buffer becomes owned bytes for the scalar wire parser.
-fn http_owned_input(data: List[u8]) -> Bytes uses {} {
-  core@1/bytes.from_list(unique data)
+fn http_buffer_error(error: std@1/bufio.ReadError[NetError]) -> HttpError uses {} {
+  match error {
+    Source(e) => Net(e),
+    Limit() => HeadTooLarge(),
+    UnexpectedEof() => Truncated(),
+    InvalidUtf8() => Malformed(HeaderValue()),
+    InvalidRead() => Net(InvalidInput()),
+  }
 }
 
 fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
-  let mut unread: List[u8] = []
-  let mut i = r.offset
-  while i < core@1/list.len(r.input) {
-    core@1/list.push(mut unread, r.input[i])
-    i += 1
-  }
-  r.input = take unread
-  r.offset = 0
-  Ok(core@1/net.read(r.net, mut r.stream, mut r.input, max) ? http_net_error)
+  let n = r.net
+  Ok(
+    std@1/bufio.stream_read_more(n, mut r.stream, mut r.input, max) ? http_buffer_error
+  )
 }
 
 fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   while true {
-    let buf = http_owned_input(r.input)
-    let unread = core@1/bytes.slice(buf, r.offset, core@1/bytes.len(buf))
-    match http_parse_head(unread, r.config)? {
+    let buf = std@1/bufio.contents(r.input)
+    match http_parse_head(buf, r.config)? {
       Some((head, end)) => {
         if end > r.config.max_head_bytes {
           return Error(HeadTooLarge())
         }
-        r.offset += end
+        std@1/bufio.consume(mut r.input, end)
         return Ok(take head)
       },
       None() => (),
     }
-    let have = core@1/list.len(r.input) - r.offset
+    let have = std@1/bufio.buffered(r.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -790,23 +787,24 @@ pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
 // Zig Reader.State.body_remaining_chunk_len: head -> data -> suffix -> head.
 fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
   if r.chunk_suffix {
-    while core@1/list.len(r.input) - r.offset < 2 {
+    while std@1/bufio.buffered(r.input) < 2 {
       if http_read_more(mut r, 4096)? == 0 {
         return Error(Truncated())
       }
     }
-    if r.input[r.offset] != 13 || r.input[r.offset + 1] != 10 {
+    let suffix = std@1/bufio.contents(r.input)
+    if suffix[0] != 13 || suffix[1] != 10 {
       return Error(Chunk())
     }
-    r.offset += 2
+    std@1/bufio.consume(mut r.input, 2)
     r.chunk_suffix = false
   }
   while true {
-    let buf = http_owned_input(r.input)
-    match std@1/http_wire.parse_chunk_size(buf, r.offset) {
+    let buf = std@1/bufio.contents(r.input)
+    match std@1/http_wire.parse_chunk_size(buf, 0) {
       Error(_) => return Error(Chunk()),
       Ok(Complete(consumed, size)) => {
-        r.offset += consumed
+        std@1/bufio.consume(mut r.input, consumed)
         r.remaining = size
         if size == 0 {
           http_read_trailers(mut r)?
@@ -816,7 +814,7 @@ fn http_chunk_head(mut r: Request) -> Result[(), HttpError] {
       },
       Ok(Partial()) => (),
     }
-    let have = core@1/list.len(r.input) - r.offset
+    let have = std@1/bufio.buffered(r.input)
     if have >= r.config.max_head_bytes {
       return Error(HeadTooLarge())
     }
@@ -840,10 +838,14 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
   let mut collected: List[u8] = []
   std@1/text.append(mut collected, "HTTP/1.1 200 OK\r\n")
   while true {
-    while r.offset < core@1/list.len(r.input) {
-      core@1/list.push(mut collected, r.input[r.offset])
-      r.offset += 1
+    let count = std@1/bufio.buffered(r.input)
+    let unread = std@1/bufio.contents(r.input)
+    let mut i: u64 = 0
+    while i < count {
+      core@1/list.push(mut collected, unread[i])
+      i += 1
     }
+    std@1/bufio.consume(mut r.input, count)
     let buf = core@1/bytes.from_list(copy collected)
     match http_parse_head(buf, r.config)? {
       Some((head, end)) => {
@@ -890,7 +892,7 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  if r.offset == core@1/list.len(r.input) {
+  if std@1/bufio.buffered(r.input) == 0 {
     if http_read_more(
       mut r,
       if max > 4096 {
@@ -906,19 +908,15 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
       return Ok(0)
     }
   }
-  let mut count = core@1/list.len(r.input) - r.offset
+  let mut count = std@1/bufio.buffered(r.input)
   if count > max {
     count = max
   }
   if r.body_kind != 0 && count > r.remaining {
     count = r.remaining
   }
-  let mut i: u64 = 0
-  while i < count {
-    core@1/list.push(mut out, r.input[r.offset + i])
-    i += 1
-  }
-  r.offset += count
+  let n = r.net
+  let _ = std@1/bufio.stream_read(n, mut r.stream, mut r.input, mut out, count) ? http_buffer_error
   if r.body_kind != 0 {
     r.remaining -= count
     if r.remaining == 0 {
@@ -1106,14 +1104,14 @@ pub fn receive_request(
   max_head_bytes: u64,
   max_body_bytes: u64
 ) -> Result[ServerRequest, HttpError] {
-  let mut input: List[u8] = []
+  let mut input = std@1/bufio.new(4096)
   while true {
-    let buf = http_owned_input(input)
+    let buf = std@1/bufio.contents(input)
     match parse_server_request(buf, max_head_bytes, max_body_bytes)? {
       Some((incoming, _)) => return Ok(take incoming),
       None() => (),
     }
-    if core@1/net.read(n, mut s, mut input, 4096) ? http_net_error == 0 {
+    if std@1/bufio.stream_read_more(n, mut s, mut input, 4096) ? http_buffer_error == 0 {
       return Error(Truncated())
     }
   }
