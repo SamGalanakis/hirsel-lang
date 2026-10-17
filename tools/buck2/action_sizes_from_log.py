@@ -13,8 +13,8 @@ and duration (+/-0.1s or 2%). Never size from cache hits or ambiguous matches.
 Final CPU: 1 while p95 cores is at most 1.6, otherwise clamp(ceil(p95), 2, 4).
 Every worker gives a one-CPU action the larger of its request and the slot
 share (1.67 cores at the least, by the pool executor's action supervisor), so a second
-CPU below that only reserves a core the action leaves idle; such targets keep
-two codegen units (defs.bzl). Schedulability on a shared pool beats peak
+CPU below that only reserves a core the action leaves idle; such release targets
+keep two codegen units (dev compiles use 16, defs.bzl). Schedulability on a shared pool beats peak
 parallelism: a previous eight-CPU probe must not become a permanent floor.
 With <20 samples use the maximum measured core use instead of a percentile.
 Memory: anonymous p99 * 1.25 + 512 MiB, rounded to 256 MiB, min 1 GiB;
@@ -24,7 +24,7 @@ A target's request covers all its compile phases; dev/release are sized apart.
 A compile measured under a one-CPU request reads as using one core, so the rule
 alone never grows it. The critical-path compiles in CPU_CLASSES are calibrated
 instead: build with `-c hirsel.probe_cpus=8` (platforms.bzl), which gives each
-of them eight CPUs and eight codegen units for that invocation, and size them
+of them eight CPUs (and, in release, eight codegen units) for that invocation, and size them
 from that evidence with `--merge`, which replaces only the calibrated rows.
 CALIBRATED_CPUS keeps the reservation that measured the least wall time,
 queue included, on the loaded pool, with that measurement; only such an entry

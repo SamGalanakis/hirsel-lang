@@ -351,8 +351,12 @@ CPU-hours and GiB-hours per lane and target over the last N hours.
 
 `action-sizes.json` keeps dev/release budgets per target, with phase timings,
 CPU seconds and anonymous memory peaks. `sync.py` generates `exec_sizes.bzl`
-from it; compile rules select that target's platform and set `-Ccodegen-units`
-to its CPU reservation. Unmeasured targets keep Cargo's codegen defaults.
+from it; compile rules select that target's platform. A dev compile splits its
+code into 16 codegen units whatever its reservation, so LLVM spreads them over
+the reserved CPUs, and one reserving more than one CPU runs rustc's front end on
+that many threads (`-Zthreads`; `_dev_codegen` in `defs.bzl` has the
+measurements). A release compile's codegen units match its reservation;
+unmeasured release targets keep Cargo's defaults.
 One target's metadata and codegen share the reservation.
 Cargo profiles and dependency resolution remain in Cargo.toml.
 
@@ -372,8 +376,8 @@ python3 tools/buck2/sync.py
 Final CPU sizing is one CPU while p95 cores is at most 1.6 (a one-CPU action
 runs unthrottled up to the worker's slot share), otherwise
 `clamp(ceil(p95_cores), 2, 4)`; below 20 samples the maximum replaces p95.
-Codegen units match the request, and one-CPU targets keep two. A probe's old request is evidence,
-never a reservation floor. Schedulability on the shared pool beats peak
+Release codegen units match the request, and one-CPU release targets keep two;
+dev compiles use 16. A probe's old request is evidence, never a reservation floor. Schedulability on the shared pool beats peak
 parallelism: smaller requests can start without a whole eight-CPU slot.
 Memory keeps its measured headroom. The script documents memory headroom and sample
 handling. Requests participate in action keys, so resizing deliberately
@@ -381,8 +385,8 @@ invalidates those actions.
 
 A compile measured under one CPU reads as using one core, so the rule never
 grows it. The critical-path compiles in `CPU_CLASSES` are calibrated instead:
-`-c hirsel.probe_cpus=8` gives each of them eight CPUs and codegen units for
-that invocation, `action_sizes_from_log.py --merge` sizes their rows from that
+`-c hirsel.probe_cpus=8` gives each of them eight CPUs (and, in release, codegen
+units) for that invocation, `action_sizes_from_log.py --merge` sizes their rows from that
 evidence, and `CALIBRATED_CPUS` keeps the reservation that measured the least
 wall time including queue on the loaded pool; only such a row may exceed four
 CPUs. A crate split that renames a `CPU_CLASSES` target fails `sync.py` until

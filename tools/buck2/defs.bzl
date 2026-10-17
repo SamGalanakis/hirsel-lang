@@ -91,18 +91,31 @@ def _compile_constraints(name):
         "DEFAULT": [budget_constraint(pool_budget_name(*compile_request("dev", name)))],
     })
 
-def _codegen_units(profile, name):
-    # A measured compile's codegen units match its reservation, and a one-CPU
-    # compile keeps two: its slot share covers them (action_sizes_from_log.py).
-    # Unmeasured targets keep Cargo's defaults until there is evidence to size.
-    if name not in COMPILE_REQUESTS[profile] and not (PROBE_CPUS and name in COMPILE_CLASSES[profile]):
+def _release_codegen_units(name):
+    # A measured release compile's codegen units match its reservation, and a
+    # one-CPU compile keeps two: its slot share covers them
+    # (action_sizes_from_log.py). Unmeasured targets keep Cargo's defaults.
+    if name not in COMPILE_REQUESTS["release"] and not (PROBE_CPUS and name in COMPILE_CLASSES["release"]):
         return []
-    return ["-Ccodegen-units={}".format(max(2, compile_request(profile, name)[0]))]
+    return ["-Ccodegen-units={}".format(max(2, compile_request("release", name)[0]))]
+
+# A dev compile splits its code into 16 units, Cargo's non-incremental default,
+# whatever its reservation: LLVM then spreads the units over the reserved CPUs
+# instead of waiting on the largest of two to four. A compile that reserves
+# more than one CPU also runs rustc's front end on that many threads. On types
+# edits, alternated with the reservation-sized units (median execution): the rc
+# rlib 37 -> 20 s, validate 48 -> 35 s, lir 30 -> 22 s, types 15 -> 8.5 s, the
+# driver `it` harness 14.5 -> 10 s, rc metadata 8 -> 4 s.
+DEV_CODEGEN_UNITS = 16
+
+def _dev_codegen(name):
+    cpus = compile_request("dev", name)[0]
+    return ["-Ccodegen-units={}".format(DEV_CODEGEN_UNITS)] + (["-Zthreads={}".format(cpus)] if cpus > 1 else [])
 
 def _codegen_flags(name):
     return select({
-        "root//tools/buck2:profile_release": _codegen_units("release", name),
-        "DEFAULT": _codegen_units("dev", name),
+        "root//tools/buck2:profile_release": _release_codegen_units(name),
+        "DEFAULT": _dev_codegen(name),
     })
 
 def _flags(manifest_dir, extra = [], host_code = False, target = None, opt_level = None):

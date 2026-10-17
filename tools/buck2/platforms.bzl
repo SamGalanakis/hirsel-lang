@@ -69,8 +69,8 @@ DEFAULT_REQUEST = [1, 1048576]
 # Every Clippy twin's request (defs.bzl): Clippy is a single-threaded front end.
 CLIPPY_REQUEST = [1, 524288, ""]
 
-# `-c hirsel.probe_cpus=N` gives every CPU_CLASSES compile N CPUs (and N
-# codegen units, defs.bzl) for one invocation: the calibration that a compile
+# `-c hirsel.probe_cpus=N` gives every CPU_CLASSES compile N CPUs (and, in
+# release, N codegen units, defs.bzl) for one invocation: the calibration that a compile
 # measured under one CPU cannot provide (action_sizes_from_log.py).
 PROBE_CPUS = int(read_root_config("hirsel", "probe_cpus", "0"))
 PROBE_MEMORY_KB = 4194304
