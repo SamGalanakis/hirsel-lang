@@ -148,6 +148,7 @@ fn explicit_finalization_is_a_ready_stage_primitive() {
     let (unit, layouts, manifest) = t.finish();
     let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
     let inputs = hirsel_lir::validate::Inputs {
+        discharge: None,
         operations: &(),
         target: &target,
         layouts: &layouts,

@@ -330,6 +330,8 @@ fn fixture(
             });
             let address = AddressId(b.builder.unit.addresses.len() as u32);
             b.builder.unit.addresses.push(AddressInfo {
+                source_place: None,
+                unchecked: Vec::new(),
                 ty: t,
                 base: AddressBase::Slot(slot),
                 projection: PoolRange::EMPTY,
@@ -383,6 +385,7 @@ fn check<S: Stage>(unit: &LirUnit<S>, table: &LayoutTable, registry: &OperationR
     hirsel_lir::validate::check(
         unit,
         &Inputs {
+            discharge: None,
             target: &TargetSpec::x86_64_unknown_linux_gnu(),
             layouts: table,
             manifest: &manifest,

@@ -2384,6 +2384,8 @@ impl Lowering<'_, '_> {
         let projection = PoolRange::push(&mut self.ed.unit.pools.projections, steps);
         let id = AddressId(self.ed.unit.addresses.len() as u32);
         self.ed.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Slot(slot),
             projection,
             ty,

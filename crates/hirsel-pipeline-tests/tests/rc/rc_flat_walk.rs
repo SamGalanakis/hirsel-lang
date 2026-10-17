@@ -148,6 +148,7 @@ fn stages(
         let v = hirsel_lir::validate::check(
             &rc,
             &Inputs {
+                discharge: None,
                 operations: &p.operation_registry(),
                 target: &target(),
                 layouts: &table,
@@ -206,6 +207,8 @@ fn input_program(src: &str, enabled: bool, n: u64) -> hirsel_heapcheck::Program<
     sum.tables.symbols.push(sym.clone());
     let address = AddressId(sum.addresses.len() as u32);
     sum.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
         base: AddressBase::Slot(SlotId(root as u32)),
         projection: PoolRange::EMPTY,
         ty,
@@ -314,6 +317,7 @@ fn the_validator_replays_the_offset_and_rejects_a_hand_built_forgery() {
     let target = target();
     let manifest = manifest(&p);
     let inputs = Inputs {
+        discharge: None,
         operations: &p.operation_registry(),
         target: &target,
         layouts: &l.table,
@@ -458,6 +462,8 @@ fn control(forged: u8) -> Vec<ViolationKind> {
             ],
         );
         u.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Value(base),
             projection,
             ty: LirTypeId(2),
@@ -516,6 +522,7 @@ fn control(forged: u8) -> Vec<ViolationKind> {
     hirsel_lir::validate::check(
         &u,
         &Inputs {
+            discharge: None,
             operations: &p.operation_registry(),
             target: &target(),
             layouts: &l.table,
@@ -551,6 +558,8 @@ fn a_body_write_to_the_sequence_declines_without_mutating_the_unit() {
     let a = AddressId(u.addresses.len() as u32);
     let ty = u.slots[0].ty;
     u.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
         base: AddressBase::Slot(SlotId(0)),
         projection: PoolRange::EMPTY,
         ty,
@@ -645,6 +654,8 @@ fn a_loop_carried_sequence_name_does_not_hide_a_changed_reaching_value() {
         },
     ];
     u.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
         base: AddressBase::Value(sequence),
         projection: PoolRange::push(
             &mut u.pools.projections,
@@ -756,6 +767,7 @@ fn a_loop_carried_sequence_name_does_not_hide_a_changed_reaching_value() {
         Terminator::Propagate,
     ];
     let inputs = Inputs {
+        discharge: None,
         operations: &p.operation_registry(),
         target: &target(),
         layouts: &l.table,
@@ -859,6 +871,8 @@ fn reads_and_writes_on_a_break_only_path_participate_in_the_proof() {
     let at = AddressId(u.addresses.len() as u32);
     let ty = u.slots[0].ty;
     u.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
         base: AddressBase::Slot(SlotId(0)),
         projection: PoolRange::EMPTY,
         ty,
@@ -904,6 +918,8 @@ fn a_write_after_the_index_scope_ends_does_not_prevent_the_walk() {
     let at = AddressId(u.addresses.len() as u32);
     let ty = u.slots[0].ty;
     u.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
         base: AddressBase::Slot(SlotId(0)),
         projection: PoolRange::EMPTY,
         ty,

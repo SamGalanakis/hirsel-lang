@@ -1256,6 +1256,7 @@ fn finalize_order(swap: bool) -> Vec<K> {
     hirsel_lir::validate::check(
         &unit,
         &hirsel_lir::validate::Inputs {
+            discharge: None,
             operations: &(),
             target: &target,
             layouts: &layouts,

@@ -42,6 +42,7 @@ pub(super) fn audited(source: &str, expected: u128) {
             let problems = hirsel_lir::validate::check(
                 &rc,
                 &Inputs {
+                    discharge: None,
                     operations: &input.operation_registry(),
                     target: &target(),
                     layouts: &lowered.table,

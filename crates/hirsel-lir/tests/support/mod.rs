@@ -779,6 +779,8 @@ impl<S: Stage> Lir<S> {
             steps.iter().copied(),
         );
         self.builder.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base,
             projection,
             ty,
@@ -1417,6 +1419,7 @@ impl<S: Stage> Lir<S> {
         validate::check(
             &unit,
             &Inputs {
+                discharge: None,
                 operations: &operations,
                 target: &TargetSpec::x86_64_unknown_linux_gnu(),
                 layouts: &table,

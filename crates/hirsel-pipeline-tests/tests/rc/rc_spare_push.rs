@@ -71,6 +71,7 @@ fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program<Ready> {
     let target = target();
     let operations = program.operation_registry();
     let inputs = Inputs {
+        discharge: None,
         operations: &operations,
         target: &target,
         layouts: &table,

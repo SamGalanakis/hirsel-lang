@@ -10,9 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum Form {
     /// A TIR `Check` of `rule`: no `Inst::Check` and no failure edge.
     Check(String),
-    /// A SEM-1 integer `Add`: a wrapping `IntArith` instead of the failing
-    /// `Binary`.
-    Overflow,
+    /// A SEM-1 integer operation: a wrapping `IntArith` instead of
+    /// the failing `Binary` or `Unary`.
+    Integer,
+    /// Signed integer negation: a wrapping subtraction from zero.
+    Negation,
+    /// Bounds or tag guards of this exact canonical TIR place at this site.
+    Projection { place: u32, rule: String },
 }
 
 /// One licensed site, at its TIR `(body, block, statement)`: the statement is

@@ -57,8 +57,86 @@ pub const INTO_SUFFIX: &str = "$into";
 /// `program` with every fusable call site rewritten and the appending forms
 /// those sites call added. A program without such a site is returned as is.
 pub fn fuse(program: &Program) -> Program {
+    fuse_with_origins(program, &hirsel_lir::discharge::Discharge::default()).0
+}
+
+/// Source coordinates survive rewriting and derivation. New instructions
+/// have no source obligation; retained instructions keep their original one.
+type StatementOrigins = Vec<Vec<Vec<Option<(u32, u32)>>>>;
+
+#[derive(Clone)]
+pub(crate) struct SourceMap {
+    pub definition: DefPath,
+    pub sites: StatementOrigins,
+    pub places: Vec<Vec<u32>>,
+}
+
+impl SourceMap {
+    fn new(def: &Definition) -> Self {
+        Self {
+            definition: def.path.clone(),
+            sites: def
+                .bodies
+                .iter()
+                .map(|body| {
+                    body.blocks
+                        .iter()
+                        .enumerate()
+                        .map(|(b, block)| {
+                            (0..=block.instructions.len())
+                                .map(|i| Some((b as u32, i as u32)))
+                                .collect()
+                        })
+                        .collect()
+                })
+                .collect(),
+            places: def
+                .bodies
+                .iter()
+                .map(|body| {
+                    let mut canonical = HashMap::new();
+                    body.places
+                        .iter()
+                        .enumerate()
+                        .map(|(i, place)| {
+                            *canonical
+                                .entry((place.root, place.projection.clone()))
+                                .or_insert(i as u32)
+                        })
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+
+    /// Rewrites append instructions to existing blocks and add new blocks;
+    /// the old terminator keeps its source coordinate after the new work.
+    fn appended(&mut self, def: &Definition) {
+        for (body, maps) in def.bodies.iter().zip(&mut self.sites) {
+            for (block, map) in body.blocks.iter().zip(maps.iter_mut()) {
+                let terminator = map.pop().unwrap();
+                map.resize(block.instructions.len(), None);
+                map.push(terminator);
+            }
+            for block in &body.blocks[maps.len()..] {
+                maps.push(vec![None; block.instructions.len() + 1]);
+            }
+        }
+    }
+}
+
+pub(crate) fn fuse_with_origins(
+    program: &Program,
+    discharge: &hirsel_lir::discharge::Discharge,
+) -> (Program, BTreeMap<DefPath, SourceMap>) {
     let mut p = program.clone();
     let mut fuser = Fuser::default();
+    fuser.origins = program
+        .definitions
+        .iter()
+        .filter(|(path, _)| discharge.sites(path).is_some())
+        .map(|(path, def)| (path.clone(), SourceMap::new(def)))
+        .collect();
     loop {
         let mut changed = false;
         let paths: Vec<DefPath> = p.definitions.keys().cloned().collect();
@@ -74,11 +152,12 @@ pub fn fuse(program: &Program) -> Program {
         fuser.builders.clear();
         fuser.totals.clear();
     }
-    p
+    (p, fuser.origins)
 }
 
 #[derive(Default)]
 struct Fuser {
+    origins: BTreeMap<DefPath, SourceMap>,
     /// Builders already given an appending form: `f` to `f$into`.
     derived: BTreeMap<DefPath, DefPath>,
     /// Memoized copy-function summaries: (list parameter, bytes parameter).
@@ -975,6 +1054,9 @@ impl Fuser {
                 },
             };
             rewrite_site(&mut def, &site, into);
+            if let Some(origin) = self.origins.get_mut(path) {
+                origin.appended(&def);
+            }
             changed = true;
         }
         if changed {
@@ -1223,7 +1305,11 @@ impl Fuser {
         let shape = builder(program, f, self)?;
         let into = into_path(f);
         let def = &program.definitions[f];
-        let derived = derive_body(def, &into, &shape);
+        let mut origin = self.origins.get(f).cloned();
+        let derived = derive_body(def, &into, &shape, origin.as_mut());
+        if let Some(origin) = origin {
+            self.origins.insert(into.clone(), origin);
+        }
         let signature = &program.signatures[f];
         let derived_signature = derive_signature(signature, &into, &derived);
         let tag =
@@ -1878,7 +1964,12 @@ fn rewrite_site(def: &mut Definition, site: &Site, into: DefPath) {
 
 /// `f$into`: `f`'s body with its list replaced by a trailing `mut`
 /// parameter, its freeze removed and its result unit.
-fn derive_body(def: &Definition, into: &DefPath, shape: &Shape) -> Definition {
+fn derive_body(
+    def: &Definition,
+    into: &DefPath,
+    shape: &Shape,
+    mut origin: Option<&mut SourceMap>,
+) -> Definition {
     let mut def = def.clone();
     def.path = into.clone();
     let unit = unit_type(&mut def.types);
@@ -1930,15 +2021,30 @@ fn derive_body(def: &Definition, into: &DefPath, shape: &Shape) -> Definition {
     let resulted = |p: &PlaceId| result_places.contains(&p.0);
     // Instructions: the list's creation, moves, storage, origins and drops go;
     // its loans stay, now on the parameter.
-    for block in &mut body.blocks {
-        block.instructions.retain(|i| match &i.kind {
-            K::StorageLive(l) => !in_list(*l),
-            K::StorageDead { place, .. } | K::EndOrigin(place) => !listed(place),
-            K::Drop { place, .. } => !listed(place) && !resulted(place),
-            K::BindOrigin { source, place, .. } => !listed(source) && !listed(place),
-            K::Assign { destination, .. } => !listed(destination),
-            _ => true,
+    for (b, block) in body.blocks.iter_mut().enumerate() {
+        let mut retained = Vec::new();
+        let mut index = 0;
+        block.instructions.retain(|i| {
+            let keep = match &i.kind {
+                K::StorageLive(l) => !in_list(*l),
+                K::StorageDead { place, .. } | K::EndOrigin(place) => !listed(place),
+                K::Drop { place, .. } => !listed(place) && !resulted(place),
+                K::BindOrigin { source, place, .. } => !listed(source) && !listed(place),
+                K::Assign { destination, .. } => !listed(destination),
+                _ => true,
+            };
+            if let Some(origin) = &origin
+                && keep
+            {
+                retained.push(origin.sites[def.entry.0 as usize][b][index]);
+            }
+            index += 1;
+            keep
         });
+        if let Some(origin) = &mut origin {
+            retained.push(origin.sites[def.entry.0 as usize][b][index]);
+            origin.sites[def.entry.0 as usize][b] = retained;
+        }
     }
     // The freeze becomes the unit its result now is.
     let freeze = shape.freeze;
@@ -2007,6 +2113,9 @@ fn derive_body(def: &Definition, into: &DefPath, shape: &Shape) -> Definition {
     }
     body.cleanup_nodes = out;
     def.contracts.clear();
+    if let Some(origin) = origin {
+        origin.appended(&def);
+    }
     def
 }
 

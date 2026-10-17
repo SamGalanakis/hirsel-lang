@@ -187,12 +187,12 @@ fn int_arith(layout: LayoutId, op: BinaryOp, mode: ArithMode, with_flag: bool) -
 #[test]
 fn integer_arithmetic_adds_integers_and_flags_exactly_a_checked_overflow() {
     let bad = |k: &K| *k == K::Type("integer arithmetic");
-    // `Add` is the only operation the library names (docs/spec/core-library.md).
+    // Named division modes are not unchecked operator forms.
     pair(
         |m| {
             int_arith(
                 l::I64,
-                if m { BinaryOp::Sub } else { BinaryOp::Add },
+                if m { BinaryOp::DivFloor } else { BinaryOp::Add },
                 ArithMode::Wrapping,
                 false,
             )

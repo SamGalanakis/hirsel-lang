@@ -871,6 +871,8 @@ impl<S: Stage> Editor<S> {
         let ty = self.unit.slots[slot.index()].ty;
         let id = AddressId(self.unit.addresses.len() as u32);
         self.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Slot(slot),
             projection: PoolRange::EMPTY,
             ty,
@@ -4270,6 +4272,8 @@ fn detach(
         let id = AddressId(ed.unit.addresses.len() as u32);
         let projection = PoolRange::push(&mut ed.unit.pools.projections, prefix.iter().copied());
         ed.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Slot(slot),
             projection,
             ty: block_ty,

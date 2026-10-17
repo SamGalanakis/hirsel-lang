@@ -576,3 +576,9 @@ growing; removal transfers the Option and advances its generation.
 Generation zero is reserved: the first id uses one, and removal at the maximum
 wraps to zero and retires that vacancy. Reads check both words before observing
 the payload. Ordinary placement, COW, counting and drop passes own all storage.
+
+PS-13 import consumes accepted integer-operation and canonical-place projection
+sites. `append_into::SourceMap` preserves original instruction/terminator sites
+and canonical places through caller rewrites and derived appending bodies;
+inserted instructions have no obligation. Reference and discharged imports use
+the same mapping, and the driver validates their independent guard inventories.

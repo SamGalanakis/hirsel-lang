@@ -74,9 +74,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             AddressBase::Value(value) => self.preserved_lengths[value.index()],
             _ => None,
         };
-        for &step in steps {
+        let skipped = info.projection.len as usize - steps.len();
+        for (i, &step) in steps.iter().enumerate() {
             self.known_count = known.take();
-            place = self.project(place, step, failure)?;
+            place = self.project(
+                place,
+                step,
+                failure,
+                info.unchecked.contains(&((i + skipped) as u32)),
+            )?;
         }
         self.known_count = None;
         if place.layout != self.lir_type(info.ty)?.layout {
@@ -200,6 +206,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         place: Place<'m>,
         step: ProjectionStep,
         failure: FailureId,
+        unchecked: bool,
     ) -> Emitted<Place<'m>> {
         let state = self.sequence_state_at(place);
         let mut place = place;
@@ -268,12 +275,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     return self.invalid("a field the variant does not have");
                 };
                 // MEM-13: the active tag must be the projected variant.
-                let active = self.active_tag(place)?;
-                let expected = self
-                    .module
-                    .const_int(self.module.int_type(32), u128::from(variant));
-                let wrong = self.builder.icmp(IntPredicate::Ne, active, expected);
-                self.guard(wrong, failure)?;
+                if !unchecked {
+                    let active = self.active_tag(place)?;
+                    let expected = self
+                        .module
+                        .const_int(self.module.int_type(32), u128::from(variant));
+                    let wrong = self.builder.icmp(IntPredicate::Ne, active, expected);
+                    self.guard(wrong, failure)?;
+                }
                 self.field_place(place, field.offset, field.layout, field.unaligned)
             }
             ProjectionStep::Slot(index) => {
@@ -314,7 +323,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     unreachable!("matched above")
                 };
                 let count = self.load_u64(place.ptr);
-                self.checked_index(index, count, failure)?;
+                self.projection_index(index, count, failure, unchecked)?;
                 let first = self.sequential_first(place.ptr, element)?;
                 self.flat_content = Some(first);
                 Ok(Place {
@@ -328,7 +337,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 // Element `index` of a variable-element flat sequence at its known content
                 // offset, checked like `Index` (MEM-14).
                 let count = self.flat_count(place)?;
-                self.checked_index(index, count, failure)?;
+                self.projection_index(index, count, failure, unchecked)?;
                 let (element, variable) = self.flat_sequence(place.layout)?;
                 if !variable {
                     return self.invalid("a flat walk of a sequence of fixed elements");
@@ -351,7 +360,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     unreachable!("matched above")
                 };
                 let count = self.load_u64(place.ptr);
-                let index = self.checked_index(index, count, failure)?;
+                let index = self.projection_index(index, count, failure, unchecked)?;
                 let first = self.sequential_first(place.ptr, element)?;
                 self.flat_content = Some(first);
                 let ptr = self.sequential_walk(first, element, index)?;
@@ -367,7 +376,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 // revision 4): fixed elements by stride past the prefix, variable ones walked
                 // past each earlier element's prefixed encoding.
                 let count = self.flat_count(place)?;
-                let index = self.checked_index(index, count, failure)?;
+                let index = self.projection_index(index, count, failure, unchecked)?;
                 let (element, variable) = self.flat_sequence(place.layout)?;
                 let ptr = if variable {
                     let content = self.builder.offset(place.ptr, self.const_u64(16));
@@ -468,7 +477,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     _ => return self.unsupported("an index into this layout kind"),
                 };
                 let stride = self.fixed_size(element)?;
-                let index64 = self.checked_index(index, count, failure)?;
+                let index64 = self.projection_index(index, count, failure, unchecked)?;
                 let scaled = self
                     .builder
                     .binary(BinOp::Mul, index64, self.const_u64(stride));
@@ -498,12 +507,29 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         count: Value<'m>,
         failure: FailureId,
     ) -> Emitted<Value<'m>> {
+        self.projection_index(index, count, failure, false)
+    }
+
+    fn projection_index(
+        &mut self,
+        index: ValueId,
+        count: Value<'m>,
+        failure: FailureId,
+        unchecked: bool,
+    ) -> Emitted<Value<'m>> {
         let index_kind = self.scalar_kind(index)?;
         let Some((width, signed)) = scalar::integer(index_kind) else {
             return self.invalid("an index that is not an integer");
         };
         let index = self.get(index)?;
         let i64_ty = self.module.int_type(64);
+        if unchecked {
+            return Ok(match width.cmp(&64) {
+                std::cmp::Ordering::Less => self.builder.cast(Cast::ZExt, index, i64_ty),
+                std::cmp::Ordering::Equal => index,
+                std::cmp::Ordering::Greater => self.builder.cast(Cast::Trunc, index, i64_ty),
+            });
+        }
         let index_ty = self.module.int_type(width);
         let zero = self.module.const_int(index_ty, 0);
         let mut failed = self.module.const_int(self.module.int_type(1), 0);

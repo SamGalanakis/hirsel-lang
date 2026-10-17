@@ -134,6 +134,8 @@ impl Importer<'_, '_> {
         path.push(ProjectionStep::Index(index));
         let element_at = AddressId(self.out.addresses.len() as u32);
         self.out.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: info.base,
             projection: PoolRange::push(&mut self.out.pools.projections, path),
             ty: encoded,

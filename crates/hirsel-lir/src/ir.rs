@@ -282,6 +282,11 @@ pub enum AddressBase {
 /// A field-path address. Its checks (bounds, tag) run at `Inst::Address`.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct AddressInfo {
+    /// PS-2 canonical TIR PlaceId, present on source projection preparations.
+    pub source_place: Option<u32>,
+    /// Projection ordinals whose bounds/tag guards accepted PS-13 evidence
+    /// removes. The path and all storage/ownership checks stay unchanged.
+    pub unchecked: Vec<u32>,
     pub base: AddressBase,
     pub projection: PoolRange<ProjectionStep>,
     pub ty: LirTypeId,
@@ -370,7 +375,10 @@ pub enum ConvertMode {
 /// (SEM-1's named behaviours, LIR schema revision 6).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ArithMode {
-    /// `int.wrapping_add`: the result modulo 2^width.
+    /// Integer Add/Sub/Mul modulo 2^width; Neg is Sub from zero.
+    /// Div/Rem require a nonzero divisor, signed Div excludes MIN / -1,
+    /// and shifts require a count in 0..width. These forms are exact when
+    /// their SEM-1 obligation holds; signed MIN % -1 remains zero.
     Wrapping,
     /// `int.saturating_add`: the nearest bound of the kind.
     Saturating,
@@ -2611,6 +2619,8 @@ snapshot_enum!(AddressBase {
     Address(address)
 });
 snapshot_struct!(AddressInfo {
+    source_place,
+    unchecked,
     base,
     projection,
     ty

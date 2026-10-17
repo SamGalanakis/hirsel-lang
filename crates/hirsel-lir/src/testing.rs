@@ -86,6 +86,8 @@ impl<S: Stage> UnitBuilder<S> {
         let ty = self.ty(repr, layout);
         let projection = PoolRange::push(&mut self.unit.pools.projections, steps.iter().copied());
         self.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base,
             projection,
             ty,

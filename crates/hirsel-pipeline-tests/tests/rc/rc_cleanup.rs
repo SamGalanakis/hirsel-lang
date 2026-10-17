@@ -81,6 +81,7 @@ fn validate_driver_ready(source: &'static str) {
     });
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &built.program.operation_registry(),
         target: &target,
         layouts: &built.table,
@@ -151,6 +152,7 @@ fn check<S: Stage>(b: &Built, units: &[LirUnit<S>]) -> Vec<(String, Vec<Violatio
     let manifest = manifest(&b.program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &b.program.operation_registry(),
         target: &target,
         layouts: &b.table,

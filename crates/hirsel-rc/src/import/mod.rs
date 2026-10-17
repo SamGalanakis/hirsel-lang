@@ -29,9 +29,10 @@
 //!
 //! PS-13 check removal (`lower_discharging`): a licensed TIR `Check` imports
 //! without its `Check` and failure edge (its condition is still read), and a
-//! licensed SEM-1 integer `Add` as a wrapping `IntArith`. Plans name TIR
-//! `(body, block, statement)` sites, the numbering anchors use, so a
-//! definition whose TIR append fusion rewrote keeps every check.
+//! licensed SEM-1 integer operator as a wrapping `IntArith`. Projection paths
+//! mark only their licensed bounds/tag guards unchecked. Plans name original
+//! TIR `(body, block, statement)` sites; append fusion carries those coordinates
+//! and canonical places through retained and derived code.
 use crate::PassError;
 use crate::instance::{Actuals, InstanceError, InstanceId, Instances, Program, substitute};
 use crate::normalize::{Declined, Facts, Home, LoopPlan, LoopSite, NormalizeError};
@@ -114,9 +115,8 @@ pub struct Lowered {
     /// as discharged, for `validate_discharge`. The unit then continues
     /// through `units` like any other.
     pub discharged: Vec<DischargedUnit>,
-    /// Planned definitions whose TIR append fusion rewrote: their sites no
-    /// longer number the TIR the plan was made from, so they keep every check.
-    pub undischarged: BTreeSet<DefPath>,
+    /// Accepted source sites keyed by native definition, including derived forms.
+    pub native_discharge: Discharge,
 }
 
 /// One unit imported twice, as `Lowered::discharged` describes.
@@ -174,19 +174,14 @@ pub fn lower_discharging(
     discharge: &Discharge,
 ) -> Result<Lowered, LowerError> {
     // Results built only to be appended are built in place (append_into).
-    let fused = crate::append_into::fuse(program);
-    let undischarged: BTreeSet<DefPath> = discharge
-        .0
-        .keys()
-        .filter(
-            |path| match (program.definitions.get(*path), fused.definitions.get(*path)) {
-                (Some(a), Some(b)) => !(std::sync::Arc::ptr_eq(a, b) || a == b),
-                _ => false,
-            },
-        )
-        .cloned()
-        .collect();
+    let (fused, origins) = crate::append_into::fuse_with_origins(program, discharge);
     let program = &fused;
+    let mut native_discharge = discharge.clone();
+    for (path, origin) in &origins {
+        if let Some(sites) = discharge.sites(&origin.definition) {
+            native_discharge.0.insert(path.clone(), sites.clone());
+        }
+    }
     let none = BTreeSet::new();
     let mut discharged = Vec::new();
     // The library's native representations lie over the program's owners.
@@ -216,19 +211,20 @@ pub fn lower_discharging(
             .map_err(|e| LowerError::Normalize(id, e))?;
         declined.extend(no.into_iter().map(|d| (id, d)));
         let definition = &instances.view(id).definition.path;
-        let sites = discharge
-            .sites(definition)
-            .filter(|_| !undischarged.contains(definition));
+        let origin = origins.get(definition);
+        let proof_owner = origin.map_or(definition, |o| &o.definition);
+        let sites = discharge.sites(proof_owner);
         let reference = match sites {
             // The reference's library requests are its own: only the
             // discharged unit is compiled.
             Some(_) => Some(
-                import(
+                import_mapped(
                     program,
                     &instances,
                     id,
                     plan.as_ref(),
                     &none,
+                    origin,
                     &mut layouts,
                     &mut Vec::new(),
                 )
@@ -236,12 +232,13 @@ pub fn lower_discharging(
             ),
             None => None,
         };
-        let mut unit = import(
+        let mut unit = import_mapped(
             program,
             &instances,
             id,
             plan.as_ref(),
             sites.unwrap_or(&none),
+            origin,
             &mut layouts,
             &mut required,
         )
@@ -249,7 +246,7 @@ pub fn lower_discharging(
         if let Some(reference) = reference {
             discharged.push(DischargedUnit {
                 instance: id,
-                definition: definition.clone(),
+                definition: proof_owner.clone(),
                 reference,
                 discharged: unit.clone(),
             });
@@ -291,7 +288,7 @@ pub fn lower_discharging(
         unit_origins: Vec::new(),
         inline_instances: Default::default(),
         discharged,
-        undischarged,
+        native_discharge,
     };
     let specialized = crate::closure_calls::specialize(&mut lowered);
     lowered.unit_origins = specialized.origins;
@@ -588,6 +585,7 @@ impl State {
 /// A resolved TIR place: its slot root, validator steps and LIR projection.
 #[derive(Clone, Debug)]
 struct PlaceRef {
+    source_place: Option<u32>,
     slot: SlotId,
     steps: Vec<Step>,
     projection: Vec<ProjectionStep<tir::LocalId>>,
@@ -895,6 +893,22 @@ pub fn import(
     layouts: &mut LayoutBuilder<'_>,
     required: &mut Vec<crate::library::Request>,
 ) -> R<LirUnit<Value>> {
+    import_mapped(
+        program, instances, id, plan, discharge, None, layouts, required,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_mapped(
+    program: &Program,
+    instances: &Instances,
+    id: InstanceId,
+    plan: Option<&LoopPlan>,
+    discharge: &BTreeSet<Discharged>,
+    origin: Option<&crate::append_into::SourceMap>,
+    layouts: &mut LayoutBuilder<'_>,
+    required: &mut Vec<crate::library::Request>,
+) -> R<LirUnit<Value>> {
     let view = instances.view(id);
     let def: &tir::Definition = &view.definition;
     let body = &def.bodies[view.body.0 as usize];
@@ -909,6 +923,7 @@ pub fn import(
         id,
         plan,
         discharge,
+        origin,
         def,
         body,
         body_id: view.body.0,
@@ -1026,6 +1041,7 @@ struct Importer<'a, 'o> {
     plan: Option<&'a LoopPlan>,
     /// PS-13 sites of this definition that import without their check.
     discharge: &'a BTreeSet<Discharged>,
+    origin: Option<&'a crate::append_into::SourceMap>,
     def: &'a tir::Definition,
     body: &'a tir::Body,
     body_id: u32,

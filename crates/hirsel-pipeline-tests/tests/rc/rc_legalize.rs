@@ -68,6 +68,7 @@ fn build(source: &str) -> Ready_ {
     let manifest = manifest(&program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: &table,
@@ -591,6 +592,7 @@ fn a_simd_lane_of_another_scalar_kind_is_rejected() {
     let manifest = manifest(&program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: &b.table,
@@ -723,6 +725,7 @@ fn rewrite(b: Ready_, source: &str, ledger: &hirsel_rc::legalize::Ledger) -> Rew
             let (proved, left) = hirsel_rc::legalize::prove(plans, ledger);
             let u = hirsel_rc::legalize::commit(u, &proved);
             let inputs = Inputs {
+                discharge: None,
                 operations: &program.operation_registry(),
                 target: &target,
                 layouts: &b.table,

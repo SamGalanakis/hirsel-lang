@@ -162,6 +162,8 @@ pub(crate) fn local(
     let ty = b.ty(layout);
     let address = AddressId(b.ed.unit.addresses.len() as u32);
     b.ed.unit.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
         base: AddressBase::Slot(slot),
         projection: PoolRange::EMPTY,
         ty,

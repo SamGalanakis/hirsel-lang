@@ -14,6 +14,7 @@ mod logical;
 mod operation_abi;
 mod ownership;
 mod packed_storage;
+mod projection_proofs;
 mod revision10;
 mod revision11;
 mod revision13;

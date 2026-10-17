@@ -354,10 +354,27 @@ pub(crate) fn table<'a>(
             .collect::<Vec<_>>()
     };
     let mut obligations = clause_obligations(ContractKind::Requires, ObligationKind::Requires);
-    let projected = builder.places.iter().map(|((body, root, projection, _), index)| {
-        let place = definition.bodies[*body].places.iter().position(|p| p.root == *root && p.projection.as_ref() == projection.as_slice()).expect("an inventoried place");
-        (builder.obligations[*index].0.clone(), (BodyId(*body as u32), PlaceId(place as u32)))
-    }).collect();
+    let mut canonical = HashMap::new();
+    for (b, body) in definition.bodies.iter().enumerate() {
+        for (p, place) in body.places.iter().enumerate() {
+            canonical
+                .entry((b, place.root, place.projection.to_vec()))
+                .or_insert(PlaceId(p as u32));
+        }
+    }
+    let projected = builder
+        .places
+        .iter()
+        .map(|((body, root, projection, _), index)| {
+            (
+                builder.obligations[*index].0.clone(),
+                (
+                    BodyId(*body as u32),
+                    canonical[&(*body, *root, projection.clone())],
+                ),
+            )
+        })
+        .collect();
     obligations.extend(builder.obligations);
     obligations.extend(clause_obligations(
         ContractKind::Ensures,
@@ -546,6 +563,6 @@ fn terminator_places(terminator: &Terminator) -> Vec<PlaceId> {
 /// The canonical place of a MEM-13/14 obligation: the first PlaceId with
 /// its (body, root, projection), ignoring bindings and loans, as PS-2 does.
 /// This reuses the obligation traversal; no export or identity changes.
-pub fn projected_place(definition: &Definition, id: &ObligationId) -> Option<(BodyId, PlaceId)> {
-    table(definition, |_| None).projected.get(id).copied()
+pub fn projected_places(definition: &Definition) -> BTreeMap<ObligationId, (BodyId, PlaceId)> {
+    table(definition, |_| None).projected
 }

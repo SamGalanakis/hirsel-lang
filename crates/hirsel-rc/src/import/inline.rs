@@ -102,6 +102,8 @@ impl Inline for Importer<'_, '_> {
             })
             .unwrap_or((AddressBase::Value(value), value));
         self.out.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base,
             projection,
             ty,

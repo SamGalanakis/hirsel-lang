@@ -56,6 +56,7 @@ fn build(source: &str) -> Built {
     let manifest = manifest(&program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: &table,
@@ -994,6 +995,7 @@ fn handmade_finalizer(library: bool, wrong_convention: bool) {
     let manifest = hirsel_core_contract::Manifest::skeleton([]);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &(),
         target: &target,
         layouts: &table,
@@ -1173,6 +1175,7 @@ fn an_immortal_sequence_is_consumed_without_allocation_or_detach() {
     let manifest = manifest(&source_program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &source_program.operation_registry(),
         target: &target,
         layouts: &b.table,

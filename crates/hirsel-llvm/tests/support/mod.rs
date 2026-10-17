@@ -391,6 +391,8 @@ impl<'t> Unit<'t> {
             steps.iter().copied(),
         );
         self.builder.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base,
             projection,
             ty,
@@ -834,6 +836,7 @@ pub fn seal(table: &Table, manifest: &Manifest, unit: LirUnit<Ready>) -> Validat
     validate::validate(
         unit,
         &Inputs {
+            discharge: None,
             operations: &(),
             target: &table.target,
             layouts: &table.table,

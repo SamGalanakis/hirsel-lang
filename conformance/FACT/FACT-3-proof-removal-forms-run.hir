@@ -1,0 +1,60 @@
+// rule: FACT-3
+// expect: run
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn unsigned(x: u32, y: u32) -> u32 {
+  let sub = x - y
+  let mul = x * y
+  let div = x / y
+  let rem = x % y
+  let shl = x << y
+  let shr = x >> y
+  let neg = -0u32
+  sub + mul + div + rem + shl + shr + neg
+}
+
+fn signed(x: i32, y: i32) -> i32 {
+  let sub = x - y
+  let mul = x * y
+  let div = x / y
+  let rem = x % y
+  let shl = x << y
+  let shr = x >> y
+  let neg = -x
+  sub + mul + div + rem + shl + shr + neg
+}
+
+fn remainder(x: i32, y: i32) -> i32 {
+  x % y
+}
+
+fn projected(xs: List[u64], i: u64, x: Packed[Choice]) -> u64 {
+  xs[i] + x.Small.value
+}
+
+fn producer(n: u8) -> Bytes {
+  let mut output: List[u8] = []
+  let byte = n - 1u8
+  list.push(mut output, byte)
+  bytes.from_list(take output)
+}
+
+fn fused(n: u8) -> Bytes {
+  let mut output: List[u8] = []
+  let byte = n - 1u8
+  let data = producer(byte)
+  for i in 0u64..bytes.len(data) {
+    list.push(mut output, data[i])
+  }
+  bytes.from_list(take output)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(unsigned(6u32, 2u32) == 44u32, Arithmetic())
+  failure.check(signed(6i32, 2i32) == 38i32, Arithmetic())
+  failure.check(remainder(-2147483648i32, -1i32) == 0i32, Arithmetic())
+  let x: Packed[Choice] = Small(value: 3u64)
+  failure.check(projected([5u64], 0u64, x) == 8u64, Bounds())
+  failure.check(fused(67u8) == b"A", Arithmetic())
+  Ok(())
+}

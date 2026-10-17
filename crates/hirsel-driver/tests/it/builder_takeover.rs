@@ -166,6 +166,7 @@ fn share_the_builder(program: &mut ReadyProgram) {
     }
     unit.instructions = instructions;
     let inputs = hirsel_lir::validate::Inputs {
+        discharge: None,
         target: &program.target,
         layouts: &program.table,
         manifest: &program.manifest,

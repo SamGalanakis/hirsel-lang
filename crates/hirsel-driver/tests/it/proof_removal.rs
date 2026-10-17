@@ -201,15 +201,21 @@ fn an_accepted_overflow_check_imports_a_wrapping_add() {
 }
 
 #[test]
-fn a_bounds_check_has_no_removal_form_and_stays() {
+fn an_accepted_bounds_check_removes_only_its_projection_guard() {
     with_compiler_stack(|| {
         let (reference, _) = ready(BUMP, None);
         let text = sidecar(BUMP, &[(BOUNDS, "proved")], |_| {});
         let (ready, report) = ready(BUMP, Some(&text));
-        assert_eq!(checks(&ready), checks(&reference));
         assert_eq!(
-            report[0],
-            format!("proof {BOUNDS}: kept (no removal form for a MEM-14 failure-edge obligation)")
+            checks(&ready),
+            without(checks(&reference), Opcode::Address, "MEM-14")
+        );
+        assert_eq!(report[0], format!("proof {BOUNDS}: removed"));
+        let before = bump_ir(&reference);
+        let after = bump_ir(&ready);
+        assert!(
+            before.matches("icmp uge").count() > after.matches("icmp uge").count(),
+            "{before}\n{after}"
         );
     })
 }
@@ -341,4 +347,222 @@ fn the_discharge_validator_refuses_any_difference_from_the_plan() {
             "{errors:?}"
         );
     })
+}
+
+/// Corpus execution cannot observe check removal. Inspect every non-Add
+/// arithmetic form and its independent, unproved neighbour in LIR.
+#[test]
+fn accepted_integer_operators_remove_only_their_own_failure_edges() {
+    with_compiler_stack(|| {
+        for (ty, expression) in [
+            ("u32", "x - y"),
+            ("i32", "x - y"),
+            ("u32", "x * y"),
+            ("i32", "x * y"),
+            ("u32", "x / y"),
+            ("i32", "x / y"),
+            ("u32", "x % y"),
+            ("i32", "x % y"),
+            ("u32", "x << y"),
+            ("i32", "x << y"),
+            ("u32", "x >> y"),
+            ("i32", "x >> y"),
+            ("u32", "-x"),
+            ("i32", "-x"),
+        ] {
+            let source = format!(
+                "fn bump(x: {ty}, y: {ty}) -> {ty} {{ let n = {expression}; n + y }}\npub fn main() -> Result[(), ()] {{ let n = bump(6{ty}, 2{ty}); Ok(()) }}\n"
+            );
+            let (reference, _) = ready(&source, None);
+            let record = sidecar(&source, &[(OVERFLOW, "proved")], |_| {});
+            let (accepted, report) = ready(&source, Some(&record));
+            let opcode = if expression == "-x" && ty == "i32" {
+                Opcode::Unary
+            } else {
+                Opcode::Binary
+            };
+            assert_eq!(
+                checks(&accepted),
+                without(checks(&reference), opcode, "SEM-1"),
+                "{ty} {expression}"
+            );
+            assert!(report[0].ends_with(": removed"), "{report:?}");
+            emit_ir(&accepted, OptLevel::None).unwrap();
+            let record = sidecar(&source, &[(OVERFLOW, "proved")], |r| {
+                r["checksum"] = format!("#{}", "0".repeat(64)).into()
+            });
+            let (forged, report) = ready(&source, Some(&record));
+            assert_eq!(checks(&forged), checks(&reference));
+            assert!(report[0].contains("kept (stale:"), "{report:?}");
+        }
+    });
+}
+
+const FORMS: &str = include_str!("../../../../conformance/FACT/FACT-3-proof-removal-forms-run.hir");
+
+fn all_records(source: &str) -> String {
+    let mut engine = engine(source);
+    let input = engine
+        .proof_export_input(&entry_path(&default_context()))
+        .unwrap();
+    let export = hirsel_proof_export::build(&input);
+    let ids: Vec<_> = export
+        .definitions
+        .iter()
+        .flat_map(|d| &d.obligations)
+        .filter(|o| {
+            o.id.kind == hirsel_proof_export::ObligationKind::FailureEdge
+                && matches!(o.id.rule.as_str(), "SEM-1" | "MEM-13" | "MEM-14")
+        })
+        .map(|o| o.id.to_string())
+        .collect();
+    assert!(!ids.is_empty());
+    sidecar(
+        source,
+        &ids.iter()
+            .map(|id| (id.as_str(), "proved"))
+            .collect::<Vec<_>>(),
+        |_| {},
+    )
+}
+
+#[test]
+fn tag_and_bounds_evidence_is_exact_to_the_projected_place() {
+    with_compiler_stack(|| {
+        let source = "type Choice = Small(value: u64) | Large(value: u64, extra: u64)\nfn bump(xs: List[u64], i: u64, j: u64, x: Packed[Choice]) -> u64 { xs[i] + xs[j] + x.Small.value }\npub fn main() -> Result[(), ()] { let x: Packed[Choice] = Small(value: 3u64); let n = bump([5u64], 0u64, 0u64, x); Ok(()) }\n";
+        let (reference, _) = ready(source, None);
+        for (id, rule) in [
+            (BOUNDS, "MEM-14"),
+            ("standalone@0/bump#MEM-13/failure-edge/0", "MEM-13"),
+        ] {
+            let text = sidecar(source, &[(id, "proved")], |_| {});
+            let (accepted, report) = ready(source, Some(&text));
+            assert_eq!(
+                checks(&accepted),
+                without(checks(&reference), Opcode::Address, rule)
+            );
+            assert_eq!(report[0], format!("proof {id}: removed"));
+            emit_ir(&accepted, OptLevel::None).unwrap();
+            let text = sidecar(source, &[(id, "proved")], |r| {
+                r["checksum"] = format!("#{}", "0".repeat(64)).into()
+            });
+            let (forged, _) = ready(source, Some(&text));
+            assert_eq!(checks(&forged), checks(&reference));
+        }
+    });
+}
+
+#[test]
+fn append_fusion_keeps_original_sites_in_callers_and_derived_builders() {
+    with_compiler_stack(|| {
+        let ids = [
+            "standalone@0/fused#SEM-1/failure-edge/0",
+            "standalone@0/producer#SEM-1/failure-edge/0",
+        ];
+        let (reference, _) = ready(FORMS, None);
+        let text = sidecar(FORMS, &ids.map(|id| (id, "proved")), |_| {});
+        let (accepted, report) = ready(FORMS, Some(&text));
+        assert!(
+            report[..2].iter().all(|l| l.ends_with(": removed")),
+            "{report:?}"
+        );
+        for name in ["fused", "producer$into"] {
+            let count = |p: &ReadyProgram| {
+                p.raw_units()
+                    .iter()
+                    .filter(|u| u.header.definition.0.name == name)
+                    .flat_map(|u| {
+                        u.instructions
+                            .iter()
+                            .filter(|i| {
+                                matches!(
+                                    i,
+                                    hirsel_lir::ir::Inst::Binary {
+                                        op: hirsel_lir::ir::BinaryOp::Sub,
+                                        ..
+                                    }
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .count()
+            };
+            assert_eq!(count(&reference), 1, "{name} must have native code");
+            assert_eq!(count(&accepted), 0, "{name}");
+        }
+        let text = sidecar(FORMS, &ids.map(|id| (id, "proved")), |r| {
+            r["checksum"] = format!("#{}", "0".repeat(64)).into()
+        });
+        let (forged, report) = ready(FORMS, Some(&text));
+        assert!(
+            report[..2].iter().all(|l| l.contains("kept (stale:")),
+            "{report:?}"
+        );
+        assert_eq!(forged.discharged, Default::default());
+    });
+}
+
+/// The sidecar changes LIR and code generation, which ordinary corpus
+/// execution cannot exercise. Run accepted arithmetic/projections/fusion on H
+/// and on both native targets at O0 and O3, retaining main's result checks.
+#[test]
+fn accepted_removal_forms_run_on_heap_and_both_native_targets() {
+    use hirsel_driver::native::{
+        Observation, Partition, Sites, Toolchain, launch, link, observe, run_heap,
+    };
+    with_compiler_stack(|| {
+        let mut engine = engine(FORMS);
+        let entry = entry_path(&default_context());
+        let execution = run_observed_snapshot(
+            &mut engine,
+            &RunConfiguration {
+                entry: entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            SimulationConfig::default(),
+        )
+        .unwrap();
+        let expected = Observation::of_reference(execution.observation.as_ref().unwrap());
+        assert_eq!(expected.exit_code, Some(0), "{expected:?}");
+        let input = engine.export_native_input().unwrap();
+        let validated = engine.import_native_input(input).unwrap();
+        let text = all_records(FORMS);
+        let evidence = Evidence {
+            records: parse_sidecar(&text).unwrap(),
+            trusted: vec![Checker::parse("prover@1").unwrap()],
+        };
+        let proofs = Proofs::assess(&mut engine, &entry, &validated, &evidence).unwrap();
+        let targets = [
+            TargetSpec::x86_64_unknown_linux_gnu(),
+            TargetSpec::aarch64_unknown_linux_gnu(),
+        ];
+        let root =
+            std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("proof-removal-forms");
+        std::fs::create_dir_all(&root).unwrap();
+        let tools =
+            Toolchain::in_tree_diagnostic(&root, &targets.iter().collect::<Vec<_>>()).unwrap();
+        for target in targets {
+            let mut options = Options::new(target.clone());
+            options.discharge = proofs.discharge.clone();
+            let program = build(&validated, &options).unwrap();
+            let sites = Sites::new(validated.snapshot());
+            assert_eq!(
+                run_heap(&program, &entry, &sites).unwrap().observation,
+                expected
+            );
+            for opt in [OptLevel::None, OptLevel::Speed] {
+                let dir = root.join(format!("{}-{opt:?}", target.triple));
+                std::fs::create_dir_all(&dir).unwrap();
+                let exe = link(&program, &entry, opt, Partition::Whole, &tools, &dir).unwrap();
+                let launched = launch(&exe, &target, &tools, &dir, false).unwrap();
+                assert_eq!(
+                    observe(&launched, &program, &sites).unwrap(),
+                    expected,
+                    "{} {opt:?}",
+                    target.triple
+                );
+            }
+        }
+    });
 }

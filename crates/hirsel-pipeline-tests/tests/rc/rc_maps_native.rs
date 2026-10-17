@@ -240,6 +240,7 @@ fn internal_set_order_agrees_on_heap_and_both_native_targets() {
         for target in targets {
             let mut ready = build(&input, &Options::new(target.clone())).unwrap();
             let inputs = Inputs {
+                discharge: None,
                 operations: &ready.operations,
                 target: &ready.target,
                 layouts: &ready.table,

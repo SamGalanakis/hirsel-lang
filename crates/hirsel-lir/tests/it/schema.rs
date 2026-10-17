@@ -424,16 +424,22 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     );
     u.addresses = vec![
         AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Slot(SlotId(1)),
             projection,
             ty: LirTypeId(4),
         },
         AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Value(v(2)),
             projection: PoolRange::EMPTY,
             ty: LirTypeId(4),
         },
         AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Address(AddressId(0)),
             projection: PoolRange::EMPTY,
             ty: LirTypeId(1),

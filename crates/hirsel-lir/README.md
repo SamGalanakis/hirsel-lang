@@ -514,3 +514,16 @@ descriptor carries `LAYOUT_FROZEN`. `Freeze` and `Thaw` are library-only: `Freez
 moves a value into a fresh root and `Thaw` moves the last root's value out. A
 library unit may test the uniqueness of an owned root before RC, since its count
 is the root count. Runtime ABI 8 adds `hirsel_rt_v2_freeze` and `hirsel_rt_v2_thaw`.
+
+LIR revision 28 adds `AddressInfo.source_place` and `unchecked`: the canonical
+TIR place and the exact projection ordinals whose bounds/tag guards PS-13
+removes. Paths, reaching versions and ownership replay are unchanged. C requires
+an independently supplied `Inputs.discharge` plan for each unchecked ordinal's
+source site, canonical place and rule, and refuses duplicates, non-check steps
+and absent evidence as `Type("unchecked projection evidence")`.
+`tests/it/projection_proofs.rs` holds hand-built controls and forged-site twins.
+The discharge inventory counts projection guards individually, independently of
+the address's shared failure-rule label. Origin/loan naming events have no guard.
+Wrapping `IntArith` also admits Sub/Mul/Div/Rem/Shl/Shr; Neg is Sub from zero.
+Div/Rem require a nonzero divisor, signed Div excludes MIN / -1 and shifts require
+a count below the width. Signed MIN % -1 is zero. Checked/saturating modes stay Add.

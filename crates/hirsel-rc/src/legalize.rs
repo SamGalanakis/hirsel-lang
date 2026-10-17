@@ -859,6 +859,8 @@ impl Lowering<'_> {
         let projection =
             PoolRange::push(&mut self.ed.unit.pools.projections, steps.iter().copied());
         self.ed.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base,
             projection,
             ty,

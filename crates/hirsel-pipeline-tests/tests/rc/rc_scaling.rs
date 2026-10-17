@@ -151,6 +151,7 @@ fn middle_end(program: &hirsel_rc::instance::Program) -> ([Duration; 14], usize)
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: table,

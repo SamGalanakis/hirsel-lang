@@ -615,6 +615,7 @@ impl Importer<'_, '_> {
         }
         let ty = self.out.slots[slot.index()].ty;
         let place = PlaceRef {
+            source_place: None,
             slot,
             steps: steps.clone(),
             projection: steps
@@ -649,6 +650,7 @@ impl Importer<'_, '_> {
                     .expect("field of a resolved place");
             }
             PlaceRef {
+                source_place: None,
                 ty: self.intern(layout),
                 ..place
             }

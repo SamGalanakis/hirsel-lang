@@ -1345,8 +1345,19 @@ impl<S: Stage> Checker<'_, '_, S> {
                 left,
                 right,
             } => {
-                // `Add` is the only operation the library names (docs/spec/core-library.md).
-                let ok = op == crate::ir::BinaryOp::Add
+                // Named checked/saturating arithmetic is Add; proof removal also
+                // uses the unchecked integer operator forms.
+                let ok = (op == BinaryOp::Add
+                    || mode == ArithMode::Wrapping
+                        && matches!(
+                            op,
+                            BinaryOp::Sub
+                                | BinaryOp::Mul
+                                | BinaryOp::Div
+                                | BinaryOp::Rem
+                                | BinaryOp::Shl
+                                | BinaryOp::Shr
+                        ))
                     && self.scalar(left).is_some_and(|k| integer_bits(k).is_some())
                     && self.same_type(left, right)
                     && self.same_type(result, left)
@@ -1458,13 +1469,53 @@ impl<S: Stage> Checker<'_, '_, S> {
             | Inst::FrameEnter { .. }
             | Inst::FrameLeave
             | Inst::Unavailable { .. } => {}
-            Inst::Address { address, .. } => {
+            Inst::Address { address, failure } => {
                 let info = &unit.addresses[address.index()];
                 if let AddressBase::Value(v) = info.base
                     && (!matches!(self.ty(v).repr, ValueRepr::Block | ValueRepr::Uncounted)
                         || self.cx.layouts.payload(self.layout_of(v)).is_none())
                 {
                     self.add(site, K::AddressType(address));
+                }
+                let steps = info.projection.get(&unit.pools.projections).unwrap_or(&[]);
+                if info.unchecked.windows(2).any(|p| p[0] >= p[1]) {
+                    self.add(site, K::Type("unchecked projection evidence"));
+                }
+                for &ordinal in &info.unchecked {
+                    let rule = match steps.get(ordinal as usize) {
+                        Some(ProjectionStep::Index(_) | ProjectionStep::FlatAt { .. }) => {
+                            Some("MEM-14")
+                        }
+                        Some(ProjectionStep::VariantField { .. }) => Some("MEM-13"),
+                        _ => None,
+                    };
+                    let accepted =
+                        info.source_place
+                            .zip(rule)
+                            .and_then(|(place, rule)| {
+                                let anchor = unit.tables.source_anchors.get(
+                                    unit.tables.failures.get(failure.index())?.anchor.index(),
+                                )?;
+                                let form = crate::discharge::Discharged {
+                                    body: anchor.body,
+                                    block: anchor.block,
+                                    statement: anchor.statement,
+                                    form: crate::discharge::Form::Projection {
+                                        place,
+                                        rule: rule.into(),
+                                    },
+                                };
+                                Some(
+                                    self.cx
+                                        .discharge?
+                                        .sites(&unit.header.definition)?
+                                        .contains(&form),
+                                )
+                            })
+                            .unwrap_or(false);
+                    if !accepted {
+                        self.add(site, K::Type("unchecked projection evidence"));
+                    }
                 }
                 for step in info.projection.get(&unit.pools.projections).unwrap_or(&[]) {
                     match *step {

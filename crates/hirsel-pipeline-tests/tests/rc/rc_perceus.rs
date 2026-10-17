@@ -47,6 +47,7 @@ fn check_stage<S: Stage>(
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: table,
@@ -450,6 +451,8 @@ fn shared_write() -> (
             PoolRange::push(&mut ed.unit.pools.projections, [ProjectionStep::Field(0)]);
         let ty = ed.unit.values[three_value.index()].ty;
         ed.unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Slot(s),
             projection,
             ty,
@@ -520,6 +523,7 @@ fn copy_on_write_detaches_a_shared_block_before_a_write() {
     let manifest = manifest(&program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: &table,

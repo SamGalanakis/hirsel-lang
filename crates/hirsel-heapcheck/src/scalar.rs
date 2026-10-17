@@ -417,7 +417,7 @@ fn fits_every(wi: u32, si: bool, wj: u32, sj: bool) -> bool {
     }
 }
 
-/// `IntArith`: `Add` of two integers of `kind` in `mode`; the result bits and,
+/// `IntArith`: unchecked integer operators or named Add modes; the result bits and,
 /// in `Checked` mode, the overflow flag (SEM-1 named behaviours).
 pub(crate) fn int_arith(
     op: BinaryOp,
@@ -429,8 +429,25 @@ pub(crate) fn int_arith(
     let Some((width, signed)) = integer(kind) else {
         return Err(format!("{op:?} of {kind:?}"));
     };
+    if mode == ArithMode::Wrapping {
+        let value = match op {
+            BinaryOp::Add => left.wrapping_add(right),
+            BinaryOp::Sub => left.wrapping_sub(right),
+            BinaryOp::Mul => left.wrapping_mul(right),
+            BinaryOp::Div | BinaryOp::Rem | BinaryOp::Shl | BinaryOp::Shr => {
+                // These unchecked forms require the accepted obligation's
+                // domain conditions. A violated proof is an H error, never a
+                // language failure or a Rust panic. Rem retains MIN % -1 = 0.
+                binary(op, kind, left, kind, right)?
+                    .ok_or_else(|| format!("invalid unchecked {op:?}"))?
+                    .1
+            }
+            _ => return Err(format!("{op:?} in IntArith")),
+        };
+        return Ok((value & mask(width), None));
+    }
     if op != BinaryOp::Add {
-        return Err(format!("{op:?} in IntArith"));
+        return Err(format!("{op:?} in IntArith {mode:?}"));
     }
     let wrapped = left.wrapping_add(right) & mask(width);
     let exact = binary(BinaryOp::Add, kind, left, kind, right)?.map(|(_, v)| v);

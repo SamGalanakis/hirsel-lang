@@ -215,19 +215,27 @@ This records the first consumer of PS-12 and PS-13, `hirsel build` and
   any other checker is unreplayable; a verdict other than `proved` is rejected.
 - **Removal forms.** An accepted `check` or `ensures` obligation removes the
   `Check` at each of its sites. The clause is still evaluated, so its own
-  failures remain. An accepted SEM-1 `failure-edge` on an integer `Add` turns
-  that add into a wrapping add, which is exact when no overflow occurs. Every
-  other obligation keeps its check and is reported: `requires` (the entry check
-  stands for every caller), `requires-at-call`, MEM-13, MEM-14, `Fail`, and
-  SEM-1 on any other operation. Removal applies to native code only; the
-  interpreter checks everything.
+  failures remain. An accepted SEM-1 `failure-edge` on integer `Add`, `Sub`,
+  `Mul`, `Div`, `Rem`, `Shl`, `Shr` or `Neg` removes that operation's checks:
+  the unchecked operation is exact whenever its obligation holds. One Div
+  obligation covers both zero and signed overflow; signed `MIN % -1` still
+  yields zero. An accepted MEM-14 or MEM-13 `failure-edge` removes respectively
+  the bounds or active-tag guards of exactly its projected place at its sites;
+  other projection guards and storage/ownership checks remain. Every other
+  obligation keeps its check and is reported: `requires` (the entry check
+  stands for every caller), `requires-at-call`, and `Fail`. Removal applies to
+  native code only; the interpreter checks everything.
 - **Validation.** Removal happens in SSA import. The low-level IR validator
   compares each discharged unit with a reference import that keeps every check,
-  counting failure sites by TIR site, opcode and rule. The two may differ in
-  exactly the accepted sites, and every accepted site of a definition that has
-  native code must be removed. A definition whose TIR a lowering rewrite changes
-  before import keeps all its checks. The build reports each record's outcome
-  and counts the obligations that have no evidence.
+  counting failure sites by TIR site, opcode, rule and projected place. The two
+  may differ in exactly the accepted guards. Naming events that do not access a
+  place have no guard to remove. The stage validator also requires accepted
+  evidence for every unchecked projection at its exact source site and place.
+  Append fusion carries the original sites through retained instructions and
+  derived appending bodies; inserted instructions have no source obligation and
+  cannot consume evidence. Every accepted guard in native code must be removed.
+  The build reports each record's outcome and counts the obligations that have
+  no evidence.
 
 ### PS-14: Authority is opaque
 

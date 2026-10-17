@@ -24,6 +24,7 @@ fn main() {
         let lower = hirsel_rc::import::lower(&program, &target).unwrap();
         let table: LayoutTable = lower.table;
         let inputs = Inputs {
+            discharge: None,
             operations: &program.operation_registry(),
             target: &target,
             layouts: &table,

@@ -968,7 +968,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                 Err(e) => return Ok(Err(e)),
             },
         };
-        for step in self.pool(info.projection, &u.pools.projections)? {
+        for (ordinal, step) in self
+            .pool(info.projection, &u.pools.projections)?
+            .iter()
+            .enumerate()
+        {
+            let unchecked = info.unchecked.contains(&(ordinal as u32));
             // The cached end belongs to the element, not any projected field.
             flat_end = None;
             // Payload is one explicit Box dereference, even when the payload is another Box.
@@ -1041,6 +1046,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                     })?;
                     let active = self.active_variant(ptr.at(tag.offset), tag.form)?;
                     if active != variant {
+                        if unchecked {
+                            return fail(V::TypeConfusion, "invalid proved variant projection");
+                        }
                         return Ok(Err(LangFailure));
                     }
                     let fields = &tag
@@ -1119,6 +1127,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                             ptr = self.ledger.project(ptr, at.offset - ptr.offset, logical);
                             layout = element;
                         }
+                        None if unchecked => {
+                            return fail(V::OutOfExtent, "invalid proved flat index projection");
+                        }
                         None => return Ok(Err(LangFailure)),
                     }
                 }
@@ -1139,6 +1150,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                     let count = u64::try_from(self.read_scalar(ptr, 8)?)
                         .map_err(|_| err(V::Malformed, "a sequence count beyond u64"))?;
                     if bits >= u128::from(count) {
+                        if unchecked {
+                            return fail(V::OutOfExtent, "invalid proved index projection");
+                        }
                         return Ok(Err(LangFailure));
                     }
                     let mut at = self.sequential_start(element)?;
@@ -1165,6 +1179,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                             }
                             ptr = self.ledger.project(ptr, at.offset - ptr.offset, logical);
                             layout = element;
+                        }
+                        None if unchecked => {
+                            return fail(V::OutOfExtent, "invalid proved flat index projection");
                         }
                         None => return Ok(Err(LangFailure)),
                     }
@@ -1216,6 +1233,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                         return fail(V::TypeConfusion, "index is not an integer");
                     }
                     if bits >= u128::from(count) {
+                        if unchecked {
+                            return fail(V::OutOfExtent, "invalid proved index projection");
+                        }
                         return Ok(Err(LangFailure));
                     }
                     ptr = self.ledger.project(

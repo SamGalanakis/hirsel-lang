@@ -197,6 +197,7 @@ pub fn violations(program: &Program, lowered: &Lowered) -> Vec<(String, Vec<Viol
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: &lowered.table,
@@ -437,6 +438,7 @@ pub fn unit_violations(
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &program.operation_registry(),
         target: &target,
         layouts: &lowered.table,

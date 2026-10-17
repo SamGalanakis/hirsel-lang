@@ -525,7 +525,7 @@ fn representable<'m>(
     fits
 }
 
-/// `IntArith`: `Add` of two integers of `kind` in `mode`; `Checked` also yields the `i1`
+/// `IntArith`: unchecked integer operators, or named Add modes; `Checked` yields the `i1`
 /// overflow flag.
 pub(crate) fn int_arith<'m>(
     b: &Builder<'m>,
@@ -538,8 +538,30 @@ pub(crate) fn int_arith<'m>(
     let Some((width, signed)) = integer(kind) else {
         return Err(format!("{op:?} of {kind:?}"));
     };
+    if mode == ArithMode::Wrapping {
+        let value = match op {
+            BinaryOp::Add => b.binary(BinOp::Add, left, right),
+            BinaryOp::Sub => b.binary(BinOp::Sub, left, right),
+            BinaryOp::Mul => b.binary(BinOp::Mul, left, right),
+            BinaryOp::Shl => b.binary(BinOp::Shl, left, right),
+            BinaryOp::Shr => b.binary(if signed { BinOp::AShr } else { BinOp::LShr }, left, right),
+            BinaryOp::Div => b.binary(if signed { BinOp::SDiv } else { BinOp::UDiv }, left, right),
+            BinaryOp::Rem if signed => {
+                // MIN % -1 is zero even though LLVM srem would be poison.
+                let ty = b.module().int_type(width);
+                let minus_one = b.module().const_int(ty, u128::MAX);
+                let one = b.module().const_int(ty, 1);
+                let is_minus_one = b.icmp(IntPredicate::Eq, right, minus_one);
+                let divisor = b.select(is_minus_one, one, right);
+                b.binary(BinOp::SRem, left, divisor)
+            }
+            BinaryOp::Rem => b.binary(BinOp::URem, left, right),
+            _ => return Err(format!("{op:?} in IntArith")),
+        };
+        return Ok((value, None));
+    }
     if op != BinaryOp::Add {
-        return Err(format!("{op:?} in IntArith"));
+        return Err(format!("{op:?} in IntArith {mode:?}"));
     }
     let ty = b.module().int_type(width);
     let s = if signed { 's' } else { 'u' };

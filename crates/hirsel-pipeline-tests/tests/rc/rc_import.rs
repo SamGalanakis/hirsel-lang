@@ -396,6 +396,7 @@ fn a_mutated_output_is_rejected() {
             dump(&unit)
         );
         let inputs = hirsel_lir::validate::Inputs {
+            discharge: None,
             operations: &program.operation_registry(),
             target: &target,
             layouts: &lowered.table,

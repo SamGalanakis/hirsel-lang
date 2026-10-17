@@ -35,6 +35,18 @@ impl Importer<'_, '_> {
         let Some(place) = self.body.places.get(id.0 as usize) else {
             return malformed(format!("place {} outside the body", id.0));
         };
+        let source_place = match self.origin {
+            Some(origin) => origin.places[self.body_id as usize]
+                .get(id.0 as usize)
+                .copied(),
+            None if self.discharge.is_empty() => None,
+            None => self
+                .body
+                .places
+                .iter()
+                .position(|p| p.root == place.root && p.projection == place.projection)
+                .map(|i| i as u32),
+        };
         let temporary = self.out.slots[self.slot_for(place.root.0 as usize)?.index()].kind
             == SlotKind::Temporary;
         // A view temporary reads through the place it views.
@@ -178,6 +190,7 @@ impl Importer<'_, '_> {
                 return unsupported("a fixed flat record part at its source type");
             }
             return Ok(PlaceRef {
+                source_place,
                 slot,
                 steps,
                 projection: lowered,
@@ -198,6 +211,7 @@ impl Importer<'_, '_> {
             ));
         }
         Ok(PlaceRef {
+            source_place,
             slot,
             steps,
             projection: lowered,
@@ -227,6 +241,8 @@ impl Importer<'_, '_> {
         let projection = PoolRange::push(&mut self.out.pools.projections, steps);
         let a = AddressId(self.out.addresses.len() as u32);
         self.out.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Slot(p.slot),
             projection,
             ty: p.ty,
@@ -369,19 +385,38 @@ impl Importer<'_, '_> {
     pub(super) fn named_address(&mut self, p: &PlaceRef) -> R<(AddressId, Option<&'static str>)> {
         let mut steps = Vec::new();
         let mut rule = None;
-        for x in &p.projection {
+        let mut unchecked = Vec::new();
+        for (ordinal, x) in p.projection.iter().enumerate() {
+            let check = match x {
+                ProjectionStep::Index(_) => Some("MEM-14"),
+                ProjectionStep::VariantField { .. } => Some("MEM-13"),
+                _ => None,
+            };
+            let proved = p.source_place.zip(check).is_some_and(|(place, rule)| {
+                self.discharged(Form::Projection {
+                    place,
+                    rule: rule.into(),
+                })
+            });
+            if proved {
+                unchecked.push(ordinal as u32);
+            }
             steps.push(match x {
                 ProjectionStep::Payload => ProjectionStep::Payload,
                 ProjectionStep::Field(f) => ProjectionStep::Field(*f),
                 ProjectionStep::VariantField { variant, field } => {
-                    rule.get_or_insert("MEM-13");
+                    if !proved {
+                        rule.get_or_insert("MEM-13");
+                    }
                     ProjectionStep::VariantField {
                         variant: *variant,
                         field: *field,
                     }
                 }
                 ProjectionStep::Index(local) => {
-                    rule = Some("MEM-14");
+                    if !proved {
+                        rule = Some("MEM-14");
+                    }
                     let index = self.read_local_bits(*local)?;
                     ProjectionStep::Index(index)
                 }
@@ -393,6 +428,8 @@ impl Importer<'_, '_> {
         let projection = PoolRange::push(&mut self.out.pools.projections, steps);
         let a = AddressId(self.out.addresses.len() as u32);
         self.out.addresses.push(AddressInfo {
+            source_place: p.source_place,
+            unchecked,
             base: AddressBase::Slot(p.slot),
             projection,
             ty: p.ty,
@@ -405,6 +442,7 @@ impl Importer<'_, '_> {
         let slot = self.slot_for(local.0 as usize)?;
         let ty = self.out.slots[slot.index()].ty;
         let p = PlaceRef {
+            source_place: None,
             slot,
             steps: Vec::new(),
             projection: Vec::new(),
@@ -558,6 +596,7 @@ impl Importer<'_, '_> {
         );
         let ty = self.out.slots[slot.index()].ty;
         let place = PlaceRef {
+            source_place: None,
             slot,
             steps: Vec::new(),
             projection: Vec::new(),

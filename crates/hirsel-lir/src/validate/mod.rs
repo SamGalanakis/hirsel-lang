@@ -73,6 +73,7 @@ pub struct Inputs<'a> {
     pub layouts: &'a LayoutTable,
     pub manifest: &'a Manifest,
     pub operations: &'a dyn crate::operation::OperationDeclarations,
+    pub discharge: Option<&'a crate::discharge::Discharge>,
 }
 
 /// A rejected unit, returned with every violation found.
@@ -355,6 +356,7 @@ pub fn check<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Vec<Violation>
         stage: S::KIND,
         target: inputs.target,
         operations: inputs.operations,
+        discharge: inputs.discharge,
     };
     let mut report = Report::default();
     let facts = structure::check(&cx, &mut report);
@@ -383,6 +385,7 @@ pub(crate) struct Cx<'a, S> {
     pub stage: StageKind,
     pub target: &'a TargetSpec,
     pub operations: &'a dyn crate::operation::OperationDeclarations,
+    pub discharge: Option<&'a crate::discharge::Discharge>,
 }
 
 impl<S> Cx<'_, S> {

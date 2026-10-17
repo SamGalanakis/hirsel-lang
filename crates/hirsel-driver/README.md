@@ -33,7 +33,11 @@ plans, it requires the native snapshot's TIR of each planned definition to be
 the exported TIR. `build_program` lowers with the plan and runs
 `validate_discharge` on every discharged unit before the Value validator. Any
 difference from the plan is an import validator error. `ReadyProgram.discharged`
-lists the removed sites, which the proof report reads.
+lists the removed sites, which the proof report reads. Integer operators import
+as unchecked `IntArith` (Neg as subtraction from zero); projection addresses
+retain their path and mark only the licensed bounds/tag guards unchecked.
+Append fusion carries source-site and canonical-place mappings through caller
+rewrites and derived builders, so reports and evidence keep their original ids.
 
 Native callable-target specializations retain their original instance's signature
 and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include

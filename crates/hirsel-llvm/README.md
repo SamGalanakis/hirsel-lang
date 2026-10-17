@@ -46,8 +46,11 @@ Invariants:
   `float.to_i32`); `float.from_int` is `sitofp` or `uitofp` into its destination width;
   `Reinterpret` (`f32.bits` and its siblings) is a `bitcast` whose NaN self-compare selects
   the canonical NaN's bits.
-  `IntArith` is `add`, `llvm.{s,u}add.sat` or `llvm.{s,u}add.with.overflow`,
-  the named divisions guard a divisor made safe, `min`/`max` are `llvm.minimum`/`llvm.maximum`
+  `IntArith` emits unchecked integer operators for proved SEM-1 sites, or
+  `llvm.{s,u}add.sat` / `llvm.{s,u}add.with.overflow` for named Add modes.
+  Signed unchecked remainder still makes a -1 divisor safe, preserving MIN % -1 = 0;
+  unchecked projection ordinals skip only their bounds/tag guards.
+  The named divisions guard a divisor made safe, `min`/`max` are `llvm.minimum`/`llvm.maximum`
   (the `_number` forms select a NaN operand's other operand around them) and `total_order`
   compares sign-magnitude keys of NaN-canonical bits. LLVM may lower `llvm.fma` and
   128-bit integer-to-float casts to target support routines. `tests/it/scalar_library.rs` holds each to the

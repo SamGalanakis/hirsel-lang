@@ -129,6 +129,7 @@ fn stages(src: &str, enabled: bool) -> hirsel_heapcheck::Program<Rc> {
         let v = hirsel_lir::validate::check(
             &rc,
             &Inputs {
+                discharge: None,
                 operations: &p.operation_registry(),
                 target: &target(),
                 layouts: &table,
@@ -372,6 +373,8 @@ fn control(forgery: Forgery) -> Vec<ViolationKind> {
     ] {
         let projection = PoolRange::push(&mut u.pools.projections, projection);
         u.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Value(ValueId(0)),
             projection,
             ty,
@@ -439,6 +442,7 @@ fn control(forgery: Forgery) -> Vec<ViolationKind> {
     hirsel_lir::validate::check(
         &u,
         &Inputs {
+            discharge: None,
             operations: &p.operation_registry(),
             target: &target(),
             layouts: &l.table,

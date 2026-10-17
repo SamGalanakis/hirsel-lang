@@ -50,6 +50,7 @@ impl Importer<'_, '_> {
 
     pub(super) fn whole(&self, slot: SlotId) -> PlaceRef {
         PlaceRef {
+            source_place: None,
             slot,
             steps: Vec::new(),
             projection: Vec::new(),
@@ -622,7 +623,7 @@ impl Importer<'_, '_> {
                 };
                 let operand = self.operand(value)?;
                 let result = self.fresh(ty);
-                if op == UnaryOp::Neg && self.unsigned(ty) {
+                if op == UnaryOp::Neg && (self.unsigned(ty) || self.discharged(Form::Negation)) {
                     // Negating an unsigned value is `0 - x`: SEM-1 unless x is 0.
                     let constant = self.constant(ty, ConstantValue::Integer(0));
                     let zero = self.fresh(ty);
@@ -630,14 +631,25 @@ impl Importer<'_, '_> {
                         result: zero,
                         constant,
                     });
-                    let failure = self.fail(Some("SEM-1".to_string()))?;
-                    self.push(Inst::Binary {
-                        result,
-                        op: BinaryOp::Sub,
-                        left: zero,
-                        right: operand,
-                        failure,
-                    });
+                    if self.discharged(Form::Integer) || self.discharged(Form::Negation) {
+                        self.push(Inst::IntArith {
+                            result,
+                            flag: None,
+                            op: BinaryOp::Sub,
+                            mode: hirsel_lir::ir::ArithMode::Wrapping,
+                            left: zero,
+                            right: operand,
+                        });
+                    } else {
+                        let failure = self.fail(Some("SEM-1".to_string()))?;
+                        self.push(Inst::Binary {
+                            result,
+                            op: BinaryOp::Sub,
+                            left: zero,
+                            right: operand,
+                            failure,
+                        });
+                    }
                     return Ok(result);
                 }
                 let failure = self.fail((op == UnaryOp::Neg).then(|| "SEM-1".to_string()))?;
@@ -670,8 +682,8 @@ impl Importer<'_, '_> {
                         | BinaryOp::Shl
                         | BinaryOp::Shr
                 );
-                if lop == BinaryOp::Add && self.discharged(Form::Overflow) {
-                    // Proved not to overflow, so the wrapped sum is the sum.
+                if arithmetic && self.discharged(Form::Integer) {
+                    // Every failure condition of this integer operation is proved absent.
                     self.push(Inst::IntArith {
                         result,
                         flag: None,

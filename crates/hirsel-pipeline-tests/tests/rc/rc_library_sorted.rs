@@ -240,6 +240,8 @@ Ok(())
             .unwrap();
         let address = AddressId(unit.addresses.len() as u32);
         unit.addresses.push(AddressInfo {
+            source_place: None,
+            unchecked: Vec::new(),
             base: AddressBase::Slot(SlotId(slot as u32)),
             projection: PoolRange::EMPTY,
             ty: unit.values[reaching.index()].ty,

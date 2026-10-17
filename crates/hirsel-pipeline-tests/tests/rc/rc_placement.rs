@@ -44,6 +44,7 @@ fn check<S: Stage>(p: &Placed_, unit: &LirUnit<S>) -> Vec<ViolationKind> {
     let manifest = manifest(&p.program);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &p.program.operation_registry(),
         target: &target,
         layouts: &p.table,
@@ -444,6 +445,7 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     let rows = hirsel_core_contract::Manifest::skeleton([]);
     let target = target();
     let inputs = Inputs {
+        discharge: None,
         operations: &(),
         target: &target,
         layouts: &table,

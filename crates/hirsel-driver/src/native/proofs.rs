@@ -9,7 +9,7 @@ use hirsel_engine::{QueryEngine, ToolError, ValidatedNativeInput};
 use hirsel_lir::discharge::{Discharge, Discharged, Form};
 use hirsel_proof_export::sidecar::{self, Budget, Checker, Record, SIDECAR_FORMAT, Verdict};
 use hirsel_proof_export::{DefinitionSection, Obligation, ObligationKind, SitePosition};
-use hirsel_syntax::{BinaryOp, ContentHash, DefPath};
+use hirsel_syntax::{BinaryOp, ContentHash, DefPath, UnaryOp};
 use serde_json::Value;
 use std::path::Path;
 
@@ -156,6 +156,7 @@ impl Proofs {
         let mut discharge = Discharge::default();
         let mut lines = vec![];
         let mut missing = 0;
+        let mut projections = std::collections::BTreeMap::new();
         for assessed in &assessment.obligations {
             let id = assessed.obligation.id.to_string();
             let path = &assessed.section.path;
@@ -165,7 +166,16 @@ impl Proofs {
                     continue;
                 }
                 Err(keep) => Err(keep.to_string()),
-                Ok(_) => forms(assessed.section, assessed.obligation),
+                Ok(_) => {
+                    let places = projections.entry(path.clone()).or_insert_with(|| {
+                        hirsel_proof_export::projected_places(&assessed.section.tir)
+                    });
+                    forms(
+                        assessed.section,
+                        assessed.obligation,
+                        places.get(&assessed.obligation.id).copied(),
+                    )
+                }
             };
             if let Ok(sites) = &licensed {
                 if definitions
@@ -206,10 +216,6 @@ impl Proofs {
         let (mut removed, mut kept) = (0, 0);
         for line in &self.lines {
             let outcome = match &line.licensed {
-                Ok(()) if ready.undischarged.contains(&line.definition) => Err(
-                    "append fusion rewrote the definition before import, so its sites no longer number its TIR"
-                        .to_string(),
-                ),
                 Ok(()) if !ready.discharged.0.contains_key(&line.definition) => {
                     Ok("removed (the definition has no native code)")
                 }
@@ -242,13 +248,40 @@ impl Proofs {
 
 /// The removal form of each site of an accepted obligation, or why it has
 /// none. A `check` or `ensures` site is a TIR `Check`; a SEM-1 failure edge
-/// is removable on an integer `Add` (wrapping is then exact). `requires` is
+/// is removable on checked integer arithmetic (wrapping is then exact). `requires` is
 /// an assumption whose entry check every caller's evidence would have to
 /// cover, and the remaining kinds and operations have no removal form yet.
-fn forms(section: &DefinitionSection, obligation: &Obligation) -> Result<Vec<Discharged>, String> {
+fn forms(
+    section: &DefinitionSection,
+    obligation: &Obligation,
+    projection: Option<(hirsel_tir::BodyId, hirsel_tir::PlaceId)>,
+) -> Result<Vec<Discharged>, String> {
     use hirsel_tir::{InstructionKind, Rvalue};
     let kind = obligation.id.kind;
     let sem1 = obligation.id.rule.as_str() == "SEM-1";
+    if kind == ObligationKind::FailureEdge
+        && let Some((body_id, place)) = projection
+    {
+        let body = &section.tir.bodies[body_id.0 as usize];
+        return Ok(obligation
+            .sites
+            .iter()
+            .map(|site| Discharged {
+                body: site.body.0,
+                block: site.block.0,
+                statement: match site.position {
+                    SitePosition::Instruction(i) => i,
+                    SitePosition::Terminator => {
+                        body.blocks[site.block.0 as usize].instructions.len() as u32
+                    }
+                },
+                form: Form::Projection {
+                    place: place.0,
+                    rule: obligation.id.rule.to_string(),
+                },
+            })
+            .collect());
+    }
     if !matches!(kind, ObligationKind::Check | ObligationKind::Ensures)
         && !(kind == ObligationKind::FailureEdge && sem1)
     {
@@ -272,8 +305,36 @@ fn forms(section: &DefinitionSection, obligation: &Obligation) -> Result<Vec<Dis
                 InstructionKind::Assign { value, .. } if sem1 => {
                     match &body.rvalues[value.0 as usize] {
                         Rvalue::Binary {
-                            op: BinaryOp::Add, ..
-                        } => Form::Overflow,
+                            op:
+                                BinaryOp::Add
+                                | BinaryOp::Sub
+                                | BinaryOp::Mul
+                                | BinaryOp::Div
+                                | BinaryOp::Rem
+                                | BinaryOp::Shl
+                                | BinaryOp::Shr,
+                            ..
+                        } => Form::Integer,
+                        Rvalue::Unary {
+                            op: UnaryOp::Neg,
+                            value,
+                        } => {
+                            let ty = body.places[value.place.0 as usize].ty;
+                            if matches!(
+                                section.tir.types.get(ty).map(|t| &t.kind),
+                                Some(hirsel_types::TypeKind::Primitive(
+                                    hirsel_types::Primitive::I8
+                                        | hirsel_types::Primitive::I16
+                                        | hirsel_types::Primitive::I32
+                                        | hirsel_types::Primitive::I64
+                                        | hirsel_types::Primitive::I128
+                                ))
+                            ) {
+                                Form::Negation
+                            } else {
+                                Form::Integer
+                            }
+                        }
                         Rvalue::Binary { op, .. } => {
                             return Err(format!("no removal form for SEM-1 {op:?}"));
                         }

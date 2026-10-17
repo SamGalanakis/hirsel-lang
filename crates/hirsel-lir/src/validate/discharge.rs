@@ -9,33 +9,80 @@
 //! and no planned entry may remain.
 use crate::discharge::{Discharged, Form};
 use crate::effect::Opcode;
-use crate::ir::{FailureId, LirUnit};
+use crate::ir::{FailureId, Inst, LirUnit, ProjectionStep};
 use crate::stage::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-type Entry = ((u32, u32, u32), Opcode, Option<String>);
+type Entry = ((u32, u32, u32), Opcode, Option<String>, Option<u32>);
 
 fn inventory(unit: &LirUnit<Value>) -> BTreeMap<Entry, usize> {
     let mut out = BTreeMap::new();
-    let mut add = |failure: FailureId, opcode: Opcode| {
+    let mut add = |failure: FailureId, opcode: Opcode, rule: Option<String>, place: Option<u32>| {
+        // Environmental edges and cleanup plumbing are not source checks.
+        // Removing a guard can also remove its otherwise-unused cleanup path,
+        // or change where a shared cleanup is first emitted.
+        if rule.is_none() {
+            return;
+        }
         let edge = unit.tables.failures.get(failure.index());
         let anchor = edge.and_then(|e| unit.tables.source_anchors.get(e.anchor.index()));
         let key = anchor.map_or((u32::MAX, u32::MAX, u32::MAX), |a| {
             (a.body, a.block, a.statement)
         });
-        *out.entry((key, opcode, edge.and_then(|e| e.rule.clone())))
-            .or_default() += 1;
+        *out.entry((key, opcode, rule, place)).or_default() += 1;
     };
     for (b, block) in unit.blocks.iter().enumerate() {
         for inst in block.instructions.get(&unit.instructions).unwrap_or(&[]) {
-            if let Some(failure) = inst.failure() {
-                add(failure, inst.opcode());
+            if let Inst::Address { address, failure } = inst {
+                let info = &unit.addresses[address.index()];
+                for (i, step) in info
+                    .projection
+                    .get(&unit.pools.projections)
+                    .unwrap_or(&[])
+                    .iter()
+                    .enumerate()
+                {
+                    if info.unchecked.contains(&(i as u32)) {
+                        continue;
+                    }
+                    let rule = match step {
+                        ProjectionStep::Index(_) | ProjectionStep::FlatAt { .. } => Some("MEM-14"),
+                        ProjectionStep::VariantField { .. } => Some("MEM-13"),
+                        _ => None,
+                    };
+                    if let Some(rule) = rule {
+                        add(
+                            *failure,
+                            Opcode::Address,
+                            Some(rule.into()),
+                            info.source_place,
+                        );
+                    }
+                }
+            } else if let Some(failure) = inst.failure() {
+                add(
+                    failure,
+                    inst.opcode(),
+                    unit.tables
+                        .failures
+                        .get(failure.index())
+                        .and_then(|e| e.rule.clone()),
+                    None,
+                );
             }
         }
         if let Some(terminator) = unit.terminators.get(b)
             && let Some(failure) = terminator.failure()
         {
-            add(failure, terminator.opcode());
+            add(
+                failure,
+                terminator.opcode(),
+                unit.tables
+                    .failures
+                    .get(failure.index())
+                    .and_then(|e| e.rule.clone()),
+                None,
+            );
         }
     }
     out
@@ -44,8 +91,10 @@ fn inventory(unit: &LirUnit<Value>) -> BTreeMap<Entry, usize> {
 fn entry(site: &Discharged) -> Entry {
     let at = (site.body, site.block, site.statement);
     match &site.form {
-        Form::Check(rule) => (at, Opcode::Check, Some(rule.clone())),
-        Form::Overflow => (at, Opcode::Binary, Some("SEM-1".into())),
+        Form::Check(rule) => (at, Opcode::Check, Some(rule.clone()), None),
+        Form::Integer => (at, Opcode::Binary, Some("SEM-1".into()), None),
+        Form::Projection { place, rule } => (at, Opcode::Address, Some(rule.clone()), Some(*place)),
+        Form::Negation => (at, Opcode::Unary, Some("SEM-1".into()), None),
     }
 }
 
@@ -67,7 +116,7 @@ pub fn validate_discharge(
             before.get(key).copied().unwrap_or(0),
             after.get(key).copied().unwrap_or(0),
         );
-        let ((body, block, statement), opcode, rule) = key;
+        let ((body, block, statement), opcode, rule, _) = key;
         let at = format!(
             "{opcode:?} {} at body {body} block {block} statement {statement}",
             rule.as_deref().unwrap_or("(no rule)")
@@ -83,6 +132,18 @@ pub fn validate_discharge(
             None => {}
         }
     }
+    // PS-2 also lists origin bindings, loan events and drops that name a
+    // projected place without accessing it. They have no guard in either
+    // import. An actual access is independently inventoried above.
+    removed.extend(
+        plan.iter()
+            .filter(|s| {
+                matches!(s.form, Form::Projection { .. })
+                    && !before.contains_key(&entry(s))
+                    && !after.contains_key(&entry(s))
+            })
+            .cloned(),
+    );
     if errors.is_empty() {
         Ok(removed)
     } else {

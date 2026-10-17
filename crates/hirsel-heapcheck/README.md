@@ -494,3 +494,7 @@ has gone. Handle-close failures retain the entry definition with no source site,
 join the failure observation, and keep their report in the terminal output.
 The source-free terminal handle control covers LANG-9 and a successful close
 under both holder audit modes.
+
+PS-13 unchecked arithmetic and projection guards do not take language failure
+edges. H still audits the domain of unchecked division/shifts and the validity
+of unchecked indices/tags; violations are model errors. Signed MIN % -1 remains zero.

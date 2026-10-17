@@ -161,8 +161,6 @@ pub struct ReadyProgram {
     /// The planned PS-13 sites some unit removed, as `validate_discharge`
     /// confirmed.
     pub discharged: Discharge,
-    /// Planned definitions that kept every check (`Lowered::undischarged`).
-    pub undischarged: BTreeSet<DefPath>,
 }
 
 impl ReadyProgram {
@@ -272,6 +270,7 @@ pub fn build_program(
     let table = &lowered.table;
     let operations = program.operation_registry();
     let inputs = Inputs {
+        discharge: Some(&lowered.native_discharge),
         operations: &operations,
         target,
         layouts: table,
@@ -347,7 +346,6 @@ pub fn build_program(
         inline_instances: lowered.inline_instances,
         statics,
         discharged,
-        undischarged: lowered.undischarged,
     })
 }
 
