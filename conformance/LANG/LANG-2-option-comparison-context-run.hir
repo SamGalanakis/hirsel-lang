@@ -1,0 +1,31 @@
+// rule: LANG-2
+// expect: run
+fn lookup(s: String) -> Option[String] in s {
+  None()
+}
+
+fn generic[T: copyable](value: T) -> Option[T] in value {
+  None()
+}
+
+fn map_absent(m: Map[u64, String]) -> bool {
+  map.get(m, 0u64) == None
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(lookup("x") == None, Bounds())
+  failure.check(None == lookup("x"), Bounds())
+  failure.check(lookup("x") == None(), Bounds())
+  failure.check(None() == lookup("x"), Bounds())
+  failure.check(
+    lookup("x") == {
+      None
+    },
+    Bounds()
+  )
+  let source: String = "x"
+  failure.check(generic(source) == None, Bounds())
+  let m: Map[u64, String] = map.empty()
+  failure.check(map_absent(m), Bounds())
+  Ok(())
+}

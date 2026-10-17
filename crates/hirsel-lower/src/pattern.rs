@@ -160,8 +160,16 @@ impl Builder<'_, '_> {
                     };
                     let _ = self.loan(&mut value, span);
                     let origin = Self::binding_origin(binding.owner, &binding.binding).unwrap();
-                    let place =
-                        self.bind_origin(value.place, origin, OriginBindingKind::Alias, span);
+                    let place = self.bind_origin(
+                        value.place,
+                        origin,
+                        if fresh {
+                            OriginBindingKind::Fresh
+                        } else {
+                            OriginBindingKind::Alias
+                        },
+                        span,
+                    );
                     self.retain_view(place);
                     self.bindings.push((binding.owner, binding.binding, place));
                     return Ok(());

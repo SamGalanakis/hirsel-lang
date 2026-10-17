@@ -1052,7 +1052,7 @@ impl<'a> Checker<'a> {
                     self.identities = before_identities.clone();
                     self.identity_changes = before_changes.clone();
                     if let Some(actual) = self.ty(value) {
-                        self.bind_pattern(arm.pattern, actual, value);
+                        self.bind_pattern(arm.pattern, actual, value, false);
                     }
                     if let Some(guard) = arm.guard {
                         self.expr(guard, None);
@@ -1496,9 +1496,20 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
-            ExprKind::Binary { left, right, .. } => {
+            ExprKind::Binary { op, left, right } => {
                 self.expr(left, None);
                 self.expr(right, None);
+                if matches!(
+                    op,
+                    hirsel_syntax::BinaryOp::Eq | hirsel_syntax::BinaryOp::Ne
+                ) {
+                    if let Some(peer) = self.ty(left) {
+                        self.comparison_variant(right, peer);
+                    }
+                    if let Some(peer) = self.ty(right) {
+                        self.comparison_variant(left, peer);
+                    }
+                }
                 used = self.used(left).join(self.used(right));
             }
             ExprKind::Try {
@@ -1893,7 +1904,7 @@ impl<'a> Checker<'a> {
                         row.sendability_requirement = SendabilityRequirement::None;
                         self.out.body.types.push(row)
                     };
-                    self.bind_pattern(pattern, actual, value);
+                    self.bind_pattern(pattern, actual, value, false);
                     if let Some(holdings) = self.part_holdings.get(&value).cloned() {
                         if let Some(binding) = self
                             .out
@@ -2125,7 +2136,7 @@ impl<'a> Checker<'a> {
                             row.kind = TypeKind::Tuple(fields.to_vec().into());
                             let tuple = self.out.body.types.push(row);
                             let item = self.projected_item(actual, tuple);
-                            self.bind_pattern(pattern, item, source);
+                            self.bind_pattern(pattern, item, source, true);
                         } else if matches!(
                             kind,
                             BuiltinType::Array
@@ -2140,7 +2151,7 @@ impl<'a> Checker<'a> {
                                 } else {
                                     self.projected_item(actual, *item)
                                 };
-                                self.bind_pattern(pattern, item, source);
+                                self.bind_pattern(pattern, item, source, true);
                             }
                         }
                     }
@@ -2188,6 +2199,69 @@ impl<'a> Checker<'a> {
             }
         }
     }
+    /// H's comparison context can be a callee result template. Once J has
+    /// substituted the other operand, a contextual nullary variant needs that
+    /// caller-side instantiation too. It holds no payload or source lifetime.
+    fn comparison_variant(&mut self, expression: ExprId, peer: TypeId) {
+        match self.tree.expressions[expression.0 as usize].kind.clone() {
+            ExprKind::Block {
+                tail: Some(tail), ..
+            } => {
+                self.comparison_variant(tail, peer);
+                self.copy_value_type(expression, tail);
+                return;
+            }
+            ExprKind::Unary {
+                op: UnaryOp::Copy | UnaryOp::Take,
+                value,
+            } => {
+                self.comparison_variant(value, peer);
+                self.copy_value_type(expression, value);
+                return;
+            }
+            _ => (),
+        }
+        let variant = match self.tree.expressions[expression.0 as usize].kind {
+            ExprKind::Path(_) => match self.resolved.get(&expression) {
+                Some(ResolvedName::Variant(variant)) => *variant,
+                _ => return,
+            },
+            ExprKind::Call { ref arguments, .. } if arguments.is_empty() => {
+                let Some(CheckedCall {
+                    target: CallTarget::Constructor(ContextualName::Variant { variant, .. }),
+                    ..
+                }) = self.call_row(expression)
+                else {
+                    return;
+                };
+                *variant
+            }
+            _ => return,
+        };
+        let Some(actual) = self.ty(expression) else {
+            return;
+        };
+        if !hirsel_types::shape_equal(&self.out.body.types, actual, &self.out.body.types, peer)
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let Some(TypeKind::Variant(variants)) = self.layout(peer) else {
+            return;
+        };
+        if !variants
+            .get(variant.0 as usize)
+            .is_some_and(|variant| variant.fields.is_empty())
+        {
+            return;
+        }
+        let mut row = self.out.body.types.get(peer).unwrap().clone();
+        row.brand = Brand::default();
+        row.modes.relation = Relation::global();
+        let receipt = self.out.body.types.push(row);
+        self.set_ty(expression, receipt);
+    }
+
     fn return_value(&mut self, value: ExprId, span: Span) {
         let Some(t) = self.ty(value) else { return };
         if self.scoped(t) {

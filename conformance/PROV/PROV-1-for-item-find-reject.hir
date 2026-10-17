@@ -1,0 +1,15 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 9
+pub fn main() -> Result[(), ()] {
+  let lines: List[String] = ["x"]
+  let other: String = "x"
+  for line in lines {
+    match std@1/string.find(line, "x") {
+      Some(p) => {
+        failure.check(string.byte_offset(other, p) == 0, TextInvariant())
+      },
+      None() => (),
+    }
+  }
+  Ok(())
+}

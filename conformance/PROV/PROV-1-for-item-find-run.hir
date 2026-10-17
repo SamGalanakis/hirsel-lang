@@ -1,0 +1,34 @@
+// rule: PROV-1
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let mut lines: List[String] = ["x", "xx"]
+  for line in lines {
+    match std@1/string.find(line, "x") {
+      Some(p) => failure.check(string.byte_offset(line, p) == 0, TextInvariant()),
+      None() => failure.check(false, TextInvariant()),
+    }
+  }
+  for line in mut lines {
+    match std@1/string.find(line, "x") {
+      Some(p) => failure.check(string.byte_offset(line, p) == 0, TextInvariant()),
+      None() => failure.check(false, TextInvariant()),
+    }
+  }
+  for line in take lines {
+    match std@1/string.find(line, "x") {
+      Some(p) => failure.check(string.byte_offset(line, p) == 0, TextInvariant()),
+      None() => failure.check(false, TextInvariant()),
+    }
+  }
+  // A yielded value's existing brand still belongs to its original owner.
+  let source: String = "x"
+  let p = match string.position(source, 0u64) {
+    Some(p) => p,
+    None() => return Error(()),
+  }
+  let points: List[StrPos of source] = [p]
+  for point in points {
+    failure.check(string.byte_offset(source, point) == 0, TextInvariant())
+  }
+  Ok(())
+}

@@ -359,3 +359,10 @@ Owned synthetic data temporaries use Take and ordinary constructor cleanup.
 Named reference leaves use the same capture-free forwarding bodies as source
 function references, with the imported producer type store and declared passing
 modes.
+
+Loop pattern bindings name the yielded value, separately from the collection or
+cursor source. Each iteration introduces a fresh binding identity, including
+borrowed indexed items. The projected item's existing brand, locality and arena
+placement remain unchanged. This lets `string.find(item, ...)` return positions
+of that exact item without claiming the collection itself is a string owner.
+`PROV-1-for-item-find-run` and its rejected twin retain the same-owner requirement.

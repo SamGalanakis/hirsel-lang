@@ -824,3 +824,17 @@ while copying, lifetime and current Sendable proofs remain independent.
 The registry-backed source harnesses import signature normalization from
 hirsel-signature and body checking from hirsel-check directly. Both dependencies
 are test-only; production modes continue to consume shared phase data.
+
+Loop pattern bindings name the yielded value, separately from the collection or
+cursor source. Each iteration introduces a fresh binding identity, including
+borrowed indexed items. The projected item's existing brand, locality and arena
+placement remain unchanged. This lets `string.find(item, ...)` return positions
+of that exact item without claiming the collection itself is a string owner.
+`PROV-1-for-item-find-run` and its rejected twin retain the same-owner requirement.
+
+Equality context for a payload-free variant is refreshed after both operands'
+call results have their caller-side substitutions. Its type arguments retain
+that complete context, while the empty construction retains no source lifetime.
+`LANG-2-option-comparison-context-run` covers bare/called `None`, operand order,
+block wrappers, generic results and map lookup; the Slots control checks the
+original static case without depending on unfinished Slots execution.

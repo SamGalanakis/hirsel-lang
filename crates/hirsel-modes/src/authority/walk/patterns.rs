@@ -139,13 +139,14 @@ impl Checker<'_> {
             self.out.failure.get_or_insert(error);
             return;
         }
-        self.bind_pattern(pattern, plan.step.item, plan.source);
+        self.bind_pattern(pattern, plan.step.item, plan.source, true);
     }
     pub(super) fn bind_pattern(
         &mut self,
         pattern: hirsel_syntax::PatternId,
         actual: TypeId,
         value: ExprId,
+        iteration: bool,
     ) {
         let source = self.source_place(value);
         let owned = matches!(source.access, SourceAccess::Take | SourceAccess::Unique)
@@ -155,7 +156,7 @@ impl Checker<'_> {
                 .is_some_and(|binding| binding.usage == UseKind::Take);
         let deep_unique = owned
             && self.out.body.types.get(actual).unwrap().modes.uniqueness == Uniqueness::Unique;
-        self.bind_pattern_value(pattern, actual, value, deep_unique, false);
+        self.bind_pattern_value(pattern, actual, value, deep_unique, false, iteration);
     }
     fn bind_pattern_value(
         &mut self,
@@ -164,6 +165,7 @@ impl Checker<'_> {
         value: ExprId,
         deep_unique: bool,
         part: bool,
+        iteration: bool,
     ) {
         let Some(decision) = self.pattern_row(pattern).cloned() else {
             return;
@@ -211,7 +213,12 @@ impl Checker<'_> {
         // statement, make the binding a new owner; a copy of a place keeps
         // that place's identity (PROV-1). Blocks are transparent (spec #50):
         // `{take x}` is `take x`. Lowering applies the same test.
-        let value_identity =
+        // A loop source describes a collection/cursor, not the yielded value.
+        // Its item keeps the projected brand and lifetime above, but receives
+        // its own per-iteration identity instead of aliasing the container.
+        let value_identity = if iteration {
+            None
+        } else {
             match self.tree.expressions[self.transparent_value(value).0 as usize].kind {
                 ExprKind::Unary {
                     op: UnaryOp::Take, ..
@@ -226,11 +233,13 @@ impl Checker<'_> {
                     None
                 }
                 _ => self.identity(value),
-            };
+            }
+        };
         // Call results are owned receipts, even when local to an argument
         // (spec #43). Their source elaboration's Borrow is a consumer view,
         // not a copied alias that detaches when this binding is mutated.
         let owned_call = !part
+            && !iteration
             && matches!(
                 self.tree.expressions[value.0 as usize].kind,
                 ExprKind::Call { .. }
@@ -308,7 +317,7 @@ impl Checker<'_> {
             if let Some(part) = actual_fields.get(field.0 as usize) {
                 let part = super::facts::siblings(&mut self.out.body.types, *part, &roots);
                 let part = self.projected_item(refined, part);
-                self.bind_pattern_value(child, part, value, deep_unique, true);
+                self.bind_pattern_value(child, part, value, deep_unique, true, iteration);
                 if let Some(b) = self.out.body.bindings.iter().find(|b| {
                     work::count(Counter::AuthoritySourceRows);
                     b.site == NameSite::Pattern(child)
