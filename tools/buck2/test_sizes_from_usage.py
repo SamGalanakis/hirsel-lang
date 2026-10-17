@@ -19,18 +19,18 @@ writes `test-sizes.json` (the evidence) and `test_sizes.bzl` (the requests
 `platforms.bzl` reads). A binary's shards are one row: they run the same harness.
 
 CPU: 1 while p95 cores (CPU seconds per wall second, runs of at least 1 s) is
-at most 1.6, otherwise clamp(ceil(p95), 2, 4). A one-CPU action gets the
-larger of its request and the worker's slot share (1.25-1.67 cores), so a
-second CPU below that reserves a core the run leaves idle. The launcher runs
-as many test threads as the reservation's whole CPUs, so a multi-threaded
-binary keeps the count it measured using. With fewer than 20 runs the maximum
-replaces p95. The pool holds its one reservation for a blocked multi-CPU
-action, so a three- or four-CPU run can wait minutes where a two-CPU one starts
-in seconds: a binary that rule gives more than two CPUs takes two when its
-measured parallelism predicts at most 30% more wall time there. That fraction
-is Amdahl's, from each run's cores used over the test threads it ran (its
-request, at most 4), the median over runs. The agreement shards keep their
-count for their timeouts.
+at most 1.6, otherwise 2. A one-CPU action gets the larger of its request and
+the worker's slot share (1.25-1.67 cores), so a second CPU below that reserves
+a core the run leaves idle. The launcher runs as many test threads as the
+reservation's whole CPUs. With fewer than 20 runs the maximum replaces p95.
+No gate test asks for more than two: the pool holds its one reservation for a
+blocked multi-CPU action, so a three- or four-CPU run both waits minutes and
+holds back the actions behind it, where a two-CPU one starts in seconds. The
+evidence keeps what more would buy: Amdahl's parallel fraction, from each run's
+cores used over the test threads it ran (its request, at most 4), the median
+over runs, and the wall time two CPUs take relative to clamp(ceil(p95), 2, 4).
+Only the full run's agreement shards, which run past their timeout already at
+four, keep that count.
 
 Memory: the worker samples an action's process-group PSS (shared libraries and
 mapped binaries included) every 250 ms and kills it past twice its memory_kb on
@@ -48,6 +48,7 @@ import re
 
 HERE = Path(__file__).resolve().parent
 SHARE_CORES = 1.6
+GATE_CPUS = 2
 MAX_CPUS = 4
 MIN_SAMPLES = 20
 MIN_WALL_SECONDS = 1.0
@@ -56,8 +57,7 @@ MEMORY_MARGIN = 1.2
 ESCALATION = 1.75
 MEMORY_STEP_KB = 262144
 MIN_MEMORY_KB = 524288
-TWO_CPU_SLOWDOWN = 1.3
-KEEP_CPUS = {"gate-agree", "gate-agree-full"}
+FULL_RUN_CPUS = {"gate-agree-full"}
 # Conformance shards are single-threaded and ran past their limit on the
 # slower worker class; they keep asking for the fast workers.
 CPU_CLASSES = {"gate-conformance": "fast"}
@@ -151,11 +151,10 @@ def relative_wall(p, cpus):
 def size(name, samples, peaks, floors):
     cores = [s["cpu"] / s["wall"] for s in samples if s["cpu"] is not None and s["wall"] >= MIN_WALL_SECONDS]
     p95 = high(cores, .95) if cores else 0.0
-    cpu = 1 if p95 <= SHARE_CORES else min(MAX_CPUS, max(2, math.ceil(p95)))
+    wanted = 1 if p95 <= SHARE_CORES else min(MAX_CPUS, max(GATE_CPUS, math.ceil(p95)))
+    cpu = wanted if name in FULL_RUN_CPUS else min(wanted, GATE_CPUS)
     p = parallel_fraction(samples)
-    slowdown = round(relative_wall(p, 2) / relative_wall(p, cpu), 2) if p is not None and cpu > 2 else None
-    if slowdown is not None and slowdown <= TWO_CPU_SLOWDOWN and name not in KEEP_CPUS:
-        cpu = 2
+    slowdown = round(relative_wall(p, GATE_CPUS) / relative_wall(p, wanted), 2) if p is not None and wanted > GATE_CPUS else None
     peak = max(peaks, default=0)
     memory_kb = max([MIN_MEMORY_KB, step(peak / KILL_FACTOR * MEMORY_MARGIN)] + [step(f) for f in floors])
     return dict(

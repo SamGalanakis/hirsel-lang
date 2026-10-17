@@ -1,7 +1,7 @@
 {
   "gate-agree": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 52.7,
     "memory_kb": 1835008,
     "memory_kills": 0,
@@ -66,7 +66,7 @@
   },
   "gate-native-smoke": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 19.7,
     "memory_kb": 786432,
     "memory_kills": 0,
@@ -243,7 +243,7 @@
   },
   "hirsel-conformance-unittest": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 68.0,
     "memory_kb": 1310720,
     "memory_kills": 0,
@@ -310,7 +310,7 @@
   },
   "hirsel-driver-test-it": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 93.0,
     "memory_kb": 2359296,
     "memory_kills": 0,
@@ -335,7 +335,7 @@
   },
   "hirsel-driver-test-it-scaling": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 44.5,
     "memory_kb": 786432,
     "memory_kills": 0,
@@ -357,7 +357,7 @@
   },
   "hirsel-driver-test-it-stdlib": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 83.4,
     "memory_kb": 1310720,
     "memory_kills": 0,
@@ -754,7 +754,7 @@
   },
   "hirsel-llvm-test-it": {
     "cpu_class": "",
-    "cpu_count": 3,
+    "cpu_count": 2,
     "mean_wall_seconds": 9.7,
     "memory_kb": 524288,
     "memory_kills": 0,
@@ -907,7 +907,7 @@
   },
   "hirsel-pipeline-tests-test-front": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 82.9,
     "memory_kb": 2359296,
     "memory_kills": 0,
@@ -931,7 +931,7 @@
   },
   "hirsel-pipeline-tests-test-rc": {
     "cpu_class": "",
-    "cpu_count": 4,
+    "cpu_count": 2,
     "mean_wall_seconds": 81.5,
     "memory_kb": 1572864,
     "memory_kills": 0,

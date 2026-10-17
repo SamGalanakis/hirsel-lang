@@ -314,12 +314,16 @@ bundled`, and delete `prelude_overlay.py`, its pins, its test `tools/tests/prelu
 A pool test binary reserves what it measured using: `test_sizes.bzl`
 (`TEST_REQUESTS`, evidence in `test-sizes.json`) gives each binary, shared by
 its shards, one CPU while its p95 core use is at most 1.6 (a one-CPU action
-already runs up to the worker's slot share), otherwise `clamp(ceil(p95), 2,
-4)`, but two where its measured parallelism predicts at most 30% more wall
-time at two: the pool holds its one reservation for a blocked multi-CPU
-action, so three or four CPUs can wait minutes where two start in seconds.
-The agreement shards keep their count for their timeouts. The launcher runs
-as many test threads as the request's whole CPUs.
+already runs up to the worker's slot share), otherwise two. No gate test asks
+for more: the pool holds its one reservation for a blocked multi-CPU action, so
+three or four CPUs both wait minutes and hold back the actions behind them,
+where two start in seconds. The evidence keeps the parallel fraction and the
+wall time two CPUs take relative to `clamp(ceil(p95), 2, 4)`; at two, every
+gate binary's p95 wall, scaled from its measured runs, stays under a
+quarter of its 1800 s timeout.
+Only the full run's agreement shards, which already reach their timeout at
+four, keep four. The launcher runs as many test threads as the request's whole
+CPUs.
 
 Memory follows the worker's kill rule: it samples an action's process-group
 PSS, shared libraries and mapped binaries included, and kills it past twice its
