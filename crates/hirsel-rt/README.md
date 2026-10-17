@@ -498,3 +498,7 @@ admission. `-- [args...]` supplies only Args; no record or delimiter grants no
 external roots. Compiler adapters receive the root table [Io, Args, Env, Unsafe,
 Test] and forward only declared parameters, in source order. The standalone path
 always uses admitted host grants and never the conformance fixture profile.
+
+`--hirsel-grants grants.json [args...]` binds a template to the standalone
+executable's embedded program and entry, then follows the same validation,
+argv snapshot and host admission path as `--hirsel-run`.

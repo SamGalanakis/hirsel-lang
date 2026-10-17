@@ -82,3 +82,9 @@ Net with empty rules grants the `net` projection while permitting no operations;
 scripted network tape requests. They neither admit a RunConfig nor grant network
 authority; the serving adapter validates endpoints and duplicates before minting
 a world. JSON unknown fields and invalid variant/byte representations refuse.
+
+`bind_grants` / `read_grants` fill a fresh schema-1 binding from the launcher's
+program, entry and launch kind, then validate the resulting record. Templates
+accept only inputs, Io, Args, Env, Unsafe and admission fields; binding fields,
+unknowns and duplicates refuse. Omitted fields use the same denial defaults as
+`empty`. Relative template paths are explicit tooling inputs.

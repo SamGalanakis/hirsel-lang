@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
 
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))
@@ -26,7 +26,7 @@ enum Command {
     },
     Run {
         file: OsString,
-        record: Option<OsString>,
+        record: Option<(bool, OsString)>,
         native: bool,
     },
     Source {
@@ -101,7 +101,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 while let Some(arg) = args.next()? {
                     match arg {
                         Long("native") if !native => native = true,
-                        Long("run") if record.is_none() => record = Some(args.value()?),
+                        Long("run" | "grants") if record.is_none() => {
+                            record = Some((matches!(arg, Long("grants")), args.value()?));
+                        }
                         Long("simulation") if simulation.is_none() => {
                             simulation = Some(args.value()?)
                         }
@@ -116,7 +118,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let file = file.ok_or("missing source path")?;
                 if let Some(config) = simulation {
                     if native || record.is_some() {
-                        return Err("--simulation cannot combine with --native or --run".into());
+                        return Err(
+                            "--simulation cannot combine with --native, --run or --grants".into(),
+                        );
                     }
                     Command::Simulation { config, file }
                 } else {
@@ -244,7 +248,13 @@ fn execute(args: Vec<OsString>) -> u8 {
             // program yet is a tool outcome (exit 2).
             return match hirsel_driver::native::run_path_native_with_config(
                 Path::new(&file),
-                record.as_deref().map(Path::new),
+                record.as_ref().map(|(grants, path)| {
+                    if *grants {
+                        hirsel_driver::LaunchConfig::Grants(Path::new(path))
+                    } else {
+                        hirsel_driver::LaunchConfig::Record(Path::new(path))
+                    }
+                }),
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
             ) {
@@ -264,7 +274,13 @@ fn execute(args: Vec<OsString>) -> u8 {
         } => {
             return run_result(hirsel_driver::run_path_with_config(
                 Path::new(&file),
-                record.as_deref().map(Path::new),
+                record.as_ref().map(|(grants, path)| {
+                    if *grants {
+                        hirsel_driver::LaunchConfig::Grants(Path::new(path))
+                    } else {
+                        hirsel_driver::LaunchConfig::Record(Path::new(path))
+                    }
+                }),
                 &mut std::io::stdout().lock(),
             ));
         }

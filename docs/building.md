@@ -25,20 +25,30 @@ pinned cross compiler and runtime archive. The executable contains the productio
 runtime and compiler support libraries statically; its only shared dependencies are
 libc and the platform ELF loader. It runs independently of Hirsel and the source checkout.
 
-Grants are supplied at launch, using the same schema-1 RunConfig as
-`hirsel run --run`. Export an empty record bound to the selected program:
+Grants are supplied at launch using schema-1 RunConfig fields. A grants template
+omits `schema`, `program`, `entry` and `launch`: the launcher binds those to the
+selected program. For an entry receiving `Io`, `grants.json` can grant only stdout:
+
+```json
+{"io":{"stdout":"stdout.bytes@1","dirs":[]}}
+```
+
+```sh
+hirsel run hello.hir --grants grants.json
+./hello --hirsel-grants grants.json argument-one argument-two
+```
+
+Templates may supply `inputs`, `io`, `args`, `env`, `unsafe` and `admission`.
+Omitted fields deny authority and use zero seeds. Binding fields, unknown fields,
+duplicate fields and invalid grants refuse launch. Templates use the ordinary
+RunConfig validation and admission path; selecting code grants no authority.
+
+For a record pinned to a particular semantic program revision, export its binding,
+edit its grants, and select it explicitly:
 
 ```sh
 hirsel export --run hello.hir -o /absolute/path/run.json
 ./hello --hirsel-run /absolute/path/run.json argument-one argument-two
-```
-
-Edit that record to grant the roots the entry requests. For an entry receiving
-`Io`, this `io` value grants only standard output:
-
-```json
-{"stdout":"stdout.bytes@1","tasks":null,"monotonic_clock":null,
- "wall_clock":null,"random":null,"dirs":[],"net":null}
 ```
 
 To read files, add a directory mount to `io.dirs`, for example
@@ -47,13 +57,13 @@ A program can acquire `io.dir(rt, path.of("data"))` and read relative paths with
 that grant. Use `read_write` only when writes are intended. No working directory,
 standard stream, environment key, clock or network authority is implicit.
 
-The run record path must be absolute. The launcher validates the record, checks
+The run record path must be absolute; a template path may be relative. The launcher validates the record, checks
 its semantic program revision, entry and launch kind, checks required roots and
 admission conditions, then pins host grants before entry. The same binary can
 accept different grants and seeds on subsequent launches. Unknown or unsupported
 policy refuses launch. Environment variables never supply a grant fallback.
 
-Arguments after `--hirsel-run <path>` replace the record's `args` with the exact
+Arguments after `--hirsel-run <path>` or `--hirsel-grants <path>` replace the record's `args` with the exact
 UTF-8 process snapshot, including an empty snapshot, before admission. A record
 may therefore omit Args. Without a run record, `./program -- args...` explicitly
 grants only Args. `./program` grants no external roots: a root-free entry can

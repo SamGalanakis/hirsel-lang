@@ -1,0 +1,8 @@
+// rule: PROG-3
+// expect: run
+// stdout: bound
+// Also launched from a grants template by the CLI boundary tests.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let _ = out.print(io.stdout(rt)?, "bound\n")
+  Ok(())
+}

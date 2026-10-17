@@ -123,6 +123,15 @@ fabricated capability. The ambient heap permission is unchanged. Launch, header 
 admission refusals are tooling errors before entry, not source diagnostics or language
 failures.
 
+A launcher may bind a grants template to the selected program in one step
+(`hirsel run <source> --grants <template>` or a standalone executable's
+`--hirsel-grants <template>`). A template supplies only the schema-1 run fields
+`inputs`, `io`, `args`, `env`, `unsafe` and `admission`; the launcher supplies
+`schema`, `program`, `entry` and `launch`. Omitted fields use denial defaults and
+zero seeds. Binding fields, unknown or duplicate fields and invalid grants refuse
+launch. The completed record follows ordinary validation and admission. Standalone
+arguments after the template path replace its Args snapshot as with `--hirsel-run`.
+
 ### PROG-4: Interop
 
 `extern "c" fn` definitions require `Unsafe` and use parameter modes: a borrow means C does

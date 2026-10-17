@@ -41,15 +41,21 @@ pub(crate) fn select_run(
     } else {
         LaunchKind::Main
     };
-    let invalid = || RunRefusal::Invalid {
+    let invalid = || {
+        RunRefusal::Invalid {
         field: "argv".into(),
-        detail: "expected --hirsel-run /absolute/run.json [args...] or -- [args...]".into(),
+        detail: "expected --hirsel-run /absolute/run.json [args...], --hirsel-grants grants.json [args...] or -- [args...]".into(),
+    }
     };
     let record = match arguments.first() {
         None => RunConfig::empty(program, entry.into(), launch),
-        Some(flag) if flag == "--hirsel-run" => {
+        Some(flag) if flag == "--hirsel-run" || flag == "--hirsel-grants" => {
             let path = arguments.get(1).ok_or_else(invalid)?;
-            let run = RunConfig::read_path(std::path::Path::new(path))?;
+            let run = if flag == "--hirsel-grants" {
+                RunConfig::read_grants(std::path::Path::new(path), program, entry.into(), launch)?
+            } else {
+                RunConfig::read_path(std::path::Path::new(path))?
+            };
             run.check_program(program, entry, launch)?;
             let mut record = run.record().clone();
             record.args = Some(hirsel_run_config::snapshot_args(

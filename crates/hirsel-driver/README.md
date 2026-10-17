@@ -71,3 +71,7 @@ executable. Its entry adapter forwards nominal roots in source parameter order,
 derived from the engine's shared `entry_roots` validation. The executable embeds
 semantic program revision and entry identity; fresh launch grants and argv are
 validated and admitted by the runtime, independently of compiler profile.
+
+`LaunchConfig` selects either a bound record or a grants template. Both source
+engines resolve it against the checked semantic revision before host admission;
+templates never pass through a temporary exported record.

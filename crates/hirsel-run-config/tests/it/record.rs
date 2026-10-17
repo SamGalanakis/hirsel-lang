@@ -608,3 +608,48 @@ fn relative_record_paths_are_refused_before_reading() {
         matches!(RunConfig::read_path(std::path::Path::new("run.json")), Err(RunRefusal::Invalid { field, .. }) if field == "--hirsel-run")
     );
 }
+
+#[test]
+fn grants_templates_bind_only_selected_code_and_use_record_validation() {
+    let bytes = br#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":["x"],"env":{"KEY":null},"inputs":{"hash_seed":7,"random_seed":8,"test_seed":9}}"#;
+    let run =
+        RunConfig::bind_grants(bytes, [1; 32], "probe@1/main".into(), LaunchKind::Main).unwrap();
+    run.check_program([1; 32], "probe@1/main", LaunchKind::Main)
+        .unwrap();
+    assert!(
+        run.check_program([2; 32], "probe@1/main", LaunchKind::Main)
+            .is_err()
+    );
+    assert_eq!(run.record().inputs.hash_seed, 7);
+    assert_eq!(run.record().args, Some(vec!["x".into()]));
+    assert_eq!(RunConfig::validate(run.canonical()).unwrap(), run);
+    let denied =
+        RunConfig::bind_grants(b"{}", [1; 32], "probe@1/main".into(), LaunchKind::Main).unwrap();
+    assert!(denied.record().io.is_none());
+    assert!(denied.record().args.is_none());
+    assert!(denied.record().env.is_none());
+    assert!(!denied.record().unsafe_root);
+    for bad in [
+        r#"{"schema":1}"#,
+        r#"{"program":"ignored"}"#,
+        r#"{"entry":"probe@1/other"}"#,
+        r#"{"launch":"test"}"#,
+        r#"{"args":[],"args":["x"]}"#,
+        r#"{"env":{"K":null,"K":"x"}}"#,
+        r#"{"io":{"dirs":[],"stdout":"unknown@1"}}"#,
+        r#"{"inputs":{"hash_seed":1.0,"random_seed":0,"test_seed":0}}"#,
+        r#"{"admission":{"not_before":9,"expires":1}}"#,
+        r#"{"unknown":true}"#,
+    ] {
+        assert!(
+            RunConfig::bind_grants(
+                bad.as_bytes(),
+                [1; 32],
+                "probe@1/main".into(),
+                LaunchKind::Main
+            )
+            .is_err(),
+            "{bad}"
+        );
+    }
+}

@@ -199,6 +199,52 @@ impl Config {
 }
 
 impl RunConfig {
+    /// Bind explicit grants to the selected code, then use ordinary record validation.
+    /// Binding fields are not template inputs: they always come from the launcher.
+    pub fn bind_grants(
+        bytes: &[u8],
+        program: [u8; 32],
+        entry: String,
+        launch: LaunchKind,
+    ) -> Result<ValidatedRun, RunRefusal> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Grants {
+            #[serde(default)]
+            inputs: Inputs,
+            io: Option<IoGrants>,
+            args: Option<Vec<String>>,
+            #[serde(default, deserialize_with = "unique_env")]
+            env: Option<BTreeMap<String, Option<String>>>,
+            #[serde(default, rename = "unsafe")]
+            unsafe_root: bool,
+            admission: Option<Admission>,
+        }
+        integer_tokens(bytes)?;
+        let grants: Grants = serde_json::from_slice(bytes).map_err(|e| RunRefusal::Malformed {
+            detail: e.to_string(),
+        })?;
+        let mut record = Self::empty(program, entry, launch);
+        record.inputs = grants.inputs;
+        record.io = grants.io;
+        record.args = grants.args;
+        record.env = grants.env;
+        record.unsafe_root = grants.unsafe_root;
+        record.admission = grants.admission;
+        record.validated()
+    }
+
+    /// Read the explicitly selected template. Relative template paths are tooling inputs.
+    pub fn read_grants(
+        path: &std::path::Path,
+        program: [u8; 32],
+        entry: String,
+        launch: LaunchKind,
+    ) -> Result<ValidatedRun, RunRefusal> {
+        let bytes = std::fs::read(path).map_err(|e| invalid("grants", &e.to_string()))?;
+        Self::bind_grants(&bytes, program, entry, launch)
+    }
+
     /// Read an explicitly selected record; relative paths cannot resolve against cwd.
     pub fn read_path(path: &std::path::Path) -> Result<ValidatedRun, RunRefusal> {
         if !path.is_absolute() {

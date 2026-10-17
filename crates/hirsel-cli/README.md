@@ -90,3 +90,9 @@ snapshots before supplying that record; selecting the source grants no authority
 production runtime. Default builds use LLVM O2, release O3, debug O0 with source
 line tables. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
 records deny external roots. `-- [args...]` explicitly supplies only Args.
+
+`hirsel run <source|manifest> --grants grants.json` binds a grants template to
+that program and uses the same validation and admission as `--run`. These options
+are exclusive, and neither combines with `--simulation`. Templates omit binding
+fields and deny omitted roots. Standalone executables accept the corresponding
+`--hirsel-grants grants.json [args...]` spelling.

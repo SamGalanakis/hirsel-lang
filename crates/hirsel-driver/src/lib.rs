@@ -107,10 +107,33 @@ pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
             .to_vec(),
     )
 }
+/// Explicit production launch input. Templates bind to the code selected by this launch.
+#[derive(Clone, Copy)]
+pub enum LaunchConfig<'a> {
+    Record(&'a Path),
+    Grants(&'a Path),
+}
+impl LaunchConfig<'_> {
+    fn read(
+        self,
+        revision: &hirsel_run_config::ProgramRevision,
+    ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_config::RunRefusal> {
+        match self {
+            Self::Record(path) => hirsel_engine::read_run_record(path),
+            Self::Grants(path) => hirsel_run_config::RunConfig::read_grants(
+                path,
+                revision.digest(),
+                revision.entry().into(),
+                hirsel_run_config::LaunchKind::Main,
+            ),
+        }
+    }
+}
+
 /// Execute checked TIR with freshly admitted host grants and exact snapshots.
 pub fn run_path_with_config(
     path: &Path,
-    record: Option<&Path>,
+    record: Option<LaunchConfig<'_>>,
     stdout: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
     use hirsel_interp::Outcome;
@@ -125,7 +148,7 @@ pub fn run_path_with_config(
         .semantic_program_revision(&program.entry)
         .map_err(|e| program.error(e))?;
     let requested = record
-        .map(hirsel_engine::read_run_record)
+        .map(|record| record.read(&revision))
         .transpose()
         .map_err(|e| ToolError::Runtime(e.to_string()))?;
     let mut host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());

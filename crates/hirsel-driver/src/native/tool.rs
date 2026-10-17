@@ -25,7 +25,7 @@ pub fn run_path_native(
 
 pub fn run_path_native_with_config(
     path: &Path,
-    record: Option<&Path>,
+    record: Option<crate::LaunchConfig<'_>>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
@@ -37,7 +37,8 @@ pub fn run_path_native_with_config(
             .engine
             .semantic_program_revision(&loaded.entry)
             .map_err(|e| loaded.error(e))?;
-        let requested = hirsel_engine::read_run_record(record)
+        let requested = record
+            .read(&revision)
             .map_err(|e| ToolError::Runtime(e.to_string()))?;
         let mut host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
         Some(

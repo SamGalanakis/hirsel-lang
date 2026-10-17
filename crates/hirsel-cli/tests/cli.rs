@@ -13,7 +13,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
+            b"usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -1073,4 +1073,92 @@ fn build_rejects_invalid_options_and_source_before_writing_an_executable() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     std::fs::remove_file(accepted).unwrap();
     std::fs::remove_file(source).unwrap();
+}
+
+#[test]
+fn grants_templates_launch_current_source_without_export_and_refuse_bad_inputs() {
+    let source = file(
+        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"template\\n\"); Ok(()) }\n",
+    );
+    let grants = file(r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#);
+    for native in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.arg("run").arg(&source).arg("--grants").arg(&grants);
+        if native {
+            command.arg("--native");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"template\n");
+    }
+    for bad in [
+        r#"{}"#,
+        r#"{"program":"stale"}"#,
+        r#"{"args":[],"args":[]}"#,
+    ] {
+        std::fs::write(&grants, bad).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&source)
+            .arg("--grants")
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{bad}: {output:?}");
+        assert!(output.stdout.is_empty());
+    }
+    for flags in [
+        ["--grants", "--run"],
+        ["--run", "--grants"],
+        ["--simulation", "--grants"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&source)
+            .arg(flags[0])
+            .arg(&grants)
+            .arg(flags[1])
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+    }
+}
+
+#[test]
+fn standalone_grants_bind_embedded_code_without_an_exported_record() {
+    let source = file(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../conformance/PROG/PROG-3-grants-template-entry-run.hir"),
+        )
+        .unwrap(),
+    );
+    let executable = source.with_extension("exe");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let grants = file(r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]}}"#);
+    let output = Command::new(&executable)
+        .arg("--hirsel-grants")
+        .arg(&grants)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, b"bound\n");
+    for bad in [r#"{}"#, r#"{"entry":"standalone@0/other"}"#] {
+        std::fs::write(&grants, bad).unwrap();
+        let output = Command::new(&executable)
+            .arg("--hirsel-grants")
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3), "{output:?}");
+        assert!(output.stdout.is_empty());
+    }
 }
