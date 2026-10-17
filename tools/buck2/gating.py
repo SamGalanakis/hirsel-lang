@@ -5,6 +5,8 @@ it, the green record and the failure summary."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -62,6 +64,52 @@ DRIVER_DEPENDENTS = {
 
 def say(message):
     print(message, flush=True)
+
+
+# ---------------------------------------------------------------- gate slots
+
+# `dir:N`: a host's gates run at most N at a time on the pool, each holding a
+# lock on one of `dir/slot-0` .. `slot-N-1` while its Buck2 work runs. Unset,
+# there is no cap.
+GATE_SLOTS = 'HIRSEL_GATE_SLOTS'
+SLOT_POLL_SECONDS = 5
+
+
+@contextlib.contextmanager
+def gate_slot(environ=os.environ):
+    """Hold one of the host's gate slots, waiting for one to free."""
+    spec = environ.get(GATE_SLOTS, '')
+    if not spec:
+        yield
+        return
+    directory, _, count = spec.rpartition(':')
+    if not directory or not count.isdigit() or int(count) < 1:
+        raise SystemExit(f'gate: {GATE_SLOTS}={spec!r} is not dir:N')
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    waiting = None
+    while True:
+        for slot in range(int(count)):
+            # Python opens files non-inheritable, so Buck2 never holds the lock.
+            handle = open(directory / f'slot-{slot}', 'a+')
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                continue
+            with handle:
+                handle.truncate(0)
+                handle.write(f'{os.getpid()} {ROOT}\n')
+                handle.flush()
+                if waiting is not None:
+                    say(f'gate: took gate slot {slot} after waiting {time.monotonic() - waiting:.0f} s')
+                yield
+            return
+        if waiting is None:
+            holders = [(directory / f'slot-{slot}').read_text().strip() for slot in range(int(count))]
+            say(f'gate: waiting for one of {count} gate slots in {directory}; held by: ' + '; '.join(holders))
+            waiting = time.monotonic()
+        time.sleep(SLOT_POLL_SECONDS)
 
 
 # ---------------------------------------------------------------- git

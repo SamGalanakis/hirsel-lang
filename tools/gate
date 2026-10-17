@@ -15,6 +15,10 @@ workspace build, Clippy and every selected test and campaign run as one Buck2
 invocation, so the pool runs them concurrently, while formatting and the
 build-file check run beside it here.
 
+`$HIRSEL_GATE_SLOTS` (`dir:N`) caps a host's concurrent gates: the Buck2 work
+waits for one of N lock files in dir, and says it is waiting. Unset, there is
+no cap.
+
 A passing change is remembered by its identity (gating.change_identity: the
 patch-id of the lane's own diff, and the crates it touches). When main moves
 under an unchanged change and it rebases cleanly, the next run only builds the
@@ -216,7 +220,8 @@ def push_gate(base_ref):
         say('gate: this change already passed; main moved under it and it rebased cleanly, '
             'so only the workspace build and formatting run')
         if prepare(report):
-            build_only(report, log)
+            with gating.gate_slot():
+                build_only(report, log)
         report.print(time.monotonic() - started)
         return 0 if report.passed else 1
     for kind, paths in (('documentation', c.docs), ('gate tooling', c.tools), ('build-wide', c.build_wide),
@@ -255,8 +260,8 @@ def push_gate(base_ref):
         say(f'gate: Buck2 output: {log}')
         with tempfile.TemporaryDirectory() as scratch:
             event_log, build_report = Path(scratch) / 'events.pb.zst', Path(scratch) / 'build.json'
-            invoked = time.monotonic()
-            with open(log, 'w') as out:
+            with gating.gate_slot(), open(log, 'w') as out:
+                invoked = time.monotonic()
                 status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
                                       *build, *[t + '[clippy.txt]' for t in clippy], *selection.tests, *campaigns,
                                       '--', '--timeout', str(gating.TIMEOUT), stdout=out, stderr=subprocess.STDOUT).returncode
@@ -391,7 +396,10 @@ def main():
     group.add_argument('--base', default='origin/main', help='check the change from this commit\'s merge base')
     args = parser.parse_args()
     os.chdir(ROOT)
-    return full_gate() if args.full else push_gate(args.base)
+    if args.full:
+        with gating.gate_slot():
+            return full_gate()
+    return push_gate(args.base)
 
 
 if __name__ == '__main__':

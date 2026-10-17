@@ -112,6 +112,8 @@ names its failing cases and the command that reruns each alone. A passing
 change is recorded by its identity, the patch-id of the lane's own diff
 without context lines and the crates it touches: after main moves and the
 change rebases cleanly, `tools/gate` only builds and checks formatting.
+With `HIRSEL_GATE_SLOTS=dir:N` set, at most N gates on the host run their
+Buck2 work at once; a gate past that waits for a slot in dir and says so.
 
 `tools/land` lands the committed change: fetch, rebase onto `origin/main`,
 then the workspace build, Clippy, formatting and the build-file check on the

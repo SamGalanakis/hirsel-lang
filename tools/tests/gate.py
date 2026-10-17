@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """tools/gate's selection, change identity and summary, and tools/land's loop,
 against scratch repositories with a fake Buck2."""
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -8,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 sys.dont_write_bytecode = True
@@ -306,6 +309,35 @@ class Identity(unittest.TestCase):
         self.assertTrue(gating.is_green(identity, {'hirsel-lexer'}, self.root))
         self.assertFalse(gating.is_green(identity, {'hirsel-llvm'}, self.root))
         self.assertFalse(gating.is_green('', set(), self.root))
+
+
+class Slots(unittest.TestCase):
+    def test_a_gate_waits_while_every_slot_is_held_and_takes_the_first_freed(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            environ = {gating.GATE_SLOTS: f'{scratch}/slots:2'}
+            poll, gating.SLOT_POLL_SECONDS = gating.SLOT_POLL_SECONDS, 0.05
+            self.addCleanup(setattr, gating, 'SLOT_POLL_SECONDS', poll)
+            entered = threading.Event()
+            with gating.gate_slot(environ), gating.gate_slot(environ):
+                said = io.StringIO()
+
+                def third():
+                    with contextlib.redirect_stdout(said), gating.gate_slot(environ):
+                        entered.set()
+
+                waiter = threading.Thread(target=third)
+                waiter.start()
+                self.assertFalse(entered.wait(0.5))
+            waiter.join(5)
+            self.assertTrue(entered.is_set())
+            self.assertIn('waiting for one of 2 gate slots', said.getvalue())
+            self.assertIn('took gate slot', said.getvalue())
+
+    def test_no_cap_without_the_variable_and_a_malformed_one_is_refused(self):
+        with gating.gate_slot({}), gating.gate_slot({}), gating.gate_slot({}):
+            pass
+        with self.assertRaises(SystemExit), gating.gate_slot({gating.GATE_SLOTS: '/tmp/slots'}):
+            pass
 
 
 class Summary(unittest.TestCase):
