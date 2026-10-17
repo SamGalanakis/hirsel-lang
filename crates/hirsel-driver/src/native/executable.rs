@@ -60,6 +60,26 @@ pub fn build_path_native(
     profile: BuildProfile,
     evidence: Option<&super::Evidence>,
 ) -> Result<Result<Vec<String>, NativeError>, ToolError> {
+    build_path_native_backend(
+        source,
+        output,
+        target,
+        profile,
+        super::Backend::Llvm,
+        evidence,
+    )
+}
+
+/// `build_path_native` with `backend`, which lowers the same Ready LIR; Cranelift reads
+/// the profile's optimization level as none or speed.
+pub fn build_path_native_backend(
+    source: &Path,
+    output: &Path,
+    target: TargetSpec,
+    profile: BuildProfile,
+    backend: super::Backend,
+    evidence: Option<&super::Evidence>,
+) -> Result<Result<Vec<String>, NativeError>, ToolError> {
     let mut loaded = crate::load_program(source)?;
     loaded.check_for_execution()?;
     let mut engine = loaded.engine;
@@ -94,8 +114,9 @@ pub fn build_path_native(
             .map(PathBuf::from)
             .unwrap_or_else(super::runtime_cache::default_directory);
         let tools = Toolchain::in_tree(&cache, &[&target])?;
-        let objects = super::emit_objects(
+        let objects = super::emit_backend_objects(
             &program,
+            backend,
             profile.opt(),
             Partition::Whole,
             false,

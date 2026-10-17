@@ -266,6 +266,63 @@
       "dependencies": [
         {
           "kind": null,
+          "name": "cranelift-codegen",
+          "req": "=0.136.3",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
+          "name": "cranelift-frontend",
+          "req": "=0.136.3",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
+          "name": "cranelift-module",
+          "req": "=0.136.3",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
+          "name": "cranelift-object",
+          "req": "=0.136.3",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
+          "name": "hirsel-core-contract",
+          "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-graph",
+          "path": "crates/hirsel-graph",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-syntax",
+          "path": "crates/hirsel-syntax",
+          "req": "*",
+          "uses_default_features": true
+        }
+      ],
+      "name": "hirsel-cranelift"
+    },
+    {
+      "dependencies": [
+        {
+          "kind": null,
           "name": "hirsel-span",
           "path": "crates/hirsel-span",
           "req": "*",
@@ -306,6 +363,13 @@
           "kind": null,
           "name": "hirsel-core-contract",
           "path": "crates/hirsel-core-contract",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "hirsel-cranelift",
+          "path": "crates/hirsel-cranelift",
           "req": "*",
           "uses_default_features": true
         },

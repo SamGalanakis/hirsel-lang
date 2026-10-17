@@ -1,0 +1,16 @@
+[package]
+name = "hirsel-cranelift"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-graph = { path = "../hirsel-graph" }
+hirsel-lir = { path = "../hirsel-lir" }
+hirsel-syntax = { path = "../hirsel-syntax" }
+cranelift-codegen = { version = "=0.136.3", default-features = false, features = ["std", "x86", "arm64", "unwind"] }
+cranelift-frontend = { version = "=0.136.3", default-features = false, features = ["std"] }
+cranelift-module = { version = "=0.136.3", default-features = false, features = ["std"] }
+cranelift-object = { version = "=0.136.3", default-features = false }

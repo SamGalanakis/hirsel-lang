@@ -295,6 +295,24 @@ they add or touch on the pool. Focus runs book one CPU at lane priority:
 .buck2/bin/buck2 test -c hirsel.full=true -c hirsel.tests=focus //:gate-native-full -- --test-arg=--filter --test-arg=<program>
 ```
 
+Changes to `crates/hirsel-cranelift` also run the Cranelift parity gate for the
+programs they touch: each case LLVM passes (unoptimized, diagnostic archive) must
+agree with the reference as a Cranelift executable, and every case that does not is
+a row of `native-tests/regressions/cranelift-parity.tsv` with its reason. A failure
+without a row, a changed reason and a row whose case passes all fail. `--clif`
+first prints each selected case's Cranelift IR. The per-push native smoke runs the
+cases of `native-tests/regressions/cranelift-smoke.txt` as Cranelift executables.
+
+```sh
+.buck2/bin/buck2 test -c hirsel.full=true -c hirsel.tests=focus //:gate-native-cranelift -- --test-arg=--filter --test-arg=<program>
+```
+
+The whole parity set runs as `//:gate-native-cranelift-shard-1` to `-8`, each under
+the pool's action time limit.
+
+`native --cranelift-times [--filter TEXT]...` prints each case's emission wall time
+under Cranelift, LLVM O0 and LLVM O2, and the totals.
+
 Tests that execute the full native matrix or take about a minute or longer
 carry `#[ignore = "full gate"]` and a `full_gate_` name prefix. Keep their
 inputs and assertions intact; add a separate bounded smoke test when useful.

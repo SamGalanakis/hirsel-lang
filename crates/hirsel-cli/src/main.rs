@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>]";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>]";
 
 const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
 
@@ -19,6 +19,7 @@ enum Command {
         output: OsString,
         target: hirsel_driver::native::TargetSpec,
         profile: hirsel_driver::native::BuildProfile,
+        backend: hirsel_driver::native::Backend,
         proofs: Proofs,
     },
     Export {
@@ -35,6 +36,7 @@ enum Command {
         file: OsString,
         launch: Option<Launch>,
         native: bool,
+        backend: Option<hirsel_driver::native::Backend>,
         proofs: Proofs,
         arguments: Option<Vec<OsString>>,
         max_steps: Option<u64>,
@@ -82,6 +84,16 @@ impl Launch {
     }
 }
 
+/// `--backend llvm|cranelift`: the code generator a native build lowers its LIR with.
+fn backend(value: OsString) -> Result<hirsel_driver::native::Backend, lexopt::Error> {
+    use hirsel_driver::native::Backend;
+    match value.to_str() {
+        Some("llvm") => Ok(Backend::Llvm),
+        Some("cranelift") => Ok(Backend::Cranelift),
+        _ => Err("--backend must be llvm or cranelift".into()),
+    }
+}
+
 /// `--proofs <sidecar>` and the checkers `--trust` names (PS-12, PS-15).
 #[derive(Default)]
 struct Proofs {
@@ -119,6 +131,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
         Some(Value(command)) if command == "build" => {
             use hirsel_driver::native::{BuildProfile, TargetSpec};
             let (mut source, mut output, mut target, mut profile) = (None, None, None, None);
+            let mut selected = None;
             let mut proofs = Proofs::default();
             while let Some(arg) = args.next()? {
                 match arg {
@@ -128,6 +141,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     Long("trust") => proofs.trust(args.value()?)?,
                     Long("release") if profile.is_none() => profile = Some(BuildProfile::Release),
                     Long("debug") if profile.is_none() => profile = Some(BuildProfile::Debug),
+                    Long("backend") if selected.is_none() => {
+                        selected = Some(backend(args.value()?)?)
+                    }
                     Long("target") if target.is_none() => {
                         let value = args.value()?;
                         target = Some(match value.to_str() {
@@ -148,6 +164,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 output: output.ok_or("build requires -o")?,
                 target: target.unwrap_or_else(TargetSpec::x86_64_unknown_linux_gnu),
                 profile: profile.unwrap_or_default(),
+                backend: selected.unwrap_or_default(),
                 proofs: {
                     proofs.check()?;
                     proofs
@@ -194,6 +211,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let mut revocations = None;
                 let mut replay = None;
                 let mut native = false;
+                let mut selected = None;
                 let mut simulation = None;
                 let mut max_steps = None;
                 let mut file = None;
@@ -214,6 +232,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         }
                         Long("trust") => proofs.trust(args.value()?)?,
                         Long("native") if !native => native = true,
+                        Long("backend") if selected.is_none() => {
+                            selected = Some(backend(args.value()?)?)
+                        }
                         Long("run" | "grants") if config.is_none() => {
                             config = Some((matches!(arg, Long("grants")), args.value()?));
                         }
@@ -257,6 +278,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 proofs.check()?;
                 if !native && proofs.sidecar.is_some() {
                     return Err("--proofs requires --native".into());
+                }
+                if !native && selected.is_some() {
+                    return Err("--backend requires --native".into());
                 }
                 if revocations.is_some() && (config.is_none() || replay.is_some()) {
                     return Err("--revocations requires a live --run or --grants launch".into());
@@ -306,6 +330,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         file,
                         launch,
                         native,
+                        backend: selected,
                         proofs,
                         arguments,
                         max_steps,
@@ -379,17 +404,19 @@ fn execute(args: Vec<OsString>) -> u8 {
             output,
             target,
             profile,
+            backend,
             proofs,
         } => {
             let evidence = match proofs.evidence() {
                 Ok(evidence) => evidence,
                 Err(error) => return tool_error(error, false),
             };
-            return match hirsel_driver::native::build_path_native(
+            return match hirsel_driver::native::build_path_native_backend(
                 Path::new(&source),
                 Path::new(&output),
                 target,
                 profile,
+                backend,
                 evidence.as_ref(),
             ) {
                 Ok(Ok(report)) => {
@@ -449,6 +476,7 @@ fn execute(args: Vec<OsString>) -> u8 {
             file,
             launch,
             native: true,
+            backend,
             proofs,
             arguments,
             max_steps: _,
@@ -460,12 +488,13 @@ fn execute(args: Vec<OsString>) -> u8 {
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
             // program yet is a tool outcome (exit 2).
-            return match hirsel_driver::native::run_path_native_with_config(
+            return match hirsel_driver::native::run_path_native_backend(
                 Path::new(&file),
                 launch
                     .as_ref()
                     .map(|launch| launch.host(arguments.as_deref())),
                 evidence.as_ref(),
+                backend.unwrap_or_default(),
                 hirsel_driver::native::Output::Inherit,
             ) {
                 // The native driver already wrote the complete failure chain.
@@ -482,6 +511,7 @@ fn execute(args: Vec<OsString>) -> u8 {
             file,
             launch,
             native: false,
+            backend: _,
             proofs: _,
             arguments,
             max_steps,

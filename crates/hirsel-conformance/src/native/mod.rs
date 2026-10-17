@@ -10,6 +10,7 @@
 //! A disagreement without a row, a row whose reason changed and a row whose
 //! configuration now agrees all fail the gate, so support only grows.
 pub mod artifact;
+pub mod cranelift;
 pub mod diet;
 pub mod generate;
 pub mod scratch;
@@ -76,6 +77,7 @@ pub fn baseline(root: &Path) -> Result<Vec<Case>, String> {
 pub enum Class {
     Heap,
     Llvm,
+    Cranelift,
 }
 
 impl Class {
@@ -83,12 +85,14 @@ impl Class {
         match self {
             Self::Heap => "heap",
             Self::Llvm => "llvm",
+            Self::Cranelift => "cranelift",
         }
     }
     pub fn of(configuration: &Configuration) -> Self {
         match configuration.engine {
             Engine::Heap { .. } => Self::Heap,
             Engine::Native { .. } => Self::Llvm,
+            Engine::Cranelift { .. } => Self::Cranelift,
         }
     }
 }

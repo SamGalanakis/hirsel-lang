@@ -71,7 +71,9 @@ diagnostics), then builds it as an optimized x86-64 Linux executable, links it
 against the runtime built from this checkout and runs it. Output, exit status
 and the `runtime failure[RULE] at line N` line match `run`. A program a native
 stage cannot build yet prints `hirsel: native <stage>: ...` and exits 2; that is
-a tool outcome and says nothing about the source.
+a tool outcome and says nothing about the source. `--backend cranelift` builds
+the same LIR with Cranelift, unoptimized, for a fast debug loop
+(`crates/hirsel-cranelift`); `--backend llvm` (the default) is LLVM O3.
 
 Check/run (including `--native` and `--simulation`) also accept an explicit
 launch manifest JSON path. A source path loads its exact `.hir.json` sidecar
@@ -93,10 +95,12 @@ and cannot combine with `--run` or `--native`.
 with empty grants. A launcher can explicitly fill its Io projections and Args/Env
 snapshots before supplying that record; selecting the source grants no authority.
 
-`hirsel build [--release | --debug] [--target x86_64-linux | aarch64-linux]
+`hirsel build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux]
 <source|manifest.json> -o <exe>` writes a standalone executable linked with the
 production runtime. Default builds use LLVM O2, release O3, debug O0 with source
-line tables. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
+line tables. `--backend cranelift` lowers the same LIR with Cranelift: `--debug`
+is its unoptimized level without line tables, the other profiles its `speed`
+level. x86-64 is the target its parity gate covers. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
 records deny external roots. `-- [args...]` explicitly supplies only Args.
 
 `build` and `run --native` accept `--proofs <sidecar>` with any number of

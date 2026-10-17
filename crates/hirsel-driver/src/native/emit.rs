@@ -6,6 +6,24 @@ use hirsel_lir::emission::{EmitInputs, FailureCode, FailureCodes, OptLevel};
 use hirsel_lir::stage::ObjectArtifact;
 use std::collections::BTreeSet;
 
+/// The code generator that lowers Ready LIR to objects. Cranelift builds fast debug
+/// executables; the Cranelift parity gate holds it to LLVM's observations.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Backend {
+    #[default]
+    Llvm,
+    Cranelift,
+}
+
+impl Backend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Llvm => "llvm",
+            Self::Cranelift => "cranelift",
+        }
+    }
+}
+
 /// The failure category code of every language failure (`kind` of
 /// `hirsel_rt_v2_failure_begin`): M1b has one category, FAIL-1's `bug`.
 pub const KIND_BUG: u32 = 1;
@@ -73,6 +91,7 @@ pub fn emit(
     );
     emit_registered(
         program,
+        Backend::Llvm,
         opt,
         select,
         &BTreeSet::new(),
@@ -109,8 +128,37 @@ pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeEr
         .map_err(|e| NativeError::new(StageName::Emission, e.to_string()))
 }
 
+/// The Cranelift IR of the whole program as one object, before compilation: the text a
+/// Cranelift parity failure is read from.
+pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
+    check_runtime_calls(program)?;
+    let failures = failure_codes(program);
+    let units: Vec<_> = program.units.iter().collect();
+    let inputs = EmitInputs {
+        input: &program.input,
+        target: &program.target,
+        layouts: &program.table,
+        manifest: &program.manifest,
+        failures: &failures,
+        statics: &program.statics,
+        finalizers: &program.finalizers,
+        inline_instances: &program.inline_instances,
+        available_externally: &BTreeSet::new(),
+        callbacks: &program.callbacks,
+        opt: OptLevel::None,
+        registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+            &program.table,
+            &program.finalizers,
+        ),
+        measurement: false,
+    };
+    hirsel_cranelift::emit_clif(&units, &inputs)
+        .map_err(|e| NativeError::new(StageName::Emission, e.to_string()))
+}
+
 pub(crate) fn emit_registered(
     program: &ReadyProgram,
+    backend: Backend,
     opt: OptLevel,
     select: impl Fn(usize) -> bool,
     copies: &BTreeSet<hirsel_syntax::ContentHash>,
@@ -141,18 +189,25 @@ pub(crate) fn emit_registered(
         registry: registry.clone(),
         measurement,
     };
-    hirsel_llvm::emit_object_profile(&units, &inputs, sources).map_err(|e| {
-        let definition = match &e {
-            hirsel_llvm::CodegenError::Receipt { definition, .. }
-            | hirsel_llvm::CodegenError::Invalid { definition, .. }
-            | hirsel_llvm::CodegenError::Unsupported { definition, .. }
-            | hirsel_llvm::CodegenError::UnknownRule { definition, .. } => Some(definition.clone()),
-            _ => None,
-        };
-        NativeError {
-            definition,
-            ..NativeError::new(StageName::Emission, e.to_string())
-        }
+    let emitted = match backend {
+        Backend::Llvm => hirsel_llvm::emit_object_profile(&units, &inputs, sources).map_err(|e| {
+            let definition = match &e {
+                hirsel_llvm::CodegenError::Receipt { definition, .. }
+                | hirsel_llvm::CodegenError::Invalid { definition, .. }
+                | hirsel_llvm::CodegenError::Unsupported { definition, .. }
+                | hirsel_llvm::CodegenError::UnknownRule { definition, .. } => {
+                    Some(definition.clone())
+                }
+                _ => None,
+            };
+            (definition, e.to_string())
+        }),
+        Backend::Cranelift => hirsel_cranelift::emit_object(&units, &inputs)
+            .map_err(|e| (e.definition().cloned(), e.to_string())),
+    };
+    emitted.map_err(|(definition, message)| NativeError {
+        definition,
+        ..NativeError::new(StageName::Emission, message)
     })
 }
 

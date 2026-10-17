@@ -1,0 +1,1833 @@
+//! One Ready unit as one Cranelift function: values, blocks and edges, failure edges,
+//! terminators and calls.
+//!
+//! A LIR value lives in SSA form as nothing (unit), one Cranelift value (a scalar; a Bool is
+//! an `i8` holding 0 or 1), a code and environment pair (a callable), or the address of an
+//! immutable stack copy of its bytes (any other fixed-size inline value). A block parameter
+//! of bytes is a stack slot of its own that every edge into the block copies into. Blocks
+//! a failure edge or a call's failure path starts in are filled after the body, once every
+//! LIR value they read is defined.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use cranelift_codegen::ir::{
+    self, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlagsData, StackSlot,
+    StackSlotData, StackSlotKind, TrapCode, Value, condcodes::IntCC, types,
+};
+use cranelift_frontend::{FunctionBuilder, Switch};
+use cranelift_module::{DataId, FuncId, Module};
+use hirsel_core_contract::{Disposition, Engine, Passing};
+use hirsel_lir::abi::abi_digest;
+use hirsel_lir::abi_types::{CallableShape, FnAbi, ParameterPassing};
+use hirsel_lir::emission::{FailureCode, register_result, site_code, symbol_name};
+use hirsel_lir::ir::*;
+use hirsel_lir::layout::{align_up, payload_offset};
+use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutRecord, ScalarKind, TagForm};
+use hirsel_lir::runtime_abi::RuntimeEntry;
+use hirsel_lir::stage::{ObjectSymbolKind, Ready};
+use hirsel_syntax::DefPath;
+
+use crate::CodegenError;
+use crate::module::{Emitted, Emitter, Hidden, PTR, Sig, scalar_type};
+
+/// The trap a proved-unreachable point or an emitter invariant takes.
+pub(crate) const TRAP: TrapCode = TrapCode::unwrap_user(1);
+
+/// How a value is held in SSA form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shape {
+    Unit,
+    Scalar(ScalarKind),
+    /// Code and environment pointers.
+    Callable,
+    /// The bytes of a fixed-size inline value, read through memory.
+    Bytes {
+        size: u64,
+        align: u32,
+    },
+}
+
+/// A value in SSA form (`Shape`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum V {
+    Unit,
+    One(Value),
+    Pair(Value, Value),
+    /// The address of the value's bytes, never written while the value is live, and the
+    /// stack slot holding them when it is a block parameter's.
+    Mem {
+        addr: Value,
+        slot: Option<StackSlot>,
+    },
+}
+
+impl V {
+    pub(crate) fn one(self) -> Option<Value> {
+        match self {
+            V::One(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+/// A prepared address: its pointer, layout and the alignment it is known to have.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Place {
+    pub(crate) ptr: Value,
+    pub(crate) layout: LayoutId,
+    pub(crate) align: u32,
+    /// The counted block (its header) whose payload holds this place, if any.
+    pub(crate) block: Option<Value>,
+}
+
+/// A block parameter: none for a storage version or a unit, the Cranelift parameters of a
+/// scalar or callable, or the stack slot of bytes.
+#[derive(Clone, Copy, Debug)]
+enum Param {
+    None,
+    Ssa(usize),
+    Slot(StackSlot, u64, u32),
+}
+
+/// A block filled after the body.
+enum Deferred {
+    /// A failure edge's start: the rule's begin, the token disposals, the cleanup edge.
+    Failure { block: Block, failure: FailureId },
+    /// A failing call's re-anchoring at its site before its failure edge.
+    Reanchor {
+        block: Block,
+        site: u64,
+        then: Block,
+    },
+    /// A failing runtime call whose operation records its own failure rule.
+    Record {
+        block: Block,
+        code: FailureCode,
+        site: u64,
+        then: Block,
+    },
+    /// A bounded arena's `OutOfSpace` (MEM-6): recorded, then the failure edge's tokens
+    /// and its cleanup.
+    Exhausted {
+        block: Block,
+        code: FailureCode,
+        region: Value,
+        site: u64,
+        failure: FailureId,
+    },
+}
+
+pub(crate) struct FnEmitter<'e, 'a, 'f> {
+    pub(crate) em: &'e mut Emitter<'a>,
+    pub(crate) unit: &'a LirUnit<Ready>,
+    pub(crate) b: FunctionBuilder<'f>,
+    pub(crate) sig: Sig<'a>,
+    pub(crate) context: Value,
+    pub(crate) environment: Option<Value>,
+    /// The function's own parameters.
+    pub(crate) entry_params: Vec<Value>,
+    values: Vec<Option<V>>,
+    /// Storage version names: never operands, so they have no value.
+    versions: BTreeSet<ValueId>,
+    pub(crate) slots: Vec<Option<Place>>,
+    pub(crate) addresses: Vec<Option<Place>>,
+    /// Per address of a variable flat element, where its sequence's elements begin.
+    pub(crate) flat_contents: Vec<Option<Value>>,
+    /// Set by the last variable flat element step `project` took.
+    pub(crate) flat_content: Option<Value>,
+    blocks: Vec<Block>,
+    params: Vec<Vec<Param>>,
+    failures: BTreeMap<FailureId, Block>,
+    deferred: Vec<Deferred>,
+    /// Per compiler-local region instance, its `hirsel_rt_v2_region` record in the frame.
+    pub(crate) regions: Vec<Value>,
+    funcs: HashMap<FuncId, FuncRef>,
+    globals: HashMap<DataId, GlobalValue>,
+}
+
+/// Bytes of a `hirsel_rt_v2_region` record.
+const REGION_RECORD_BYTES: u64 = hirsel_lir::runtime_abi::REGION_RECORD_BYTES;
+
+pub(crate) fn low_bit(n: u64) -> u32 {
+    if n == 0 {
+        u32::MAX
+    } else {
+        1u32 << n.trailing_zeros().min(31)
+    }
+}
+
+/// Memory flags of every access: Hirsel addresses are valid, alignment is not promised.
+pub(crate) fn flags() -> MemFlagsData {
+    MemFlagsData::new()
+}
+
+/// The alignment a constant-size copy or fill of `size` bytes may assume.
+fn copy_align(size: u64, align: u32) -> u8 {
+    let size_align = if size == 0 {
+        1
+    } else {
+        1u64 << size.trailing_zeros().min(7)
+    };
+    (u64::from(align).min(size_align).min(128)) as u8
+}
+
+impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
+    pub(crate) fn new(
+        em: &'e mut Emitter<'a>,
+        unit: &'a LirUnit<Ready>,
+        mut b: FunctionBuilder<'f>,
+        sig: Sig<'a>,
+    ) -> Self {
+        let prologue = b.create_block();
+        b.append_block_params_for_function_params(prologue);
+        b.switch_to_block(prologue);
+        let entry_params = b.block_params(prologue).to_vec();
+        let context = entry_params[0];
+        let environment = sig
+            .hidden_index(Hidden::Environment)
+            .map(|index| entry_params[index]);
+        Self {
+            em,
+            unit,
+            b,
+            sig,
+            context,
+            environment,
+            entry_params,
+            values: vec![None; unit.values.len()],
+            versions: BTreeSet::new(),
+            slots: vec![None; unit.slots.len()],
+            addresses: vec![None; unit.addresses.len()],
+            flat_contents: vec![None; unit.addresses.len()],
+            flat_content: None,
+            blocks: Vec::new(),
+            params: Vec::new(),
+            failures: BTreeMap::new(),
+            deferred: Vec::new(),
+            regions: Vec::new(),
+            funcs: HashMap::new(),
+            globals: HashMap::new(),
+        }
+    }
+
+    // Errors and tables.
+
+    pub(crate) fn definition(&self) -> &'a DefPath {
+        &self.unit.header.definition
+    }
+
+    pub(crate) fn invalid<T>(&self, what: impl Into<String>) -> Emitted<T> {
+        Err(CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: what.into(),
+        })
+    }
+
+    pub(crate) fn unsupported<T>(&self, what: impl Into<String>) -> Emitted<T> {
+        Err(CodegenError::Unsupported {
+            definition: self.definition().clone(),
+            what: what.into(),
+        })
+    }
+
+    pub(crate) fn layout(&self, id: LayoutId) -> Emitted<&'a LayoutRecord> {
+        match self.em.layouts().layout(id) {
+            Some(record) => Ok(record),
+            None => self.invalid(format!("no layout {}", id.0)),
+        }
+    }
+
+    /// The bytes a value of `id` occupies in storage.
+    pub(crate) fn fixed_size(&self, id: LayoutId) -> Emitted<u64> {
+        match self.layout(id)?.size.storage() {
+            Some(size) => Ok(size),
+            None => self.unsupported("a value of dynamic extent"),
+        }
+    }
+
+    pub(crate) fn lir_type(&self, id: LirTypeId) -> Emitted<&'a LirType> {
+        match self.unit.types.get(id.index()) {
+            Some(ty) => Ok(ty),
+            None => self.invalid(format!("no type {}", id.0)),
+        }
+    }
+
+    pub(crate) fn value_type(&self, value: ValueId) -> Emitted<&'a LirType> {
+        match self.unit.values.get(value.index()) {
+            Some(info) => self.lir_type(info.ty),
+            None => self.invalid(format!("no value {}", value.0)),
+        }
+    }
+
+    pub(crate) fn shape(&self, ty: &LirType) -> Emitted<Shape> {
+        if matches!(ty.repr, ValueRepr::Token | ValueRepr::RegionMark) {
+            return Ok(Shape::Scalar(ScalarKind::Pointer));
+        }
+        self.layout_shape(ty.layout)
+    }
+
+    pub(crate) fn layout_shape(&self, layout: LayoutId) -> Emitted<Shape> {
+        let record = self.layout(layout)?;
+        if let Some(kind) = hirsel_lir::emission::scalar_shape(&record.kind) {
+            return Ok(Shape::Scalar(kind));
+        }
+        Ok(match record.kind {
+            LayoutKind::Unit => Shape::Unit,
+            LayoutKind::Callable { .. } => Shape::Callable,
+            _ => Shape::Bytes {
+                size: self.fixed_size(layout)?,
+                align: record.align,
+            },
+        })
+    }
+
+    pub(crate) fn value_shape(&self, value: ValueId) -> Emitted<Shape> {
+        self.shape(self.value_type(value)?)
+    }
+
+    pub(crate) fn scalar_kind(&self, value: ValueId) -> Emitted<ScalarKind> {
+        match self.value_shape(value)? {
+            Shape::Scalar(kind) => Ok(kind),
+            _ => self.invalid(format!("value {} is not a scalar", value.0)),
+        }
+    }
+
+    pub(crate) fn pool<T: Copy>(&self, range: PoolRange<T>, pool: &'a [T]) -> Emitted<&'a [T]> {
+        match range.get(pool) {
+            Some(items) => Ok(items),
+            None => self.invalid("a pool range outside its pool"),
+        }
+    }
+
+    pub(crate) fn edge(&self, edge: EdgeId) -> Emitted<&'a Edge> {
+        match self.unit.tables.edges.get(edge.index()) {
+            Some(e) => Ok(e),
+            None => self.invalid(format!("no edge {}", edge.0)),
+        }
+    }
+
+    pub(crate) fn failure_edge(&self, failure: FailureId) -> Emitted<&'a FailureEdge> {
+        match self.unit.tables.failures.get(failure.index()) {
+            Some(f) => Ok(f),
+            None => self.invalid(format!("no failure edge {}", failure.0)),
+        }
+    }
+
+    // Values.
+
+    pub(crate) fn get(&self, value: ValueId) -> Emitted<V> {
+        match self.values.get(value.index()).copied().flatten() {
+            Some(v) => Ok(v),
+            None if self.versions.contains(&value) => {
+                self.invalid(format!("storage version {} used as an operand", value.0))
+            }
+            None => self.invalid(format!("value {} used before its definition", value.0)),
+        }
+    }
+
+    /// A scalar or pointer value's one Cranelift value.
+    pub(crate) fn get1(&self, value: ValueId) -> Emitted<Value> {
+        match self.get(value)? {
+            V::One(v) => Ok(v),
+            _ => self.invalid(format!("value {} is not one word", value.0)),
+        }
+    }
+
+    pub(crate) fn define(&mut self, value: ValueId, v: V) -> Emitted {
+        match self.values.get_mut(value.index()) {
+            Some(slot @ None) => {
+                *slot = Some(v);
+                Ok(())
+            }
+            Some(Some(_)) => self.invalid(format!("value {} defined twice", value.0)),
+            None => self.invalid(format!("no value {}", value.0)),
+        }
+    }
+
+    pub(crate) fn define1(&mut self, value: ValueId, v: Value) -> Emitted {
+        self.define(value, V::One(v))
+    }
+
+    /// Takes a defined value back (a construction redone on another path).
+    #[allow(dead_code)]
+    pub(crate) fn undefine(&mut self, value: ValueId) -> Option<V> {
+        self.values.get_mut(value.index()).and_then(Option::take)
+    }
+
+    /// Define a scalar operation's flag, present exactly when the operation reports one.
+    pub(crate) fn define_flag(&mut self, flag: Option<ValueId>, v: Option<Value>) -> Emitted {
+        match (flag, v) {
+            (Some(flag), Some(v)) => self.define1(flag, v),
+            (None, None) => Ok(()),
+            _ => self.invalid("a scalar flag the operation does not report"),
+        }
+    }
+
+    // Constants and addresses.
+
+    pub(crate) fn u64c(&mut self, n: u64) -> Value {
+        self.b.ins().iconst(types::I64, n as i64)
+    }
+
+    /// The integer constant `bits` of type `ty`, `i128` included.
+    pub(crate) fn int_const(&mut self, ty: ir::Type, bits: u128) -> Value {
+        if ty == types::I128 {
+            let low = self.b.ins().iconst(types::I64, bits as u64 as i64);
+            let high = self.b.ins().iconst(types::I64, (bits >> 64) as u64 as i64);
+            return self.b.ins().iconcat(low, high);
+        }
+        let mask = if ty.bits() >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << ty.bits()) - 1
+        };
+        self.b.ins().iconst(ty, ((bits as u64) & mask) as i64)
+    }
+
+    pub(crate) fn offset(&mut self, ptr: Value, n: u64) -> Value {
+        if n == 0 {
+            ptr
+        } else {
+            self.b.ins().iadd_imm_s(ptr, n as i64)
+        }
+    }
+
+    pub(crate) fn offset_by(&mut self, ptr: Value, by: Value) -> Value {
+        self.b.ins().iadd(ptr, by)
+    }
+
+    pub(crate) fn load_ty(&mut self, ty: ir::Type, at: Value, offset: u64) -> Value {
+        if offset > i32::MAX as u64 {
+            let at = self.offset(at, offset);
+            return self.b.ins().load(ty, flags(), at, 0);
+        }
+        self.b.ins().load(ty, flags(), at, offset as i32)
+    }
+
+    pub(crate) fn store_at(&mut self, value: Value, at: Value, offset: u64) {
+        if offset > i32::MAX as u64 {
+            let at = self.offset(at, offset);
+            self.b.ins().store(flags(), value, at, 0);
+            return;
+        }
+        self.b.ins().store(flags(), value, at, offset as i32);
+    }
+
+    /// The u64 at `at`, which flat values store unaligned.
+    pub(crate) fn load_u64(&mut self, at: Value) -> Value {
+        self.load_ty(types::I64, at, 0)
+    }
+
+    pub(crate) fn load_ptr(&mut self, at: Value) -> Value {
+        self.load_ty(PTR, at, 0)
+    }
+
+    /// Fresh stack storage of `size` bytes aligned to `align` (at most 16), at the current
+    /// position: its address and slot.
+    pub(crate) fn stack_bytes(&mut self, size: u64, align: u32) -> (Value, StackSlot) {
+        let shift = align.clamp(1, 16).trailing_zeros() as u8;
+        let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            size.max(1) as u32,
+            shift,
+        ));
+        (self.b.ins().stack_addr(PTR, slot, 0), slot)
+    }
+
+    /// Fresh stack storage for a value of `layout`.
+    pub(crate) fn stack(&mut self, layout: LayoutId) -> Emitted<Place> {
+        let size = self.fixed_size(layout)?;
+        let align = self.layout(layout)?.align;
+        let (ptr, _) = self.stack_bytes(size, align);
+        Ok(Place {
+            ptr,
+            layout,
+            align,
+            block: None,
+        })
+    }
+
+    /// One pointer-sized out word in the frame.
+    pub(crate) fn out_word(&mut self) -> Value {
+        self.stack_bytes(8, 8).0
+    }
+
+    pub(crate) fn copy(&mut self, dest: Value, src: Value, size: u64, align: u32) {
+        if size == 0 {
+            return;
+        }
+        let config = self.em.module.target_config();
+        let align = copy_align(size, align);
+        self.b
+            .emit_small_memory_copy(config, dest, src, size, align, align, true, flags());
+    }
+
+    pub(crate) fn copy_dynamic(&mut self, dest: Value, src: Value, size: Value) {
+        let config = self.em.module.target_config();
+        self.b.call_memcpy(config, dest, src, size);
+    }
+
+    pub(crate) fn zero(&mut self, at: Value, size: u64, align: u32) {
+        if size == 0 {
+            return;
+        }
+        let config = self.em.module.target_config();
+        let align = copy_align(size, align);
+        self.b
+            .emit_small_memset(config, at, 0, size, align, flags());
+    }
+
+    pub(crate) fn func_ref(&mut self, id: FuncId) -> FuncRef {
+        if let Some(&r) = self.funcs.get(&id) {
+            return r;
+        }
+        let r = self.em.module.declare_func_in_func(id, self.b.func);
+        self.funcs.insert(id, r);
+        r
+    }
+
+    /// The address of data object `id`, `offset` bytes in.
+    pub(crate) fn data_addr(&mut self, id: DataId, offset: u64) -> Value {
+        let gv = match self.globals.get(&id) {
+            Some(&gv) => gv,
+            None => {
+                let gv = self.em.module.declare_data_in_func(id, self.b.func);
+                self.globals.insert(id, gv);
+                gv
+            }
+        };
+        let base = self.b.ins().symbol_value(PTR, gv);
+        self.offset(base, offset)
+    }
+
+    pub(crate) fn func_addr(&mut self, id: FuncId) -> Value {
+        let r = self.func_ref(id);
+        self.b.ins().func_addr(PTR, r)
+    }
+
+    /// Calls `id` with `args`: its results.
+    pub(crate) fn call(&mut self, id: FuncId, args: &[Value]) -> Vec<Value> {
+        let r = self.func_ref(id);
+        let call = self.b.ins().call(r, args);
+        self.b.inst_results(call).to_vec()
+    }
+
+    /// Calls the runtime entry `entry`: its result, if it has one.
+    pub(crate) fn rt(&mut self, entry: RuntimeEntry, args: &[Value]) -> Emitted<Option<Value>> {
+        let id = self.em.runtime(entry)?;
+        Ok(self.call(id, args).first().copied())
+    }
+
+    /// Calls a runtime entry that returns a value.
+    pub(crate) fn rt1(&mut self, entry: RuntimeEntry, args: &[Value]) -> Emitted<Value> {
+        match self.rt(entry, args)? {
+            Some(v) => Ok(v),
+            None => self.invalid(format!("runtime entry {entry:?} returns nothing")),
+        }
+    }
+
+    /// Calls a function the toolchain provides (`TOOLCHAIN_IMPORTS`).
+    pub(crate) fn toolchain_call(
+        &mut self,
+        name: &str,
+        params: &[ir::Type],
+        returns: ir::Type,
+        args: &[Value],
+    ) -> Emitted<Value> {
+        let mut sig = ir::Signature::new(self.em.call_conv);
+        sig.params
+            .extend(params.iter().map(|&t| ir::AbiParam::new(t)));
+        sig.returns.push(ir::AbiParam::new(returns));
+        let id = self.em.import_function(name, &sig)?;
+        Ok(self.call(id, args)[0])
+    }
+
+    // Loads and stores of values.
+
+    pub(crate) fn load(&mut self, shape: Shape, place: Place) -> V {
+        match shape {
+            Shape::Unit => V::Unit,
+            Shape::Scalar(ScalarKind::Bool) => {
+                let byte = self.load_ty(types::I8, place.ptr, 0);
+                V::One(self.b.ins().icmp_imm_s(IntCC::NotEqual, byte, 0))
+            }
+            Shape::Scalar(kind) => V::One(self.load_ty(scalar_type(kind), place.ptr, 0)),
+            Shape::Callable => {
+                let code = self.load_ty(PTR, place.ptr, 0);
+                let env = self.load_ty(PTR, place.ptr, 8);
+                V::Pair(code, env)
+            }
+            Shape::Bytes { size, align } => {
+                let (addr, _) = self.stack_bytes(size, align);
+                self.copy(addr, place.ptr, size, align.min(place.align));
+                V::Mem { addr, slot: None }
+            }
+        }
+    }
+
+    pub(crate) fn store(&mut self, shape: Shape, value: V, place: Place) -> Emitted {
+        match (shape, value) {
+            (Shape::Unit, _) => {}
+            (Shape::Scalar(_), V::One(v)) => self.store_at(v, place.ptr, 0),
+            (Shape::Callable, V::Pair(code, env)) => {
+                self.store_at(code, place.ptr, 0);
+                self.store_at(env, place.ptr, 8);
+            }
+            (Shape::Bytes { size, align }, V::Mem { addr, .. }) => {
+                self.copy(place.ptr, addr, size, align.min(place.align));
+            }
+            _ => return self.invalid("a store of a value of another shape"),
+        }
+        Ok(())
+    }
+
+    /// The place `offset` bytes into `place`, holding a value of `layout`.
+    pub(crate) fn field_place(
+        &mut self,
+        place: Place,
+        offset: u64,
+        layout: LayoutId,
+        unaligned: bool,
+    ) -> Emitted<Place> {
+        let ptr = self.offset(place.ptr, offset);
+        let align = if unaligned {
+            1
+        } else {
+            place
+                .align
+                .min(low_bit(offset))
+                .min(self.layout(layout)?.align)
+        };
+        Ok(Place {
+            ptr,
+            layout,
+            align,
+            block: place.block,
+        })
+    }
+
+    /// The payload of a counted block, behind its header.
+    pub(crate) fn payload_of(&mut self, block: Value, payload: LayoutId) -> Emitted<Place> {
+        let align = self.layout(payload)?.align;
+        let offset = match payload_offset(align) {
+            Ok(offset) => offset,
+            Err(error) => return self.invalid(format!("{error:?}")),
+        };
+        Ok(Place {
+            ptr: self.offset(block, offset),
+            layout: payload,
+            align,
+            block: Some(block),
+        })
+    }
+
+    // The function.
+
+    pub(crate) fn emit(mut self) -> Emitted {
+        self.find_versions()?;
+        let order = self.reverse_postorder()?;
+        for _ in &self.unit.blocks {
+            let block = self.b.create_block();
+            self.blocks.push(block);
+        }
+        self.create_params()?;
+        self.allocate_slots()?;
+        self.bind_parameters()?;
+        let entry = self.blocks[self.unit.entry.index()];
+        if self.params[self.unit.entry.index()]
+            .iter()
+            .any(|p| !matches!(p, Param::None))
+        {
+            return self.invalid("an entry block with parameters");
+        }
+        self.b.ins().jump(entry, &[]);
+        for b in order {
+            self.emit_block(BlockId(b as u32))?;
+        }
+        while let Some(deferred) = self.deferred.pop() {
+            self.fill_deferred(deferred)?;
+        }
+        self.b.seal_all_blocks();
+        let config = self.em.module.target_config();
+        self.b.finalize(config);
+        Ok(())
+    }
+
+    /// Storage version names: stores', replaces' and slot-backed parameters' versions, and
+    /// every block parameter an edge passes one to.
+    fn find_versions(&mut self) -> Emitted {
+        let unit = self.unit;
+        for inst in &unit.instructions {
+            match *inst {
+                Inst::Store { version, .. }
+                | Inst::SeqReserve { version, .. }
+                | Inst::SeqSetLen { version, .. }
+                | Inst::SeqAppend { version, .. }
+                | Inst::FlatAppend { version, .. }
+                | Inst::FlatField { version, .. }
+                | Inst::FlatClose { version, .. } => {
+                    self.versions.insert(version);
+                }
+                Inst::Replace {
+                    version,
+                    displaced_version,
+                    ..
+                } => {
+                    self.versions.insert(version);
+                    self.versions.insert(displaced_version);
+                }
+                _ => {}
+            }
+        }
+        for call in &unit.tables.calls {
+            for argument in self.pool(call.arguments, &unit.pools.call_arguments)? {
+                if let ArgumentValue::Address { version, .. } = argument.value {
+                    self.versions.insert(version);
+                }
+            }
+        }
+        for parameter in &self.sig.abi.parameters {
+            let backed = unit
+                .slots
+                .iter()
+                .any(|s| s.kind == SlotKind::Parameter(parameter.source));
+            if backed && let Some(&value) = unit.parameters.get(parameter.source as usize) {
+                self.versions.insert(value);
+            }
+        }
+        loop {
+            let mut grew = false;
+            for edge in &unit.tables.edges {
+                let arguments = self.pool(edge.arguments, &unit.pools.values)?;
+                let Some(block) = unit.blocks.get(edge.target.index()) else {
+                    return self.invalid("an edge to a missing block");
+                };
+                let parameters = self.pool(block.parameters, &unit.pools.values)?;
+                for (a, p) in arguments.iter().zip(parameters) {
+                    if self.versions.contains(a) && self.versions.insert(*p) {
+                        grew = true;
+                    }
+                }
+            }
+            if !grew {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Successor blocks of a block over normal and failure edges.
+    fn successors(&self, b: usize) -> Emitted<Vec<usize>> {
+        let unit = self.unit;
+        let block = &unit.blocks[b];
+        let mut edges = Vec::new();
+        let mut failures = Vec::new();
+        for inst in self.pool(block.instructions, &unit.instructions)? {
+            inst.visit(&mut |r| {
+                if let Ref::Failure(f) = r {
+                    failures.push(f);
+                }
+            });
+        }
+        let Some(terminator) = unit.terminators.get(b) else {
+            return self.invalid("a block without a terminator");
+        };
+        let mut arms = None;
+        terminator.visit(&mut |r| match r {
+            Ref::Edge(e) => edges.push(e),
+            Ref::Failure(f) => failures.push(f),
+            Ref::SwitchArms(range) => arms = Some(range),
+            _ => {}
+        });
+        if let Some(range) = arms {
+            edges.extend(
+                self.pool(range, &unit.pools.switch_arms)?
+                    .iter()
+                    .map(|a| a.edge),
+            );
+        }
+        for f in failures {
+            edges.push(self.failure_edge(f)?.cleanup);
+        }
+        edges
+            .into_iter()
+            .map(|e| self.edge(e).map(|e| e.target.index()))
+            .collect()
+    }
+
+    /// Blocks in reverse postorder from the entry, so each definition is emitted before the
+    /// uses it dominates.
+    fn reverse_postorder(&self) -> Emitted<Vec<usize>> {
+        let count = self.unit.blocks.len();
+        if self.unit.entry.index() >= count {
+            return self.invalid("no entry block");
+        }
+        let adjacent: Vec<Vec<usize>> = (0..count)
+            .map(|b| self.successors(b))
+            .collect::<Emitted<_>>()?;
+        if adjacent.iter().flatten().any(|&b| b >= count) {
+            return self.invalid("an edge to a missing block");
+        }
+        let post = hirsel_graph::reverse_postorder(&adjacent, self.unit.entry.index());
+        if post.len() != count {
+            return self.invalid("an unreachable block");
+        }
+        Ok(post)
+    }
+
+    fn create_params(&mut self) -> Emitted {
+        let unit = self.unit;
+        for (b, block) in unit.blocks.iter().enumerate() {
+            let mut params = Vec::new();
+            for &p in self.pool(block.parameters, &unit.pools.values)? {
+                if self.versions.contains(&p) {
+                    params.push(Param::None);
+                    continue;
+                }
+                let target = self.blocks[b];
+                let param = match self.value_shape(p)? {
+                    Shape::Unit => Param::None,
+                    Shape::Scalar(kind) => {
+                        let index = self.b.block_params(target).len();
+                        self.b.append_block_param(target, scalar_type(kind));
+                        Param::Ssa(index)
+                    }
+                    Shape::Callable => {
+                        let index = self.b.block_params(target).len();
+                        self.b.append_block_param(target, PTR);
+                        self.b.append_block_param(target, PTR);
+                        Param::Ssa(index)
+                    }
+                    Shape::Bytes { size, align } => {
+                        let shift = align.clamp(1, 16).trailing_zeros() as u8;
+                        let slot = self.b.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            size.max(1) as u32,
+                            shift,
+                        ));
+                        Param::Slot(slot, size, align)
+                    }
+                };
+                params.push(param);
+            }
+            self.params.push(params);
+        }
+        Ok(())
+    }
+
+    fn allocate_slots(&mut self) -> Emitted {
+        let unit = self.unit;
+        for (s, slot) in unit.slots.iter().enumerate() {
+            match slot.kind {
+                SlotKind::Parameter(_) | SlotKind::Capture(_) => continue,
+                SlotKind::Local
+                | SlotKind::Temporary
+                | SlotKind::ReturnSlot
+                | SlotKind::LoopCarried(_)
+                | SlotKind::Displaced => {}
+            }
+            let layout = self.lir_type(slot.ty)?.layout;
+            self.slots[s] = Some(self.stack(layout)?);
+        }
+        for _ in &unit.tables.regions {
+            let (record, _) = self.stack_bytes(REGION_RECORD_BYTES, 8);
+            self.regions.push(record);
+        }
+        Ok(())
+    }
+
+    /// Binds each declared parameter: its value, or its slot's storage.
+    fn bind_parameters(&mut self) -> Emitted {
+        let unit = self.unit;
+        let abi = self.sig.abi;
+        if unit.parameters.len() != abi.parameters.len() {
+            return self.invalid("parameter count differs from the FnAbi");
+        }
+        for (i, parameter) in abi.parameters.iter().enumerate() {
+            let value = unit.parameters[i];
+            let slot = unit
+                .slots
+                .iter()
+                .position(|s| s.kind == SlotKind::Parameter(parameter.source));
+            let first = self.sig.first[i];
+            let layout = parameter.layout;
+            let align = self.layout(layout)?.align;
+            match parameter.passing {
+                ParameterPassing::ByValue => {
+                    let args = self.entry_params[first..first + parameter.slots.len()].to_vec();
+                    let assembled = self.assemble(layout, &args)?;
+                    match slot {
+                        Some(s) => {
+                            let place = self.stack(layout)?;
+                            let shape = self.layout_shape(layout)?;
+                            self.store(shape, assembled, place)?;
+                            self.slots[s] = Some(place);
+                        }
+                        None => self.define(value, assembled)?,
+                    }
+                }
+                ParameterPassing::ReadOnlyAddress
+                | ParameterPassing::TransferAddress
+                | ParameterPassing::ExclusiveAddress => {
+                    let place = Place {
+                        ptr: self.entry_params[first],
+                        layout,
+                        align,
+                        block: None,
+                    };
+                    match slot {
+                        Some(s) => self.slots[s] = Some(place),
+                        None if parameter.convention == Passing::Mut => {
+                            return self.invalid("a mut parameter without its slot");
+                        }
+                        None => {
+                            let shape = self.layout_shape(layout)?;
+                            let loaded = self.load(shape, place);
+                            self.define(value, loaded)?;
+                        }
+                    }
+                }
+                ParameterPassing::PointerLength => {
+                    // The ABI pointer addresses the logical flat bytes; a variable flat
+                    // value's LIR representation is its owner, whose header precedes them.
+                    let pointer = self.entry_params[first];
+                    match self.layout(layout)?.kind {
+                        LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
+                            let pointer = if self.value_type(value)?.repr == ValueRepr::Uncounted {
+                                pointer
+                            } else {
+                                match self.uncounted_payload(pointer, payload)?.block {
+                                    Some(owner) => owner,
+                                    None => {
+                                        return self
+                                            .invalid("a flat extent parameter without its owner");
+                                    }
+                                }
+                            };
+                            if let Some(s) = slot {
+                                let place = self.stack(layout)?;
+                                self.store_at(pointer, place.ptr, 0);
+                                self.slots[s] = Some(place);
+                            } else {
+                                self.define1(value, pointer)?;
+                            }
+                        }
+                        LayoutKind::Flat => {
+                            let place = Place {
+                                ptr: pointer,
+                                layout,
+                                align,
+                                block: None,
+                            };
+                            if let Some(s) = slot {
+                                self.slots[s] = Some(place);
+                            } else {
+                                let shape = self.layout_shape(layout)?;
+                                let loaded = self.load(shape, place);
+                                self.define(value, loaded)?;
+                            }
+                        }
+                        _ => {
+                            return self.invalid("a pointer/length parameter of a non-flat layout");
+                        }
+                    }
+                }
+            }
+        }
+        self.bind_captures()
+    }
+
+    /// Binds each capture slot to its field of the environment the body was entered with:
+    /// the captures in ordinal order, each at the layout of its slot, behind the counted
+    /// block header.
+    fn bind_captures(&mut self) -> Emitted {
+        let unit = self.unit;
+        let mut captures: Vec<(u32, usize, LayoutId)> = Vec::new();
+        for (s, slot) in unit.slots.iter().enumerate() {
+            if let SlotKind::Capture(i) = slot.kind {
+                captures.push((i, s, self.lir_type(slot.ty)?.layout));
+            }
+        }
+        if captures.is_empty() {
+            return Ok(());
+        }
+        captures.sort_by_key(|c| c.0);
+        if captures.iter().enumerate().any(|(n, c)| c.0 as usize != n)
+            || captures.len() != unit.captures.len()
+        {
+            return self.invalid("capture slots that are not one per environment field");
+        }
+        let Some(environment) = self.environment else {
+            return self.invalid("capture slots in a unit without an environment");
+        };
+        let mut offset = 0u64;
+        let mut align = 1u32;
+        let mut fields = Vec::new();
+        for &(_, s, layout) in &captures {
+            let field_align = self.layout(layout)?.align;
+            offset = match align_up(offset, u64::from(field_align)) {
+                Ok(offset) => offset,
+                Err(_) => return self.invalid("an environment beyond u64"),
+            };
+            fields.push((s, offset, layout));
+            offset += self.fixed_size(layout)?;
+            align = align.max(field_align);
+        }
+        let start = match payload_offset(align) {
+            Ok(start) => start,
+            Err(_) => return self.invalid("an environment payload offset beyond u64"),
+        };
+        let payload = self.offset(environment, start);
+        for (s, offset, layout) in fields {
+            let ptr = self.offset(payload, offset);
+            let align = align.min(low_bit(offset)).min(self.layout(layout)?.align);
+            self.slots[s] = Some(Place {
+                ptr,
+                layout,
+                align,
+                block: Some(environment),
+            });
+        }
+        Ok(())
+    }
+
+    /// A by-value parameter from its physical slots: none for unit, one scalar, or the
+    /// scalar leaves of a multi-slot value at their layout offsets.
+    pub(crate) fn assemble(&mut self, layout: LayoutId, args: &[Value]) -> Emitted<V> {
+        match (self.layout_shape(layout)?, args) {
+            (Shape::Unit, []) => Ok(V::Unit),
+            (Shape::Scalar(ScalarKind::Bool), [byte]) => {
+                Ok(V::One(self.b.ins().icmp_imm_s(IntCC::NotEqual, *byte, 0)))
+            }
+            (Shape::Scalar(_), [arg]) => Ok(V::One(*arg)),
+            (Shape::Callable, [code, environment]) => Ok(V::Pair(*code, *environment)),
+            (Shape::Bytes { size, align }, args) => {
+                let leaves = &self.layout(layout)?.abi.scalars;
+                if leaves.len() != args.len() {
+                    return self
+                        .unsupported("a by-value aggregate whose slots are not its scalar leaves");
+                }
+                let (addr, _) = self.stack_bytes(size, align);
+                self.zero(addr, size, align);
+                for (&(offset, kind), &arg) in leaves.iter().zip(args) {
+                    let arg = if kind == ScalarKind::Bool {
+                        self.b.ins().icmp_imm_s(IntCC::NotEqual, arg, 0)
+                    } else {
+                        arg
+                    };
+                    self.store_at(arg, addr, offset);
+                }
+                Ok(V::Mem { addr, slot: None })
+            }
+            _ => self.invalid("a by-value parameter's slots do not match its layout"),
+        }
+    }
+
+    /// The physical slots of a by-value argument (the inverse of `assemble`).
+    pub(crate) fn disassemble(&mut self, layout: LayoutId, value: V) -> Emitted<Vec<Value>> {
+        Ok(match (self.layout_shape(layout)?, value) {
+            (Shape::Unit, _) => Vec::new(),
+            (Shape::Scalar(_), V::One(v)) => vec![v],
+            (Shape::Callable, V::Pair(code, env)) => vec![code, env],
+            (Shape::Bytes { .. }, V::Mem { addr, .. }) => {
+                let mut slots = Vec::new();
+                for &(offset, kind) in &self.layout(layout)?.abi.scalars {
+                    slots.push(self.load_ty(scalar_type(kind), addr, offset));
+                }
+                slots
+            }
+            _ => return self.invalid("a by-value argument of another shape"),
+        })
+    }
+
+    // Blocks and edges.
+
+    fn emit_block(&mut self, b: BlockId) -> Emitted {
+        let unit = self.unit;
+        let block = self.blocks[b.index()];
+        self.b.switch_to_block(block);
+        // The block's parameter values.
+        let parameters = self.pool(unit.blocks[b.index()].parameters, &unit.pools.values)?;
+        let params = self.params[b.index()].clone();
+        for (&p, param) in parameters.iter().zip(params) {
+            match param {
+                Param::None => {
+                    if !self.versions.contains(&p) {
+                        self.define(p, V::Unit)?;
+                    }
+                }
+                Param::Ssa(index) => {
+                    let values = self.b.block_params(block).to_vec();
+                    let v = match self.value_shape(p)? {
+                        Shape::Callable => V::Pair(values[index], values[index + 1]),
+                        _ => V::One(values[index]),
+                    };
+                    self.define(p, v)?;
+                }
+                Param::Slot(slot, _, _) => {
+                    let addr = self.b.ins().stack_addr(PTR, slot, 0);
+                    self.define(
+                        p,
+                        V::Mem {
+                            addr,
+                            slot: Some(slot),
+                        },
+                    )?;
+                }
+            }
+        }
+        for inst in self.pool(unit.blocks[b.index()].instructions, &unit.instructions)? {
+            self.instruction(inst)?;
+        }
+        let terminator = &unit.terminators[b.index()];
+        self.terminator(terminator)
+    }
+
+    /// The arguments an edge passes to its target's SSA parameters, after copying each bytes
+    /// argument into its parameter slot.
+    fn edge_args(&mut self, edge: &Edge) -> Emitted<Vec<BlockArg>> {
+        let arguments = self.pool(edge.arguments, &self.unit.pools.values)?;
+        let params = self.params[edge.target.index()].clone();
+        if arguments.len() != params.len() {
+            return self.invalid("edge arguments differ from the target's parameters");
+        }
+        let mut ssa = Vec::new();
+        let mut copies = Vec::new();
+        for (&argument, param) in arguments.iter().zip(&params) {
+            match *param {
+                Param::None => {}
+                Param::Ssa(_) => match self.get(argument)? {
+                    V::One(v) => ssa.push(BlockArg::Value(v)),
+                    V::Pair(code, env) => {
+                        ssa.push(BlockArg::Value(code));
+                        ssa.push(BlockArg::Value(env));
+                    }
+                    _ => return self.invalid("an edge argument of another shape"),
+                },
+                Param::Slot(slot, size, align) => match self.get(argument)? {
+                    V::Mem { addr, slot: from } => copies.push((slot, size, align, addr, from)),
+                    _ => return self.invalid("an edge argument of another shape"),
+                },
+            }
+        }
+        // Copies are parallel: an argument read from another of the target's slots is
+        // saved first.
+        let targets: Vec<StackSlot> = copies.iter().map(|c| c.0).collect();
+        let mut sources = Vec::new();
+        for &(slot, size, align, addr, from) in &copies {
+            match from {
+                Some(from) if from == slot => sources.push(None),
+                Some(from) if targets.contains(&from) => {
+                    let (temp, _) = self.stack_bytes(size, align);
+                    self.copy(temp, addr, size, align);
+                    sources.push(Some(temp));
+                }
+                _ => sources.push(Some(addr)),
+            }
+        }
+        for (&(slot, size, align, _, _), source) in copies.iter().zip(sources) {
+            if let Some(source) = source {
+                let to = self.b.ins().stack_addr(PTR, slot, 0);
+                self.copy(to, source, size, align);
+            }
+        }
+        Ok(ssa)
+    }
+
+    /// Branches from the current block along `edge`.
+    pub(crate) fn jump(&mut self, edge: EdgeId) -> Emitted {
+        let edge = self.edge(edge)?;
+        let args = self.edge_args(edge)?;
+        let target = self.blocks[edge.target.index()];
+        self.b.ins().jump(target, &args);
+        Ok(())
+    }
+
+    /// A block that takes `edge` from a multi-way branch: the target itself when the edge
+    /// passes nothing, else a fresh block passing the arguments, filled by `trampolines`.
+    fn edge_block(
+        &mut self,
+        edge: EdgeId,
+        trampolines: &mut Vec<(Block, EdgeId)>,
+    ) -> Emitted<Block> {
+        let e = self.edge(edge)?;
+        let carries = self.params[e.target.index()]
+            .iter()
+            .any(|p| !matches!(p, Param::None));
+        if !carries {
+            return Ok(self.blocks[e.target.index()]);
+        }
+        let block = self.b.create_block();
+        trampolines.push((block, edge));
+        Ok(block)
+    }
+
+    fn fill_trampolines(&mut self, trampolines: Vec<(Block, EdgeId)>) -> Emitted {
+        for (block, edge) in trampolines {
+            self.b.switch_to_block(block);
+            self.jump(edge)?;
+        }
+        Ok(())
+    }
+
+    /// The block a failure edge starts in, filled after the body.
+    pub(crate) fn failure_block(&mut self, failure: FailureId) -> Emitted<Block> {
+        if let Some(&block) = self.failures.get(&failure) {
+            return Ok(block);
+        }
+        self.failure_edge(failure)?;
+        let block = self.b.create_block();
+        self.b.set_cold_block(block);
+        self.deferred.push(Deferred::Failure { block, failure });
+        self.failures.insert(failure, block);
+        Ok(block)
+    }
+
+    fn fill_deferred(&mut self, deferred: Deferred) -> Emitted {
+        match deferred {
+            Deferred::Failure { block, failure } => {
+                self.b.switch_to_block(block);
+                let edge = self.failure_edge(failure)?;
+                if let Some(rule) = &edge.rule {
+                    let code = self.failure_code(rule)?;
+                    let site = self.anchor_code(edge.anchor)?;
+                    self.failure_begin(code, site)?;
+                }
+                self.dispose_tokens(edge)?;
+                self.jump(edge.cleanup)
+            }
+            Deferred::Reanchor { block, site, then } => {
+                self.b.switch_to_block(block);
+                let site = self.u64c(site);
+                let context = self.context;
+                self.rt(RuntimeEntry::FailureReanchor, &[context, site])?;
+                self.b.ins().jump(then, &[]);
+                Ok(())
+            }
+            Deferred::Record {
+                block,
+                code,
+                site,
+                then,
+            } => {
+                self.b.switch_to_block(block);
+                self.failure_begin(code, site)?;
+                self.b.ins().jump(then, &[]);
+                Ok(())
+            }
+            Deferred::Exhausted {
+                block,
+                code,
+                region,
+                site,
+                failure,
+            } => {
+                self.b.switch_to_block(block);
+                let kind = self.b.ins().iconst(types::I32, i64::from(code.kind));
+                let rule = self.b.ins().iconst(types::I32, i64::from(code.rule));
+                let site = self.u64c(site);
+                let context = self.context;
+                self.rt(
+                    RuntimeEntry::ArenaExhausted,
+                    &[context, region, kind, rule, site],
+                )?;
+                let edge = self.failure_edge(failure)?;
+                self.dispose_tokens(edge)?;
+                self.jump(edge.cleanup)
+            }
+        }
+    }
+
+    pub(crate) fn failure_code(&self, rule: &str) -> Emitted<FailureCode> {
+        match self.em.inputs.failures.codes.get(rule).copied() {
+            Some(code) => Ok(code),
+            None => Err(CodegenError::UnknownRule {
+                definition: self.definition().clone(),
+                rule: rule.to_owned(),
+            }),
+        }
+    }
+
+    fn failure_begin(&mut self, code: FailureCode, site: u64) -> Emitted {
+        let kind = self.b.ins().iconst(types::I32, i64::from(code.kind));
+        let rule = self.b.ins().iconst(types::I32, i64::from(code.rule));
+        let site = self.u64c(site);
+        let context = self.context;
+        self.rt(RuntimeEntry::FailureBegin, &[context, kind, rule, site])?;
+        Ok(())
+    }
+
+    fn dispose_tokens(&mut self, edge: &FailureEdge) -> Emitted {
+        let dispose = self.pool(edge.dispose, &self.unit.pools.values)?;
+        for &token in dispose {
+            let token = self.get1(token)?;
+            let context = self.context;
+            self.rt(RuntimeEntry::Dispose, &[context, token])?;
+        }
+        Ok(())
+    }
+
+    /// A block that records the arena `region`'s own `OutOfSpace` at `anchor` and takes
+    /// `failure`, filled after the body.
+    pub(crate) fn exhausted_block(
+        &mut self,
+        code: FailureCode,
+        region: Value,
+        anchor: SourceAnchorId,
+        failure: FailureId,
+    ) -> Emitted<Block> {
+        self.failure_edge(failure)?;
+        let site = self.anchor_code(anchor)?;
+        let block = self.b.create_block();
+        self.b.set_cold_block(block);
+        self.deferred.push(Deferred::Exhausted {
+            block,
+            code,
+            region,
+            site,
+            failure,
+        });
+        Ok(block)
+    }
+
+    /// Branches to `failure` when `failed` (an `i8` truth value) holds and continues in a
+    /// fresh block.
+    pub(crate) fn guard(&mut self, failed: Value, failure: FailureId) -> Emitted {
+        let fail = self.failure_block(failure)?;
+        self.branch_to(failed, fail)
+    }
+
+    /// Branches to `to` when `taken` holds and continues in a fresh block.
+    pub(crate) fn branch_to(&mut self, taken: Value, to: Block) -> Emitted {
+        let next = self.b.create_block();
+        self.b.ins().brif(taken, to, &[], next, &[]);
+        self.b.switch_to_block(next);
+        Ok(())
+    }
+
+    /// Branches to `failure` when a runtime entry's status is nonzero. The runtime has
+    /// already recorded the failure.
+    pub(crate) fn status_guard(&mut self, status: Value, failure: FailureId) -> Emitted {
+        self.guard(status, failure)
+    }
+
+    /// Traps when `bad` holds: an implementation invariant, never a language failure.
+    pub(crate) fn trap_if(&mut self, bad: Value) {
+        self.b.ins().trapnz(bad, TRAP);
+    }
+
+    /// The site code of a source anchor.
+    pub(crate) fn anchor_code(&self, anchor: SourceAnchorId) -> Emitted<u64> {
+        if self.unit.header.origin == UnitOrigin::Library {
+            return Ok(0);
+        }
+        let Some(anchor) = self.unit.tables.source_anchors.get(anchor.index()) else {
+            return self.invalid("an anchor outside the anchor table");
+        };
+        Ok(site_code(
+            &self.unit.header.definition,
+            &self.unit.header.implementation_revision,
+            anchor.site,
+        ))
+    }
+
+    /// The site code of a cleanup anchor.
+    pub(crate) fn cleanup_code(&self, anchor: CleanupAnchorId) -> Emitted<u64> {
+        let Some(anchor) = self.unit.tables.cleanup_anchors.get(anchor.index()) else {
+            return self.invalid("a cleanup anchor outside the anchor table");
+        };
+        Ok(site_code(
+            &self.unit.header.definition,
+            &self.unit.header.implementation_revision,
+            anchor.site,
+        ))
+    }
+
+    // Terminators.
+
+    /// Returns `status` and, with a register result, `value` (a zero word when absent).
+    fn return_status(&mut self, status: i64, value: Option<V>) -> Emitted {
+        let status = self.b.ins().iconst(types::I8, status);
+        match self.sig.value {
+            Some(kind) => {
+                let word = match value {
+                    Some(V::One(v)) => self.encode_word(kind, v),
+                    Some(_) => return self.invalid("a register result of another shape"),
+                    None => self.b.ins().iconst(types::I64, 0),
+                };
+                self.b.ins().return_(&[status, word]);
+            }
+            None => {
+                self.b.ins().return_(&[status]);
+            }
+        }
+        Ok(())
+    }
+
+    /// `value`, an SSA scalar of `kind`, as a zero-extended 64-bit word.
+    fn encode_word(&mut self, kind: ScalarKind, value: Value) -> Value {
+        match kind {
+            ScalarKind::Pointer | ScalarKind::U64 | ScalarKind::I64 => value,
+            ScalarKind::F64 => self.b.ins().bitcast(types::I64, flags(), value),
+            ScalarKind::F32 => {
+                let bits = self.b.ins().bitcast(types::I32, flags(), value);
+                self.b.ins().uextend(types::I64, bits)
+            }
+            _ => self.b.ins().uextend(types::I64, value),
+        }
+    }
+
+    /// The scalar of `kind` a returned word carries in its low bits.
+    fn decode_word(&mut self, kind: ScalarKind, word: Value) -> Value {
+        match kind {
+            ScalarKind::Pointer | ScalarKind::U64 | ScalarKind::I64 => word,
+            ScalarKind::Bool => {
+                let byte = self.b.ins().ireduce(types::I8, word);
+                self.b.ins().icmp_imm_s(IntCC::NotEqual, byte, 0)
+            }
+            ScalarKind::F64 => self.b.ins().bitcast(types::F64, flags(), word),
+            ScalarKind::F32 => {
+                let bits = self.b.ins().ireduce(types::I32, word);
+                self.b.ins().bitcast(types::F32, flags(), bits)
+            }
+            kind => self.b.ins().ireduce(scalar_type(kind), word),
+        }
+    }
+
+    fn terminator(&mut self, terminator: &'a Terminator) -> Emitted {
+        match *terminator {
+            Terminator::Jump(edge) => self.jump(edge),
+            Terminator::Branch { condition, yes, no } => {
+                let condition = self.get1(condition)?;
+                let mut trampolines = Vec::new();
+                let yes = self.edge_block(yes, &mut trampolines)?;
+                let no = self.edge_block(no, &mut trampolines)?;
+                self.b.ins().brif(condition, yes, &[], no, &[]);
+                self.fill_trampolines(trampolines)
+            }
+            Terminator::Switch {
+                value,
+                arms,
+                otherwise,
+            } => {
+                // A switch on a variant value selects by its active ordinal.
+                let layout = self.value_type(value)?.layout;
+                let record = self.layout(layout)?;
+                let on = match (self.value_shape(value)?, &record.tag) {
+                    (Shape::Bytes { .. }, Some(tag)) => {
+                        let V::Mem { addr, .. } = self.get(value)? else {
+                            return self.invalid("a variant value that is not bytes");
+                        };
+                        let tag = self.load_tag(addr, tag.offset, tag.form);
+                        self.b.ins().uextend(types::I64, tag)
+                    }
+                    _ => {
+                        let kind = self.scalar_kind(value)?;
+                        if crate::scalar::integer(kind).is_none() {
+                            return self.invalid("a switch on a value that is not an integer");
+                        }
+                        let v = self.get1(value)?;
+                        match scalar_type(kind) {
+                            types::I64 => v,
+                            types::I128 => self.b.ins().ireduce(types::I64, v),
+                            _ => self.b.ins().uextend(types::I64, v),
+                        }
+                    }
+                };
+                let mut trampolines = Vec::new();
+                let mut switch = Switch::new();
+                let mut seen = BTreeSet::new();
+                for arm in self.pool(arms, &self.unit.pools.switch_arms)? {
+                    let block = self.edge_block(arm.edge, &mut trampolines)?;
+                    // The first arm of a value wins, as an ordered switch does.
+                    if seen.insert(arm.value) {
+                        switch.set_entry(u128::from(arm.value), block);
+                    }
+                }
+                let otherwise = self.edge_block(otherwise, &mut trampolines)?;
+                switch.emit(&mut self.b, on, otherwise);
+                self.fill_trampolines(trampolines)
+            }
+            Terminator::Call {
+                call,
+                normal,
+                failure,
+            } => self.call_site(call, normal, failure),
+            Terminator::Return(value) => {
+                if self.sig.value.is_some() {
+                    let Some(value) = value else {
+                        return self.invalid("a return without the entry's result");
+                    };
+                    let v = self.get(value)?;
+                    return self.return_status(0, Some(v));
+                }
+                if let (Some(value), Some(index)) = (value, self.sig.hidden_index(Hidden::Result)) {
+                    let Some(result) = &self.sig.abi.result else {
+                        return self.invalid("a result slot without a result");
+                    };
+                    let align = self.layout(result.layout)?.align;
+                    let out = Place {
+                        ptr: self.entry_params[index],
+                        layout: result.layout,
+                        align,
+                        block: None,
+                    };
+                    let shape = self.value_shape(value)?;
+                    let v = self.get(value)?;
+                    self.store(shape, v, out)?;
+                }
+                self.return_status(0, None)
+            }
+            Terminator::Raise(failure) => {
+                let block = self.failure_block(failure)?;
+                self.b.ins().jump(block, &[]);
+                Ok(())
+            }
+            Terminator::Recover {
+                arena,
+                caught,
+                failed,
+            } => {
+                let arena = self.get1(arena)?;
+                let context = self.context;
+                let status = self.rt1(RuntimeEntry::ArenaRecover, &[context, arena])?;
+                let mut trampolines = Vec::new();
+                let caught = self.edge_block(caught, &mut trampolines)?;
+                let failed = self.edge_block(failed, &mut trampolines)?;
+                self.b.ins().brif(status, caught, &[], failed, &[]);
+                self.fill_trampolines(trampolines)
+            }
+            Terminator::Propagate => self.return_status(1, None),
+            Terminator::InvariantFault { .. } => {
+                self.rt(RuntimeEntry::InvariantFault, &[])?;
+                self.b.ins().trap(TRAP);
+                Ok(())
+            }
+            Terminator::Unreachable => {
+                // Proved unreachable by the validator; still a trap.
+                self.b.ins().trap(TRAP);
+                Ok(())
+            }
+        }
+    }
+
+    /// The u32 variant ordinal at `offset` bytes from `base` in `form`, as an `i32`.
+    pub(crate) fn load_tag(&mut self, base: Value, offset: u64, form: TagForm) -> Value {
+        match form {
+            TagForm::Ordinal => self.load_ty(types::I32, base, offset),
+            TagForm::LiveBit { bit } => {
+                let word = self.load_ty(types::I64, base, offset);
+                let set = self.b.ins().band_imm_s(word, (1u64 << bit) as i64);
+                let live = self.b.ins().icmp_imm_s(IntCC::NotEqual, set, 0);
+                self.b.ins().uextend(types::I32, live)
+            }
+            TagForm::Niche { nullary, dataful } => {
+                let word = self.load_ty(PTR, base, offset);
+                let null = self.b.ins().icmp_imm_s(IntCC::Equal, word, 0);
+                let nullary = self.b.ins().iconst(types::I32, i64::from(nullary));
+                let dataful = self.b.ins().iconst(types::I32, i64::from(dataful));
+                self.b.ins().select(null, nullary, dataful)
+            }
+        }
+    }
+
+    /// The link name of function `symbol`, imported at `abi`.
+    fn named_function(&mut self, symbol: SymbolId, abi: &FnAbi) -> Emitted<String> {
+        let Some(symbol) = self.unit.tables.symbols.get(symbol.index()) else {
+            return self.invalid("a callee outside the symbol table");
+        };
+        if symbol.kind != SymbolKind::Function {
+            return self.invalid("a call of a symbol that is not a function");
+        }
+        let name = symbol_name(&symbol.definition, symbol.instance.as_ref());
+        self.em.manifest_import(
+            &name,
+            ObjectSymbolKind::Function,
+            Some(&symbol.definition),
+            Some(abi),
+        );
+        Ok(name)
+    }
+
+    /// The code pointer and environment block of a callable value.
+    pub(crate) fn callable_parts(&mut self, callable: ValueId) -> Emitted<(Value, Value)> {
+        let layout = self.value_type(callable)?.layout;
+        match self.get(callable)? {
+            V::Pair(code, env) => Ok((code, env)),
+            V::Mem { addr, .. } => {
+                let iterator = matches!(self.layout(layout)?.kind, LayoutKind::Iterator { .. });
+                let (code_at, env_at) = if iterator { (8, 0) } else { (0, 8) };
+                let code = self.load_ty(PTR, addr, code_at);
+                let env = self.load_ty(PTR, addr, env_at);
+                Ok((code, env))
+            }
+            _ => self.invalid("a callable of another shape"),
+        }
+    }
+
+    fn call_site(&mut self, call: CallId, normal: Option<EdgeId>, failure: FailureId) -> Emitted {
+        let unit = self.unit;
+        let Some(site) = unit.tables.calls.get(call.index()) else {
+            return self.invalid("a call outside the call table");
+        };
+        let abi = self.em.fn_abi(site.abi, self.definition())?;
+        if abi.shape == CallableShape::Foreign {
+            return self.unsupported("a call of an extern \"c\" function (the Foreign shape)");
+        }
+        let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
+        let mut runtime_primitive = false;
+        let (code, environment, name): (Option<Value>, Option<Value>, Option<String>) = match site
+            .callee
+        {
+            Callee::Direct(symbol) => (None, None, Some(self.named_function(symbol, abi)?)),
+            Callee::Bound { code, closure } => {
+                if !abi.environment {
+                    return self.invalid("a bound call through an ABI without an environment");
+                }
+                let (_, env) = self.callable_parts(closure)?;
+                (None, Some(env), Some(self.named_function(code, abi)?))
+            }
+            Callee::Operation(op) => {
+                let Some(id) = unit.tables.operations.get(op.index()) else {
+                    return self.invalid("an operation outside the operation table");
+                };
+                let Some(row) = self.em.inputs.manifest.row(id) else {
+                    return self.invalid("an operation the manifest does not list");
+                };
+                match row.dispositions.get(Engine::Native) {
+                    Disposition::RuntimePrimitive(template) => {
+                        let Some(symbol) =
+                            hirsel_lir::abi::resolve_call_symbol(template, unit, site)
+                        else {
+                            return self.invalid(format!(
+                                "runtime template `{template}` names no symbol for this call"
+                            ));
+                        };
+                        self.em.manifest_import(
+                            &symbol,
+                            ObjectSymbolKind::Runtime,
+                            Some(&id.definition),
+                            Some(abi),
+                        );
+                        runtime_primitive = true;
+                        (None, None, Some(symbol))
+                    }
+                    other => {
+                        return self.unsupported(format!(
+                            "an operation with native disposition {other:?}"
+                        ));
+                    }
+                }
+            }
+            Callee::Indirect(callable) => {
+                if !abi.environment {
+                    return self.invalid("an indirect call through an ABI without an environment");
+                }
+                let (code, env) = self.callable_parts(callable)?;
+                (Some(code), Some(env), None)
+            }
+        };
+        let signature = if runtime_primitive {
+            self.em.runtime_signature(abi, self.definition())?
+        } else {
+            self.em.entry_signature(abi, self.definition())?
+        };
+        let mut args = Vec::new();
+        let mut result_place = None;
+        for hidden in signature.hidden.clone() {
+            match hidden {
+                Hidden::Context => args.push(self.context),
+                Hidden::Environment => match environment {
+                    Some(env) => args.push(env),
+                    None => return self.invalid("an environment argument without a callable"),
+                },
+                Hidden::Destination => {
+                    let destination = match &site.destination {
+                        Some(DestinationClass::Heap) => self.b.ins().iconst(PTR, 0),
+                        Some(DestinationClass::Caller(_)) => {
+                            match self.sig.hidden_index(Hidden::Destination) {
+                                Some(index) => self.entry_params[index],
+                                None => {
+                                    return self
+                                        .invalid("a caller destination in a function without one");
+                                }
+                            }
+                        }
+                        Some(other) => {
+                            return self.unsupported(format!("a call destination {other:?}"));
+                        }
+                        None => return self.invalid("a destination slot without a destination"),
+                    };
+                    args.push(destination);
+                }
+                Hidden::Result => {
+                    let Some(result) = &abi.result else {
+                        return self.invalid("a result slot without a result");
+                    };
+                    let place = self.stack(result.layout)?;
+                    args.push(place.ptr);
+                    result_place = Some(place);
+                }
+            }
+        }
+        for parameter in &abi.parameters {
+            let Some(argument) = arguments.iter().find(|a| a.parameter == parameter.source) else {
+                return self.invalid("a call without an argument for a parameter");
+            };
+            match (parameter.passing, argument.value) {
+                (ParameterPassing::ByValue, ArgumentValue::Value(value)) => {
+                    let v = self.get(value)?;
+                    let slots = self.disassemble(parameter.layout, v)?;
+                    if slots.len() != parameter.slots.len() {
+                        return self.invalid("an argument's slots differ from its parameter's");
+                    }
+                    args.extend(slots);
+                }
+                (
+                    ParameterPassing::ReadOnlyAddress | ParameterPassing::TransferAddress,
+                    ArgumentValue::Value(value),
+                ) => {
+                    // The callee reads (or takes) the value from caller storage.
+                    let place = self.stack(parameter.layout)?;
+                    let shape = self.value_shape(value)?;
+                    let v = self.get(value)?;
+                    self.store(shape, v, place)?;
+                    args.push(place.ptr);
+                }
+                (ParameterPassing::ExclusiveAddress, ArgumentValue::Address { address, .. }) => {
+                    let place = self.place(address)?;
+                    args.push(place.ptr);
+                }
+                (ParameterPassing::PointerLength, ArgumentValue::Value(value)) => {
+                    let place = match self.layout(parameter.layout)?.kind {
+                        LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
+                            let pointer = self.get1(value)?;
+                            if self.value_type(value)?.repr == ValueRepr::Uncounted {
+                                self.uncounted_payload(pointer, payload)?
+                            } else {
+                                self.payload(pointer, parameter.layout)?
+                            }
+                        }
+                        LayoutKind::Flat => {
+                            let place = self.stack(parameter.layout)?;
+                            let shape = self.value_shape(value)?;
+                            let v = self.get(value)?;
+                            self.store(shape, v, place)?;
+                            place
+                        }
+                        _ => return self.invalid("a pointer/length argument of a non-flat layout"),
+                    };
+                    args.push(place.ptr);
+                    let extent = self.extent(place.layout, place.ptr)?;
+                    args.push(extent);
+                }
+                _ => return self.invalid("an argument passed against its parameter's convention"),
+            }
+        }
+        if args.len() != signature.ir.params.len() {
+            return self.invalid("a call whose arguments differ from its signature");
+        }
+        let returned = match (&name, code) {
+            (Some(name), _) => {
+                let id = self.em.import_function(name, &signature.ir)?;
+                self.call(id, &args)
+            }
+            (None, Some(code)) => {
+                let sig_ref = self.b.import_signature(signature.ir.clone());
+                let call = self.b.ins().call_indirect(sig_ref, code, &args);
+                self.b.inst_results(call).to_vec()
+            }
+            (None, None) => return self.invalid("a call without a callee"),
+        };
+        let status = returned[0];
+        let failure_block = self.failure_block(failure)?;
+        let fail = if self.unit.header.origin == UnitOrigin::Library {
+            failure_block
+        } else {
+            let block = self.b.create_block();
+            self.b.set_cold_block(block);
+            let site = self.anchor_code(site.anchor)?;
+            self.deferred.push(Deferred::Reanchor {
+                block,
+                site,
+                then: failure_block,
+            });
+            block
+        };
+        let fail = if let Callee::Operation(op) = site.callee
+            && let Some(rule) = self
+                .em
+                .inputs
+                .manifest
+                .row(&unit.tables.operations[op.index()])
+                .and_then(|row| row.failure.as_ref())
+        {
+            let code = self.failure_code(&rule.0)?;
+            if self.failure_edge(failure)?.rule.is_some() {
+                return self.invalid("a runtime call failure rule must be recorded exactly once");
+            }
+            let block = self.b.create_block();
+            self.b.set_cold_block(block);
+            let site = self.anchor_code(site.anchor)?;
+            self.deferred.push(Deferred::Record {
+                block,
+                code,
+                site,
+                then: fail,
+            });
+            block
+        } else {
+            fail
+        };
+        self.branch_to(status, fail)?;
+        // A diverging callee reports only failure: its success status is impossible.
+        let Some(normal) = normal else {
+            self.b.ins().trap(TRAP);
+            return Ok(());
+        };
+        if let Some(result) = site.result {
+            let value = match (signature.value, result_place) {
+                (Some(kind), _) => {
+                    let word = returned[1];
+                    V::One(self.decode_word(kind, word))
+                }
+                (None, Some(place)) => {
+                    let shape = self.value_shape(result)?;
+                    self.load(shape, place)
+                }
+                (None, None) => return self.invalid("a call result without a result slot"),
+            };
+            self.define(result, value)?;
+        }
+        self.jump(normal)
+    }
+
+    pub(crate) fn place(&self, address: AddressId) -> Emitted<Place> {
+        match self.addresses.get(address.index()).copied().flatten() {
+            Some(place) => Ok(place),
+            None => self.invalid(format!("address {} used before its preparation", address.0)),
+        }
+    }
+
+    /// Whether the value is a register result of `abi`.
+    #[allow(dead_code)]
+    pub(crate) fn register_result(&self, abi: &FnAbi) -> Option<ScalarKind> {
+        register_result(self.em.layouts(), abi)
+    }
+
+    /// Records the import of `name`, a function of `definition`, for the manifest.
+    pub(crate) fn import_definition(
+        &mut self,
+        name: &str,
+        definition: &DefPath,
+        abi: Option<&FnAbi>,
+    ) {
+        self.em
+            .manifest_import(name, ObjectSymbolKind::Function, Some(definition), abi);
+    }
+
+    /// The digest of `abi`.
+    #[allow(dead_code)]
+    pub(crate) fn digest(abi: &FnAbi) -> hirsel_syntax::ContentHash {
+        abi_digest(abi)
+    }
+}

@@ -25,8 +25,10 @@ pub use differential::{
     Configuration, Engine, MATRIX_VERSION, Outcome, Runtime, differential, full_matrix,
     real_io_replay, real_io_replay_with_config, runtime_builds, smoke_matrix, topology_matrix,
 };
-pub use emit::{KIND_BUG, check_runtime_calls, emit, emit_ir, failure_codes, failure_rules};
-pub use executable::{BuildProfile, build_path_native};
+pub use emit::{
+    Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_ir, failure_codes, failure_rules,
+};
+pub use executable::{BuildProfile, build_path_native, build_path_native_backend};
 pub use heap::{HeapRun, heap_campaign, run_heap};
 pub use hirsel_lir::emission::OptLevel;
 pub use hirsel_lir::layout_types::TargetSpec;
@@ -34,14 +36,15 @@ pub use hirsel_llvm::{ProfileSource, ProfileSources, c_call};
 pub use hirsel_proof_export::sidecar::Checker;
 pub use hirsel_run_config::Inputs as LaunchInputs;
 pub use link::{
-    Launched, Partition, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape, Toolchain, emit_objects,
-    launch, launch_with, link, link_objects, link_profile, observe, partition_objects,
+    Launched, Partition, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape, Toolchain,
+    emit_backend_objects, emit_objects, launch, launch_with, link, link_objects, link_profile,
+    observe, partition_backend_objects, partition_objects,
 };
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
 pub use proofs::{Evidence, Proofs, parse as parse_sidecar};
 pub use stages::{NativeError, Options, ReadyProgram, StageName, build, build_program};
-pub use tool::{Output, run_path_native, run_path_native_with_config};
+pub use tool::{Output, run_path_native, run_path_native_backend, run_path_native_with_config};
 
 /// The pinned LLVM release emission binds, for reports and artifacts.
 pub fn llvm_version() -> String {

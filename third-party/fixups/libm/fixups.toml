@@ -1,0 +1,4 @@
+# libm's build script only turns features into cfgs (configure.rs) and reads OPT_LEVEL,
+# which Buck2 does not set: the default `arch` feature is `arch_enabled`.
+buildscript.run = false
+cfgs = ["arch_enabled"]

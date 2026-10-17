@@ -243,6 +243,9 @@ AGREE_NATIVE_FULL_TIMEOUT = 3600
 # under its Buck2 timeout; gate-native-full stays whole for --bless and for a
 # lane's filtered run.
 NATIVE_FULL_SHARDS = 8
+# The Cranelift parity set (about 3600 cases, each an LLVM and a Cranelift build and
+# launch) runs as shards by path hash, each well under the pool's 600 s action limit.
+CRANELIFT_SHARDS = 8
 # The historical replay (tools/native-plants.py --history-only) runs every
 # protected source under the exhaustive matrix at one CPU; single sources take
 # up to 15 minutes, so 32 path-hash shards keep each under the gate's budget.
@@ -278,6 +281,14 @@ GATE_TESTS = [
            args=["--replay-history", "--shard", f"{index}/{HISTORY_SHARDS}"], release=True,
            runtime_archives=RUNTIME_ARCHIVES, **GATE)
       for index in range(1, HISTORY_SHARDS + 1)),
+    # The Cranelift parity gate: on demand (`-c hirsel.full=true`), with a lane's
+    # `--test-arg=--filter --test-arg=<program>`; the shards together are the whole parity set.
+    dict(name="gate-native-cranelift", full=True, binary="//:hirsel-conformance-bin-native", args=["--cranelift"],
+         release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE),
+    *(dict(name=f"gate-native-cranelift-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
+           args=["--cranelift", "--shard", f"{index}/{CRANELIFT_SHARDS}"], release=True,
+           runtime_archives=RUNTIME_ARCHIVES, **GATE)
+      for index in range(1, CRANELIFT_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",

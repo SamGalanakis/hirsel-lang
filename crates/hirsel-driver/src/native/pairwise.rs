@@ -35,6 +35,12 @@ fn values(c: &Configuration) -> Vec<String> {
             partition.name(),
             runtime.name().into(),
         ],
+        Engine::Cranelift { partition, runtime } => vec![
+            "cranelift".into(),
+            "O0".into(),
+            partition.name(),
+            runtime.name().into(),
+        ],
     });
     values
 }

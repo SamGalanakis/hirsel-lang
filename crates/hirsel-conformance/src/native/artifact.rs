@@ -135,6 +135,7 @@ pub fn configuration(name: &str) -> Option<Configuration> {
     let mut config = full_matrix()
         .into_iter()
         .chain(topology_matrix(20))
+        .chain(super::cranelift::matrix())
         .find(|c| c.name() == base)?;
     config.options.launch = launch;
     // Stored names must be canonical: no duplicate, reordered or zero suffixes.

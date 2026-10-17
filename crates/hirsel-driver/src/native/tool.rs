@@ -43,6 +43,18 @@ pub fn run_path_native_with_config(
     evidence: Option<&super::Evidence>,
     output: Output<'_>,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
+    run_path_native_backend(path, launch, evidence, super::Backend::Llvm, output)
+}
+
+/// `run_path_native_with_config` with `backend`: LLVM builds at O3, Cranelift
+/// unoptimized, for a fast debug loop.
+pub fn run_path_native_backend(
+    path: &Path,
+    launch: Option<crate::HostLaunch<'_>>,
+    evidence: Option<&super::Evidence>,
+    backend: super::Backend,
+    output: Output<'_>,
+) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let (mut host_stdout, mut host_stderr) = (std::io::stdout(), std::io::stderr());
     let (inherit, stdout, stderr): (bool, &mut dyn Write, &mut dyn Write) = match output {
         Output::Inherit => (true, &mut host_stdout, &mut host_stderr),
@@ -121,6 +133,7 @@ pub fn run_path_native_with_config(
         &entry,
         host.as_ref().map(|(run, tape)| (run, *tape)),
         proofs.as_ref(),
+        backend,
         inherit,
         stdout,
         stderr,
@@ -160,6 +173,7 @@ fn run(
     entry: &hirsel_engine::DefPath,
     host: Option<(&hirsel_run_config::ValidatedRun, super::link::Tape<'_>)>,
     proofs: Option<&super::Proofs>,
+    backend: super::Backend,
     inherit: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -183,8 +197,18 @@ fn run(
     std::fs::create_dir_all(&scratch).map_err(io)?;
     let result = (|| {
         let toolchain = Toolchain::in_tree(&cache, &[&target])?;
-        let objects =
-            super::link::emit_objects(&program, OptLevel::Speed, Partition::Whole, false, None)?;
+        let opt = match backend {
+            super::Backend::Llvm => OptLevel::Speed,
+            super::Backend::Cranelift => OptLevel::None,
+        };
+        let objects = super::link::emit_backend_objects(
+            &program,
+            backend,
+            opt,
+            Partition::Whole,
+            false,
+            None,
+        )?;
         let executable = super::link::link_objects_with_run(
             &program, entry, &objects, &toolchain, &scratch, run,
         )?;

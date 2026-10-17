@@ -1,6 +1,6 @@
 //! P8: link the program's object with the runtime archive and a `main` that
 //! hands the entry to `hirsel_rt_v2_launch`, then run it with explicit grants.
-use super::emit::{check_runtime_calls, failure_rules};
+use super::emit::{Backend, check_runtime_calls, failure_rules};
 use super::observe::{Observation, Sites, site_codes};
 use super::stages::{NativeError, ReadyProgram, StageName};
 use hirsel_lir::abi_types::{ParameterPassing, PhysicalType};
@@ -507,6 +507,28 @@ pub fn partition_objects(
     measurement: bool,
     sources: Option<&hirsel_llvm::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
+    partition_backend_objects(
+        program,
+        Backend::Llvm,
+        opt,
+        partition,
+        registry,
+        measurement,
+        sources,
+    )
+}
+
+/// `partition_objects` by `backend`. Cranelift does not inline, so it copies no small
+/// callee bodies at any optimization level.
+pub fn partition_backend_objects(
+    program: &ReadyProgram,
+    backend: Backend,
+    opt: OptLevel,
+    partition: Partition,
+    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
+    measurement: bool,
+    sources: Option<&hirsel_llvm::ProfileSources>,
+) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     use hirsel_lir::ir::{Callee, Inst, UnitOrigin};
     let assignment = partition.assign(program.units.len());
     let mut groups: Vec<usize> = assignment.clone();
@@ -527,7 +549,8 @@ pub fn partition_objects(
         .iter()
         .enumerate()
         .map(|(i, u)| {
-            opt != OptLevel::None
+            backend == Backend::Llvm
+                && opt != OptLevel::None
                 && !library[i]
                 && !inline[i]
                 && u.unit().instructions.len() <= SMALL_UNIT_INSTRUCTIONS
@@ -602,6 +625,7 @@ pub fn partition_objects(
             }
             super::emit::emit_registered(
                 program,
+                backend,
                 opt,
                 |unit| selected[unit],
                 &copies,
@@ -657,12 +681,33 @@ pub fn emit_objects(
     measurement: bool,
     sources: Option<&hirsel_llvm::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
+    emit_backend_objects(program, Backend::Llvm, opt, partition, measurement, sources)
+}
+
+/// `emit_objects` by `backend`. The objects name their backend, and linking them
+/// compiles the launcher with the same one.
+pub fn emit_backend_objects(
+    program: &ReadyProgram,
+    backend: Backend,
+    opt: OptLevel,
+    partition: Partition,
+    measurement: bool,
+    sources: Option<&hirsel_llvm::ProfileSources>,
+) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     check_runtime_calls(program)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
         &program.finalizers,
     );
-    partition_objects(program, opt, partition, &registry, measurement, sources)
+    partition_backend_objects(
+        program,
+        backend,
+        opt,
+        partition,
+        &registry,
+        measurement,
+        sources,
+    )
 }
 
 /// Check the link manifest of `objects` (from `emit_objects`) and link them
@@ -874,12 +919,67 @@ done:
             launch_config,
         )
     };
-    let shim = format!(
-        "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\ndeclare ptr @signal(i32, ptr)\ndefine i32 @main() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = {call}\n ret i32 %r\n}}\n",
-        target.triple
-    );
-    let main = hirsel_llvm::compile_ir(&shim, target, OptLevel::None)
-        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    // The launcher object comes from the backend that emitted the program's objects, so a
+    // Cranelift build never runs LLVM.
+    let cranelift = !objects.is_empty()
+        && objects.iter().all(|o| {
+            o.reproducibility
+                .toolchain
+                .starts_with(hirsel_cranelift::TOOLCHAIN)
+        });
+    let main = if cranelift {
+        use hirsel_cranelift::LaunchArgument as A;
+        let registry_arguments = [
+            A::Symbol(registry.symbol()),
+            A::Int {
+                bits: 32,
+                value: u64::from(registry.external_count()),
+            },
+        ];
+        let mut arguments = vec![
+            A::Entry,
+            A::Int {
+                bits: 64,
+                value: result_size,
+            },
+        ];
+        arguments.extend(registry_arguments);
+        let launcher = if standalone {
+            let name = revision.entry().as_bytes();
+            arguments.extend([
+                A::Bytes(revision.digest().to_vec()),
+                A::Bytes(name.to_vec()),
+                A::Int {
+                    bits: 64,
+                    value: name.len() as u64,
+                },
+            ]);
+            "hirsel_rt_v2_launch_standalone"
+        } else {
+            let mut bytes = Vec::with_capacity(56);
+            for seed in [config.hash_seed(), config.random_seed(), config.test_seed()] {
+                bytes.extend(seed.to_le_bytes());
+            }
+            bytes.extend(config.run_identity());
+            arguments.push(A::Bytes(bytes));
+            "hirsel_rt_v2_launch_roots"
+        };
+        arguments.push(A::Int {
+            bits: 8,
+            value: u64::from(mask),
+        });
+        let words: Vec<u64> = roots.iter().map(|r| root_index(*r) as u64).collect();
+        hirsel_cranelift::launch_object(target, &symbol, &words, launcher, &arguments)
+            .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
+    } else {
+        let shim = format!(
+            "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\ndeclare ptr @signal(i32, ptr)\ndefine i32 @main() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = {call}\n ret i32 %r\n}}\n",
+            target.triple
+        );
+        hirsel_llvm::compile_ir(&shim, target, OptLevel::None)
+            .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
+            .bytes
+    };
     // Link manifest: each definition instance has exactly one implementation
     // across the objects, the entry among them, and every import is another
     // object's export, a runtime entry or a toolchain routine.
@@ -937,7 +1037,7 @@ done:
     if !standalone {
         command.args(toolchain.loader_flags(target));
     }
-    command.arg(write("main.o", &main.bytes)?);
+    command.arg(write("main.o", &main)?);
     for (index, object) in objects.iter().enumerate() {
         command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
     }

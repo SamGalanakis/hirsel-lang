@@ -75,6 +75,7 @@ CRATE_CAMPAIGNS = {
     'hirsel-rc': frozenset({NATIVE_SMOKE}),
     'hirsel-heapcheck': frozenset({NATIVE_SMOKE}),
     'hirsel-llvm': frozenset({NATIVE_SMOKE}),
+    'hirsel-cranelift': frozenset({NATIVE_SMOKE}),
     'hirsel-rt': frozenset({NATIVE_SMOKE}),
     # Tool and test crates: only their own tests.
     'hirsel-cli': frozenset(),

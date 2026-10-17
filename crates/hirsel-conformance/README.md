@@ -201,8 +201,23 @@ an upper bound; an exact launch count requires running the campaign.
 `native-tests/regressions/smoke.txt` and eight generated successes and eight
 directed failures on the heap executor with fault injection and as an optimized
 x86-64 executable on the diagnostic runtime archive and on the shipped (default)
-archive, then records each on real Io and replays its tape; every one must
-agree with the interpreter.
+archive, then records each on real Io and replays its tape, and runs the cases of
+`native-tests/regressions/cranelift-smoke.txt` as Cranelift executables; every one
+must agree with the interpreter.
+
+`native --cranelift` (on demand: `//:gate-native-cranelift` filtered, and the whole set
+as `//:gate-native-cranelift-shard-1` to `-8`, `--shard I/N` by path hash) is the
+Cranelift parity gate. The parity set is the executable cases of `conformance/passing.txt` and the
+programs of `native-tests/regressions` and `native-tests/library`; each runs as an
+unoptimized LLVM x86-64 executable and as a Cranelift one, both on the diagnostic
+archive. A case LLVM does not agree on is outside the gate (each is named on stderr
+with LLVM's reason). Every case LLVM agrees on and Cranelift does not is a row of
+`native-tests/regressions/cranelift-parity.tsv` (`case`, then Cranelift's reason); a
+failure without its row, a changed reason and a row whose case agrees fail. The run
+prints the rows its results imply, keeping rows of cases it did not select.
+`--clif` first prints each selected case's Cranelift IR. `native --cranelift-times`
+prints the emission wall time of each case's one-object build under Cranelift, LLVM
+O0 and LLVM O2, and their totals.
 
 A native configuration names the runtime archive it links: `diagnostic`
 (poisoning, header checks and the exit leak audit; its compiled fast paths stay

@@ -3,9 +3,10 @@
 //! choice. A configuration names its target, placement, reuse, engine,
 //! optimization level and build topology, so a report row is reproducible
 //! from its name alone.
+use super::emit::Backend;
 use super::heap::{heap_campaign, run_heap};
 use super::link::{
-    Partition, RuntimeBuild, Toolchain, emit_objects, launch, link, link_objects, observe,
+    Partition, RuntimeBuild, Toolchain, emit_backend_objects, launch, link, link_objects, observe,
 };
 use super::observe::{Observation, Sites};
 use super::stages::{NativeError, Options, ReadyProgram, StageName, build};
@@ -27,6 +28,12 @@ pub enum Engine {
     /// A linked executable on one runtime archive.
     Native {
         opt: OptLevel,
+        partition: Partition,
+        runtime: Runtime,
+    },
+    /// A linked executable whose objects and launcher Cranelift emitted (fast debug
+    /// builds), held to the LLVM configurations' observations by the parity gate.
+    Cranelift {
         partition: Partition,
         runtime: Runtime,
     },
@@ -109,6 +116,9 @@ impl Configuration {
                 partition.name(),
                 runtime.name(),
             ),
+            Engine::Cranelift { partition, runtime } => {
+                format!("{passes}/cranelift/{}/{}", partition.name(), runtime.name())
+            }
         };
         let mut name = name;
         for (field, seed) in [
@@ -234,7 +244,8 @@ pub fn full_matrix() -> Vec<Configuration> {
 pub fn runtime_builds(matrix: &[Configuration]) -> Vec<RuntimeBuild> {
     let mut builds = vec![Runtime::Diagnostic.build()];
     for configuration in matrix {
-        if let Engine::Native { runtime, .. } = configuration.engine
+        if let Engine::Native { runtime, .. } | Engine::Cranelift { runtime, .. } =
+            configuration.engine
             && !builds.contains(&runtime.build())
         {
             builds.push(runtime.build());
@@ -309,8 +320,34 @@ pub fn differential(
     let sites = Sites::new(validated.snapshot());
     let mut built: Vec<(&Options, Result<ReadyProgram, NativeError>)> = Vec::new();
     type Objects = Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError>;
-    let mut emitted: Vec<((usize, OptLevel, Partition), Objects)> = Vec::new();
+    let mut emitted: Vec<((usize, Backend, OptLevel, Partition), Objects)> = Vec::new();
     let mut out = Vec::with_capacity(configurations.len());
+    // Configurations that differ only by runtime archive share their objects.
+    let mut native = |backend: Backend,
+                      opt: OptLevel,
+                      partition: Partition,
+                      runtime: Runtime,
+                      index: usize,
+                      program: &ReadyProgram| {
+        let toolchain = &toolchain.with_runtime(runtime.build());
+        let key = (index, backend, opt, partition);
+        let at = match emitted.iter().position(|(k, _)| *k == key) {
+            Some(at) => at,
+            None => {
+                let measurement = toolchain.runtime_build.measurement;
+                let objects =
+                    emit_backend_objects(program, backend, opt, partition, measurement, None);
+                emitted.push((key, objects));
+                emitted.len() - 1
+            }
+        };
+        let objects = emitted[at].1.as_ref().map_err(Clone::clone)?;
+        let executable = link_objects(program, entry, objects, toolchain, dir)?;
+        let target = &program.target;
+        let diagnostic = runtime == Runtime::Diagnostic;
+        let launched = launch(&executable, target, toolchain, dir, diagnostic)?;
+        observe(&launched, program, &sites)
+    };
     for configuration in configurations {
         let index = match built
             .iter()
@@ -340,25 +377,15 @@ pub fn differential(
                     opt,
                     partition,
                     runtime,
-                } => {
-                    let toolchain = &toolchain.with_runtime(runtime.build());
-                    let key = (index, opt, partition);
-                    let at = match emitted.iter().position(|(k, _)| *k == key) {
-                        Some(at) => at,
-                        None => {
-                            let measurement = toolchain.runtime_build.measurement;
-                            let objects = emit_objects(program, opt, partition, measurement, None);
-                            emitted.push((key, objects));
-                            emitted.len() - 1
-                        }
-                    };
-                    let objects = emitted[at].1.as_ref().map_err(Clone::clone)?;
-                    let executable = link_objects(program, entry, objects, toolchain, dir)?;
-                    let target = &program.target;
-                    let diagnostic = runtime == Runtime::Diagnostic;
-                    let launched = launch(&executable, target, toolchain, dir, diagnostic)?;
-                    observe(&launched, program, &sites)
-                }
+                } => native(Backend::Llvm, opt, partition, runtime, index, program),
+                Engine::Cranelift { partition, runtime } => native(
+                    Backend::Cranelift,
+                    OptLevel::None,
+                    partition,
+                    runtime,
+                    index,
+                    program,
+                ),
             });
         let outcome = match observed {
             Ok(observation) if observation == *reference => Outcome::Agree,

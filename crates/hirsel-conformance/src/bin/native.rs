@@ -1,6 +1,7 @@
 //! The native differential gate: `--smoke` (per push), `--full` (the versioned
-//! matrix, the set rule, topology and mismatch artifacts), `--replay` and
-//! `--reduce` of a stored artifact.
+//! matrix, the set rule, topology and mismatch artifacts), `--cranelift` (the
+//! Cranelift parity gate) and `--cranelift-times` (emission time per backend),
+//! `--replay` and `--reduce` of a stored artifact.
 use hirsel_cli_args::{
     CommonOption, CommonOptions, Shard,
     lexopt::{Arg::*, Parser, ValueExt},
@@ -13,7 +14,7 @@ use hirsel_driver::native::{
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
+const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --cranelift [--clif] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
                      options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
 
 fn main() -> ExitCode {
@@ -107,6 +108,7 @@ fn run() -> Result<bool, String> {
     let mut out = None;
     let mut filter = Filter::default();
     let mut bless = false;
+    let mut clif = false;
     let mut exhaustive = false;
     let mut seed = std::env::var("PROPTEST_RNG_SEED")
         .ok()
@@ -122,7 +124,10 @@ fn run() -> Result<bool, String> {
                 continue;
             }
             match arg {
-                Long(name @ ("smoke" | "full" | "sanitize" | "hash-sweep")) => {
+                Long(
+                    name @ ("smoke" | "full" | "sanitize" | "hash-sweep" | "cranelift"
+                    | "cranelift-times"),
+                ) => {
                     mode = Some((format!("--{name}"), PathBuf::new()));
                 }
                 Long(name @ ("replay" | "reduce")) => {
@@ -130,6 +135,7 @@ fn run() -> Result<bool, String> {
                     mode = Some((name, args.value()?.into()));
                 }
                 Long("bless") => bless = true,
+                Long("clif") => clif = true,
                 Long("exhaustive") => exhaustive = true,
                 Long("seed") => seed = args.value()?.parse()?,
                 Long("out") => out = Some(PathBuf::from(args.value()?)),
@@ -167,8 +173,8 @@ fn run() -> Result<bool, String> {
     if engine.is_some() && mode != "--full" {
         return Err("--engine requires --full".into());
     }
-    if filter.1.is_some() && mode != "--full" {
-        return Err("--shard requires --full".into());
+    if filter.1.is_some() && mode != "--full" && mode != "--cranelift" {
+        return Err("--shard requires --full or --cranelift".into());
     }
     match mode.as_str() {
         "--smoke" => {
@@ -201,14 +207,28 @@ fn run() -> Result<bool, String> {
                 },
             );
             ok &= all_agree("real Io replay", &replayed);
+            // A handful of cases as Cranelift executables.
+            let cranelift = [native::cranelift::cranelift(matrix[0].options.clone())];
+            let compiled = native::run_cases(
+                &listed(&root, native::cranelift::SMOKE)?,
+                &cranelift,
+                &toolchain,
+                &native::scratch("smoke-cranelift")?,
+                jobs,
+            );
+            ok &= all_agree("cranelift", &compiled);
             println!(
-                "native smoke: {} cases under {} configurations and real Io record and replay{}",
+                "native smoke: {} cases under {} configurations and real Io record and replay, \
+                 {} as Cranelift executables{}",
                 results.len(),
                 matrix.len(),
+                compiled.len(),
                 if ok { " agree" } else { ": FAILED" }
             );
             Ok(ok)
         }
+        "--cranelift" => cranelift(&root, jobs, &filter, hash_seed, clif),
+        "--cranelift-times" => cranelift_times(&root, jobs, &filter),
         "--sanitize" => {
             // The smoke and memcheck cases as optimized and unoptimized x86-64
             // executables on the system-allocator archive and on the size-class
@@ -289,6 +309,155 @@ fn run() -> Result<bool, String> {
         }
         _ => unreachable!(),
     }
+}
+
+/// `--cranelift`: the parity gate over the selected cases (all without a filter).
+/// With `clif`, each selected case's Cranelift IR is printed first.
+fn cranelift(
+    root: &Path,
+    jobs: usize,
+    filter: &Filter,
+    hash_seed: u64,
+    clif: bool,
+) -> Result<bool, String> {
+    use native::cranelift;
+    let matrix = seeded(cranelift::matrix(), hash_seed);
+    let mut cases = cranelift::cases(root)?;
+    cases.retain(|c| filter.keeps(&c.id));
+    if clif {
+        for case in &cases {
+            let case = case.clone();
+            let text = hirsel_engine::with_compiler_stack(move || cranelift::clif(&case))
+                .unwrap_or_else(|e| format!("unavailable: {e}"));
+            println!("{text}");
+        }
+    }
+    let text = std::fs::read_to_string(root.join(cranelift::PARITY))
+        .map_err(|e| format!("{}: {e}", cranelift::PARITY))?;
+    let listed = cranelift::parse(&text)?;
+    let results = native::run_cases(
+        &cases,
+        &matrix,
+        &toolchain(&matrix)?,
+        &native::scratch("cranelift")?,
+        jobs,
+    );
+    let report = cranelift::judge(&results, &listed);
+    for (id, reason) in &report.unlisted {
+        eprintln!("cranelift: {id}: {reason}");
+        // The whole failure, for the lane that debugs it.
+        let outcome = results
+            .iter()
+            .filter(|r| r.id == *id)
+            .flat_map(|r| &r.outcomes)
+            .find(|(_, class, _)| *class == Class::Cranelift);
+        match outcome {
+            Some((_, _, Outcome::Unavailable(error))) => eprintln!("  {error}"),
+            Some((_, _, Outcome::Mismatch(actual))) => eprintln!("  observed\n{}", actual.render()),
+            _ => {}
+        }
+    }
+    for id in &report.stale {
+        eprintln!(
+            "cranelift: {id} passes; remove its row from {}",
+            cranelift::PARITY
+        );
+    }
+    // Cases outside the gate, and why LLVM does not pass them.
+    for result in results.iter().filter(|r| cranelift::verdict(r).is_none()) {
+        let why = result.snapshot.clone().unwrap_or_else(|| {
+            result
+                .outcomes
+                .iter()
+                .find(|(_, class, _)| *class == Class::Llvm)
+                .and_then(|(_, _, outcome)| native::exclusion(outcome))
+                .map_or_else(
+                    || "no LLVM run".into(),
+                    |e| format!("{}: {}", e.class, e.reason),
+                )
+        });
+        eprintln!("cranelift: outside the gate: {}: {why}", result.id);
+    }
+    // Rows of cases this run did not reach stay as they are.
+    let ran: std::collections::BTreeSet<_> = results.iter().map(|r| r.id.as_str()).collect();
+    if !filter.is_empty() || filter.1.is_some() {
+        println!("the parity rows of the selected cases:");
+    }
+    let mut rendered = cranelift::render(&results);
+    for (id, reason) in listed.iter().filter(|(id, _)| !ran.contains(id.as_str())) {
+        rendered.push_str(&format!("{id}\t{reason}\n"));
+    }
+    print!("{rendered}");
+    let ok = report.ok() && !results.is_empty();
+    println!(
+        "cranelift parity: {} of {} cases LLVM passes agree as Cranelift executables ({} selected){}",
+        report.passing,
+        report.gated,
+        results.len(),
+        if ok { "" } else { ": FAILED" }
+    );
+    Ok(ok)
+}
+
+/// `--cranelift-times`: emission wall time per case and backend, and the totals.
+fn cranelift_times(root: &Path, jobs: usize, filter: &Filter) -> Result<bool, String> {
+    use native::cranelift::{self, BACKENDS};
+    let mut cases = cranelift::cases(root)?;
+    cases.retain(|c| filter.keeps(&c.id));
+    let times = std::sync::Mutex::new(Vec::new());
+    native::run_cases_with(
+        &cases,
+        &native::scratch("cranelift-times")?,
+        jobs,
+        |case, _| {
+            let timed = cranelift::compile_times(case);
+            times.lock().unwrap().push((case.id.clone(), timed));
+            native::CaseResult {
+                id: case.id.clone(),
+                snapshot: None,
+                outcomes: Vec::new(),
+                reference: None,
+                wall: Default::default(),
+            }
+        },
+    );
+    let mut times = times.into_inner().unwrap();
+    times.sort_by(|a, b| a.0.cmp(&b.0));
+    let names: Vec<_> = BACKENDS
+        .iter()
+        .map(|(name, ..)| format!("{name}_ms"))
+        .collect();
+    // Two spaces apart: test logs drop tabs.
+    println!("case  {}", names.join("  "));
+    let mut totals = [std::time::Duration::ZERO; 3];
+    let mut timed = 0;
+    for (id, result) in &times {
+        match result {
+            Ok(walls) => {
+                timed += 1;
+                let row: Vec<_> = walls
+                    .iter()
+                    .zip(&mut totals)
+                    .map(|(wall, total)| {
+                        *total += *wall;
+                        format!("{:.2}", wall.as_secs_f64() * 1e3)
+                    })
+                    .collect();
+                println!("{id}  {}", row.join("  "));
+            }
+            Err(error) => println!("{id}  unavailable: {}", error.replace(['\t', '\n'], " ")),
+        }
+    }
+    let total = |i: usize| totals[i].as_secs_f64();
+    println!(
+        "emission over {timed} cases: cranelift {:.2} s, llvm O0 {:.2} s ({:.1}x), llvm O2 {:.2} s ({:.1}x)",
+        total(0),
+        total(1),
+        total(1) / total(0).max(1e-9),
+        total(2),
+        total(2) / total(0).max(1e-9),
+    );
+    Ok(timed > 0)
 }
 
 /// `--engine`: one engine's configurations, or native code on one runtime
