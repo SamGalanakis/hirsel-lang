@@ -6,11 +6,16 @@ def _impl(ctx):
     tree = ctx.actions.copied_dir("corpus", {f.short_path: f for f in ctx.attrs.data})
     output = ctx.actions.declare_output("selection.json")
     llvm = ctx.attrs._llvm[DefaultInfo].default_outputs[0]
+    inventory = ctx.actions.declare_output("inventory.json")
+    ctx.actions.run(
+        cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--inventory-output", inventory.as_output(), hidden = [llvm]),
+        env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib"))}, category = "native_inventory",
+    )
     observations = []
-    for index in range(1, 9):
+    for index in range(1, 33):
         part = ctx.actions.declare_output("observations-{}.json".format(index))
         ctx.actions.run(
-            cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--derive", part.as_output(), "--shard", "{}/8".format(index), hidden = [llvm]),
+            cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--derive", part.as_output(), "--shard", "{}/32".format(index), "--inventory-input", inventory, hidden = [llvm]),
             env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib"))},
             category = "native_observation", identifier = str(index),
         )

@@ -8,6 +8,8 @@ fn run() -> Result<(), String> {
     let mut derive = None;
     let mut replay = false;
     let mut chunks = Vec::<PathBuf>::new();
+    let mut inventory_input = None::<PathBuf>;
+    let mut inventory_output = None::<PathBuf>;
     let mut filters = Vec::new();
     let mut seed = 1;
     let mut shard = None;
@@ -17,6 +19,13 @@ fn run() -> Result<(), String> {
             "--program" => program = Some(args.next().ok_or("--program needs a path")?),
             "--derive" => derive = Some(args.next().ok_or("--derive needs an output path")?),
             "--replay-history" => replay = true,
+            "--inventory-input" => {
+                inventory_input = Some(args.next().ok_or("--inventory-input needs a path")?.into())
+            }
+            "--inventory-output" => {
+                inventory_output =
+                    Some(args.next().ok_or("--inventory-output needs a path")?.into())
+            }
             "--merge" => chunks.push(
                 args.next()
                     .ok_or("--merge needs an observation path")?
@@ -43,7 +52,11 @@ fn run() -> Result<(), String> {
             }
         }
     }
-    if replay {
+    if let Some(output) = inventory_output {
+        let inventory = hirsel_conformance::native::diet::inventory(&root)?;
+        std::fs::write(output, serde_json::to_vec(&inventory).unwrap())
+            .map_err(|e| e.to_string())?;
+    } else if replay {
         let report =
             hirsel_conformance::native::diet::replay_history(&root, seed, &filters, shard)?;
         println!("{report:#}");
@@ -52,7 +65,13 @@ fn run() -> Result<(), String> {
         }
     } else if let Some(output) = derive {
         let selection = if chunks.is_empty() {
-            hirsel_conformance::native::diet::derive_shard(&root, shard)?
+            let inventory = inventory_input
+                .map(|path| {
+                    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                    serde_json::from_str(&text).map_err(|e| e.to_string())
+                })
+                .transpose()?;
+            hirsel_conformance::native::diet::derive_shard(&root, shard, inventory)?
         } else {
             let values = chunks
                 .iter()

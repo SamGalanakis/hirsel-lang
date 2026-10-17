@@ -210,12 +210,16 @@ impl Collected {
 /// Build a derived coverage artifact. The Buck2 action key includes the
 /// collector binary and every source input; no checked-in selection goes stale.
 pub fn derive(root: &Path) -> Result<serde_json::Value, String> {
-    derive_shard(root, None)
+    derive_shard(root, None, None)
 }
 
 /// Observe a stable stripe independently; reduction happens only after merge.
-pub fn derive_shard(root: &Path, shard: Option<crate::Shard>) -> Result<serde_json::Value, String> {
-    let inventory = inventory(root)?;
+pub fn derive_shard(
+    root: &Path,
+    shard: Option<crate::Shard>,
+    inventory_input: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let inventory = inventory_input.map_or_else(|| inventory(root), Ok)?;
     let mut cases: BTreeMap<_, _> = native::baseline(root)?
         .into_iter()
         .map(|c| (c.id.clone(), c))
@@ -665,7 +669,11 @@ mod tests {
         let shards: Vec<_> = (1..=2)
             .map(|index| {
                 hirsel_engine::with_compiler_stack(|| {
-                    derive_shard(&root, Some(crate::Shard { index, count: 2 }))
+                    derive_shard(
+                        &root,
+                        Some(crate::Shard { index, count: 2 }),
+                        Some(value["inventory"].clone()),
+                    )
                 })
                 .unwrap()
             })
