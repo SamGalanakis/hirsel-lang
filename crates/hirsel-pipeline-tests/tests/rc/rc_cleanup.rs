@@ -252,7 +252,7 @@ fn first_injected_violation<S: Stage>(
     c.first_violation().map(|(site, v)| (site, v.clone()))
 }
 
-fn finalized(trace: &[hirsel_heapcheck::Event]) -> Vec<String> {
+fn finalized(trace: &hirsel_heapcheck::Trace) -> Vec<String> {
     trace
         .iter()
         .filter(|e| matches!(e, hirsel_heapcheck::Event::Finalize { .. }))

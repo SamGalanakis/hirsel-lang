@@ -12,10 +12,11 @@ pub mod ledger;
 pub mod observe;
 pub mod program;
 mod scalar;
+mod snapshot;
 pub mod violation;
 
 pub use exec::{rc_trace, rc_trace_with_config};
-pub use ledger::{Counters, Event, Exemption};
+pub use ledger::{Counters, Event, Exemption, History, Trace};
 pub use observe::{Observation, Observed};
 pub use program::{
     Arg, Config, INJECTED_RULE, NoOperations, OpOutcome, OpValue, OperationDomain, Operations,
@@ -31,7 +32,7 @@ use hirsel_syntax::DefPath;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Audit {
     pub observation: Observation,
-    pub exemptions: Vec<Exemption>,
+    pub exemptions: History<Exemption>,
 }
 
 /// One execution. `output` is what the program printed before it finished
@@ -43,7 +44,7 @@ pub struct Run {
     pub sites: u64,
     /// Executor steps completed or attempted, for diagnostic-localisation controls.
     pub steps: u64,
-    pub trace: Vec<Event>,
+    pub trace: Trace,
     /// Instrumentation only: no check reads them.
     pub counters: Counters,
     pub result: Result<Audit, Violation>,

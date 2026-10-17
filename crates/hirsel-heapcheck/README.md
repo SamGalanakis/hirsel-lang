@@ -53,9 +53,20 @@ Invariants:
   writes update the tally at binding/transfer/drop seams. An incoming-cell index
   checks existing pointers when target liveness or generation changes. Candidate
   cells and counts retain the full recount's diagnostic order and messages.
-  Full recounts independently cross-check both tally and incoming-cell index at
-  steps 1, 2, 4, 8, ...; language/injected failures; any incremental violation;
-  and terminal audit. Disagreement is `InternalAudit`, an H defect.
+  Independent physical cross-checks cover both tally and incoming-cell index at
+  steps 1, 2, 4, 8, ...; every campaign checkpoint; language/injected failures;
+  any incremental violation; and terminal audit. They read allocation cells and
+  register credits directly, without consuming the fast tally's write journals.
+  A retained snapshot proves unchanged tree branches; differences rebuild the
+  changed physical holders and incoming positions. Header changes revisit all
+  incoming cells, including holders inherited unchanged by a failure fork.
+  Tokens, resources, regions, handles and named allocation exemptions likewise
+  retain independently derived terminal obligations. A separate physical reverse
+  index includes borrowed cells for region escape checks; region exit visits
+  incoming references to its own allocations in the original source/offset
+  order, rather than scanning unrelated dead storage. Nothing is discharged by
+  dropping an audit candidate. Candidate order and violation text remain the
+  full recount's. Disagreement is `InternalAudit`, an H defect.
   `Config::full_recount_every_step` or `HIRSEL_HEAPCHECK_FULL_RECOUNT=1` runs
   the old per-step recount as the reference too. `cargo test` runs the existing
   fixtures/campaigns and all rc-trace vectors in both modes and compares the
@@ -65,7 +76,9 @@ Invariants:
   commands are in `exec/holders.rs`: missing dup, extra release, overwritten
   credited cell, silently dropped Held credit, and stale-generation cell.
   Each fails at step 3 with the old violation (`CountMismatch`, or
-  `UseAfterFree` for the stale cell).
+  `UseAfterFree` for the stale cell). `exec/fork.rs` also plants a leaked holder,
+  double release and stale count during injected cleanup, with corrected twins;
+  the stale-count control bypasses the fast journal in inherited storage.
 - Every access is checked before use: liveness and generation, extent bounds,
   initialized bytes, writes only through unique counted blocks and never into
   published or static storage, borrowed values only while their loan is active
@@ -107,6 +120,25 @@ Invariants:
   steps, copies, frame admission, finalizer entry) and audits each failure
   path. `Replace` is not one: native code exchanges the contents with
   nothing between the two stores that can fail.
+  The base refreshes each prefix's independent proof once before forking,
+  retaining discrepancies until the original audit boundary. Allocation tables,
+  register storage, holder indexes, paths, retained iterator results and arena
+  flags, terminal obligations and event and
+  exemption histories use shared immutable snapshots. A fork copies only the
+  branches its suffix changes; it neither clones nor drops the historical
+  allocation table. Indexed snapshots use radix trees, and path interning uses
+  an ordered AVL tree; updates take logarithmic work and never rely on hashes
+  for audit equality. Campaign bookkeeping scales with the base and executed
+  failure suffixes, rather than their product with dead allocation history.
+  Required failure cleanup and observation still execute in full.
+  `History::iter` streams shared report prefixes; `History::as_slice` explicitly
+  materializes one lazily for consumers that need contiguous storage. Large
+  iterator, token and explicit-forget payloads share their immutable contents
+  too, including when a neighboring snapshot entry changes.
+  `HIRSEL_HEAPCHECK_PROFILE_CAMPAIGN=1` prints clean steps, injected sites,
+  allocation entries visited by holder/terminal audits and reference-index
+  maintenance, and campaign wall
+  time. Instrumentation does not determine any verdict.
 - Allocation counters and the trace are instrumentation only; no check reads
   them.
 

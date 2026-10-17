@@ -14,6 +14,7 @@ use crate::ledger::{
 use crate::observe::{OBSERVATION_SCHEMA_VERSION, Observation, Observed, ObservedFailure};
 use crate::program::{Arg, Config, INJECTED_RULE, OpOutcome, OpValue, Operations, Program};
 use crate::scalar;
+use crate::snapshot::Snapshot;
 use crate::violation::{Checked, Site, ViolationKind as V, err, fail};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{
@@ -136,12 +137,12 @@ pub(crate) struct Frame {
     unit: usize,
     block: BlockId,
     statement: u32,
-    values: Vec<Option<Held>>,
-    slots: Vec<SlotStore>,
-    versions: Vec<Option<ValueId>>,
+    values: Snapshot<Option<Held>>,
+    slots: Snapshot<SlotStore>,
+    versions: Snapshot<Option<ValueId>>,
     /// Where each prepared address's preparation located its place.
-    prepared: Vec<Option<Located>>,
-    loans: Vec<Option<Ptr>>,
+    prepared: Snapshot<Option<Located>>,
+    loans: Snapshot<Option<Ptr>>,
     failing: bool,
     admitted: u32,
     env: Option<Ptr>,
@@ -225,12 +226,12 @@ pub(crate) struct Machine<'p, S> {
     unanchored_failures: std::collections::BTreeSet<usize>,
     pub sites: u64,
     pub(crate) steps: u64,
-    runtime_iterators: BTreeMap<AllocId, Vec<OpValue>>,
-    version_slots: Vec<Vec<Option<SlotId>>>,
+    runtime_iterators: Snapshot<std::sync::Arc<[OpValue]>>,
+    version_slots: std::sync::Arc<Vec<Vec<Option<SlotId>>>>,
     statics: BTreeMap<(usize, u32), Ptr>,
     constants: BTreeMap<(usize, u32), Ptr>,
     roots: BTreeMap<u64, Held>,
-    forgotten: Vec<Held>,
+    forgotten: Snapshot<Held>,
     finished: Option<Finished>,
     terminal: Option<Observation>,
     word: u64,
@@ -238,8 +239,9 @@ pub(crate) struct Machine<'p, S> {
     /// borrowed under itself would otherwise never terminate.
     resolving: u32,
     holders: holders::Holders,
+    physical: holders::Physical,
     full_recount_due: bool,
-    arena_no_drop: std::collections::BTreeSet<AllocId>,
+    arena_no_drop: Snapshot<()>,
     /// Each flat list builder with an open element, and the field its bytes
     /// are built in (LIR schema revision 24).
     open_elements: BTreeMap<AllocId, u32>,
@@ -323,17 +325,18 @@ impl<'p, S: Stage> Machine<'p, S> {
             unanchored_failures: std::collections::BTreeSet::new(),
             sites: 0,
             steps: 0,
-            runtime_iterators: BTreeMap::new(),
-            version_slots: program.units.iter().map(versions::slots).collect(),
+            runtime_iterators: Default::default(),
+            version_slots: std::sync::Arc::new(program.units.iter().map(versions::slots).collect()),
             statics: BTreeMap::new(),
             constants: BTreeMap::new(),
             roots: BTreeMap::new(),
-            forgotten: Vec::new(),
+            forgotten: Default::default(),
             finished: None,
             terminal: None,
             word: u64::from(program.target.pointer_bytes),
             resolving: 0,
             holders: Default::default(),
+            physical: Default::default(),
             arena_no_drop: Default::default(),
             open_elements: BTreeMap::new(),
             full_recount_due: false,
@@ -404,11 +407,11 @@ impl<'p, S: Stage> Machine<'p, S> {
             unit,
             block: u.entry,
             statement: 0,
-            values: vec![None; u.values.len()],
+            values: (0..u.values.len()).map(|_| None).collect(),
             slots: u.slots.iter().map(|_| SlotStore::Dead).collect(),
-            versions: vec![None; u.slots.len()],
-            prepared: vec![None; u.addresses.len()],
-            loans: vec![None; u.tables.loans.len()],
+            versions: (0..u.slots.len()).map(|_| None).collect(),
+            prepared: (0..u.addresses.len()).map(|_| None).collect(),
+            loans: (0..u.tables.loans.len()).map(|_| None).collect(),
             failing: false,
             admitted: 0,
             env,
@@ -2301,6 +2304,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     /// Ideal holders, recounted from every holder position, against each
     /// block's actual count.
     fn recount_holders(&self, validate_cells: bool) -> Checked<Vec<u64>> {
+        fork::scanned(self.ledger.allocations.len());
         let mut holders = vec![0u64; self.ledger.allocations.len()];
         let mut add = |ptr: Ptr, n: u64| holders[ptr.alloc.0 as usize] += n;
         for (index, a) in self.ledger.allocations.iter().enumerate() {
@@ -2359,6 +2363,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     fn recount_counts(&self) -> Checked<()> {
+        fork::scanned(self.ledger.allocations.len());
         let holders = self.recount_holders(true)?;
         for (index, a) in self.ledger.allocations.iter().enumerate() {
             if a.owner != Owner::Heap || matches!(a.state, AllocState::Dead | AllocState::Raw(_)) {
@@ -4407,7 +4412,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         alloc: p.alloc,
                         generation: a.generation,
                         consumed: false,
-                        native: a.extent.native(),
+                        native: a.extent.native().into(),
                     });
                     let layout = a.layout.expect("live block has a layout");
                     let a = self.ledger.get_mut(p.alloc);
@@ -4453,7 +4458,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let site = self.construct_site(unit, construct)?;
                 let layout = self.value_type(unit, result)?.layout;
                 let (reuse, native) = match t {
-                    None => (None, Vec::new()),
+                    None => (None, std::sync::Arc::<[Option<u8>]>::default()),
                     Some(t) => {
                         let native = self.ledger.tokens[t.0 as usize].native.clone();
                         (Some(self.install(t, site, layout)?), native)
@@ -4482,7 +4487,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 self.ledger.regions.push(crate::ledger::Region {
                     instance: region,
                     live: true,
-                    allocations: Vec::new(),
+                    allocations: Default::default(),
                 });
                 f.regions.push(rt);
                 self.ledger.trace.push(Event::RegionEnter { region: rt });
@@ -4539,7 +4544,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 for alloc in self.ledger.regions[rt].allocations.clone() {
                     let a = self.ledger.get(alloc);
                     if let Some(layout) = a.layout
-                        && !self.arena_no_drop.contains(&alloc)
+                        && self.arena_no_drop.get(alloc.0 as usize).is_none()
                         && a.extent.any_init(0, a.extent.len())
                     {
                         work.push(Work::DropAt {
@@ -5012,7 +5017,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 };
                 self.write_fields(f, target, payload, site.constructor, fields)?;
                 if site.arena_no_drop {
-                    self.arena_no_drop.insert(target.alloc);
+                    self.arena_no_drop.set(target.alloc.0 as usize, ());
                 }
                 // An arena block is immutable once built (MEM-4).
                 if matches!(
@@ -5889,8 +5894,8 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         self.ledger.exemptions.push(Exemption::Forget {
             anchor: None,
-            allocations,
-            resources,
+            allocations: allocations.into(),
+            resources: resources.into(),
         });
         self.ledger.trace.push(Event::Forget);
         self.holders.value(&val, 1);
@@ -6118,7 +6123,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             let position = self.scan_scalar(environment, 8)? as usize;
             let items = self
                 .runtime_iterators
-                .get(&environment.alloc)
+                .get(environment.alloc.0 as usize)
                 .ok_or_else(|| err(V::ForgedPointer, "unknown runtime iterator environment"))?;
             let item = items.get(position).cloned();
             let next = match &item {
@@ -6832,7 +6837,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .get_mut(environment.alloc)
                     .extent
                     .write_bytes(0, &0u64.to_le_bytes());
-                self.runtime_iterators.insert(environment.alloc, items);
+                self.runtime_iterators
+                    .set(environment.alloc.0 as usize, items.into());
                 let mut image = Extent::new(self.size(layout)?);
                 image.write_bytes(0, &vec![0; self.size(layout)? as usize]);
                 image.put_cell(
@@ -7302,26 +7308,16 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     fn exit_region(&mut self, f: &mut Frame, rt: usize) -> Checked<()> {
         let inside = self.ledger.regions[rt].allocations.clone();
-        for (index, a) in self.ledger.allocations.iter().enumerate() {
-            if a.state == AllocState::Dead
-                || matches!(a.owner, Owner::Frame | Owner::Temporary)
-                || inside.contains(&AllocId(index as u32))
-            {
-                continue;
-            }
-            for (offset, cell) in &a.extent.cells {
-                if let Cell::Data { ptr, .. } = cell
-                    && inside.contains(&ptr.alloc)
-                {
-                    return fail(
-                        V::RegionEscape,
-                        format!(
-                            "AllocId({index})+{offset} references {:?} of a region at its exit",
-                            ptr.alloc
-                        ),
-                    );
-                }
-            }
+        if let Some((source, offset, ptr)) =
+            self.physical.references.escaping(&self.ledger, &inside)
+        {
+            return fail(
+                V::RegionEscape,
+                format!(
+                    "{source:?}+{offset} references {:?} of a region at its exit",
+                    ptr.alloc
+                ),
+            );
         }
         for alloc in inside {
             self.ledger.free(alloc)?;
@@ -7939,7 +7935,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         Ok(())
     }
 
-    pub fn finish(&mut self) -> Checked<(Observation, Vec<Exemption>)> {
+    pub fn finish(&mut self) -> Checked<(Observation, crate::History<Exemption>)> {
         if self.terminal.is_none() {
             self.prepare_finish()?;
         }
@@ -7955,13 +7951,14 @@ impl<'p, S: Stage> Machine<'p, S> {
         self.holders.sync(&mut self.ledger);
         self.cross_check_holders()?;
         let l = &self.ledger;
-        if let Some((i, _)) = l.tokens.iter().enumerate().find(|(_, t)| !t.consumed) {
+        if let Some((i, _)) = self.physical.pending_tokens.indexed().next() {
             return fail(
                 V::LeakedToken,
                 format!("TokenId({i}) was never reused or disposed"),
             );
         }
-        for (r, region) in l.regions.iter().enumerate() {
+        for (r, _) in self.physical.live_regions.indexed() {
+            let region = &l.regions[r];
             if region.live {
                 return fail(
                     V::LiveRegion,
@@ -7969,7 +7966,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                 );
             }
         }
-        for (i, r) in l.resources.iter().enumerate() {
+        for (i, _) in self.physical.open_resources.indexed() {
+            let r = &l.resources[i];
             if r.state != ResourceState::Dead && !r.forgotten {
                 return fail(
                     V::OpenResource,
@@ -7977,29 +7975,21 @@ impl<'p, S: Stage> Machine<'p, S> {
                 );
             }
         }
-        for (h, (state, context)) in &l.handles {
-            if *state == crate::ledger::HandleState::Open && !context {
-                return fail(
-                    V::OpenHandle,
-                    format!("handle {h} is open at the terminal audit"),
-                );
-            }
+        if let Some((h, _)) = self.physical.open_handles.indexed().next() {
+            return fail(
+                V::OpenHandle,
+                format!("handle {h} is open at the terminal audit"),
+            );
         }
-        let exempt = |id: AllocId| {
-            l.exemptions.iter().any(|e| match e {
-                Exemption::Static { alloc, .. } | Exemption::Overflow { alloc } => *alloc == id,
-                Exemption::Forget { allocations, .. } => allocations.contains(&id),
-                Exemption::Context { .. } => false,
-            })
-        };
-        for (i, a) in l.allocations.iter().enumerate() {
+        for (i, _) in self.physical.terminal_allocations.indexed() {
+            fork::scanned(1);
+            let a = &l.allocations[i];
             let id = AllocId(i as u32);
             match a.state {
                 AllocState::Dead => {}
                 AllocState::Raw(t) => {
                     return fail(V::LeakedToken, format!("{id:?} is raw storage of {t:?}"));
                 }
-                AllocState::Live | AllocState::Dying if exempt(id) => {}
                 AllocState::Live | AllocState::Dying => {
                     return fail(
                         V::UnexplainedAllocation,
@@ -8012,7 +8002,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
             }
         }
-        self.recount_counts()
+        self.physical.counts(&self.ledger)
     }
 
     fn observe_val(&self, val: &Val, layout: LayoutId, repr: ValueRepr) -> Checked<Observed> {

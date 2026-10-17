@@ -531,7 +531,7 @@ impl<'p> Runner<'p> {
                         alloc: p.alloc,
                         generation: p.generation,
                         consumed: false,
-                        native: Vec::new(),
+                        native: Default::default(),
                     });
                     self.tokens.insert(t, Some(token));
                     self.resets.insert(p.alloc, t);
@@ -691,7 +691,7 @@ impl<'p> Runner<'p> {
                 self.m.ledger.regions.push(LedgerRegion {
                     instance: RegionInstanceId(g as u32),
                     live: true,
-                    allocations: Vec::new(),
+                    allocations: Default::default(),
                 });
                 self.m.ledger.trace.push(Event::RegionEnter { region: rt });
                 self.regions.insert(0, (g, rt));

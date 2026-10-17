@@ -5,13 +5,14 @@
 //! Nothing here calls the production runtime. A pointer is a `Ptr` (allocation,
 //! generation, offset); in an extent it occupies pointer-sized bytes whose
 //! content is a `Cell`, never an address.
+use crate::snapshot::{Map, Snapshot};
 use crate::violation::{Checked, ViolationKind as V, fail};
 use hirsel_lir::ir::{ProjectionStep, RegionInstanceId, SourceAnchorId};
 use hirsel_lir::layout_types::{LayoutId, TagForm};
 use hirsel_lir::runtime_abi::{FREE_POISON, UNINIT_POISON};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct AllocId(pub u32);
@@ -432,14 +433,14 @@ pub(crate) struct Token {
     pub consumed: bool,
     /// The payload bits native memory held when the donor was reset
     /// (`Extent::native`); a kept field must find its operand's bits here.
-    pub native: Vec<Option<u8>>,
+    pub native: Arc<[Option<u8>]>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Region {
     pub instance: RegionInstanceId,
     pub live: bool,
-    pub allocations: Vec<AllocId>,
+    pub allocations: Snapshot<AllocId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -459,8 +460,8 @@ pub enum Exemption {
     /// Explicit `forget`: the value and everything it owns.
     Forget {
         anchor: Option<SourceAnchorId>,
-        allocations: Vec<AllocId>,
-        resources: Vec<ResourceId>,
+        allocations: Arc<[AllocId]>,
+        resources: Arc<[ResourceId]>,
     },
     /// Harness-owned run-context backing.
     Context { handle: u64, what: String },
@@ -531,20 +532,113 @@ pub enum Event {
     },
 }
 
+/// Logical handles retain closed entries for repeated-close diagnostics, while
+/// the independent terminal audit keeps a sparse index of remaining obligations.
+#[derive(Clone, Default)]
+pub(crate) struct Handles {
+    pub(crate) entries: Snapshot<(HandleState, bool), 15>,
+}
+impl Handles {
+    pub(crate) fn get(&self, h: &u64) -> Option<&(HandleState, bool)> {
+        self.entries.get(*h as usize)
+    }
+    pub(crate) fn get_mut(&mut self, h: &u64) -> Option<&mut (HandleState, bool)> {
+        self.entries.get_mut(*h as usize)
+    }
+    pub(crate) fn contains_key(&self, h: &u64) -> bool {
+        self.get(h).is_some()
+    }
+    pub(crate) fn insert(&mut self, h: u64, state: (HandleState, bool)) {
+        self.entries.set(h as usize, state);
+    }
+}
+impl<'a> IntoIterator for &'a Handles {
+    type Item = (u64, &'a (HandleState, bool));
+    type IntoIter = std::iter::Map<
+        crate::snapshot::Entries<'a, (HandleState, bool)>,
+        fn((usize, &'a (HandleState, bool))) -> (u64, &'a (HandleState, bool)),
+    >;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.indexed().map(|(h, v)| (h as u64, v))
+    }
+}
+
+/// A shared append-only audit history. Forks and reports retain its prefix
+/// in constant time. Iteration streams; slice consumers materialize lazily.
+pub struct History<T> {
+    entries: Snapshot<T>,
+    contiguous: OnceLock<Vec<T>>,
+}
+impl<T> Default for History<T> {
+    fn default() -> Self {
+        Self {
+            entries: Snapshot::default(),
+            contiguous: OnceLock::new(),
+        }
+    }
+}
+impl<T: Clone> Clone for History<T> {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            contiguous: OnceLock::new(),
+        }
+    }
+}
+impl<T> History<T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.entries.iter()
+    }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.entries.get(index)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+impl<T: Clone> History<T> {
+    pub(crate) fn push(&mut self, value: T) {
+        self.contiguous.take();
+        self.entries.push(value);
+    }
+}
+impl<T: Clone> History<T> {
+    pub fn as_slice(&self) -> &[T] {
+        self.contiguous
+            .get_or_init(|| self.iter().cloned().collect())
+    }
+}
+impl<T: std::fmt::Debug> std::fmt::Debug for History<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+impl<T: PartialEq> PartialEq for History<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+impl<T: Eq> Eq for History<T> {}
+/// Ownership transitions in execution order.
+pub type Trace = History<Event>;
+
 #[derive(Clone, Default)]
 pub(crate) struct Ledger {
-    pub allocations: Vec<Arc<Allocation>>,
-    paths: RefCell<Vec<Vec<ProjectionStep<u64>>>>,
-    path_ids: RefCell<BTreeMap<Vec<ProjectionStep<u64>>, u32>>,
-    pub resources: Vec<Resource>,
-    pub tokens: Vec<Token>,
-    pub regions: Vec<Region>,
-    pub handles: BTreeMap<u64, (HandleState, bool)>,
-    pub exemptions: Vec<Exemption>,
+    pub allocations: Snapshot<Arc<Allocation>>,
+    paths: RefCell<Snapshot<Vec<ProjectionStep<u64>>>>,
+    path_ids: RefCell<Map<Vec<ProjectionStep<u64>>, u32>>,
+    pub resources: Snapshot<Resource>,
+    pub tokens: Snapshot<Token>,
+    pub regions: Snapshot<Region>,
+    pub handles: Handles,
+    pub exemptions: History<Exemption>,
     pub counters: Counters,
     /// Heap blocks not yet freed, for `Counters::peak_live_heap`.
     live_heap: u64,
-    pub trace: Vec<Event>,
+    pub trace: Trace,
     /// Every allocation whose count, lifetime, generation or cells may have changed.
     pub(crate) changed: Vec<AllocId>,
 }
@@ -743,6 +837,32 @@ pub(crate) fn owner_name(owner: Owner) -> &'static str {
 #[cfg(test)]
 mod fork_tests {
     use super::*;
+    #[test]
+    fn logical_handle_snapshots_cover_the_full_u64_key_space() {
+        let mut ledger = Ledger::default();
+        let handles = [0, u64::from(u32::MAX) + 1, u64::MAX - 1, u64::MAX];
+        for h in handles {
+            ledger.handles.insert(h, (HandleState::Open, false));
+        }
+        let snapshot = ledger.clone();
+        ledger.handles.get_mut(&u64::MAX).unwrap().0 = HandleState::Closed;
+        assert_eq!(
+            snapshot.handles.get(&u64::MAX),
+            Some(&(HandleState::Open, false))
+        );
+        assert_eq!(
+            ledger.handles.get(&u64::MAX),
+            Some(&(HandleState::Closed, false))
+        );
+        assert_eq!(
+            (&ledger.handles)
+                .into_iter()
+                .map(|(h, _)| h)
+                .collect::<Vec<_>>(),
+            handles
+        );
+    }
+
     #[test]
     fn allocation_snapshots_isolate_headers_and_physical_storage() {
         let mut ledger = Ledger::default();

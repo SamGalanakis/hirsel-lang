@@ -162,7 +162,7 @@ fn run_all(source: &str) -> Vec<(Mode, Outcome)> {
             mode,
             Outcome {
                 observation: audit.observation,
-                exemptions: audit.exemptions,
+                exemptions: audit.exemptions.iter().cloned().collect(),
                 counters: campaign.clean.counters,
                 built,
             },
