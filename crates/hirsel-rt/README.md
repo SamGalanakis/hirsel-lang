@@ -569,9 +569,15 @@ existing FileFault/Canceled/NotGranted ordinals and appends five nullary variant
 
 `net_host::CooperativeNet` reuses HostNet's socket conventions and immediate operations
 with nonblocking sockets, retained connect/write/TLS progress and readiness tokens.
-`Readiness` exposes zero-wait polling and an idle-only wait to the interpreter's driver.
+`readiness::Readiness` holds every parked host operation's descriptor interest under its
+token and exposes zero-wait polling and an idle-only wait to the interpreter's driver.
+`host_stdin::CooperativeStdin` pins a close-on-exec duplicate of descriptor 0 at admission:
+a pipe, socket or character device becomes nonblocking (restored on drop) and an empty
+read records POLLIN interest; a regular file or block device is read directly and always
+ready; a closed descriptor 0 reads as end of input.
 DNS runs outside the evaluator and signals a descriptor; relative timeouts retain one
 deadline across readiness retries. Partially published writes/TLS exchanges cannot be
 reported as effect-free cancellation. HostNet remains the native blocking provider.
-`HostGrants::cooperative` admits `tasks.cooperative@1` for the interpreter;
+`HostGrants::cooperative` admits `tasks.cooperative@1` for the interpreter and installs
+CooperativeNet and CooperativeStdin over one Readiness (`into_cooperative`);
 `HostGrants::new` refuses Tasks until native scheduling supports that contract.

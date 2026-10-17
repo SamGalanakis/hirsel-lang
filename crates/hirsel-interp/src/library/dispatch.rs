@@ -34,12 +34,12 @@ impl Library {
             next_callback: 0,
         })
     }
-    fn read_stdin(
+    /// `stdin.read` over the configured input; a host adapter resumes a parked read here.
+    pub fn read_stdin(
         &mut self,
-        call: &OperationCall<'_>,
+        a: &[Value],
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        let a = call.arguments;
         self.simulation.id(arg(a, 0)?, "Stdin")?;
         let max = int(arg(a, 2)?)?.bits() as u64;
         let mut buffer = arg(a, 1)?.clone();
@@ -305,7 +305,7 @@ impl Library {
                     Some(Some(value)) => ok(some(Value::String(value.clone()))),
                 }
             }
-            "stdin.read" => return self.read_stdin(call, context).map(Some),
+            "stdin.read" => return self.read_stdin(a, context).map(Some),
             "err.print" | "out.print" => {
                 self.simulation.id(
                     arg(a, 0)?,

@@ -89,6 +89,7 @@ unless overridden. `run_path`, `run_path_with_simulation`, and interpreter
 HostLibrary implements OperationsAdapter, whose forwarding implementation is generated
 from the same inventory as Operations. Scheduler and cleanup hooks therefore cannot
 silently inherit no-op defaults. Host sockets use CooperativeNet: parked operations
-retain typed snapshots while the evaluator retains owners and mutable loans. Socket
-readiness and relative timeouts are polled at scheduling points; the scheduler waits
-only when no task is runnable. Effect-free waits observe level-triggered cancellation.
+retain typed snapshots while the evaluator retains owners and mutable loans. A
+`stdin.read` with no available byte parks its task on the same Readiness and resumes
+through `Library::read_stdin`. Socket and stdin readiness and relative timeouts are
+polled at scheduling points; the scheduler waits only when no task is runnable. Effect-free waits observe level-triggered cancellation.

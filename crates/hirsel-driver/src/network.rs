@@ -187,7 +187,7 @@ pub(crate) struct HostLibrary<'a> {
     handles: BTreeMap<u64, u64>,
     next: u64,
     next_wait: u64,
-    readiness: hirsel_rt::net_host::Readiness,
+    readiness: hirsel_rt::readiness::Readiness,
     waits: BTreeMap<u64, HostWait>,
     yield_now: bool,
 }
@@ -199,7 +199,8 @@ impl<'a> HostLibrary<'a> {
     pub fn new(
         run: &hirsel_tir::RunConfiguration,
         admitted: &hirsel_run_config::ValidatedRun,
-        mut io: RealIo,
+        io: RealIo,
+        readiness: hirsel_rt::readiness::Readiness,
         output: &'a mut dyn std::io::Write,
     ) -> Result<Self, Error> {
         let record = admitted.record();
@@ -230,8 +231,6 @@ impl<'a> HostLibrary<'a> {
             test_seed: record.inputs.test_seed,
             ..Default::default()
         };
-        let (provider, readiness) = hirsel_rt::net_host::CooperativeNet::with_readiness();
-        io.set_net_provider(provider);
         Ok(Self {
             readiness,
             next_wait: 1 << 62,
@@ -267,8 +266,7 @@ impl<'a> HostLibrary<'a> {
         call: OperationCall<'_>,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        use hirsel_interp::library::simulation::Fault;
-        use hirsel_rt::io::{ENV_HANDLE, InputError, IoError};
+        use hirsel_rt::io::{ENV_HANDLE, IoError};
         let a = call.arguments;
         if matches!(name, "io.stdin" | "io.stderr") {
             // The library validates the root and records the semantic projection once.
@@ -334,21 +332,62 @@ impl<'a> HostLibrary<'a> {
         if matches!(name, "stdin.read" | "err.print") && self.library.cancellation().is_some() {
             return self.library.call(call, cx);
         }
-        let request = match name {
-            "stdin.read" => R::ReadStdin {
-                stdin: self.id(&a[0])?,
-                max: word(&a[2])?,
-            },
-            "err.print" => R::PrintStderr {
-                stderr: self.id(&a[0])?,
-                bytes: bytes(&a[1])?,
-            },
-            _ => return Err(invalid()),
-        };
+        if name == "stdin.read" {
+            // A pipe or terminal with no byte yet parks only this task (CONC-1).
+            let token = self.next_wait;
+            self.next_wait += 1;
+            if self.host_stdin(a, token)? {
+                return self.library.call(call, cx);
+            }
+            self.waits.insert(
+                token,
+                HostWait {
+                    name: name.into(),
+                    arguments: a.to_vec(),
+                },
+            );
+            return Ok(Some(OperationResult::Park {
+                token,
+                wait: hirsel_interp::BlockedWait {
+                    spawn_path: self.library.task_path(),
+                    anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                    kind: name.into(),
+                    targets: vec![],
+                },
+            }));
+        }
         let completion = self
             .io
-            .call(request)
+            .call(R::PrintStderr {
+                stderr: self.id(&a[0])?,
+                bytes: bytes(&a[1])?,
+            })
             .map_err(|e| Error::Unavailable(format!("host input: {e:?}")))?;
+        self.supply(name, completion)?;
+        self.library.call(call, cx)
+    }
+    /// Read host stdin into the simulation the library then consumes. False when no
+    /// byte is available yet: the token keeps the descriptor's readiness interest.
+    fn host_stdin(&mut self, a: &[Value], token: u64) -> Result<bool, Error> {
+        let request = R::ReadStdin {
+            stdin: self.id(&a[0])?,
+            max: word(&a[2])?,
+        };
+        self.readiness.enter(token);
+        let completion = match self.io.call(request) {
+            Err(hirsel_rt::io::AdapterError::Blocked) => return Ok(false),
+            completion => {
+                self.readiness.finish(token);
+                completion.map_err(|e| Error::Unavailable(format!("host input: {e:?}")))?
+            }
+        };
+        self.supply("stdin.read", completion)?;
+        Ok(true)
+    }
+    /// Hand a host stdin/stderr completion to the library as configured input or fault.
+    fn supply(&mut self, name: &str, completion: C) -> Result<(), Error> {
+        use hirsel_interp::library::simulation::Fault;
+        use hirsel_rt::io::{InputError, IoError};
         let fault = match completion {
             C::Input(Ok(bytes)) => {
                 self.library.simulation.supply_stdin(bytes);
@@ -379,7 +418,7 @@ impl<'a> HostLibrary<'a> {
                 .or_default()
                 .push_back(fault);
         }
-        self.library.call(call, cx)
+        Ok(())
     }
     fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
         self.yield_now = true;
@@ -906,6 +945,16 @@ impl hirsel_interp::OperationsAdapter for HostLibrary<'_> {
         }
         let name = wait.name.clone();
         let arguments = wait.arguments.clone();
+        if name == "stdin.read" {
+            // A canceled read consumes nothing; the library reports Canceled.
+            if canceled {
+                self.readiness.finish(token);
+            } else if !self.host_stdin(&arguments, token)? {
+                return Ok(None);
+            }
+            self.waits.remove(&token);
+            return self.library.read_stdin(&arguments, cx).map(Some);
+        }
         match self.try_network(&name, &arguments, token) {
             Err(Error::Blocked(_)) => Ok(None),
             result => {

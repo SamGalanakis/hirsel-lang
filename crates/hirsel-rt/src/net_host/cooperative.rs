@@ -3,117 +3,11 @@
 //! Unlike the blocking provider, EAGAIN retains readiness instead of becoming a timeout.
 use super::*;
 use crate::io::AdapterError;
-use std::cell::RefCell;
+use crate::readiness::Readiness;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
-
-#[derive(Clone, Default)]
-pub struct Readiness(Rc<RefCell<ReadyState>>);
-#[derive(Default)]
-struct ReadyState {
-    current: u64,
-    pending: BTreeMap<u64, Pending>,
-}
-#[derive(Default)]
-struct Pending {
-    interest: Option<(libc::c_int, libc::c_short)>,
-    deadline: Option<Instant>,
-    resolver: Option<(Receiver<Result<Vec<SocketAddr>, NetError>>, UnixStream)>,
-    addresses: Option<VecDeque<SocketAddr>>,
-    connecting: Option<OwnedFd>,
-    last_error: Option<NetError>,
-    offset: usize,
-    committed: bool,
-}
-impl Readiness {
-    fn pending(&self) -> std::cell::RefMut<'_, Pending> {
-        std::cell::RefMut::map(self.0.borrow_mut(), |state| {
-            state.pending.entry(state.current).or_default()
-        })
-    }
-
-    /// Select the opaque operation token before asking RealIo to execute a request.
-    pub fn enter(&self, token: u64) {
-        self.0.borrow_mut().current = token;
-    }
-    pub fn finish(&self, token: u64) {
-        self.0.borrow_mut().pending.remove(&token);
-    }
-    /// After a packet is sent or a write is accepted, the operation must complete
-    /// with its own outcome rather than report an effect-free cancellation.
-    pub fn cancellable(&self, token: u64) -> bool {
-        self.0
-            .borrow()
-            .pending
-            .get(&token)
-            .is_none_or(|p| !p.committed)
-    }
-    pub fn ready(&self, token: u64) -> Result<bool, AdapterError> {
-        let state = self.0.borrow();
-        let Some(pending) = state.pending.get(&token) else {
-            return Ok(true);
-        };
-        if pending.deadline.is_some_and(|d| Instant::now() >= d) {
-            return Ok(true);
-        }
-        let Some((fd, events)) = pending.interest else {
-            return Ok(true);
-        };
-        let mut row = libc::pollfd {
-            fd,
-            events,
-            revents: 0,
-        };
-        loop {
-            // SAFETY: row contains a live descriptor retained by the provider or Pending.
-            let n = unsafe { libc::poll(&mut row, 1, 0) };
-            if n >= 0 {
-                return Ok(n != 0);
-            }
-            if errno() != libc::EINTR {
-                return Err(AdapterError::Unsupported("host readiness poll".into()));
-            }
-        }
-    }
-    /// Called only with no runnable task. A false result means this provider has
-    /// no external readiness source (e.g. the remaining waits are scripted).
-    pub fn wait(&self) -> Result<bool, AdapterError> {
-        let state = self.0.borrow();
-        let mut rows: Vec<_> = state
-            .pending
-            .values()
-            .filter_map(|p| {
-                p.interest.map(|(fd, events)| libc::pollfd {
-                    fd,
-                    events,
-                    revents: 0,
-                })
-            })
-            .collect();
-        if rows.is_empty() {
-            return Ok(false);
-        }
-        loop {
-            let deadline = state.pending.values().filter_map(|p| p.deadline).min();
-            let timeout = deadline.map_or(-1, |d| {
-                let left = d.saturating_duration_since(Instant::now());
-                left.as_millis()
-                    .saturating_add(u128::from(!left.is_zero()))
-                    .min(libc::c_int::MAX as u128) as libc::c_int
-            });
-            // SAFETY: all rows borrow descriptors whose owners outlive this poll.
-            if unsafe { libc::poll(rows.as_mut_ptr(), rows.len() as libc::nfds_t, timeout) } >= 0 {
-                return Ok(true);
-            }
-            if errno() != libc::EINTR {
-                return Err(AdapterError::Unsupported("host readiness poll".into()));
-            }
-        }
-    }
-}
 
 /// Separate provider selection leaves native HostNet's blocking contract intact.
 pub struct CooperativeNet {
@@ -122,16 +16,13 @@ pub struct CooperativeNet {
     timeouts: BTreeMap<u64, (NetTimeout, NetTimeout)>,
 }
 impl CooperativeNet {
-    pub fn with_readiness() -> (Self, Readiness) {
-        let readiness = Readiness::default();
-        (
-            Self {
-                host: HostNet::new(),
-                readiness: readiness.clone(),
-                timeouts: BTreeMap::new(),
-            },
+    /// Blocked operations record their interest in the scheduler's shared readiness.
+    pub fn new(readiness: Readiness) -> Self {
+        Self {
+            host: HostNet::new(),
             readiness,
-        )
+            timeouts: BTreeMap::new(),
+        }
     }
     fn interest(
         &self,

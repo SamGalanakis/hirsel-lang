@@ -577,4 +577,4 @@ impl NetProvider for HostNet {
 }
 
 mod cooperative;
-pub use cooperative::{CooperativeNet, Readiness};
+pub use cooperative::CooperativeNet;

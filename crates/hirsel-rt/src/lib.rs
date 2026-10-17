@@ -17,6 +17,7 @@ pub mod host_launch;
 
 mod host_io_tape;
 pub mod host_paths;
+pub mod host_stdin;
 pub mod io;
 pub mod io_net_script;
 pub mod io_real;
@@ -28,6 +29,7 @@ pub mod net_abi;
 pub mod net_host;
 pub mod net_tls;
 pub mod operations;
+pub mod readiness;
 mod standalone;
 pub mod test_net_abi;
 pub mod text;

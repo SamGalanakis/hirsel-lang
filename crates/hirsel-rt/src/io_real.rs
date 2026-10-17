@@ -16,16 +16,25 @@ pub struct RealIo {
     tape: Vec<Event>,
     fault: Option<Fault>,
     output: Box<dyn Write>,
-    input: Box<dyn Read>,
+    input: Input,
     stderr: Box<dyn Write>,
     recording: Option<crate::launch::RecordingWriter<File>>,
     retain_history: bool,
     net: Box<dyn NetProvider>,
 }
+enum Input {
+    Blocking(Box<dyn Read>),
+    Cooperative(crate::host_stdin::CooperativeStdin),
+}
 impl RealIo {
     /// Pin the explicitly admitted input stream before entry. Projections remain independent.
     pub fn set_stdin(&mut self, input: impl Read + 'static) {
-        self.input = Box::new(input);
+        self.input = Input::Blocking(Box::new(input));
+    }
+    /// The interpreter's stdin: a read with no available byte is `AdapterError::Blocked`
+    /// and leaves POLLIN interest under the entered Readiness token.
+    pub fn set_cooperative_stdin(&mut self, input: crate::host_stdin::CooperativeStdin) {
+        self.input = Input::Cooperative(input);
     }
     pub fn set_stderr(&mut self, output: impl Write + 'static) {
         self.stderr = Box::new(output);
@@ -119,7 +128,7 @@ impl RealIo {
             tape: vec![],
             fault: None,
             output: Box::new(output),
-            input: Box::new(std::io::empty()),
+            input: Input::Blocking(Box::new(std::io::empty())),
             stderr: Box::new(std::io::sink()),
             recording: None,
             retain_history: true,
@@ -379,11 +388,17 @@ impl Adapter for RealIo {
                             let len = usize::try_from(*max).unwrap_or(usize::MAX).min(64 * 1024);
                             let mut bytes = vec![0; len];
                             loop {
-                                match self.input.read(&mut bytes) {
-                                    Ok(count) => {
+                                let read = match &mut self.input {
+                                    Input::Blocking(input) => input.read(&mut bytes).map(Some),
+                                    Input::Cooperative(input) => input.read(&mut bytes),
+                                };
+                                match read {
+                                    Ok(Some(count)) => {
                                         bytes.truncate(count);
                                         break Ok(bytes);
                                     }
+                                    // Nothing was consumed or recorded; the same request retries.
+                                    Ok(None) => return Err(AdapterError::Blocked),
                                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                                         continue;
                                     }

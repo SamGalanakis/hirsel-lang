@@ -1,35 +1,45 @@
 //! Production PROG-6 admission shared by source and native launch adapters.
-use crate::{host_paths::PinnedDirectory, io_real::RealIo, net::NetRule};
+use crate::{
+    host_paths::PinnedDirectory, host_stdin::CooperativeStdin, io_real::RealIo, net::NetRule,
+    net_host::CooperativeNet, readiness::Readiness,
+};
 use hirsel_run_config::{HostAuthority, RevocationEvidence, RunConfig, RunRefusal};
 
 pub struct HostGrants {
-    cooperative_tasks: bool,
+    /// Present for cooperative admission: host net and stdin park on it.
+    readiness: Option<Readiness>,
     io: Option<RealIo>,
     output: Option<Box<dyn std::io::Write>>,
 }
 impl HostGrants {
     pub fn new(output: impl std::io::Write + 'static) -> Self {
         Self {
-            cooperative_tasks: false,
+            readiness: None,
             io: None,
             output: Some(Box::new(output)),
         }
     }
-    /// Interpreter admission for the cooperative scheduler. Native callers keep
+    /// Interpreter admission for the cooperative scheduler: sockets and stdin are
+    /// nonblocking and record their interest in one Readiness. Native callers keep
     /// the default refusal until their own task contexts are implemented.
     pub fn cooperative(output: impl std::io::Write + 'static) -> Self {
         Self {
-            cooperative_tasks: true,
+            readiness: Some(Readiness::default()),
             ..Self::new(output)
         }
     }
     pub fn into_io(self) -> RealIo {
         self.io.expect("successful host admission")
     }
+    /// The admitted io and the readiness its cooperative providers share.
+    pub fn into_cooperative(self) -> (RealIo, Readiness) {
+        let readiness = self.readiness.clone().expect("cooperative admission");
+        (self.into_io(), readiness)
+    }
 }
 impl HostAuthority for HostGrants {
     fn authorize(&mut self, record: &RunConfig) -> Result<(), RunRefusal> {
-        if record.io.as_ref().is_some_and(|io| io.tasks.is_some()) && !self.cooperative_tasks {
+        if record.io.as_ref().is_some_and(|io| io.tasks.is_some()) && self.readiness.is_none() {
             return Err(RunRefusal::Unsupported {
                 field: "io.tasks".into(),
             });
@@ -57,7 +67,19 @@ impl HostAuthority for HostGrants {
             .as_ref()
             .is_some_and(|grants| grants.stdin.is_some())
         {
-            io.set_stdin(std::io::stdin());
+            match &self.readiness {
+                Some(readiness) => {
+                    io.set_cooperative_stdin(CooperativeStdin::pin(readiness.clone()).map_err(
+                        |error| RunRefusal::Unauthorized {
+                            field: format!("io.stdin: {error}"),
+                        },
+                    )?)
+                }
+                None => io.set_stdin(std::io::stdin()),
+            }
+        }
+        if let Some(readiness) = &self.readiness {
+            io.set_net_provider(CooperativeNet::new(readiness.clone()));
         }
         if record
             .io

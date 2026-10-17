@@ -435,7 +435,7 @@ fn tls_abi_uses_the_core_roots_and_result_layouts() {
 
 #[test]
 fn cooperative_tls_retains_handshake_and_plaintext_across_readiness() {
-    use hirsel_rt::net_host::{CooperativeNet, Readiness};
+    use hirsel_rt::{net_host::CooperativeNet, readiness::Readiness};
     struct Pump {
         io: RealIo,
         ready: Readiness,
@@ -463,8 +463,8 @@ fn cooperative_tls_retains_handshake_and_plaintext_across_readiness() {
         let (port, server) = server(truncated, tls12);
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
         io.set_net_rules(rules(port));
-        let (provider, ready) = CooperativeNet::with_readiness();
-        io.set_net_provider(provider);
+        let ready = Readiness::default();
+        io.set_net_provider(CooperativeNet::new(ready.clone()));
         exchange(&mut Pump { io, ready, next: 0 }, port, truncated);
         server.join().unwrap();
     }

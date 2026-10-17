@@ -235,7 +235,8 @@ pub fn run_path_with_config(
         .runtime_types()
         .map_err(|e| program.error(e))?;
     runtime.trace_mode = hirsel_interp::TraceMode::Effects;
-    let mut operations = network::HostLibrary::new(&run, admitted.run(), host.into_io(), stdout)
+    let (io, readiness) = host.into_cooperative();
+    let mut operations = network::HostLibrary::new(&run, admitted.run(), io, readiness, stdout)
         .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
     let args = operations
         .library

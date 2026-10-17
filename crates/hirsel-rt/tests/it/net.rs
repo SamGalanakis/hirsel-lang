@@ -861,10 +861,10 @@ fn tape_v4_round_trips_every_network_event_and_other_versions_are_refused() {
 /// logical handle allocation while a provider operation is suspended.
 #[test]
 fn cooperative_accept_read_timeout_and_interleaved_handles() {
-    use hirsel_rt::net_host::CooperativeNet;
+    use hirsel_rt::{net_host::CooperativeNet, readiness::Readiness};
     let mut io = real([rule("127.0.0.1", 0, NetOperation::Listen)]);
-    let (provider, ready) = CooperativeNet::with_readiness();
-    io.set_net_provider(provider);
+    let ready = Readiness::default();
+    io.set_net_provider(CooperativeNet::new(ready.clone()));
     let n = net(&mut io);
     ready.enter(1);
     let listener = handle(io.call(Request::Listen {
@@ -930,12 +930,12 @@ fn cooperative_accept_read_timeout_and_interleaved_handles() {
 
 #[test]
 fn cooperative_connect_retains_socket_across_handle_allocation() {
-    use hirsel_rt::net_host::CooperativeNet;
+    use hirsel_rt::{net_host::CooperativeNet, readiness::Readiness};
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = SocketAddr::of(listener.local_addr().unwrap());
     let mut io = real([rule("127.0.0.1", addr.port, NetOperation::Connect)]);
-    let (provider, ready) = CooperativeNet::with_readiness();
-    io.set_net_provider(provider);
+    let ready = Readiness::default();
+    io.set_net_provider(CooperativeNet::new(ready.clone()));
     let n = net(&mut io);
     ready.enter(1);
     let request = Request::ConnectAddr {

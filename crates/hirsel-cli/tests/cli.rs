@@ -1744,3 +1744,191 @@ fn source_sidecars_and_explicit_manifests_select_the_same_dependency_graph() {
         }
     }
 }
+
+#[test]
+fn real_host_stdin_read_parks_only_its_task() {
+    use std::io::{BufRead, Write};
+    use std::os::fd::AsRawFd;
+    use std::process::Stdio;
+    let source = file(
+        r#"
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let input = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() -> bool {
+          let mut bytes: List[u8] = []
+          match stdin.read(input, mut bytes, 1) {
+            Ok(count) => count == 1 && bytes[0] == 120u8,
+            _ => false,
+          }
+        }
+      )
+      let _ = out.print(output, "sibling\n")
+      let read = match task.await(s, take child) {
+        true => "read x\n",
+        false => "read failed\n",
+      }
+      let _ = out.print(output, read)
+    }
+  )
+  Ok(())
+}
+"#,
+    );
+    let record = run_record(
+        &source,
+        serde_json::json!({"io": {
+        "tasks":"tasks.cooperative@1", "stdin":"stdin.bytes@1", "stdout":"stdout.bytes@1", "dirs":[]
+    }, "args":[]}),
+    );
+    // O_NONBLOCK of the open file description the child shares with this process.
+    let nonblocking = |fd: i32| {
+        let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}")).unwrap();
+        let flags = info.lines().find_map(|l| l.strip_prefix("flags:")).unwrap();
+        u32::from_str_radix(flags.trim(), 8).unwrap() & 0o4000 != 0
+    };
+    let spawn = |stdin: Stdio| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&source)
+            .arg("--run")
+            .arg(&record)
+            .stdin(stdin)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (send, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in stdout.lines() {
+                let _ = send.send(line.unwrap());
+            }
+        });
+        (child, lines)
+    };
+    let finish = |child: std::process::Child, lines: std::sync::mpsc::Receiver<String>| {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(lines.iter().collect::<Vec<_>>(), ["read x"]);
+    };
+
+    // The pipe stays open and empty until the sibling has printed.
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let observer = reader.try_clone().unwrap();
+    let (mut child, lines) = spawn(reader.into());
+    match lines.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(line) => assert_eq!(line, "sibling"),
+        Err(e) => {
+            let _ = child.kill();
+            panic!("the parked stdin read blocked its sibling: {e}");
+        }
+    }
+    assert!(nonblocking(observer.as_raw_fd()));
+    writer.write_all(b"x").unwrap();
+    drop(writer);
+    finish(child, lines);
+    assert!(!nonblocking(observer.as_raw_fd()), "blocking mode restored");
+
+    // A regular file cannot block: it is read directly and stays blocking.
+    let input = source.with_extension("stdin");
+    std::fs::write(&input, b"x").unwrap();
+    let (child, lines) = spawn(std::fs::File::open(&input).unwrap().into());
+    assert_eq!(lines.recv().unwrap(), "sibling");
+    finish(child, lines);
+    std::fs::remove_file(input).unwrap();
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
+}
+
+#[test]
+fn real_host_parked_stdin_read_observes_cancellation() {
+    use std::io::BufRead;
+    use std::process::Stdio;
+    // The child parks on the empty pipe at the sibling's print; cancel must resume
+    // it as Canceled without input ever arriving.
+    let source = file(
+        r#"
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let input = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() -> bool {
+          let mut bytes: List[u8] = []
+          match stdin.read(input, mut bytes, 1) {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+        }
+      )
+      let _ = out.print(output, "sibling\n")
+      task.cancel(s, child)
+      let read = match task.await(s, take child) {
+        true => "canceled\n",
+        false => "not canceled\n",
+      }
+      let _ = out.print(output, read)
+    }
+  )
+  Ok(())
+}
+"#,
+    );
+    let record = run_record(
+        &source,
+        serde_json::json!({"io": {
+        "tasks":"tasks.cooperative@1", "stdin":"stdin.bytes@1", "stdout":"stdout.bytes@1", "dirs":[]
+    }, "args":[]}),
+    );
+    let (reader, writer) = std::io::pipe().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&source)
+        .arg("--run")
+        .arg(&record)
+        .stdin(reader)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let (send, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stdout.lines() {
+            let _ = send.send(line.unwrap());
+        }
+    });
+    for expected in ["sibling", "canceled"] {
+        match lines.recv_timeout(std::time::Duration::from_secs(60)) {
+            Ok(line) => assert_eq!(line, expected),
+            Err(e) => {
+                let _ = child.kill();
+                panic!("canceled stdin read stayed parked: {e}");
+            }
+        }
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    drop(writer);
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(record).unwrap();
+}
