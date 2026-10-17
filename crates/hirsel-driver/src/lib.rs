@@ -165,7 +165,19 @@ pub fn run_path_with_config(
         &mut operations,
         &runtime,
     )
-    .map_err(|e| ToolError::Runtime(format!("interpret: {:?}", e.error)))?;
+    .map_err(|e| match e.error {
+        hirsel_interp::Error::Unavailable(_) => ToolError::Query {
+            error: hirsel_types::QueryError::NotImplemented,
+            phase: Some(hirsel_engine::QueryKind::Interpret),
+            sources: sources.clone(),
+        },
+        hirsel_interp::Error::Query(error) => ToolError::Query {
+            error,
+            phase: Some(hirsel_engine::QueryKind::Interpret),
+            sources: sources.clone(),
+        },
+        error => ToolError::Runtime(format!("interpret: {error:?}")),
+    })?;
     Ok(match execution.outcome {
         Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
         Outcome::Failed(f) => RunOutcome::Failure {

@@ -304,11 +304,15 @@ fn unavailable_execution_preserves_stdout_before_the_tool_error() {
     let source = file(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"before unavailable\\n\"); let s: Slots[u8] = slots.empty(); Ok(()) }",
     );
-    let config = file(r#"{"grants":["Io","Args"],"projections":["stdout"]}"#);
+    let config = run_record(
+        &source,
+        serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}),
+    );
     let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .args(["run", "--simulation"])
-        .arg(&config)
+        .arg("run")
         .arg(&source)
+        .arg("--run")
+        .arg(&config)
         .output()
         .unwrap();
     assert_eq!(
