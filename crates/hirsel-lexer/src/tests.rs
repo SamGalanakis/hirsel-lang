@@ -393,3 +393,39 @@ fn escaped_newline_reports_one_error_and_recovers_through_the_quote() {
         }
     }
 }
+
+#[test]
+fn character_literals_suggest_numeric_scalars_and_recover_as_one_token() {
+    for literal in ["'a'", "'\\n'", "'é'", "'\\''"] {
+        let (sources, _, output) = fixture(&format!("let scalar = {literal}\nfn later() {{}}"));
+        assert_eq!(
+            output.diagnostics.len(),
+            1,
+            "{literal}: {:?}",
+            output.diagnostics
+        );
+        let diagnostic = &output.diagnostics[0];
+        assert_eq!(diagnostic.rule.as_str(), "LANG-1");
+        assert!(
+            diagnostic.message.contains("character literals"),
+            "{diagnostic:?}"
+        );
+        assert!(
+            diagnostic.notes.iter().any(|n| n.contains("10u32")),
+            "{diagnostic:?}"
+        );
+        let invalid: Vec<_> = output
+            .tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Invalid)
+            .collect();
+        assert_eq!(invalid.len(), 1);
+        assert_eq!(sources.slice(invalid[0].span), Some(literal));
+        assert!(
+            output
+                .tokens
+                .iter()
+                .any(|t| sources.slice(t.span) == Some("later"))
+        );
+    }
+}

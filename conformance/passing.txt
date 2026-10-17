@@ -820,6 +820,8 @@ conformance/GEN/GEN-5-self-growth-ok.hir
 conformance/GEN/GEN-5-shrinking-edge.hir
 conformance/LANG/LANG-1-angle-generics-bad.hir
 conformance/LANG/LANG-1-angle-generics-ok.hir
+conformance/LANG/LANG-1-character-literal-bad.hir
+conformance/LANG/LANG-1-character-literal-ok.hir
 conformance/LANG/LANG-1-conditional-operator-bad.hir
 conformance/LANG/LANG-1-conditional-operator-ok.hir
 conformance/LANG/LANG-1-contract-syntax.hir

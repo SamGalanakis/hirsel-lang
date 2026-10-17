@@ -1,0 +1,5 @@
+// rule: LANG-1
+// expect: accept
+fn newline(c: u32) -> bool {
+  c == 10u32
+}

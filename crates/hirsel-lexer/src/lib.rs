@@ -111,6 +111,7 @@ impl<'a> Scanner<'a> {
             b'/' if self.starts(b"//") => self.line_comment(),
             b'/' if self.starts(b"/*") => self.block_comment(),
             b'"' => self.string(false),
+            b'\'' => self.character_literal(),
             b'b' if self.starts(b"b\"") => self.string(true),
             b'0'..=b'9' => self.number(),
             b if letter(b) => {
@@ -151,6 +152,42 @@ impl<'a> Scanner<'a> {
             kind
         };
         self.emit(start, kind);
+    }
+    // Character literals are excluded. Retain one invalid token through the
+    // closing quote so the unsupported spelling does not cause quote/escape cascades.
+    fn character_literal(&mut self) -> TokenKind {
+        let start = self.pos;
+        self.pos += 1;
+        while let Some(&byte) = self.bytes.get(self.pos) {
+            if matches!(byte, b'\n' | b'\r') {
+                break;
+            }
+            self.pos += 1;
+            if byte == b'\'' {
+                break;
+            }
+            if byte == b'\\'
+                && self
+                    .bytes
+                    .get(self.pos)
+                    .is_some_and(|b| !matches!(b, b'\n' | b'\r'))
+            {
+                self.pos += 1;
+            }
+        }
+        self.error(
+            const { RuleId::of("LANG-1") },
+            start,
+            self.pos,
+            "character literals are unsupported",
+        );
+        self.output
+            .diagnostics
+            .last_mut()
+            .unwrap()
+            .notes
+            .push("help: use a u32 scalar value, for example 10u32 for a newline".into());
+        TokenKind::Invalid
     }
     // Validate a source scalar while traversing a comment, including bare CR.
     fn comment_scalar(&mut self) {
