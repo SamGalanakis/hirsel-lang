@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
 
 const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
 
@@ -16,6 +16,7 @@ enum Command {
         output: OsString,
         target: hirsel_driver::native::TargetSpec,
         profile: hirsel_driver::native::BuildProfile,
+        proofs: Proofs,
     },
     Export {
         run: bool,
@@ -31,6 +32,7 @@ enum Command {
         file: OsString,
         record: Option<(bool, OsString)>,
         native: bool,
+        proofs: Proofs,
         max_steps: u64,
     },
     Source {
@@ -38,6 +40,35 @@ enum Command {
         flag: Option<&'static str>,
         file: OsString,
     },
+}
+
+/// `--proofs <sidecar>` and the checkers `--trust` names (PS-12, PS-15).
+#[derive(Default)]
+struct Proofs {
+    sidecar: Option<OsString>,
+    trusted: Vec<hirsel_driver::native::Checker>,
+}
+impl Proofs {
+    fn trust(&mut self, value: OsString) -> Result<(), lexopt::Error> {
+        self.trusted.push(
+            value
+                .to_str()
+                .and_then(hirsel_driver::native::Checker::parse)
+                .ok_or("--trust requires tool@version")?,
+        );
+        Ok(())
+    }
+    fn check(&self) -> Result<(), lexopt::Error> {
+        if self.sidecar.is_none() && !self.trusted.is_empty() {
+            return Err("--trust requires --proofs".into());
+        }
+        Ok(())
+    }
+    fn evidence(self) -> Result<Option<hirsel_driver::native::Evidence>, ToolError> {
+        self.sidecar
+            .map(|path| hirsel_driver::native::Evidence::read(Path::new(&path), self.trusted))
+            .transpose()
+    }
 }
 
 fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
@@ -48,8 +79,13 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
         Some(Value(command)) if command == "build" => {
             use hirsel_driver::native::{BuildProfile, TargetSpec};
             let (mut source, mut output, mut target, mut profile) = (None, None, None, None);
+            let mut proofs = Proofs::default();
             while let Some(arg) = args.next()? {
                 match arg {
+                    Long("proofs") if proofs.sidecar.is_none() => {
+                        proofs.sidecar = Some(args.value()?)
+                    }
+                    Long("trust") => proofs.trust(args.value()?)?,
                     Long("release") if profile.is_none() => profile = Some(BuildProfile::Release),
                     Long("debug") if profile.is_none() => profile = Some(BuildProfile::Debug),
                     Long("target") if target.is_none() => {
@@ -72,6 +108,10 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 output: output.ok_or("build requires -o")?,
                 target: target.unwrap_or_else(TargetSpec::x86_64_unknown_linux_gnu),
                 profile: profile.unwrap_or_default(),
+                proofs: {
+                    proofs.check()?;
+                    proofs
+                },
             }
         }
         Some(Value(command)) if command == "export" => {
@@ -103,8 +143,13 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let mut simulation = None;
                 let mut max_steps = None;
                 let mut file = None;
+                let mut proofs = Proofs::default();
                 while let Some(arg) = args.next()? {
                     match arg {
+                        Long("proofs") if proofs.sidecar.is_none() => {
+                            proofs.sidecar = Some(args.value()?)
+                        }
+                        Long("trust") => proofs.trust(args.value()?)?,
                         Long("native") if !native => native = true,
                         Long("run" | "grants") if record.is_none() => {
                             record = Some((matches!(arg, Long("grants")), args.value()?));
@@ -132,6 +177,10 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 if native && max_steps.is_some() {
                     return Err("--max-steps is only supported for interpreted run".into());
                 }
+                proofs.check()?;
+                if !native && proofs.sidecar.is_some() {
+                    return Err("--proofs requires --native".into());
+                }
                 let max_steps = max_steps.unwrap_or(DEFAULT_RUN_MAX_STEPS);
                 if let Some(config) = simulation {
                     if native || record.is_some() {
@@ -149,6 +198,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         file,
                         record,
                         native,
+                        proofs,
                         max_steps,
                     }
                 }
@@ -211,14 +261,25 @@ fn execute(args: Vec<OsString>) -> u8 {
             output,
             target,
             profile,
+            proofs,
         } => {
+            let evidence = match proofs.evidence() {
+                Ok(evidence) => evidence,
+                Err(error) => return tool_error(error, false),
+            };
             return match hirsel_driver::native::build_path_native(
                 Path::new(&source),
                 Path::new(&output),
                 target,
                 profile,
+                evidence.as_ref(),
             ) {
-                Ok(Ok(())) => 0,
+                Ok(Ok(report)) => {
+                    for line in report {
+                        eprintln!("hirsel: {line}");
+                    }
+                    0
+                }
                 Ok(Err(error)) => {
                     eprintln!("hirsel: {error}");
                     2
@@ -270,8 +331,13 @@ fn execute(args: Vec<OsString>) -> u8 {
             file,
             record,
             native: true,
+            proofs,
             max_steps: _,
         } => {
+            let evidence = match proofs.evidence() {
+                Ok(evidence) => evidence,
+                Err(error) => return tool_error(error, false),
+            };
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
             // program yet is a tool outcome (exit 2).
@@ -284,6 +350,7 @@ fn execute(args: Vec<OsString>) -> u8 {
                         hirsel_driver::LaunchConfig::Record(Path::new(path))
                     }
                 }),
+                evidence.as_ref(),
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
             ) {
@@ -300,6 +367,7 @@ fn execute(args: Vec<OsString>) -> u8 {
             file,
             record,
             native: false,
+            proofs: _,
             max_steps,
         } => {
             return run_result(hirsel_driver::run_path_with_config(

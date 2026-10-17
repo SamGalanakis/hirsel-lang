@@ -5,6 +5,7 @@
 use super::adapt;
 use hirsel_core_contract::Manifest;
 use hirsel_engine::ValidatedNativeInput;
+use hirsel_lir::discharge::Discharge;
 use hirsel_lir::ir::LirUnit;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, TargetSpec};
 use hirsel_lir::stage::{InputIdentity, Ready, Stage, ValidatedUnit};
@@ -15,7 +16,7 @@ use hirsel_rc::cleanup::Finalizers;
 use hirsel_rc::insert::Proofs;
 use hirsel_rc::instance::{InstanceRole, Program};
 use hirsel_syntax::{ContentHash, DefPath};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Compiler choices and explicit launch inputs. Compiler choices and the hash
@@ -33,6 +34,8 @@ pub struct Options {
     pub reuse: bool,
     /// Walk variable flat sequences linearly instead of rescanning prefixes.
     pub flat_walk: bool,
+    /// PS-13 checks accepted evidence licenses removing (`--proofs`).
+    pub discharge: Discharge,
 }
 
 impl Options {
@@ -45,6 +48,7 @@ impl Options {
             elide: true,
             reuse: true,
             flat_walk: true,
+            discharge: Discharge::default(),
         }
     }
 }
@@ -154,6 +158,11 @@ pub struct ReadyProgram {
     pub(crate) revisions: BTreeMap<DefPath, hirsel_run_config::ProgramRevision>,
     /// The static data of every constant a unit reads (CT-2).
     pub statics: Vec<hirsel_lir::statics::StaticData>,
+    /// The planned PS-13 sites some unit removed, as `validate_discharge`
+    /// confirmed.
+    pub discharged: Discharge,
+    /// Planned definitions that kept every check (`Lowered::undischarged`).
+    pub undischarged: BTreeSet<DefPath>,
 }
 
 impl ReadyProgram {
@@ -248,14 +257,16 @@ pub fn build_program(
     options: &Options,
 ) -> Result<ReadyProgram, NativeError> {
     let target = &options.target;
-    let lowered = hirsel_rc::import::lower_with_options(
+    let mut lowered = hirsel_rc::import::lower_discharging(
         program,
         target,
         &hirsel_rc::flat_walk::Options {
             enabled: options.flat_walk,
         },
+        &options.discharge,
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
+    let discharged = discharged(&mut lowered, &options.discharge)?;
     hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table)
         .map_err(|e| NativeError::new(StageName::Import, e))?;
     let table = &lowered.table;
@@ -335,5 +346,47 @@ pub fn build_program(
         units,
         inline_instances: lowered.inline_instances,
         statics,
+        discharged,
+        undischarged: lowered.undischarged,
     })
+}
+
+/// PS-13: every discharged unit removed exactly its planned sites, and every
+/// planned site of a definition with units was removed by one of them; any
+/// difference is a tool error. Returns the removed sites.
+fn discharged(
+    lowered: &mut hirsel_rc::import::Lowered,
+    plan: &Discharge,
+) -> Result<Discharge, NativeError> {
+    let mut removed = Discharge::default();
+    for unit in std::mem::take(&mut lowered.discharged) {
+        let sites = plan.sites(&unit.definition).cloned().unwrap_or_default();
+        let here =
+            hirsel_lir::validate::validate_discharge(&unit.reference, &unit.discharged, &sites)
+                .map_err(|errors| NativeError {
+                    validator: true,
+                    ..NativeError::of(
+                        StageName::Import,
+                        &unit.definition,
+                        format!("PS-13 check removal: {}", errors.join("; ")),
+                    )
+                })?;
+        removed.0.entry(unit.definition).or_default().extend(here);
+    }
+    for (definition, sites) in &removed.0 {
+        if let Some(missed) = plan.0[definition].difference(sites).next() {
+            return Err(NativeError {
+                validator: true,
+                ..NativeError::of(
+                    StageName::Import,
+                    definition,
+                    format!(
+                        "PS-13 check removal: accepted {:?} at body {} block {} statement {} has no check in the native program",
+                        missed.form, missed.body, missed.block, missed.statement
+                    ),
+                )
+            });
+        }
+    }
+    Ok(removed)
 }

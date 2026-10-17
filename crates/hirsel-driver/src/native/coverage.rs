@@ -258,6 +258,7 @@ pub fn backend_features(input: &ValidatedNativeInput) -> (BTreeSet<String>, Vec<
                 elide,
                 reuse,
                 flat_walk,
+                discharge: Default::default(),
                 launch: Default::default(),
             };
             match build(input, &options) {

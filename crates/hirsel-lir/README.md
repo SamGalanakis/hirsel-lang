@@ -6,7 +6,11 @@ declarations, effect flags and deterministic snapshots.
 `layout.rs` holds physical arithmetic, `abi.rs` holds physical ABI operations,
 and `layout_validate.rs` checks layouts and ABIs independently. The type-to-layout
 bridge, instance keys/views and declaration ABI derivation live in
-`hirsel-layout`. `validate/` holds the independent stage validators. `hirsel-graph` supplies pure traversal, dominance and loop-forest algorithms;
+`hirsel-layout`. `validate/` holds the independent stage validators. `discharge.rs` is the PS-13
+check-removal plan (TIR sites by definition, each with its removal form), and
+`validate::validate_discharge` compares a discharged unit with its reference
+import: their failure-site inventories by anchor, opcode and rule may differ in
+exactly the planned sites. `hirsel-graph` supplies pure traversal, dominance and loop-forest algorithms;
 the validators derive their own normal and failure graph from the IR.
 `persistent.rs` is the structure-sharing vector that
 dataflow states are built from, here and in `hirsel-rc`: a state costs what it

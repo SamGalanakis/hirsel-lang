@@ -26,12 +26,19 @@
 //! `LOOP_RELEASE`, `SCRATCH_DISPOSAL`), so no anchor names a TIR action it does
 //! not perform. Allocation-class failures (construction, copies, closures)
 //! carry no language rule: allocation exhaustion is environmental.
+//!
+//! PS-13 check removal (`lower_discharging`): a licensed TIR `Check` imports
+//! without its `Check` and failure edge (its condition is still read), and a
+//! licensed SEM-1 integer `Add` as a wrapping `IntArith`. Plans name TIR
+//! `(body, block, statement)` sites, the numbering anchors use, so a
+//! definition whose TIR append fusion rewrote keeps every check.
 use crate::PassError;
 use crate::instance::{Actuals, InstanceError, InstanceId, Instances, Program, substitute};
 use crate::normalize::{Declined, Facts, Home, LoopPlan, LoopSite, NormalizeError};
 use hirsel_core_contract::{OperationId, Passing};
 use hirsel_layout::layout::LayoutBuilder;
 use hirsel_lir::abi_types::{CallableShape, FnAbiId};
+use hirsel_lir::discharge::{Discharge, Discharged, Form};
 use hirsel_lir::effect::Effects;
 use hirsel_lir::ir::{
     AddressBase, AddressId, AddressInfo, ArgumentValue, BinaryOp, Block, BlockId, BlockKind,
@@ -102,6 +109,22 @@ pub struct Lowered {
     pub unit_origins: Vec<InstanceId>,
     /// Source bodies available for inlining in every calling partition.
     pub inline_instances: std::collections::BTreeSet<ContentHash>,
+    /// Per unit imported under a nonempty plan: the instance, the
+    /// definition, the reference import that kept every check, and the unit
+    /// as discharged, for `validate_discharge`. The unit then continues
+    /// through `units` like any other.
+    pub discharged: Vec<DischargedUnit>,
+    /// Planned definitions whose TIR append fusion rewrote: their sites no
+    /// longer number the TIR the plan was made from, so they keep every check.
+    pub undischarged: BTreeSet<DefPath>,
+}
+
+/// One unit imported twice, as `Lowered::discharged` describes.
+pub struct DischargedUnit {
+    pub instance: InstanceId,
+    pub definition: DefPath,
+    pub reference: LirUnit<Value>,
+    pub discharged: LirUnit<Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -138,9 +161,34 @@ pub fn lower_with_options(
     target: &TargetSpec,
     flat_walk: &crate::flat_walk::Options,
 ) -> Result<Lowered, LowerError> {
+    lower_discharging(program, target, flat_walk, &Discharge::default())
+}
+
+/// `lower_with_options` under a PS-13 check-removal plan: each planned
+/// definition's units import without its licensed checks, after a reference
+/// import that keeps them all (`Lowered::discharged`).
+pub fn lower_discharging(
+    program: &Program,
+    target: &TargetSpec,
+    flat_walk: &crate::flat_walk::Options,
+    discharge: &Discharge,
+) -> Result<Lowered, LowerError> {
     // Results built only to be appended are built in place (append_into).
     let fused = crate::append_into::fuse(program);
+    let undischarged: BTreeSet<DefPath> = discharge
+        .0
+        .keys()
+        .filter(
+            |path| match (program.definitions.get(*path), fused.definitions.get(*path)) {
+                (Some(a), Some(b)) => !(std::sync::Arc::ptr_eq(a, b) || a == b),
+                _ => false,
+            },
+        )
+        .cloned()
+        .collect();
     let program = &fused;
+    let none = BTreeSet::new();
+    let mut discharged = Vec::new();
     // The library's native representations lie over the program's owners.
     let owners = crate::library::owners(&program.signatures).over(&program.owners);
     let mut layouts = LayoutBuilder::new(target, &owners);
@@ -167,15 +215,45 @@ pub fn lower_with_options(
         let (plan, no) = plan_instance(program, &instances, id, &mut layouts)
             .map_err(|e| LowerError::Normalize(id, e))?;
         declined.extend(no.into_iter().map(|d| (id, d)));
+        let definition = &instances.view(id).definition.path;
+        let sites = discharge
+            .sites(definition)
+            .filter(|_| !undischarged.contains(definition));
+        let reference = match sites {
+            // The reference's library requests are its own: only the
+            // discharged unit is compiled.
+            Some(_) => Some(
+                import(
+                    program,
+                    &instances,
+                    id,
+                    plan.as_ref(),
+                    &none,
+                    &mut layouts,
+                    &mut Vec::new(),
+                )
+                .map_err(|e| LowerError::Import(id, e))?,
+            ),
+            None => None,
+        };
         let mut unit = import(
             program,
             &instances,
             id,
             plan.as_ref(),
+            sites.unwrap_or(&none),
             &mut layouts,
             &mut required,
         )
         .map_err(|e| LowerError::Import(id, e))?;
+        if let Some(reference) = reference {
+            discharged.push(DischargedUnit {
+                instance: id,
+                definition: definition.clone(),
+                reference,
+                discharged: unit.clone(),
+            });
+        }
         let proven = crate::spare_push::prove(&unit, &|l| layouts.record(l).kind.clone());
         crate::spare_push::commit(&mut unit, &proven, &mut required, &layouts)
             .map_err(LowerError::Instance)?;
@@ -212,6 +290,8 @@ pub fn lower_with_options(
         statics,
         unit_origins: Vec::new(),
         inline_instances: Default::default(),
+        discharged,
+        undischarged,
     };
     let specialized = crate::closure_calls::specialize(&mut lowered);
     lowered.unit_origins = specialized.origins;
@@ -811,6 +891,7 @@ pub fn import(
     instances: &Instances,
     id: InstanceId,
     plan: Option<&LoopPlan>,
+    discharge: &BTreeSet<Discharged>,
     layouts: &mut LayoutBuilder<'_>,
     required: &mut Vec<crate::library::Request>,
 ) -> R<LirUnit<Value>> {
@@ -827,6 +908,7 @@ pub fn import(
         layouts,
         id,
         plan,
+        discharge,
         def,
         body,
         body_id: view.body.0,
@@ -942,6 +1024,8 @@ struct Importer<'a, 'o> {
     layouts: &'a mut LayoutBuilder<'o>,
     id: InstanceId,
     plan: Option<&'a LoopPlan>,
+    /// PS-13 sites of this definition that import without their check.
+    discharge: &'a BTreeSet<Discharged>,
     def: &'a tir::Definition,
     body: &'a tir::Body,
     body_id: u32,

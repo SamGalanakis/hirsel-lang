@@ -21,6 +21,8 @@
 //!   order, and the exact holder-credit replay over normal and failure edges.
 //! - `tokens`: reuse-token provenance, compatibility and feedback edges.
 //! - `ready`: what the Ready stage must have discharged.
+//! - `discharge`: PS-13, a discharged Value unit against its reference
+//!   import (`validate_discharge`).
 //!
 //! Readings this module relies on:
 //! - Cleanup order reads scope nesting from `LirUnit::scopes`: a release in a
@@ -41,6 +43,8 @@
 //!   it needs no credit, and it is never a reuse donor.
 mod arena;
 pub use arena::check_calls as check_result_arena_calls;
+mod discharge;
+pub use discharge::validate_discharge;
 mod flat_open;
 mod flat_walk;
 mod flow;

@@ -25,6 +25,16 @@ within one matrix-length cycle of consecutive seeds. Pair coverage is not a
 proof of equivalent bug-finding power: higher-order interactions are covered
 only by rotation over time and the explicit exhaustive campaign.
 
+`native::Proofs` (`native/proofs.rs`) is the `--proofs` consumer. It builds
+this compiler's own export of the entry's closure, assesses the sidecar with
+`hirsel_proof_export::sidecar`, and maps each accepted obligation's TIR sites to
+a removal form in a `Discharge` plan carried by `Options::discharge`. Before it
+plans, it requires the native snapshot's TIR of each planned definition to be
+the exported TIR. `build_program` lowers with the plan and runs
+`validate_discharge` on every discharged unit before the Value validator. Any
+difference from the plan is an import validator error. `ReadyProgram.discharged`
+lists the removed sites, which the proof report reads.
+
 Native callable-target specializations retain their original instance's signature
 and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include
 known callable bodies and their transitive specializations in each calling

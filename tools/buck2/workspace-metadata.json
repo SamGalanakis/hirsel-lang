@@ -367,6 +367,13 @@
         },
         {
           "kind": null,
+          "name": "hirsel-proof-export",
+          "path": "crates/hirsel-proof-export",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
           "name": "hirsel-rc",
           "path": "crates/hirsel-rc",
           "req": "*",
@@ -464,13 +471,6 @@
           "kind": "dev",
           "name": "hirsel-parser",
           "path": "crates/hirsel-parser",
-          "req": "*",
-          "uses_default_features": true
-        },
-        {
-          "kind": "dev",
-          "name": "hirsel-proof-export",
-          "path": "crates/hirsel-proof-export",
           "req": "*",
           "uses_default_features": true
         },

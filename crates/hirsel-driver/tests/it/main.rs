@@ -46,6 +46,7 @@ mod pipeline;
 mod program_revision;
 mod proof_export;
 mod proof_limits;
+mod proof_removal;
 mod protocol_declarations;
 mod receiving;
 mod receiving_lifetimes;

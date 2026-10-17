@@ -20,12 +20,15 @@ pub fn run_path_native(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
-    run_path_native_with_config(path, None, stdout, stderr)
+    run_path_native_with_config(path, None, None, stdout, stderr)
 }
 
+/// `run_path_native` with a launch record and PS-12 evidence; the proof
+/// report goes to `stderr` before the program runs.
 pub fn run_path_native_with_config(
     path: &Path,
     record: Option<crate::LaunchConfig<'_>>,
+    evidence: Option<&super::Evidence>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
@@ -75,10 +78,18 @@ pub fn run_path_native_with_config(
             )));
         }
     };
+    let proofs = match evidence
+        .map(|e| super::Proofs::assess(&mut engine, &entry, &validated, e))
+        .transpose()
+    {
+        Ok(proofs) => proofs,
+        Err(error) => return Ok(Err(error)),
+    };
     Ok(run(
         &validated,
         &entry,
         admitted.as_ref().map(|run| run.run()),
+        proofs.as_ref(),
         stdout,
         stderr,
     )
@@ -116,11 +127,20 @@ fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
     entry: &hirsel_engine::DefPath,
     run: Option<&hirsel_run_config::ValidatedRun>,
+    proofs: Option<&super::Proofs>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Observation, NativeError> {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
-    let program = build(validated, &Options::new(target.clone()))?;
+    let mut options = Options::new(target.clone());
+    if let Some(proofs) = proofs {
+        options.discharge = proofs.discharge.clone();
+    }
+    let program = build(validated, &options)?;
+    for line in proofs.map_or_else(Vec::new, |p| p.report(&program)) {
+        writeln!(stderr, "hirsel: {line}")
+            .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+    }
     let scratch = std::env::temp_dir().join(format!("hirsel-native-{}", std::process::id()));
     let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
         .map(std::path::PathBuf::from)

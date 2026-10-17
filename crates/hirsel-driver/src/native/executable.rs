@@ -51,12 +51,15 @@ fn io(error: std::io::Error) -> NativeError {
 
 /// Check a source or manifest, compile it and write a directly executable artifact.
 /// Source/checker errors remain separate from native tool outcomes, as for native run.
+/// With `evidence`, accepted proofs remove their checks (PS-13) and the result
+/// is the proof report; without, it is empty.
 pub fn build_path_native(
     source: &Path,
     output: &Path,
     target: TargetSpec,
     profile: BuildProfile,
-) -> Result<Result<(), NativeError>, ToolError> {
+    evidence: Option<&super::Evidence>,
+) -> Result<Result<Vec<String>, NativeError>, ToolError> {
     let mut loaded = crate::load_program(source)?;
     loaded.check_for_execution()?;
     let mut engine = loaded.engine;
@@ -78,7 +81,14 @@ pub fn build_path_native(
         }
     };
     Ok((|| {
-        let program = super::build(&validated, &Options::new(target.clone()))?;
+        let mut options = Options::new(target.clone());
+        let proofs = evidence
+            .map(|e| super::Proofs::assess(&mut engine, &loaded.entry, &validated, e))
+            .transpose()?;
+        if let Some(proofs) = &proofs {
+            options.discharge = proofs.discharge.clone();
+        }
+        let program = super::build(&validated, &options)?;
         let scratch = Scratch::new()?;
         let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
             .map(PathBuf::from)
@@ -94,6 +104,6 @@ pub fn build_path_native(
         let executable =
             super::link::link_standalone(&program, &loaded.entry, &objects, &tools, &scratch.0)?;
         std::fs::copy(executable, output).map_err(io)?;
-        Ok(())
+        Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
     })())
 }

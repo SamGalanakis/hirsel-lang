@@ -733,6 +733,7 @@ hirsel_library(
         "//:hirsel-llvm",
         "//:hirsel-lower",
         "//:hirsel-modes",
+        "//:hirsel-proof-export",
         "//:hirsel-rc",
         "//:hirsel-rt",
         "//:hirsel-run-config",

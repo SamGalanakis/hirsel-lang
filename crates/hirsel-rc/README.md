@@ -85,6 +85,14 @@ at each stage and H against the interpreter, and keeps the declined twins.
   discovery requires one Borrow assignment and no value, loan or cleanup use.
 - `import`: one `LirUnit<Value>` per instance (`lower` runs expansion,
   planning and import and seals units against the finished layout table).
+  `lower_discharging` imports under a PS-13 check-removal plan
+  (`hirsel_lir::discharge`): a licensed TIR `Check` emits no `Check` and no
+  failure edge, and a licensed SEM-1 integer `Add` is a wrapping `IntArith`.
+  Each planned definition's units are imported twice, first with every check
+  as the reference, and both are kept in `Lowered::discharged` for the
+  driver's `validate_discharge`. A definition that append fusion rewrote keeps
+  every check (`Lowered::undischarged`), since plans number the TIR before
+  fusion.
   Slots hold mutable storage; every write names a fresh version, merges join
   versions through block parameters. Operands are read in TIR order with their
   declaration ordinals. Failure successors are TIR cleanup chains expanded and

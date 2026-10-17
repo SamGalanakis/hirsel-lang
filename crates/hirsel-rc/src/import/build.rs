@@ -369,6 +369,16 @@ impl Importer<'_, '_> {
         id
     }
 
+    /// Whether the statement being imported is a PS-13 site licensed in `form`.
+    pub(super) fn discharged(&self, form: Form) -> bool {
+        self.discharge.contains(&Discharged {
+            body: self.body_id,
+            block: self.statement.0,
+            statement: self.statement.1,
+            form,
+        })
+    }
+
     pub(super) fn anchor_here(&mut self) -> SourceAnchorId {
         let a = SourceAnchor {
             body: self.body_id,

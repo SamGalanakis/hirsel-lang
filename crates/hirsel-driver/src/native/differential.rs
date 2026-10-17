@@ -132,6 +132,7 @@ fn options(target: &TargetSpec, regions: bool, elide: bool, reuse: bool) -> Opti
         elide,
         reuse,
         flat_walk: true,
+        discharge: Default::default(),
     }
 }
 

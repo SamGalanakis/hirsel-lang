@@ -13,6 +13,14 @@ The prover-neutral proof seam (rules PS-1..PS-16):
   digest, table and checksum, requires canonical form, and re-validates each
   definition with V.
 
+`sidecar.rs` is the PS-12 evidence consumer: the
+`hirsel.proof.sidecar.v1` record shape and `assess`, which decides for every
+obligation of an export whether its record is current (revision and checksum),
+replayable (a checker the build trusts, a deterministic budget) and proved, and
+otherwise why it keeps its check (PS-13). The trust hook is an explicitly
+trusted external verdict; nothing is replayed. The driver maps accepted
+obligations to removal forms (`docs/spec/proof-seam.md`, PS-13).
+
 Consumers read the text out of process; there is no plugin API. Interpreter and
 runtime `Failure` records are unchanged: `Export::failure_obligations` maps a
 failure's (definition, rule, site) to candidate obligation ids.

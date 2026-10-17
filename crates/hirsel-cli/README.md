@@ -92,6 +92,14 @@ production runtime. Default builds use LLVM O2, release O3, debug O0 with source
 line tables. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
 records deny external roots. `-- [args...]` explicitly supplies only Args.
 
+`build` and `run --native` accept `--proofs <sidecar>` with any number of
+`--trust <tool@version>`: current `proved` records from a trusted checker
+remove their checks from the native program (PS-12/PS-13, the sidecar format in
+`docs/spec/proof-seam.md`). The proof report goes to stderr as
+`hirsel: proof <id>: removed` or `kept (<reason>)` lines and a count line.
+`--trust` needs `--proofs`, and `--proofs` needs a native engine. A malformed
+sidecar is a tool error.
+
 `hirsel run <source|manifest> --grants grants.json` binds a grants template to
 that program and uses the same validation and admission as `--run`. These options
 are exclusive, and neither combines with `--simulation`. Templates omit binding

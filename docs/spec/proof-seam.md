@@ -193,6 +193,42 @@ the check". The low-level IR validator confirms that the set of removed checks e
 accepted set; any difference is a compile-time tool error, never a silently kept or removed
 check.
 
+#### Sidecar format and removal forms (v1)
+
+This records the first consumer of PS-12 and PS-13, `hirsel build` and
+`hirsel run --native` with `--proofs <sidecar>` and `--trust <tool@version>`.
+
+- **Format.** A JSON object `{"format": "hirsel.proof.sidecar.v1", "records": [...]}`.
+  Each record has exactly `revision` (the export header's program revision),
+  `obligation` (the written PS-1 id), `checksum` (PS-6), `checker`
+  (`tool@version`), `budget` (`{"unit", "count"}`) and `verdict` (`proved`,
+  `refuted`, `unknown` or `timeout`). Hashes are spelled as in the export: `#`
+  and 64 lowercase hex digits. A missing or unknown field, or two records with
+  one `(revision, obligation, checksum)` key, refuses the sidecar.
+- **Currency.** A record is current for an obligation when its revision is the
+  program revision and its checksum the obligation's. A program without a launch
+  entry has no revision, so nothing in a sidecar is current for it.
+- **Trust.** The checker hook is an explicitly trusted external verdict.
+  Nothing is replayed: a current `proved` record is accepted when its checker is
+  one the build names with `--trust` and its budget is a positive count in
+  `steps`, `heartbeats`, `conflicts`, `rlimit` or `fuel` (PS-15). A record from
+  any other checker is unreplayable; a verdict other than `proved` is rejected.
+- **Removal forms.** An accepted `check` or `ensures` obligation removes the
+  `Check` at each of its sites. The clause is still evaluated, so its own
+  failures remain. An accepted SEM-1 `failure-edge` on an integer `Add` turns
+  that add into a wrapping add, which is exact when no overflow occurs. Every
+  other obligation keeps its check and is reported: `requires` (the entry check
+  stands for every caller), `requires-at-call`, MEM-13, MEM-14, `Fail`, and
+  SEM-1 on any other operation. Removal applies to native code only; the
+  interpreter checks everything.
+- **Validation.** Removal happens in SSA import. The low-level IR validator
+  compares each discharged unit with a reference import that keeps every check,
+  counting failure sites by TIR site, opcode and rule. The two may differ in
+  exactly the accepted sites, and every accepted site of a definition that has
+  native code must be removed. A definition whose TIR a lowering rewrite changes
+  before import keeps all its checks. The build reports each record's outcome
+  and counts the obligations that have no evidence.
+
 ### PS-14: Authority is opaque
 
 A function whose [CAP-2](capabilities.md#cap-2-charged-at-use) authority summary is

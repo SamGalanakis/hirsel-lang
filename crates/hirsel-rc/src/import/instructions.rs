@@ -338,11 +338,14 @@ impl Importer<'_, '_> {
             }
             K::Check { condition, rule } => {
                 let c = self.operand(condition)?;
-                let failure = self.fail(Some(rule.to_string()))?;
-                self.push(Inst::Check {
-                    condition: c,
-                    failure,
-                });
+                // PS-13: a licensed check is left out; its condition is still read.
+                if !self.discharged(Form::Check(rule.to_string())) {
+                    let failure = self.fail(Some(rule.to_string()))?;
+                    self.push(Inst::Check {
+                        condition: c,
+                        failure,
+                    });
+                }
             }
             K::BindOrigin {
                 source,
@@ -667,6 +670,18 @@ impl Importer<'_, '_> {
                         | BinaryOp::Shl
                         | BinaryOp::Shr
                 );
+                if lop == BinaryOp::Add && self.discharged(Form::Overflow) {
+                    // Proved not to overflow, so the wrapped sum is the sum.
+                    self.push(Inst::IntArith {
+                        result,
+                        flag: None,
+                        op: lop,
+                        mode: hirsel_lir::ir::ArithMode::Wrapping,
+                        left: l,
+                        right: r,
+                    });
+                    return Ok(result);
+                }
                 let failure = self.fail(arithmetic.then(|| "SEM-1".to_string()))?;
                 self.push(Inst::Binary {
                     result,

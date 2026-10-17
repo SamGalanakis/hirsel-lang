@@ -6,6 +6,7 @@
 pub mod abi;
 pub mod abi_types;
 pub mod descriptor_registry;
+pub mod discharge;
 pub mod effect;
 pub mod ir;
 pub mod layout;

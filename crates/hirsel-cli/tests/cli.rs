@@ -13,7 +13,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel check [--json] <source|manifest.json> | run [--native | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
+            b"usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [--run <json> | --grants <json>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -392,6 +392,123 @@ fn invalid_utf8_is_a_located_language_diagnostic_for_every_entry_point() {
 /// diagnostic, the same output and exit status, the same failure line. A
 /// program native code cannot build yet is a tool outcome (exit 2) whose
 /// source verdict is unchanged.
+/// PS-12/PS-13 through the binary: a trusted (here deliberately false)
+/// verdict for `bump`'s `ensures` removes that check from the native program
+/// only, so the interpreter still fails FACT-1 and the native run does not.
+#[test]
+fn proofs_remove_their_checks_from_native_builds_only() {
+    let source = file(
+        "fn bump(x: u32, y: u32) -> u32\n  ensures result > x\n{\n  x + y\n}\npub fn main() -> Result[(), ()] {\n  let n = bump(1u32, 0u32)\n  Ok(())\n}\n",
+    );
+    let mut loaded = hirsel_driver::load_program(&source).unwrap();
+    loaded.check_for_execution().unwrap();
+    let text = loaded.engine.export_tir(&loaded.entry).unwrap();
+    let export = loaded.engine.import_tir(&text).unwrap();
+    let hash = |h: [u8; 32]| {
+        format!(
+            "#{}",
+            h.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        )
+    };
+    let id = "standalone@0/bump#FACT-1/ensures/0";
+    let obligation = export
+        .definitions
+        .iter()
+        .flat_map(|d| &d.obligations)
+        .find(|o| o.id.to_string() == id)
+        .unwrap();
+    let sidecar = source.with_extension("proofs.json");
+    std::fs::write(
+        &sidecar,
+        serde_json::json!({"format": "hirsel.proof.sidecar.v1", "records": [{
+            "revision": hash(export.header.program_revision.unwrap().0),
+            "obligation": id,
+            "checksum": hash(obligation.checksum.0),
+            "checker": "liar@1",
+            "budget": {"unit": "steps", "count": 1},
+            "verdict": "proved",
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    let hirsel = |args: &[&std::ffi::OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let (src, proofs) = (source.as_os_str(), sidecar.as_os_str());
+    let report = format!(
+        "hirsel: proof {id}: removed\nhirsel: proofs: 1 removed, 0 kept, 1 without evidence\n"
+    );
+    for args in [vec!["run"], vec!["run", "--native"]] {
+        let mut args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_ref()).collect();
+        args.push(src);
+        let output = hirsel(&args);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("FACT-1"),
+            "{output:?}"
+        );
+    }
+    let output = hirsel(&[
+        "run".as_ref(),
+        "--native".as_ref(),
+        "--proofs".as_ref(),
+        proofs,
+        "--trust".as_ref(),
+        "liar@1".as_ref(),
+        src,
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), report);
+    let exe = source.with_extension("proofs-exe");
+    let output = hirsel(&[
+        "build".as_ref(),
+        "--proofs".as_ref(),
+        proofs,
+        "--trust".as_ref(),
+        "liar@1".as_ref(),
+        src,
+        "-o".as_ref(),
+        exe.as_os_str(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), report);
+    assert_eq!(Command::new(&exe).output().unwrap().status.code(), Some(0));
+    // Untrusted, the same evidence keeps the check.
+    let output = hirsel(&[
+        "run".as_ref(),
+        "--native".as_ref(),
+        "--proofs".as_ref(),
+        proofs,
+        src,
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("kept (unreplayable: this build trusts no checker liar@1)"),
+        "{stderr}"
+    );
+    for args in [
+        vec!["run", "--proofs", "p.json", "file.hir"],
+        vec!["run", "--native", "--trust", "a@1", "file.hir"],
+        vec![
+            "run", "--native", "--proofs", "p.json", "--trust", "a", "file.hir",
+        ],
+        vec!["build", "--trust", "a@1", "file.hir", "-o", "exe"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+    }
+    for path in [source, sidecar, exe] {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 #[test]
 fn native_run_matches_the_reference_run() {
     let run = |native: bool, path: &std::path::Path| {

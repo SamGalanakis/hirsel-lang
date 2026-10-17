@@ -5,6 +5,7 @@
 //! and table, and re-validates each definition with V; any difference is a
 //! located refusal.
 mod obligations;
+pub mod sidecar;
 pub mod wire;
 
 pub use obligations::{Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition};
