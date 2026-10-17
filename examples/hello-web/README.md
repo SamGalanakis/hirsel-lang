@@ -8,3 +8,6 @@ The server handles one connection at a time, reads at most 16 KiB of request hea
 and 1 MiB of Content-Length body, sends 400 for invalid requests, and closes each
 connection after its response. Transfer encodings and persistent connections are
 unsupported. Stop it with Ctrl-C.
+
+Error propagation uses the one-argument sum constructors directly (`? Grant`,
+`? Network`, `? Http`), as specified by LANG-8. No mapper functions are needed.

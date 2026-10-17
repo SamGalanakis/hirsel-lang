@@ -1,0 +1,17 @@
+// rule: LANG-8
+// expect: run
+pub type ServerError = Grant(GrantError) | Network(NetError) | Other
+
+fn accept_result(r: Result[u64, NetError]) -> Result[u64, ServerError] {
+  let n = r ? Network
+  Ok(n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, accept_result(Ok(7)) == Ok(7))
+  test.check(
+    t,
+    accept_result(Error(ConnectionReset())) == Error(Network(ConnectionReset()))
+  )
+  Ok(())
+}

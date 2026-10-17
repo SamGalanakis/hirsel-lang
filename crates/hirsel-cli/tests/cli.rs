@@ -524,8 +524,8 @@ fn hello_web(native: bool) {
             .replace(
                 "while true",
                 r#"
-let bound = net.local_addr(n, listener) ? network_error
-let output = io.stdout(rt) ? grant_error
+let bound = net.local_addr(n, listener) ? Network
+let output = io.stdout(rt) ? Grant
 let _ = out.print(output, std@1/u16.to_string(bound.port))
 let _ = out.print(output, "\n")
 for i in 0u64..3u64

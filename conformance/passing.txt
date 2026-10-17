@@ -1236,6 +1236,8 @@ conformance/LANG/LANG-8-mapping-nullary-variant-bad.hir
 conformance/LANG/LANG-8-mapping-nullary-variant-ok.hir
 conformance/LANG/LANG-8-mapping-output-bad.hir
 conformance/LANG/LANG-8-mapping-output-ok.hir
+conformance/LANG/LANG-8-network-constructor-map-bad.hir
+conformance/LANG/LANG-8-network-constructor-map-run.hir
 conformance/LANG/LANG-8-propagation-runtime.hir
 conformance/LANG/LANG-8-variant-map.hir
 conformance/LANG/LANG-9-explicit-check.hir

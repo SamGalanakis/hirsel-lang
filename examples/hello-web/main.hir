@@ -2,20 +2,8 @@ pub type ServerError = Grant(GrantError) | Network(NetError) | Http(
   std@1/http.HttpError
 )
 
-fn grant_error(e: GrantError) -> ServerError uses {} {
-  Grant(e)
-}
-
-fn network_error(e: NetError) -> ServerError uses {} {
-  Network(e)
-}
-
-fn http_error(e: std@1/http.HttpError) -> ServerError uses {} {
-  Http(e)
-}
-
 fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
-  let mut (stream, _) = net.accept(n, mut listener) ? network_error
+  let mut (stream, _) = net.accept(n, mut listener) ? Network
   match std@1/http.receive_request(n, mut stream, 16384, 1048576) {
     Ok(incoming) => std@1/http.respond(
       n,
@@ -23,19 +11,19 @@ fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
       200u16,
       [std@1/http.Header(name: "Content-Type", value: "text/plain")],
       b"Hello, world"
-    ) ? http_error,
-    Error(_) => std@1/http.respond(n, mut stream, 400u16, [], b"Bad Request") ? http_error,
+    ) ? Http,
+    Error(_) => std@1/http.respond(n, mut stream, 400u16, [], b"Bad Request") ? Http,
   }
   net.close(n, take stream)
   Ok(())
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
-  let n = io.net(rt) ? grant_error
+  let n = io.net(rt) ? Grant
   let mut listener = net.listen(
     n,
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
-  ) ? network_error
+  ) ? Network
   while true {
     serve(n, mut listener)?
   }

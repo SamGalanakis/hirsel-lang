@@ -1,0 +1,8 @@
+// rule: LANG-8
+// expect: reject LANG-8 at line 6
+pub type ServerError = Grant(GrantError) | Network(NetError) | Other
+
+fn accept_result(r: Result[u64, NetError]) -> Result[u64, ServerError] {
+  let n = r ? Grant
+  Ok(n)
+}
