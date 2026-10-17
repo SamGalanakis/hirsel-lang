@@ -56,6 +56,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "Random",
         "Tasks",
         "Net",
+        "Proc",
         "Scope",
         "Arena",
         "Test",
@@ -165,6 +166,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "Send(Bytes)|Expect(Bytes)|Stall()|Close()|Reset()|Truncate()",
         ),
         ("GrantError", "", "NotGranted()"),
+        ("ExitStatus", "", "Exited(i32)|Signaled(i32)"),
+        (
+            "ProcessError",
+            "",
+            "NotGranted()|InvalidInput()|NotFound()|PermissionDenied()|OutputLimit()|Fault(u32)",
+        ),
         (
             "InputError",
             "",
@@ -258,6 +265,16 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "NetPeer",
             "",
             "address: String,port: u16,resolves_to: List[IpAddr],tls: PeerTls,connections: List[NetConnection]",
+        ),
+        (
+            "ProcessOutput",
+            "",
+            "status: ExitStatus,stdout: Bytes,stderr: Bytes",
+        ),
+        (
+            "ProcessScript",
+            "",
+            "program: String,args: List[String],outcome: Result[ProcessOutput,ProcessError]",
         ),
     ] {
         let mut b = Builder::new(generic)
@@ -765,6 +782,7 @@ impl Builder {
                                 | "Random"
                                 | "Tasks"
                                 | "Net"
+                                | "Proc"
                                 | "Scope"
                                 | "Arena"
                                 | "Test"

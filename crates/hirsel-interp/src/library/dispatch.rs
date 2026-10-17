@@ -1126,6 +1126,7 @@ primary_operations! { self, call, context, name, a, value;
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" => {
         return self.network_call(name, &call, context).map(Some);
     },
+    Unavailable: "io.process" | "proc.run" | "test.process" => { return Err(Error::Unavailable(format!("{name} needs the reference process provider"))); },
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Unavailable: "reservations.insert" | "stock.get" | "stock.put" | "store.transact" => { return Err(Error::Unavailable(format!("{name} is a signature-only application fixture"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),

@@ -71,7 +71,7 @@ from omitting the root. A requested but absent root is a launch refusal under
 | `program` | Digest of the selected semantic program revision: transitive source and core implementations, selected constant dependencies and the runtime's semantic contract. |
 | `entry`, `launch` | The entry's full versioned definition path, and `main` or `test`. |
 | `inputs` | `hash_seed`, `random_seed` and `test_seed`, each an explicit `u64`; and, for a simulation, a separate scheduler algorithm, version and seed. |
-| `io` | Absent or null, or a closed grant record: stdout sink, Tasks provider, monotonic clock, wall clock, Random provider, directory mounts and network grant. Each absent projection is denied. |
+| `io` | Absent or null, or a closed grant record: stdout sink, Tasks provider, monotonic clock, wall clock, Random provider, directory mounts, network grant and process grant. Each absent projection is denied. |
 | `args` | Absent or null, or the exact ordered UTF-8 snapshot, explicit empty included. |
 | `env` | Absent or null, or exact key-to-value entries, with null for a granted key that is unset; denied keys are distinguishable from granted unset keys. |
 | `unsafe` | Boolean explicit root grant, false by default. |
@@ -90,9 +90,16 @@ operation}`: `address` is a canonical host name or IP literal
 ([CAP-1](capabilities.md#cap-1-authority)), `service` a canonical decimal port `0`–`65535`
 without leading zeros, and `operation` one of `connect`, `connect_tls` and `listen`.
 
+**Process grants** name a provider and rules `{program, env}` sorted and unique by
+`program`: `program` is a canonical absolute path ([processes](core-library.md#processes)),
+and `env` a sorted, unique list of variable names, each nonempty and without `=` or NUL,
+passed through from the launcher's environment; `env` may be omitted for none. For example
+`{"provider": "process.spawn@1", "rules": [{"program": "/usr/bin/git", "env": ["HOME"]}]}`.
+
 **Providers** name versioned observable contracts, identical for real hosts, simulation and
 replay: `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1`,
-`clock.wall.unix_ns@1`, `tasks.cooperative@1`, `net.stream@1` and `net.script@2`.
+`clock.wall.unix_ns@1`, `tasks.cooperative@1`, `net.stream@1`, `net.script@2`,
+`process.spawn@1` and `process.script@1`.
 `tasks.cooperative@1` supplies structured tasks with cooperative scheduling at the
 suspension points of [CONC-1](concurrency.md#conc-1-runtime). Host readiness waits
 suspend only their task; the provider waits for external readiness only when no task
@@ -108,6 +115,14 @@ any other provider. Peer variants are external snake_case tags: `"plain"`,
 `"close"`, `"reset"` and `"truncate"` for steps; bytes are arrays of `u8`. Peer data grants
 no authority beyond the explicit rules. An implementation that cannot enforce a requested
 rule or provider refuses the launch; it never widens it.
+`process.spawn@1` runs host programs with the [process semantics of the core
+library](core-library.md#processes). `process.script@1` additionally takes `runs`, an
+array of `{program, args, outcome}` script entries, and serves the program from them
+exactly as `test.process` does; `runs` is invalid under any other provider. An outcome is
+`{"output": {"status": status, "stdout": [bytes], "stderr": [bytes]}}`, with status
+`{"exited": code}` or `{"signaled": number}`, or `{"error": error}`, with error
+`"not_granted"`, `"invalid_input"`, `"not_found"`, `"permission_denied"`, `"output_limit"`
+or `{"fault": code}`. Script entries grant no authority beyond the explicit rules.
 
 **Canonical form.** The record has one strict canonical representation: schema-order object
 members; arrays ordered as specified (`args` order preserved, grant sets sorted by
@@ -231,6 +246,17 @@ configuration and refuses a recorded completion that contradicts it. A replayed 
 returns exactly the recorded bytes, so behaviour that depends on chunk boundaries replays
 identically. A crash between a durable `Prepared` and its `Completed` leaves the request
 InDoubt; continuing from an InDoubt write never retries it.
+
+### Process recording
+
+A process run is recorded at the call: the request (the `Proc` handle, program, arguments,
+every stdin byte, the working-directory handle or none, and `max_output`) and the
+completion (the exit status with exactly the captured stdout and stderr bytes, or the
+error). Elapsed time and the order in which the child's streams were drained are never
+recorded. Replay returns the recorded completion without spawning anything, and re-derives
+the program check from the bound run configuration: a recorded completion that contradicts
+it is a replay refusal, like any other mismatch. Recordings hold whatever the child wrote,
+so they are as secret-bearing as the child's output.
 
 ## The Blocked observation
 

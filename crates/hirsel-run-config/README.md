@@ -52,7 +52,8 @@ artifact/compiler/position/instance details never belong in those fields.
 
 Known provider contracts have one closed enumeration, `ProviderContract`:
 `tasks.cooperative@1`, `stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1` and
-`clock.wall.unix_ns@1`, `net.stream@1` and `net.script@2`. The validator checks the exact projection and version.
+`clock.wall.unix_ns@1`, `net.stream@1`, `net.script@2`, `process.spawn@1` and
+`process.script@1`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin
 belongs to tooling provenance. Unknown contracts and versions and
 scheduler policy refuse as Unsupported until adapters can enforce them.
@@ -72,8 +73,18 @@ unknown version. Bytes are arrays of u8. Peer, address, certificate-name,
 connection and step order is preserved in run identity. Peer data supplies no
 authority beyond the explicit rules, including when those rules are empty.
 
+`process.spawn@1` takes `rules`, sorted and unique by `program`: each names a
+canonical absolute path (`canonical_program`: no empty, `.` or `..` component, no
+trailing `/`, backslash or NUL) and an optional sorted, unique `env` list of
+pass-through variable names. `process.script@1` additionally requires `runs`
+(possibly empty), forbidden under every other provider: ordered `{program, args,
+outcome}` entries, where an outcome is `{"output":{"status":{"exited":0},"stdout":[..],
+"stderr":[..]}}` (or `{"signaled":n}`) or `{"error":e}` with a snake_case
+ProcessError tag such as `"not_found"` or `{"fault":7}`. Runs grant nothing beyond
+the rules.
+
 `RunConfig::read_path` accepts only an explicit absolute record path.
-`ValidatedRun::io_projections`, `clock_grants` and `net_grant` derive adapter policy
+`ValidatedRun::io_projections`, `clock_grants`, `net_grant` and `process_grant` derive adapter policy
 from the validated grants, with no projections for absent or empty Io. An explicit
 Net with empty rules grants the `net` projection while permitting no operations;
 `net_grant` returns its exact validated provider, rules and peers.

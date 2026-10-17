@@ -10,6 +10,7 @@ N fn clock.wall(clock: WallClock) -> Result[i64, ClockError]
 N fn instant.ticks(value: Instant) -> u64 uses {}
 N fn io.net(rt: Io) -> Result[Net, GrantError]
 N fn io.random(rt: Io) -> Result[Random, GrantError]
+N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
 fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
 N fn arg.count(args: Args) -> u64
@@ -25,6 +26,7 @@ N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer]) -> Net
+fn test.process(t: Test, runs: List[ProcessScript]) -> Proc
 
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
@@ -62,6 +64,9 @@ N fn tls.close(n: Net, take s: Stream of n) -> Result[(), NetError]
 fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
 N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
+
+// CAP-1/2, DET-1
+fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64) -> Result[ProcessOutput, ProcessError]
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R

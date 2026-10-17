@@ -13,6 +13,11 @@ pub use net::{
     canonical_address as canonical_net_address, decode_net_peers, encode_net_peers,
     validate_net_grant,
 };
+mod process;
+pub use process::{
+    ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun,
+    canonical_program,
+};
 
 pub const SCHEMA: u32 = 1;
 pub const IDENTITY_DOMAIN: &str = "hirsel.run-config.v1";
@@ -30,9 +35,11 @@ pub enum ProviderContract {
     WallUnixNanoseconds,
     NetStream,
     NetScript,
+    ProcessSpawn,
+    ProcessScript,
 }
 impl ProviderContract {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::TasksCooperative,
         Self::StdinBytes,
         Self::StderrBytes,
@@ -42,6 +49,8 @@ impl ProviderContract {
         Self::WallUnixNanoseconds,
         Self::NetStream,
         Self::NetScript,
+        Self::ProcessSpawn,
+        Self::ProcessScript,
     ];
     pub const fn name(self) -> &'static str {
         match self {
@@ -54,6 +63,8 @@ impl ProviderContract {
             Self::WallUnixNanoseconds => "clock.wall.unix_ns@1",
             Self::NetStream => "net.stream@1",
             Self::NetScript => "net.script@2",
+            Self::ProcessSpawn => "process.spawn@1",
+            Self::ProcessScript => "process.script@1",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -110,6 +121,7 @@ pub struct IoGrants {
     pub random: Option<String>,
     pub dirs: Vec<Mount>,
     pub net: Option<NetGrant>,
+    pub process: Option<ProcessGrant>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -359,6 +371,10 @@ impl RunConfig {
                 provider("io.net.provider", &net.provider)?;
                 net.validate()?;
             }
+            if let Some(process) = &mut io.process {
+                provider("io.process.provider", &process.provider)?;
+                process.validate()?;
+            }
         }
         if let Some(env) = &record.env {
             for key in env.keys() {
@@ -404,6 +420,7 @@ impl ValidatedRun {
             ("stdout", io.stdout.is_some()),
             ("tasks", io.tasks.is_some()),
             ("net", io.net.is_some()),
+            ("process", io.process.is_some()),
             ("random", io.random.is_some()),
             ("dir", !io.dirs.is_empty()),
         ]
@@ -420,6 +437,10 @@ impl ValidatedRun {
     /// Exact validated Net policy; peers supply data and never widen its rules.
     pub fn net_grant(&self) -> Option<&NetGrant> {
         self.record.io.as_ref()?.net.as_ref()
+    }
+    /// Exact validated process policy; scripted runs never widen its rules.
+    pub fn process_grant(&self) -> Option<&ProcessGrant> {
+        self.record.io.as_ref()?.process.as_ref()
     }
     /// Bind launch to semantic code, independently of native artifact provenance.
     pub fn check_revision(
@@ -752,6 +773,14 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
             )
         {
             return Err(unsupported("io.net.provider"));
+        }
+        if let Some(process) = &io.process
+            && !matches!(
+                ProviderContract::parse(&process.provider),
+                Some(ProviderContract::ProcessSpawn | ProviderContract::ProcessScript)
+            )
+        {
+            return Err(unsupported("io.process.provider"));
         }
     }
     Ok(())

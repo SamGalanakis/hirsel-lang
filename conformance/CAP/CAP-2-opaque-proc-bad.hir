@@ -1,0 +1,5 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 3
+pub opaque type Runner: plain + sendable + inert uses {} {
+  p: Proc,
+}

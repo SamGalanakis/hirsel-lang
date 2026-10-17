@@ -34,6 +34,7 @@ N fn clock.wall(clock: WallClock) -> Result[i64, ClockError]
 N fn instant.ticks(value: Instant) -> u64 uses {}
 N fn io.net(rt: Io) -> Result[Net, GrantError]
 N fn io.random(rt: Io) -> Result[Random, GrantError]
+N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
 fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
 N fn arg.count(args: Args) -> u64
@@ -49,6 +50,7 @@ N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer]) -> Net
+fn test.process(t: Test, runs: List[ProcessScript]) -> Proc
 
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
@@ -86,6 +88,9 @@ N fn tls.close(n: Net, take s: Stream of n) -> Result[(), NetError]
 fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
 N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
+
+// CAP-1/2, DET-1
+fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64) -> Result[ProcessOutput, ProcessError]
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
@@ -326,7 +331,8 @@ it first reports `test failure: seed=S case=C` and a newline through Test report
 the run's Test seed and the supplied zero-based case index. `test.fail` records a LANG-9
 failure through Test reporting, then ends the test along its failure edge after ordinary
 failure cleanup; it never returns. `test.dir` creates a confined fake file system from its
-entries; `test.net` creates a fake `Net` served by scripted peers ([below](#network)).
+entries; `test.net` creates a fake `Net` served by scripted peers ([below](#network));
+`test.process` creates a fake `Proc` served by scripted runs ([below](#processes)).
 
 ## Concurrency
 
@@ -437,6 +443,54 @@ invalid input.
 Every operation against a scripted peer is recorded as the same request and completion a
 real network produces, so a simulated run yields a recording that replays like a real one
 ([network recording](determinism.md#network-recording)).
+
+## Processes
+
+The process data types are root core types, with variant ordinals in the order written:
+
+```text
+ExitStatus    = Exited(i32) | Signaled(i32)
+ProcessOutput = { status: ExitStatus, stdout: Bytes, stderr: Bytes }
+ProcessError  = NotGranted() | InvalidInput() | NotFound() | PermissionDenied()
+              | OutputLimit() | Fault(u32)
+ProcessScript = { program: String, args: List[String],
+                  outcome: Result[ProcessOutput, ProcessError] }
+```
+
+`proc.run(p, program, args, stdin, dir, max_output)` runs one child to completion and
+returns its exit status and everything it wrote to standard output and standard error.
+The checks run in this order, each before any host effect:
+
+1. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
+   `..` component and no trailing `/`, and no argument contains a NUL byte; otherwise
+   `InvalidInput()`.
+2. `program` must equal a rule of `p` byte for byte; otherwise `NotGranted()`. No `PATH`
+   search, link resolution or prefix match takes part in the check.
+3. With `Some(d)`, the child's working directory is `d`'s directory; a `Dir` with no host
+   directory (one from `test.dir`) is `InvalidInput()` for a host provider. With `None()`
+   the working directory is `/`. A `Dir` grants the child nothing; it only names where it
+   starts.
+
+The child's argument vector is `program` followed by `args`. Its environment holds exactly
+the variables its rule lists that are set in the launcher's environment, and nothing else.
+`stdin` is written to the child's standard input, which is then closed; standard output and
+standard error are captured separately and concurrently, so neither pipe can stall the
+other. When either stream exceeds `max_output` bytes the child is killed and the result is
+`OutputLimit()`; `max_output` 0 accepts only a child that writes nothing. A child that
+exits returns `Exited(code)`, one ended by a signal `Signaled(number)`; a nonzero status is
+an ordinary `Ok`, not an error. A missing executable is `NotFound()`, one the host refuses
+to execute `PermissionDenied()`, and any other spawn or wait failure `Fault(code)`, a
+capability input like other fault codes. `proc.run` blocks its task until the child exits;
+it is not a cancellation point. Interactive and streaming children are not provided.
+
+**Scripted runs.** `test.process` returns a fake `Proc` whose rules are the distinct
+`program` values of its runs, with no environment names. A `proc.run` on it makes the same
+checks, `InvalidInput()` and `NotGranted()` first, then takes the first unused script
+entry whose `program` and `args` equal its own and returns its `outcome`, with an output
+longer than `max_output` on either stream returning `OutputLimit()`. With no such entry the
+result is `NotFound()`. `stdin` and `dir` are not consulted beyond their checks. A scripted
+run is recorded as the same request and completion a host run produces, so a simulated run
+replays like a real one ([process recording](determinism.md#process-recording)).
 
 ## Memory and iteration
 

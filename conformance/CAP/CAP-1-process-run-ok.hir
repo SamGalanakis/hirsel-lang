@@ -1,0 +1,6 @@
+// rule: CAP-1
+// expect: accept
+// A Dir names the child's working directory; it is not authority to run a program.
+pub fn status(p: Proc, d: Dir) -> Result[ProcessOutput, ProcessError] {
+  proc.run(p, path.of("/usr/bin/git"), ["status"], b"", Some(d), 65536)
+}

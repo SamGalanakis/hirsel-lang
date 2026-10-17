@@ -41,6 +41,10 @@ conformance/CAP/CAP-1-net-tls-truncate-run.hir
 conformance/CAP/CAP-1-net-ungranted-host-run.hir
 conformance/CAP/CAP-1-normalize-tree-example.hir
 conformance/CAP/CAP-1-output-no-added-newline.hir
+conformance/CAP/CAP-1-process-projection-bad.hir
+conformance/CAP/CAP-1-process-projection-ok.hir
+conformance/CAP/CAP-1-process-run-bad.hir
+conformance/CAP/CAP-1-process-run-ok.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
 conformance/CAP/CAP-1-random-projection-ok.hir
 conformance/CAP/CAP-1-stderr-parameter-bad.hir
@@ -111,6 +115,8 @@ conformance/CAP/CAP-2-opaque-lock-ok.hir
 conformance/CAP/CAP-2-opaque-package-bad.hir
 conformance/CAP/CAP-2-opaque-package-effect-ok.hir
 conformance/CAP/CAP-2-opaque-package-pure-ok.hir
+conformance/CAP/CAP-2-opaque-proc-bad.hir
+conformance/CAP/CAP-2-opaque-proc-ok.hir
 conformance/CAP/CAP-2-opaque-stderr-bad.hir
 conformance/CAP/CAP-2-opaque-stderr-ok.hir
 conformance/CAP/CAP-2-opaque-stdin-bad.hir
