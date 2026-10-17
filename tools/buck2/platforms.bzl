@@ -13,7 +13,8 @@ shard runs on any worker.
 
 The pool serves lane and CI work at priority 100; 0 is its warming class,
 which never gets a reserved worker. Compiles and test runs ask for 100, and only
-the test runs of the on-demand full run (`-c hirsel.full=true`) for 0. The
+the test runs of the on-demand full run (`-c hirsel.full=true`, without
+`-c hirsel.tests=focus`) for 0. The
 scheduler reads the REAPI execution policy's priority, which Buck2 sends from a
 `CommandExecutorConfig`: a platform's for its actions, and a test's own
 `default_executor` (`test_executor`) for its run. The priority is not a platform
@@ -24,7 +25,6 @@ load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS", "POOL_BUDGETS")
 load(":test_sizes.bzl", "TEST_REQUESTS")
 
 PRIORITY = 100
-TEST_PRIORITY = 0 if read_root_config("hirsel", "full", "false") == "true" else PRIORITY
 
 # A pool test binary's request, `[cpu, memory_kb, cpu_class]`, is measured
 # from the workers' usage logs (TEST_REQUESTS, test_sizes_from_usage.py): one
@@ -38,6 +38,10 @@ DEFAULT_TEST_REQUEST = [1, 2097152, ""]
 # behind a stream of one-CPU actions a four-CPU run of a single case waited up
 # to minutes for one worker to free four CPUs at once, then ran for a second.
 FOCUS = read_root_config("hirsel", "tests", "pool") == "focus"
+
+# A full run's test runs queue at 0 unless focused: `-c hirsel.full=true` also
+# declares the campaign targets a lane runs filtered, which someone waits on.
+TEST_PRIORITY = 0 if read_root_config("hirsel", "full", "false") == "true" and not FOCUS else PRIORITY
 
 def _test_request(cpu, memory_kb, cpu_class):
     """A test request's budget name and effective `[cpu, memory_kb, cpu_class]`."""

@@ -247,8 +247,8 @@ them into a shared directory.
   (`action_sizes_from_log.py`) and the conformance shards ask for
   `cpu_class=fast`; other tests and gate shards run on any worker. Compiles
   and test runs queue at priority 100, the pool's class for lane and CI work;
-  only the test runs of the on-demand full run (`-c hirsel.full=true`) queue at
-  0, its warming class, which gets no reserved worker. A test run carries its
+  only the test runs of the on-demand full run (`-c hirsel.full=true` without
+  `-c hirsel.tests=focus`) queue at 0, its warming class, which gets no reserved worker. A test run carries its
   own executor (`test_executor` in `platforms.bzl`): Buck2 runs tests with it,
   not with their platform's. The priority is not part of an action key. The
   platforms also include the invoking host for an explicit
