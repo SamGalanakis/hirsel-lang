@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] | --replay <tape>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
 
 const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
 
@@ -49,6 +49,7 @@ enum Launch {
         grants: bool,
         config: OsString,
         record: Option<OsString>,
+        revocations: Option<OsString>,
     },
     Replay(OsString),
 }
@@ -59,6 +60,7 @@ impl Launch {
                 grants,
                 config,
                 record,
+                revocations,
             } => hirsel_driver::HostLaunch::Live {
                 config: if *grants {
                     hirsel_driver::LaunchConfig::Grants(Path::new(config))
@@ -66,6 +68,7 @@ impl Launch {
                     hirsel_driver::LaunchConfig::Record(Path::new(config))
                 },
                 record: record.as_deref().map(Path::new),
+                revocations: revocations.as_deref().map(Path::new),
             },
             Self::Replay(tape) => hirsel_driver::HostLaunch::Replay(Path::new(tape)),
         }
@@ -170,6 +173,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             if name == "run" {
                 let mut config = None;
                 let mut record = None;
+                let mut revocations = None;
                 let mut replay = None;
                 let mut native = false;
                 let mut simulation = None;
@@ -187,6 +191,9 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                             config = Some((matches!(arg, Long("grants")), args.value()?));
                         }
                         Long("record") if record.is_none() => record = Some(args.value()?),
+                        Long("revocations") if revocations.is_none() => {
+                            revocations = Some(args.value()?)
+                        }
                         Long("replay") if replay.is_none() => replay = Some(args.value()?),
                         Long("max-steps") if max_steps.is_none() => {
                             max_steps = Some(
@@ -216,12 +223,16 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     return Err("--proofs requires --native".into());
                 }
                 let max_steps = max_steps.unwrap_or(DEFAULT_RUN_MAX_STEPS);
+                if revocations.is_some() && (config.is_none() || replay.is_some()) {
+                    return Err("--revocations requires a live --run or --grants launch".into());
+                }
                 let launch = match (config, record, replay) {
                     (None, None, None) => None,
                     (Some((grants, config)), record, None) => Some(Launch::Live {
                         grants,
                         config,
                         record,
+                        revocations,
                     }),
                     (None, None, Some(tape)) => Some(Launch::Replay(tape)),
                     (None, Some(_), _) => return Err("--record requires --run or --grants".into()),

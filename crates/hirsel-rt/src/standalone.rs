@@ -33,6 +33,7 @@ pub(crate) enum Selected {
     Live {
         run: ValidatedRun,
         tape: Option<std::path::PathBuf>,
+        revocations: Option<std::path::PathBuf>,
     },
     Replay {
         run: ValidatedRun,
@@ -55,35 +56,60 @@ pub(crate) fn select(
     entry: &str,
     roots: u8,
 ) -> Result<Selected, RunRefusal> {
-    match arguments.first() {
-        Some(flag) if flag == "--hirsel-replay" => {
-            let [_, path] = arguments.as_slice() else {
-                return Err(RunRefusal::Invalid {
-                    field: "argv".into(),
-                    detail: "expected only --hirsel-replay <tape>".into(),
-                });
-            };
-            let (io, run) = crate::host_launch::replay(std::path::Path::new(path))?;
-            run.check_program(program, entry, launch_kind(roots))?;
-            run.require_roots(&required_roots(roots)?)?;
-            Ok(Selected::Replay { run, io })
-        }
-        Some(flag) if flag == "--hirsel-record" => {
-            let tape = arguments.get(1).ok_or_else(|| RunRefusal::Invalid {
+    if arguments
+        .first()
+        .is_some_and(|flag| flag == "--hirsel-replay")
+    {
+        let [_, path] = arguments.as_slice() else {
+            return Err(RunRefusal::Invalid {
                 field: "argv".into(),
-                detail: "expected --hirsel-record <tape> before the launch input".into(),
-            })?;
-            Ok(Selected::Live {
-                tape: Some(tape.into()),
-                run: select_run(arguments[2..].to_vec(), program, entry, roots)?,
-            })
-        }
-        _ => Ok(Selected::Live {
-            run: select_run(arguments, program, entry, roots)?,
-            tape: None,
-        }),
+                detail: "expected only --hirsel-replay <tape>".into(),
+            });
+        };
+        let (io, run) = crate::host_launch::replay(std::path::Path::new(path))?;
+        run.check_program(program, entry, launch_kind(roots))?;
+        run.require_roots(&required_roots(roots)?)?;
+        return Ok(Selected::Replay { run, io });
     }
+    let options = live_options(&arguments)?;
+    Ok(Selected::Live {
+        run: select_run(options.input.to_vec(), program, entry, roots)?,
+        tape: options.tape,
+        revocations: options.revocations,
+    })
 }
+pub(crate) struct LiveOptions<'a> {
+    pub input: &'a [OsString],
+    pub tape: Option<std::path::PathBuf>,
+    pub revocations: Option<std::path::PathBuf>,
+}
+pub(crate) fn live_options(arguments: &[OsString]) -> Result<LiveOptions<'_>, RunRefusal> {
+    let (mut tape, mut revocations) = (None, None);
+    let mut offset = 0;
+    while let Some(flag) = arguments.get(offset) {
+        let slot = if flag == "--hirsel-record" && tape.is_none() {
+            &mut tape
+        } else if flag == "--hirsel-revocations" && revocations.is_none() {
+            &mut revocations
+        } else {
+            break;
+        };
+        let path = arguments
+            .get(offset + 1)
+            .ok_or_else(|| RunRefusal::Invalid {
+                field: "argv".into(),
+                detail: "expected a path after launch option".into(),
+            })?;
+        *slot = Some(std::path::PathBuf::from(path));
+        offset += 2;
+    }
+    Ok(LiveOptions {
+        input: &arguments[offset..],
+        tape,
+        revocations,
+    })
+}
+
 fn launch_kind(roots: u8) -> LaunchKind {
     if roots == ROOT_TEST {
         LaunchKind::Test
@@ -161,6 +187,7 @@ mod tests {
             binding: Some(RecordedRun {
                 canonical: run.canonical().to_vec(),
                 admitted_at: 0,
+                revocation: None,
             }),
             tree: crate::io::Tree::new(Default::default()).unwrap(),
             events: vec![],
@@ -201,7 +228,7 @@ mod tests {
                 entry,
                 ROOT_ARGS
             ),
-            Ok(Selected::Live { tape: Some(_), run }) if run.record().args.as_deref() == Some(["x".to_string()].as_slice())
+            Ok(Selected::Live { tape: Some(_), run, .. }) if run.record().args.as_deref() == Some(["x".to_string()].as_slice())
         ));
     }
     #[test]

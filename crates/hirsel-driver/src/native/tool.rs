@@ -38,15 +38,23 @@ pub fn run_path_native_with_config(
     loaded.check_for_execution()?;
     let host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
     let host = match launch {
-        Some(crate::HostLaunch::Live { config, record }) => {
+        Some(crate::HostLaunch::Live {
+            config,
+            record,
+            revocations,
+        }) => {
             let live = crate::HostLaunch::Live {
                 config,
                 record: None,
+                revocations,
             };
             let bound = crate::bind_host_run(&mut loaded, live, host)?;
             Some((
                 bound.run().clone(),
-                record.map_or(super::link::Tape::None, super::link::Tape::Record),
+                super::link::Tape::Live {
+                    record,
+                    revocations,
+                },
             ))
         }
         Some(launch @ crate::HostLaunch::Replay(tape)) => {

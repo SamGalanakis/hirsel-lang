@@ -837,8 +837,18 @@ fn generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry() {
                     &dir,
                 )
                 .unwrap();
-                let recorded =
-                    launch_with(&exe, &target, &tools, &dir, false, Tape::Record(&tape)).unwrap();
+                let recorded = launch_with(
+                    &exe,
+                    &target,
+                    &tools,
+                    &dir,
+                    false,
+                    Tape::Live {
+                        record: Some(&tape),
+                        revocations: None,
+                    },
+                )
+                .unwrap();
                 assert_eq!(recorded.exit, Some(0));
                 assert_eq!(recorded.stdout, checked.reference.output);
                 let record =

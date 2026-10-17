@@ -19,6 +19,50 @@ pub use process::{
     canonical_program,
 };
 
+/// A host-supplied, immutable admission snapshot. Its revision hashes the exact file.
+#[derive(Clone, Debug)]
+pub struct Revocations {
+    revoked: BTreeSet<String>,
+    revision: String,
+}
+impl Revocations {
+    pub fn read_path(path: &std::path::Path) -> Result<Self, RunRefusal> {
+        let bytes = std::fs::read(path).map_err(|e| invalid("revocations", &e.to_string()))?;
+        Self::validate(&bytes)
+    }
+    pub fn validate(bytes: &[u8]) -> Result<Self, RunRefusal> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct List {
+            schema: u32,
+            revoked: Vec<String>,
+        }
+        let list: List =
+            serde_json::from_slice(bytes).map_err(|e| invalid("revocations", &e.to_string()))?;
+        if list.schema != 1 || list.revoked.iter().any(|r| r.is_empty()) {
+            return Err(invalid(
+                "revocations",
+                "expected schema 1 and nonempty references",
+            ));
+        }
+        let revision = Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Ok(Self {
+            revoked: list.revoked.into_iter().collect(),
+            revision,
+        })
+    }
+    pub fn evidence(&self, reference: &str) -> RevocationEvidence {
+        RevocationEvidence {
+            reference: reference.into(),
+            revision: self.revision.clone(),
+            revoked: self.revoked.contains(reference),
+        }
+    }
+}
+
 pub const SCHEMA: u32 = 1;
 pub const IDENTITY_DOMAIN: &str = "hirsel.run-config.v1";
 

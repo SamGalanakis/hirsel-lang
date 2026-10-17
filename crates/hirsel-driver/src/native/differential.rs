@@ -424,7 +424,10 @@ pub fn real_io_replay_with_config(
             toolchain,
             dir,
             true,
-            super::link::Tape::Record(&tape),
+            super::link::Tape::Live {
+                record: Some(&tape),
+                revocations: None,
+            },
         )?;
         let real = observe(&recorded, &program, &sites)?;
         if real != *reference {

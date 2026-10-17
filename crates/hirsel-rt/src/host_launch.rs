@@ -38,6 +38,7 @@ pub fn record(
         binding: Some(RecordedRun {
             canonical: run.canonical().to_vec(),
             admitted_at: admitted.evidence().at,
+            revocation: admitted.evidence().revocation.clone(),
         }),
         tree,
         events: vec![],
@@ -86,6 +87,7 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
 pub struct HostGrants {
     /// Present for cooperative admission: host net and stdin park on it.
     readiness: Option<Readiness>,
+    revocations: Option<hirsel_run_config::Revocations>,
     io: Option<RealIo>,
     output: Option<Box<dyn std::io::Write>>,
 }
@@ -93,6 +95,7 @@ impl HostGrants {
     pub fn new(output: impl std::io::Write + 'static) -> Self {
         Self {
             readiness: None,
+            revocations: None,
             io: None,
             output: Some(Box::new(output)),
         }
@@ -105,6 +108,11 @@ impl HostGrants {
             readiness: Some(Readiness::default()),
             ..Self::new(output)
         }
+    }
+    /// Read the explicit host evidence exactly once, before admission.
+    pub fn read_revocations(&mut self, path: &Path) -> Result<(), RunRefusal> {
+        self.revocations = Some(hirsel_run_config::Revocations::read_path(path)?);
+        Ok(())
     }
     pub fn into_io(self) -> RealIo {
         self.io.expect("successful host admission")
@@ -182,8 +190,11 @@ impl HostAuthority for HostGrants {
         Ok(())
     }
     fn revocation(&mut self, reference: &str) -> Result<RevocationEvidence, RunRefusal> {
-        Err(RunRefusal::MissingEvidence {
-            reference: reference.into(),
-        })
+        self.revocations
+            .as_ref()
+            .map(|list| list.evidence(reference))
+            .ok_or_else(|| RunRefusal::MissingEvidence {
+                reference: reference.into(),
+            })
     }
 }

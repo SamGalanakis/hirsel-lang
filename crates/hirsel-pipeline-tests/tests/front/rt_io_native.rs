@@ -150,7 +150,10 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
                     &tools,
                     &work,
                     true,
-                    Tape::Record(&tape),
+                    Tape::Live {
+                        record: Some(&tape),
+                        revocations: None,
+                    },
                 )
                 .unwrap();
                 assert_eq!(

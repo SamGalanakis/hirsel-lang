@@ -194,6 +194,7 @@ pub enum HostLaunch<'a> {
     Live {
         config: LaunchConfig<'a>,
         record: Option<&'a Path>,
+        revocations: Option<&'a Path>,
     },
     Replay(&'a Path),
 }
@@ -235,7 +236,15 @@ pub(crate) fn bind_host_run(
         .semantic_program_revision(&program.entry)
         .map_err(|e| program.error(e))?;
     match launch {
-        HostLaunch::Live { config, record } => {
+        HostLaunch::Live {
+            config,
+            record,
+            revocations,
+        } => {
+            if let Some(path) = revocations {
+                host.read_revocations(path)
+                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            }
             let requested = config
                 .read(&revision)
                 .map_err(|e| ToolError::Runtime(e.to_string()))?;

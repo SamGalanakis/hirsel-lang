@@ -664,3 +664,38 @@ fn grants_templates_bind_only_selected_code_and_use_record_validation() {
         );
     }
 }
+
+#[test]
+fn revocation_source_is_closed_and_hashes_the_exact_snapshot() {
+    let bytes = br#"{"schema":1,"revoked":["grant-A"]}"#;
+    let source = Revocations::validate(bytes).unwrap();
+    assert!(source.evidence("grant-A").revoked);
+    assert!(!source.evidence("grant-B").revoked);
+    let revision = source.evidence("grant-A").revision;
+    assert_eq!(revision, source.evidence("grant-B").revision);
+    assert_ne!(
+        revision,
+        Revocations::validate(b"{\"schema\":1,\"revoked\":[\"grant-A\"]}\n")
+            .unwrap()
+            .evidence("grant-A")
+            .revision
+    );
+    for invalid in [
+        r#"{"schema":2,"revoked":[]}"#,
+        r#"{"schema":1,"revoked":[""]}"#,
+        r#"{"schema":1,"revoked":[],"unknown":true}"#,
+        r#"{"schema":1,"revoked":[],"revoked":["grant-A"]}"#,
+        r#"{"schema":1}"#,
+    ] {
+        assert!(
+            Revocations::validate(invalid.as_bytes()).is_err(),
+            "{invalid}"
+        );
+    }
+    assert!(
+        !Revocations::validate(br#"{"schema":1,"revoked":[]}"#)
+            .unwrap()
+            .evidence("grant-A")
+            .revoked
+    );
+}

@@ -528,6 +528,7 @@ pub struct Recording {
 pub struct RecordedRun {
     pub canonical: Vec<u8>,
     pub admitted_at: i64,
+    pub revocation: Option<hirsel_run_config::RevocationEvidence>,
 }
 impl Recording {
     /// The bound run, checked against this header and its recorded admission without
@@ -549,7 +550,7 @@ impl Recording {
             self.run_identity,
             &hirsel_run_config::AdmissionEvidence {
                 at: binding.admitted_at,
-                revocation: None,
+                revocation: binding.revocation.clone(),
             },
         )?;
         let config = run.config();
@@ -576,6 +577,15 @@ pub fn render_recording(record: &Recording) -> Result<String, String> {
             "run {}\nadmitted_at {}",
             hex(&binding.canonical),
             binding.admitted_at
+        );
+    }
+    if let Some(proof) = record.binding.as_ref().and_then(|b| b.revocation.as_ref()) {
+        let _ = writeln!(
+            text,
+            "revocation {} {} {}",
+            hex(proof.reference.as_bytes()),
+            hex(proof.revision.as_bytes()),
+            u8::from(proof.revoked)
         );
     }
     for argument in &record.arguments {
@@ -636,6 +646,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
     let mut run_identity = None;
     let (mut hash_seed, mut random_seed, mut test_seed) = (None, None, None);
     let (mut run, mut admitted_at) = (None, None);
+    let mut revocation = None;
     let mut arguments = vec![];
     let mut files = std::collections::BTreeMap::new();
     let mut links = std::collections::BTreeMap::new();
@@ -673,6 +684,13 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
                     return Err("bad recorded admission time".into());
                 }
                 admitted_at = Some(at);
+            }
+            ["revocation", reference, revision, revoked @ ("0" | "1")] if revocation.is_none() => {
+                revocation = Some(hirsel_run_config::RevocationEvidence {
+                    reference: string(reference)?,
+                    revision: string(revision)?,
+                    revoked: *revoked == "1",
+                });
             }
             ["argument", value] => arguments.push(string(value)?),
             ["directory", value] => {
@@ -744,8 +762,9 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
                 (Some(canonical), Some(admitted_at)) => Some(RecordedRun {
                     canonical,
                     admitted_at,
+                    revocation,
                 }),
-                (None, None) => None,
+                (None, None) if revocation.is_none() => None,
                 _ => return Err("a run record without its admission time".into()),
             },
             tree,
@@ -929,31 +948,36 @@ unsafe fn launch(
         return refuse("missing launch configuration");
     };
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    let read = |path: &std::ffi::OsString| {
-        hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))
-            .map_err(|e| e.to_string())
-    };
-    // Without a production flag, process argv is the harness launch's Args.
-    let requested = match arguments.iter().map(|a| a.to_str()).collect::<Vec<_>>()[..] {
-        [Some("--hirsel-run"), _] => read(&arguments[1]).map(|run| {
-            Some(crate::standalone::Selected::Live { run, tape: None })
-        }),
-        [Some("--hirsel-record"), _, Some("--hirsel-run"), _] => read(&arguments[3]).map(|run| {
-            Some(crate::standalone::Selected::Live {
-                run,
-                tape: Some(arguments[1].clone().into()),
-            })
-        }),
-        [Some("--hirsel-replay"), _] => {
-            crate::host_launch::replay(std::path::Path::new(&arguments[1]))
+    // Harness arguments stay ordinary Args unless a production flag selects a run.
+    let requested = if arguments.first().is_some_and(|a| a == "--hirsel-replay") {
+        match arguments.as_slice() {
+            [_, path] => crate::host_launch::replay(std::path::Path::new(path))
                 .map(|(io, run)| Some(crate::standalone::Selected::Replay { run, io }))
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string()),
+            _ => Err("expected only --hirsel-replay <tape>".into()),
         }
-        [Some("--hirsel-run" | "--hirsel-record" | "--hirsel-replay"), ..] => Err(
-            "expected only [--hirsel-record <tape>] --hirsel-run /absolute/run.json or --hirsel-replay <tape>"
-                .into(),
-        ),
-        _ => Ok(None),
+    } else if arguments.first().is_some_and(|a| {
+        a == "--hirsel-run" || a == "--hirsel-record" || a == "--hirsel-revocations"
+    }) {
+        crate::standalone::live_options(&arguments)
+            .and_then(|options| match options.input {
+                [flag, path] if flag == "--hirsel-run" => {
+                    hirsel_run_config::RunConfig::read_path(std::path::Path::new(path)).map(|run| {
+                        Some(crate::standalone::Selected::Live {
+                            run,
+                            tape: options.tape,
+                            revocations: options.revocations,
+                        })
+                    })
+                }
+                _ => Err(hirsel_run_config::RunRefusal::Invalid {
+                    field: "argv".into(),
+                    detail: "expected --hirsel-run after launch options".into(),
+                }),
+            })
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(None)
     };
     let requested = match requested {
         Ok(requested) => requested,
@@ -1004,8 +1028,17 @@ unsafe fn execute(
         match selected {
             // A replay performs no host effect: no admission, clock or provider.
             crate::standalone::Selected::Replay { io, .. } => production_replay = Some(io),
-            crate::standalone::Selected::Live { run, tape } => {
+            crate::standalone::Selected::Live {
+                run,
+                tape,
+                revocations,
+            } => {
                 let mut host = crate::host_launch::HostGrants::new(RawStdout);
+                if let Some(path) = revocations {
+                    if let Err(e) = host.read_revocations(&path) {
+                        return refuse(&e.to_string());
+                    }
+                }
                 let now = match std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .ok()

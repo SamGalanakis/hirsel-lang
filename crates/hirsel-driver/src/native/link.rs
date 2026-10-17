@@ -948,15 +948,26 @@ pub fn launch(
     dir: &Path,
     diagnostic: bool,
 ) -> Result<Launched, NativeError> {
-    launch_with(executable, target, toolchain, dir, diagnostic, Tape::None)
+    launch_with(
+        executable,
+        target,
+        toolchain,
+        dir,
+        diagnostic,
+        Tape::Live {
+            record: None,
+            revocations: None,
+        },
+    )
 }
 
 /// What a launch does with the Io completion tape.
 #[derive(Clone, Copy, Debug)]
 pub enum Tape<'a> {
-    None,
-    /// Real Io, its completions recorded to this file.
-    Record(&'a Path),
+    Live {
+        record: Option<&'a Path>,
+        revocations: Option<&'a Path>,
+    },
     /// Simulated Io consuming exactly this recorded file.
     Replay(&'a Path),
 }
@@ -1009,26 +1020,29 @@ fn launch_impl(
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record);
     // A live launch selects record and replay by flag; harness launches by environment.
-    match (&live, tape) {
-        (Some(_), Tape::Replay(path)) => {
-            command.arg("--hirsel-replay").arg(absolute(path)?);
+    match tape {
+        Tape::Replay(path) => {
+            if live.is_some() {
+                command.arg("--hirsel-replay").arg(absolute(path)?);
+            } else {
+                command.env("HIRSEL_RT_REPLAY", path);
+            }
         }
-        (Some(_), Tape::Record(path)) => {
-            command
-                .arg("--hirsel-record")
-                .arg(absolute(path)?)
-                .arg("--hirsel-run")
-                .arg(dir.join("run.json"));
-        }
-        (Some(_), Tape::None) => {
-            command.arg("--hirsel-run").arg(dir.join("run.json"));
-        }
-        (None, Tape::None) => {}
-        (None, Tape::Record(path)) => {
-            command.env("HIRSEL_RT_TAPE", path);
-        }
-        (None, Tape::Replay(path)) => {
-            command.env("HIRSEL_RT_REPLAY", path);
+        Tape::Live {
+            record,
+            revocations,
+        } => {
+            if live.is_some() {
+                if let Some(path) = record {
+                    command.arg("--hirsel-record").arg(absolute(path)?);
+                }
+                if let Some(path) = revocations {
+                    command.arg("--hirsel-revocations").arg(absolute(path)?);
+                }
+                command.arg("--hirsel-run").arg(dir.join("run.json"));
+            } else if let Some(path) = record {
+                command.env("HIRSEL_RT_TAPE", path);
+            }
         }
     }
     if !toolchain.wrapper.is_empty() {

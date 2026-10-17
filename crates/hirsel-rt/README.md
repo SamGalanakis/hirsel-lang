@@ -608,3 +608,8 @@ reported as effect-free cancellation. HostNet remains the native blocking provid
 `HostGrants::cooperative` admits `tasks.cooperative@1` for the interpreter and installs
 CooperativeNet and CooperativeStdin over one Readiness (`into_parts`);
 `HostGrants::new` refuses Tasks until native scheduling supports that contract.
+
+`HostGrants::read_revocations` installs an explicit immutable revocation-list
+snapshot before admission. Without it a grant requiring revocation evidence refuses.
+Ordinary tapes retain the accepted reference, file digest and decision beside the
+admission time; replay reads none of the current host evidence.

@@ -158,6 +158,8 @@ settings and caching are tooling.
 
 ### PROG-6: Grant admission
 
+The host launcher reads explicit schema-1 `{"schema":1,"revoked":[reference,...]}` evidence once from `--revocations <file>` (`--hirsel-revocations` for executables); its file digest and reference decision are recorded, and a missing source refuses a grant requiring revocation evidence.
+
 Optional not-before, expiry and revocation conditions on launch grants are checked at
 admission only and recorded as admission evidence. They do not silently revoke an admitted
 in-process grant. A policy that requires later revocation is implemented as an explicit

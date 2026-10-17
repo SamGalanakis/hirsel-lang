@@ -99,3 +99,7 @@ program, entry and launch kind, then validate the resulting record. Templates
 accept only inputs, Io, Args, Env, Unsafe and admission fields; binding fields,
 unknowns and duplicates refuse. Omitted fields use the same denial defaults as
 `empty`. Relative template paths are explicit tooling inputs.
+
+`Revocations::read_path` reads an explicit schema-1 host revocation list once. Its
+SHA-256 revision covers the exact file bytes; `evidence(reference)` records that
+revision and whether the named grant was listed. It supplies no authority itself.

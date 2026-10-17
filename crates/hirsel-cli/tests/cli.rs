@@ -15,7 +15,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] | --replay <tape>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
+            b"usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -2053,4 +2053,171 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     drop(writer);
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
+}
+
+#[test]
+fn launch_admission_conditions_and_historical_replay() {
+    let source = file(
+        "pub fn main(rt: Io) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"entered\\n\"); Ok(()) }\n",
+    );
+    let exe = build_executable(&source, &[]);
+    let grants = source.with_extension("grants.json");
+    let revocations = source.with_extension("revocations.json");
+    let tape = source.with_extension("tape");
+    // Exercise source interpretation, source native launch and the standalone launcher.
+    for mode in 0..3 {
+        let command = |replay: bool| {
+            let mut c = if mode == 2 {
+                Command::new(&exe)
+            } else {
+                let mut c = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                c.arg("run").arg(&source);
+                if mode == 1 {
+                    c.arg("--native");
+                }
+                c
+            };
+            if replay {
+                c.arg(if mode == 2 {
+                    "--hirsel-replay"
+                } else {
+                    "--replay"
+                })
+                .arg(&tape);
+            }
+            c
+        };
+        for (admission, list, error) in [
+            (
+                serde_json::json!({"expires":0}),
+                Some(false),
+                Some("expired"),
+            ),
+            (
+                serde_json::json!({"not_before":i64::MAX}),
+                Some(false),
+                Some("not_yet_valid"),
+            ),
+            (
+                serde_json::json!({"revocation":"grant-A"}),
+                Some(true),
+                Some("revoked"),
+            ),
+            (
+                serde_json::json!({"revocation":"grant-A"}),
+                None,
+                Some("missing_evidence"),
+            ),
+            (
+                serde_json::json!({"not_before":0,"expires":i64::MAX,"revocation":"grant-A"}),
+                Some(false),
+                None,
+            ),
+        ] {
+            std::fs::write(
+                &grants,
+                serde_json::json!({"io":stdout_grant(),"admission":admission}).to_string(),
+            )
+            .unwrap();
+            let mut c = command(false);
+            if let Some(revoked) = list {
+                std::fs::write(&revocations, serde_json::json!({"schema":1,"revoked":if revoked {vec!["grant-A"]} else {vec![]}}).to_string()).unwrap();
+                c.arg(if mode == 2 {
+                    "--hirsel-revocations"
+                } else {
+                    "--revocations"
+                })
+                .arg(&revocations);
+            }
+            if error.is_none() {
+                c.arg(if mode == 2 {
+                    "--hirsel-record"
+                } else {
+                    "--record"
+                })
+                .arg(&tape);
+            }
+            c.arg(if mode == 2 {
+                "--hirsel-grants"
+            } else {
+                "--grants"
+            })
+            .arg(&grants);
+            let output = c.output().unwrap();
+            if let Some(error) = error {
+                assert!(!output.status.success(), "mode={mode}: {output:?}");
+                assert!(
+                    output.stdout.is_empty(),
+                    "entry ran before refusal: {output:?}"
+                );
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains(error),
+                    "mode={mode}: {output:?}"
+                );
+            } else {
+                assert!(output.status.success(), "mode={mode}: {output:?}");
+                assert_eq!(output.stdout, b"entered\n");
+                assert!(output.stderr.is_empty(), "{output:?}");
+                let recorded = std::fs::read_to_string(&tape).unwrap();
+                let field =
+                    |name: &str| recorded.lines().find_map(|l| l.strip_prefix(name)).unwrap();
+                assert!(field("admitted_at ").parse::<i64>().unwrap() > 0);
+                let proof: Vec<_> = field("revocation ").split(' ').collect();
+                assert_eq!(proof.len(), 3);
+                assert_eq!(proof[0], "6772616e742d41"); // grant-A
+                assert_eq!(proof[1].len(), 128); // hex-encoded SHA-256 revision
+                assert_eq!(proof[2], "0");
+                // This exact accepted tape still replays when the host now revokes it,
+                // and when both the source of evidence and grants cease to exist.
+                std::fs::write(&revocations, r#"{"schema":1,"revoked":["grant-A"]}"#).unwrap();
+                let output = command(true).output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                assert_eq!(output.stdout, b"entered\n");
+                std::fs::remove_file(&revocations).unwrap();
+                std::fs::remove_file(&grants).unwrap();
+                // A valid historical admission at 10ns with expiry at 20ns. Rebind
+                // the tape, retaining its real Io events, to check replay's clock seam
+                // deterministically without waiting for a host deadline.
+                let decode = |text: &str| {
+                    (0..text.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+                        .collect::<Vec<_>>()
+                };
+                let encode =
+                    |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                let canonical = field("run ");
+                let mut historical: serde_json::Value =
+                    serde_json::from_slice(&decode(canonical)).unwrap();
+                historical["admission"]["expires"] = 20.into();
+                std::fs::write(&grants, historical.to_string()).unwrap();
+                let run = hirsel_engine::read_run_record(&grants).unwrap();
+                std::fs::remove_file(&grants).unwrap();
+                let historical = recorded
+                    .replace(
+                        &format!("run {canonical}\n"),
+                        &format!("run {}\n", encode(run.canonical())),
+                    )
+                    .replace(
+                        &format!("run_identity {}\n", field("run_identity ")),
+                        &format!("run_identity {}\n", encode(&run.identity())),
+                    )
+                    .replace(
+                        &format!("admitted_at {}\n", field("admitted_at ")),
+                        "admitted_at 10\n",
+                    );
+                std::fs::write(&tape, historical).unwrap();
+                let output = command(true).output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "historical mode={mode}: {output:?}"
+                );
+                assert_eq!(output.stdout, b"entered\n");
+                assert!(output.stderr.is_empty(), "{output:?}");
+            }
+        }
+    }
+    for path in [source, exe, tape] {
+        std::fs::remove_file(path).unwrap();
+    }
 }

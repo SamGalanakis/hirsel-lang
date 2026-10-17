@@ -125,3 +125,8 @@ The option works with simulated inputs, explicit host `--run` records and replay
 `--native` rejects it. Exhaustion deterministically exits 2 and reports
 `evaluator tooling limit: Steps`. Driver/conformance adapter defaults and
 compile-time evaluation budgets are independent.
+
+`--revocations <file>` accompanies a live `--run` or `--grants` launch and supplies
+explicit schema-1 `{"schema":1,"revoked":["grant-reference"]}` host evidence.
+Executables accept `--hirsel-revocations <file>` before their launch input. The file
+is read once at admission; replay uses the recorded decision and digest.

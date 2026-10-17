@@ -318,6 +318,7 @@ fn bound_runs_round_trip_and_refuse_a_header_that_disagrees() {
     recording.binding = Some(RecordedRun {
         canonical: run.canonical().to_vec(),
         admitted_at: -5,
+        revocation: None,
     });
     let text = render_recording(&recording).unwrap();
     let parsed = parse_recording(&text).unwrap();
