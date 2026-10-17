@@ -326,3 +326,51 @@ fn value() -> u64 {
         "{value:?}"
     );
 }
+
+/// The digit emitters manipulate only scalar/inline data and a borrowed output.
+/// A counted table used to add generic release calls around indexed reads.
+#[test]
+fn decimal_digit_emitters_need_no_reference_count_or_release_work() {
+    let program = compile(
+        "fn main() -> u64 {
+  let mut out: List[u8] = []
+  std@1/u64.format_into(18446744073709551615u64, mut out)
+  list.len(out)
+}
+",
+    );
+    for target in hirsel_lir::layout_types::TargetSpec::executed() {
+        let built = hirsel_driver::native::build_program(
+            &program,
+            manifest(&program),
+            &Options::new(target),
+        )
+        .unwrap();
+        let mut emitters = 0;
+        for unit in &built.units {
+            let unit = unit.unit();
+            let path = &unit.header.definition.0;
+            if path.package.package_is("std", "1")
+                && path.modules.last().is_some_and(|name| name == "decimal")
+                && matches!(
+                    path.name.as_str(),
+                    "append" | "leading_digits" | "sixteen_digits"
+                )
+            {
+                emitters += 1;
+                let count_work: Vec<_> = unit
+                    .instructions
+                    .iter()
+                    .filter(|inst| {
+                        matches!(
+                            inst,
+                            hirsel_lir::ir::Inst::Dup { .. } | hirsel_lir::ir::Inst::Release { .. }
+                        )
+                    })
+                    .collect();
+                assert!(count_work.is_empty(), "{}: {count_work:#?}", path.name);
+            }
+        }
+        assert_eq!(emitters, 3);
+    }
+}
