@@ -41,6 +41,15 @@
       1792184119
     ]
   },
+  "gate-agree-native-full": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "fallback_from": "gate-native-full",
+    "memory_kb": 4194304,
+    "memory_kills": 0,
+    "pss_runs": 0,
+    "runs": 0
+  },
   "gate-conformance": {
     "cpu_class": "fast",
     "cpu_count": 1,
@@ -64,6 +73,97 @@
       1792193296
     ]
   },
+  "gate-conformance-hash-seed": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "fallback_from": "gate-native-full",
+    "memory_kb": 4194304,
+    "memory_kills": 0,
+    "pss_runs": 0,
+    "runs": 0
+  },
+  "gate-native-full": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 156.6,
+    "memory_kb": 4194304,
+    "memory_kills": 1,
+    "p95_cores": 1.4,
+    "parallel_fraction": null,
+    "pss_peak_mib": 4112,
+    "pss_runs": 23,
+    "requested": [
+      "1/2097152",
+      "1/4194304"
+    ],
+    "runs": 22,
+    "timed_runs": 22,
+    "two_cpu_slowdown": null,
+    "window": [
+      1792195724,
+      1792208378
+    ]
+  },
+  "gate-native-hash-sweep": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "fallback_from": "gate-native-full",
+    "memory_kb": 4194304,
+    "memory_kills": 0,
+    "pss_runs": 0,
+    "runs": 0
+  },
+  "gate-native-library-c": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 2.3,
+    "memory_kb": 524288,
+    "memory_kills": 0,
+    "p95_cores": 0.67,
+    "parallel_fraction": null,
+    "pss_peak_mib": 100,
+    "pss_runs": 1,
+    "requested": [
+      "1/2097152"
+    ],
+    "runs": 1,
+    "timed_runs": 1,
+    "two_cpu_slowdown": null,
+    "window": [
+      1792195082,
+      1792195082
+    ]
+  },
+  "gate-native-runtime-c": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 5.2,
+    "memory_kb": 524288,
+    "memory_kills": 0,
+    "p95_cores": 0.64,
+    "parallel_fraction": null,
+    "pss_peak_mib": 121,
+    "pss_runs": 1,
+    "requested": [
+      "1/2097152"
+    ],
+    "runs": 1,
+    "timed_runs": 1,
+    "two_cpu_slowdown": null,
+    "window": [
+      1792195086,
+      1792195086
+    ]
+  },
+  "gate-native-sanitize": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "fallback_from": "gate-native-full",
+    "memory_kb": 4194304,
+    "memory_kills": 0,
+    "pss_runs": 0,
+    "runs": 0
+  },
   "gate-native-smoke": {
     "cpu_class": "",
     "cpu_count": 2,
@@ -84,6 +184,27 @@
     "window": [
       1792153853,
       1792193090
+    ]
+  },
+  "gate-native-toolchain-pin": {
+    "cpu_class": "",
+    "cpu_count": 1,
+    "mean_wall_seconds": 0.8,
+    "memory_kb": 524288,
+    "memory_kills": 0,
+    "p95_cores": 0.0,
+    "parallel_fraction": null,
+    "pss_peak_mib": 69,
+    "pss_runs": 1,
+    "requested": [
+      "1/2097152"
+    ],
+    "runs": 1,
+    "timed_runs": 0,
+    "two_cpu_slowdown": null,
+    "window": [
+      1792195080,
+      1792195080
     ]
   },
   "hirsel-check-unittest": {

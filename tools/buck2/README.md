@@ -333,7 +333,9 @@ Memory follows the worker's kill rule: it samples an action's process-group
 PSS, shared libraries and mapped binaries included, and kills it past twice its
 `memory_kb`. A binary reserves its largest PSS peak / 2 * 1.2, rounded up to
 256 MiB, at least 512 MiB, and at least 1.75 times the request of any run of it
-killed for memory. A binary without a row reserves 1 CPU and 2 GiB.
+killed for memory. The full native stages without measurements inherit the largest measured native
+stage's request, recorded as `fallback_from` in the evidence. Other binaries
+without a row reserve 1 CPU and 2 GiB.
 
 The inputs are read-only copies: each worker's `actions.log` and
 `actions.log.1` (`TEST_TARGET` and CPU per test run), the scheduler's usage
@@ -343,6 +345,9 @@ operation) and the workers' `kiln-executor` journal lines for memory kills:
 ```sh
 python3 tools/buck2/test_sizes_from_usage.py --usage /tmp/usage-*.log \
   --pss /tmp/trace-*.jsonl --kills /tmp/kills.txt
+# Refresh only full native stages, preserving the other measured requests:
+python3 tools/buck2/test_sizes_from_usage.py --native-stages \
+  --usage /tmp/usage-*.log --pss /tmp/trace-*.jsonl --kills /tmp/kills.txt
 ```
 
 A request is part of the test's action key: resizing reruns those tests once.
