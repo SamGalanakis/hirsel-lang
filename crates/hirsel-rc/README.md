@@ -370,9 +370,17 @@ its finalization proof excludes taking a field from a live resource with a
 finalizer. Those are malformed input invariants, rather than cleanup limits.
 C independently
 proves edge truth and currency; H checks field flags against its physical ledger.
+
 `join_versions` joins reaching content versions; empty edges may name any declared
 version, including one defined later, while initialized bytes keep their current
 version even after their inline finalizer has run.
+
+It builds dominance and incoming-edge indexes once, then shares one solve and one
+slot-row replay across joins of distinct slots. A join changes that slot's version
+transfer, so another join of the same slot uses a fresh solve. Edge snapshots retain
+only persistent slot rows. `RcCleanupVersionRows` counts instruction and terminator
+rows transferred by cleanup's version-state solves and replays; the driver's
+`it-scaling` regression bounds independent joins without using elapsed time.
 
 `library::iter` constructs `Iter` values as closures owning state and callback,
 with compiled `iter_from_step` and `iter_map_step` bodies. `iter.next` and

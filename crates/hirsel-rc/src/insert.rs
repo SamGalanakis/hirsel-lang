@@ -1412,6 +1412,12 @@ impl<S: Stage> Flow<'_, S> {
     /// blocks are visited in reverse postorder, earliest first: a block is
     /// walked again only when a feedback edge changed what reaches it.
     pub fn solve(&self) -> Vec<Option<State>> {
+        self.solve_counted(|_| {})
+    }
+
+    /// The same fixed point, reporting the instruction and terminator rows of
+    /// each actual block transfer for deterministic work measurements.
+    pub(crate) fn solve_counted(&self, mut transferred: impl FnMut(usize)) -> Vec<Option<State>> {
         let n = self.unit.blocks.len();
         let entry = self.unit.entry;
         let succ = self.successors();
@@ -1448,6 +1454,7 @@ impl<S: Stage> Flow<'_, S> {
             let Some(state) = ins[b.index()].clone() else {
                 continue;
             };
+            transferred(self.code[b.index()].len() + 1);
             let new = self.block(b, state, |_, _, _| {});
             let first = outs[b.index()].is_empty();
             for (i, (edge, out)) in new.iter().enumerate() {

@@ -2275,6 +2275,7 @@ hirsel_library(
     deps = [
         "//:hirsel-core-contract",
         "//:hirsel-graph",
+        "//:hirsel-intern",
         "//:hirsel-lir",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2299,6 +2300,7 @@ hirsel_test(
         "//:hirsel-core-contract",
         "//:hirsel-graph",
         "//:hirsel-heapcheck",
+        "//:hirsel-intern",
         "//:hirsel-lir",
         "//:hirsel-span",
         "//:hirsel-syntax",

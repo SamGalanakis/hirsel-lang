@@ -503,6 +503,7 @@ dependencies = [
  "hirsel-core-contract",
  "hirsel-graph",
  "hirsel-heapcheck",
+ "hirsel-intern",
  "hirsel-lir",
  "hirsel-span",
  "hirsel-syntax",

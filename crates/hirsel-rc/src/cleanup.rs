@@ -38,6 +38,7 @@
 use crate::insert::{Editor, Facts, Flow, Lay, Place, Root, State, Step, Tri, Versions, type_of};
 use crate::instance::Instances;
 use hirsel_core_contract::Passing;
+use hirsel_intern::work::{self, Counter};
 use hirsel_lir::abi_types::FnAbiId;
 use hirsel_lir::ir::{
     AddressBase, AddressId, AddressInfo, ArgumentValue, BlockId, BlockKind, CallArgument, CallId,
@@ -244,149 +245,144 @@ fn join_versions(
     lay: Lay<'_>,
     reads: bool,
 ) -> Result<(), CleanupError> {
+    // Parameters and arguments change below, but the graph does not.
+    let adjacent = Flow {
+        unit: &ed.unit,
+        code: &ed.code,
+        lay,
+        facts,
+    }
+    .successors()
+    .into_iter()
+    .map(|targets| targets.into_iter().map(|b| b.index()).collect())
+    .collect::<Vec<Vec<usize>>>();
+    let dom = hirsel_graph::Dominators::new(&adjacent, ed.unit.entry.index());
+    let mut incoming = vec![Vec::new(); ed.unit.blocks.len()];
+    for (index, edge) in ed.unit.tables.edges.iter().enumerate() {
+        incoming[edge.target.index()].push(EdgeId(index as u32));
+    }
+    let mut defs = version_defs(ed, facts);
+    let mut versions = vec![Vec::new(); ed.unit.slots.len()];
+    for &value in defs.keys() {
+        versions[facts.version_of[value.index()].unwrap().index()].push(value);
+    }
     let bound = ed.unit.slots.len() * ed.unit.blocks.len() + 1;
     for _ in 0..bound {
-        let drops = instruction_states(ed, facts, lay, reads);
-        let defs = version_defs(ed, facts);
-        let succ = Flow {
-            unit: &ed.unit,
-            code: &ed.code,
-            lay,
-            facts,
-        }
-        .successors();
-        let adjacent: Vec<Vec<usize>> = succ
-            .iter()
-            .map(|ts| ts.iter().map(|b| b.index()).collect())
-            .collect();
-        let dom = hirsel_graph::Dominators::new(&adjacent, ed.unit.entry.index());
-        let reaches = |v: ValueId, b: BlockId, point: usize| {
-            defs.get(&v).is_some_and(|&(x, at)| {
-                (x == b && at <= point)
-                    || (x != b
-                        && (!dom.reachable(b.index()) || dom.dominates(x.index(), b.index())))
-            })
-        };
-        let drop_join = drops.iter().find_map(|(b, i, st)| {
-            let address = match ed.code[b.index()][*i] {
-                Inst::Drop { address, .. }
-                | Inst::Read { address, .. }
-                | Inst::Copy { address, .. } => address,
-                _ => return None,
-            };
-            let (slot, _) = facts.slot_of(address)?;
-            let s = &st.slots[slot.index()];
-            (content_of(s.live, s.init) != Tri::No && s.versions == Versions::Many)
-                .then_some((*b, slot))
-        });
-        // Plain bytes retained by a finalized shell still have a physical
-        // version. Existing version parameters need a real transport even
-        // when no later read needs another join at the source.
-        let edge_join = if reads && drop_join.is_none() {
-            version_source_join(ed, facts, lay)
-        } else {
-            None
-        };
-        let Some((b, slot)) = drop_join.or(edge_join) else {
+        let inputs = VersionInputs::new(ed, facts, lay, reads);
+        if inputs.joins.is_empty() {
             return Ok(());
-        };
-        let flow = Flow {
-            unit: &ed.unit,
-            code: &ed.code,
-            lay,
-            facts,
-        };
-        let ins = flow.solve();
-        let along = edge_versions(ed, facts, lay, slot);
-        // A version this edge may pass as it is.
-        let usable = |e: &(BlockId, usize, Versions, Tri)| match e.2 {
-            Versions::One(v) => e.3 == Tri::No || reaches(v, e.0, e.1),
-            Versions::None => e.3 == Tri::No,
-            Versions::Many => false,
-        };
-        let met_before = ins[b.index()]
-            .as_ref()
-            .is_some_and(|st| st.slots[slot.index()].versions == Versions::Many);
-        if !met_before {
-            return Err(CleanupError::Unsupported(
-                "versions that meet inside a block".into(),
-            ));
         }
-        let ty = ed.unit.slots[slot.index()].ty;
-        let mut joins: BTreeMap<BlockId, ValueId> = BTreeMap::new();
-        let mut work = vec![b];
-        while let Some(x) = work.pop() {
-            if joins.contains_key(&x) {
-                continue;
-            }
-            joins.insert(x, ed.value(ty, Holding::Plain));
-            for (e, edge) in &along {
-                if ed.unit.tables.edges[e.index()].target == x && !usable(edge) {
-                    work.push(edge.0);
+        // A plain version phi changes only its slot's version transfer, not
+        // any other slot's liveness, initialization or version. Distinct slots
+        // therefore share this solve and replay. Recompute before joining the
+        // same slot again, since its transfer function has now changed.
+        for &(block, slot) in &inputs.joins {
+            let reaches = |v: ValueId, b: BlockId, point: usize| {
+                defs.get(&v).is_some_and(|&(x, at)| {
+                    (x == b && at <= point)
+                        || (x != b
+                            && (!dom.reachable(b.index()) || dom.dominates(x.index(), b.index())))
+                })
+            };
+            let usable = |edge: &VersionEdge| {
+                let state = &edge.slots[slot.index()];
+                let empty = content_of(state.live, state.init) == Tri::No;
+                match state.versions {
+                    Versions::One(value) => empty || reaches(value, edge.source, edge.point),
+                    Versions::None => empty,
+                    Versions::Many => false,
                 }
+            };
+            if !inputs.ins[block.index()]
+                .as_ref()
+                .is_some_and(|slots| slots[slot.index()].versions == Versions::Many)
+            {
+                return Err(CleanupError::Unsupported(
+                    "versions that meet inside a block".into(),
+                ));
             }
-        }
-
-        // Where the slot holds nothing, any version of it reaching the edge.
-        let versions_of_slot: Vec<ValueId> = defs
-            .keys()
-            .copied()
-            .filter(|v| facts.version_of.get(v.index()).copied().flatten() == Some(slot))
-            .collect();
-        for (&x, &p) in &joins {
-            let params = ed.unit.blocks[x.index()]
-                .parameters
-                .get(&ed.unit.pools.values)
-                .unwrap_or(&[])
-                .to_vec();
-            let ordinal = params.len();
-            ed.unit.blocks[x.index()].parameters =
-                PoolRange::push(&mut ed.unit.pools.values, params.into_iter().chain([p]));
-            if facts.phis.len() <= x.index() {
-                facts.phis.resize(x.index() + 1, Vec::new());
-            }
-            facts.phis[x.index()].push((ordinal, slot));
-            if facts.version_of.len() <= p.index() {
-                facts.version_of.resize(p.index() + 1, None);
-                facts.backing.resize(p.index() + 1, None);
-                facts.statics.resize(p.index() + 1, false);
-            }
-            facts.version_of[p.index()] = Some(slot);
-            for e in 0..ed.unit.tables.edges.len() {
-                let edge = EdgeId(e as u32);
-                if ed.unit.tables.edges[e].target != x {
+            let ty = ed.unit.slots[slot.index()].ty;
+            let mut joins: BTreeMap<BlockId, ValueId> = BTreeMap::new();
+            let mut created = Vec::new();
+            let mut work = vec![block];
+            while let Some(source) = work.pop() {
+                if joins.contains_key(&source) {
                     continue;
                 }
-                // An edge no reachable block takes is pruned at the end; it
-                // still needs an argument of the right type until then.
-                let argument = match along.get(&edge) {
-                    Some(a @ (_, _, Versions::One(v), _)) if usable(a) => *v,
-                    Some(a @ (source, point, Versions::None, _)) if usable(a) => versions_of_slot
-                        .iter()
-                        .copied()
-                        .find(|&v| reaches(v, *source, *point))
-                        .or_else(|| joins.get(source).copied())
-                        // Revision 8 permits a future version marker on an
-                        // empty edge. Initialized inputs independently pin
-                        // the joined version; nothing reads this marker.
-                        .or_else(|| versions_of_slot.first().copied())
-                        .ok_or_else(|| {
-                            CleanupError::Malformed(
-                                "initialized storage has no version declaration".into(),
-                            )
-                        })?,
-                    Some((source, ..)) => joins.get(source).copied().unwrap_or(p),
-                    None => p,
-                };
-                let args = ed.unit.tables.edges[e]
-                    .arguments
+                let value = ed.value(ty, Holding::Plain);
+                joins.insert(source, value);
+                created.push((source, value));
+                for &edge in &incoming[source.index()] {
+                    if let Some(edge) = &inputs.edges[edge.index()]
+                        && !usable(edge)
+                    {
+                        work.push(edge.source);
+                    }
+                }
+            }
+            for (&target, &parameter) in &joins {
+                let params = ed.unit.blocks[target.index()]
+                    .parameters
                     .get(&ed.unit.pools.values)
                     .unwrap_or(&[])
                     .to_vec();
-                ed.unit.tables.edges[e].arguments = PoolRange::push(
+                let ordinal = params.len();
+                ed.unit.blocks[target.index()].parameters = PoolRange::push(
                     &mut ed.unit.pools.values,
-                    args.into_iter().chain([argument]),
+                    params.into_iter().chain([parameter]),
                 );
+                if facts.phis.len() <= target.index() {
+                    facts.phis.resize(target.index() + 1, Vec::new());
+                }
+                facts.phis[target.index()].push((ordinal, slot));
+                if facts.version_of.len() <= parameter.index() {
+                    facts.version_of.resize(parameter.index() + 1, None);
+                    facts.backing.resize(parameter.index() + 1, None);
+                    facts.statics.resize(parameter.index() + 1, false);
+                }
+                facts.version_of[parameter.index()] = Some(slot);
+                for &edge in &incoming[target.index()] {
+                    // Unused edges are pruned by Editor::finish, but need a
+                    // correctly typed argument until then.
+                    let argument = match &inputs.edges[edge.index()] {
+                        Some(along) if usable(along) => {
+                            match along.slots[slot.index()].versions {
+                                Versions::One(value) => value,
+                                Versions::None => versions[slot.index()]
+                                    .iter()
+                                    .copied()
+                                    .find(|&v| reaches(v, along.source, along.point))
+                                    .or_else(|| joins.get(&along.source).copied())
+                                    // Revision 8 permits a future marker on empty
+                                    // storage. Initialized inputs pin its version.
+                                    .or_else(|| versions[slot.index()].first().copied())
+                                    .ok_or_else(|| {
+                                        CleanupError::Malformed(
+                                            "initialized storage has no version declaration".into(),
+                                        )
+                                    })?,
+                                Versions::Many => unreachable!("usable version"),
+                            }
+                        }
+                        Some(along) => joins.get(&along.source).copied().unwrap_or(parameter),
+                        None => parameter,
+                    };
+                    let args = ed.unit.tables.edges[edge.index()]
+                        .arguments
+                        .get(&ed.unit.pools.values)
+                        .unwrap_or(&[])
+                        .to_vec();
+                    ed.unit.tables.edges[edge.index()].arguments = PoolRange::push(
+                        &mut ed.unit.pools.values,
+                        args.into_iter().chain([argument]),
+                    );
+                }
+            }
+            // Creation order is ValueId order, preserving the fallback's
+            // preference for the earliest declared version of this slot.
+            for (block, value) in created {
+                defs.insert(value, (block, 0));
+                versions[slot.index()].push(value);
             }
         }
     }
@@ -395,119 +391,112 @@ fn join_versions(
     ))
 }
 
-/// Check all version transports in one replay, rather than solving once per phi.
-fn version_source_join(
-    ed: &Editor<Ready>,
-    facts: &Facts,
-    lay: Lay<'_>,
-) -> Option<(BlockId, SlotId)> {
-    let flow = Flow {
-        unit: &ed.unit,
-        code: &ed.code,
-        lay,
-        facts,
-    };
-    for (b, state) in flow.solve().into_iter().enumerate() {
-        let Some(state) = state else { continue };
-        let block = BlockId(b as u32);
-        let mut found = None;
-        let mut record = |edge: EdgeId, state: &State| {
-            let target = ed.unit.tables.edges[edge.index()].target;
-            for &(_, slot) in facts.phis_of(target) {
-                if state.slots[slot.index()].versions == Versions::Many {
-                    found.get_or_insert((block, slot));
-                }
-            }
-        };
-        flow.block(block, state, |i, pre, post| {
-            if let Some(inst) = ed.code[b].get(i) {
-                if let Some(f) = Inst::failure(inst) {
-                    let finishes = matches!(
-                        inst,
-                        Inst::Drop { .. }
-                            | Inst::Release { .. }
-                            | Inst::Reset { .. }
-                            | Inst::RegionExit { .. }
-                    );
-                    record(
-                        ed.unit.tables.failures[f.index()].cleanup,
-                        if finishes { post } else { pre },
-                    );
-                }
-            } else {
-                let term = &ed.unit.terminators[b];
-                for edge in Terminator::normal_edges(term, &ed.unit.pools) {
-                    record(edge, post);
-                }
-                if let Some(f) = Terminator::failure(term) {
-                    record(ed.unit.tables.failures[f.index()].cleanup, post);
-                }
-            }
-        });
-        if found.is_some() {
-            return found;
-        }
-    }
-    None
+struct VersionEdge {
+    source: BlockId,
+    point: usize,
+    slots: hirsel_lir::persistent::PVec<crate::insert::SlotState>,
 }
 
-fn edge_versions(
-    ed: &Editor<Ready>,
-    facts: &Facts,
-    lay: Lay<'_>,
-    slot: SlotId,
-) -> BTreeMap<EdgeId, (BlockId, usize, Versions, Tri)> {
-    let flow = Flow {
-        unit: &ed.unit,
-        code: &ed.code,
-        lay,
-        facts,
-    };
-    let states = flow.solve();
-    let mut along = BTreeMap::new();
-    for (b, state) in states.into_iter().enumerate() {
-        let Some(state) = state else { continue };
-        let block = BlockId(b as u32);
-        let mut record = |edge: EdgeId, point: usize, state: &State| {
-            let state = &state.slots[slot.index()];
-            along.insert(
-                edge,
-                (
-                    block,
-                    point,
-                    state.versions,
-                    content_of(state.live, state.init),
-                ),
-            );
+/// One solved input and one replay for every version consumer and edge.
+/// Snapshots share persistent state rows; no state is cloned at each drop/read.
+struct VersionInputs {
+    ins: Vec<Option<hirsel_lir::persistent::PVec<crate::insert::SlotState>>>,
+    edges: Vec<Option<VersionEdge>>,
+    joins: Vec<(BlockId, SlotId)>,
+}
+impl VersionInputs {
+    fn new(ed: &Editor<Ready>, facts: &Facts, lay: Lay<'_>, reads: bool) -> Self {
+        let flow = Flow {
+            unit: &ed.unit,
+            code: &ed.code,
+            lay,
+            facts,
         };
-        flow.block(block, state, |i, pre, post| {
-            if let Some(inst) = ed.code[b].get(i) {
-                if let Some(f) = Inst::failure(inst) {
-                    let finishes = matches!(
-                        inst,
-                        Inst::Drop { .. }
-                            | Inst::Release { .. }
-                            | Inst::Reset { .. }
-                            | Inst::RegionExit { .. }
-                    );
-                    record(
-                        ed.unit.tables.failures[f.index()].cleanup,
-                        i + usize::from(finishes),
-                        if finishes { post } else { pre },
-                    );
+        let ins = version_states(&flow);
+        let mut edges = (0..ed.unit.tables.edges.len())
+            .map(|_| None)
+            .collect::<Vec<_>>();
+        let mut order = Vec::new();
+        let mut joins = Vec::new();
+        let mut slots = std::collections::BTreeSet::new();
+        for (b, state) in ins.iter().enumerate() {
+            let Some(state) = state else {
+                continue;
+            };
+            let block = BlockId(b as u32);
+            let mut record = |edge: EdgeId, point: usize, state: &State| {
+                edges[edge.index()] = Some(VersionEdge {
+                    source: block,
+                    point,
+                    slots: state.slots.clone(),
+                });
+                order.push(edge);
+            };
+            work::count_by(Counter::RcCleanupVersionRows, (ed.code[b].len() + 1) as u64);
+            flow.block(block, state.clone(), |i, pre, post| {
+                if let Some(inst) = ed.code[b].get(i) {
+                    let address = match inst {
+                        Inst::Drop { address, .. } => Some(*address),
+                        Inst::Read { address, .. } | Inst::Copy { address, .. } if reads => {
+                            Some(*address)
+                        }
+                        _ => None,
+                    };
+                    if let Some(address) = address
+                        && let Some((slot, _)) = facts.slot_of(address)
+                    {
+                        let state = &pre.slots[slot.index()];
+                        if content_of(state.live, state.init) != Tri::No
+                            && state.versions == Versions::Many
+                            && slots.insert(slot)
+                        {
+                            joins.push((block, slot));
+                        }
+                    }
+                    if let Some(failure) = inst.failure() {
+                        let finishes = matches!(
+                            inst,
+                            Inst::Drop { .. }
+                                | Inst::Release { .. }
+                                | Inst::Reset { .. }
+                                | Inst::RegionExit { .. }
+                        );
+                        record(
+                            ed.unit.tables.failures[failure.index()].cleanup,
+                            i + usize::from(finishes),
+                            if finishes { post } else { pre },
+                        );
+                    }
+                } else {
+                    let term = &ed.unit.terminators[b];
+                    for edge in term.normal_edges(&ed.unit.pools) {
+                        record(edge, i, post);
+                    }
+                    if let Some(failure) = term.failure() {
+                        record(ed.unit.tables.failures[failure.index()].cleanup, i, post);
+                    }
                 }
-            } else {
-                let term = &ed.unit.terminators[b];
-                for edge in Terminator::normal_edges(term, &ed.unit.pools) {
-                    record(edge, i, post);
-                }
-                if let Some(f) = Terminator::failure(term) {
-                    record(ed.unit.tables.failures[f.index()].cleanup, i, post);
+            });
+        }
+        // After all direct consumers have versions, repair transports of
+        // initialized plain bytes retained by finalized shells as before.
+        if reads && joins.is_empty() {
+            for edge in order {
+                let along = edges[edge.index()].as_ref().unwrap();
+                let target = ed.unit.tables.edges[edge.index()].target;
+                for &(_, slot) in facts.phis_of(target) {
+                    if along.slots[slot.index()].versions == Versions::Many && slots.insert(slot) {
+                        joins.push((along.source, slot));
+                    }
                 }
             }
-        });
+        }
+        let ins = ins
+            .into_iter()
+            .map(|state| state.map(|state| state.slots))
+            .collect();
+        Self { ins, edges, joins }
     }
-    along
 }
 
 /// Where each version of a slot is defined: (block, the instruction index
@@ -1023,6 +1012,10 @@ fn drop_states(ed: &Editor<Ready>, facts: &Facts, lay: Lay<'_>) -> Vec<(BlockId,
     instruction_states(ed, facts, lay, false)
 }
 
+fn version_states(flow: &Flow<'_, Ready>) -> Vec<Option<State>> {
+    flow.solve_counted(|rows| work::count_by(Counter::RcCleanupVersionRows, rows as u64))
+}
+
 fn instruction_states(
     ed: &Editor<Ready>,
     facts: &Facts,
@@ -1035,7 +1028,7 @@ fn instruction_states(
         lay,
         facts,
     };
-    let ins = flow.solve();
+    let ins = version_states(&flow);
     let mut out = Vec::new();
     for (b, state) in ins.into_iter().enumerate() {
         let Some(state) = state else {
@@ -1043,6 +1036,7 @@ fn instruction_states(
         };
         let block = BlockId(b as u32);
         let code = &ed.code[b];
+        work::count_by(Counter::RcCleanupVersionRows, (code.len() + 1) as u64);
         flow.block(block, state, |i, pre, _| {
             if matches!(code.get(i), Some(Inst::Drop { .. }))
                 || reads && matches!(code.get(i), Some(Inst::Read { .. } | Inst::Copy { .. }))

@@ -6,6 +6,7 @@ mod scaling_authority_invalidation;
 mod scaling_branch_types;
 mod scaling_call_proofs;
 mod scaling_cleanup_roots;
+mod scaling_cleanup_versions;
 mod scaling_dataflow;
 mod scaling_definition_inputs;
 mod scaling_dependencies;
