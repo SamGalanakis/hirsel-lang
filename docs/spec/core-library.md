@@ -34,6 +34,8 @@ N fn io.net(rt: Io) -> Result[Net, GrantError]
 N fn io.random(rt: Io) -> Result[Random, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
 fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
+N fn arg.count(args: Args) -> u64
+fn arg.text(args: Args, index: u64) -> Result[String, ArgError]
 fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
 fn path.of(text: String) -> Path
 N fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
@@ -188,7 +190,7 @@ ChannelError  = Closed | Canceled(CancelCause)
 GrantError    = NotGranted()
 FileError     = FileFault(u32) | Canceled(CancelCause) | NotGranted()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
-ArgError      = MissingArgument()
+ArgError      = MissingArgument() | InvalidUtf8()
 FloatIntError = NotFinite | OutOfRange
 OutOfSpace    = OutOfSpace()
 ```
@@ -236,6 +238,12 @@ PeerTls       = Plain() | Certificate(List[String]) | Fails(TlsFailure)
 NetConnection = Refused() | Unanswered() | Open(List[NetStep])
 NetStep       = Send(Bytes) | Expect(Bytes) | Stall() | Close() | Reset() | Truncate()
 ```
+
+`arg.count` counts the ordered launch arguments, excluding the executable and tool options.
+`arg.text` returns the unchanged UTF-8 argument at a zero-based index, or
+`MissingArgument()` outside the snapshot and `InvalidUtf8()` for a non-UTF-8 argument.
+Run descriptions contain UTF-8 snapshots; host admission may reject an invalid snapshot
+before entry. Neither operation consults ambient process arguments.
 
 ## Effects and cancellation
 

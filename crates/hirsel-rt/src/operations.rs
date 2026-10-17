@@ -113,12 +113,12 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         // in HIRSEL_ABI_EXPORTS; generic callbacks remain compiled bodies.
         "string.from_bytes" | "string.slice" | "io.stdout" | "string.as_bytes"
         | "string.position" | "string.byte_offset" | "bytes.slice" | "path.text" | "out.print"
-        | "io.dir" | "dir.narrow" | "path.of" | "arg.path" | "file.open" | "file.narrow"
-        | "file.create_atomic" | "file.commit" | "file.size" | "file.remove"
-        | "file.write_bytes" | "file.write_all" | "io.monotonic_clock" | "io.wall_clock"
-        | "clock.monotonic" | "clock.wall" | "instant.ticks" | "io.random" | "io.tasks"
-        | "io.net" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "test.net"
-        | "file.read_bytes" | "file.walk" => {
+        | "io.dir" | "dir.narrow" | "path.of" | "arg.path" | "arg.count" | "arg.text"
+        | "file.open" | "file.narrow" | "file.create_atomic" | "file.commit" | "file.size"
+        | "file.remove" | "file.write_bytes" | "file.write_all" | "io.monotonic_clock"
+        | "io.wall_clock" | "clock.monotonic" | "clock.wall" | "instant.ticks" | "io.random"
+        | "io.tasks" | "io.net" | "test.check" | "test.check_case" | "test.fail" | "test.dir"
+        | "test.net" | "file.read_bytes" | "file.walk" => {
             Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
         }
         // Listeners execute after M2; TLS upgrades share the stream handle.
@@ -150,6 +150,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "dir.narrow"
             | "path.of"
             | "arg.path"
+            | "arg.count"
+            | "arg.text"
             | "io.monotonic_clock"
             | "io.wall_clock"
             | "clock.monotonic"
@@ -632,6 +634,18 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
     },
     AbiExport {
+        symbol: "hirsel_rt_v2_arg_count",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_arg_text",
+        destination: true,
+        result: Some((32, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
         symbol: "hirsel_rt_v2_arg_path",
         destination: true,
         result: Some((16, 8)),
@@ -774,7 +788,9 @@ pub const NATIVE_PATHS: &[&str] = &[
     "arena.bounded",
     "arena.seal",
     "arena.with",
+    "arg.count",
     "arg.path",
+    "arg.text",
     "array.len",
     "atomic.create",
     "atomic.load",

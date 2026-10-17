@@ -1218,3 +1218,29 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
     assert_eq!(failures[0].cause, Some(1));
     assert_eq!(failures[1], original);
 }
+
+#[test]
+fn argument_snapshot_preserves_empty_unicode_and_option_like_text() {
+    let texts = vec![String::new(), "λ🐑".into(), "--flag".into()];
+    let mut h = Harness::new(SimulationConfig {
+        args: texts.clone(),
+        ..Default::default()
+    });
+    let args = h.root("Args");
+    assert_eq!(h.value("arg.count", vec![args.clone()]), u64_value(3));
+    for (i, text) in texts.into_iter().enumerate() {
+        assert_eq!(
+            h.value("arg.text", vec![args.clone(), u64_value(i as u64)]),
+            ok(Value::String(text))
+        );
+    }
+    for index in [3, u64::MAX] {
+        assert_eq!(
+            h.value("arg.text", vec![args.clone(), u64_value(index)]),
+            error(Value::Variant {
+                variant: 0,
+                fields: vec![]
+            })
+        );
+    }
+}

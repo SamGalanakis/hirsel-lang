@@ -1486,6 +1486,48 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
     crate::STATUS_OK
 }
 
+/// # Safety
+/// Args names the launch snapshot and out is writable scalar storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arg_count(
+    ctx: *mut crate::RunCtx,
+    out: *mut u64,
+    args: *const u64,
+) -> u8 {
+    if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
+        return crate::STATUS_FAILURE;
+    }
+    unsafe { out.write(Binding::get(ctx).arguments.len() as u64) };
+    crate::STATUS_OK
+}
+
+/// # Safety
+/// Args names the launch snapshot and out is writable Result[String, ArgError] storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut crate::text::StringResult,
+    args: *const u64,
+    index: u64,
+) -> u8 {
+    if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
+        return crate::STATUS_FAILURE;
+    }
+    let text = usize::try_from(index)
+        .ok()
+        .and_then(|i| unsafe { Binding::get(ctx) }.arguments.get(i))
+        .cloned();
+    // Zero initializes the MissingArgument tag and all padding on the error arm.
+    let mut result: crate::text::StringResult = unsafe { std::mem::zeroed() };
+    match text {
+        Some(text) => result.value = unsafe { crate::text::allocate_bytes(ctx, text.as_bytes()) },
+        None => result.tag = 1,
+    }
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+
 /// Inline Result[capability, GrantError]. The error is a nullary tag at offset 8.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

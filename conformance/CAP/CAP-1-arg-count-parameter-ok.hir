@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: accept
+pub fn query(args: Args) -> u64 {
+  arg.count(args)
+}

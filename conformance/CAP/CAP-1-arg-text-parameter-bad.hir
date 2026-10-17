@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 4
+pub fn query() -> Result[String, ArgError] {
+  arg.text(0)
+}

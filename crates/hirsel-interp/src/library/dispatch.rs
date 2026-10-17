@@ -181,14 +181,24 @@ impl Library {
                     error(variant(2, vec![]))
                 }
             }
-            "arg.path" => {
+            "arg.count" => {
+                self.simulation.id(arg(a, 0)?, "Args")?;
+                u64_value(self.simulation.config.args.len() as u64)
+            }
+            "arg.text" | "arg.path" => {
                 self.simulation.id(arg(a, 0)?, "Args")?;
                 let i = index(arg(a, 1)?)?;
                 self.simulation
                     .config
                     .args
                     .get(i)
-                    .map(|s| ok(path(s)))
+                    .map(|s| {
+                        ok(if name == "arg.path" {
+                            path(s)
+                        } else {
+                            Value::String(s.clone())
+                        })
+                    })
                     .unwrap_or_else(|| error(variant(0, vec![])))
             }
             "out.print" => {
@@ -844,7 +854,7 @@ primary_operations! { self, call, context, name, a, value;
         if !a.is_empty() { return Err(invalid("heap operation arity")); }
         Value::Handle { kind: "$Heap".into(), id: 0 }
     },
-    Capability: "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();

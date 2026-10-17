@@ -384,7 +384,7 @@ fn every_runtime_primitive_row_matches_its_export() {
             }
         }
         assert_eq!(
-            primitives, 55,
+            primitives, 57,
             "Io, Test, text, scalar/position cursors and network streams"
         );
         // Calls of each, with each float family, on both targets.

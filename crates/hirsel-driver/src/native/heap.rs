@@ -256,7 +256,7 @@ impl Io {
             }
             (
                 Some("arg"),
-                "path",
+                "path" | "text",
                 [
                     OpValue::Handle(ARGS_HANDLE),
                     OpValue::Bits {
@@ -270,6 +270,10 @@ impl Io {
                     tag: 0,
                     value: Box::new(OpValue::Unit),
                 }),
+            },
+            (Some("arg"), "count", [OpValue::Handle(ARGS_HANDLE)]) => OpValue::Bits {
+                scalar: ScalarKind::U64,
+                bits: 0,
             },
             (Some("io"), "monotonic_clock" | "wall_clock", [OpValue::Handle(IO_HANDLE)]) => {
                 OpValue::Variant {
