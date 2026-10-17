@@ -1388,6 +1388,8 @@ conformance/LANG/LANG-8-tour-00-number-run.hir
 conformance/LANG/LANG-8-tour-03-errors-run.hir
 conformance/LANG/LANG-8-tour-06-json-run.hir
 conformance/LANG/LANG-8-tour-07-path-time-run.hir
+conformance/LANG/LANG-8-tour-12-bad-input-run.hir
+conformance/LANG/LANG-8-tour-12-valid-input-run.hir
 conformance/LANG/LANG-8-variant-map.hir
 conformance/LANG/LANG-9-explicit-check.hir
 conformance/LANG/LANG-9-fake-directory.hir

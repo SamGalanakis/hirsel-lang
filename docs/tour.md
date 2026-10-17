@@ -248,6 +248,55 @@ input error
 ```
 <!-- /tour -->
 
+## Rejecting invalid input
+
+Use `Result[(), String]` for an entry that needs to fail with an application
+message. `Error("bad input: ...")` exits 1; no fake `FileFault(0u32)` is needed.
+A helper can return `Result[T, String]`, and plain `?` propagates its message.
+The line below can come from `input.read_line`; the example deliberately rejects it.
+
+<!-- tour: conformance/LANG/LANG-8-tour-12-bad-input-run.hir -->
+[Runnable source](../conformance/LANG/LANG-8-tour-12-bad-input-run.hir)
+
+```hirsel
+pub fn main() -> Result[(), String] {
+  let line = "not a number"
+  let number = match u64.parse(string.trim(line)) {
+    Ok(n) => n,
+    Error(_) => return Error("bad input: expected one decimal number"),
+  }
+  failure.check(number == 42, Arithmetic())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 1.
+<!-- /tour -->
+
+The same parser accepts a trimmed decimal:
+
+<!-- tour: conformance/LANG/LANG-8-tour-12-valid-input-run.hir -->
+[Runnable source](../conformance/LANG/LANG-8-tour-12-valid-input-run.hir)
+
+```hirsel
+pub fn main() -> Result[(), String] {
+  let line = " 42\n"
+  let number = match u64.parse(string.trim(line)) {
+    Ok(n) => n,
+    Error(_) => return Error("bad input: expected one decimal number"),
+  }
+  failure.check(number == 42, Arithmetic())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 ## Collections
 
 `List[T]` grows, `Array[T]` is a heap sequence, and `Inline[T, n]` has its size in

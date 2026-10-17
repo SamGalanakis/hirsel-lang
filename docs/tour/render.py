@@ -16,7 +16,11 @@ def render(match):
     body = ''.join(lines[split:]).lstrip('\n')
     output = ''.join(line.removeprefix('// stdout: ').rstrip('\n') + '\n'
                      for line in lines[:split] if line.startswith('// stdout: '))
-    expected = f'```text\n{output}```' if output else 'No stdout; exit 0 (all checks pass).'
+    exit_code = next((line.removeprefix('// exit: ').strip()
+                      for line in lines[:split] if line.startswith('// exit: ')), '0')
+    expected = (f'```text\n{output}```' if output else
+                'No stdout; exit 0 (all checks pass).' if exit_code == '0' else
+                f'No stdout; exit {exit_code}.')
     return (f'<!-- tour: {path} -->\n'
             f'[Runnable source](../{path})\n\n'
             f'```hirsel\n{body}```\n\nExpected:\n\n{expected}\n<!-- /tour -->')

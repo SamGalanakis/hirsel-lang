@@ -125,6 +125,12 @@ fabricated capability. The ambient heap permission is unchanged. Launch, header 
 admission refusals are tooling errors before entry, not source diagnostics or language
 failures.
 
+An entry may return `Result[(), String]` to report invalid application input:
+`Error("bad input: expected one decimal number")` is an ordinary returned error
+and exits 1; `Ok(())` exits 0. Helpers returning `Result[T, String]` propagate
+through plain `?`. Applications need no fabricated host file error and no new
+standard error wrapper. Returning an error is not a language failure.
+
 A launcher may bind a grants template to the selected program in one step
 (`hirsel run <source> --grants <template>` or a standalone executable's
 `--hirsel-grants <template>`). A template supplies only the schema-1 run fields

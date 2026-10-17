@@ -1,0 +1,12 @@
+// rule: LANG-8
+// expect: run
+// exit: 1
+pub fn main() -> Result[(), String] {
+  let line = "not a number"
+  let number = match u64.parse(string.trim(line)) {
+    Ok(n) => n,
+    Error(_) => return Error("bad input: expected one decimal number"),
+  }
+  failure.check(number == 42, Arithmetic())
+  Ok(())
+}
