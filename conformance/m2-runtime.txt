@@ -1,10 +1,4 @@
 # path	required runtime behavior
-conformance/CONC/CONC-1-pure-child.hir	tasks/synchronization
-conformance/CONC/CONC-2-await.hir	tasks/synchronization
-conformance/CONC/CONC-2-cancel-then-await.hir	tasks/synchronization
-conformance/CONC/CONC-2-detach-joins-before-exit.hir	tasks/synchronization
-conformance/CONC/CONC-2-detach.hir	tasks/synchronization
-conformance/CONC/CONC-3-canceled-pure-child.hir	tasks/synchronization
 conformance/CONC/CONC-4-sequential-atomic-order.hir	tasks/synchronization
 conformance/CONC/CONC-5-inert-capture-and-update.hir	tasks/synchronization
 conformance/CONC/CONC-6-all-duplicated-senders-drop.hir	tasks/synchronization
@@ -12,15 +6,7 @@ conformance/CONC/CONC-6-buffer-drains.hir	tasks/synchronization
 conformance/CONC/CONC-6-last-receiver-closes-send.hir	tasks/synchronization
 conformance/CONC/CONC-6-last-sender-closes-receive.hir	tasks/synchronization
 conformance/CONC/CONC-6-receiver-child-capture.hir	tasks/synchronization
-conformance/FAIL/FAIL-2-child-propagates.hir	tasks/synchronization
-conformance/FAIL/FAIL-2-first-spawn-failure.hir	tasks/synchronization
-conformance/FAIL/FAIL-2-isolate-catches.hir	tasks/synchronization
-conformance/FAIL/FAIL-2-isolate-expected-error.hir	tasks/synchronization
-conformance/FAIL/FAIL-2-isolate-success.hir	tasks/synchronization
-conformance/FAIL/FAIL-2-scope-propagates.hir	tasks/synchronization
 conformance/FAIL/FAIL-3-arena-scope-unwind.hir	tasks/synchronization, arena/region runtime
-conformance/FAIL/FAIL-3-drop-failure-fields.hir	tasks/synchronization
-conformance/FAIL/FAIL-3-unwind-resources.hir	tasks/synchronization
 conformance/FAIL/FAIL-4-mutex-body-failure.hir	tasks/synchronization
 conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir	tasks/synchronization
 conformance/MEM/MEM-11-shared-index-example.hir	Shared runtime
@@ -35,4 +21,3 @@ conformance/MEM/MEM-4-copy-out.hir	arena/region runtime
 conformance/MEM/MEM-4-heap-keyword.hir	arena/region runtime
 conformance/MEM/MEM-6-empty-positive-cap.hir	arena/region runtime
 conformance/MEM/MEM-6-empty-zero-cap.hir	arena/region runtime
-conformance/OWN/OWN-6-unique-child-value.hir	tasks/synchronization

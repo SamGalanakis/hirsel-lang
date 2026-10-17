@@ -89,6 +89,9 @@ pub(crate) fn discard_result(result: crate::OperationResult) {
                 v.discard();
             }
         }
-        crate::OperationResult::Failed(_) | crate::OperationResult::UndefinedBehavior(_) => (),
+        crate::OperationResult::Failed(_)
+        | crate::OperationResult::UndefinedBehavior(_)
+        | crate::OperationResult::Park { .. }
+        | crate::OperationResult::FailureChain { .. } => (),
     }
 }

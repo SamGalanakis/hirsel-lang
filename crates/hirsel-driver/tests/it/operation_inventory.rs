@@ -24,7 +24,7 @@ fn registry_and_dispatch_have_exact_bidirectional_callable_coverage() {
     assert!(records.values().all(|r| r.reference.is_some()));
     assert_eq!(
         dispatch[&hirsel_syntax::DefPath::core("task.async")],
-        OperationDisposition::Unavailable
+        OperationDisposition::Capability
     );
     assert_eq!(
         dispatch[&hirsel_syntax::DefPath::core("forget")],

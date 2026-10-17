@@ -155,7 +155,133 @@ fn execute_frames(
     execution: &mut Execution,
 ) -> Result<(), Error> {
     let mut tooling = None;
+    let mut task = 0;
+    let mut runnable = std::collections::VecDeque::new();
+    let mut parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)> = Vec::new();
+    operations.enter_task(task);
     loop {
+        for start in operations.take_tasks() {
+            let (definition, body, captures, sizes) = match &start.callee {
+                Value::Closure {
+                    definition,
+                    body,
+                    captures,
+                    sizes,
+                    ..
+                } => (
+                    provider.definition(definition).map_err(Error::Query)?,
+                    *body,
+                    captures.clone(),
+                    sizes.clone(),
+                ),
+                Value::FunctionReference(reference) => {
+                    let definition = provider
+                        .definition(&reference.definition)
+                        .map_err(Error::Query)?;
+                    let body = definition.entry;
+                    (definition, body, vec![], Default::default())
+                }
+                _ => return Err(invalid("task body requires a callable")),
+            };
+            let mut child = Frame::new_body(definition, body, vec![], captures, sizes)?;
+            if let Some(parent) = frames.last().and_then(|f| f.check.as_ref()) {
+                let callee =
+                    frames
+                        .last()
+                        .and_then(|f| f.operation.as_ref())
+                        .and_then(|(_, state)| {
+                            let bounds = state.bounds.as_ref()?;
+                            let Value::Closure {
+                                captures,
+                                owned_captures,
+                                ..
+                            } = &start.callee
+                            else {
+                                return None;
+                            };
+                            let shadow = crate::checked::native_shadow(
+                                &start.callee,
+                                &state.arguments,
+                                bounds,
+                            );
+                            Some(crate::checked::Callee {
+                                captures: captures
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, value)| {
+                                        value
+                                            .as_ref()
+                                            .map(|v| shadow.part(i).for_value(v))
+                                            .unwrap_or_default()
+                                    })
+                                    .collect(),
+                                owned: owned_captures.clone(),
+                                lifetime: shadow.lifetime(),
+                            })
+                        });
+                child.check = Some(enter_checked(&parent.state, &child, vec![], callee));
+            }
+            child.loop_owned.push((start.callee, start.anchor));
+            runnable.push_back((start.id, vec![child], vec![]));
+        }
+        // Poll each runtime-owned wait once after a scheduling transition. There
+        // is no host waiting: exhausted readiness is the CONC-8 observation.
+        let mut waiting = vec![];
+        for (id, mut stack, failures) in parked.drain(..) {
+            operations.enter_task(id);
+            let frame: &mut Frame = stack.last_mut().unwrap();
+            let (OperationResult::Park { token, .. }, state) = frame.operation.as_ref().unwrap()
+            else {
+                return Err(invalid("parked task has no wait"));
+            };
+            let result = operations.poll(
+                *token,
+                &mut OperationContext {
+                    configuration,
+                    sources,
+                    stdout: &mut execution.stdout,
+                    trace: &mut execution.trace,
+                    trace_mode: runtime.trace_mode,
+                    anchor: Some(&state.anchor),
+                },
+            )?;
+            if let Some(result) = result {
+                frame.operation.as_mut().unwrap().0 = result;
+                runnable.push_back((id, stack, failures));
+            } else {
+                waiting.push((id, stack, failures));
+            }
+        }
+        parked = waiting;
+        operations.enter_task(task);
+        let yield_now = operations.take_yield();
+        if frames.is_empty()
+            || (yield_now && !runnable.is_empty() && !frames.iter().any(|f| f.finalized.is_some()))
+        {
+            if !frames.is_empty() {
+                runnable.push_back((
+                    task,
+                    std::mem::take(&mut frames),
+                    std::mem::take(&mut execution.failures),
+                ));
+            }
+            if let Some((id, stack, failures)) = runnable.pop_front() {
+                task = id;
+                frames = stack;
+                execution.failures = failures;
+                operations.enter_task(task);
+            } else {
+                let waits = parked
+                    .iter()
+                    .filter_map(|(_, stack, _)| match &stack.last()?.operation.as_ref()?.0 {
+                        OperationResult::Park { wait, .. } => Some(wait.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                return Err(Error::Blocked(waits));
+            }
+        }
+
         let depth = frames.len();
         if let Some((result, mut state)) = frames
             .last_mut()
@@ -167,6 +293,43 @@ fn execute_frames(
         {
             let frame = frames.last_mut().unwrap();
             match result {
+                OperationResult::Park { token, wait } => {
+                    frame.operation = Some((OperationResult::Park { token, wait }, state));
+                    parked.push((
+                        task,
+                        std::mem::take(&mut frames),
+                        std::mem::take(&mut execution.failures),
+                    ));
+                }
+                OperationResult::FailureChain {
+                    mut failures,
+                    released,
+                } => {
+                    let first = failures
+                        .first()
+                        .ok_or_else(|| invalid("empty failure chain"))?
+                        .failure
+                        .clone();
+                    let offset = execution.failures.len();
+                    if let Some(last) = execution.failures.last_mut() {
+                        last.cause = Some(offset);
+                    }
+                    for failure in &mut failures {
+                        if let Some(cause) = &mut failure.cause {
+                            *cause += offset;
+                        }
+                    }
+                    execution.failures.extend(failures);
+                    state.already_failed = true;
+                    frame.ending = Some(crate::resources::Ending::Failed);
+                    for value in released.into_iter().rev() {
+                        frame.work.push_back(crate::resources::Work::Release(
+                            value,
+                            state.anchor.clone(),
+                        ));
+                    }
+                    frame.operation = Some((OperationResult::Failed(first), state));
+                }
                 OperationResult::UndefinedBehavior(detected) => {
                     execution.outcome = Outcome::UndefinedBehavior(detected);
                     return Ok(());
@@ -569,6 +732,16 @@ fn execute_frames(
                         }
                     }
                     let failed = matches!(result, OperationResult::Failed(_));
+                    let handles = operations.handles_failure(callback.token);
+                    let result = if failed && handles {
+                        callback.state.already_failed = false;
+                        OperationResult::FailureChain {
+                            failures: execution.failures.split_off(callback.failure_start),
+                            released: vec![],
+                        }
+                    } else {
+                        result
+                    };
                     let resumed = operations.resume(
                         callback.token,
                         result,
@@ -581,7 +754,7 @@ fn execute_frames(
                             anchor: Some(&callback.state.anchor),
                         },
                     )?;
-                    let resumed = if failed {
+                    let resumed = if failed && !handles {
                         release_operation_result(frame, resumed, &mut callback.state)?;
                         OperationResult::Failed(
                             execution.failures[callback.failure_start].failure.clone(),
@@ -941,6 +1114,21 @@ fn execute_frames(
                     }
                 }
             } else {
+                if task != 0 && tooling.is_none() {
+                    let result = if execution.failures.is_empty() {
+                        let crate::resources::Ending::Return(value) = ending else {
+                            return Err(invalid("task failed without a failure"));
+                        };
+                        OperationResult::returned(value)
+                    } else {
+                        OperationResult::FailureChain {
+                            failures: std::mem::take(&mut execution.failures),
+                            released: vec![],
+                        }
+                    };
+                    operations.task_finished(task, result)?;
+                    continue;
+                }
                 execution.outcome = if let Some(limit) = tooling {
                     Outcome::ToolingLimit(limit)
                 } else if let Some(f) = execution.failures.first() {
@@ -2591,7 +2779,10 @@ fn release_operation_result(
                     .push_back(crate::resources::Work::Release(value, anchor.clone()));
             }
         }
-        OperationResult::Failed(_) | OperationResult::UndefinedBehavior(_) => (),
+        OperationResult::Failed(_)
+        | OperationResult::UndefinedBehavior(_)
+        | OperationResult::Park { .. }
+        | OperationResult::FailureChain { .. } => (),
     }
     Ok(())
 }

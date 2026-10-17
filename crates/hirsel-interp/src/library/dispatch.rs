@@ -15,6 +15,7 @@ use hirsel_types::{BuiltinType, GenericArgument, Primitive, TypeKind};
 
 pub struct Library {
     pub simulation: Simulation,
+    pub(super) tasks: super::tasks::Tasks,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
 }
@@ -22,6 +23,7 @@ impl Library {
     pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
         Ok(Self {
             simulation: Simulation::new(run, config)?,
+            tasks: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
         })
@@ -32,6 +34,7 @@ impl Library {
         call: &OperationCall<'_>,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
+        self.tasks.yield_now = true;
         let a = call.arguments;
         let op = name.split_once('.').unwrap().1;
         let value = match name {
@@ -662,13 +665,40 @@ impl Library {
     }
 }
 impl Operations for Library {
+    fn take_tasks(&mut self) -> Vec<crate::TaskStart> {
+        self.tasks.take_starts()
+    }
+    fn enter_task(&mut self, id: u64) {
+        self.tasks.current = id;
+    }
+    fn task_finished(&mut self, id: u64, result: OperationResult) -> Result<(), Error> {
+        self.tasks.finished(id, result)
+    }
+    fn take_yield(&mut self) -> bool {
+        std::mem::take(&mut self.tasks.yield_now)
+    }
+    fn handles_failure(&self, token: u64) -> bool {
+        self.tasks.pending.contains_key(&token)
+    }
+    fn poll(
+        &mut self,
+        token: u64,
+        context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        self.poll_task(token, context)
+    }
+
     fn resume(
         &mut self,
         token: u64,
         result: OperationResult,
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        self.resume_callback(token, result, context)
+        if let Some(pending) = self.tasks.pending.remove(&token) {
+            self.resume_task(pending, result, context)
+        } else {
+            self.resume_callback(token, result, context)
+        }
     }
     fn drop_handle(
         &mut self,
@@ -797,7 +827,8 @@ primary_operations! { self, call, context, name, a, value;
             }
             return self.capability(name, &call, context);
             },
-    Unavailable: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" | "mutex.create" | "mutex.with" | "channel.open" | "channel.send" | "channel.receive" | "atomic.create" | "atomic.load" | "atomic.store" | "sender.dup" | "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Capability: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
+    Unavailable: "mutex.create" | "mutex.with" | "channel.open" | "channel.send" | "channel.receive" | "atomic.create" | "atomic.load" | "atomic.store" | "sender.dup" | "shared.freeze" | "shared.thaw" | "arena.bounded" | "arena.seal" | "region.with" | "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" | "copy_to" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" => {
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
         let result = self.simulation.net_call(name, &call, context).map(Some);

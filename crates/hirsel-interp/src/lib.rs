@@ -180,7 +180,33 @@ pub(crate) fn invalid(message: impl Into<String>) -> Error {
 /// Return None for an ordinary TIR definition. Arguments are in parameter order,
 /// already extracted with their explicit use modes. Returning Failed unwinds the
 /// call's cleanup; it must carry the defining operation's rule and source site.
+pub struct TaskStart {
+    pub id: u64,
+    pub callee: Value,
+    pub anchor: observation::Anchor,
+}
 pub trait Operations {
+    fn take_tasks(&mut self) -> Vec<TaskStart> {
+        vec![]
+    }
+    fn enter_task(&mut self, _id: u64) {}
+    fn task_finished(&mut self, _id: u64, _result: OperationResult) -> Result<(), Error> {
+        Err(invalid("unexpected task completion"))
+    }
+    fn take_yield(&mut self) -> bool {
+        false
+    }
+    fn handles_failure(&self, _token: u64) -> bool {
+        false
+    }
+    fn poll(
+        &mut self,
+        _token: u64,
+        _context: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        Err(invalid("unexpected parked operation"))
+    }
+
     fn drop_handle(
         &mut self,
         _kind: &str,
@@ -231,6 +257,16 @@ pub struct CallbackWriteback {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperationResult {
+    /// Runtime-owned wait. The evaluator retains the operation and all its loans.
+    Park {
+        token: u64,
+        wait: BlockedWait,
+    },
+    /// An already-unwound task or isolation boundary preserves every cause/site.
+    FailureChain {
+        failures: Vec<observation::FailureRecord>,
+        released: Vec<Value>,
+    },
     Call {
         callee: Value,
         arguments: Vec<Value>,

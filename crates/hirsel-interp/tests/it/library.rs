@@ -605,7 +605,7 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
 fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
     let mut h = Harness::new(Default::default());
     let t = h.types.push(ty(TypeKind::Tuple(vec![].into())));
-    let path = hirsel_syntax::DefPath::core("task.scope");
+    let path = hirsel_syntax::DefPath::core("shared.freeze");
     let mut context = OperationContext {
         trace_mode: Default::default(),
         anchor: None,

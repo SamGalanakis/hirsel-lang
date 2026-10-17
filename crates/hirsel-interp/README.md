@@ -79,7 +79,7 @@ The core dispatches no named numeric/string operations. In particular integer
 conversion signatures, float-to-integer behavior, explicit fused math, IEEE bits,
 float min/max/total order, scalar views are dependency
 owned by M against docs/spec/core-library.md (which settles #18). There is no conversion opcode in frozen `Rvalue`.
-Region/task cleanup is unavailable until its owning runtime task. Unavailable features are
+Region cleanup is unavailable until its owning runtime task. Unavailable features are
 reported explicitly, never silently approximated.
 
 ## Explicit limit and exit policies
@@ -223,7 +223,8 @@ an opaque u64 token owned by the operation module; it carries no source identity
 Resume may return another Call, a final Complete result or Failed. Every
 callback is a frame on the same scheduler stack: normal step/depth guards and emitted
 failure cleanup apply. Callback failure is delivered to resume for disposal, then
-propagates regardless of a returned success (FAIL-2 has no M1a catch boundary).
+propagates regardless of a returned success, unless its runtime continuation explicitly
+implements a FAIL-2 isolation or structured join boundary.
 Artificial limits propagate directly without being converted into callback failures.
 The default resume rejects unimplemented continuations as InvalidTir. Tests perform
 1000 resumes with maximum depth 2, check mut callback results, failure shielding,
@@ -438,3 +439,38 @@ CONC-8 quiescence has `Outcome::Blocked`, separate from Failure and tooling limi
 The scheduler accepts the internal Blocked stop signal without executing pending
 cleanup or checked resource-exit audits. Its observation retains stdout, confirmed
 effects and stable wait rows (spawn path, source anchor, kind, logical targets).
+
+## Structured concurrency implementation
+
+The reference runtime uses cooperative fibers: each task owns a frame stack and
+failure chain. A FIFO runnable queue advances only at Io calls, CAP-4 operations
+and explicit cancellation checks. Pure code and shielded destruction do not yield.
+Spawn transfers the once closure into a new task; its captured value tree has no
+shared counted storage in this value-based interpreter. Scope continuations join
+all children, including detached children, before releasing the scope body.
+Cancellation is persistent task state and is observed before a blocking effect,
+never by pure code, joins or mutex acquisition. Synchronizing operations record
+ordered capability events through the existing strict replay input.
+
+Channels own FIFO payload values, endpoint counts and suspended receives. A send
+transfers its argument only on success; a closed or canceled send returns it.
+Closing the final receiver schedules buffered payload destruction through evaluator
+work items. Mutex callbacks run on the acquiring stack, without a scheduling point
+inside the body. Mutable callback results replace the payload on success; failure
+kills the mutex and releases its payload through the same worklist. Atomics store
+scalar values and use the same total operation order.
+
+An isolate continuation alone may catch the callback's language failure after all
+cleanup; ordinary callbacks preserve failure propagation. Child completion retains
+its failure chain and spawn path. Scope joins select failures in spawn order and
+cancel siblings. Tooling termination and global quiescence bypass isolation.
+
+The native implementation will require separate task contexts, each owning its
+allocator, plain counts and failure state. Cooperative stackful fibers avoid
+concurrent access to those contexts. Runtime ABI entries must transfer unique
+allocation graphs (including slab ownership) between contexts at spawn, send,
+receive and join; copying a plain counted pointer across contexts is invalid.
+Mutex payloads need a separately owned context entered only for their synchronous
+callback. Native cleanup must finish before publishing task completion, and an
+isolate must save/restore the acquiring context's failure chain. Until those ABI
+and lowering changes exist, native concurrency remains explicitly unavailable.
