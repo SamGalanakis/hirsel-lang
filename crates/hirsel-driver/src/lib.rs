@@ -46,7 +46,7 @@ pub fn format_path(path: &Path) -> Result<String, ToolError> {
     COMPILER.format_path(path)
 }
 pub fn run_path(path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, ToolError> {
-    run_path_with_config(path, None, stdout)
+    COMPILER.run_path(path, stdout)
 }
 pub fn run_path_with_simulation(
     path: &Path,
@@ -73,7 +73,7 @@ pub fn check_file(path: &Path) -> Result<CheckOutput, NotImplemented> {
     check_path(path).map_err(|_| NotImplemented)
 }
 pub fn run_file(path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented> {
-    COMPILER.run_path(path, stdout).map_err(|_| NotImplemented)
+    run_path(path, stdout).map_err(|_| NotImplemented)
 }
 
 pub(crate) fn launch_signature(
@@ -114,6 +114,9 @@ pub fn run_path_with_config(
     stdout: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
     use hirsel_interp::Outcome;
+    if record.is_none() {
+        return run_path(path, stdout);
+    }
     let mut program = load_program(path)?;
     program.check_for_execution()?;
     let signature = launch_signature(&mut program)?;

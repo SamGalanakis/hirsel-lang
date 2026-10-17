@@ -77,7 +77,8 @@ seam is independent of the production RunConfig admission contract.
 Production source runs use `hirsel run <source|manifest> --run /absolute/run.json`,
 with optional `--native`. The shared RunConfig parser binds the semantic program and
 entry, validates every grant and snapshot, and completes host admission before entry.
-Without a record, roots are denied. `--simulation` remains an explicit fake-provider seam
+Without a record, the existing simulated world supplies captured stdout, empty virtual
+directories and no network; it grants no real host authority. `--simulation` remains an explicit fake-provider seam
 and cannot combine with `--run` or `--native`.
 
 `hirsel export --run <source|manifest> -o run.json` writes the current semantic binding

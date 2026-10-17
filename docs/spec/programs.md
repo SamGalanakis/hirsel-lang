@@ -73,7 +73,10 @@ sidecar when present, else `standalone@0`; no parent manifest is searched for. A
 must assign the source to its root package. Formatting operates on one source file and
 needs no dependency bodies. Capability implementations and simulation inputs are separate,
 explicit launch inputs ([run configuration](determinism.md#run-configuration)); selecting a
-package grants no authority.
+package grants no authority. An explicit `--run /absolute/run.json` selects freshly admitted
+host Io in either engine. Without `--run`, source-run tooling keeps its simulated world:
+captured stdout, empty virtual directories and no network. This simulation grants no real
+host authority.
 
 The standard library is the source package `stdlib/std@1/hirsel.json`
 ([standard library](std-library.md)). It is selected by the same manifest mechanism as any

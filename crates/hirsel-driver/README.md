@@ -56,11 +56,11 @@ Valgrind redirects do not depend on the worker image's stripped loader.
 
 Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.
 
-`run_path_with_config` is the production interpreter launch: it validates the record,
+`run_path_with_config` with an explicit record is the production interpreter launch: it validates the record,
 checks the semantic revision and required roots with `admit_run`, then executes TIR with
 `network::HostLibrary`. This adapter translates explicit filesystem, clock and network
 calls to the runtime's typed Request/Completion protocol, which owns grant enforcement;
 the interpreter has no host effects. Pure calls and recorded Args/Env snapshots use the
-ordinary Library. `run_path_with_simulation` and `run_file` are the explicit fake-provider
+ordinary Library. `run_path`, `run_path_with_simulation` and `run_file` are the fake-provider
 entry points for semantic fixtures. Production native runs pass the same validated record
-to linking and launch; user programs have streaming stdout and no harness wall-time limit.
+to linking and launch; explicit host runs have streaming stdout and no harness wall-time limit.

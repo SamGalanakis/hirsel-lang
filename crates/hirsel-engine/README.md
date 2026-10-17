@@ -48,7 +48,7 @@ old frozen revisions across later source edits. Raw `NativeInput` has no new
 claimed revision field; import derives the graph from the checked source again.
 
 The engine's build script snapshots a conservative common runtime/core bundle:
-interpreter, runtime (including its headers), kernels, native library bodies,
+interpreter, runtime (including its headers), the driver's host adapter, kernels, native library bodies,
 core ledger/constant/protocol definitions, the included native operation-review
 table and exact libc/Unicode dependency
 versions/checksums. It uses the same shared graph encoder and only repository-

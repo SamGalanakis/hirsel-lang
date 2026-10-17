@@ -1149,6 +1149,7 @@ hirsel_build_script(
     srcs = ["crates/hirsel-engine/build.rs"],
     deps = ["//:hirsel-run-config"],
     inputs = glob([
+        "crates/hirsel-driver/src/network.rs",
         "crates/hirsel-interp/src/**",
         "crates/hirsel-interp/Cargo.toml",
         "crates/hirsel-rt/src/**",

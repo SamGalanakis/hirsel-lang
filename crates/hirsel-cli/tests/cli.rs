@@ -155,10 +155,7 @@ fn real_pipeline_accepts_clean_source_and_checks_launch_shape() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("expected a public, complete, monomorphic")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("entry must be pub fn"));
     std::fs::remove_file(path).unwrap();
     // A program without its entry checks, and running it names the entry.
     let path = file("fn probe() -> u64 {\n  1\n}\n");
@@ -403,24 +400,7 @@ fn native_run_matches_the_reference_run() {
         if native {
             command.arg("--native");
         }
-        // Rejected source still reaches the same first source diagnostics.
-        let export = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(["check"])
-            .arg(path)
-            .output()
-            .unwrap();
-        if export.status.success() {
-            let record = run_record(
-                path,
-                serde_json::json!({"io":{"stdout":"stdout.bytes@1","net":{"provider":"net.stream@1","rules":[]},"dirs":[]},"args":[]}),
-            );
-            command.arg(path).arg("--run").arg(&record);
-            let output = command.output().unwrap();
-            std::fs::remove_file(record).unwrap();
-            output
-        } else {
-            command.arg(path).output().unwrap()
-        }
+        command.arg(path).output().unwrap()
     };
     let prints = file(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let _ = out.print(io.stdout(rt)?, \"hi\\n\")\n  Ok(())\n}\n",

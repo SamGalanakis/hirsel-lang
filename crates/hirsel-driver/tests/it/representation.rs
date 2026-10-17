@@ -203,8 +203,7 @@ fn opaque_package_controls_preserve_private_operations_and_diagnostic_sites() {
             if slug.ends_with("run") {
                 let mut output = vec![];
                 assert!(matches!(
-                    run_path_with_simulation(&path, SimulationConfig::default(), &mut output)
-                        .unwrap(),
+                    run_path(&path, &mut output).unwrap(),
                     RunOutcome::Exit(0)
                 ));
                 assert_eq!(

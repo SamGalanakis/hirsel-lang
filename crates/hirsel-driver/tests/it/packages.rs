@@ -33,8 +33,7 @@ fn explicit_launch_selects_source_std_without_registry_status() {
                 .name_is("std"))
         );
         assert!(matches!(
-            run_path_with_simulation(&manifest, SimulationConfig::default(), &mut Vec::new())
-                .unwrap(),
+            run_path(&manifest, &mut Vec::new()).unwrap(),
             RunOutcome::Exit(0)
         ));
     });
@@ -89,12 +88,7 @@ fn packaged_replay_moves_without_original_manifest_paths() {
         assert!(bundle_program(&source, &text, &dir).unwrap());
         std::fs::rename(&dir, &moved).unwrap();
         assert!(matches!(
-            run_path_with_simulation(
-                &moved.join("source.hir"),
-                SimulationConfig::default(),
-                &mut Vec::new()
-            )
-            .unwrap(),
+            run_path(&moved.join("source.hir"), &mut Vec::new()).unwrap(),
             RunOutcome::Exit(0)
         ));
         std::fs::remove_dir_all(moved).unwrap();

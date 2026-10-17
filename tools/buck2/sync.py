@@ -57,6 +57,7 @@ LITERAL = re.compile(r'"([^"\\\n]+)"')
 # repository paths: it hashes these into the frozen runtime revision.
 BUILD_SCRIPT_INPUTS = {
     "hirsel-engine": [
+        "crates/hirsel-driver/src/network.rs",
         "crates/hirsel-interp/src/**",
         "crates/hirsel-interp/Cargo.toml",
         "crates/hirsel-rt/src/**",
