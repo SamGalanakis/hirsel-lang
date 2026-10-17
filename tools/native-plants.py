@@ -17,6 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BUCK = ROOT / '.buck2/bin/buck2'
 COW = 'conformance/OWN/OWN-3-element-sibling-field-block-argument-run.hir'
 ADD = 'conformance/SEM/SEM-1-signed-add-fail.hir'
+# The production system archive has no leak audit. Overcounting must suppress
+# observable resource finalizers, rather than merely leaking a copyable list.
+COUNT = 'conformance/DROP/DROP-2-map-replaced-value.hir'
 sys.path.insert(0, str(ROOT / 'tools/buck2'))
 from gating import PASS, test_results  # noqa: E402
 from sync import NATIVE_FULL_SHARDS  # noqa: E402
@@ -24,7 +27,7 @@ PLANTS = [
     ('aarch64-add', ADD, 'crates/hirsel-llvm/src/emit.rs',
      'scalar::binary(&self.builder, op, kind, l, r, &mut guard)',
      'scalar::binary(&self.builder, if self.inputs.target.triple.starts_with("aarch64") && op == BinaryOp::Add { BinaryOp::Sub } else { op }, kind, l, r, &mut guard)'),
-    ('system-allocator-count', COW, 'crates/hirsel-rt/src/alloc.rs',
+    ('system-allocator-count', COUNT, 'crates/hirsel-rt/src/alloc.rs',
      '    pub(crate) unsafe fn allocate(&mut self, index: u32, extent: u64, align: u64) -> *mut Header {\n        // SAFETY: the index is checked; fresh storage is owned here.\n        unsafe {\n            if let Some(capacity) = self.bare_capacity(index, extent, align) {\n                let block = self.allocate_bare(index, capacity);\n                self.set_state(block, STATE_LIVE);\n                return block;\n            }\n            let block = self.allocate_large(extent, align);\n            (*block).count = 1;\n            (*block).descriptor = index | KIND_LARGE << KIND_SHIFT;\n            self.set_state(block, STATE_LIVE);\n            block\n        }\n    }',
      '    pub(crate) unsafe fn allocate(&mut self, index: u32, extent: u64, align: u64) -> *mut Header {\n        // SAFETY: the index is checked; fresh storage is owned here.\n        unsafe {\n            if let Some(capacity) = self.bare_capacity(index, extent, align) {\n                let block = self.allocate_bare(index, capacity);\n                (*block).count = 2;\n                self.set_state(block, STATE_LIVE);\n                return block;\n            }\n            let block = self.allocate_large(extent, align);\n            (*block).count = 2;\n            (*block).descriptor = index | KIND_LARGE << KIND_SHIFT;\n            self.set_state(block, STATE_LIVE);\n            block\n        }\n    }'),
     ('regions-off-release', COW, 'crates/hirsel-driver/src/native/stages.rs',
