@@ -11,6 +11,7 @@ the license named in its row; the license texts follow once each.
 | Zig standard library | `lib/std/http/Client.zig`, `HeaderIterator.zig`, `ChunkParser.zig`, `http.zig`, `ascii.zig` | `stdlib/std@1/http_wire.hir`, `stdlib/std@1/http.hir`, `crates/hirsel-driver/tests/it-stdlib/stdlib_http_wire.rs`, `crates/hirsel-driver/tests/it/stdlib_http.rs` | same | MIT |
 | Zig standard library | `lib/std/unicode.zig` utf8Decode2/3/4 | `stdlib/std@1/graphemes.hir` | same | MIT |
 | Zig standard library | `lib/std/fs/path.zig`, `lib/std/time/epoch.zig` | std@1 path and calendar sources and tests | same | MIT |
+| Zig standard library | `lib/std/mem.zig` eqlBytes bounded overlapping loads and eql unequal-byte vectors | `crates/hirsel-llvm/src/compare.rs`, `conformance/SEM/SEM-5-short-byte-equality-run.hir` | same | MIT |
 | Zig standard library | `lib/std/heap/ArenaAllocator.zig` alloc | `crates/hirsel-rt/src/region.rs` | same | MIT |
 | Zig standard library | `lib/std/Io/Threaded.zig` netLookup, `lib/std/Io/net.zig` ListenOptions | `crates/hirsel-rt/src/net_host.rs` | same | MIT |
 | Zig standard library | `lib/std/json/dynamic.zig` | std@1 JSON ordered-object duplicates | same | MIT |

@@ -43,10 +43,17 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
                     body.contains("@memcmp(") || body.contains("@bcmp("),
                     "{name} must use a bulk byte comparison\n{body}"
                 );
-                assert!(
-                    !body.contains("load i8,"),
-                    "{name} must not walk one byte per loop iteration\n{body}"
-                );
+                if name == "5equal" {
+                    assert!(
+                        body.contains("load i16,") && body.contains("load i32,"),
+                        "short equality must compare bounded overlapping words\n{body}"
+                    );
+                } else {
+                    assert!(
+                        !body.contains("load i8,"),
+                        "ordering must use the target bulk comparison\n{body}"
+                    );
+                }
             }
         });
     }

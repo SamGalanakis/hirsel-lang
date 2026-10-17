@@ -232,10 +232,12 @@ interpreter's order and fails MEM-3 past `COMPARE_MAX_DEPTH`. Path equality and 
 use its inert intern ID; ordered comparisons resolve UTF-8 text with
 `hirsel_rt_v2_path_compare(ctx, left, right)`. Comparator helpers carry the context
 through nested layouts, including Set canonical ordering. Capability handles remain
-incomparable. String/Bytes comparisons use the target libc `memcmp` over the
-shorter byte interval, then lengths; equality rejects unequal lengths first. Empty
-intervals make no library call, and the value retains its normal depth check.
-LLVM may select `bcmp` when only equality is observed. `IsUnique` loads the task-local u32 header count and compares it
+incomparable. String/Bytes ordering compares the shorter byte interval with the
+target libc `memcmp`, then lengths. Equality rejects unequal lengths first and
+compares up to 16 bytes with bounded, overlapping unaligned words (adapted from Zig
+`std.mem.eqlBytes`); longer intervals use `memcmp`, which LLVM may select as `bcmp`.
+Empty intervals make no load or library call. The value retains its normal depth
+check. `IsUnique` loads the task-local u32 header count and compares it
 with `COUNT_UNIQUE`, without a runtime call or diagnostic-flag branch. `Weaken`
 is a move, and `UniqueCopy` calls
 `hirsel_rt_v2_unique_copy` when deep and `hirsel_rt_v2_detach` when shallow; a deep copy of

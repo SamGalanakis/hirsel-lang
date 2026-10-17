@@ -583,13 +583,58 @@ impl<'m> Generator<'m, '_> {
     }
 
     /// Compare the readable byte intervals through the target's unsigned-byte order.
-    /// Empty slices do not call libc; no address outside either interval is read.
+    /// Empty slices do not call libc; short equality uses bounded overlapping
+    /// words, adapted from Zig std.mem.eqlBytes. No load leaves either interval.
     fn bytes(&self, left: Value<'m>, right: Value<'m>, count: Value<'m>) -> Compared<()> {
         let work = self.block();
         let done = self.block();
         let nonempty = self.builder.icmp(IntPredicate::Ne, count, self.u64(0));
         self.builder.cond_br(nonempty, work, done);
         self.builder.position(work);
+        if self.equality {
+            let short = self.block();
+            let bulk = self.block();
+            let small = self.builder.icmp(IntPredicate::Ule, count, self.u64(16));
+            self.builder.cond_br(small, short, bulk);
+            self.builder.position(short);
+            // Two overlapping words cover [0, count) when width <= count <= 2*width.
+            // Read alignment 1: a slice may start at any byte of its owner.
+            for width in [8, 4, 2] {
+                let compare = self.block();
+                let smaller = self.block();
+                let enough = self.builder.icmp(IntPredicate::Uge, count, self.u64(width));
+                self.builder.cond_br(enough, compare, smaller);
+                self.builder.position(compare);
+                let word = self.module.int_type(width as u32 * 8);
+                let last = self
+                    .builder
+                    .binary(crate::context::BinOp::Sub, count, self.u64(width));
+                let first_equal = self.builder.icmp(
+                    IntPredicate::Eq,
+                    self.builder.load(word, left, 1),
+                    self.builder.load(word, right, 1),
+                );
+                let last_equal = self.builder.icmp(
+                    IntPredicate::Eq,
+                    self.builder.load(word, self.builder.offset(left, last), 1),
+                    self.builder.load(word, self.builder.offset(right, last), 1),
+                );
+                let equal =
+                    self.builder
+                        .binary(crate::context::BinOp::And, first_equal, last_equal);
+                self.decide(self.builder.select(
+                    equal,
+                    self.code(ORDER_EQUAL),
+                    self.code(ORDER_GREATER),
+                ));
+                self.builder.br(done);
+                self.builder.position(smaller);
+            }
+            // The only remaining nonempty interval has one byte.
+            self.decide(self.scalar(ScalarKind::U8, left, right)?);
+            self.builder.br(done);
+            self.builder.position(bulk);
+        }
         let ptr = self.module.ptr_type();
         let int = self.module.int_type(32);
         let function = self

@@ -1,0 +1,24 @@
+// rule: SEM-5
+// expect: run
+// Adapted from Zig std.mem.eql; every byte can decide short, unaligned equality.
+pub fn main() -> Result[(), ()] {
+  let data: Bytes = b"x0123456789abcdefy"
+  for length in 1u64..17u64 {
+    let left = bytes.slice(data, 1u64, length + 1u64)
+    for changed in 0u64..length {
+      let mut copied_bytes: List[u8] = []
+      for i in 0u64..length {
+        let byte: u8 = if i == changed {
+          left[i] ^ 1u8
+        } else {
+          left[i]
+        }
+        list.push(mut copied_bytes, byte)
+      }
+      let right = bytes.from_list(take copied_bytes)
+      failure.check(left != right && !(left == right), TextInvariant())
+      failure.check(right != left && !(right == left), TextInvariant())
+    }
+  }
+  Ok(())
+}

@@ -3628,6 +3628,7 @@ conformance/SEM/SEM-5-replace-keeps-order.hir
 conformance/SEM/SEM-5-same-entries.hir
 conformance/SEM/SEM-5-set-contains-hit-miss-run.hir
 conformance/SEM/SEM-5-set-equality.hir
+conformance/SEM/SEM-5-short-byte-equality-run.hir
 conformance/SEM/SEM-5-sorted-brand-signature.hir
 conformance/SEM/SEM-5-sorted-map-projected-and-consuming-run.hir
 conformance/SEM/SEM-5-sorted-map-resource-modes-run.hir
