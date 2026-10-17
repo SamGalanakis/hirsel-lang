@@ -122,10 +122,14 @@ def replay(args, selected, output, config):
     for program in sorted({plant[1] for plant in plants}):
         if program not in selected:
             raise RuntimeError(f'healthy cover omitted planted-bug control: {program}')
-        found, count, seconds = matrix(config, program, output / ('healthy-' + Path(program).stem), True)
-        if found:
+        control = output / ('healthy-' + Path(program).stem)
+        full, before, before_seconds = matrix(config, program, control / 'exhaustive', True)
+        slim, after, after_seconds = matrix(config, program, control / 'slim', False)
+        if full or slim:
             raise RuntimeError(f'healthy control already disagrees: {program}')
-        reports.append(dict(control=program, healthy=True, configurations=count, seconds=seconds))
+        reports.append(dict(control=program, healthy=True, exhaustive=before, slim=after,
+                            exhaustive_seconds=before_seconds, slim_seconds=after_seconds,
+                            pool_cpus=1))
     for name, program, path, original, replacement in plants:
         source = ROOT / path
         saved = source.read_bytes()
