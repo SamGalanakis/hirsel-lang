@@ -149,8 +149,7 @@ impl Header {
                     fault("a bare block's capacity is its descriptor's");
                     #[cfg(not(feature = "system-allocator"))]
                     {
-                        CLASS_SIZES[(*slab_of(self as *const Self as *mut Self)).pool as usize
-                            % CLASS_COUNT] as u64
+                        class_capacity((*slab_of(self as *const Self as *mut Self)).pool as usize)
                     }
                 }
                 KIND_LARGE => (*self.large_prefix()).capacity,
@@ -244,10 +243,16 @@ impl Header {
 #[inline]
 pub(crate) fn request_capacity(extent: u64, align: u64) -> u64 {
     if extent <= SMALL_MAX && align <= SMALL_ALIGN_MAX {
-        CLASS_SIZES[class_of(extent)] as u64
+        class_capacity(class_of(extent))
     } else {
         extent.next_multiple_of(16)
     }
+}
+
+/// Usable bytes of a small pool, shared by allocation, request-derived capacity and metadata.
+#[inline]
+fn class_capacity(pool: usize) -> u64 {
+    CLASS_SIZES[pool % CLASS_COUNT] as u64
 }
 
 /// `value` rounded up to `align`, a power of two: a mask, never a division.
@@ -295,7 +300,35 @@ pub(crate) unsafe fn sequence_slots(
         return u64::MAX;
     }
     // SAFETY: caller contract.
-    unsafe { heap.capacity(block) }.saturating_sub(elements) / element_size
+    slots_in_bytes(
+        unsafe { heap.capacity(block) }.saturating_sub(elements),
+        element_size,
+    )
+}
+
+/// Convert bytes available for elements into exact slots, including zero-sized elements.
+#[inline]
+fn slots_in_bytes(bytes: u64, element_size: u64) -> u64 {
+    // Byte sequences need no general division or zero-size branch on their common path.
+    if element_size == 1 {
+        return bytes;
+    }
+    if element_size == 0 {
+        u64::MAX
+    } else {
+        bytes / element_size
+    }
+}
+
+/// Exact slots of fresh storage: use the allocator's request-to-class mapping, never a
+/// second lookup through the returned block's metadata. Existing storage still needs
+/// [`sequence_slots`], since its class need not be the class of the current request.
+#[inline]
+fn requested_sequence_slots(extent: u64, align: u64, elements: u64, element_size: u64) -> u64 {
+    slots_in_bytes(
+        request_capacity(extent, align).saturating_sub(elements),
+        element_size,
+    )
 }
 
 /// Write `slots` as the capacity word of the sequence block `block`.
@@ -336,7 +369,7 @@ pub(crate) unsafe fn allocate_sequence(
     unsafe {
         let block = hirsel_rt_v2_alloc(ctx, index, extent, element_align.max(8), DOMAIN_HEAP, 0);
         payload(block).cast::<u64>().write(count);
-        let slots = sequence_slots(&(*ctx).heap, block, elements, element_size);
+        let slots = requested_sequence_slots(extent, element_align.max(8), elements, element_size);
         set_sequence_capacity(block, slots);
         block
     }
@@ -525,8 +558,7 @@ pub(crate) struct Heap {
 
 #[inline]
 fn block_size(pool: usize) -> usize {
-    (HEADER_SIZE + CLASS_SIZES[pool % CLASS_COUNT] as usize + SLAB_REDZONE)
-        .next_multiple_of(pool_align(pool))
+    (HEADER_SIZE + class_capacity(pool) as usize + SLAB_REDZONE).next_multiple_of(pool_align(pool))
 }
 fn pool_align(pool: usize) -> usize {
     if pool < CLASS_COUNT { 8 } else { 16 }
@@ -806,7 +838,7 @@ impl Heap {
             unsafe {
                 while !slab.is_null() {
                     blocks += (*slab).live as u64;
-                    bytes += (*slab).live as u64 * CLASS_SIZES[class % CLASS_COUNT] as u64;
+                    bytes += (*slab).live as u64 * class_capacity(class);
                     slab = (*slab).next;
                 }
             }
@@ -835,23 +867,29 @@ impl Heap {
         self.slab_count * SLAB_SIZE as u64 + self.large_bytes
     }
 
-    /// T01 Alloc — fresh unpublished storage with one holder. `extent` and `align` are validated.
+    /// T01 Alloc — fresh unpublished storage with one holder and its exact usable bytes.
+    /// `extent` and `align` are validated.
     /// A bare system request is one malloc; any other system request takes the large path.
     #[cfg(feature = "system-allocator")]
     #[inline(always)]
-    pub(crate) unsafe fn allocate(&mut self, index: u32, extent: u64, align: u64) -> *mut Header {
+    pub(crate) unsafe fn allocate(
+        &mut self,
+        index: u32,
+        extent: u64,
+        align: u64,
+    ) -> (*mut Header, u64) {
         // SAFETY: the index is checked; fresh storage is owned here.
         unsafe {
             if let Some(capacity) = self.bare_capacity(index, extent, align) {
                 let block = self.allocate_bare(index, capacity);
                 self.set_state(block, STATE_LIVE);
-                return block;
+                return (block, capacity);
             }
-            let block = self.allocate_large(extent, align);
+            let (block, capacity) = self.allocate_large(extent, align);
             (*block).count = 1;
             (*block).descriptor = index | KIND_LARGE << KIND_SHIFT;
             self.set_state(block, STATE_LIVE);
-            block
+            (block, capacity)
         }
     }
 
@@ -891,31 +929,37 @@ impl Heap {
         }
     }
 
-    /// T01 Alloc — fresh unpublished storage with one holder. `extent` and `align` are validated.
+    /// T01 Alloc — fresh unpublished storage with one holder and its exact usable bytes.
+    /// `extent` and `align` are validated.
     /// The common case pops the page-local allocation list; extension and collection are out of line.
     #[cfg(not(feature = "system-allocator"))]
     #[inline(always)]
-    pub(crate) unsafe fn allocate(&mut self, index: u32, extent: u64, align: u64) -> *mut Header {
+    pub(crate) unsafe fn allocate(
+        &mut self,
+        index: u32,
+        extent: u64,
+        align: u64,
+    ) -> (*mut Header, u64) {
         // SAFETY: class blocks lie in live slabs of this heap; fresh storage is owned here.
         unsafe {
             let small = extent <= SMALL_MAX && align <= SMALL_ALIGN_MAX;
-            let block = if small {
+            let (block, capacity) = if small {
                 let class = pool_of(extent, align);
-                match self.pop(class) {
+                let block = match self.pop(class) {
                     Some(block) => block,
                     None => {
                         let block = self.refill(class);
                         self.take(slab_of(block));
                         block
                     }
-                }
+                };
+                (block, class_capacity(class))
             } else {
                 self.allocate_large(extent, align)
             };
             #[cfg(feature = "memcheck")]
             if small {
-                let bytes =
-                    HEADER_SIZE + CLASS_SIZES[pool_of(extent, align) % CLASS_COUNT] as usize;
+                let bytes = HEADER_SIZE + capacity as usize;
                 memcheck::pool_alloc(slab_of(block).cast(), block.cast(), bytes);
                 // Diagnostic allocation checks the free poison the slab still holds.
                 if self.diagnostic {
@@ -931,7 +975,7 @@ impl Heap {
                     KIND_LARGE << KIND_SHIFT
                 };
             self.set_state(block, STATE_LIVE);
-            block
+            (block, capacity)
         }
     }
 
@@ -969,7 +1013,7 @@ impl Heap {
             }
             #[cfg(feature = "measurement")]
             self.measurement
-                .allocate(CLASS_SIZES[(*slab).pool as usize % CLASS_COUNT] as u64);
+                .allocate(class_capacity((*slab).pool as usize));
         }
     }
 
@@ -1082,7 +1126,7 @@ impl Heap {
 
     #[cold]
     #[inline(never)]
-    unsafe fn allocate_large(&mut self, extent: u64, align: u64) -> *mut Header {
+    unsafe fn allocate_large(&mut self, extent: u64, align: u64) -> (*mut Header, u64) {
         let align = align.max(8);
         let offset = large_header_offset(align);
         let capacity = request_capacity(extent, align);
@@ -1148,7 +1192,7 @@ impl Heap {
         }
         #[cfg(feature = "measurement")]
         self.measurement.allocate(capacity);
-        block
+        (block, capacity)
     }
 
     /// T16 Free. Diagnostic preparation is cold; the production small path calls nothing.
@@ -1362,7 +1406,7 @@ impl Heap {
                     let next = (*slab).next;
                     #[cfg(feature = "measurement")]
                     self.measurement
-                        .free_many(CLASS_SIZES[class % CLASS_COUNT] as u64, (*slab).live as u64);
+                        .free_many(class_capacity(class), (*slab).live as u64);
                     if let Some(record) = self
                         .slab_records
                         .as_ref()
@@ -1583,17 +1627,13 @@ unsafe fn alloc_checked(
         if ctx.heap.diagnostic && (*layout).size > extent {
             fault("an allocation extent is smaller than its layout size");
         }
-        let block = ctx.heap.allocate(index, extent, align);
+        let (block, capacity) = ctx.heap.allocate(index, extent, align);
         if let Some(owners) = &mut ctx.region_owners {
             owners.remove(&block.addr());
         }
         if ctx.heap.diagnostic {
             check_poison(block);
-            ptr::write_bytes(
-                payload(block),
-                UNINIT_POISON,
-                ctx.heap.capacity(block) as usize,
-            );
+            ptr::write_bytes(payload(block), UNINIT_POISON, capacity as usize);
         }
         block
     }
@@ -1684,7 +1724,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
         // token's bytes into a prefixed block of the same capacity.
         #[cfg(feature = "system-allocator")]
         if (*token).kind() == KIND_SMALL && ctx.heap.bare_capacity(index, extent, align).is_none() {
-            let block = ctx.heap.allocate(index, extent, align);
+            let (block, _) = ctx.heap.allocate(index, extent, align);
             ptr::copy_nonoverlapping(payload(token), payload(block), capacity as usize);
             ctx.heap.free(token);
             out_block.write(block);
@@ -1749,11 +1789,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
         };
         let count = payload(block).cast::<u64>().read();
         let used = elements + count * element_size;
-        let grown = grow(ctx, block, used, extent, element_align);
-        set_sequence_capacity(
-            grown,
-            sequence_slots(&(*ctx).heap, grown, elements, element_size),
-        );
+        let (grown, bytes) = grow(ctx, block, used, extent, element_align);
+        // The validated request includes the prefix, and the chosen class holds the request.
+        set_sequence_capacity(grown, slots_in_bytes(bytes - elements, element_size));
         grown
     }
 }
@@ -1781,7 +1819,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_block_grow(
         if (*ctx).heap.capacity(block) >= extent {
             return block;
         }
-        grow(ctx, block, keep, extent, align)
+        grow(ctx, block, keep, extent, align).0
     }
 }
 
@@ -1825,23 +1863,20 @@ unsafe fn detach_reserved(
         };
         let align = element_align.max(8);
         check_request(extent, align);
-        let detached = if count == 0 && (*block).domain() == DOMAIN_STATIC {
+        let (detached, bytes) = if count == 0 && (*block).domain() == DOMAIN_STATIC {
             // An empty list literal's static block has no element, holder or credit to
             // carry: its first reserve is one fresh allocation.
-            let fresh = (*ctx).heap.allocate((*block).index(), extent, align);
+            let (fresh, bytes) = (*ctx).heap.allocate((*block).index(), extent, align);
             if (*ctx).heap.diagnostic {
-                let capacity = (*ctx).heap.capacity(fresh);
-                ptr::write_bytes(payload(fresh), UNINIT_POISON, capacity as usize);
+                ptr::write_bytes(payload(fresh), UNINIT_POISON, bytes as usize);
             }
             payload(fresh).cast::<u64>().write(0);
-            fresh
+            (fresh, bytes)
         } else {
             crate::copy::detach_sized(ctx, block, used, extent, align)
         };
-        set_sequence_capacity(
-            detached,
-            sequence_slots(&(*ctx).heap, detached, elements, element_size),
-        );
+        // The validated request includes the prefix, and the chosen class holds the request.
+        set_sequence_capacity(detached, slots_in_bytes(bytes - elements, element_size));
         detached
     }
 }
@@ -1863,14 +1898,15 @@ unsafe fn unique_heap_block(ctx: *mut RunCtx, block: *mut Header, align: u64) {
     }
 }
 
-/// Move the first `keep` payload bytes of `old` into fresh storage holding `extent` bytes.
+/// Move the first `keep` payload bytes of `old` into fresh storage holding `extent` bytes,
+/// returning the block and its exact usable bytes from the allocation's chosen class.
 unsafe fn grow(
     ctx: *mut RunCtx,
     old: *mut Header,
     keep: u64,
     extent: u64,
     align: u64,
-) -> *mut Header {
+) -> (*mut Header, u64) {
     // SAFETY: `old` is a live unique heap block (`unique_heap_block`).
     unsafe {
         let heap = &mut (*ctx).heap;
@@ -1879,14 +1915,14 @@ unsafe fn grow(
         if keep > heap.capacity(old) || keep > extent {
             fault("a sequence count exceeds its storage");
         }
-        let new = heap.allocate((*old).index(), extent, align);
+        let (new, bytes) = heap.allocate((*old).index(), extent, align);
         if heap.diagnostic {
             check_poison(new);
-            ptr::write_bytes(payload(new), UNINIT_POISON, heap.capacity(new) as usize);
+            ptr::write_bytes(payload(new), UNINIT_POISON, bytes as usize);
         }
         ptr::copy_nonoverlapping(payload(old), payload(new), keep as usize);
         heap.free(old);
-        new
+        (new, bytes)
     }
 }
 
@@ -1905,6 +1941,45 @@ pub extern "C" fn hirsel_rt_v2_payload(block: *mut Header) -> *mut u8 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_capacity(block: *mut Header) -> u64 {
     unsafe { (*block).capacity() }
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::*;
+
+    /// Request-derived slots must equal a separate read through the allocated block's
+    /// metadata, at both ends of every size class and on the large/over-aligned paths.
+    /// Source programs cannot observe the capacity word or the allocator's metadata.
+    #[test]
+    fn request_derived_sequence_slots_match_metadata_for_every_class() {
+        for diagnostic in [false, true] {
+            let layout = &crate::text::hirsel_rt_v2_bytes_descriptor.0 as *const crate::Layout;
+            let mut heap = Heap::new(Box::new([layout]), diagnostic, 0);
+            let mut lower = 0;
+            for upper in CLASS_SIZES.map(u64::from).into_iter().chain([4097, 8193]) {
+                for extent in [lower, upper] {
+                    for element_align in [1, 8, 16, 32, 64] {
+                        let align = element_align.max(8);
+                        let elements = sequence_elements_offset(element_align);
+                        // Whole elements, trailing bytes, and zero-sized elements.
+                        for element_size in [0, element_align, element_align * 3] {
+                            unsafe {
+                                let (block, bytes) = heap.allocate(0, extent, align);
+                                assert_eq!(bytes, heap.capacity(block));
+                                assert_eq!(
+                                    requested_sequence_slots(extent, align, elements, element_size),
+                                    sequence_slots(&heap, block, elements, element_size),
+                                    "extent={extent} align={element_align} size={element_size} diagnostic={diagnostic}"
+                                );
+                                heap.free(block);
+                            }
+                        }
+                    }
+                }
+                lower = upper + 1;
+            }
+        }
+    }
 }
 
 #[cfg(all(test, not(feature = "system-allocator")))]
@@ -1945,20 +2020,20 @@ mod page_tests {
             let align = pool_align(pool) as u64;
             let extent = CLASS_SIZES[pool % CLASS_COUNT] as u64;
             unsafe {
-                let a = heap.allocate(0, extent, align);
+                let (a, _) = heap.allocate(0, extent, align);
                 let slab = slab_of(a);
                 let head = (*slab).free;
                 heap.free(a);
                 assert_eq!((*slab).free, head, "free changes only local_free");
                 check_page(slab);
-                let b = heap.allocate(0, extent, align);
+                let (b, _) = heap.allocate(0, extent, align);
                 assert_ne!(b, a);
                 assert_eq!((*slab).local_free, a, "allocation leaves local_free alone");
                 let mut live = vec![b];
                 // Fill more than one page and retain every allocation. Every
                 // refill/collection must preserve disjoint lists and page counts.
                 for i in 0..(*slab).slots + 3 {
-                    live.push(heap.allocate(0, extent, align));
+                    live.push(heap.allocate(0, extent, align).0);
                     if i.is_multiple_of(64) || i + 1 == (*slab).slots + 3 {
                         let mut page = heap.classes[pool].slabs;
                         while !page.is_null() {
@@ -1979,7 +2054,7 @@ mod page_tests {
                 assert!(heap.classes[pool].current.is_null());
                 assert!(heap.classes[pool].available.is_null());
                 assert!(heap.classes[pool].slabs.is_null());
-                let fresh = heap.allocate(0, extent, align);
+                let (fresh, _) = heap.allocate(0, extent, align);
                 check_page(slab_of(fresh));
                 heap.free(fresh);
                 heap.release_all();

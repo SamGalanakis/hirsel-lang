@@ -123,7 +123,11 @@ Invariants and boundary:
   elements copied, each counted element one more holder, the caller's credit of the original
   given back. Compiled code therefore does not detach a place whose only write is a reserve,
   so `[]` then `reserve(n)` makes one allocation. A dead block and an overflowing size are
-  invariant faults.
+  invariant faults. Fresh allocations derive exact slots from `class_capacity`, the same
+  mapping the allocator and `request_capacity` use. Reserves carry the allocator's chosen
+  byte capacity with the new block, avoiding both a metadata read and a second class
+  calculation; only an existing block needs the metadata lookup, since its original
+  request is unknown.
   `hirsel_rt_v2_block_grow(ctx, block, keep, extent, align)` is the same growth by bytes:
   a block that holds `extent` payload bytes is left alone, otherwise its first `keep` bytes
   move. A sequential Packed sequence (MEM-13, `SeqAppend`) grows through it.

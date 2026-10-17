@@ -255,7 +255,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
 /// A copy-on-write detach (OWN-4) of the sequence `block` into a fresh heap block of at least
 /// `extent` payload bytes at `align`, for a reserve (`hirsel_rt_v2_seq_grow`): its first `used`
 /// bytes (the count and the elements) are copied, each counted child gains a holder, and the
-/// caller's credit of `block`, which is not unique, is given back.
+/// caller's credit of `block`, which is not unique, is given back. Returns the fresh block
+/// and its exact usable bytes from the allocation's chosen class.
 ///
 /// # Safety
 /// `ctx` is live, `block` a live sequence block that is not unique, of which the caller holds
@@ -266,7 +267,7 @@ pub(crate) unsafe fn detach_sized(
     used: u64,
     extent: u64,
     align: u64,
-) -> *mut Header {
+) -> (*mut Header, u64) {
     // SAFETY: caller contract.
     unsafe {
         let raw = ctx;
@@ -286,12 +287,12 @@ pub(crate) unsafe fn detach_sized(
         if (*ctx.descriptor((*block).index())).finalizer.is_some() {
             fault("a detach reached a resource, which is noncopyable");
         }
-        let copy = ctx.heap.allocate((*block).index(), extent, align);
+        let (copy, capacity) = ctx.heap.allocate((*block).index(), extent, align);
         if ctx.heap.diagnostic {
             ptr::write_bytes(
                 payload(copy),
                 crate::alloc::UNINIT_POISON,
-                ctx.heap.capacity(copy) as usize,
+                capacity as usize,
             );
         }
         ptr::copy_nonoverlapping(payload(block), payload(copy), used as usize);
@@ -309,7 +310,7 @@ pub(crate) unsafe fn detach_sized(
         );
         // Not unique, so the credit never frees it.
         crate::release::release_block(ctx, block, ptr::null(), 0);
-        copy
+        (copy, capacity)
     }
 }
 
