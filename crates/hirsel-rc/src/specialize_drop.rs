@@ -30,8 +30,9 @@
 //! cloned per path with the child renamed. Only a cleanup of releases, drops
 //! and region exits with no parameters or results is cloned; any other leaves
 //! the run alone.
+use crate::PassError;
 use crate::insert::{Editor, Facts, Place, Root, Step};
-use crate::reuse::{ReuseError, type_of};
+use crate::reuse::type_of;
 use hirsel_lir::ir::{
     BlockId, EdgeId, FailureId, FieldMask, Holding, Inst, LirUnit, MaskId, MaskRef, PoolRange,
     ReadMode, Ref, Terminator, ValueId, ValueRepr,
@@ -40,7 +41,7 @@ use hirsel_lir::layout_types::{CopyRecipe, LayoutId, LayoutKind, LayoutTable, Sc
 use hirsel_lir::stage::Reuse;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub fn specialize(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reuse>, ReuseError> {
+pub fn specialize(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reuse>, PassError> {
     let Some(bool_layout) = table
         .layouts
         .iter()

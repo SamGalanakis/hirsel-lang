@@ -3,7 +3,8 @@
 //! fixed runtime entry `hirsel_rt_v2_net_read_into`, with the buffer's address and `k`.
 
 use super::builder::{Body, Cx};
-use super::{BINDER, LibraryBody, LibraryError};
+use super::{BINDER, LibraryBody};
+use crate::PassError;
 use crate::instance::{Actuals, InstanceError, instantiate_function};
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
@@ -11,7 +12,7 @@ use hirsel_lir::ir::*;
 use hirsel_lir::stage::Value;
 use hirsel_types::SignatureKind;
 
-type R<T> = Result<T, LibraryError>;
+type R<T> = Result<T, PassError>;
 
 pub static READ_INTO: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("net.read_into"),
@@ -26,7 +27,7 @@ fn read_into(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .operations
         .get(&path)
         .cloned()
-        .ok_or_else(|| LibraryError::Malformed(format!("{path:?} is not an operation")))?;
+        .ok_or_else(|| PassError::Malformed(format!("{path:?} is not an operation")))?;
     // The intrinsic's `FnAbi` under this body's own actuals, as a call site computes it.
     let signature = cx
         .program
@@ -35,9 +36,7 @@ fn read_into(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .ok_or_else(|| InstanceError::MissingSignature(path.clone()))?
         .clone();
     let SignatureKind::Function(function) = &signature.kind else {
-        return Err(LibraryError::Malformed(format!(
-            "{path:?} is not a function"
-        )));
+        return Err(PassError::Malformed(format!("{path:?} is not a function")));
     };
     let mut actuals = Actuals {
         binder: Some(BINDER),
@@ -55,10 +54,10 @@ fn read_into(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let abi = cx
         .layouts
         .fn_abi(&actuals.store, callable, CallableShape::Definition)
-        .map_err(|e| LibraryError::Layout(path.clone(), e))?;
+        .map_err(|e| PassError::Layout(path.clone(), e))?;
     let mut b = Body::new(cx)?;
     let &[n, s, buffer] = b.parameters.as_slice() else {
-        return Err(LibraryError::Malformed("net.read_into parameters".into()));
+        return Err(PassError::Malformed("net.read_into parameters".into()));
     };
     let capacity = b.u64(k)?;
     let (net, loan) = b.borrow(n.address, false)?;

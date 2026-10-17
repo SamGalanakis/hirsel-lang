@@ -27,6 +27,7 @@
 //! switch: the Rc unit, retagged, with no token at all.
 //!
 //! The stage validator replays tokens, masks and kept fields independently.
+use crate::PassError;
 use crate::insert::Lay;
 use crate::insert::{Editor, Facts, owns};
 use hirsel_lir::ir::{
@@ -37,12 +38,6 @@ use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use hirsel_lir::runtime_abi::{SizeClass, size_class};
 use hirsel_lir::stage::{Rc, Reuse, Stage};
 use std::collections::{BTreeMap, BTreeSet};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ReuseError {
-    /// LIR that contradicts the stage invariants it was validated against.
-    Malformed(String),
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Options {
@@ -63,7 +58,7 @@ pub fn reuse(
     unit: LirUnit<Rc>,
     table: &LayoutTable,
     options: &Options,
-) -> Result<LirUnit<Reuse>, ReuseError> {
+) -> Result<LirUnit<Reuse>, PassError> {
     let unit = unit.into_stage::<Reuse>();
     if !options.reuse {
         return Ok(unit);
@@ -485,7 +480,7 @@ fn construct_bucket<S: Stage>(ed: &Editor<S>, table: &LayoutTable, inst: &Inst) 
 
 type Live = Vec<(ValueId, Bucket)>;
 
-fn pair_tokens(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reuse>, ReuseError> {
+fn pair_tokens(unit: LirUnit<Reuse>, table: &LayoutTable) -> Result<LirUnit<Reuse>, PassError> {
     let Some(header) = table
         .layouts
         .iter()

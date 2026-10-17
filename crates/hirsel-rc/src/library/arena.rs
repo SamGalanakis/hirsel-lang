@@ -3,8 +3,9 @@
 //! The opening is `ArenaOpen` at the unit's entry; placement lowers it to a
 //! region entry and token, and closes that region on every return and
 //! propagation, before the result leaves the frame.
+use super::LibraryBody;
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError};
+use crate::PassError;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
@@ -16,22 +17,20 @@ pub static WITH: LibraryBody = LibraryBody {
     build: with,
 };
 
-fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let callback = match cx.store.get(cx.callable).map(|t| &t.kind) {
         Some(TypeKind::Function(f)) if f.parameters.len() == 1 => f.parameters[0].ty,
         _ => {
-            return Err(LibraryError::Malformed(
-                "arena.with takes one callback".into(),
-            ));
+            return Err(PassError::Malformed("arena.with takes one callback".into()));
         }
     };
     let abi = cx
         .layouts
         .fn_abi(&cx.store, callback, CallableShape::Closure)
-        .map_err(|e| LibraryError::Layout(cx.path.clone(), e))?;
+        .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let shape = cx.layouts.table().fn_abis[abi.0 as usize].clone();
     let [token_parameter] = shape.parameters.as_slice() else {
-        return Err(LibraryError::Malformed(
+        return Err(PassError::Malformed(
             "an arena.with callback takes one arena".into(),
         ));
     };

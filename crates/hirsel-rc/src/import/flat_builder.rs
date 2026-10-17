@@ -23,6 +23,7 @@
 //! other uses are storage events, drops, moves among temporaries of its type,
 //! and its final take, so no read sees an element earlier than the push.
 use super::*;
+use crate::PassError;
 use std::collections::HashSet;
 
 /// The builder webs of one body.
@@ -485,7 +486,7 @@ impl Importer<'_, '_> {
             let builder = self
                 .layouts
                 .flat_builder(element)
-                .map_err(|e| ImportError::Layout(self.def.path.clone(), e))?;
+                .map_err(|e| PassError::Layout(self.def.path.clone(), e))?;
             for (l, x) in web_of.iter().enumerate() {
                 if *x == Some(w) {
                     out.locals.insert(tir::LocalId(l as u32), builder);

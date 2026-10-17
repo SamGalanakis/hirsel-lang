@@ -1,6 +1,7 @@
 //! Ownership-moving List primitives. Every bounds check precedes mutation.
+use super::LibraryBody;
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError};
+use crate::PassError;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutKind;
 use hirsel_lir::runtime_abi::EXTENT_MAX;
@@ -23,13 +24,13 @@ pub static RESERVE: LibraryBody = LibraryBody {
     build: reserve,
 };
 
-fn length(b: &mut Body<'_, '_>, address: AddressId) -> Result<ValueId, LibraryError> {
+fn length(b: &mut Body<'_, '_>, address: AddressId) -> Result<ValueId, PassError> {
     let (view, loan) = b.borrow(address, false)?;
     let len = b.seq_len(view)?;
     b.end_loan(loan);
     Ok(len)
 }
-fn check(b: &mut Body<'_, '_>, index: ValueId, len: ValueId) -> Result<(), LibraryError> {
+fn check(b: &mut Body<'_, '_>, index: ValueId, len: ValueId) -> Result<(), PassError> {
     let condition = b.compare(BinaryOp::Lt, index, len)?;
     let failure = b.failure(Some("MEM-14"));
     b.push(Inst::Check { condition, failure });
@@ -49,7 +50,7 @@ fn exchange(
     list: AddressId,
     a: ValueId,
     c: ValueId,
-) -> Result<(), LibraryError> {
+) -> Result<(), PassError> {
     let left = b.slot_place(list, a)?;
     let right = b.slot_place(list, c)?;
     let x = b.take(left)?;
@@ -62,7 +63,7 @@ fn exchange(
 // storage lies beyond any host's address space (`EXTENT_MAX`) reserves nothing,
 // as the interpreter's does; one within it that the host cannot supply is
 // exhaustion, which is environmental.
-fn reserve(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn reserve(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let list = b.parameters[0];
     let capacity = b.read_bits(b.parameters[1].address)?;
@@ -99,7 +100,7 @@ fn reserve(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     ret_unit(&mut b);
     Ok(b.finish())
 }
-fn swap(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn swap(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let list = b.parameters[0];
     let a = b.read_bits(b.parameters[1].address)?;
@@ -151,7 +152,7 @@ fn option(b: &mut Body<'_, '_>, value: Option<ValueId>) -> ValueId {
     });
     result
 }
-fn pop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn pop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let list = b.parameters[0];
     let len = length(&mut b, list.address)?;
@@ -173,7 +174,7 @@ fn pop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     b.ret(Some(result));
     Ok(b.finish())
 }
-fn remove(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn remove(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let list = b.parameters[0];
     let index = b.read_bits(b.parameters[1].address)?;

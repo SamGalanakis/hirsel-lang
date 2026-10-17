@@ -26,6 +26,7 @@
 //! `LOOP_RELEASE`, `SCRATCH_DISPOSAL`), so no anchor names a TIR action it does
 //! not perform. Allocation-class failures (construction, copies, closures)
 //! carry no language rule: allocation exhaustion is environmental.
+use crate::PassError;
 use crate::instance::{Actuals, InstanceError, InstanceId, Instances, Program, substitute};
 use crate::normalize::{Declined, Facts, Home, LoopPlan, LoopSite, NormalizeError};
 use hirsel_core_contract::{OperationId, Passing};
@@ -42,7 +43,6 @@ use hirsel_lir::ir::{
     SourceAnchor, SourceAnchorId, SwitchArm, Symbol, SymbolId, SymbolKind, Terminator, UnaryOp,
     UnitHeader, UnitOrigin, ValueId, ValueInfo, ValueRepr,
 };
-use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::{
     CopyRecipe, LayoutId, LayoutKind, LayoutTable, SizeSpec, TargetSpec,
 };
@@ -64,22 +64,6 @@ pub const SCRATCH_DISPOSAL: u32 = u32::MAX - 2;
 /// TIR cannot make fail: a prologue preparation or a match test).
 pub const STATE_RELEASE: u32 = u32::MAX - 3;
 
-#[derive(Clone, Debug)]
-pub enum ImportError {
-    Instance(InstanceError),
-    Layout(DefPath, LayoutError),
-    /// A TIR form the importer cannot express yet, named.
-    Unsupported(String),
-    /// TIR that contradicts its own validated invariants.
-    Malformed(String),
-}
-
-impl From<InstanceError> for ImportError {
-    fn from(e: InstanceError) -> Self {
-        Self::Instance(e)
-    }
-}
-
 mod build;
 mod calls;
 mod cleanup;
@@ -94,13 +78,13 @@ mod materialize;
 mod patterns;
 mod places;
 
-type R<T> = Result<T, ImportError>;
+type R<T> = Result<T, PassError>;
 
 fn unsupported<T>(what: impl Into<String>) -> R<T> {
-    Err(ImportError::Unsupported(what.into()))
+    Err(PassError::Unsupported(what.into()))
 }
 fn malformed<T>(what: impl Into<String>) -> R<T> {
-    Err(ImportError::Malformed(what.into()))
+    Err(PassError::Malformed(what.into()))
 }
 
 /// A lowered program: its instances, their loop plans and declined
@@ -124,11 +108,23 @@ pub struct Lowered {
 pub enum LowerError {
     Instance(InstanceError),
     Normalize(InstanceId, NormalizeError),
-    Import(InstanceId, ImportError),
+    Import(InstanceId, PassError),
     /// A library body's builder failed.
-    Library(InstanceId, crate::library::LibraryError),
+    Library(InstanceId, PassError),
     /// A constant a unit reads has no static encoding (or no value).
     Static(DefPath, crate::statics::StaticError),
+}
+
+impl std::fmt::Display for LowerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Instance(error) => write!(f, "instance: {error:?}"),
+            Self::Normalize(id, error) => write!(f, "normalize instance {}: {error:?}", id.0),
+            Self::Import(id, error) => write!(f, "import instance {}: {error}", id.0),
+            Self::Library(id, error) => write!(f, "library instance {}: {error}", id.0),
+            Self::Static(path, error) => write!(f, "static {path}: {error:?}"),
+        }
+    }
 }
 
 /// Expand, normalize and import a whole program for one target.

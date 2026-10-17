@@ -1,6 +1,7 @@
 //! failure.check uses the ordinary call anchor and checked failure edges.
+use super::LibraryBody;
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError};
+use crate::PassError;
 use hirsel_lir::ir::*;
 use hirsel_lir::stage::Value;
 
@@ -9,7 +10,7 @@ pub static CHECK: LibraryBody = LibraryBody {
     build: check,
 };
 
-fn check(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn check(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let condition = b.read_bits(b.parameters[0].address)?;
     let rule = b.read_bits(b.parameters[1].address)?;

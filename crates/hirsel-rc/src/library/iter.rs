@@ -1,6 +1,7 @@
 //! SEM-4 pull iterators: owned environments and ordinary indirect step calls.
 use super::builder::{Body, Parameter};
-use super::{CallShape, Cx, InlineLowering, LibraryBody, LibraryError, R, native_path};
+use super::{CallShape, Cx, InlineLowering, LibraryBody, R, native_path};
+use crate::PassError;
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::{CallableShape, FnAbiId};
@@ -58,21 +59,21 @@ fn next(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     Ok(true)
 }
 
-fn captures(b: &mut Body<'_, '_>) -> Result<[Parameter; 2], LibraryError> {
+fn captures(b: &mut Body<'_, '_>) -> Result<[Parameter; 2], PassError> {
     let environment =
         b.cx.environment()
-            .ok_or_else(|| LibraryError::Malformed("iterator thunk without environment".into()))?;
+            .ok_or_else(|| PassError::Malformed("iterator thunk without environment".into()))?;
     let fields = b.record(environment).fields.clone();
     Ok([
         b.capture(0, fields[0].layout)?,
         b.capture(1, fields[1].layout)?,
     ])
 }
-fn callback_abi(b: &mut Body<'_, '_>, ordinal: usize) -> Result<FnAbiId, LibraryError> {
+fn callback_abi(b: &mut Body<'_, '_>, ordinal: usize) -> Result<FnAbiId, PassError> {
     let ty = b.cx.type_actual(ordinal)?;
     b.cx.layouts
         .fn_abi(&b.cx.store, ty, CallableShape::Closure)
-        .map_err(|e| LibraryError::Layout(b.cx.path.clone(), e))
+        .map_err(|e| PassError::Layout(b.cx.path.clone(), e))
 }
 
 /// An indirect call of `callee` (`Body::call`).
@@ -82,11 +83,11 @@ pub(crate) fn call(
     abi: FnAbiId,
     arguments: Vec<CallArgument>,
     loans: &[LoanId],
-) -> Result<Option<ValueId>, LibraryError> {
+) -> Result<Option<ValueId>, PassError> {
     Ok(b.call(Callee::Indirect(callee), Vec::new(), abi, arguments, loans))
 }
 
-fn from_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn from_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let [state, next] = captures(&mut b)?;
     let abi = callback_abi(&mut b, 1)?;
@@ -149,7 +150,7 @@ fn option(b: &mut Body<'_, '_>, layout: LayoutId, variant: u32, values: &[ValueI
 pub(crate) fn local(
     b: &mut Body<'_, '_>,
     value: ValueId,
-) -> Result<(SlotId, AddressId), LibraryError> {
+) -> Result<(SlotId, AddressId), PassError> {
     let layout = b.layout_of(value);
     let slot = b.slot(layout, SlotKind::Temporary);
     b.push(Inst::StorageLive { slot });
@@ -191,12 +192,12 @@ pub(crate) fn drop_local(b: &mut Body<'_, '_>, slot: SlotId, address: AddressId)
         if_live: false,
     });
 }
-fn map_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn map_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let [it, mapper] = captures(&mut b)?;
     let it_type = b.cx.type_actual(0)?;
     let TypeKind::Builtin { arguments, .. } = &b.cx.store.get(it_type).unwrap().kind else {
-        return Err(LibraryError::Malformed(
+        return Err(PassError::Malformed(
             "map capture is not an iterator".into(),
         ));
     };
@@ -218,7 +219,7 @@ fn map_step(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     let abi =
         b.cx.layouts
             .fn_abi(&request.actuals.store, callable, CallableShape::IterNext)
-            .map_err(|e| LibraryError::Layout(b.cx.path.clone(), e))?;
+            .map_err(|e| PassError::Layout(b.cx.path.clone(), e))?;
     let (callee, loan) = b.borrow(it.address, true)?;
     let pulled = call(&mut b, callee, abi, vec![], &[loan])?.unwrap();
     let (pulled_slot, pulled_address) = local(&mut b, pulled)?;

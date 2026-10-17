@@ -1,4 +1,5 @@
 use super::*;
+use crate::PassError;
 
 impl Inline for Importer<'_, '_> {
     fn construct_inline(
@@ -79,7 +80,7 @@ impl Inline for Importer<'_, '_> {
             .fields
             .iter()
             .find(|f| f.ordinal == field)
-            .ok_or_else(|| ImportError::Unsupported(format!("field {field} of {shape:?}")))?
+            .ok_or_else(|| PassError::Unsupported(format!("field {field} of {shape:?}")))?
             .layout;
         let ty = self.intern(layout);
         let projection = PoolRange::push(
@@ -206,7 +207,7 @@ impl Inline for Importer<'_, '_> {
                 &mut request.actuals.store,
                 Default::default(),
             )
-            .map_err(|e| ImportError::Instance(InstanceError::Substitution(helper.clone(), e)))?;
+            .map_err(|e| PassError::Instance(InstanceError::Substitution(helper.clone(), e)))?;
             fields.push((imported, Passing::Take));
             values.push(CaptureValue {
                 value: self.operand(&argument.value)?,
@@ -229,7 +230,7 @@ impl Inline for Importer<'_, '_> {
                     sizes: &[],
                     movable: &[],
                 })
-                .map_err(|e| ImportError::Layout(helper.clone(), e))?,
+                .map_err(|e| PassError::Layout(helper.clone(), e))?,
         );
         let environment = request.environment.unwrap();
         let direct = self.require(request)?;
@@ -282,7 +283,7 @@ impl Inline for Importer<'_, '_> {
         let abi = self
             .layouts
             .fn_abi(&request.actuals.store, callable, CallableShape::IterNext)
-            .map_err(|e| ImportError::Layout(self.def.path.clone(), e))?;
+            .map_err(|e| PassError::Layout(self.def.path.clone(), e))?;
         let fn_abi = self.layouts.table().fn_abis[abi.0 as usize].clone();
         let result = self.new_value(fn_abi.result.unwrap().layout, None);
         self.consumed(callee);

@@ -8,14 +8,15 @@
 //! here, the `SeqLen` of their borrowed argument (`length.rs`); the others
 //! are unsupported as values.
 use super::builder::{Body, Cx};
-use super::{LibraryBody, LibraryError, native_path};
+use super::{LibraryBody, native_path};
+use crate::PassError;
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::*;
 use hirsel_lir::operation::OperationArgument;
 use hirsel_lir::stage::Value;
 use hirsel_syntax::DefPath;
 
-type R<T> = Result<T, LibraryError>;
+type R<T> = Result<T, PassError>;
 
 /// Registered under its own helper path; each instance is keyed by the
 /// operation it forwards to (`Request::operation_value`).
@@ -44,7 +45,7 @@ fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     if length(&path) {
         let mut b = Body::new(cx)?;
         let &[sequence] = b.parameters.as_slice() else {
-            return Err(LibraryError::Malformed(format!("{path:?} parameters")));
+            return Err(PassError::Malformed(format!("{path:?} parameters")));
         };
         let (value, loan) = b.borrow(sequence.address, false)?;
         let result = b.seq_len(value)?;
@@ -57,9 +58,9 @@ fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .operations
         .get(&path)
         .cloned()
-        .ok_or_else(|| LibraryError::Malformed(format!("{path:?} is not an operation")))?;
+        .ok_or_else(|| PassError::Malformed(format!("{path:?} is not an operation")))?;
     let operation_arguments = hirsel_layout::operation::collect_arguments(&cx.store, &cx.arguments)
-        .map_err(|e| LibraryError::Layout(path.clone(), e))?;
+        .map_err(|e| PassError::Layout(path.clone(), e))?;
     let abi = cx.abi;
     let sources: Vec<u32> = cx.fn_abi().parameters.iter().map(|p| p.source).collect();
     let mut b = Body::new(cx)?;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::PassError;
 
 impl Importer<'_, '_> {
     pub(super) fn destination_class(&self, d: &hirsel_types::Destination) -> R<DestinationClass> {
@@ -1155,7 +1156,7 @@ impl Importer<'_, '_> {
             }
         }
         let actuals = actuals
-            .ok_or_else(|| ImportError::Unsupported("container constructor actuals".into()))?;
+            .ok_or_else(|| PassError::Unsupported("container constructor actuals".into()))?;
         let path = hirsel_syntax::DefPath::core(if is_map { "map.insert" } else { "set.insert" });
         let body = crate::library::body_index(&path).expect("registered insertion");
         let request = crate::library::Request::operation(

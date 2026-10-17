@@ -22,6 +22,7 @@
 //!
 //! Liveness, initialization and loans are this module's own analyses; the
 //! stage validator replays ownership independently and never reads them.
+use crate::PassError;
 use crate::import::STATE_RELEASE;
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::{
@@ -38,19 +39,13 @@ use hirsel_lir::persistent::{Element, PVec};
 use hirsel_lir::stage::{Placed, Rc, Stage};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum InsertError {
-    /// LIR that contradicts the stage invariants it was validated against.
-    Malformed(String),
-}
-
 /// Lower a Placed unit to Rc: release every non-destructible slot content at
 /// its last use. The result still has to pass the Rc validator.
 pub fn insert(
     unit: LirUnit<Placed>,
     table: &LayoutTable,
     proofs: &Proofs,
-) -> Result<LirUnit<Rc>, InsertError> {
+) -> Result<LirUnit<Rc>, PassError> {
     let unit = copy_on_write(unit.into_stage::<Rc>(), table, proofs)?;
     release_at_last_use(unit, table)
 }
@@ -107,7 +102,7 @@ impl Proofs {
 pub fn insert_without_copy_on_write(
     unit: LirUnit<Placed>,
     table: &LayoutTable,
-) -> Result<LirUnit<Rc>, InsertError> {
+) -> Result<LirUnit<Rc>, PassError> {
     release_at_last_use(unit.into_stage::<Rc>(), table)
 }
 
@@ -2736,7 +2731,7 @@ struct Point {
     slot: SlotId,
 }
 
-fn release_at_last_use(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit<Rc>, InsertError> {
+fn release_at_last_use(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit<Rc>, PassError> {
     let mut excluded = BTreeSet::new();
     loop {
         let lost = match release_pass(unit.clone(), table, &excluded)? {
@@ -2748,7 +2743,7 @@ fn release_at_last_use(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit
         let before = excluded.len();
         excluded.extend(lost);
         if excluded.len() == before {
-            return Err(InsertError::Malformed(
+            return Err(PassError::Malformed(
                 "a cleanup anchor lost its discharge".into(),
             ));
         }
@@ -2761,7 +2756,7 @@ fn release_pass(
     unit: LirUnit<Rc>,
     table: &LayoutTable,
     excluded: &BTreeSet<SlotId>,
-) -> Result<Result<LirUnit<Rc>, BTreeSet<SlotId>>, InsertError> {
+) -> Result<Result<LirUnit<Rc>, BTreeSet<SlotId>>, PassError> {
     let lay = Lay(table);
     let mut facts = Facts::new(&unit, table);
     let mut ed = Editor::new(unit);
@@ -3007,7 +3002,7 @@ fn release_pass(
             Settle::Release(version) => {
                 let (slot, _) = facts.slot_of(address).expect("slot drop");
                 let Some(reaching) = version else {
-                    return Err(InsertError::Malformed(format!(
+                    return Err(PassError::Malformed(format!(
                         "no version reaches {slot:?} at an early release"
                     )));
                 };
@@ -3749,7 +3744,7 @@ pub(crate) fn copy_on_write(
     unit: LirUnit<Rc>,
     table: &LayoutTable,
     proofs: &Proofs,
-) -> Result<LirUnit<Rc>, InsertError> {
+) -> Result<LirUnit<Rc>, PassError> {
     if proofs.noalloc {
         return Ok(unit);
     }
@@ -3861,7 +3856,7 @@ pub(crate) fn copy_on_write(
         .iter()
         .position(|l| l.kind == LayoutKind::Scalar(hirsel_lir::layout_types::ScalarKind::Bool))
     else {
-        return Err(InsertError::Malformed(
+        return Err(PassError::Malformed(
             "no bool layout for a uniqueness test".into(),
         ));
     };
@@ -4223,16 +4218,16 @@ fn detach(
     bool_ty: LirTypeId,
     ruled: &mut Vec<(AddressId, Option<String>)>,
     targets: &mut [Target],
-) -> Result<(ValueId, BlockId), InsertError> {
+) -> Result<(ValueId, BlockId), PassError> {
     let slot_ty = ed.unit.slots[slot.index()].ty;
     let mut layout = ed.unit.types[slot_ty.index()].layout;
     for step in prefix {
         layout = child_layout(lay, layout, step)
-            .ok_or_else(|| InsertError::Malformed("a projection outside its layout".into()))?;
+            .ok_or_else(|| PassError::Malformed("a projection outside its layout".into()))?;
     }
     let payload = lay
         .payload(layout)
-        .ok_or_else(|| InsertError::Malformed("a crossing without a block".into()))?;
+        .ok_or_else(|| PassError::Malformed("a crossing without a block".into()))?;
     let block_ty = type_of(&mut ed.unit, ValueRepr::Block, layout);
     let (b, i) = at;
     let anchor = ed.unit.blocks[b.index()].anchor;
@@ -4518,7 +4513,7 @@ pub(crate) fn fill_pending(
     ed: &mut Editor<Rc>,
     lay: Lay<'_>,
     facts: &mut Facts,
-) -> Result<(), InsertError> {
+) -> Result<(), PassError> {
     let mut wanted: BTreeMap<(BlockId, usize), State> = BTreeMap::new();
     {
         let flow = Flow {
@@ -4563,7 +4558,7 @@ pub(crate) fn fill_pending(
     for ((b, i), state) in wanted {
         let at = ed.unit.blocks[b.index()].anchor;
         let f = synthesize_failure(ed, lay, facts, &state, at).ok_or_else(|| {
-            InsertError::Malformed("a failure whose cleanup cannot be synthesized".into())
+            PassError::Malformed("a failure whose cleanup cannot be synthesized".into())
         })?;
         if let Some(slot) = Inst::failure_mut(&mut ed.code[b.index()][i]) {
             *slot = f;

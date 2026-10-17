@@ -35,6 +35,7 @@
 //! The slot states this module reads (initialization, moved parts, reaching
 //! versions) come from insertion's forward analysis; the Ready validator
 //! replays ownership independently.
+use crate::PassError;
 use crate::insert::{Editor, Facts, Flow, Lay, Place, Root, State, Step, Tri, Versions, type_of};
 use crate::instance::Instances;
 use hirsel_core_contract::Passing;
@@ -50,14 +51,6 @@ use hirsel_lir::layout_types::{CopyRecipe, LayoutId, LayoutKind, LayoutTable};
 use hirsel_lir::stage::{Ready, Stage, StageKind};
 use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::BTreeMap;
-
-#[derive(Clone, Debug)]
-pub enum CleanupError {
-    /// A shape this lowering does not produce yet; the unit stays unlowered.
-    Unsupported(String),
-    /// Input that breaks the stage invariant this pass relies on.
-    Malformed(String),
-}
 
 /// The drop body of one resource layout: its instance and `FnAbi`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,9 +99,9 @@ pub fn lower<S: Stage>(
     unit: LirUnit<S>,
     table: &LayoutTable,
     finalizers: &Finalizers,
-) -> Result<LirUnit<Ready>, CleanupError> {
+) -> Result<LirUnit<Ready>, PassError> {
     if !matches!(S::KIND, StageKind::Rc | StageKind::Reuse) {
-        return Err(CleanupError::Malformed(format!(
+        return Err(PassError::Malformed(format!(
             "cleanup lowering reads Rc or Reuse LIR, not {:?}",
             S::KIND
         )));
@@ -244,7 +237,7 @@ fn join_versions(
     facts: &mut Facts,
     lay: Lay<'_>,
     reads: bool,
-) -> Result<(), CleanupError> {
+) -> Result<(), PassError> {
     // Parameters and arguments change below, but the graph does not.
     let adjacent = Flow {
         unit: &ed.unit,
@@ -297,7 +290,7 @@ fn join_versions(
                 .as_ref()
                 .is_some_and(|slots| slots[slot.index()].versions == Versions::Many)
             {
-                return Err(CleanupError::Unsupported(
+                return Err(PassError::Unsupported(
                     "versions that meet inside a block".into(),
                 ));
             }
@@ -357,7 +350,7 @@ fn join_versions(
                                     // storage. Initialized inputs pin its version.
                                     .or_else(|| versions[slot.index()].first().copied())
                                     .ok_or_else(|| {
-                                        CleanupError::Malformed(
+                                        PassError::Malformed(
                                             "initialized storage has no version declaration".into(),
                                         )
                                     })?,
@@ -386,9 +379,7 @@ fn join_versions(
             }
         }
     }
-    Err(CleanupError::Malformed(
-        "version joins did not settle".into(),
-    ))
+    Err(PassError::Malformed("version joins did not settle".into()))
 }
 
 struct VersionEdge {
@@ -627,7 +618,7 @@ fn inline_part_layout(
     lay: Lay<'_>,
     mut layout: LayoutId,
     path: &[Step],
-) -> Result<LayoutId, CleanupError> {
+) -> Result<LayoutId, PassError> {
     for step in path {
         let record = lay.get(layout);
         let found = match *step {
@@ -635,9 +626,7 @@ fn inline_part_layout(
                 layout = match record.map(|r| &r.kind) {
                     Some(LayoutKind::Box { payload }) => *payload,
                     _ => {
-                        return Err(CleanupError::Malformed(
-                            "Payload outside Box storage".into(),
-                        ));
+                        return Err(PassError::Malformed("Payload outside Box storage".into()));
                     }
                 };
                 continue;
@@ -651,7 +640,7 @@ fn inline_part_layout(
                 layout = match record.map(|r| &r.kind) {
                     Some(LayoutKind::Inline { element, .. }) => *element,
                     _ => {
-                        return Err(CleanupError::Malformed(
+                        return Err(PassError::Malformed(
                             "an inline path outside inline storage".into(),
                         ));
                     }
@@ -659,14 +648,14 @@ fn inline_part_layout(
                 continue;
             }
             Step::Index | Step::Slot => {
-                return Err(CleanupError::Malformed(
+                return Err(PassError::Malformed(
                     "a dynamic element moved out of frame-owned storage".into(),
                 ));
             }
         };
         layout = found
             .map(|x| x.layout)
-            .ok_or_else(|| CleanupError::Malformed(format!("no {step:?} of {layout:?}")))?;
+            .ok_or_else(|| PassError::Malformed(format!("no {step:?} of {layout:?}")))?;
     }
     Ok(layout)
 }
@@ -676,7 +665,7 @@ fn join_flags(
     facts: &Facts,
     lay: Lay<'_>,
     table: &LayoutTable,
-) -> Result<BTreeMap<(BlockId, usize), Flags>, CleanupError> {
+) -> Result<BTreeMap<(BlockId, usize), Flags>, PassError> {
     let mut wanted = std::collections::BTreeSet::new();
     for (b, i, state) in drop_states(ed, facts, lay) {
         let Inst::Drop { address, .. } = ed.code[b.index()][i] else {
@@ -703,7 +692,7 @@ fn join_flags(
         .layouts
         .iter()
         .position(|r| r.kind == LayoutKind::Scalar(hirsel_lir::layout_types::ScalarKind::Bool))
-        .ok_or_else(|| CleanupError::Malformed("drop flags require the bool layout".into()))?;
+        .ok_or_else(|| PassError::Malformed("drop flags require the bool layout".into()))?;
     let bool_ty = type_of(
         &mut ed.unit,
         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Bool),
@@ -805,7 +794,7 @@ fn join_flags(
         Tri::Maybe => current
             .get(part)
             .copied()
-            .ok_or_else(|| CleanupError::Malformed(format!("presence flag lost for {part:?}"))),
+            .ok_or_else(|| PassError::Malformed(format!("presence flag lost for {part:?}"))),
     };
     let mut flags = BTreeMap::new();
     for (&block, (entry, steps, outs)) in &walks {
@@ -882,7 +871,7 @@ fn join_flags(
 fn flag_projection(
     ed: &mut Editor<Ready>,
     path: &[Step],
-) -> Result<PoolRange<ProjectionStep>, CleanupError> {
+) -> Result<PoolRange<ProjectionStep>, PassError> {
     let mut steps = Vec::new();
     for &step in path {
         steps.push(match step {
@@ -906,12 +895,12 @@ fn flag_projection(
                         _ => None,
                     })
                     .ok_or_else(|| {
-                        CleanupError::Malformed("an inline move has no constant index".into())
+                        PassError::Malformed("an inline move has no constant index".into())
                     })?;
                 ProjectionStep::Index(value)
             }
             Step::Index | Step::Slot => {
-                return Err(CleanupError::Malformed(
+                return Err(PassError::Malformed(
                     "drop flags describe inline fields only".into(),
                 ));
             }
@@ -933,13 +922,13 @@ fn content_of(live: Tri, init: Tri) -> Tri {
 fn reroute(
     ed: &mut Editor<Ready>,
     term: Terminator,
-    edge: &mut dyn FnMut(&mut Editor<Ready>, EdgeId) -> Result<EdgeId, CleanupError>,
-) -> Result<Terminator, CleanupError> {
+    edge: &mut dyn FnMut(&mut Editor<Ready>, EdgeId) -> Result<EdgeId, PassError>,
+) -> Result<Terminator, PassError> {
     fn failure(
         ed: &mut Editor<Ready>,
         f: FailureId,
-        edge: &mut dyn FnMut(&mut Editor<Ready>, EdgeId) -> Result<EdgeId, CleanupError>,
-    ) -> Result<FailureId, CleanupError> {
+        edge: &mut dyn FnMut(&mut Editor<Ready>, EdgeId) -> Result<EdgeId, PassError>,
+    ) -> Result<FailureId, PassError> {
         let mut copy = ed.unit.tables.failures[f.index()].clone();
         let cleanup = edge(ed, copy.cleanup)?;
         if cleanup == copy.cleanup {
@@ -1055,7 +1044,7 @@ fn join_read_versions(
     ed: &mut Editor<Ready>,
     facts: &mut Facts,
     lay: Lay<'_>,
-) -> Result<(), CleanupError> {
+) -> Result<(), PassError> {
     join_versions(ed, facts, lay, true)?;
     for (block, i, state) in instruction_states(ed, facts, lay, true) {
         let address = match ed.code[block.index()][i] {
@@ -1069,7 +1058,7 @@ fn join_read_versions(
             crate::insert::Versions::None => continue,
             crate::insert::Versions::One(version) => version,
             crate::insert::Versions::Many => {
-                return Err(CleanupError::Malformed(
+                return Err(PassError::Malformed(
                     "a finalizer field read has several versions".into(),
                 ));
             }
@@ -1084,7 +1073,7 @@ fn join_read_versions(
 
 /// Bits copies read bits and FlatBytes copies copy bytes; Dup and Fields
 /// copies are the Ready primitive.
-fn lower_copies(ed: &mut Editor<Ready>, lay: Lay<'_>) -> Result<(), CleanupError> {
+fn lower_copies(ed: &mut Editor<Ready>, lay: Lay<'_>) -> Result<(), PassError> {
     for b in 0..ed.code.len() {
         for i in 0..ed.code[b].len() {
             let Inst::Copy {
@@ -1112,7 +1101,7 @@ fn lower_copies(ed: &mut Editor<Ready>, lay: Lay<'_>) -> Result<(), CleanupError
                 },
                 Some(CopyRecipe::Dup | CopyRecipe::Fields) => continue,
                 Some(CopyRecipe::NotCopyable) | None => {
-                    return Err(CleanupError::Malformed(format!(
+                    return Err(PassError::Malformed(format!(
                         "a copy of {layout:?}, which has no copy recipe"
                     )));
                 }
@@ -1180,7 +1169,7 @@ struct Site {
 impl Lowering<'_, '_> {
     /// Lower the drop at `b`'s instruction `i`; `flag` decides content that
     /// is there on some paths only.
-    fn drop(&mut self, b: BlockId, i: usize, st: &State, flags: Flags) -> Result<(), CleanupError> {
+    fn drop(&mut self, b: BlockId, i: usize, st: &State, flags: Flags) -> Result<(), PassError> {
         let Inst::Drop {
             address,
             if_live: _,
@@ -1188,10 +1177,10 @@ impl Lowering<'_, '_> {
             failure,
         } = self.ed.code[b.index()][i]
         else {
-            return Err(CleanupError::Malformed("not a drop".into()));
+            return Err(PassError::Malformed("not a drop".into()));
         };
         let Some((slot, path)) = self.facts.slot_of(address).map(|(s, p)| (s, p.to_vec())) else {
-            return Err(CleanupError::Unsupported("a drop through a block".into()));
+            return Err(PassError::Unsupported("a drop through a block".into()));
         };
         self.flags = flags
             .iter()
@@ -1204,7 +1193,7 @@ impl Lowering<'_, '_> {
         if !self.lay.trivial(layout) && owner_presence(s, &path, layout, self.lay) != Tri::No {
             if s.live == Tri::Maybe || s.init == Tri::Maybe {
                 let Some(&flag) = self.flags.get(&Vec::new()) else {
-                    return Err(CleanupError::Unsupported(format!(
+                    return Err(PassError::Unsupported(format!(
                         "a drop of conditionally initialized {slot:?}"
                     )));
                 };
@@ -1214,7 +1203,7 @@ impl Lowering<'_, '_> {
                 .iter()
                 .any(|step| !matches!(step, Step::Field(_) | Step::Variant(_, _) | Step::Inline(_)))
             {
-                return Err(CleanupError::Unsupported(
+                return Err(PassError::Unsupported(
                     "a drop through dynamic element storage".into(),
                 ));
             }
@@ -1225,7 +1214,7 @@ impl Lowering<'_, '_> {
             Versions::One(v) => Some(v),
             _ if actions.is_empty() => None,
             versions => {
-                return Err(CleanupError::Unsupported(format!(
+                return Err(PassError::Unsupported(format!(
                     "{versions:?} versions of a {:?} slot reach its drop",
                     self.ed.unit.slots[slot.index()].kind
                 )));
@@ -1260,7 +1249,7 @@ impl Lowering<'_, '_> {
         slot: SlotId,
         flag: ValueId,
         flags: Flags,
-    ) -> Result<(), CleanupError> {
+    ) -> Result<(), PassError> {
         let block = &self.ed.unit.blocks[b.index()];
         let (kind, anchor) = (block.kind, block.anchor);
         let mut tail = self.ed.code[b.index()].split_off(i);
@@ -1296,7 +1285,7 @@ impl Lowering<'_, '_> {
         at: BlockId,
         actions: &[Action],
         site: &Site,
-    ) -> Result<BlockId, CleanupError> {
+    ) -> Result<BlockId, PassError> {
         // Each chain block runs one action and goes on to the next; the last
         // continues into the drop's own failure successor.
         let mut chain: Vec<BlockId> = vec![BlockId(u32::MAX); actions.len() + 1];
@@ -1375,10 +1364,10 @@ impl Lowering<'_, '_> {
         action: &Action,
         site: &Site,
         fail: &mut dyn FnMut(&mut Self, ()) -> FailureId,
-    ) -> Result<BlockId, CleanupError> {
+    ) -> Result<BlockId, PassError> {
         let version = site
             .version
-            .ok_or_else(|| CleanupError::Malformed("an action without a version".into()))?;
+            .ok_or_else(|| PassError::Malformed("an action without a version".into()))?;
         match action {
             Action::Conditional { condition, actions } => {
                 let block = &self.ed.unit.blocks[at.index()];
@@ -1486,12 +1475,12 @@ impl Lowering<'_, '_> {
             }
             Action::Finalize { path, layout } => {
                 let finalizer = self.finalizers.0.get(layout).cloned().ok_or_else(|| {
-                    CleanupError::Unsupported(format!("no drop body instance for {layout:?}"))
+                    PassError::Unsupported(format!("no drop body instance for {layout:?}"))
                 })?;
                 let address = self.address(site.slot, path, *layout)?;
                 let abi = &self.lay.0.fn_abis[finalizer.abi.0 as usize];
                 let [parameter] = abi.parameters.as_slice() else {
-                    return Err(CleanupError::Malformed("a finalizer takes self".into()));
+                    return Err(PassError::Malformed("a finalizer takes self".into()));
                 };
                 let mutable = finalizer.origin == hirsel_lir::ir::UnitOrigin::Library;
                 if parameter.convention
@@ -1501,7 +1490,7 @@ impl Lowering<'_, '_> {
                         Passing::Borrow
                     }
                 {
-                    return Err(CleanupError::Malformed(
+                    return Err(PassError::Malformed(
                         "a library finalizer takes mut self; a source finalizer borrows self"
                             .into(),
                     ));
@@ -1591,7 +1580,7 @@ impl Lowering<'_, '_> {
         layout: LayoutId,
         site: &Site,
         fail: &mut dyn FnMut(&mut Self, ()) -> FailureId,
-    ) -> Result<BlockId, CleanupError> {
+    ) -> Result<BlockId, PassError> {
         let (local, whole, joined, retry) = self.hold_action(at, path, layout, site, fail)?;
         let slot = local.slot;
         let ty = self.ed.unit.slots[slot.index()].ty;
@@ -1730,7 +1719,7 @@ impl Lowering<'_, '_> {
         layout: LayoutId,
         site: &Site,
         fail: &mut dyn FnMut(&mut Self, ()) -> FailureId,
-    ) -> Result<(Site, AddressId, BlockId, BlockId), CleanupError> {
+    ) -> Result<(Site, AddressId, BlockId, BlockId), PassError> {
         let source = self.address(site.slot, path, layout)?;
         let ty = type_of(&mut self.ed.unit, ValueRepr::Aggregate, layout);
         let slot = SlotId(self.ed.unit.slots.len() as u32);
@@ -1786,7 +1775,7 @@ impl Lowering<'_, '_> {
         layout: LayoutId,
         site: &Site,
         fail: &mut dyn FnMut(&mut Self, ()) -> FailureId,
-    ) -> Result<BlockId, CleanupError> {
+    ) -> Result<BlockId, PassError> {
         let (local, _, joined, retry) = self.hold_action(at, path, layout, site, fail)?;
         let LayoutKind::Inline { element, count } = self.layout_kind(layout)? else {
             unreachable!()
@@ -1850,7 +1839,7 @@ impl Lowering<'_, '_> {
         actions: &[Action],
         local: &Site,
         retry: BlockId,
-    ) -> Result<usize, CleanupError> {
+    ) -> Result<usize, PassError> {
         let base = self.prepared.len();
         for action in actions {
             let (path, layout) = match action {
@@ -1875,7 +1864,7 @@ impl Lowering<'_, '_> {
         Ok(base)
     }
 
-    fn projections(&mut self, path: &[Step]) -> Result<Vec<ProjectionStep>, CleanupError> {
+    fn projections(&mut self, path: &[Step]) -> Result<Vec<ProjectionStep>, PassError> {
         let mut steps = Vec::new();
         for step in path {
             steps.push(match *step {
@@ -1892,9 +1881,7 @@ impl Lowering<'_, '_> {
                             r.kind == LayoutKind::Scalar(hirsel_lir::layout_types::ScalarKind::U64)
                         })
                         .ok_or_else(|| {
-                            CleanupError::Malformed(
-                                "no u64 layout for an inline cleanup index".into(),
-                            )
+                            PassError::Malformed("no u64 layout for an inline cleanup index".into())
                         })?;
                     let ty = type_of(
                         &mut self.ed.unit,
@@ -1918,7 +1905,7 @@ impl Lowering<'_, '_> {
                     ProjectionStep::Index(result)
                 }
                 _ => {
-                    return Err(CleanupError::Unsupported(
+                    return Err(PassError::Unsupported(
                         "a dynamic element cleanup path".into(),
                     ));
                 }
@@ -1934,7 +1921,7 @@ impl Lowering<'_, '_> {
         finalizer: &Finalizer,
         argument: ArgumentValue,
         site: &Site,
-    ) -> Result<CallId, CleanupError> {
+    ) -> Result<CallId, PassError> {
         let symbol = match self.symbols.get(&layout) {
             Some(&s) => s,
             None => {
@@ -1960,9 +1947,9 @@ impl Lowering<'_, '_> {
             .0
             .fn_abis
             .get(finalizer.abi.0 as usize)
-            .ok_or_else(|| CleanupError::Malformed("a drop body ABI outside the table".into()))?;
+            .ok_or_else(|| PassError::Malformed("a drop body ABI outside the table".into()))?;
         let [parameter] = abi.parameters.as_slice() else {
-            return Err(CleanupError::Malformed(
+            return Err(PassError::Malformed(
                 "a drop body takes exactly its borrowed self".into(),
             ));
         };
@@ -1995,7 +1982,7 @@ impl Lowering<'_, '_> {
         path: Vec<Step>,
         layout: LayoutId,
         out: &mut Vec<Action>,
-    ) -> Result<(), CleanupError> {
+    ) -> Result<(), PassError> {
         if s.moved.get(&path) == Some(&Tri::Yes) || self.lay.trivial(layout) {
             return Ok(());
         }
@@ -2011,7 +1998,7 @@ impl Lowering<'_, '_> {
                 .flags
                 .get(&path)
                 .copied()
-                .ok_or_else(|| CleanupError::Malformed(format!("no drop flag for {path:?}")))?;
+                .ok_or_else(|| PassError::Malformed(format!("no drop flag for {path:?}")))?;
             let mut present = s.clone();
             present.moved.remove(&path);
             let mut actions = Vec::new();
@@ -2030,7 +2017,7 @@ impl Lowering<'_, '_> {
         let record = self
             .lay
             .get(layout)
-            .ok_or_else(|| CleanupError::Malformed(format!("{layout:?} outside the table")))?;
+            .ok_or_else(|| PassError::Malformed(format!("{layout:?} outside the table")))?;
         if let LayoutKind::Box { .. } = record.kind {
             let mut moved = Vec::new();
             for (part, state) in &s.taken {
@@ -2042,7 +2029,7 @@ impl Lowering<'_, '_> {
                         moved.push(*field)
                     }
                     _ => {
-                        return Err(CleanupError::Unsupported(
+                        return Err(PassError::Unsupported(
                             "a conditional or nested box partial transfer".into(),
                         ));
                     }
@@ -2075,19 +2062,19 @@ impl Lowering<'_, '_> {
             return Ok(());
         }
         if !matches!(record.kind, LayoutKind::Aggregate | LayoutKind::Resource) {
-            return Err(CleanupError::Malformed(format!(
+            return Err(PassError::Malformed(format!(
                 "a partial transfer from non-composite inline {:?} storage",
                 record.kind
             )));
         }
         if record.finalizer.is_some() && s.fields_pending.get(&path) != Some(&Tri::Yes) {
             if s.fields_pending.get(&path) == Some(&Tri::Maybe) {
-                return Err(CleanupError::Malformed(
+                return Err(PassError::Malformed(
                     "a retained defused shell crossed its straight-line region".into(),
                 ));
             }
             if !under.is_empty() {
-                return Err(CleanupError::Malformed(
+                return Err(PassError::Malformed(
                     "a field moved out of a live resource".into(),
                 ));
             }
@@ -2117,11 +2104,11 @@ impl Lowering<'_, '_> {
         path: Vec<Step>,
         record: &hirsel_lir::layout_types::LayoutRecord,
         out: &mut Vec<Action>,
-    ) -> Result<(), CleanupError> {
+    ) -> Result<(), PassError> {
         for variant in &record
             .tag
             .as_ref()
-            .ok_or_else(|| CleanupError::Malformed("variant without tag".into()))?
+            .ok_or_else(|| PassError::Malformed("variant without tag".into()))?
             .variants
         {
             self.plan_variant_fields(s, path.clone(), record, variant.ordinal, out)?;
@@ -2136,12 +2123,12 @@ impl Lowering<'_, '_> {
         record: &hirsel_lir::layout_types::LayoutRecord,
         v: u32,
         out: &mut Vec<Action>,
-    ) -> Result<(), CleanupError> {
+    ) -> Result<(), PassError> {
         let fields = &record
             .tag
             .as_ref()
             .and_then(|t| t.variants.iter().find(|x| x.ordinal == v))
-            .ok_or_else(|| CleanupError::Malformed(format!("no variant {v}")))?
+            .ok_or_else(|| PassError::Malformed(format!("no variant {v}")))?
             .fields;
         for field in fields.iter().rev() {
             let mut inner = path.clone();
@@ -2176,15 +2163,15 @@ impl Lowering<'_, '_> {
         }
     }
 
-    fn layout_kind(&self, layout: LayoutId) -> Result<LayoutKind, CleanupError> {
+    fn layout_kind(&self, layout: LayoutId) -> Result<LayoutKind, PassError> {
         self.lay
             .get(layout)
             .map(|r| r.kind.clone())
-            .ok_or_else(|| CleanupError::Malformed(format!("{layout:?} outside the table")))
+            .ok_or_else(|| PassError::Malformed(format!("{layout:?} outside the table")))
     }
 
     /// The layout of a field path inside a slot.
-    fn place_layout(&self, slot: SlotId, path: &[Step]) -> Result<LayoutId, CleanupError> {
+    fn place_layout(&self, slot: SlotId, path: &[Step]) -> Result<LayoutId, PassError> {
         let unit = &self.ed.unit;
         inline_part_layout(
             self.lay,
@@ -2201,7 +2188,7 @@ impl Lowering<'_, '_> {
         slot: SlotId,
         path: &[Step],
         layout: LayoutId,
-    ) -> Result<AddressId, CleanupError> {
+    ) -> Result<AddressId, PassError> {
         if let Some((_, _, address)) = self
             .prepared
             .iter()
@@ -2274,7 +2261,7 @@ impl Lowering<'_, '_> {
         slot: SlotId,
         steps: &[ProjectionStep],
         id: AddressId,
-    ) -> Result<(), CleanupError> {
+    ) -> Result<(), PassError> {
         let n = steps
             .iter()
             .position(|s| !matches!(s, ProjectionStep::Field(_)))
@@ -2314,7 +2301,7 @@ impl Lowering<'_, '_> {
             })
             .collect();
         if sites.is_empty() {
-            return Err(CleanupError::Unsupported(
+            return Err(PassError::Unsupported(
                 "a variant part with no prepared sibling address".into(),
             ));
         }

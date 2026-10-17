@@ -1,6 +1,7 @@
 //! Sorted maps: comparison-before-write insertion and owned entry cursors.
 use super::builder::{Body, Cx};
-use super::{CallShape, InlineLowering, LibraryBody, LibraryError, R, native_path};
+use super::{CallShape, InlineLowering, LibraryBody, R, native_path};
+use crate::PassError;
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
@@ -93,14 +94,14 @@ fn field(
     root: AddressId,
     layout: LayoutId,
     ordinal: u32,
-) -> Result<AddressId, LibraryError> {
+) -> Result<AddressId, PassError> {
     let payload = b.cx.payload(layout).unwrap_or(layout);
     let field = b
         .record(payload)
         .fields
         .iter()
         .find(|f| f.ordinal == ordinal)
-        .ok_or_else(|| LibraryError::Malformed("sorted map field".into()))?
+        .ok_or_else(|| PassError::Malformed("sorted map field".into()))?
         .layout;
     b.place(
         AddressBase::Address(root),
@@ -152,7 +153,7 @@ fn record_symbol(b: &mut Body<'_, '_>, name: &str) -> SymbolId {
         instance: None,
     })
 }
-fn order(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn order(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let [a, c] = b.parameters[..] else {
         unreachable!()
@@ -180,7 +181,7 @@ fn order(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     b.ret(Some(zero));
     Ok(b.finish())
 }
-fn comparator_abi(cx: &mut Cx<'_>) -> Result<hirsel_lir::abi_types::FnAbiId, LibraryError> {
+fn comparator_abi(cx: &mut Cx<'_>) -> Result<hirsel_lir::abi_types::FnAbiId, PassError> {
     let signature = cx
         .program
         .signatures
@@ -201,14 +202,14 @@ fn comparator_abi(cx: &mut Cx<'_>) -> Result<hirsel_lir::abi_types::FnAbiId, Lib
             authorities: &[hirsel_types::AuthoritySummary::inert()],
         },
     )
-    .map_err(|e| LibraryError::Malformed(format!("Order representation: {e:?}")))?;
+    .map_err(|e| PassError::Malformed(format!("Order representation: {e:?}")))?;
     let TypeKind::Record(fields) = &cx.store.get(shape).unwrap().kind else {
         unreachable!()
     };
     let callable = fields[0].ty;
     cx.layouts
         .fn_abi(&cx.store, callable, CallableShape::Closure)
-        .map_err(|e| LibraryError::Layout(cx.path.clone(), e))
+        .map_err(|e| PassError::Layout(cx.path.clone(), e))
 }
 fn callback(
     b: &mut Body<'_, '_>,
@@ -284,7 +285,7 @@ fn replace_from(
     b: &mut Body<'_, '_>,
     address: AddressId,
     incoming: AddressId,
-) -> Result<(), LibraryError> {
+) -> Result<(), PassError> {
     let unit = &b.ed.unit;
     let layout = unit.types[unit.addresses[incoming.index()].ty.index()].layout;
     let root = b.root(address).unwrap();
@@ -327,7 +328,7 @@ fn replace_from(
     });
     Ok(())
 }
-fn insert(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn insert(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let abi = comparator_abi(cx)?;
     let mut b = Body::new(cx)?;
     let [by, map, key, value] = b.parameters[..] else {
@@ -464,7 +465,7 @@ fn insert(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     Ok(b.finish())
 }
 
-fn open(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn open(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let source = b.parameters[0];
     let flag = b.bool_layout()?;
@@ -505,7 +506,7 @@ fn open(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     b.ret(Some(cursor));
     Ok(b.finish())
 }
-fn next(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn next(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let cursor = b.parameters[0];
     let source_layout = field_layout(&b, cursor.layout, 0);
@@ -577,7 +578,7 @@ fn next(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     Ok(b.finish())
 }
 
-fn cursor_drop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn cursor_drop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let cursor = b.parameters[0];
     let source_layout = field_layout(&b, cursor.layout, 0);
@@ -677,10 +678,10 @@ fn replace_position(
     b: &mut Body<'_, '_>,
     address: AddressId,
     value: ValueId,
-) -> Result<(), LibraryError> {
+) -> Result<(), PassError> {
     let root = b
         .root(address)
-        .ok_or_else(|| LibraryError::Malformed("cursor position has no root".into()))?;
+        .ok_or_else(|| PassError::Malformed("cursor position has no root".into()))?;
     let layout = b.layout_of(value);
     let displaced = b.slot(layout, SlotKind::Temporary);
     b.push(Inst::StorageLive { slot: displaced });

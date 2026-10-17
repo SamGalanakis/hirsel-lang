@@ -1,6 +1,7 @@
 //! Decode flat sequences with ordinary list construction. The emitted zero-based
 //! Index loop is strength-reduced by flat_walk, including variable-size elements.
 use super::*;
+use crate::PassError;
 use hirsel_types::{BuiltinType, TypeKind};
 
 impl Importer<'_, '_> {
@@ -37,7 +38,7 @@ impl Importer<'_, '_> {
         let element_layout = self.layout(element_type)?;
         let element = self.intern(element_layout);
         let encoded_layout = flat_sequence(self.layouts, self.layout_of(encoding))
-            .ok_or_else(|| ImportError::Malformed("flat list encoding".into()))?;
+            .ok_or_else(|| PassError::Malformed("flat list encoding".into()))?;
         let encoded = self.intern(encoded_layout);
         let LayoutKind::Block { payload } = self.record(ordinary).kind else {
             return malformed("ordinary list block");

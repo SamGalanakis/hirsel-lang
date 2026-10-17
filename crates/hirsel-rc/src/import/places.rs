@@ -1,4 +1,5 @@
 use super::*;
+use crate::PassError;
 
 impl Importer<'_, '_> {
     // --- places and addresses ---
@@ -9,7 +10,7 @@ impl Importer<'_, '_> {
             .copied()
             .flatten()
             .ok_or_else(|| {
-                ImportError::Malformed(format!(
+                PassError::Malformed(format!(
                     "a runtime use of elided generic function local {local}"
                 ))
             })
@@ -538,7 +539,7 @@ impl Importer<'_, '_> {
             .out
             .tables
             .environment()
-            .ok_or_else(|| ImportError::Malformed("capture take without live word".into()))?;
+            .ok_or_else(|| PassError::Malformed("capture take without live word".into()))?;
         let record = self.layouts.record(environment);
         let LayoutKind::Environment { movable } = &record.kind else {
             return malformed("capture mask layout");
@@ -546,7 +547,7 @@ impl Importer<'_, '_> {
         let bit = movable
             .iter()
             .position(|&i| i == ordinal)
-            .ok_or_else(|| ImportError::Malformed("capture lacks live bit".into()))?;
+            .ok_or_else(|| PassError::Malformed("capture lacks live bit".into()))?;
         let flag_ordinal = record.fields.last().expect("live word").ordinal;
         let slot = SlotId(
             self.out

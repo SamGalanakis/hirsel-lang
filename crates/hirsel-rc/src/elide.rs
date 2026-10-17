@@ -15,12 +15,13 @@
 //! and `Fields` recipes) cancel; a flat byte copy into distinct storage is
 //! source Copy semantics and stays. Elision never adds an allocation, so a
 //! noalloc promise is preserved.
-use crate::insert::{Editor, Facts, InsertError};
+use crate::PassError;
+use crate::insert::{Editor, Facts};
 use hirsel_lir::ir::{Inst, LirUnit, ReadMode};
 use hirsel_lir::layout_types::{CopyRecipe, LayoutTable};
 use hirsel_lir::stage::Rc;
 
-pub fn elide(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit<Rc>, InsertError> {
+pub fn elide(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit<Rc>, PassError> {
     let facts = Facts::new(&unit, table);
     let mut ed = Editor::new(unit);
     for b in 0..ed.code.len() {

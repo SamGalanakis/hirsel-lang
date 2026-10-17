@@ -527,3 +527,9 @@ the byte payload and interval; no descriptor query, allocation, retain or runtim
 call is needed.
 
 Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.
+
+Native import, library construction, RC insertion/elision, reuse, cleanup and
+legalization share `PassError`. Unsupported and malformed failures retain their
+message as text; instance and layout errors retain their structured payloads.
+The driver supplies stage and definition attribution through Display at its six
+pass boundaries. Ready returns the same error without duplicate wrappers.

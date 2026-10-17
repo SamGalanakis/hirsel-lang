@@ -985,10 +985,7 @@ fn handmade_finalizer(library: bool, wrong_convention: bool) {
     )]));
     let result = hirsel_rc::cleanup::lower(caller, &table, &finalizers);
     if wrong_convention {
-        assert!(matches!(
-            result,
-            Err(hirsel_rc::cleanup::CleanupError::Malformed(_))
-        ));
+        assert!(matches!(result, Err(hirsel_rc::PassError::Malformed(_))));
         return;
     }
     let caller = result.unwrap();

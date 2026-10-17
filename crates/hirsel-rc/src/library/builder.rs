@@ -9,7 +9,8 @@
 //! imported from TIR. Consuming cursor
 //! open bodies have one checked exception: they record the source
 //! uniqueness before transferring its credit into their cursor.
-use super::{LibraryError, Request};
+use super::Request;
+use crate::PassError;
 use crate::insert::Editor;
 use crate::instance::{InstanceId, Instances, Program};
 use hirsel_core_contract::Passing;
@@ -30,7 +31,7 @@ use hirsel_lir::stage::{StageKind, Value};
 use hirsel_syntax::DefPath;
 use hirsel_types::{GenericArgument, Primitive, Size, Type, TypeId, TypeKind, TypeStore};
 
-type R<T> = Result<T, LibraryError>;
+type R<T> = Result<T, PassError>;
 
 /// The layout derivation a body and the instance collector read: the one
 /// `LayoutBuilder` of the program being lowered.
@@ -139,10 +140,7 @@ impl<'a> Cx<'a> {
     }
 
     pub(super) fn unsupported<T>(&self, what: impl std::fmt::Display) -> R<T> {
-        Err(LibraryError::Unsupported(format!(
-            "{:?}: {what}",
-            self.path
-        )))
+        Err(PassError::Unsupported(format!("{:?}: {what}", self.path)))
     }
 
     /// The body's own `FnAbi`: `operation_abi(path, actuals)` of its call.
@@ -154,7 +152,7 @@ impl<'a> Cx<'a> {
     pub fn type_actual(&self, ordinal: usize) -> R<TypeId> {
         match self.arguments.get(ordinal) {
             Some(GenericArgument::Type(ty)) => Ok(*ty),
-            _ => Err(LibraryError::Malformed(format!(
+            _ => Err(PassError::Malformed(format!(
                 "{:?}: generic actual {ordinal} is not a type",
                 self.path
             ))),
@@ -165,7 +163,7 @@ impl<'a> Cx<'a> {
     pub fn size_actual(&self, ordinal: usize) -> R<u64> {
         match self.arguments.get(ordinal) {
             Some(GenericArgument::Size(Size::Constant(n))) => Ok(*n),
-            _ => Err(LibraryError::Malformed(format!(
+            _ => Err(PassError::Malformed(format!(
                 "{:?}: generic actual {ordinal} is not a constant size",
                 self.path
             ))),
@@ -176,7 +174,7 @@ impl<'a> Cx<'a> {
     pub fn layout(&mut self, ty: TypeId) -> R<LayoutId> {
         self.layouts
             .layout(&self.store, ty)
-            .map_err(|e| LibraryError::Layout(self.path.clone(), e))
+            .map_err(|e| PassError::Layout(self.path.clone(), e))
     }
 
     /// The layout of a primitive type.
@@ -412,7 +410,7 @@ impl<'c, 'a> Body<'c, 'a> {
     /// The version of `slot` that reaches the current point.
     pub fn reaching(&self, slot: SlotId) -> R<ValueId> {
         self.versions[slot.index()].ok_or_else(|| {
-            LibraryError::Malformed(format!("{:?}: {slot:?} has no version", self.cx.path))
+            PassError::Malformed(format!("{:?}: {slot:?} has no version", self.cx.path))
         })
     }
 
@@ -807,7 +805,7 @@ impl<'c, 'a> Body<'c, 'a> {
 
     fn write(&mut self, address: AddressId) -> R<ValueId> {
         let Some(slot) = self.root(address) else {
-            return Err(LibraryError::Malformed(format!(
+            return Err(PassError::Malformed(format!(
                 "{:?}: a write through a value",
                 self.cx.path
             )));

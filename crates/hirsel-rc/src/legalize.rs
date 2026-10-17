@@ -37,6 +37,7 @@
 //! where the proof-domain ledger `native-tests/rewrites/ledger.tsv` records
 //! its rule and exact domain as proved, and the Ready validator checks the
 //! result again.
+use crate::PassError;
 use crate::import::repr_of;
 use crate::insert::{Editor, type_of};
 use crate::placement::TASK_HEAP;
@@ -50,14 +51,6 @@ use hirsel_lir::ir::{
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind};
 use hirsel_lir::stage::Ready;
 use hirsel_syntax::{DefPath, ItemPath};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LegalizeError {
-    /// A shape this pass does not legalize yet.
-    Unsupported(String),
-    /// Input that breaks the Ready invariant this pass relies on.
-    Malformed(String),
-}
 
 /// The SIMD operations this pass expands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,10 +82,7 @@ enum Site {
 }
 
 /// Legalize every operation of `unit` that has no direct native form.
-pub fn legalize(
-    unit: LirUnit<Ready>,
-    table: &LayoutTable,
-) -> Result<LirUnit<Ready>, LegalizeError> {
+pub fn legalize(unit: LirUnit<Ready>, table: &LayoutTable) -> Result<LirUnit<Ready>, PassError> {
     let mut ed = Editor::new(unit);
     let sites: Vec<(BlockId, Site)> = ed
         .unit
@@ -179,11 +169,11 @@ struct Lowering<'a> {
 }
 
 impl Lowering<'_> {
-    fn layout_kind(&self, id: LayoutId) -> Result<LayoutKind, LegalizeError> {
+    fn layout_kind(&self, id: LayoutId) -> Result<LayoutKind, PassError> {
         self.table
             .layout(id)
             .map(|l| l.kind.clone())
-            .ok_or_else(|| LegalizeError::Malformed(format!("no layout {id:?}")))
+            .ok_or_else(|| PassError::Malformed(format!("no layout {id:?}")))
     }
 
     fn value_layout(&self, v: ValueId) -> LayoutId {
@@ -193,7 +183,7 @@ impl Lowering<'_> {
 
     /// Replace the call ending `b` by its lane code and a jump to its normal
     /// successor.
-    fn simd(&mut self, b: BlockId, op: SimdOp) -> Result<(), LegalizeError> {
+    fn simd(&mut self, b: BlockId, op: SimdOp) -> Result<(), PassError> {
         let Terminator::Call {
             call,
             normal: Some(normal),
@@ -204,16 +194,16 @@ impl Lowering<'_> {
         };
         let site = self.ed.unit.tables.calls[call.index()].clone();
         let Some(result) = site.result else {
-            return Err(LegalizeError::Malformed(format!("{op:?} without a result")));
+            return Err(PassError::Malformed(format!("{op:?} without a result")));
         };
         let simd = self.value_layout(result);
         let LayoutKind::Simd { element, lanes } = self.layout_kind(simd)? else {
-            return Err(LegalizeError::Malformed(format!(
+            return Err(PassError::Malformed(format!(
                 "{op:?} into a {simd:?} that is not Simd"
             )));
         };
         let LayoutKind::Scalar(kind) = self.layout_kind(element)? else {
-            return Err(LegalizeError::Malformed(
+            return Err(PassError::Malformed(
                 "a Simd lane that is not scalar".into(),
             ));
         };
@@ -227,7 +217,7 @@ impl Lowering<'_> {
             .iter()
             .map(|a| match a.value {
                 ArgumentValue::Value(v) => Ok(v),
-                ArgumentValue::Address { .. } => Err(LegalizeError::Malformed(format!(
+                ArgumentValue::Address { .. } => Err(PassError::Malformed(format!(
                     "{op:?} with an address argument"
                 ))),
             })
@@ -236,14 +226,12 @@ impl Lowering<'_> {
             (SimdOp::Splat, &[x]) => vec![x; lanes as usize],
             (SimdOp::Add, &[x, y]) => {
                 if !integer(kind) {
-                    return Err(LegalizeError::Malformed(
-                        "simd.add of non-integer lanes".into(),
-                    ));
+                    return Err(PassError::Malformed("simd.add of non-integer lanes".into()));
                 }
                 self.add(b, failure, simd, element, kind, lanes, x, y)?
             }
             _ => {
-                return Err(LegalizeError::Malformed(format!(
+                return Err(PassError::Malformed(format!(
                     "{op:?} with {} arguments",
                     operands.len()
                 )));
@@ -281,7 +269,7 @@ impl Lowering<'_> {
     /// Replace the call ending `b` by its scalar instruction (with the
     /// variant selection an `Option` or `Result` result needs) and a jump
     /// to its normal successor.
-    fn scalar(&mut self, b: BlockId, op: ScalarOp) -> Result<(), LegalizeError> {
+    fn scalar(&mut self, b: BlockId, op: ScalarOp) -> Result<(), PassError> {
         let Terminator::Call {
             call,
             normal: Some(normal),
@@ -292,7 +280,7 @@ impl Lowering<'_> {
         };
         let site = self.ed.unit.tables.calls[call.index()].clone();
         let Some(result) = site.result else {
-            return Err(LegalizeError::Malformed(format!("{op:?} without a result")));
+            return Err(PassError::Malformed(format!("{op:?} without a result")));
         };
         let operands = self.operands(&site, op)?;
         let code = |s: &mut Self, inst: Inst| s.ed.code[b.index()].push(inst);
@@ -417,7 +405,7 @@ impl Lowering<'_> {
                 self.to_i32(b, &site, x, normal, failure)?;
             }
             _ => {
-                return Err(LegalizeError::Malformed(format!(
+                return Err(PassError::Malformed(format!(
                     "{op:?} with {} arguments",
                     operands.len()
                 )));
@@ -427,7 +415,7 @@ impl Lowering<'_> {
     }
 
     /// The call's arguments in declaration order, each a scalar value.
-    fn operands(&self, site: &CallSite, op: ScalarOp) -> Result<Vec<ValueId>, LegalizeError> {
+    fn operands(&self, site: &CallSite, op: ScalarOp) -> Result<Vec<ValueId>, PassError> {
         let mut arguments: Vec<_> = site
             .arguments
             .get(&self.ed.unit.pools.call_arguments)
@@ -442,7 +430,7 @@ impl Lowering<'_> {
                 {
                     Ok(v)
                 }
-                _ => Err(LegalizeError::Malformed(format!(
+                _ => Err(PassError::Malformed(format!(
                     "{op:?} with an argument that is not a scalar value"
                 ))),
             })
@@ -455,7 +443,7 @@ impl Lowering<'_> {
 
     /// A fresh Plain Bool, the flag of a range or overflow test. Every
     /// sealed layout table holds `Scalar(Bool)`.
-    fn bool_value(&mut self) -> Result<ValueId, LegalizeError> {
+    fn bool_value(&mut self) -> Result<ValueId, PassError> {
         let layout = self.scalar_layout(ScalarKind::Bool)?;
         let ty = type_of(
             &mut self.ed.unit,
@@ -465,17 +453,17 @@ impl Lowering<'_> {
         Ok(self.ed.value(ty, Holding::Plain))
     }
 
-    fn scalar_layout(&self, kind: ScalarKind) -> Result<LayoutId, LegalizeError> {
+    fn scalar_layout(&self, kind: ScalarKind) -> Result<LayoutId, PassError> {
         self.table
             .layouts
             .iter()
             .position(|l| l.kind == LayoutKind::Scalar(kind))
             .map(|i| LayoutId(i as u32))
-            .ok_or_else(|| LegalizeError::Malformed(format!("no {kind:?} layout in the table")))
+            .ok_or_else(|| PassError::Malformed(format!("no {kind:?} layout in the table")))
     }
 
     /// The layout of field 0 of variant `ordinal` of `variant`'s layout.
-    fn payload_layout(&self, variant: LayoutId, ordinal: u32) -> Result<LayoutId, LegalizeError> {
+    fn payload_layout(&self, variant: LayoutId, ordinal: u32) -> Result<LayoutId, PassError> {
         self.table
             .layout(variant)
             .and_then(|l| l.tag.as_ref())
@@ -483,12 +471,12 @@ impl Lowering<'_> {
             .and_then(|v| v.fields.iter().find(|f| f.ordinal == 0))
             .map(|f| f.layout)
             .ok_or_else(|| {
-                LegalizeError::Malformed(format!("{variant:?} has no field 0 in variant {ordinal}"))
+                PassError::Malformed(format!("{variant:?} has no field 0 in variant {ordinal}"))
             })
     }
 
     /// A fresh Plain value of the payload of `result`'s variant `ordinal`.
-    fn payload_value(&mut self, result: ValueId, ordinal: u32) -> Result<ValueId, LegalizeError> {
+    fn payload_value(&mut self, result: ValueId, ordinal: u32) -> Result<ValueId, PassError> {
         let layout = self.payload_layout(self.value_type(result).layout, ordinal)?;
         let kind = self.layout_kind(layout)?;
         let ty = type_of(&mut self.ed.unit, repr_of(&kind), layout);
@@ -614,7 +602,7 @@ impl Lowering<'_> {
         value: ValueId,
         normal: EdgeId,
         failure: FailureId,
-    ) -> Result<(), LegalizeError> {
+    ) -> Result<(), PassError> {
         let result = site.result.expect("a result");
         let edges = self.join(
             b,
@@ -649,7 +637,7 @@ impl Lowering<'_> {
         x: ValueId,
         normal: EdgeId,
         failure: FailureId,
-    ) -> Result<(), LegalizeError> {
+    ) -> Result<(), PassError> {
         let result = site.result.expect("a result");
         let value = self.payload_value(result, RESULT_OK)?;
         // The status has the payload's own type: i32.
@@ -718,7 +706,7 @@ impl Lowering<'_> {
         lanes: u32,
         x: ValueId,
         y: ValueId,
-    ) -> Result<Vec<ValueId>, LegalizeError> {
+    ) -> Result<Vec<ValueId>, PassError> {
         let simd_ty = type_of(&mut self.ed.unit, ValueRepr::Aggregate, simd);
         let lane_ty = type_of(
             &mut self.ed.unit,
@@ -804,7 +792,7 @@ impl Lowering<'_> {
         element: LayoutId,
         kind: ScalarKind,
         lanes: u32,
-    ) -> Result<hirsel_lir::ir::LirTypeId, LegalizeError> {
+    ) -> Result<hirsel_lir::ir::LirTypeId, PassError> {
         if let Some(i) = self
             .table
             .layouts
@@ -829,7 +817,7 @@ impl Lowering<'_> {
             (1u128 << (bits - u32::from(signed))) - 1
         };
         if u128::from(lanes - 1) > max {
-            return Err(LegalizeError::Unsupported(format!(
+            return Err(PassError::Unsupported(format!(
                 "{lanes} lanes of {kind:?} in a program without u64"
             )));
         }

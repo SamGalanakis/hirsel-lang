@@ -32,7 +32,7 @@ fn from_list(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
         _ => return Ok(false),
     };
     let start = sequence_slice_start(cx.record(element))
-        .map_err(|e| crate::import::ImportError::Malformed(format!("{e:?}")))?;
+        .map_err(|e| crate::PassError::Malformed(format!("{e:?}")))?;
     let start = cx.constant(word, ConstantValue::Integer(u128::from(start)));
     let result = cx.construct(
         layout,

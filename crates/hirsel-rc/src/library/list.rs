@@ -1,6 +1,7 @@
 //! Growing lists and consuming sequences, built as ordinary monomorphic LIR.
 use super::builder::{Body, Cx};
-use super::{CallShape, InlineLowering, LibraryBody, LibraryError, R, Request, native_path};
+use super::{CallShape, InlineLowering, LibraryBody, R, Request, native_path};
+use crate::PassError;
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::*;
@@ -49,7 +50,7 @@ fn ret_unit(b: &mut Body<'_, '_>) {
     b.ret(result);
 }
 
-fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     if sequential(cx) {
         return push_sequential(cx);
     }
@@ -69,7 +70,7 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     ))?;
     let mut b = Body::new(cx)?;
     let [list, value] = b.parameters[..] else {
-        return Err(LibraryError::Malformed("list.push parameters".into()));
+        return Err(PassError::Malformed("list.push parameters".into()));
     };
     let (view, loan) = b.borrow(list.address, false)?;
     let len = b.seq_len(view)?;
@@ -139,10 +140,10 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
 /// `spare_push` proved the count below the capacity at every call (FACT-3).
 /// P4 still detaches a shared list where the write address is prepared, and
 /// a detach keeps the capacity.
-fn push_spare(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn push_spare(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let [list, value] = b.parameters[..] else {
-        return Err(LibraryError::Malformed("list.push parameters".into()));
+        return Err(PassError::Malformed("list.push parameters".into()));
     };
     let (view, loan) = b.borrow(list.address, false)?;
     let len = b.seq_len(view)?;
@@ -171,10 +172,10 @@ fn sequential(cx: &Cx<'_>) -> bool {
 
 /// `list.push` of a sequential Packed sequence: the element's extent past the
 /// used bytes, the storage growing as needed (LIR schema revision 19).
-fn push_sequential(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn push_sequential(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let [list, value] = b.parameters[..] else {
-        return Err(LibraryError::Malformed("list.push parameters".into()));
+        return Err(PassError::Malformed("list.push parameters".into()));
     };
     let moved = b.take(value.address)?;
     b.seq_append(list.address, moved)?;
@@ -182,7 +183,7 @@ fn push_sequential(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     Ok(b.finish())
 }
 
-fn grow(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn grow(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let list = b.parameters[0];
     let (view, loan) = b.borrow(list.address, false)?;
@@ -242,13 +243,13 @@ fn field(
     root: AddressId,
     layout: hirsel_lir::layout_types::LayoutId,
     ordinal: u32,
-) -> Result<AddressId, LibraryError> {
+) -> Result<AddressId, PassError> {
     let field = b
         .record(layout)
         .fields
         .iter()
         .find(|f| f.ordinal == ordinal)
-        .ok_or_else(|| LibraryError::Malformed("cursor field".into()))?
+        .ok_or_else(|| PassError::Malformed("cursor field".into()))?
         .layout;
     b.place(
         AddressBase::Address(root),
@@ -300,7 +301,7 @@ fn record_symbol(b: &mut Body<'_, '_>, path: hirsel_syntax::DefPath) -> SymbolId
     })
 }
 
-fn open(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn open(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let source = b.parameters[0];
     let cursor_layout = b.cx.fn_abi().result.unwrap().layout;
@@ -370,7 +371,7 @@ fn open(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     Ok(b.finish())
 }
 
-fn next(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn next(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let cursor = b.parameters[0];
     let source = field(&mut b, cursor.address, cursor.layout, 0)?;
@@ -440,7 +441,7 @@ fn next(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
     Ok(b.finish())
 }
 
-fn cursor_drop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError> {
+fn cursor_drop(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let mut b = Body::new(cx)?;
     let cursor = b.parameters[0];
     let source = field(&mut b, cursor.address, cursor.layout, 0)?;
@@ -538,10 +539,10 @@ fn replace_position(
     b: &mut Body<'_, '_>,
     address: AddressId,
     value: ValueId,
-) -> Result<(), LibraryError> {
+) -> Result<(), PassError> {
     let root = b
         .root(address)
-        .ok_or_else(|| LibraryError::Malformed("cursor position has no root".into()))?;
+        .ok_or_else(|| PassError::Malformed("cursor position has no root".into()))?;
     let layout = b.layout_of(value);
     let displaced = b.slot(layout, SlotKind::Temporary);
     b.push(Inst::StorageLive { slot: displaced });

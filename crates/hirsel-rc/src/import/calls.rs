@@ -1,4 +1,5 @@
 use super::*;
+use crate::PassError;
 
 impl Importer<'_, '_> {
     pub(super) fn terminator(&mut self, t: tir::BlockId, term: &tir::Terminator) -> R<()> {
@@ -205,7 +206,7 @@ impl Importer<'_, '_> {
                         let ty = self.ty(self.body.places[value.place.0 as usize].ty)?;
                         self.layouts
                             .fn_abi(&self.store, ty, CallableShape::Closure)
-                            .map_err(|e| ImportError::Layout(self.def.path.clone(), e))?
+                            .map_err(|e| PassError::Layout(self.def.path.clone(), e))?
                     }
                 };
                 if let Some((code, _)) = bound {
@@ -354,7 +355,7 @@ impl Importer<'_, '_> {
             .map(|r| {
                 let dest = self.place(r.destination)?;
                 let address = self.address(&dest)?;
-                Ok::<_, ImportError>((dest, address))
+                Ok::<_, PassError>((dest, address))
             })
             .transpose()?;
         for a in &args {
@@ -515,11 +516,11 @@ impl Importer<'_, '_> {
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let arguments =
             hirsel_layout::operation::collect_arguments(&callee.store, &callee.arguments)
-                .map_err(|e| ImportError::Layout(path.clone(), e))?;
+                .map_err(|e| PassError::Layout(path.clone(), e))?;
         let abi = self
             .layouts
             .fn_abi(&callee.store, callable, CallableShape::Definition)
-            .map_err(|e| ImportError::Layout(path.clone(), e))?;
+            .map_err(|e| PassError::Layout(path.clone(), e))?;
         Ok((abi, arguments))
     }
 }

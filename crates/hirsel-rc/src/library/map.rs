@@ -1,7 +1,8 @@
 //! Native insertion-ordered maps and sets. Field 0 is dense entries; field 1
 //! is an optional open-addressing index. Keyed reads never mutate either.
 use super::builder::{Body, Cx, Direct};
-use super::{CallShape, InlineLowering, LibraryBody, LibraryError, Request, native_path};
+use super::{CallShape, InlineLowering, LibraryBody, Request, native_path};
+use crate::PassError;
 use crate::import::ImportCx;
 use hirsel_core_contract::Passing;
 use hirsel_lir::effect::Effects;
@@ -14,7 +15,7 @@ use hirsel_types::{
     Type, TypeId, TypeKind, Uses,
 };
 
-type R<T> = Result<T, LibraryError>;
+type R<T> = Result<T, PassError>;
 macro_rules! body {
     ($row:ident, $name:literal, $build:ident) => {
         pub static $row: LibraryBody = LibraryBody {
@@ -100,7 +101,7 @@ fn field(b: &mut Body<'_, '_>, address: AddressId, ordinal: u32) -> R<AddressId>
         .fields
         .iter()
         .find(|f| f.ordinal == ordinal)
-        .ok_or_else(|| LibraryError::Malformed(format!("field {ordinal} of {shape:?}")))?
+        .ok_or_else(|| PassError::Malformed(format!("field {ordinal} of {shape:?}")))?
         .layout;
     b.place(
         AddressBase::Address(address),

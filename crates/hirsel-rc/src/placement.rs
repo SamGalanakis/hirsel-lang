@@ -76,6 +76,15 @@ pub enum PlaceError {
     HeapInNoalloc(String),
 }
 
+impl std::fmt::Display for PlaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported(what) => write!(f, "Unsupported({what:?})"),
+            Self::HeapInNoalloc(what) => write!(f, "HeapInNoalloc({what:?})"),
+        }
+    }
+}
+
 /// Give every allocation one storage owner and every call destination a
 /// class. The result still has to pass the Placed validator.
 pub fn place(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::PassError;
 
 impl Importer<'_, '_> {
     /// TIR reachability, predecessor counts and reverse postorder. A normalized
@@ -62,7 +63,7 @@ impl Importer<'_, '_> {
         let layout = self
             .layouts
             .layout(&self.store, store_ty)
-            .map_err(|e| ImportError::Layout(self.def.path.clone(), e))?;
+            .map_err(|e| PassError::Layout(self.def.path.clone(), e))?;
         self.library_finalizers(store_ty);
         Ok(layout)
     }
@@ -131,7 +132,7 @@ impl Importer<'_, '_> {
         let abi = self
             .layouts
             .fn_abi(&request.actuals.store, request.callable, request.shape)
-            .map_err(|e| ImportError::Layout(request.path.clone(), e))?;
+            .map_err(|e| PassError::Layout(request.path.clone(), e))?;
         let symbol = Symbol {
             kind: SymbolKind::Function,
             definition: request.path.clone(),

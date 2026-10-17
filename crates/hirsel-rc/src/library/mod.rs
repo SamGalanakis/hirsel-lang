@@ -26,7 +26,8 @@ pub mod sorted;
 pub mod value;
 pub mod views;
 
-use crate::import::{ImportCx, ImportError};
+use crate::PassError;
+use crate::import::ImportCx;
 use crate::instance::{
     Actuals, InstanceError, InstanceId, InstanceRole, Instances, Program, instantiate_function,
 };
@@ -34,7 +35,6 @@ use hirsel_layout::instance::{InstanceKey, InstanceView};
 use hirsel_layout::layout::LayoutBuilder;
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::LirUnit;
-use hirsel_lir::layout::LayoutError;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::Value;
 use hirsel_syntax::{ContentHash, DefPath, ItemId};
@@ -52,7 +52,7 @@ pub struct LibraryBody {
     pub path: fn() -> DefPath,
     /// Build the Value-stage unit for these actuals. `Cx` gives the layout
     /// table, the call's `FnAbi`, type and size actuals and symbol interning.
-    pub build: fn(&mut Cx<'_>) -> Result<LirUnit<Value>, LibraryError>,
+    pub build: fn(&mut Cx<'_>) -> Result<LirUnit<Value>, PassError>,
 }
 
 /// Every registered body. A family adds its rows in its own module and
@@ -140,7 +140,7 @@ pub const INLINE: &[&InlineLowering] = &[
 ];
 
 /// The result of an import hook.
-pub type R<T> = Result<T, ImportError>;
+pub type R<T> = Result<T, PassError>;
 
 /// The operation call an inline lowering is asked to replace: the callee,
 /// its generic actuals as rows of the importing definition's store, the TIR
@@ -152,22 +152,6 @@ pub struct CallShape<'a> {
     pub destination: tir::PlaceId,
     /// The TIR block the call continues in.
     pub next: tir::BlockId,
-}
-
-#[derive(Clone, Debug)]
-pub enum LibraryError {
-    Instance(InstanceError),
-    Layout(DefPath, LayoutError),
-    /// A shape of actuals the body does not build yet, named.
-    Unsupported(String),
-    /// Actuals or layouts that contradict the body's own declaration.
-    Malformed(String),
-}
-
-impl From<InstanceError> for LibraryError {
-    fn from(e: InstanceError) -> Self {
-        Self::Instance(e)
-    }
 }
 
 /// `core@1/$native.<name>`: a helper or finalizer no registry row names.
@@ -415,9 +399,9 @@ pub fn build(
     layouts: &mut LayoutBuilder<'_>,
     instances: &mut Instances,
     id: InstanceId,
-) -> Result<LirUnit<Value>, LibraryError> {
+) -> Result<LirUnit<Value>, PassError> {
     let InstanceRole::Library { body, .. } = instances.roles[id.index()] else {
-        return Err(LibraryError::Malformed(format!(
+        return Err(PassError::Malformed(format!(
             "{id:?} is not a library instance"
         )));
     };

@@ -255,7 +255,7 @@ pub fn build_program(
             enabled: options.flat_walk,
         },
     )
-    .map_err(|e| NativeError::new(StageName::Import, format!("{e:?}")))?;
+    .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
     hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table)
         .map_err(|e| NativeError::new(StageName::Import, e))?;
     let table = &lowered.table;
@@ -276,17 +276,17 @@ pub fn build_program(
         let value = seal(StageName::Import, validate_value(unit, &inputs))?.into_raw();
         let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
         let placed = hirsel_rc::placement::place(value, table, &placement)
-            .map_err(|e| fail(StageName::Placement, format!("{e:?}")))?;
+            .map_err(|e| fail(StageName::Placement, e.to_string()))?;
         let placed = seal(StageName::Placement, validate_placed(placed, &inputs))?.into_raw();
         let proofs = Proofs::for_instance(instances, id);
         let mut unit = hirsel_rc::insert::insert(placed, table, &proofs)
-            .map_err(|e| fail(StageName::Perceus, format!("{e:?}")))?;
+            .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
         if options.elide {
             // Elision rewrites a validated unit, so insertion's output is
             // sealed first and elision's again below.
             unit = seal(StageName::Perceus, validate_rc(unit, &inputs))?.into_raw();
             unit = hirsel_rc::elide::elide(unit, table)
-                .map_err(|e| fail(StageName::Perceus, format!("{e:?}")))?;
+                .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
         }
         rc.push(seal(StageName::Perceus, validate_rc(unit, &inputs))?.into_raw());
     }
@@ -299,10 +299,10 @@ pub fn build_program(
             reuse: options.reuse,
         };
         let reused = hirsel_rc::reuse::reuse(unit, table, &reuse)
-            .map_err(|e| fail(StageName::Reuse, format!("{e:?}")))?;
+            .map_err(|e| fail(StageName::Reuse, e.to_string()))?;
         let reused = seal(StageName::Reuse, validate_reuse(reused, &inputs))?.into_raw();
         let ready = hirsel_rc::ready::ready(reused, table, &finalizers)
-            .map_err(|e| fail(StageName::Ready, format!("{e:?}")))?;
+            .map_err(|e| fail(StageName::Ready, e.to_string()))?;
         units.push(seal(StageName::Ready, validate_ready(ready, &inputs))?);
     }
     let functions = instances

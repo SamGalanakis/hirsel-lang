@@ -19,3 +19,6 @@ pub mod reuse_stores;
 pub mod spare_push;
 pub mod specialize_drop;
 pub mod statics;
+
+mod pass_error;
+pub use pass_error::PassError;

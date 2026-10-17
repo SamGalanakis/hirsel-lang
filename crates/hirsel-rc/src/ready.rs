@@ -11,24 +11,19 @@
 //! `BindFields`, `EndOrigin`) stay in Ready: the Ready validator is what
 //! discharges them, by replaying them, so removing them first would remove
 //! the evidence it checks. The emitters treat them as no-ops.
-use crate::cleanup::{self, CleanupError, Finalizers};
-use crate::legalize::{self, LegalizeError};
+use crate::PassError;
+use crate::cleanup::{self, Finalizers};
+use crate::legalize;
 use hirsel_lir::ir::LirUnit;
 use hirsel_lir::layout_types::LayoutTable;
 use hirsel_lir::stage::{Ready, Stage};
-
-#[derive(Clone, Debug)]
-pub enum ReadyError {
-    Cleanup(CleanupError),
-    Legalize(LegalizeError),
-}
 
 /// Lower one Rc or Reuse unit to Ready.
 pub fn ready<S: Stage>(
     unit: LirUnit<S>,
     table: &LayoutTable,
     finalizers: &Finalizers,
-) -> Result<LirUnit<Ready>, ReadyError> {
-    let unit = cleanup::lower(unit, table, finalizers).map_err(ReadyError::Cleanup)?;
-    legalize::legalize(unit, table).map_err(ReadyError::Legalize)
+) -> Result<LirUnit<Ready>, PassError> {
+    let unit = cleanup::lower(unit, table, finalizers)?;
+    legalize::legalize(unit, table)
 }
