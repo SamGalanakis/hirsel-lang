@@ -1,66 +1,48 @@
-use hirsel_conformance::{SeededCompiler, Shard, Status, run_suite_shard};
-use std::{env, path::PathBuf, process::ExitCode};
+use hirsel_cli_args::{
+    CommonOption, CommonOptions,
+    lexopt::{Arg::*, Parser},
+    parse_or_exit,
+};
+use hirsel_conformance::{SeededCompiler, Status, run_suite_shard};
+use std::{env, process::ExitCode};
 
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(main_on_compiler_thread)
 }
 fn main_on_compiler_thread() -> ExitCode {
-    let mut hash_seed = 0;
+    let mut common = CommonOptions::default();
     let mut json = false;
     let mut verbose = false;
     let mut update = false;
     let mut check_format = false;
-    let mut root = None;
-    let mut shard = None;
-    let mut args = env::args_os().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.to_str() {
-            Some("--json") => json = true,
-            Some("--verbose") => verbose = true,
-            Some("--update-passing") => update = true,
-            Some("--check-format") => check_format = true,
-            Some("--hash-seed") => {
-                hash_seed = match args
-                    .next()
-                    .and_then(|v| v.to_str().and_then(|v| v.parse::<u64>().ok()))
-                {
-                    Some(seed) => seed,
-                    None => {
-                        eprintln!("--hash-seed requires an unsigned integer");
-                        return ExitCode::from(2);
-                    }
-                };
+    let help = parse_or_exit((|| {
+        let mut args = Parser::from_env();
+        while let Some(arg) = args.next()? {
+            if let Some(option) = CommonOption::from_arg(&arg) {
+                common.parse(option, &mut args)?;
+                continue;
             }
-            Some("--shard") => {
-                shard = match args.next().and_then(|v| v.to_str().and_then(Shard::parse)) {
-                    Some(shard) => Some(shard),
-                    None => {
-                        eprintln!("--shard requires <index>/<count>, 1 <= index <= count");
-                        return ExitCode::from(2);
-                    }
-                };
-            }
-            Some("--root") => {
-                let Some(path) = args.next() else {
-                    eprintln!("--root requires a repository path");
-                    return ExitCode::from(2);
-                };
-                root = Some(PathBuf::from(path));
-            }
-            Some("--help" | "-h") => {
-                println!(
-                    "usage: hirsel-conformance [--json] [--verbose] [--update-passing] [--check-format] [--root <repo>] [--hash-seed N] [--shard I/N]"
-                );
-                return ExitCode::SUCCESS;
-            }
-            _ => {
-                eprintln!("unknown argument: {}", arg.to_string_lossy());
-                return ExitCode::from(2);
+            match arg {
+                Long("json") => json = true,
+                Long("verbose") => verbose = true,
+                Long("update-passing") => update = true,
+                Long("check-format") => check_format = true,
+                Long("help") | Short('h') => return Ok(true),
+                _ => return Err(arg.unexpected()),
             }
         }
+        Ok(false)
+    })());
+    if help {
+        println!(
+            "usage: hirsel-conformance [--json] [--verbose] [--update-passing] [--check-format] [--root <repo>] [--hash-seed N] [--shard I/N]"
+        );
+        return ExitCode::SUCCESS;
     }
+    let hash_seed = common.hash_seed.unwrap_or(0);
+    let shard = common.shard;
     let result = (|| {
-        let root = match root {
+        let root = match common.root {
             Some(root) => root,
             None => {
                 let cwd = env::current_dir().map_err(|e| e.to_string())?;

@@ -2,7 +2,7 @@
 
 Validate rule-linked corpus headers, classify compiler results and enforce the additive passing ratchet.
 
-Allowed dependencies: hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, hirsel-run-config, serde_json; no phase internals.
+Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, hirsel-run-config, serde_json; no phase internals.
 
 Invariants and boundary:
 
@@ -11,6 +11,10 @@ Invariants and boundary:
 - NotImplemented is distinct from rejection and never added to passing.txt.
 - Header validation applies even while the compiler is unimplemented.
 - Updating the ratchet only adds passing cases, never removes regressions; corpus files are not rewritten.
+
+The binaries use `hirsel-cli-args` and pinned lexopt for argument parsing.
+Common `--root`, `--hash-seed` and `--shard` values share validation and
+argument errors print to stderr and exit 2.
 
 The runner prints `whole corpus` and `in-gate corpus` counts. JSON retains
 `summary` for the whole corpus and adds `in_gate`, plus each test's `in_gate`,

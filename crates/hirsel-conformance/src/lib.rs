@@ -506,30 +506,7 @@ pub fn ratchet(existing: &str, tests: &[TestResult], update: bool) -> Result<Str
     ratchet_within(existing, tests, update, None)
 }
 
-/// A stable split of the corpus by repository-relative path, so a gate can run
-/// it as `count` independent parts whose counts sum to the whole run's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Shard {
-    /// One-based.
-    pub index: u64,
-    pub count: u64,
-}
-impl Shard {
-    pub fn parse(value: &str) -> Option<Shard> {
-        let (index, count) = value.split_once('/')?;
-        let (index, count) = (index.parse().ok()?, count.parse().ok()?);
-        (1..=count)
-            .contains(&index)
-            .then_some(Shard { index, count })
-    }
-    /// FNV-1a over the path's bytes: the same split on every host and build.
-    pub fn holds(&self, path: &str) -> bool {
-        let hash = path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-        });
-        hash % self.count == self.index - 1
-    }
-}
+pub use hirsel_cli_args::Shard;
 fn in_shard(shard: Option<Shard>, path: &str) -> bool {
     shard.is_none_or(|shard| shard.holds(path))
 }

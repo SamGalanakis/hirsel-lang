@@ -1,4 +1,9 @@
 //! Compile once, keep physical counts separate from sampled cycles, report source lines.
+use hirsel_cli_args::{
+    CommonOption, CommonOptions,
+    lexopt::{self, Arg::*, Parser},
+    parse_or_exit,
+};
 use hirsel_driver::native::{
     self, OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain,
 };
@@ -17,27 +22,62 @@ fn main() {
     });
 }
 
-fn profile() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
-    let program = PathBuf::from(args.next().ok_or(
-        "usage: profile PROGRAM [--cycles] [--output DIR] [--root DIR] [-- PROGRAM_ARGS...]",
-    )?);
+struct Arguments {
+    program: PathBuf,
+    cycles: bool,
+    output: Option<PathBuf>,
+    input_root: Option<PathBuf>,
+    program_args: Vec<String>,
+}
+
+fn arguments() -> Result<Arguments, lexopt::Error> {
+    let mut args = Parser::from_env();
+    let program = args.value()?.into();
     let mut cycles = false;
     let mut output = None;
-    let mut input_root = None;
+    let mut common = CommonOptions::default();
     let mut program_args = Vec::new();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--cycles" => cycles = true,
-            "--root" => input_root = Some(PathBuf::from(args.next().ok_or("--root requires DIR")?)),
-            "--output" => output = Some(PathBuf::from(args.next().ok_or("--output requires DIR")?)),
-            "--" => {
-                program_args.extend(args);
-                break;
+    loop {
+        // Keep the program's option spellings untouched after the separator.
+        if args
+            .try_raw_args()
+            .is_some_and(|mut raw| raw.peek().is_some_and(|arg| arg == "--"))
+        {
+            use lexopt::ValueExt;
+            let mut raw = args.raw_args()?;
+            raw.next();
+            program_args = raw.map(|value| value.string()).collect::<Result<_, _>>()?;
+            break;
+        }
+        let Some(arg) = args.next()? else {
+            break;
+        };
+        match arg {
+            Long("cycles") => cycles = true,
+            Long("root") => {
+                common.parse(CommonOption::Root, &mut args)?;
             }
-            _ => return Err(format!("unknown option {arg}").into()),
+            Long("output") => output = Some(args.value()?.into()),
+            _ => return Err(arg.unexpected()),
         }
     }
+    Ok(Arguments {
+        program,
+        cycles,
+        output,
+        input_root: common.root,
+        program_args,
+    })
+}
+
+fn profile() -> Result<(), Box<dyn std::error::Error>> {
+    let Arguments {
+        program,
+        cycles,
+        output,
+        input_root,
+        mut program_args,
+    } = parse_or_exit(arguments());
     let stem = program
         .file_stem()
         .ok_or("program needs a filename")?

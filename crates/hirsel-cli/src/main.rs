@@ -1,3 +1,4 @@
+use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
@@ -6,25 +7,117 @@ const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))
 }
-fn execute(args: Vec<OsString>) -> u8 {
-    if let [command, flag, entry, output_flag, output] = args.as_slice()
-        && command == "export"
-        && flag == "--tir"
-        && output_flag == "-o"
-    {
-        // The prover-neutral TIR export: a tool artifact,
-        // never a source verdict, so diagnostics come first as for `run`.
-        return match hirsel_driver::export_tir_path(Path::new(entry)) {
-            Ok(text) => match std::fs::write(output, text) {
-                Ok(()) => 0,
-                Err(error) => tool_error(ToolError::Io(error), false),
-            },
-            Err(error) => tool_error(error, false),
-        };
+enum Command {
+    Help,
+    Export {
+        entry: OsString,
+        output: OsString,
+    },
+    Simulation {
+        config: OsString,
+        file: OsString,
+    },
+    Native {
+        file: OsString,
+    },
+    Source {
+        command: &'static str,
+        flag: Option<&'static str>,
+        file: OsString,
+    },
+}
+
+fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
+    let mut args = Parser::from_args(args);
+    let command = match args.next()? {
+        Some(Long("help")) => Command::Help,
+        Some(Value(command)) if command == "help" => Command::Help,
+        Some(Value(command)) if command == "export" => {
+            if !matches!(args.next()?, Some(Long("tir"))) {
+                return Err("export requires --tir".into());
+            }
+            let entry = args.value()?;
+            if !matches!(args.next()?, Some(Short('o'))) {
+                return Err("export requires -o".into());
+            }
+            Command::Export {
+                entry,
+                output: args.value()?,
+            }
+        }
+        Some(Value(command)) if command == "check" || command == "run" || command == "fmt" => {
+            let name = match command.to_str() {
+                Some("check") => "check",
+                Some("run") => "run",
+                _ => "fmt",
+            };
+            match args.next()? {
+                Some(Long("simulation")) if name == "run" => Command::Simulation {
+                    config: args.value()?,
+                    file: args.value()?,
+                },
+                Some(Long("native")) if name == "run" => Command::Native {
+                    file: args.value()?,
+                },
+                Some(Long("json")) if name == "check" => Command::Source {
+                    command: name,
+                    flag: Some("--json"),
+                    file: source_arg(&mut args)?,
+                },
+                Some(Long("check")) if name == "fmt" => Command::Source {
+                    command: name,
+                    flag: Some("--check"),
+                    file: source_arg(&mut args)?,
+                },
+                Some(Value(file)) if !file.to_string_lossy().starts_with('-') => Command::Source {
+                    command: name,
+                    flag: None,
+                    file,
+                },
+                Some(arg) => return Err(arg.unexpected()),
+                None => return Err("missing source path".into()),
+            }
+        }
+        Some(arg) => return Err(arg.unexpected()),
+        None => return Err("missing command".into()),
+    };
+    if let Some(arg) = args.next()? {
+        return Err(arg.unexpected());
     }
-    if let [command, flag, config, file] = args.as_slice() {
-        if command == "run" && flag == "--simulation" {
-            let simulation = match read_simulation(Path::new(config)) {
+    Ok(command)
+}
+
+fn source_arg(args: &mut Parser) -> Result<OsString, lexopt::Error> {
+    match args.next()? {
+        Some(Value(file)) if !file.to_string_lossy().starts_with('-') => Ok(file),
+        Some(arg) => Err(arg.unexpected()),
+        None => Err("missing source path".into()),
+    }
+}
+
+fn execute(args: Vec<OsString>) -> u8 {
+    let command = match parse_command(args) {
+        Ok(command) => command,
+        Err(_) => return usage(),
+    };
+    let (command, flag, file) = match command {
+        Command::Help => {
+            println!("{USAGE}");
+            return 0;
+        }
+        Command::Export { entry, output } => {
+            // The prover-neutral TIR export: a tool artifact,
+            // never a source verdict, so diagnostics come first as for `run`.
+            return match hirsel_driver::export_tir_path(Path::new(&entry)) {
+                Ok(text) => match std::fs::write(output, text) {
+                    Ok(()) => 0,
+                    Err(error) => tool_error(ToolError::Io(error), false),
+                },
+                Err(error) => tool_error(error, false),
+            };
+        }
+        Command::Simulation { config, file } => {
+            let simulation = match read_simulation(Path::new(&config)) {
                 Ok(config) => config,
                 Err(error) => {
                     eprintln!("hirsel: simulation: {error}");
@@ -32,7 +125,7 @@ fn execute(args: Vec<OsString>) -> u8 {
                 }
             };
             return match hirsel_driver::run_path_with_simulation(
-                Path::new(file),
+                Path::new(&file),
                 simulation,
                 &mut std::io::stdout().lock(),
             ) {
@@ -60,14 +153,12 @@ fn execute(args: Vec<OsString>) -> u8 {
                 Err(error) => tool_error(error, false),
             };
         }
-    }
-    if let [command, flag, file] = args.as_slice() {
-        if command == "run" && flag == "--native" {
+        Command::Native { file } => {
             // Native code is an engine choice, never a source verdict: the
             // same diagnostics come first, and a stage that cannot build the
             // program yet is a tool outcome (exit 2).
             return match hirsel_driver::native::run_path_native(
-                Path::new(file),
+                Path::new(&file),
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
             ) {
@@ -80,31 +171,15 @@ fn execute(args: Vec<OsString>) -> u8 {
                 Err(error) => tool_error(error, false),
             };
         }
-    }
-    if let [command] = args.as_slice() {
-        if command == "--help" || command == "help" {
-            println!("{USAGE}");
-            return 0;
-        }
-    }
-    let (command, flag, file) = match args.as_slice() {
-        [command, file] if ["check", "run", "fmt"].iter().any(|c| command == c) => {
-            (command.to_string_lossy(), None, file)
-        }
-        [command, flag, file]
-            if (command == "check" && flag == "--json")
-                || (command == "fmt" && flag == "--check") =>
-        {
-            (command.to_string_lossy(), Some(flag.as_os_str()), file)
-        }
-        _ => return usage(),
+        Command::Source {
+            command,
+            flag,
+            file,
+        } => (command, flag, file),
     };
-    if file.to_string_lossy().starts_with('-') {
-        return usage();
-    }
-    let path = Path::new(file);
-    let json = flag.is_some_and(|f| f == "--json");
-    match command.as_ref() {
+    let path = Path::new(&file);
+    let json = flag == Some("--json");
+    match command {
         "check" => match hirsel_driver::check_path(path) {
             Ok(output) => {
                 for d in &output.diagnostics {

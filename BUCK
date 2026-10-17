@@ -388,6 +388,7 @@ hirsel_binary(
     bin_name = "native-select",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",

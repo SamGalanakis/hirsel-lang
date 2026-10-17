@@ -2,7 +2,7 @@
 
 Expose check, run, fmt and JSON through the compiler driver.
 
-Allowed dependencies: hirsel-driver, hirsel-diag and shared span/syntax types as needed; no phase internals.
+Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag and shared span/syntax types as needed; no phase internals.
 
 Invariants and boundary:
 
@@ -11,7 +11,7 @@ Invariants and boundary:
 - Launch failures are tooling errors, not invented language rule diagnostics (PROG-3).
 - Do not alter checker acceptance based on flags or topology (DET-3).
 
-Commands (arguments are hand parsed):
+Commands (arguments use the shared lexopt parser):
 
 - `hirsel --help` and `hirsel help` print usage on stdout and exit 0.
 - `hirsel check [--json] <file>` emits human diagnostics on stderr or one schema-v1

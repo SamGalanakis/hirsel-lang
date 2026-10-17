@@ -85,6 +85,35 @@ fn binary_usage_and_io_errors_have_distinct_codes() {
     assert_eq!(output.status.code(), Some(1));
 }
 #[test]
+fn command_options_and_operand_counts_remain_specific_to_each_command() {
+    for args in [
+        vec![],
+        vec!["--help", "extra"],
+        vec!["check"],
+        vec!["check", "--native", "file.hir"],
+        vec!["check", "file.hir", "--json"],
+        vec!["run", "--json", "file.hir"],
+        vec!["run", "--simulation", "config.json"],
+        vec!["run", "--native", "file.hir", "extra"],
+        vec!["fmt", "--json", "file.hir"],
+        vec!["fmt", "--check", "-file.hir"],
+        vec!["export", "--tir", "file.hir"],
+        vec!["export", "--tir", "file.hir", "--output", "out.tir"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).starts_with("usage: hirsel "),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
 fn real_pipeline_accepts_clean_source_and_checks_launch_shape() {
     let path = file("fn main() {}\n");
     for flags in [vec!["check"], vec!["check", "--json"]] {
