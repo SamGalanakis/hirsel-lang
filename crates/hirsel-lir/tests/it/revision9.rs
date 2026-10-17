@@ -23,13 +23,13 @@ fn closure_call(code: bool, callee: impl Fn(&mut Lir<Rc>, ValueId) -> Callee) ->
         abi,
     });
     let captures = PoolRange::push(
-        &mut t.unit.pools.captures,
+        &mut t.builder.unit.pools.captures,
         [CaptureValue {
             value: x,
             usage: CaptureUse::Borrow,
         }],
     );
-    t.unit.tables.closures.push(ClosureSite {
+    t.builder.unit.tables.closures.push(ClosureSite {
         code,
         environment: l::ENV,
         captures,
@@ -37,10 +37,10 @@ fn closure_call(code: bool, callee: impl Fn(&mut Lir<Rc>, ValueId) -> Callee) ->
         placement: t.heap(),
         anchor: SourceAnchorId(0),
     });
-    let closure = ClosureId(t.unit.tables.closures.len() as u32 - 1);
+    let closure = ClosureId(t.builder.unit.tables.closures.len() as u32 - 1);
     let value = t.owned(l::CLOSURE);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Closure {
             result: value,
@@ -48,12 +48,12 @@ fn closure_call(code: bool, callee: impl Fn(&mut Lir<Rc>, ValueId) -> Callee) ->
             failure,
         },
     );
-    let after = t.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[]);
     let failed = t.releasing(&[value]);
     let callee = callee(&mut t, value);
     t.call_to(ENTRY, callee, abi, &[], None, &[], (after, &[]), failed);
     t.release(after, value, &[]);
-    t.ret(after, None);
+    t.builder.ret(after, None);
     t.check()
 }
 

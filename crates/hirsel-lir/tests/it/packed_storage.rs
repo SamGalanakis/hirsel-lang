@@ -74,7 +74,7 @@ fn c_reserves_the_maximum_packed_field_extent_for_overlap_and_containment() {
                         t.table.layouts[parent.0 as usize].size = SizeSpec::Fixed(24);
                     }
                 }
-                t.ret(ENTRY, None);
+                t.builder.ret(ENTRY, None);
                 t.check()
             },
             |k| layout_obligation(k, if overlap { "Overlap" } else { "Size" }),
@@ -96,7 +96,7 @@ fn c_reserves_the_maximum_packed_extent_inside_variant_payloads() {
             ];
             r.abi.scalars.clear();
             t.table.layouts.push(r);
-            t.ret(ENTRY, None);
+            t.builder.ret(ENTRY, None);
             t.check()
         },
         |k| layout_obligation(k, "Overlap"),
@@ -119,7 +119,7 @@ fn c_requires_the_maximum_packed_stride_in_inline_arrays() {
             r.fields.clear();
             r.abi.scalars.clear();
             t.table.layouts.push(r);
-            t.ret(ENTRY, None);
+            t.builder.ret(ENTRY, None);
             t.check()
         },
         |k| layout_obligation(k, "Inline size"),
@@ -146,7 +146,7 @@ fn c_requires_the_maximum_packed_stride_in_sequences() {
                 SizeTerm::Add,
             ]);
             t.table.layouts.push(r);
-            t.ret(ENTRY, None);
+            t.builder.ret(ENTRY, None);
             t.check()
         },
         |k| layout_obligation(k, "sequence size"),
@@ -165,7 +165,7 @@ fn c_rejects_unbounded_flat_storage_beside_an_accepted_packed_twin() {
                 assert_eq!(flat.size.storage(), None);
                 t.table.layouts[parent.0 as usize].fields[0].layout = l::FLAT_TEXT;
             }
-            t.ret(ENTRY, None);
+            t.builder.ret(ENTRY, None);
             t.check()
         },
         |k| layout_obligation(k, "dynamic extent inline"),
@@ -207,7 +207,7 @@ fn c_keeps_direct_dynamic_packed_sequences_unavailable() {
                     ]);
                 }
                 t.table.layouts.push(r);
-                t.ret(ENTRY, None);
+                t.builder.ret(ENTRY, None);
                 t.check()
             },
             |k| layout_obligation(k, "dynamic-extent element"),
@@ -287,7 +287,7 @@ fn c_requires_the_sequential_layout_of_a_direct_packed_sequence() {
                 if bad {
                     mutate(&mut t, s, element);
                 }
-                t.ret(ENTRY, None);
+                t.builder.ret(ENTRY, None);
                 t.check()
             },
             |k| layout_obligation(k, detail),
@@ -401,9 +401,9 @@ fn append(case: Append) -> Vec<K> {
         element
     };
     let abi = t.abi(&[(Passing::Mut, list), (Passing::Take, value)], None);
-    t.unit.header.abi = abi;
+    t.builder.unit.header.abi = abi;
     if case != Append::Source {
-        t.unit.header.origin = UnitOrigin::Library;
+        t.builder.unit.header.origin = UnitOrigin::Library;
     }
     let s = t.slot(list, SlotKind::Parameter(0), ROOT);
     let sv = t.version_of(s);
@@ -412,7 +412,7 @@ fn append(case: Append) -> Vec<K> {
     t.param(v);
     let at = t.at(ENTRY, s, &[], &[]);
     let version = t.version_of(s);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::SeqAppend {
             address: at,
@@ -420,7 +420,7 @@ fn append(case: Append) -> Vec<K> {
             version,
         },
     );
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -473,10 +473,10 @@ fn append_address(flat: bool, mutant: bool) -> Vec<K> {
         params.extend([(Passing::Borrow, l::SLICE), (Passing::Borrow, l::U64)]);
     } else {
         params.push((Passing::Take, element));
-        t.unit.header.origin = UnitOrigin::Library;
+        t.builder.unit.header.origin = UnitOrigin::Library;
     }
     let abi = t.abi(&params, Some(l::U64));
-    t.unit.header.abi = abi;
+    t.builder.unit.header.abi = abi;
     let s = t.slot(l::SEQBLK, SlotKind::Parameter(0), ROOT);
     let first = t.version_of(s);
     t.param(first);
@@ -487,7 +487,7 @@ fn append_address(flat: bool, mutant: bool) -> Vec<K> {
     let at = t.at(ENTRY, s, &steps, &[]);
     let end = |t: &mut Lir<Rc>, address| {
         let result = t.plain(l::U64);
-        t.push(ENTRY, Inst::FlatNext { result, address });
+        t.builder.push(ENTRY, Inst::FlatNext { result, address });
         result
     };
     end(&mut t, at);
@@ -505,7 +505,7 @@ fn append_address(flat: bool, mutant: bool) -> Vec<K> {
             &[(0, text), (1, k)],
             placement,
         );
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::FlatAppend {
                 address: whole,
@@ -516,7 +516,7 @@ fn append_address(flat: bool, mutant: bool) -> Vec<K> {
     } else {
         let v = t.owned_or_plain(element);
         t.param(v);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::SeqAppend {
                 address: whole,
@@ -531,7 +531,7 @@ fn append_address(flat: bool, mutant: bool) -> Vec<K> {
         t.at(ENTRY, s, &steps, &[])
     };
     let r = end(&mut t, again);
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 

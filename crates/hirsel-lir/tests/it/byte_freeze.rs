@@ -24,15 +24,15 @@ fn frozen(mutant: u8) -> Vec<K> {
     let owner = t.owned(l::SEQBLK);
     t.param(owner);
     let start = t.plain(l::U64);
-    let ty = t.unit.values[start.index()].ty;
-    let constant = ConstantId(t.unit.tables.constants.len() as u32);
-    t.unit.tables.constants.push(ConstantData {
+    let ty = t.builder.unit.values[start.index()].ty;
+    let constant = ConstantId(t.builder.unit.tables.constants.len() as u32);
+    t.builder.unit.tables.constants.push(ConstantData {
         ty,
         // A whole byte sequence's slice starts at its first element, 8 bytes past the
         // slice data offset (runtime ABI 5); a mutant forges one more.
         value: ConstantValue::Integer(8 + u128::from(mutant == 2)),
     });
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Const {
             result: start,
@@ -41,7 +41,7 @@ fn frozen(mutant: u8) -> Vec<K> {
     );
     let length = t.plain(l::U64);
     if mutant == 3 {
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Const {
                 result: length,
@@ -49,7 +49,7 @@ fn frozen(mutant: u8) -> Vec<K> {
             },
         );
     } else {
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::SeqLen {
                 result: length,
@@ -65,7 +65,7 @@ fn frozen(mutant: u8) -> Vec<K> {
     );
     let result = t.owned(l::SLICE);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result,
@@ -73,7 +73,7 @@ fn frozen(mutant: u8) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 

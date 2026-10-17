@@ -518,7 +518,7 @@ fn program(target: &TargetSpec) -> Program {
             let result = u.plain(table.scalar(case.result));
             let flag = case.flag_kind().map(|kind| u.plain(table.scalar(kind)));
             match case.op {
-                Op::Convert(mode) => u.push(
+                Op::Convert(mode) => u.builder.push(
                     ENTRY,
                     Inst::Convert {
                         result,
@@ -529,7 +529,7 @@ fn program(target: &TargetSpec) -> Program {
                 ),
                 Op::Narrow => {
                     let fits = u.plain(table.scalar(ScalarKind::Bool));
-                    u.push(
+                    u.builder.push(
                         ENTRY,
                         Inst::Convert {
                             result,
@@ -539,7 +539,7 @@ fn program(target: &TargetSpec) -> Program {
                         },
                     );
                     let failure = u.fails(Some("SEM-1"));
-                    u.push(
+                    u.builder.push(
                         ENTRY,
                         Inst::Check {
                             condition: fits,
@@ -547,7 +547,7 @@ fn program(target: &TargetSpec) -> Program {
                         },
                     );
                 }
-                Op::Arith(mode) => u.push(
+                Op::Arith(mode) => u.builder.push(
                     ENTRY,
                     Inst::IntArith {
                         result,
@@ -562,7 +562,7 @@ fn program(target: &TargetSpec) -> Program {
                     // The float operations never fail; their edge carries no rule.
                     let rule = (!FLOATS.contains(&case.kind)).then_some("SEM-1");
                     let failure = u.fails(rule);
-                    u.push(
+                    u.builder.push(
                         ENTRY,
                         Inst::Binary {
                             result,
@@ -573,7 +573,7 @@ fn program(target: &TargetSpec) -> Program {
                         },
                     );
                 }
-                Op::MulAdd => u.push(
+                Op::MulAdd => u.builder.push(
                     ENTRY,
                     Inst::MulAdd {
                         result,
@@ -584,7 +584,7 @@ fn program(target: &TargetSpec) -> Program {
                 ),
             }
             let returned = if case.flag { flag.unwrap() } else { result };
-            u.ret(ENTRY, Some(returned));
+            u.builder.ret(ENTRY, Some(returned));
             seal(&table, &manifest, u.finish())
         })
         .collect();

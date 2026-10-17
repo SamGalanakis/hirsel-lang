@@ -44,12 +44,12 @@ fn program(target: &TargetSpec) -> Program {
         let mut u = Unit::new(&table, name, name);
         u.param(arena);
         let slot = u.slot(arena, SlotKind::Parameter(0));
-        for ty in &mut u.lir.types {
+        for ty in &mut u.builder.unit.types {
             if ty.layout == arena {
                 ty.repr = ValueRepr::Arena;
             }
         }
-        u.lir.tables.arenas.push(ExternalInstance { slot });
+        u.builder.unit.tables.arenas.push(ExternalInstance { slot });
         let block_layout = table.layout(name);
         let payload = payload(&table, name);
         let value = u.int(ENTRY, kind, 42);
@@ -60,10 +60,10 @@ fn program(target: &TargetSpec) -> Program {
             block_layout,
             &[(0, value)],
         );
-        let site = u.lir.tables.constructs.last_mut().unwrap();
+        let site = u.builder.unit.tables.constructs.last_mut().unwrap();
         site.destination = DestinationClass::Arena(slot);
         site.placement = Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0))));
-        u.ret(ENTRY, Some(block));
+        u.builder.ret(ENTRY, Some(block));
         units.push(seal(&table, &manifest, u.finish()));
     }
     Program {
@@ -227,12 +227,12 @@ fn credit_program(target: &TargetSpec, elided: bool, heap_child: bool) -> Progra
     let arena = table.layout("arena");
     u.param(arena);
     let slot = u.slot(arena, SlotKind::Parameter(0));
-    for ty in &mut u.lir.types {
+    for ty in &mut u.builder.unit.types {
         if ty.layout == arena {
             ty.repr = ValueRepr::Arena;
         }
     }
-    u.lir.tables.arenas.push(ExternalInstance { slot });
+    u.builder.unit.tables.arenas.push(ExternalInstance { slot });
     let six = u.int(ENTRY, ScalarKind::U64, 6);
     let child = u.construct_block(
         ENTRY,
@@ -242,7 +242,7 @@ fn credit_program(target: &TargetSpec, elided: bool, heap_child: bool) -> Progra
         &[(0, six)],
     );
     if !heap_child {
-        let site = u.lir.tables.constructs.last_mut().unwrap();
+        let site = u.builder.unit.tables.constructs.last_mut().unwrap();
         site.destination = DestinationClass::Arena(slot);
         site.placement = Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0))));
     }
@@ -253,11 +253,11 @@ fn credit_program(target: &TargetSpec, elided: bool, heap_child: bool) -> Progra
         table.layout("parent"),
         &[(0, child)],
     );
-    let site = u.lir.tables.constructs.last_mut().unwrap();
+    let site = u.builder.unit.tables.constructs.last_mut().unwrap();
     site.destination = DestinationClass::Arena(slot);
     site.placement = Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0))));
     site.arena_no_drop = elided;
-    u.ret(ENTRY, Some(parent));
+    u.builder.ret(ENTRY, Some(parent));
     Program {
         units: vec![seal(&table, &manifest, u.finish())],
         table,

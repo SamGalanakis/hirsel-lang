@@ -377,6 +377,7 @@ dependencies = [
  "hirsel-core-contract",
  "hirsel-diag",
  "hirsel-graph",
+ "hirsel-lir",
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",

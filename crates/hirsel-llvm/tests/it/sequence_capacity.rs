@@ -29,12 +29,12 @@ fn program(target: &TargetSpec) -> Program {
         let slot = u.slot(list, SlotKind::Parameter(0));
         let address = u.address(AddressBase::Slot(slot), &[], list);
         u.prepare(ENTRY, address, None, SourceAnchorId(0));
-        u.lir.tables.loans.push(LoanInfo {
+        u.builder.unit.tables.loans.push(LoanInfo {
             address,
             mutable: false,
         });
         let loan = LoanId(0);
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::BeginLoan {
                 loan,
@@ -44,7 +44,7 @@ fn program(target: &TargetSpec) -> Program {
             },
         );
         let view = u.value(list, Holding::Borrowed(loan));
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Read {
                 result: view,
@@ -54,21 +54,21 @@ fn program(target: &TargetSpec) -> Program {
             },
         );
         let result = u.plain(table.scalar(hirsel_lir::layout_types::ScalarKind::U64));
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::SeqCapacity {
                 result,
                 value: view,
             },
         );
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::EndLoan {
                 loan,
                 if_active: false,
             },
         );
-        u.ret(ENTRY, Some(result));
+        u.builder.ret(ENTRY, Some(result));
         units.push(seal(&table, &manifest, u.finish()));
     }
     Program {

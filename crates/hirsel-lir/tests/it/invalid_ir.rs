@@ -21,9 +21,9 @@ fn dup_and_move<S: Stage>() -> Vec<K> {
     let mut t = Lir::<S>::new(&[BORROW_BLK], None);
     let x = t.plain(l::BLK);
     t.param(x);
-    t.push(ENTRY, Inst::Dup { value: x });
-    let n = t.block(BlockKind::Body, &[]);
-    let fail = t.propagate();
+    t.builder.push(ENTRY, Inst::Dup { value: x });
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let fail = t.builder.propagate();
     t.call(
         ENTRY,
         &[TAKE_BLK],
@@ -32,7 +32,7 @@ fn dup_and_move<S: Stage>() -> Vec<K> {
         (n, &[]),
         fail,
     );
-    t.ret(n, None);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -70,7 +70,7 @@ fn copy_out<S: Stage>(layout: LayoutId) -> Vec<K> {
     let a = t.at(ENTRY, s, &[], &[]);
     let result = t.owned_or_plain(layout);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Copy {
             result,
@@ -79,7 +79,7 @@ fn copy_out<S: Stage>(layout: LayoutId) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -107,7 +107,7 @@ fn release_whole(layout: LayoutId) -> Vec<K> {
     let x = t.owned(layout);
     t.param(x);
     t.release(ENTRY, x, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -129,7 +129,7 @@ fn drop_on_exit<S: Stage>() -> Vec<K> {
     let pv = t.version_of(s);
     t.param(pv);
     let exit = t.cleanup_exit(&[Undo::Drop(s)], None);
-    t.jump(ENTRY, exit, &[]);
+    t.builder.jump(ENTRY, exit, &[]);
     t.check()
 }
 
@@ -137,15 +137,17 @@ fn drop_on_exit<S: Stage>() -> Vec<K> {
 fn dominance(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let p = (!mutant).then(|| t.plain(l::I64));
-    let join = t.block(BlockKind::Body, &Vec::from_iter(p));
-    let yes = t.block(BlockKind::Body, &[]);
-    let no = t.block(BlockKind::Body, &[]);
+    let join = t.builder.block(BlockKind::Body, &Vec::from_iter(p));
+    let yes = t.builder.block(BlockKind::Body, &[]);
+    let no = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (yes, &[]), (no, &[]));
     let a = t.int(yes);
     let b = t.int(no);
-    t.jump(yes, join, &if mutant { vec![] } else { vec![a] });
-    t.jump(no, join, &if mutant { vec![] } else { vec![b] });
-    t.ret(join, Some(p.unwrap_or(a)));
+    t.builder
+        .jump(yes, join, &if mutant { vec![] } else { vec![a] });
+    t.builder
+        .jump(no, join, &if mutant { vec![] } else { vec![b] });
+    t.builder.ret(join, Some(p.unwrap_or(a)));
     t.check()
 }
 
@@ -159,7 +161,7 @@ fn a_value_defined_twice_or_never_is_rejected() {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let a = t.int(ENTRY);
     let constant = ConstantId(0);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Const {
             result: a,
@@ -167,7 +169,7 @@ fn a_value_defined_twice_or_never_is_rejected() {
         },
     );
     t.plain(l::I64);
-    t.ret(ENTRY, Some(a));
+    t.builder.ret(ENTRY, Some(a));
     let violations = t.check();
     assert!(violations.contains(&K::Redefined(a)), "{violations:?}");
     assert!(
@@ -180,15 +182,15 @@ fn a_value_defined_twice_or_never_is_rejected() {
 fn edge_arguments(mutant: u8) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let p = t.plain(l::I64);
-    let join = t.block(BlockKind::Body, &[p]);
+    let join = t.builder.block(BlockKind::Body, &[p]);
     let a = t.int(ENTRY);
     let flag = t.boolean(ENTRY);
     match mutant {
-        0 => t.jump(ENTRY, join, &[a]),
-        1 => t.jump(ENTRY, join, &[]),
-        _ => t.jump(ENTRY, join, &[flag]),
+        0 => t.builder.jump(ENTRY, join, &[a]),
+        1 => t.builder.jump(ENTRY, join, &[]),
+        _ => t.builder.jump(ENTRY, join, &[flag]),
     }
-    t.ret(join, Some(p));
+    t.builder.ret(join, Some(p));
     t.check()
 }
 
@@ -209,8 +211,8 @@ fn call_shape(mutant: u8) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[TAKE_BLK], None);
     let x = t.owned(l::BLK);
     t.param(x);
-    let n = t.block(BlockKind::Body, &[]);
-    let fail = t.propagate();
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let fail = t.builder.propagate();
     let declared = [TAKE_BLK];
     let abi = t.abi(&declared, None);
     let symbol = t.symbol(SymbolKind::Function);
@@ -234,7 +236,7 @@ fn call_shape(mutant: u8) -> Vec<K> {
     if mutant != 0 {
         t.release(n, x, &[]);
     }
-    t.ret(n, None);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -263,25 +265,25 @@ fn exhaustive_switch(variant: LayoutId, mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[(Passing::Borrow, variant)], None);
     let v = t.plain(variant);
     t.param(v);
-    let none = t.block(BlockKind::Body, &[]);
-    let some = t.block(BlockKind::Body, &[]);
-    let never = t.block(BlockKind::Body, &[]);
-    t.ret(none, None);
-    t.ret(some, None);
-    t.term(never, Terminator::Unreachable);
+    let none = t.builder.block(BlockKind::Body, &[]);
+    let some = t.builder.block(BlockKind::Body, &[]);
+    let never = t.builder.block(BlockKind::Body, &[]);
+    t.builder.ret(none, None);
+    t.builder.ret(some, None);
+    t.builder.term(never, Terminator::Unreachable);
     let mut arms = vec![SwitchArm {
         value: 0,
-        edge: t.edge(none, &[]),
+        edge: t.builder.edge(none, &[]),
     }];
     if !mutant {
         arms.push(SwitchArm {
             value: 1,
-            edge: t.edge(some, &[]),
+            edge: t.builder.edge(some, &[]),
         });
     }
-    let otherwise = t.edge(never, &[]);
-    let arms = PoolRange::push(&mut t.unit.pools.switch_arms, arms);
-    t.term(
+    let otherwise = t.builder.edge(never, &[]);
+    let arms = PoolRange::push(&mut t.builder.unit.pools.switch_arms, arms);
+    t.builder.term(
         ENTRY,
         Terminator::Switch {
             value: v,
@@ -326,7 +328,7 @@ fn niche_field(mutant: bool) -> Vec<K> {
     t.prepare(ENTRY, at, &[p]);
     t.read(ENTRY, at, p, ReadMode::Bits, None);
     t.release(ENTRY, p, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -338,27 +340,27 @@ fn a_niche_field_is_a_place_of_its_dataful_variant() {
 #[test]
 fn unreachable_blocks_and_unused_edges_are_rejected() {
     let mut t = Lir::<Rc>::new(&[], None);
-    let dead = t.block(BlockKind::Body, &[]);
-    t.ret(ENTRY, None);
-    t.ret(dead, None);
-    t.edge(ENTRY, &[]);
+    let dead = t.builder.block(BlockKind::Body, &[]);
+    t.builder.ret(ENTRY, None);
+    t.builder.ret(dead, None);
+    t.builder.edge(ENTRY, &[]);
     let violations = t.check();
     assert!(
         violations.contains(&K::EdgeUse(EdgeId(0))),
         "{violations:?}"
     );
     let mut t = Lir::<Rc>::new(&[], None);
-    let dead = t.block(BlockKind::Body, &[]);
-    t.ret(ENTRY, None);
-    t.ret(dead, None);
+    let dead = t.builder.block(BlockKind::Body, &[]);
+    t.builder.ret(ENTRY, None);
+    t.builder.ret(dead, None);
     assert_eq!(t.check(), vec![K::UnreachableBlock(dead)]);
 }
 
 /// Failure edges enter failure cleanup, which never resumes ordinary code.
 fn failure_kinds(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], None);
-    let n = t.block(BlockKind::Body, &[]);
-    let fail = t.block(
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let fail = t.builder.block(
         if mutant {
             BlockKind::Body
         } else {
@@ -366,7 +368,7 @@ fn failure_kinds(mutant: bool) -> Vec<K> {
         },
         &[],
     );
-    t.term(
+    t.builder.term(
         fail,
         if mutant {
             Terminator::Return(None)
@@ -375,7 +377,7 @@ fn failure_kinds(mutant: bool) -> Vec<K> {
         },
     );
     t.call(ENTRY, &[], None, &[], (n, &[]), fail);
-    t.ret(n, None);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -398,7 +400,7 @@ fn address(mutant: u8) -> Vec<K> {
         t.prepare(ENTRY, a, &[]);
     }
     let r = t.plain(layout);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Read {
             result: r,
@@ -407,7 +409,7 @@ fn address(mutant: u8) -> Vec<K> {
             mode: ReadMode::Borrow,
         },
     );
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     // The borrowed view is plain here: no loan names it.
     t.check()
         .into_iter()
@@ -437,7 +439,7 @@ fn origin_names(mutant: bool) -> Vec<K> {
     let a = t.address(AddressBase::Value(u), &[ProjectionStep::Field(0)], l::BLK);
     if mutant {
         let r = t.plain(l::BLK);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Read {
                 result: r,
@@ -447,7 +449,7 @@ fn origin_names(mutant: bool) -> Vec<K> {
             },
         );
     } else {
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::BindOrigin {
                 source: a,
@@ -455,9 +457,9 @@ fn origin_names(mutant: bool) -> Vec<K> {
                 kind: OriginKind::Alias,
             },
         );
-        t.push(ENTRY, Inst::EndOrigin { place: a });
+        t.builder.push(ENTRY, Inst::EndOrigin { place: a });
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
         .into_iter()
         .filter(|k| !matches!(k, K::Holding(_)))
@@ -507,11 +509,11 @@ fn variant_address_version(mutant: bool) -> Vec<K> {
         &[],
     );
     let early = (!mutant).then(|| t.read(ENTRY, field, first, ReadMode::Bits, None));
-    t.push(ENTRY, Inst::StorageLive { slot: d });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: d });
     let second = t.version_of(s);
     let displaced_version = t.version_of(d);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Replace {
             address: whole,
@@ -523,7 +525,7 @@ fn variant_address_version(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: d,
@@ -534,7 +536,7 @@ fn variant_address_version(mutant: bool) -> Vec<K> {
         Some(r) => r,
         None => t.read(ENTRY, field, second, ReadMode::Bits, None),
     };
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -564,7 +566,7 @@ fn a_write_below_every_check_keeps_the_address_placed() {
     let n = t.int(ENTRY);
     let second = t.store(ENTRY, field, n, s);
     let r = t.read(ENTRY, field, second, ReadMode::Bits, None);
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     assert_eq!(t.check(), []);
 }
 
@@ -591,14 +593,14 @@ fn payload_address_version(mutant: bool) -> Vec<K> {
         &before,
     );
     let early = (!mutant).then(|| t.read(ENTRY, field, first, ReadMode::Bits, None));
-    t.push(ENTRY, Inst::StorageLive { slot: d });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: d });
     let second = t.version_of(s);
     let displaced_version = t.version_of(d);
     let failure = {
         let target = t.cleanup(&drop_s);
         t.failure(target)
     };
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Replace {
             address: whole,
@@ -616,7 +618,7 @@ fn payload_address_version(mutant: bool) -> Vec<K> {
         let target = t.cleanup(&drop_s);
         t.failure(target)
     };
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Drop {
             address: old,
@@ -625,7 +627,7 @@ fn payload_address_version(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: d,
@@ -636,7 +638,7 @@ fn payload_address_version(mutant: bool) -> Vec<K> {
         t.read(ENTRY, field, second, ReadMode::Bits, None);
     }
     let exit = t.cleanup_exit(&drop_s, None);
-    t.jump(ENTRY, exit, &[]);
+    t.builder.jump(ENTRY, exit, &[]);
     t.check()
 }
 
@@ -666,15 +668,15 @@ fn joined_address_version(mutant: bool) -> Vec<K> {
     }];
     let field = t.at(ENTRY, s, &steps, &[]);
     let merged = t.version_of(s);
-    let join = t.block(BlockKind::Body, &[merged]);
-    let yes = t.block(BlockKind::Body, &[]);
-    let no = t.block(BlockKind::Body, &[]);
+    let join = t.builder.block(BlockKind::Body, &[merged]);
+    let yes = t.builder.block(BlockKind::Body, &[]);
+    let no = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (yes, &[]), (no, &[]));
-    t.push(yes, Inst::StorageLive { slot: d });
+    t.builder.push(yes, Inst::StorageLive { slot: d });
     let second = t.version_of(s);
     let displaced_version = t.version_of(d);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         yes,
         Inst::Replace {
             address: whole,
@@ -686,22 +688,22 @@ fn joined_address_version(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    t.push(
+    t.builder.push(
         yes,
         Inst::StorageDead {
             slot: d,
             if_live: false,
         },
     );
-    t.jump(yes, join, &[second]);
-    t.jump(no, join, &[first]);
+    t.builder.jump(yes, join, &[second]);
+    t.builder.jump(no, join, &[first]);
     let at = if mutant {
         field
     } else {
         t.at(join, s, &steps, &[])
     };
     let r = t.read(join, at, merged, ReadMode::Bits, None);
-    t.ret(join, Some(r));
+    t.builder.ret(join, Some(r));
     t.check()
 }
 
@@ -724,7 +726,7 @@ fn sequence_write_address(set_len: bool, mutant: bool) -> Vec<K> {
         ],
         Some(l::I64),
     );
-    t.unit.header.origin = UnitOrigin::Library;
+    t.builder.unit.header.origin = UnitOrigin::Library;
     let s = t.slot(l::SEQBLK, SlotKind::Parameter(0), ROOT);
     let first = t.version_of(s);
     t.param(first);
@@ -737,7 +739,7 @@ fn sequence_write_address(set_len: bool, mutant: bool) -> Vec<K> {
     let element = t.at(ENTRY, s, &steps, &[]);
     t.read(ENTRY, element, first, ReadMode::Bits, None);
     let second = t.version_of(s);
-    t.push(
+    t.builder.push(
         ENTRY,
         if set_len {
             Inst::SeqSetLen {
@@ -759,7 +761,7 @@ fn sequence_write_address(set_len: bool, mutant: bool) -> Vec<K> {
         t.at(ENTRY, s, &steps, &[])
     };
     let r = t.read(ENTRY, at, second, ReadMode::Bits, None);
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -778,8 +780,8 @@ fn reaching_version(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
     let d = t.slot(l::I64, SlotKind::Displaced, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
-    t.push(ENTRY, Inst::StorageLive { slot: d });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: d });
     let a = t.at(ENTRY, s, &[], &[]);
     let one = t.int(ENTRY);
     let first = t.store(ENTRY, a, one, s);
@@ -787,7 +789,7 @@ fn reaching_version(mutant: bool) -> Vec<K> {
     let second = t.version_of(s);
     let displaced_version = t.version_of(d);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Replace {
             address: a,
@@ -806,21 +808,21 @@ fn reaching_version(mutant: bool) -> Vec<K> {
         ReadMode::Bits,
         None,
     );
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: d,
             if_live: false,
         },
     );
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -837,8 +839,8 @@ fn displaced_reaching_version(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
     let d = t.slot(l::I64, SlotKind::Displaced, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
-    t.push(ENTRY, Inst::StorageLive { slot: d });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: d });
     let a = t.at(ENTRY, s, &[], &[]);
     let ad = t.at(ENTRY, d, &[], &[]);
     let one = t.int(ENTRY);
@@ -847,7 +849,7 @@ fn displaced_reaching_version(mutant: bool) -> Vec<K> {
     let second = t.version_of(s);
     let displaced_version = t.version_of(d);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Replace {
             address: a,
@@ -869,7 +871,7 @@ fn displaced_reaching_version(mutant: bool) -> Vec<K> {
     let new = t.read(ENTRY, a, second, ReadMode::Take, None);
     let sum = t.value(l::I64, Holding::Plain);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Binary {
             result: sum,
@@ -880,7 +882,7 @@ fn displaced_reaching_version(mutant: bool) -> Vec<K> {
         },
     );
     for slot in [d, s] {
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::StorageDead {
                 slot,
@@ -888,7 +890,7 @@ fn displaced_reaching_version(mutant: bool) -> Vec<K> {
             },
         );
     }
-    t.ret(ENTRY, Some(sum));
+    t.builder.ret(ENTRY, Some(sum));
     t.check()
 }
 
@@ -904,8 +906,8 @@ fn displaced_version_type(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], None);
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
     let d = t.slot(l::I64, SlotKind::Displaced, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
-    t.push(ENTRY, Inst::StorageLive { slot: d });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: d });
     let a = t.at(ENTRY, s, &[], &[]);
     let one = t.int(ENTRY);
     t.store(ENTRY, a, one, s);
@@ -918,7 +920,7 @@ fn displaced_version_type(mutant: bool) -> Vec<K> {
         t.version_of(d)
     };
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Replace {
             address: a,
@@ -931,7 +933,7 @@ fn displaced_version_type(mutant: bool) -> Vec<K> {
         },
     );
     for slot in [d, s] {
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::StorageDead {
                 slot,
@@ -939,7 +941,7 @@ fn displaced_version_type(mutant: bool) -> Vec<K> {
             },
         );
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -957,21 +959,21 @@ fn version_join(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
     let d = t.slot(l::I64, SlotKind::Displaced, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
     let zero = t.int(ENTRY);
     let v0 = t.store(ENTRY, a, zero, s);
     let merged = t.version_of(s);
-    let join = t.block(BlockKind::Body, &[merged]);
-    let yes = t.block(BlockKind::Body, &[]);
-    let no = t.block(BlockKind::Body, &[]);
+    let join = t.builder.block(BlockKind::Body, &[merged]);
+    let yes = t.builder.block(BlockKind::Body, &[]);
+    let no = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (yes, &[]), (no, &[]));
-    t.push(yes, Inst::StorageLive { slot: d });
+    t.builder.push(yes, Inst::StorageLive { slot: d });
     let one = t.int(yes);
     let v1 = t.version_of(s);
     let displaced_version = t.version_of(d);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         yes,
         Inst::Replace {
             address: a,
@@ -983,24 +985,24 @@ fn version_join(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    t.push(
+    t.builder.push(
         yes,
         Inst::StorageDead {
             slot: d,
             if_live: false,
         },
     );
-    t.jump(yes, join, &[if mutant { v0 } else { v1 }]);
-    t.jump(no, join, &[v0]);
+    t.builder.jump(yes, join, &[if mutant { v0 } else { v1 }]);
+    t.builder.jump(no, join, &[v0]);
     let r = t.read(join, a, merged, ReadMode::Bits, None);
-    t.push(
+    t.builder.push(
         join,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(join, Some(r));
+    t.builder.ret(join, Some(r));
     t.check()
 }
 
@@ -1016,24 +1018,24 @@ fn two_entry_loop(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
     let d = t.slot(l::I64, SlotKind::Displaced, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
     let zero = t.int(ENTRY);
     let v0 = t.store(ENTRY, a, zero, s);
     let pa = t.version_of(s);
     let pb = t.version_of(s);
     let pe = t.version_of(s);
-    let block_a = t.block(BlockKind::Body, &[pa]);
-    let block_b = t.block(BlockKind::Body, &[pb]);
-    let exit = t.block(BlockKind::Body, &[pe]);
+    let block_a = t.builder.block(BlockKind::Body, &[pa]);
+    let block_b = t.builder.block(BlockKind::Body, &[pb]);
+    let exit = t.builder.block(BlockKind::Body, &[pe]);
     t.branch(ENTRY, (block_a, &[v0]), (block_b, &[v0]));
     let replace = |t: &mut Lir<Rc>, b: BlockId| {
-        t.push(b, Inst::StorageLive { slot: d });
+        t.builder.push(b, Inst::StorageLive { slot: d });
         let value = t.int(b);
         let version = t.version_of(s);
         let displaced_version = t.version_of(d);
         let failure = t.fails();
-        t.push(
+        t.builder.push(
             b,
             Inst::Replace {
                 address: a,
@@ -1045,7 +1047,7 @@ fn two_entry_loop(mutant: bool) -> Vec<K> {
                 failure,
             },
         );
-        t.push(
+        t.builder.push(
             b,
             Inst::StorageDead {
                 slot: d,
@@ -1063,14 +1065,14 @@ fn two_entry_loop(mutant: bool) -> Vec<K> {
         (exit, &[vb]),
     );
     let r = t.read(exit, a, pe, ReadMode::Bits, None);
-    t.push(
+    t.builder.push(
         exit,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(exit, Some(r));
+    t.builder.ret(exit, Some(r));
     t.check()
 }
 
@@ -1085,9 +1087,9 @@ fn two_entry_credits(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[TAKE_BLK], None);
     let x = t.owned(l::BLK);
     t.param(x);
-    let block_a = t.block(BlockKind::Body, &[]);
-    let block_b = t.block(BlockKind::Body, &[]);
-    let exit = t.block(BlockKind::Body, &[]);
+    let block_a = t.builder.block(BlockKind::Body, &[]);
+    let block_b = t.builder.block(BlockKind::Body, &[]);
+    let exit = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (block_a, &[]), (block_b, &[]));
     if mutant {
         let y = t.new_block(block_a, &[Undo::Release(x)]);
@@ -1097,7 +1099,7 @@ fn two_entry_credits(mutant: bool) -> Vec<K> {
     t.branch(block_a, (block_b, &[]), (exit, &[]));
     t.branch(block_b, (block_a, &[]), (exit, &[]));
     t.release(exit, x, &[]);
-    t.ret(exit, None);
+    t.builder.ret(exit, None);
     t.check()
 }
 
@@ -1111,7 +1113,7 @@ fn initialization(mutant: u8) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
     if mutant != 1 {
-        t.push(ENTRY, Inst::StorageLive { slot: s });
+        t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     }
     let a = t.at(ENTRY, s, &[], &[]);
     let one = t.int(ENTRY);
@@ -1125,14 +1127,14 @@ fn initialization(mutant: u8) -> Vec<K> {
         t.read(ENTRY, a, v, ReadMode::Take, None);
     }
     let r = t.read(ENTRY, a, v, ReadMode::Bits, None);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
         .into_iter()
         .filter(|k| !matches!(k, K::StaleVersion { .. }))
@@ -1161,14 +1163,14 @@ fn storage_leak(mutant: bool) -> Vec<K> {
     let x = t.owned(l::BLK);
     t.param(x);
     let s = t.slot(l::BLK, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[Undo::Release(x)]);
     t.store(ENTRY, a, x, s);
     if mutant {
-        t.ret(ENTRY, None);
+        t.builder.ret(ENTRY, None);
     } else {
         let exit = t.cleanup_exit(&[Undo::Drop(s)], None);
-        t.jump(ENTRY, exit, &[]);
+        t.builder.jump(ENTRY, exit, &[]);
     }
     t.check()
 }
@@ -1197,7 +1199,7 @@ fn borrowed_storage(mutant: bool) -> Vec<K> {
     if mutant {
         t.release(ENTRY, v, &[]);
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -1219,7 +1221,7 @@ fn loans(mutant: u8) -> Vec<K> {
         t.begin(ENTRY, loan);
     }
     let w = t.read(ENTRY, f0, u, ReadMode::Borrow, Some(loan));
-    let n = t.block(BlockKind::Body, &[]);
+    let n = t.builder.block(BlockKind::Body, &[]);
     let fail = t.cleanup(&[Undo::End(loan), Undo::Release(u)]);
     t.call(
         ENTRY,
@@ -1233,7 +1235,7 @@ fn loans(mutant: u8) -> Vec<K> {
         t.end(n, loan);
     }
     t.release(n, u, &[]);
-    t.ret(n, None);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -1254,13 +1256,13 @@ fn loans_follow_their_state_machine_and_cover_their_views() {
 /// region is entered.
 fn region(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Placed>::new(&[], None);
-    t.unit.tables.regions.push(RegionInstance {
+    t.builder.unit.tables.regions.push(RegionInstance {
         scope: ROOT,
         anchor: SourceAnchorId(0),
     });
     let r = RegionInstanceId(0);
     let mark = t.owned(l::PTR);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::RegionEnter {
             result: mark,
@@ -1276,11 +1278,11 @@ fn region(mutant: bool) -> Vec<K> {
         &[(0, one), (1, two)],
         Some(Placement::Fixed(StorageOwner::LocalRegion(r))),
     );
-    t.unit.tables.constructs[site.index()].destination = DestinationClass::Region;
+    t.builder.unit.tables.constructs[site.index()].destination = DestinationClass::Region;
     let v = t.value_as(ValueRepr::Uncounted, l::BLK, Holding::Plain);
     let exit_failure = t.fails();
     let leave = |t: &mut Lir<Placed>, b: BlockId, failure| {
-        t.push(
+        t.builder.push(
             b,
             Inst::RegionExit {
                 mark,
@@ -1289,12 +1291,12 @@ fn region(mutant: bool) -> Vec<K> {
             },
         );
     };
-    let failed = t.block(BlockKind::FailureCleanup, &[]);
+    let failed = t.builder.block(BlockKind::FailureCleanup, &[]);
     let inner = t.fails();
     leave(&mut t, failed, inner);
-    t.term(failed, Terminator::Propagate);
+    t.builder.term(failed, Terminator::Propagate);
     let failure = t.failure(failed);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result: v,
@@ -1302,10 +1304,10 @@ fn region(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    let n = t.block(BlockKind::Body, &[]);
+    let n = t.builder.block(BlockKind::Body, &[]);
     if mutant {
         leave(&mut t, ENTRY, exit_failure);
-        let fail = t.propagate();
+        let fail = t.builder.propagate();
         t.call(
             ENTRY,
             &[(Passing::Borrow, l::BLK)],
@@ -1314,12 +1316,12 @@ fn region(mutant: bool) -> Vec<K> {
             (n, &[]),
             fail,
         );
-        t.ret(n, None);
+        t.builder.ret(n, None);
     } else {
-        let failed = t.block(BlockKind::FailureCleanup, &[]);
+        let failed = t.builder.block(BlockKind::FailureCleanup, &[]);
         let inner = t.fails();
         leave(&mut t, failed, inner);
-        t.term(failed, Terminator::Propagate);
+        t.builder.term(failed, Terminator::Propagate);
         t.call(
             ENTRY,
             &[(Passing::Borrow, l::BLK)],
@@ -1329,7 +1331,7 @@ fn region(mutant: bool) -> Vec<K> {
             failed,
         );
         leave(&mut t, n, exit_failure);
-        t.ret(n, None);
+        t.builder.ret(n, None);
     }
     t.check()
 }
@@ -1354,7 +1356,7 @@ fn placement<S: Stage>(placed: bool) -> Vec<K> {
     );
     let v = t.owned(l::BLK);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result: v,
@@ -1362,7 +1364,7 @@ fn placement<S: Stage>(placed: bool) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(v));
+    t.builder.ret(ENTRY, Some(v));
     t.check()
 }
 
@@ -1392,8 +1394,8 @@ fn ready_call(destination: Option<DestinationClass>, native: Disposition) -> Vec
         .result
         .as_ref()
         .map(|r| r.layout);
-    let n = t.block(BlockKind::Body, &[]);
-    let fail = t.propagate();
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let fail = t.builder.propagate();
     t.call_to(
         ENTRY,
         Callee::Operation(OperationRef(0)),
@@ -1404,8 +1406,8 @@ fn ready_call(destination: Option<DestinationClass>, native: Disposition) -> Vec
         (n, &[]),
         fail,
     );
-    t.unit.tables.calls[0].destination = destination;
-    t.ret(n, None);
+    t.builder.unit.tables.calls[0].destination = destination;
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -1451,7 +1453,7 @@ fn accepted_units_are_sealed_and_rejected_units_returned() {
         if release {
             t.release(ENTRY, x, &[]);
         }
-        t.ret(ENTRY, None);
+        t.builder.ret(ENTRY, None);
         t.finish()
     };
     let (unit, table, manifest) = build(true);
@@ -1496,7 +1498,7 @@ fn accepted_units_are_sealed_and_rejected_units_returned() {
     // A table that fails its independent layout validation is rejected before
     // any unit check reads it.
     let mut t = Lir::<Rc>::new(&[], None);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.table.layouts[l::PAY.0 as usize].align = 3;
     let violations = t.check();
     assert!(!violations.is_empty());
@@ -1525,7 +1527,7 @@ fn rich() -> (
     let loan = t.loan(au, false);
     t.begin(ENTRY, loan);
     let w = t.read(ENTRY, au, u, ReadMode::Borrow, Some(loan));
-    let header = t.block(BlockKind::Body, &[]);
+    let header = t.builder.block(BlockKind::Body, &[]);
     let fail = t.cleanup(&[Undo::End(loan), Undo::Release(u)]);
     t.call(
         ENTRY,
@@ -1535,19 +1537,19 @@ fn rich() -> (
         (header, &[]),
         fail,
     );
-    let body = t.block(BlockKind::Body, &[]);
-    let after = t.block(BlockKind::Body, &[]);
+    let body = t.builder.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[]);
     t.branch(header, (body, &[]), (after, &[]));
-    t.jump(body, header, &[]);
+    t.builder.jump(body, header, &[]);
     t.end(after, loan);
     let aw = t.at(after, p, &[ProjectionStep::Field(1)], &[Undo::Release(u)]);
     let ploan = t.loan(aw, false);
     t.begin(after, ploan);
     let v = t.read(after, aw, pv, ReadMode::Borrow, Some(ploan));
-    t.push(after, Inst::Dup { value: v });
+    t.builder.push(after, Inst::Dup { value: v });
     t.end(after, ploan);
     let exit = t.cleanup_exit(&[Undo::Release(v), Undo::Release(u)], None);
-    t.jump(after, exit, &[]);
+    t.builder.jump(after, exit, &[]);
     t.finish()
 }
 
@@ -1667,7 +1669,7 @@ enum MutRead {
 fn mut_call_version(case: MutRead) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
     let one = t.int(ENTRY);
     let before = t.store(ENTRY, a, one, s);
@@ -1679,8 +1681,8 @@ fn mut_call_version(case: MutRead) -> Vec<K> {
     if case == MutRead::BeforeCall {
         t.read(ENTRY, a, after, ReadMode::Bits, None);
     }
-    let n = t.block(BlockKind::Body, &[]);
-    let fb = t.block(BlockKind::FailureCleanup, &[]);
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let fb = t.builder.block(BlockKind::FailureCleanup, &[]);
     t.read(
         fb,
         a,
@@ -1692,7 +1694,7 @@ fn mut_call_version(case: MutRead) -> Vec<K> {
         ReadMode::Bits,
         None,
     );
-    t.term(fb, Terminator::Propagate);
+    t.builder.term(fb, Terminator::Propagate);
     t.call(
         ENTRY,
         &[(Passing::Mut, l::I64)],
@@ -1715,14 +1717,14 @@ fn mut_call_version(case: MutRead) -> Vec<K> {
         ReadMode::Bits,
         None,
     );
-    t.push(
+    t.builder.push(
         n,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(n, Some(r));
+    t.builder.ret(n, Some(r));
     t.check()
 }
 
@@ -1763,10 +1765,10 @@ fn capture_version(case: CaptureRead) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], Some(l::I64));
     let c = t.slot(l::I64, SlotKind::Capture(0), ROOT);
     let d = t.slot(l::I64, SlotKind::Displaced, ROOT);
-    let entry = t.unit.captures[0];
+    let entry = t.builder.unit.captures[0];
     match case {
-        CaptureRead::Missing => t.unit.captures.clear(),
-        CaptureRead::WrongType => t.unit.captures[0] = t.plain(l::BOOL),
+        CaptureRead::Missing => t.builder.unit.captures.clear(),
+        CaptureRead::WrongType => t.builder.unit.captures[0] = t.plain(l::BOOL),
         _ => {}
     }
     let a = t.at(ENTRY, c, &[], &[]);
@@ -1782,11 +1784,11 @@ fn capture_version(case: CaptureRead) -> Vec<K> {
         ReadMode::Bits,
         None,
     );
-    t.push(ENTRY, Inst::StorageLive { slot: d });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: d });
     let replaced = t.version_of(c);
     let displaced_version = t.version_of(d);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Replace {
             address: a,
@@ -1809,14 +1811,14 @@ fn capture_version(case: CaptureRead) -> Vec<K> {
         ReadMode::Bits,
         None,
     );
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: d,
             if_live: false,
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -1857,22 +1859,22 @@ fn string_literal(case: Literal) -> Vec<K> {
         l::SLICE
     };
     let ty = t.ty(ValueRepr::Aggregate, layout);
-    t.unit.tables.constants.push(ConstantData {
+    t.builder.unit.tables.constants.push(ConstantData {
         ty,
         value: ConstantValue::String("hirsel".into()),
     });
-    let constant = ConstantId(t.unit.tables.constants.len() as u32 - 1);
+    let constant = ConstantId(t.builder.unit.tables.constants.len() as u32 - 1);
     let holding = if case == Literal::OwnedSlice {
         Holding::Owned
     } else {
         Holding::Plain
     };
     let result = t.value_as(ValueRepr::Aggregate, layout, holding);
-    t.push(ENTRY, Inst::Const { result, constant });
+    t.builder.push(ENTRY, Inst::Const { result, constant });
     if case == Literal::OwnedSlice {
         t.release(ENTRY, result, &[]);
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -1890,13 +1892,13 @@ fn closure_at(layout: LayoutId) -> Vec<K> {
     let code = t.symbol(SymbolKind::Function);
     let abi = t.abi_shaped(CallableShape::Closure, &[], None);
     let captures = PoolRange::push(
-        &mut t.unit.pools.captures,
+        &mut t.builder.unit.pools.captures,
         [CaptureValue {
             value: x,
             usage: CaptureUse::Copy,
         }],
     );
-    t.unit.tables.closures.push(ClosureSite {
+    t.builder.unit.tables.closures.push(ClosureSite {
         code: Some(ClosureCode {
             symbol: code,
             abi: abi,
@@ -1907,10 +1909,10 @@ fn closure_at(layout: LayoutId) -> Vec<K> {
         placement: None,
         anchor: SourceAnchorId(0),
     });
-    let closure = ClosureId(t.unit.tables.closures.len() as u32 - 1);
+    let closure = ClosureId(t.builder.unit.tables.closures.len() as u32 - 1);
     let result = t.owned(layout);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Closure {
             result,
@@ -1918,7 +1920,7 @@ fn closure_at(layout: LayoutId) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -1937,11 +1939,11 @@ fn a_closure_is_its_specialized_or_its_erased_callable() {
 /// without a normal edge (LIR schema revision 19).
 fn call_divergence(callee_diverges: bool, returning: bool) -> Vec<K> {
     let mut t = Lir::<Rc>::new(&[], None);
-    let fail = t.propagate();
+    let fail = t.builder.propagate();
     let abi = t.abi(&[], None);
     t.table.fn_abis[abi.0 as usize].diverges = callee_diverges;
     if returning {
-        let n = t.block(BlockKind::Body, &[]);
+        let n = t.builder.block(BlockKind::Body, &[]);
         let symbol = t.symbol(SymbolKind::Function);
         t.call_to(
             ENTRY,
@@ -1953,7 +1955,7 @@ fn call_divergence(callee_diverges: bool, returning: bool) -> Vec<K> {
             (n, &[]),
             fail,
         );
-        t.ret(n, None);
+        t.builder.ret(n, None);
     } else {
         t.diverging_call(ENTRY, abi, fail);
     }
@@ -1982,11 +1984,11 @@ fn a_diverging_function_has_no_normal_return() {
     pair(
         |mutant| {
             let mut t = Lir::<Rc>::new(&[], None);
-            let fail = t.propagate();
-            let own = t.unit.header.abi;
+            let fail = t.builder.propagate();
+            let own = t.builder.unit.header.abi;
             t.table.fn_abis[own.0 as usize].diverges = true;
             if mutant {
-                t.ret(ENTRY, None);
+                t.builder.ret(ENTRY, None);
             } else {
                 let callee = t.abi(&[], None);
                 t.table.fn_abis[callee.0 as usize].diverges = true;

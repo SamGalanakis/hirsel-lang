@@ -29,14 +29,14 @@ fn payload(boxed: bool, nested: bool) -> Vec<K> {
         if nested { l::PAY } else { l::SEQ },
     );
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Address {
             address: a,
             failure,
         },
     );
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -72,18 +72,22 @@ fn partial_transfer(bad_mask: bool) -> Vec<K> {
     t.release_then(ENTRY, taken, &[Undo::Drop(s)]);
     let whole = t.at(ENTRY, s, &[], &[Undo::Drop(s)]);
     let pointer = t.read(ENTRY, whole, version, ReadMode::Take, None);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    let words = PoolRange::push(&mut t.unit.pools.mask_words, [2]);
-    t.unit.tables.masks.push(FieldMask { fields: 2, words });
+    let words = PoolRange::push(&mut t.builder.unit.pools.mask_words, [2]);
+    t.builder
+        .unit
+        .tables
+        .masks
+        .push(FieldMask { fields: 2, words });
     let anchor = t.cleanup_anchor();
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Release {
             value: pointer,
@@ -97,7 +101,7 @@ fn partial_transfer(bad_mask: bool) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 

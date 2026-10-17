@@ -19,11 +19,11 @@ fn field_flag(mutation: Mutation) -> Vec<K> {
     let value = t.plain(l::PAY);
     t.param(value);
     let slot = t.slot(l::PAY, SlotKind::Parameter(0), ROOT);
-    let version = t.unit.parameters[0];
+    let version = t.builder.unit.parameters[0];
     let field = t.at(ENTRY, slot, &[ProjectionStep::Field(0)], &[]);
     let sibling = t.at(ENTRY, slot, &[ProjectionStep::Field(1)], &[]);
-    let took = t.block(BlockKind::Body, &[]);
-    let kept = t.block(BlockKind::Body, &[]);
+    let took = t.builder.block(BlockKind::Body, &[]);
+    let kept = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (took, &[]), (kept, &[]));
     t.read(took, field, version, ReadMode::Take, None);
     let absent = t.bool_const(took, matches!(mutation, Mutation::WrongArgument));
@@ -34,18 +34,18 @@ fn field_flag(mutation: Mutation) -> Vec<K> {
         Mutation::WrongPath => vec![ProjectionStep::Field(0), ProjectionStep::Field(0)],
         _ => vec![ProjectionStep::Field(0)],
     };
-    t.unit.tables.init_flags.last_mut().unwrap().path =
-        PoolRange::push(&mut t.unit.pools.projections, path);
-    let join = t.block(BlockKind::Body, &[flag]);
-    t.jump(took, join, &[absent]);
-    t.jump(kept, join, &[present]);
+    t.builder.unit.tables.init_flags.last_mut().unwrap().path =
+        PoolRange::push(&mut t.builder.unit.pools.projections, path);
+    let join = t.builder.block(BlockKind::Body, &[flag]);
+    t.builder.jump(took, join, &[absent]);
+    t.builder.jump(kept, join, &[present]);
     // The parent remains live, with its independent sibling read after the join.
     t.read(join, sibling, version, ReadMode::Bits, None);
     if matches!(mutation, Mutation::UnguardedRead) {
         t.read(join, field, version, ReadMode::Bits, None);
     }
-    let full = t.block(BlockKind::Body, &[]);
-    let empty = t.block(BlockKind::Body, &[]);
+    let full = t.builder.block(BlockKind::Body, &[]);
+    let empty = t.builder.block(BlockKind::Body, &[]);
     t.branch_on(join, flag, (full, &[]), (empty, &[]));
     t.read(full, field, version, ReadMode::Take, None);
     let forwarded = if matches!(mutation, Mutation::Stale) {
@@ -54,20 +54,22 @@ fn field_flag(mutation: Mutation) -> Vec<K> {
         t.bool_const(full, false)
     };
     let after = t.flag(slot);
-    t.unit.tables.init_flags.last_mut().unwrap().path =
-        PoolRange::push(&mut t.unit.pools.projections, [ProjectionStep::Field(0)]);
-    let end = t.block(BlockKind::Body, &[after]);
-    t.jump(full, end, &[forwarded]);
-    t.jump(empty, end, &[flag]);
+    t.builder.unit.tables.init_flags.last_mut().unwrap().path = PoolRange::push(
+        &mut t.builder.unit.pools.projections,
+        [ProjectionStep::Field(0)],
+    );
+    let end = t.builder.block(BlockKind::Body, &[after]);
+    t.builder.jump(full, end, &[forwarded]);
+    t.builder.jump(empty, end, &[flag]);
     t.read(end, sibling, version, ReadMode::Take, None);
-    t.push(
+    t.builder.push(
         end,
         Inst::StorageDead {
             slot,
             if_live: false,
         },
     );
-    t.ret(end, None);
+    t.builder.ret(end, None);
     t.check()
 }
 
@@ -104,14 +106,14 @@ fn explicit_finalization_is_a_ready_stage_primitive() {
     let mut t = Lir::<Ready>::new(&[], None);
     let slot = t.slot(l::RES, SlotKind::Local, ROOT);
     let whole = t.at(ENTRY, slot, &[], &[]);
-    t.push(ENTRY, Inst::StorageLive { slot });
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
     let n = t.int(ENTRY);
     let symbol = t.symbol(SymbolKind::Type);
     let constructor =
         t.construct_site(ConstructorKind::Record(symbol), l::RES, &[(0, n)], t.heap());
     let value = t.owned(l::RES);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result: value,
@@ -121,28 +123,28 @@ fn explicit_finalization_is_a_ready_stage_primitive() {
     );
     t.store(ENTRY, whole, value, slot);
     let anchor = t.cleanup_anchor();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::FinalizeBegin {
             address: whole,
             anchor,
         },
     );
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::FinalizeEnd {
             address: whole,
             anchor,
         },
     );
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot,
             if_live: false,
         },
     );
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     let (unit, layouts, manifest) = t.finish();
     let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
     let inputs = hirsel_lir::validate::Inputs {
@@ -168,7 +170,7 @@ fn future_version(live: bool) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[], None);
     let slot = t.slot(l::I64, SlotKind::Local, ROOT);
     let whole = t.at(ENTRY, slot, &[], &[]);
-    t.push(ENTRY, Inst::StorageLive { slot });
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
     let first = t.int(ENTRY);
     let first = t.store(ENTRY, whole, first, slot);
     if !live {
@@ -176,25 +178,25 @@ fn future_version(live: bool) -> Vec<K> {
     }
     let version = t.version_of(slot);
     let flag = t.flag(slot);
-    let join = t.block(BlockKind::Body, &[version, flag]);
-    let write = t.block(BlockKind::Body, &[]);
-    let done = t.block(BlockKind::Body, &[]);
+    let join = t.builder.block(BlockKind::Body, &[version, flag]);
+    let write = t.builder.block(BlockKind::Body, &[]);
+    let done = t.builder.block(BlockKind::Body, &[]);
     let value = t.int(write);
     let future = t.store(write, whole, value, slot);
     let empty = t.bool_const(ENTRY, live);
     let full = t.bool_const(write, true);
-    t.jump(ENTRY, join, &[future, empty]);
-    t.jump(write, join, &[future, full]);
+    t.builder.jump(ENTRY, join, &[future, empty]);
+    t.builder.jump(write, join, &[future, full]);
     t.branch_on(join, flag, (done, &[]), (write, &[]));
     t.read(done, whole, version, ReadMode::Take, None);
-    t.push(
+    t.builder.push(
         done,
         Inst::StorageDead {
             slot,
             if_live: false,
         },
     );
-    t.ret(done, None);
+    t.builder.ret(done, None);
     t.check()
 }
 
@@ -232,32 +234,33 @@ fn phase_flag(repeat: bool) -> Vec<K> {
     // These static field preparations cannot fail. Their required failure
     // references name an implementation fault, which has no source cleanup.
     let failures: Vec<_> = t
+        .builder
         .unit
         .tables
         .failures
         .iter()
-        .map(|f| t.unit.tables.edges[f.cleanup.index()].target)
+        .map(|f| t.builder.unit.tables.edges[f.cleanup.index()].target)
         .collect();
     for block in failures {
-        t.term(
+        t.builder.term(
             block,
             Terminator::InvariantFault {
                 reason: "static field preparation failed".into(),
             },
         );
     }
-    let finished = t.block(BlockKind::Body, &[]);
-    let live = t.block(BlockKind::Body, &[]);
+    let finished = t.builder.block(BlockKind::Body, &[]);
+    let live = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (finished, &[]), (live, &[]));
     let anchor = t.cleanup_anchor();
-    t.push(
+    t.builder.push(
         finished,
         Inst::FinalizeBegin {
             address: first,
             anchor,
         },
     );
-    t.push(
+    t.builder.push(
         finished,
         Inst::FinalizeEnd {
             address: first,
@@ -267,23 +270,25 @@ fn phase_flag(repeat: bool) -> Vec<K> {
     let absent = t.bool_const(finished, false);
     let present = t.bool_const(live, true);
     let flag = t.flag(slot);
-    t.unit.tables.init_flags.last_mut().unwrap().path =
-        PoolRange::push(&mut t.unit.pools.projections, [ProjectionStep::Field(0)]);
-    let joined = t.block(BlockKind::Body, &[flag]);
-    t.jump(finished, joined, &[absent]);
-    t.jump(live, joined, &[present]);
-    let yes = t.block(BlockKind::Body, &[]);
-    let no = t.block(BlockKind::Body, &[]);
-    let after = t.block(BlockKind::Body, &[]);
+    t.builder.unit.tables.init_flags.last_mut().unwrap().path = PoolRange::push(
+        &mut t.builder.unit.pools.projections,
+        [ProjectionStep::Field(0)],
+    );
+    let joined = t.builder.block(BlockKind::Body, &[flag]);
+    t.builder.jump(finished, joined, &[absent]);
+    t.builder.jump(live, joined, &[present]);
+    let yes = t.builder.block(BlockKind::Body, &[]);
+    let no = t.builder.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[]);
     t.branch_on(joined, flag, (yes, &[]), (no, &[]));
-    t.push(
+    t.builder.push(
         yes,
         Inst::FinalizeBegin {
             address: first,
             anchor,
         },
     );
-    t.push(
+    t.builder.push(
         yes,
         Inst::FinalizeEnd {
             address: first,
@@ -291,7 +296,7 @@ fn phase_flag(repeat: bool) -> Vec<K> {
         },
     );
     if repeat {
-        t.push(
+        t.builder.push(
             yes,
             Inst::FinalizeBegin {
                 address: first,
@@ -299,30 +304,30 @@ fn phase_flag(repeat: bool) -> Vec<K> {
             },
         );
     }
-    t.jump(yes, after, &[]);
-    t.jump(no, after, &[]);
-    t.push(
+    t.builder.jump(yes, after, &[]);
+    t.builder.jump(no, after, &[]);
+    t.builder.push(
         after,
         Inst::FinalizeBegin {
             address: sibling,
             anchor,
         },
     );
-    t.push(
+    t.builder.push(
         after,
         Inst::FinalizeEnd {
             address: sibling,
             anchor,
         },
     );
-    t.push(
+    t.builder.push(
         after,
         Inst::StorageDead {
             slot,
             if_live: false,
         },
     );
-    t.ret(after, None);
+    t.builder.ret(after, None);
     t.check()
 }
 
@@ -345,14 +350,15 @@ fn forwarded_phase(repeat: bool) -> Vec<K> {
     let whole = t.at(ENTRY, slot, &[], &[]);
     let child = t.at(ENTRY, slot, &[ProjectionStep::Field(0)], &[]);
     let failures: Vec<_> = t
+        .builder
         .unit
         .tables
         .failures
         .iter()
-        .map(|f| t.unit.tables.edges[f.cleanup.index()].target)
+        .map(|f| t.builder.unit.tables.edges[f.cleanup.index()].target)
         .collect();
     for block in failures {
-        t.term(
+        t.builder.term(
             block,
             Terminator::InvariantFault {
                 reason: "static field preparation failed".into(),
@@ -361,20 +367,20 @@ fn forwarded_phase(repeat: bool) -> Vec<K> {
     }
     let yes = t.bool_const(ENTRY, true);
     let flag = t.flag(slot);
-    let joined = t.block(BlockKind::Body, &[flag]);
-    t.jump(ENTRY, joined, &[yes]);
-    let full = t.block(BlockKind::Body, &[]);
-    let empty = t.block(BlockKind::Body, &[]);
+    let joined = t.builder.block(BlockKind::Body, &[flag]);
+    t.builder.jump(ENTRY, joined, &[yes]);
+    let full = t.builder.block(BlockKind::Body, &[]);
+    let empty = t.builder.block(BlockKind::Body, &[]);
     t.branch_on(joined, flag, (full, &[]), (empty, &[]));
     let anchor = t.cleanup_anchor();
-    t.push(
+    t.builder.push(
         full,
         Inst::FinalizeBegin {
             address: whole,
             anchor,
         },
     );
-    t.push(
+    t.builder.push(
         full,
         Inst::FinalizeEnd {
             address: whole,
@@ -382,12 +388,12 @@ fn forwarded_phase(repeat: bool) -> Vec<K> {
         },
     );
     let forwarded = t.flag(slot);
-    let after = t.block(BlockKind::Body, &[forwarded]);
-    t.jump(full, after, &[flag]);
-    let ready = t.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[forwarded]);
+    t.builder.jump(full, after, &[flag]);
+    let ready = t.builder.block(BlockKind::Body, &[]);
     t.branch_on(after, forwarded, (ready, &[]), (empty, &[]));
     if repeat {
-        t.push(
+        t.builder.push(
             ready,
             Inst::FinalizeBegin {
                 address: whole,
@@ -397,22 +403,22 @@ fn forwarded_phase(repeat: bool) -> Vec<K> {
     }
     let value = t.read(ready, child, version, ReadMode::Take, None);
     t.release(ready, value, &[]);
-    t.push(
+    t.builder.push(
         ready,
         Inst::StorageDead {
             slot,
             if_live: false,
         },
     );
-    t.ret(ready, None);
-    t.push(
+    t.builder.ret(ready, None);
+    t.builder.push(
         empty,
         Inst::StorageDead {
             slot,
             if_live: false,
         },
     );
-    t.ret(empty, None);
+    t.builder.ret(empty, None);
     t.check()
 }
 

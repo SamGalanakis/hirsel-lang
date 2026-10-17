@@ -23,7 +23,7 @@ fn compare_params(operand: LayoutId, at: LayoutId, result: LayoutId) -> Vec<K> {
     t.param(y);
     let r = t.plain(result);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Compare {
             result: r,
@@ -34,7 +34,7 @@ fn compare_params(operand: LayoutId, at: LayoutId, result: LayoutId) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -89,7 +89,7 @@ fn compare_owned(mutant: bool) -> Vec<K> {
     let held = if mutant { vec![b] } else { vec![a, b] };
     let target = t.releasing(&held);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Compare {
             result: r,
@@ -104,7 +104,7 @@ fn compare_owned(mutant: bool) -> Vec<K> {
         t.release(ENTRY, a, &[b]);
     }
     t.release(ENTRY, b, &[]);
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -133,7 +133,7 @@ fn compare_view(mutant: bool) -> Vec<K> {
     };
     let target = t.cleanup(&undo);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Compare {
             result: r,
@@ -148,7 +148,7 @@ fn compare_view(mutant: bool) -> Vec<K> {
         t.end(ENTRY, loan);
     }
     t.release(ENTRY, u, &[]);
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -186,14 +186,14 @@ fn is_unique<S: Stage>(case: Unique) -> Vec<K> {
         t.release(ENTRY, a, &[]);
     }
     let value = if case == Unique::Uncounted { x } else { a };
-    let after = t.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[]);
     let r = t.plain(answer);
-    t.push(ENTRY, Inst::IsUnique { result: r, value });
-    t.jump(ENTRY, after, &[]);
+    t.builder.push(ENTRY, Inst::IsUnique { result: r, value });
+    t.builder.jump(ENTRY, after, &[]);
     if case != Unique::Released {
         t.release(after, a, &[]);
     }
-    t.ret(after, Some(r));
+    t.builder.ret(after, Some(r));
     t.check()
 }
 
@@ -252,7 +252,7 @@ fn weaken(from: LayoutId, to: LayoutId, twice: bool) -> Vec<K> {
     let f = t.owned(from);
     t.param(f);
     let g = t.owned(to);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Weaken {
             result: g,
@@ -262,7 +262,7 @@ fn weaken(from: LayoutId, to: LayoutId, twice: bool) -> Vec<K> {
     let mut returned = g;
     if twice {
         returned = t.owned(to);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Weaken {
                 result: returned,
@@ -270,7 +270,7 @@ fn weaken(from: LayoutId, to: LayoutId, twice: bool) -> Vec<K> {
             },
         );
     }
-    t.ret(ENTRY, Some(returned));
+    t.builder.ret(ENTRY, Some(returned));
     t.check()
 }
 
@@ -332,18 +332,18 @@ fn joined_holder(case: Join, holder: bool) -> Vec<K> {
     let l0 = t.loan(first, false);
     let l1 = t.loan(second, false);
     let p = t.borrowed(l::BLK, if case == Join::Declared { l1 } else { l0 });
-    let join = t.block(BlockKind::Body, &[p]);
-    let yes = t.block(BlockKind::Body, &[]);
-    let no = t.block(BlockKind::Body, &[]);
+    let join = t.builder.block(BlockKind::Body, &[p]);
+    let yes = t.builder.block(BlockKind::Body, &[]);
+    let no = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (yes, &[]), (no, &[]));
     t.begin(yes, l0);
     let a = t.read(yes, first, sv, ReadMode::Borrow, Some(l0));
-    t.jump(yes, join, &[a]);
+    t.builder.jump(yes, join, &[a]);
     t.begin(no, l1);
     let b = t.read(no, second, sv, ReadMode::Borrow, Some(l1));
-    t.jump(no, join, &[b]);
+    t.builder.jump(no, join, &[b]);
     let end = |t: &mut Lir<Rc>, block: BlockId, loan: LoanId| {
-        t.push(
+        t.builder.push(
             block,
             Inst::EndLoan {
                 loan,
@@ -351,10 +351,10 @@ fn joined_holder(case: Join, holder: bool) -> Vec<K> {
             },
         );
     };
-    let fail = t.block(BlockKind::FailureCleanup, &[]);
+    let fail = t.builder.block(BlockKind::FailureCleanup, &[]);
     end(&mut t, fail, l0);
     end(&mut t, fail, l1);
-    t.term(fail, Terminator::Propagate);
+    t.builder.term(fail, Terminator::Propagate);
     let (argument, layout) = if holder {
         use hirsel_lir::layout_types::{CopyRecipe, FieldLayout, ScanStep, SizeSpec};
         let mut record = t.table.layouts[l::PAIR.0 as usize].clone();
@@ -375,7 +375,7 @@ fn joined_holder(case: Join, holder: bool) -> Vec<K> {
             t.construct_site(ConstructorKind::Record(symbol), layout, &[(0, p)], t.heap());
         let result = t.plain(layout);
         let failure = t.failure(fail);
-        t.push(
+        t.builder.push(
             join,
             Inst::Construct {
                 result,
@@ -391,7 +391,7 @@ fn joined_holder(case: Join, holder: bool) -> Vec<K> {
     match case {
         Join::EndedLoan => end(&mut t, join, l0),
         Join::WriteSource => {
-            let written = t.block(BlockKind::Body, &[]);
+            let written = t.builder.block(BlockKind::Body, &[]);
             let version = t.version_of(s);
             t.call(
                 join,
@@ -408,7 +408,7 @@ fn joined_holder(case: Join, holder: bool) -> Vec<K> {
         }
         Join::Valid | Join::Declared => {}
     }
-    let after = t.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[]);
     t.call(
         at,
         &[(Passing::Borrow, layout)],
@@ -419,7 +419,7 @@ fn joined_holder(case: Join, holder: bool) -> Vec<K> {
     );
     end(&mut t, after, l0);
     end(&mut t, after, l1);
-    t.ret(after, None);
+    t.builder.ret(after, None);
     t.check()
 }
 
@@ -478,14 +478,14 @@ fn flat_write(variable: bool, store: bool) -> Vec<K> {
         (1, l::U64)
     };
     let at = t.at(ENTRY, s, &[ProjectionStep::Field(field)], &[]);
-    let after = t.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[]);
     if store {
         let v = t.read(ENTRY, at, sv, ReadMode::Take, None);
         t.store(ENTRY, at, v, s);
-        t.jump(ENTRY, after, &[]);
+        t.builder.jump(ENTRY, after, &[]);
     } else {
-        let fail = t.block(BlockKind::FailureCleanup, &[]);
-        t.term(fail, Terminator::Propagate);
+        let fail = t.builder.block(BlockKind::FailureCleanup, &[]);
+        t.builder.term(fail, Terminator::Propagate);
         let version = t.version_of(s);
         t.call(
             ENTRY,
@@ -499,7 +499,7 @@ fn flat_write(variable: bool, store: bool) -> Vec<K> {
             fail,
         );
     }
-    t.ret(after, None);
+    t.builder.ret(after, None);
     t.check()
 }
 
@@ -524,13 +524,13 @@ fn borrowed_capture(captured: LayoutId) -> Vec<K> {
     let code = t.symbol(SymbolKind::Function);
     let abi = t.abi_shaped(CallableShape::Closure, &[], None);
     let captures = PoolRange::push(
-        &mut t.unit.pools.captures,
+        &mut t.builder.unit.pools.captures,
         [CaptureValue {
             value: x,
             usage: CaptureUse::Borrow,
         }],
     );
-    t.unit.tables.closures.push(ClosureSite {
+    t.builder.unit.tables.closures.push(ClosureSite {
         code: Some(ClosureCode {
             symbol: code,
             abi: abi,
@@ -541,10 +541,10 @@ fn borrowed_capture(captured: LayoutId) -> Vec<K> {
         placement: None,
         anchor: SourceAnchorId(0),
     });
-    let closure = ClosureId(t.unit.tables.closures.len() as u32 - 1);
+    let closure = ClosureId(t.builder.unit.tables.closures.len() as u32 - 1);
     let result = t.owned(l::CLOSURE);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Closure {
             result,
@@ -552,7 +552,7 @@ fn borrowed_capture(captured: LayoutId) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 

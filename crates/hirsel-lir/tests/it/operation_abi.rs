@@ -311,23 +311,23 @@ fn fixture(
     let (abi, table) = registry.derive(operation, &actuals, &target).unwrap();
     let mut b = Lir::<Value>::new(&[], None);
     b.table = table;
-    b.unit.header.abi = FnAbiId(0);
-    b.unit.tables.operations = vec![operation.clone()];
+    b.builder.unit.header.abi = FnAbiId(0);
+    b.builder.unit.tables.operations = vec![operation.clone()];
     let mut arguments = Vec::new();
     for p in &abi.parameters {
         let repr = repr(&b.table, p.layout);
         let v = b.value_as(repr, p.layout, Holding::Plain);
         b.param(v);
         let value = if p.convention == Passing::Mut {
-            let t = b.unit.values[v.index()].ty;
-            let slot = SlotId(b.unit.slots.len() as u32);
-            b.unit.slots.push(SlotInfo {
+            let t = b.builder.unit.values[v.index()].ty;
+            let slot = SlotId(b.builder.unit.slots.len() as u32);
+            b.builder.unit.slots.push(SlotInfo {
                 ty: t,
                 kind: SlotKind::Parameter(p.source),
                 scope: support::ROOT,
             });
-            let address = AddressId(b.unit.addresses.len() as u32);
-            b.unit.addresses.push(AddressInfo {
+            let address = AddressId(b.builder.unit.addresses.len() as u32);
+            b.builder.unit.addresses.push(AddressInfo {
                 ty: t,
                 base: AddressBase::Slot(slot),
                 projection: PoolRange::EMPTY,
@@ -348,8 +348,8 @@ fn fixture(
         .result
         .as_ref()
         .map(|r| b.value_as(repr(&b.table, r.layout), r.layout, Holding::Plain));
-    let arguments = PoolRange::push(&mut b.unit.pools.call_arguments, arguments);
-    b.unit.tables.calls.push(CallSite {
+    let arguments = PoolRange::push(&mut b.builder.unit.pools.call_arguments, arguments);
+    b.builder.unit.tables.calls.push(CallSite {
         callee: Callee::Operation(OperationRef(0)),
         operation_arguments: actuals,
         abi: FnAbiId(0),
@@ -359,11 +359,11 @@ fn fixture(
         declared: hirsel_lir::Effects::ALL,
         anchor: SourceAnchorId(0),
     });
-    let next = b.block(BlockKind::Body, &[]);
-    let fail = b.propagate();
-    let normal = b.edge(next, &[]);
+    let next = b.builder.block(BlockKind::Body, &[]);
+    let fail = b.builder.propagate();
+    let normal = b.builder.edge(next, &[]);
     let failure = b.failure(fail);
-    b.term(
+    b.builder.term(
         ENTRY,
         Terminator::Call {
             call: CallId(0),
@@ -371,7 +371,7 @@ fn fixture(
             failure,
         },
     );
-    b.ret(next, result);
+    b.builder.ret(next, result);
     let (unit, table, _) = b.finish();
     (unit, table)
 }

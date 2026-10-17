@@ -16,36 +16,39 @@ use support::*;
 fn flag_argument(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[], None);
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
     let v = t.int(ENTRY);
     let first = t.store(ENTRY, a, v, s);
-    let (took, kept) = (t.block(BlockKind::Body, &[]), t.block(BlockKind::Body, &[]));
+    let (took, kept) = (
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+    );
     t.branch(ENTRY, (took, &[]), (kept, &[]));
     let p = t.flag(s);
-    let join = t.block(BlockKind::Body, &[p]);
+    let join = t.builder.block(BlockKind::Body, &[p]);
     t.read(took, a, first, ReadMode::Take, None);
     let taken = t.bool_const(took, mutant);
-    t.jump(took, join, &[taken]);
+    t.builder.jump(took, join, &[taken]);
     let there = t.bool_const(kept, true);
-    t.jump(kept, join, &[there]);
+    t.builder.jump(kept, join, &[there]);
     let (full, empty, end) = (
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
     );
     t.branch_on(join, p, (full, &[]), (empty, &[]));
     t.read(full, a, first, ReadMode::Take, None);
-    t.jump(full, end, &[]);
-    t.jump(empty, end, &[]);
-    t.push(
+    t.builder.jump(full, end, &[]);
+    t.builder.jump(empty, end, &[]);
+    t.builder.push(
         end,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(end, None);
+    t.builder.ret(end, None);
     t.check()
 }
 
@@ -60,35 +63,41 @@ fn a_flag_argument_is_a_constant_matching_its_edge() {
 fn stale_flag(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[], None);
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
     let v = t.int(ENTRY);
     let first = t.store(ENTRY, a, v, s);
-    let (took, kept) = (t.block(BlockKind::Body, &[]), t.block(BlockKind::Body, &[]));
+    let (took, kept) = (
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+    );
     t.branch(ENTRY, (took, &[]), (kept, &[]));
     let p = t.flag(s);
-    let join = t.block(BlockKind::Body, &[p]);
+    let join = t.builder.block(BlockKind::Body, &[p]);
     t.read(took, a, first, ReadMode::Take, None);
     let taken = t.bool_const(took, false);
-    t.jump(took, join, &[taken]);
+    t.builder.jump(took, join, &[taken]);
     let there = t.bool_const(kept, true);
-    t.jump(kept, join, &[there]);
-    let (full, empty) = (t.block(BlockKind::Body, &[]), t.block(BlockKind::Body, &[]));
+    t.builder.jump(kept, join, &[there]);
+    let (full, empty) = (
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+    );
     let q = t.flag(s);
-    let end = t.block(BlockKind::Body, &[q]);
+    let end = t.builder.block(BlockKind::Body, &[q]);
     t.branch_on(join, p, (full, &[]), (empty, &[]));
     t.read(full, a, first, ReadMode::Take, None);
     let now = if mutant { p } else { t.bool_const(full, false) };
-    t.jump(full, end, &[now]);
-    t.jump(empty, end, &[p]);
-    t.push(
+    t.builder.jump(full, end, &[now]);
+    t.builder.jump(empty, end, &[p]);
+    t.builder.push(
         end,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(end, None);
+    t.builder.ret(end, None);
     t.check()
 }
 
@@ -104,26 +113,29 @@ fn displaced_flag(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[], None);
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
     let d = t.slot(l::I64, SlotKind::Displaced, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
     let v = t.int(ENTRY);
     let first = t.store(ENTRY, a, v, s);
-    let (took, kept) = (t.block(BlockKind::Body, &[]), t.block(BlockKind::Body, &[]));
+    let (took, kept) = (
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+    );
     t.branch(ENTRY, (took, &[]), (kept, &[]));
     let p = t.flag(s);
-    let join = t.block(BlockKind::Body, &[p]);
+    let join = t.builder.block(BlockKind::Body, &[p]);
     t.read(took, a, first, ReadMode::Take, None);
     let taken = t.bool_const(took, false);
-    t.jump(took, join, &[taken]);
+    t.builder.jump(took, join, &[taken]);
     let there = t.bool_const(kept, true);
-    t.jump(kept, join, &[there]);
-    t.push(join, Inst::StorageLive { slot: d });
+    t.builder.jump(kept, join, &[there]);
+    t.builder.push(join, Inst::StorageLive { slot: d });
     let ad = t.at(join, d, &[], &[]);
     let w = t.int(join);
     let second = t.version_of(s);
     let displaced_version = t.version_of(d);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         join,
         Inst::Replace {
             address: a,
@@ -136,17 +148,17 @@ fn displaced_flag(mutant: bool) -> Vec<K> {
         },
     );
     let (full, empty, end) = (
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
     );
     t.branch_on(join, p, (full, &[]), (empty, &[]));
     let reader = if mutant { empty } else { full };
     t.read(reader, ad, displaced_version, ReadMode::Take, None);
-    t.jump(full, end, &[]);
-    t.jump(empty, end, &[]);
+    t.builder.jump(full, end, &[]);
+    t.builder.jump(empty, end, &[]);
     for slot in [d, s] {
-        t.push(
+        t.builder.push(
             end,
             Inst::StorageDead {
                 slot,
@@ -154,7 +166,7 @@ fn displaced_flag(mutant: bool) -> Vec<K> {
             },
         );
     }
-    t.ret(end, None);
+    t.builder.ret(end, None);
     t.check()
 }
 
@@ -167,24 +179,24 @@ fn a_replace_hands_its_slot_s_flag_to_the_displaced_slot() {
 fn flag_parameter(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[], None);
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let c = t.bool_const(ENTRY, false);
     if mutant {
-        t.unit.tables.init_flags.push(InitFlag {
+        t.builder.unit.tables.init_flags.push(InitFlag {
             path: PoolRange::EMPTY,
             value: c,
             slot: s,
             environment: None,
         });
     }
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -200,15 +212,18 @@ fn a_flag_is_a_bool_block_parameter() {
 fn empty_edge_version(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[], None);
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
     let v = t.int(ENTRY);
     let first = t.store(ENTRY, a, v, s);
-    let (took, kept) = (t.block(BlockKind::Body, &[]), t.block(BlockKind::Body, &[]));
+    let (took, kept) = (
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+    );
     t.branch(ENTRY, (took, &[]), (kept, &[]));
     let p = t.flag(s);
     let q = t.version_of(s);
-    let join = t.block(BlockKind::Body, &[p, q]);
+    let join = t.builder.block(BlockKind::Body, &[p, q]);
     t.read(took, a, first, ReadMode::Take, None);
     let held = if mutant {
         let w = t.int(took);
@@ -218,26 +233,26 @@ fn empty_edge_version(mutant: bool) -> Vec<K> {
         false
     };
     let flag = t.bool_const(took, held);
-    t.jump(took, join, &[flag, first]);
+    t.builder.jump(took, join, &[flag, first]);
     let there = t.bool_const(kept, true);
-    t.jump(kept, join, &[there, first]);
+    t.builder.jump(kept, join, &[there, first]);
     let (full, empty, end) = (
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
     );
     t.branch_on(join, p, (full, &[]), (empty, &[]));
     t.read(full, a, q, ReadMode::Take, None);
-    t.jump(full, end, &[]);
-    t.jump(empty, end, &[]);
-    t.push(
+    t.builder.jump(full, end, &[]);
+    t.builder.jump(empty, end, &[]);
+    t.builder.push(
         end,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(end, None);
+    t.builder.ret(end, None);
     t.check()
 }
 
@@ -253,25 +268,28 @@ fn an_empty_edge_s_version_names_no_content() {
 fn undominated_reaching(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[], None);
     let s = t.slot(l::I64, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[]);
-    let (stored, skipped) = (t.block(BlockKind::Body, &[]), t.block(BlockKind::Body, &[]));
+    let (stored, skipped) = (
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+    );
     t.branch(ENTRY, (stored, &[]), (skipped, &[]));
     let p = t.flag(s);
-    let join = t.block(BlockKind::Body, &[p]);
+    let join = t.builder.block(BlockKind::Body, &[p]);
     let v = t.int(stored);
     let first = t.store(stored, a, v, s);
     t.read(stored, a, first, ReadMode::Take, None);
     let w = t.int(stored);
     let second = t.store(stored, a, w, s);
     let there = t.bool_const(stored, true);
-    t.jump(stored, join, &[there]);
+    t.builder.jump(stored, join, &[there]);
     let absent = t.bool_const(skipped, false);
-    t.jump(skipped, join, &[absent]);
+    t.builder.jump(skipped, join, &[absent]);
     let (full, empty, end) = (
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
-        t.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
+        t.builder.block(BlockKind::Body, &[]),
     );
     t.branch_on(join, p, (full, &[]), (empty, &[]));
     t.read(
@@ -281,16 +299,16 @@ fn undominated_reaching(mutant: bool) -> Vec<K> {
         ReadMode::Take,
         None,
     );
-    t.jump(full, end, &[]);
-    t.jump(empty, end, &[]);
-    t.push(
+    t.builder.jump(full, end, &[]);
+    t.builder.jump(empty, end, &[]);
+    t.builder.push(
         end,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(end, None);
+    t.builder.ret(end, None);
     t.check()
 }
 

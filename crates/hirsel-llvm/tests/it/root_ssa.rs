@@ -14,18 +14,18 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
     let integer = table.scalar(ScalarKind::I64);
     {
         let mut leaf = Unit::new(table, "reserve_then_fail", "push list64");
-        leaf.lir.header.origin = UnitOrigin::Library;
+        leaf.builder.unit.header.origin = UnitOrigin::Library;
         leaf.param(list);
         let x = leaf.param(integer);
         let slot = leaf.slot(list, SlotKind::Parameter(0));
         let address = leaf.address(AddressBase::Slot(slot), &[], list);
         leaf.prepare(ENTRY, address, None, SourceAnchorId(0));
-        let loan = LoanId(leaf.lir.tables.loans.len() as u32);
-        leaf.lir.tables.loans.push(LoanInfo {
+        let loan = LoanId(leaf.builder.unit.tables.loans.len() as u32);
+        leaf.builder.unit.tables.loans.push(LoanInfo {
             address,
             mutable: false,
         });
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::BeginLoan {
                 loan,
@@ -35,24 +35,24 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
             },
         );
         let view = leaf.value(list, Holding::Borrowed(loan));
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::Read {
                 result: view,
                 address,
-                reaching: leaf.lir.parameters[0],
+                reaching: leaf.builder.unit.parameters[0],
                 mode: ReadMode::Borrow,
             },
         );
         let before = leaf.plain(table.scalar(ScalarKind::U64));
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::SeqCapacity {
                 result: before,
                 value: view,
             },
         );
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::EndLoan {
                 loan,
@@ -61,7 +61,7 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
         );
         let capacity = leaf.int(ENTRY, ScalarKind::U64, 1024);
         let version = leaf.version(slot);
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::SeqReserve {
                 address,
@@ -69,12 +69,12 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
                 version,
             },
         );
-        let loan = LoanId(leaf.lir.tables.loans.len() as u32);
-        leaf.lir.tables.loans.push(LoanInfo {
+        let loan = LoanId(leaf.builder.unit.tables.loans.len() as u32);
+        leaf.builder.unit.tables.loans.push(LoanInfo {
             address,
             mutable: false,
         });
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::BeginLoan {
                 loan,
@@ -84,7 +84,7 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
             },
         );
         let view = leaf.value(list, Holding::Borrowed(loan));
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::Read {
                 result: view,
@@ -94,14 +94,14 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
             },
         );
         let after = leaf.plain(table.scalar(ScalarKind::U64));
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::SeqCapacity {
                 result: after,
                 value: view,
             },
         );
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::EndLoan {
                 loan,
@@ -112,7 +112,7 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
         let preserved = leaf.binary(ENTRY, BinaryOp::Ge, after, before);
         let enough = leaf.binary(ENTRY, BinaryOp::BitAnd, enough, preserved);
         let failure = leaf.fails(Some("MEM-14"));
-        leaf.push(
+        leaf.builder.push(
             ENTRY,
             Inst::Check {
                 condition: enough,
@@ -121,7 +121,7 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
         );
         let one = leaf.int(ENTRY, ScalarKind::I64, 1);
         leaf.binary(ENTRY, BinaryOp::Add, x, one);
-        leaf.ret(ENTRY, None);
+        leaf.builder.ret(ENTRY, None);
         program
             .units
             .push(seal(table, &program.manifest, leaf.finish()));
@@ -135,7 +135,7 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
     caller.prepare(ENTRY, address, None, SourceAnchorId(0));
     let version = caller.version(slot);
     let symbol = caller.symbol(SymbolKind::Function, "reserve_then_fail");
-    let normal = caller.block(BlockKind::Body, &[]);
+    let normal = caller.builder.block(BlockKind::Body, &[]);
     let failure = caller.fails(None);
     caller.call(
         ENTRY,
@@ -149,7 +149,7 @@ fn program(target: &hirsel_lir::layout_types::TargetSpec) -> Program {
         &[],
         failure,
     );
-    caller.ret(normal, None);
+    caller.builder.ret(normal, None);
     program
         .units
         .push(seal(table, &program.manifest, caller.finish()));

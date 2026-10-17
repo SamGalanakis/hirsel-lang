@@ -49,14 +49,14 @@ fn closure(
 ) -> ValueId {
     let symbol = u.symbol(SymbolKind::Function, code);
     let captures = PoolRange::push(
-        &mut u.lir.pools.captures,
+        &mut u.builder.unit.pools.captures,
         captures.iter().map(|&value| CaptureValue {
             value,
             usage: CaptureUse::Take,
         }),
     );
-    let id = ClosureId(u.lir.tables.closures.len() as u32);
-    u.lir.tables.closures.push(ClosureSite {
+    let id = ClosureId(u.builder.unit.tables.closures.len() as u32);
+    u.builder.unit.tables.closures.push(ClosureSite {
         code: Some(ClosureCode {
             symbol,
             abi: u.table.abi(code),
@@ -69,7 +69,7 @@ fn closure(
     });
     let result = u.value(u.table.layout(layout), Holding::Owned);
     let failure = u.releasing(pending, None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Closure {
             result,
@@ -94,16 +94,16 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
     table.abis.insert("many_leaf", id);
     let m = manifest();
     let mut leaf = Unit::new(&table, "leaf", "leaf");
-    leaf.ret(ENTRY, None);
+    leaf.builder.ret(ENTRY, None);
     let leaf = seal(&table, &m, leaf.finish());
     let mut many_leaf = Unit::new(&table, "many_leaf", "many_leaf");
-    many_leaf.ret(ENTRY, None);
+    many_leaf.builder.ret(ENTRY, None);
     let many_leaf = seal(&table, &m, many_leaf.finish());
     let mut body = Unit::new(&table, "outer", "outer");
     for i in 0..2 {
         let slot = body.slot(table.layout("once"), SlotKind::Capture(i));
         let version = body.version(slot);
-        body.lir.captures.push(version);
+        body.builder.unit.captures.push(version);
     }
     let word_layout = table.table.layouts[table.layout("outer_env").0 as usize]
         .fields
@@ -112,8 +112,8 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
         .layout;
     let flags = body.slot(word_layout, SlotKind::Capture(2));
     let flag_version = body.version(flags);
-    body.lir.captures.push(flag_version);
-    body.lir.tables.init_flags.push(InitFlag {
+    body.builder.unit.captures.push(flag_version);
+    body.builder.unit.tables.init_flags.push(InitFlag {
         path: PoolRange::EMPTY,
         value: flag_version,
         slot: flags,
@@ -124,18 +124,18 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
     body.prepare(ENTRY, at, None, SourceAnchorId(0));
     body.prepare(ENTRY, word, None, SourceAnchorId(0));
     let moved = body.value(table.layout("once"), Holding::Owned);
-    body.push(
+    body.builder.push(
         ENTRY,
         Inst::Read {
             result: moved,
             address: at,
-            reaching: body.lir.captures[0],
+            reaching: body.builder.unit.captures[0],
             mode: ReadMode::Take,
         },
     );
     let old = body.read(ENTRY, word, flag_version);
     let next = body.plain(word_layout);
-    body.push(
+    body.builder.push(
         ENTRY,
         Inst::UpdateMask {
             result: next,
@@ -146,7 +146,7 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
     );
     body.store(ENTRY, word, next, flags);
     body.release(ENTRY, moved, table.layout("once"));
-    body.ret(ENTRY, None);
+    body.builder.ret(ENTRY, None);
     let outer = seal(&table, &m, body.finish());
 
     let mut main = Unit::new(&table, "main", "main");
@@ -161,7 +161,7 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
         );
         let many = closure(&mut main, "leaf_env", "many_leaf", "many", &[block], &[]);
         let once = main.value(table.layout("once"), Holding::Owned);
-        main.push(
+        main.builder.push(
             ENTRY,
             Inst::Weaken {
                 result: once,
@@ -199,7 +199,7 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
         closure(&mut main, "outer_env", "outer", "once", &captures, &[])
     };
     let after = if called {
-        let after = main.block(BlockKind::Body, &[]);
+        let after = main.builder.block(BlockKind::Body, &[]);
         let failure = main.releasing(&[(value, table.layout("once"))], None, SourceAnchorId(0));
         main.call(
             ENTRY,
@@ -215,7 +215,7 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
         ENTRY
     };
     main.release(after, value, table.layout("once"));
-    main.ret(after, None);
+    main.builder.ret(after, None);
     let main = seal(&table, &m, main.finish());
     Program {
         table,
@@ -488,10 +488,10 @@ fn initialization_masks_share_the_named_live_word_limit() {
         let mut u = Unit::new(&table, "mask_limit", "mask_limit");
         let ty = u.ty(ValueRepr::InitMask { fields }, table.layout("number"));
         let mask = u.param(table.layout("number"));
-        u.lir.values[mask.index()].ty = ty;
+        u.builder.unit.values[mask.index()].ty = ty;
         let next = u.plain(table.layout("number"));
-        u.lir.values[next.index()].ty = ty;
-        u.push(
+        u.builder.unit.values[next.index()].ty = ty;
+        u.builder.push(
             ENTRY,
             Inst::UpdateMask {
                 result: next,
@@ -500,7 +500,7 @@ fn initialization_masks_share_the_named_live_word_limit() {
                 initialized: false,
             },
         );
-        u.ret(ENTRY, None);
+        u.builder.ret(ENTRY, None);
         let sealed = seal(&table, &m, u.finish());
         let codes = failure_codes();
         let id = input();

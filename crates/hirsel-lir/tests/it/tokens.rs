@@ -18,7 +18,7 @@ fn reset_then<S: Stage>(t: &mut Lir<S>, b: BlockId, donor: ValueId, undo: &[Undo
     let anchor = t.cleanup_anchor();
     let target = t.cleanup(undo);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         b,
         Inst::Reset {
             result,
@@ -58,7 +58,7 @@ fn reuse<S: Stage>(
     let result = t.owned(block);
     let target = t.cleanup(undo);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         b,
         Inst::Reuse {
             result,
@@ -77,7 +77,7 @@ fn reset<S: Stage>(t: &mut Lir<S>, b: BlockId, donor: ValueId) -> ValueId {
 
 fn none<S: Stage>(t: &mut Lir<S>, b: BlockId) -> ValueId {
     let result = t.owned(l::HDR);
-    t.push(b, Inst::TokenNone { result });
+    t.builder.push(b, Inst::TokenNone { result });
     result
 }
 
@@ -103,7 +103,7 @@ fn copied(mutant: bool) -> Vec<K> {
     );
     t.release(ENTRY, first, &[y]);
     t.release(ENTRY, y, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -118,9 +118,9 @@ fn disposed(times: usize) -> Vec<K> {
     t.param(x);
     let tok = reset(&mut t, ENTRY, x);
     for _ in 0..times {
-        t.push(ENTRY, Inst::Dispose { token: tok });
+        t.builder.push(ENTRY, Inst::Dispose { token: tok });
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -148,18 +148,18 @@ fn irreducible(mutant: bool) -> Vec<K> {
     t.param(x);
     let tok = reset(&mut t, ENTRY, x);
     if !mutant {
-        t.push(ENTRY, Inst::Dispose { token: tok });
+        t.builder.push(ENTRY, Inst::Dispose { token: tok });
     }
-    let a = t.block(BlockKind::Body, &[]);
-    let b = t.block(BlockKind::Body, &[]);
-    let exit = t.block(BlockKind::Body, &[]);
+    let a = t.builder.block(BlockKind::Body, &[]);
+    let b = t.builder.block(BlockKind::Body, &[]);
+    let exit = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (a, &[]), (b, &[]));
     t.branch(a, (b, &[]), (exit, &[]));
     t.branch(b, (a, &[]), (exit, &[]));
     if mutant {
-        t.push(exit, Inst::Dispose { token: tok });
+        t.builder.push(exit, Inst::Dispose { token: tok });
     }
-    t.ret(exit, None);
+    t.builder.ret(exit, None);
     t.check()
 }
 
@@ -172,30 +172,30 @@ fn a_token_across_an_irreducible_feedback_edge_is_rejected() {
 fn a_token_within_one_loop_iteration_is_accepted() {
     // header -> body (new block, reset, reuse, release) -> header; header -> exit.
     let mut t = Lir::<Reuse>::new(&[], None);
-    let header = t.block(BlockKind::Body, &[]);
-    let body = t.block(BlockKind::Body, &[]);
-    let exit = t.block(BlockKind::Body, &[]);
-    t.jump(ENTRY, header, &[]);
+    let header = t.builder.block(BlockKind::Body, &[]);
+    let body = t.builder.block(BlockKind::Body, &[]);
+    let exit = t.builder.block(BlockKind::Body, &[]);
+    t.builder.jump(ENTRY, header, &[]);
     t.branch(header, (body, &[]), (exit, &[]));
     let y = t.new_block(body, &[]);
     let tok = reset(&mut t, body, y);
     let z = reuse(&mut t, body, tok, l::PAY, heap(0), &[]);
     t.release(body, z, &[]);
-    t.jump(body, header, &[]);
-    t.ret(exit, None);
+    t.builder.jump(body, header, &[]);
+    t.builder.ret(exit, None);
     assert_eq!(t.check(), vec![]);
 }
 
 /// Reuse in another task heap than the donor's.
 fn wrong_owner(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Reuse>::new(&[TAKE_BLK], None);
-    t.unit.tables.task_domains = 2;
+    t.builder.unit.tables.task_domains = 2;
     let x = t.owned(l::BLK);
     t.param(x);
     let tok = reset(&mut t, ENTRY, x);
     let y = reuse(&mut t, ENTRY, tok, l::PAY, heap(u32::from(mutant)), &[]);
     t.release(ENTRY, y, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -211,7 +211,7 @@ fn reuse_as(payload: LayoutId) -> Vec<K> {
     let tok = reset(&mut t, ENTRY, x);
     let y = reuse(&mut t, ENTRY, tok, payload, heap(0), &[]);
     t.release(ENTRY, y, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -246,11 +246,11 @@ fn failure_disposal(mutant: bool) -> Vec<K> {
     t.param(w);
     let tok = reset_then(&mut t, ENTRY, x, &[Undo::Release(w)]);
     let dispose: &[ValueId] = if mutant { &[] } else { &[tok] };
-    let p = t.propagate();
+    let p = t.builder.propagate();
     let failure = t.failure_disposing(p, &[], dispose);
     t.release_with(ENTRY, w, failure);
-    t.push(ENTRY, Inst::Dispose { token: tok });
-    t.ret(ENTRY, None);
+    t.builder.push(ENTRY, Inst::Dispose { token: tok });
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -265,9 +265,9 @@ fn token_argument(mutant: bool) -> Vec<K> {
     let x = t.owned(l::BLK);
     t.param(x);
     let tok = reset(&mut t, ENTRY, x);
-    let n = t.block(BlockKind::Body, &[]);
+    let n = t.builder.block(BlockKind::Body, &[]);
     if mutant {
-        let fail = t.propagate();
+        let fail = t.builder.propagate();
         t.call(
             ENTRY,
             &[(Passing::Take, l::HDR)],
@@ -277,11 +277,11 @@ fn token_argument(mutant: bool) -> Vec<K> {
             fail,
         );
     } else {
-        t.push(ENTRY, Inst::Dispose { token: tok });
-        let fail = t.propagate();
+        t.builder.push(ENTRY, Inst::Dispose { token: tok });
+        let fail = t.builder.propagate();
         t.call(ENTRY, &[], None, &[], (n, &[]), fail);
     }
-    t.ret(n, None);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -297,13 +297,13 @@ fn static_donor(mutant: bool) -> Vec<K> {
     t.param(x);
     let donor = if mutant {
         let ty = t.ty(ValueRepr::Block, l::BLK);
-        t.unit.tables.constants.push(ConstantData {
+        t.builder.unit.tables.constants.push(ConstantData {
             ty,
             value: ConstantValue::Bytes(vec![0; 16]),
         });
-        let constant = ConstantId(t.unit.tables.constants.len() as u32 - 1);
+        let constant = ConstantId(t.builder.unit.tables.constants.len() as u32 - 1);
         let c = t.owned(l::BLK);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Const {
                 result: c,
@@ -316,8 +316,8 @@ fn static_donor(mutant: bool) -> Vec<K> {
         x
     };
     let tok = reset(&mut t, ENTRY, donor);
-    t.push(ENTRY, Inst::Dispose { token: tok });
-    t.ret(ENTRY, None);
+    t.builder.push(ENTRY, Inst::Dispose { token: tok });
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -332,12 +332,12 @@ fn token_join(mutant: bool) -> Vec<K> {
     let x = t.owned(l::BLK);
     t.param(x);
     let p = t.owned(l::HDR);
-    let join = t.block(BlockKind::Body, &[p]);
-    let yes = t.block(BlockKind::Body, &[]);
-    let no = t.block(BlockKind::Body, &[]);
+    let join = t.builder.block(BlockKind::Body, &[p]);
+    let yes = t.builder.block(BlockKind::Body, &[]);
+    let no = t.builder.block(BlockKind::Body, &[]);
     t.branch(ENTRY, (yes, &[]), (no, &[]));
     let small = reset(&mut t, yes, x);
-    t.jump(yes, join, &[small]);
+    t.builder.jump(yes, join, &[small]);
     let other = if mutant {
         let big = t.new_block_of(no, l::BIG, &[Undo::Release(x)]);
         t.release(no, x, &[big]);
@@ -346,10 +346,10 @@ fn token_join(mutant: bool) -> Vec<K> {
         t.release(no, x, &[]);
         none(&mut t, no)
     };
-    t.jump(no, join, &[other]);
+    t.builder.jump(no, join, &[other]);
     let y = reuse(&mut t, join, p, l::PAY, heap(0), &[]);
     t.release(join, y, &[]);
-    t.ret(join, None);
+    t.builder.ret(join, None);
     t.check()
 }
 
@@ -368,9 +368,13 @@ fn mask<S: Stage>(t: &mut Lir<S>, fields: u32, live: &[u32]) -> MaskId {
     for &f in live {
         word |= 1 << f;
     }
-    let words = PoolRange::push(&mut t.unit.pools.mask_words, [word]);
-    t.unit.tables.masks.push(FieldMask { fields, words });
-    MaskId(t.unit.tables.masks.len() as u32 - 1)
+    let words = PoolRange::push(&mut t.builder.unit.pools.mask_words, [word]);
+    t.builder
+        .unit
+        .tables
+        .masks
+        .push(FieldMask { fields, words });
+    MaskId(t.builder.unit.tables.masks.len() as u32 - 1)
 }
 
 /// How a `PAIRBLK` donor is taken apart and rebuilt.
@@ -407,7 +411,7 @@ fn rebuild(how: Rebuild) -> Vec<K> {
         let c = t.owned(l::BLK);
         let target = t.releasing(&[x, n]);
         let failure = t.failure(target);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Copy {
                 result: c,
@@ -427,7 +431,7 @@ fn rebuild(how: Rebuild) -> Vec<K> {
         let taken = t.read(ENTRY, a, x, ReadMode::Take, None);
         if how == Rebuild::TakeTwice {
             let again = t.read(ENTRY, a, x, ReadMode::Take, None);
-            t.push(ENTRY, Inst::Forget { value: again });
+            t.builder.push(ENTRY, Inst::Forget { value: again });
         }
         if how == Rebuild::ReadMoved {
             let loan = t.loan(a, false);
@@ -446,7 +450,7 @@ fn rebuild(how: Rebuild) -> Vec<K> {
     let anchor = t.cleanup_anchor();
     let target = t.releasing(&[taken, n]);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Reset {
             result,
@@ -468,7 +472,7 @@ fn rebuild(how: Rebuild) -> Vec<K> {
     let y = t.owned(l::PAIRBLK);
     let target = t.cleanup(&[]);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Reuse {
             result: y,
@@ -479,7 +483,7 @@ fn rebuild(how: Rebuild) -> Vec<K> {
         },
     );
     t.release(ENTRY, y, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -552,14 +556,14 @@ fn take_borrowed(mutant: bool) -> Vec<K> {
     t.param(x);
     let base = if mutant {
         let s = t.slot(l::PAIRBLK, SlotKind::Local, ScopeId(0));
-        t.push(ENTRY, Inst::StorageLive { slot: s });
+        t.builder.push(ENTRY, Inst::StorageLive { slot: s });
         let whole = t.at(ENTRY, s, &[], &[Undo::Release(x)]);
         t.store(ENTRY, whole, x, s);
         let loan = t.loan(whole, false);
         t.begin(ENTRY, loan);
         let v = t.borrowed(l::PAIRBLK, loan);
-        let version = ValueId(t.unit.values.len() as u32 - 2);
-        t.push(
+        let version = ValueId(t.builder.unit.values.len() as u32 - 2);
+        t.builder.push(
             ENTRY,
             Inst::Read {
                 result: v,
@@ -581,7 +585,7 @@ fn take_borrowed(mutant: bool) -> Vec<K> {
         let anchor = t.cleanup_anchor();
         let target = t.releasing(&[taken]);
         let failure = t.failure(target);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Release {
                 value: x,
@@ -593,7 +597,7 @@ fn take_borrowed(mutant: bool) -> Vec<K> {
         );
     }
     t.release(ENTRY, taken, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -617,13 +621,13 @@ fn closure_donor(mutant: bool) -> Vec<K> {
     let env = t.symbol(SymbolKind::Function);
     let abi = t.abi_shaped(hirsel_lir::abi_types::CallableShape::Closure, &[], None);
     let captures = PoolRange::push(
-        &mut t.unit.pools.captures,
+        &mut t.builder.unit.pools.captures,
         [CaptureValue {
             value: k,
             usage: CaptureUse::Copy,
         }],
     );
-    t.unit.tables.closures.push(ClosureSite {
+    t.builder.unit.tables.closures.push(ClosureSite {
         code: Some(ClosureCode {
             symbol: env,
             abi: abi,
@@ -636,18 +640,18 @@ fn closure_donor(mutant: bool) -> Vec<K> {
     });
     let c = t.owned(l::CLOSURE);
     let fails = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Closure {
             result: c,
-            closure: ClosureId(t.unit.tables.closures.len() as u32 - 1),
+            closure: ClosureId(t.builder.unit.tables.closures.len() as u32 - 1),
             failure: fails,
         },
     );
     let result = t.owned(l::HDR);
     let anchor = t.cleanup_anchor();
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Reset {
             result,
@@ -660,7 +664,7 @@ fn closure_donor(mutant: bool) -> Vec<K> {
     );
     let y = reuse(&mut t, ENTRY, result, l::PAY, heap(0), &[]);
     t.release(ENTRY, y, &[]);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 

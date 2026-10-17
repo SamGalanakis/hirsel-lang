@@ -41,3 +41,7 @@ pub const RUNTIME_ABI_VERSION: u32 = runtime_abi::ABI_VERSION;
 /// Private FlatFormatV0, separate from the canonical SER-2 codec.
 pub const FLAT_FORMAT_VERSION: u32 = 0;
 pub const VALIDATOR_VERSION: u32 = 7;
+
+/// Shared hand-built LIR assembly, available only with the `testing` feature.
+#[cfg(feature = "testing")]
+pub mod testing;

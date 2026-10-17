@@ -34,11 +34,11 @@ fn construction(wrong_element: bool, release_source: bool) -> Vec<K> {
     let mut block = t.table.layouts[l::SEQBLK.0 as usize].clone();
     block.kind = LayoutKind::Block { payload };
     t.table.layouts.push(block);
-    let abi = t.unit.header.abi;
+    let abi = t.builder.unit.header.abi;
     // The ABI fixture builder selects the matching physical slots for this
     // extra taken parameter, so the ownership control has exactly one credit.
     let new_abi = t.abi(&[(Passing::Take, source)], Some(l::FLAT_ITEMS_BLK));
-    t.unit.header.abi = new_abi;
+    t.builder.unit.header.abi = new_abi;
     assert_eq!(abi.0, 0);
     let input = t.value_as(ValueRepr::Block, source, Holding::Owned);
     t.param(input);
@@ -53,7 +53,7 @@ fn construction(wrong_element: bool, release_source: bool) -> Vec<K> {
     let result = t.owned(l::FLAT_ITEMS_BLK);
     let target = t.releasing(&[input]);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result,
@@ -64,7 +64,7 @@ fn construction(wrong_element: bool, release_source: bool) -> Vec<K> {
     if release_source {
         t.release(ENTRY, input, &[result]);
     }
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 

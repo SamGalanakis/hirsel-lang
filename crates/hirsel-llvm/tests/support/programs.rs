@@ -275,7 +275,7 @@ pub fn scalar_program(target: &TargetSpec) -> Program {
                 }
                 Err(op) => u.unary(ENTRY, op, a),
             };
-            u.ret(ENTRY, Some(result));
+            u.builder.ret(ENTRY, Some(result));
             seal(&table, &manifest, u.finish())
         })
         .collect();
@@ -371,15 +371,15 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let x = u.param(i64_l);
     let one = u.int(ENTRY, ScalarKind::I64, 1);
     let r = u.binary(ENTRY, BinaryOp::Add, x, one);
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // twice_inc(x) = inc(inc(x)): direct calls inside the object; a callee failure
     // propagates.
     let mut u = Unit::new(&table, "twice_inc", "i64 -> i64");
     let x = u.param(i64_l);
-    let second = u.block(BlockKind::Body, &[]);
-    let done = u.block(BlockKind::Body, &[]);
+    let second = u.builder.block(BlockKind::Body, &[]);
+    let done = u.builder.block(BlockKind::Body, &[]);
     let inc = Callee::Direct(u.symbol(SymbolKind::Function, "inc"));
     let f1 = u.fails(None);
     let y = u
@@ -405,13 +405,13 @@ pub fn abi_program(target: &TargetSpec) -> Program {
             f2,
         )
         .unwrap();
-    u.ret(done, Some(z));
+    u.builder.ret(done, Some(z));
     add(u);
 
     // host_call(x) = host_scale(x) + 1: a call into C, whose failure propagates.
     let mut u = Unit::new(&table, "host_call", "i64 -> i64");
     let x = u.param(i64_l);
-    let after = u.block(BlockKind::Body, &[]);
+    let after = u.builder.block(BlockKind::Body, &[]);
     let host = Callee::Direct(u.symbol(SymbolKind::Function, HOST_SCALE));
     let f = u.fails(None);
     let h = u
@@ -427,7 +427,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
         .unwrap();
     let one = u.int(after, ScalarKind::I64, 1);
     let r = u.binary(after, BinaryOp::Add, h, one);
-    u.ret(after, Some(r));
+    u.builder.ret(after, Some(r));
     add(u);
 
     // pair_sum(borrow p) = p.0 + p.1: a borrowed aggregate by read-only address.
@@ -442,7 +442,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let v0 = u.read(ENTRY, a0, p);
     let v1 = u.read(ENTRY, a1, p);
     let r = u.binary(ENTRY, BinaryOp::Add, v0, v1);
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // pair_take(take p) = p.0 - p.1: a taken aggregate by transferring address.
@@ -456,7 +456,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let v0 = u.read(ENTRY, a0, p);
     let v1 = u.read(ENTRY, a1, p);
     let r = u.binary(ENTRY, BinaryOp::Sub, v0, v1);
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // pair_make(a, b) = Pair { a, b }: an aggregate result through the output pointer.
@@ -470,7 +470,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
         pair_l,
         &[(0, a), (1, b)],
     );
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // wire_value(borrow w) = w.1 + 1: an unaligned u64 read in a `@packed` record.
@@ -483,7 +483,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let v = u.read(ENTRY, a1, w);
     let one = u.int(ENTRY, ScalarKind::U64, 1);
     let r = u.binary(ENTRY, BinaryOp::Add, v, one);
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // wire_make(a, b, c) = Wire { a, b, c }: a packed construction returned at alignment 1.
@@ -498,7 +498,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
         wire_l,
         &[(0, a), (1, b), (2, c)],
     );
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // opt_get(borrow o) = o.Some.0, failing MEM-13 on None.
@@ -517,7 +517,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let tag_anchor = u.anchor(40, 50);
     u.prepare(ENTRY, field, Some("MEM-13"), tag_anchor);
     let v = u.read(ENTRY, field, o);
-    u.ret(ENTRY, Some(v));
+    u.builder.ret(ENTRY, Some(v));
     add(u);
 
     // opt_some(x) = Some(x).
@@ -533,7 +533,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
         opt_l,
         &[(0, x)],
     );
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // arr_get(borrow a, i) = a[i], failing MEM-14 out of bounds.
@@ -546,7 +546,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let bounds_anchor = u.anchor(60, 70);
     u.prepare(ENTRY, element, Some("MEM-14"), bounds_anchor);
     let v = u.read(ENTRY, element, a);
-    u.ret(ENTRY, Some(v));
+    u.builder.ret(ENTRY, Some(v));
     add(u);
 
     // sum_below(n) = 0 + 1 + ... + (n - 1): a loop through block parameters.
@@ -554,15 +554,15 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let n = u.param(u64_l);
     let i = u.plain(u64_l);
     let acc = u.plain(u64_l);
-    let head = u.block(BlockKind::Body, &[i, acc]);
-    let body = u.block(BlockKind::Body, &[]);
-    let exit = u.block(BlockKind::Body, &[]);
+    let head = u.builder.block(BlockKind::Body, &[i, acc]);
+    let body = u.builder.block(BlockKind::Body, &[]);
+    let exit = u.builder.block(BlockKind::Body, &[]);
     let zero = u.int(ENTRY, ScalarKind::U64, 0);
-    u.jump(ENTRY, head, &[zero, zero]);
+    u.builder.jump(ENTRY, head, &[zero, zero]);
     let more = u.binary(head, BinaryOp::Lt, i, n);
-    let yes = u.edge(body, &[]);
-    let no = u.edge(exit, &[]);
-    u.term(
+    let yes = u.builder.edge(body, &[]);
+    let no = u.builder.edge(exit, &[]);
+    u.builder.term(
         head,
         Terminator::Branch {
             condition: more,
@@ -573,8 +573,8 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let next_acc = u.binary(body, BinaryOp::Add, acc, i);
     let one = u.int(body, ScalarKind::U64, 1);
     let next_i = u.binary(body, BinaryOp::Add, i, one);
-    u.jump(body, head, &[next_i, next_acc]);
-    u.ret(exit, Some(acc));
+    u.builder.jump(body, head, &[next_i, next_acc]);
+    u.builder.ret(exit, Some(acc));
     add(u);
 
     // apply(f, x) = f(x) + 1: an indirect call through a callable value from C.
@@ -582,7 +582,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let mut u = Unit::new(&table, "apply", "callback i64 -> i64");
     let f = u.param(callback_l);
     let x = u.param(i64_l);
-    let after = u.block(BlockKind::Body, &[]);
+    let after = u.builder.block(BlockKind::Body, &[]);
     let failure = u.fails(None);
     let y = u
         .call(
@@ -597,7 +597,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
         .unwrap();
     let one = u.int(after, ScalarKind::I64, 1);
     let r = u.binary(after, BinaryOp::Add, y, one);
-    u.ret(after, Some(r));
+    u.builder.ret(after, Some(r));
     add(u);
 
     // positive(x) = x, failing LANG-9 unless x > 0: a source check at its own site.
@@ -606,16 +606,16 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let zero = u.int(ENTRY, ScalarKind::I64, 0);
     let ok = u.binary(ENTRY, BinaryOp::Gt, x, zero);
     let check_anchor = u.anchor(30, 40);
-    let p = u.propagate();
+    let p = u.builder.propagate();
     let failure = u.failure_to(p, Some("LANG-9"), check_anchor);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Check {
             condition: ok,
             failure,
         },
     );
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // choose(b, x) = if b { x } else { -x }: narrow arguments and a join.
@@ -624,11 +624,11 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let b = u.param(table.scalar(ScalarKind::Bool));
     let x = u.param(i8_l);
     let joined = u.plain(i8_l);
-    let negate = u.block(BlockKind::Body, &[]);
-    let join = u.block(BlockKind::Body, &[joined]);
-    let yes = u.edge(join, &[x]);
-    let no = u.edge(negate, &[]);
-    u.term(
+    let negate = u.builder.block(BlockKind::Body, &[]);
+    let join = u.builder.block(BlockKind::Body, &[joined]);
+    let yes = u.builder.edge(join, &[x]);
+    let no = u.builder.edge(negate, &[]);
+    u.builder.term(
         ENTRY,
         Terminator::Branch {
             condition: b,
@@ -637,8 +637,8 @@ pub fn abi_program(target: &TargetSpec) -> Program {
         },
     );
     let negated = u.unary(negate, UnaryOp::Neg, x);
-    u.jump(negate, join, &[negated]);
-    u.ret(join, Some(joined));
+    u.builder.jump(negate, join, &[negated]);
+    u.builder.ret(join, Some(joined));
     add(u);
 
     // fused(a, b, c) = mul_add(a, b, c): `MulAdd`, one rounding (LIR schema revision 6).
@@ -646,7 +646,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
     let mut u = Unit::new(&table, "fused", "f64 f64 f64 -> f64");
     let (a, b, c) = (u.param(f64_l), u.param(f64_l), u.param(f64_l));
     let r = u.plain(f64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::MulAdd {
             result: r,
@@ -655,7 +655,7 @@ pub fn abi_program(target: &TargetSpec) -> Program {
             addend: c,
         },
     );
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     Program {
@@ -722,7 +722,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     let b = u.construct_block(ENTRY, ConstructorKind::Box, box_payload, box_l, &[(0, x)]);
     let at = u.address(AddressBase::Value(b), &[], i64_l);
     let failure = u.releasing(&[(b, box_payload)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -731,7 +731,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     );
     let v = u.read(ENTRY, at, b);
     u.release(ENTRY, b, box_payload);
-    u.ret(ENTRY, Some(v));
+    u.builder.ret(ENTRY, Some(v));
     add(u);
 
     // nested(x, y) = Box(Rec { x, Box(y) }).0: releasing the outer block releases the inner
@@ -756,7 +756,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
         i64_l,
     );
     let failure = u.releasing(&[(outer, rec_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -765,7 +765,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     );
     let v = u.read(ENTRY, at, outer);
     u.release(ENTRY, outer, rec_l);
-    u.ret(ENTRY, Some(v));
+    u.builder.ret(ENTRY, Some(v));
     add(u);
 
     // list_get(a, b, c, i) = [a, b, c][i], failing MEM-14 out of bounds after releasing the
@@ -784,7 +784,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     let bounds = u.anchor(60, 70);
     let failure = u.releasing(&[(l, list_payload)], Some("MEM-14"), bounds);
     let at = u.address(AddressBase::Value(l), &[ProjectionStep::Index(i)], i64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -793,7 +793,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     );
     let v = u.read(ENTRY, at, l);
     u.release(ENTRY, l, list_payload);
-    u.ret(ENTRY, Some(v));
+    u.builder.ret(ENTRY, Some(v));
     add(u);
 
     // reuse(x, y) = *Box(y), built in the storage of a released Box(x).
@@ -802,14 +802,14 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     let y = u.param(i64_l);
     let first = u.construct_block(ENTRY, ConstructorKind::Box, box_payload, box_l, &[(0, x)]);
     let token_ty = u.ty(ValueRepr::Token, table.header);
-    u.lir.values.push(ValueInfo {
+    u.builder.unit.values.push(ValueInfo {
         ty: token_ty,
         holding: Holding::Owned,
     });
-    let token = ValueId(u.lir.values.len() as u32 - 1);
+    let token = ValueId(u.builder.unit.values.len() as u32 - 1);
     let anchor = u.cleanup_anchor(80, 90);
     let failure = u.fails(None);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Reset {
             result: token,
@@ -832,7 +832,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     );
     let at = u.address(AddressBase::Value(second), &[], i64_l);
     let failure = u.releasing(&[(second, box_payload)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -841,7 +841,7 @@ pub fn heap_program(target: &TargetSpec) -> Program {
     );
     let v = u.read(ENTRY, at, second);
     u.release(ENTRY, second, box_payload);
-    u.ret(ENTRY, Some(v));
+    u.builder.ret(ENTRY, Some(v));
     add(u);
 
     Program {

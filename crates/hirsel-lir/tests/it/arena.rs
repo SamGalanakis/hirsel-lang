@@ -25,7 +25,7 @@ fn placed(mutant: u8) -> Vec<K> {
         _ => None,
     };
     let slot = other.unwrap_or(s);
-    t.unit.tables.arenas.push(ExternalInstance { slot });
+    t.builder.unit.tables.arenas.push(ExternalInstance { slot });
     let one = t.int(ENTRY);
     let two = t.int(ENTRY);
     let symbol = t.symbol(SymbolKind::Type);
@@ -35,10 +35,10 @@ fn placed(mutant: u8) -> Vec<K> {
         &[(0, one), (1, two)],
         Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0)))),
     );
-    t.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
+    t.builder.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
     let v = t.owned(l::BLK);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result: v,
@@ -47,9 +47,9 @@ fn placed(mutant: u8) -> Vec<K> {
         },
     );
     if let Some(other) = other {
-        t.push(ENTRY, Inst::StorageLive { slot: other });
+        t.builder.push(ENTRY, Inst::StorageLive { slot: other });
     }
-    t.ret(ENTRY, Some(v));
+    t.builder.ret(ENTRY, Some(v));
     t.check()
 }
 
@@ -77,13 +77,13 @@ fn passed(mutant: bool) -> Vec<K> {
     let token = t.plain(l::ARENA);
     t.param(token);
     let token = if mutant {
-        let n = t.block(BlockKind::Body, &[]);
-        let fail = t.propagate();
+        let n = t.builder.block(BlockKind::Body, &[]);
+        let fail = t.builder.propagate();
         let made = t
             .call(ENTRY, &[], Some(l::ARENA), &[], (n, &[]), fail)
             .expect("a result");
-        let m = t.block(BlockKind::Body, &[]);
-        let fail = t.propagate();
+        let m = t.builder.block(BlockKind::Body, &[]);
+        let fail = t.builder.propagate();
         t.call(
             n,
             &[TOKEN],
@@ -92,13 +92,13 @@ fn passed(mutant: bool) -> Vec<K> {
             (m, &[]),
             fail,
         );
-        t.ret(m, None);
+        t.builder.ret(m, None);
         return t.check();
     } else {
         token
     };
-    let n = t.block(BlockKind::Body, &[]);
-    let fail = t.propagate();
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let fail = t.builder.propagate();
     t.call(
         ENTRY,
         &[TOKEN],
@@ -107,7 +107,7 @@ fn passed(mutant: bool) -> Vec<K> {
         (n, &[]),
         fail,
     );
-    t.ret(n, None);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -120,13 +120,13 @@ fn an_arena_token_is_never_forged() {
 /// (mutant) the region exits.
 fn token_after_exit(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Placed>::new(&[], None);
-    t.unit.tables.regions.push(RegionInstance {
+    t.builder.unit.tables.regions.push(RegionInstance {
         scope: ROOT,
         anchor: SourceAnchorId(0),
     });
     let r = RegionInstanceId(0);
     let mark = t.owned(l::PTR);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::RegionEnter {
             result: mark,
@@ -134,7 +134,7 @@ fn token_after_exit(mutant: bool) -> Vec<K> {
         },
     );
     let token = t.plain(l::ARENA);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::ArenaToken {
             result: token,
@@ -143,7 +143,7 @@ fn token_after_exit(mutant: bool) -> Vec<K> {
     );
     let exit = |t: &mut Lir<Placed>, b: BlockId| {
         let failure = t.fails();
-        t.push(
+        t.builder.push(
             b,
             Inst::RegionExit {
                 mark,
@@ -152,11 +152,11 @@ fn token_after_exit(mutant: bool) -> Vec<K> {
             },
         );
     };
-    let n = t.block(BlockKind::Body, &[]);
-    let failed = t.block(BlockKind::FailureCleanup, &[]);
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let failed = t.builder.block(BlockKind::FailureCleanup, &[]);
     if mutant {
         exit(&mut t, ENTRY);
-        t.term(failed, Terminator::Propagate);
+        t.builder.term(failed, Terminator::Propagate);
         t.call(
             ENTRY,
             &[TOKEN],
@@ -167,7 +167,7 @@ fn token_after_exit(mutant: bool) -> Vec<K> {
         );
     } else {
         exit(&mut t, failed);
-        t.term(failed, Terminator::Propagate);
+        t.builder.term(failed, Terminator::Propagate);
         t.call(
             ENTRY,
             &[TOKEN],
@@ -178,7 +178,7 @@ fn token_after_exit(mutant: bool) -> Vec<K> {
         );
         exit(&mut t, n);
     }
-    t.ret(n, None);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -191,13 +191,13 @@ fn an_arena_token_is_used_only_while_its_region_is_entered() {
 /// in a later block (mutant) would leave exits that never entered it.
 fn opened(mutant: bool) -> Vec<K> {
     let mut t = Lir::<Value>::new(&[], None);
-    t.unit.header.origin = UnitOrigin::Library;
+    t.builder.unit.header.origin = UnitOrigin::Library;
     let token = t.plain(l::ARENA);
-    let n = t.block(BlockKind::Body, &[]);
+    let n = t.builder.block(BlockKind::Body, &[]);
     let at = if mutant { n } else { ENTRY };
-    t.push(at, Inst::ArenaOpen { result: token });
-    t.jump(ENTRY, n, &[]);
-    t.ret(n, None);
+    t.builder.push(at, Inst::ArenaOpen { result: token });
+    t.builder.jump(ENTRY, n, &[]);
+    t.builder.ret(n, None);
     t.check()
 }
 
@@ -209,8 +209,8 @@ fn an_arena_opens_only_at_a_library_entry() {
     // A source unit never opens one.
     let mut t = Lir::<Value>::new(&[], None);
     let token = t.plain(l::ARENA);
-    t.push(ENTRY, Inst::ArenaOpen { result: token });
-    t.ret(ENTRY, None);
+    t.builder.push(ENTRY, Inst::ArenaOpen { result: token });
+    t.builder.ret(ENTRY, None);
     assert!(t.check().contains(&K::Vocabulary(Opcode::ArenaOpen)));
 }
 
@@ -221,17 +221,17 @@ fn child_credit(mutant: bool) -> Vec<K> {
     let slot = t.slot(l::ARENA, SlotKind::Parameter(0), ROOT);
     let version = t.version_of(slot);
     t.param(version);
-    t.unit.tables.arenas.push(ExternalInstance { slot });
+    t.builder.unit.tables.arenas.push(ExternalInstance { slot });
     let left = t.new_block(ENTRY, &[]);
-    let first = t.unit.tables.constructs.len() - 1;
+    let first = t.builder.unit.tables.constructs.len() - 1;
     let right = t.new_block(ENTRY, &[Undo::Release(left)]);
-    for site in &mut t.unit.tables.constructs[first..] {
+    for site in &mut t.builder.unit.tables.constructs[first..] {
         site.destination = DestinationClass::Arena(slot);
         site.placement = Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0))));
     }
     if mutant {
-        t.unit.tables.constructs[first].destination = DestinationClass::Heap;
-        t.unit.tables.constructs[first].placement =
+        t.builder.unit.tables.constructs[first].destination = DestinationClass::Heap;
+        t.builder.unit.tables.constructs[first].placement =
             Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0))));
     }
     let site = t.construct_site(
@@ -240,11 +240,11 @@ fn child_credit(mutant: bool) -> Vec<K> {
         &[(0, left), (1, right)],
         Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0)))),
     );
-    t.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
-    t.unit.tables.constructs[site.index()].arena_no_drop = true;
+    t.builder.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
+    t.builder.unit.tables.constructs[site.index()].arena_no_drop = true;
     let result = t.owned(l::PAIRBLK);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result,
@@ -252,7 +252,7 @@ fn child_credit(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -269,15 +269,15 @@ fn result_summary(mutant: bool) -> Vec<K> {
     let slot = t.slot(l::ARENA, SlotKind::Parameter(0), ROOT);
     let version = t.version_of(slot);
     t.param(version);
-    t.unit.tables.arenas.push(ExternalInstance { slot });
+    t.builder.unit.tables.arenas.push(ExternalInstance { slot });
     let result = t.new_block(ENTRY, &[]);
     if !mutant {
-        let site = t.unit.tables.constructs.last_mut().unwrap();
+        let site = t.builder.unit.tables.constructs.last_mut().unwrap();
         site.destination = DestinationClass::Arena(slot);
         site.placement = Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0))));
     }
-    t.table.fn_abis[t.unit.header.abi.0 as usize].result_arena = Some(0);
-    t.ret(ENTRY, Some(result));
+    t.table.fn_abis[t.builder.unit.header.abi.0 as usize].result_arena = Some(0);
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -293,11 +293,11 @@ fn call_child(mutant: bool) -> Vec<K> {
     let slot = t.slot(l::ARENA, SlotKind::Parameter(0), ROOT);
     let version = t.version_of(slot);
     t.param(version);
-    t.unit.tables.arenas.push(ExternalInstance { slot });
+    t.builder.unit.tables.arenas.push(ExternalInstance { slot });
     let address = t.at(ENTRY, slot, &[], &[]);
     let token = t.read(ENTRY, address, version, ReadMode::Bits, None);
-    let next = t.block(BlockKind::Body, &[]);
-    let fail = t.propagate();
+    let next = t.builder.block(BlockKind::Body, &[]);
+    let fail = t.builder.propagate();
     let child = t
         .call(
             ENTRY,
@@ -308,7 +308,7 @@ fn call_child(mutant: bool) -> Vec<K> {
             fail,
         )
         .unwrap();
-    let call = t.unit.tables.calls.last().unwrap();
+    let call = t.builder.unit.tables.calls.last().unwrap();
     if !mutant {
         t.table.fn_abis[call.abi.0 as usize].result_arena = Some(0);
     }
@@ -324,13 +324,13 @@ fn call_child(mutant: bool) -> Vec<K> {
     );
     // The niche payload is (BLK, i64), not (BLK, Arena).
     let number = t.int(next);
-    let range = t.unit.tables.constructs[site.index()].fields;
-    t.unit.pools.fields[range.start as usize + 1].value = number;
-    t.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
-    t.unit.tables.constructs[site.index()].arena_no_drop = true;
+    let range = t.builder.unit.tables.constructs[site.index()].fields;
+    t.builder.unit.pools.fields[range.start as usize + 1].value = number;
+    t.builder.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
+    t.builder.unit.tables.constructs[site.index()].arena_no_drop = true;
     let result = t.owned(l::NICHEBLK);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         next,
         Inst::Construct {
             result,
@@ -338,7 +338,7 @@ fn call_child(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    t.ret(next, Some(result));
+    t.builder.ret(next, Some(result));
     t.check()
 }
 
@@ -362,7 +362,7 @@ fn a_call_cannot_forge_its_callees_result_summary() {
         t.param(version);
         let address = t.at(ENTRY, slot, &[], &[]);
         let token = t.read(ENTRY, address, version, ReadMode::Bits, None);
-        let own = t.unit.header.abi;
+        let own = t.builder.unit.header.abi;
         t.table.fn_abis[own.0 as usize].result_arena = Some(0);
         let call_abi = if mutant {
             let mut abi = t.table.fn_abis[own.0 as usize].clone();
@@ -374,8 +374,8 @@ fn a_call_cannot_forge_its_callees_result_summary() {
             own
         };
         let symbol = t.symbol(SymbolKind::Function);
-        let next = t.block(BlockKind::Body, &[]);
-        let fail = t.propagate();
+        let next = t.builder.block(BlockKind::Body, &[]);
+        let fail = t.builder.propagate();
         let result = t
             .call_to(
                 ENTRY,
@@ -388,7 +388,7 @@ fn a_call_cannot_forge_its_callees_result_summary() {
                 fail,
             )
             .unwrap();
-        t.ret(next, Some(result));
+        t.builder.ret(next, Some(result));
         let (mut caller, table, _) = t.finish();
         let mut callee = caller.clone();
         let callee_name = path("callee");
@@ -416,14 +416,14 @@ fn loop_token(entry_init: bool, mutant: bool) -> Vec<K> {
     let token = t.read(ENTRY, address, version, ReadMode::Bits, None);
     let slot = t.slot(l::ARENA, SlotKind::Local, ROOT);
     let address = t.at(ENTRY, slot, &[], &[]);
-    t.unit.tables.arenas.push(ExternalInstance { slot });
-    let body = t.block(BlockKind::Body, &[]);
-    t.jump(ENTRY, body, &[]);
+    t.builder.unit.tables.arenas.push(ExternalInstance { slot });
+    let body = t.builder.block(BlockKind::Body, &[]);
+    t.builder.jump(ENTRY, body, &[]);
     let init = if entry_init { ENTRY } else { body };
-    t.push(init, Inst::StorageLive { slot });
+    t.builder.push(init, Inst::StorageLive { slot });
     t.store(init, address, token, slot);
     let child = t.new_block(body, &[]);
-    let child_site = t.unit.tables.constructs.last_mut().unwrap();
+    let child_site = t.builder.unit.tables.constructs.last_mut().unwrap();
     child_site.destination = DestinationClass::Arena(slot);
     child_site.placement = Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0))));
     let n = t.int(body);
@@ -437,11 +437,11 @@ fn loop_token(entry_init: bool, mutant: bool) -> Vec<K> {
         &[(0, child), (1, n)],
         Some(Placement::Fixed(StorageOwner::Arena(ArenaInstanceId(0)))),
     );
-    t.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
-    t.unit.tables.constructs[site.index()].arena_no_drop = mutant;
+    t.builder.unit.tables.constructs[site.index()].destination = DestinationClass::Arena(slot);
+    t.builder.unit.tables.constructs[site.index()].arena_no_drop = mutant;
     let result = t.owned(l::NICHEBLK);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         body,
         Inst::Construct {
             result,
@@ -451,7 +451,7 @@ fn loop_token(entry_init: bool, mutant: bool) -> Vec<K> {
     );
     t.release(body, result, &[]);
     if !entry_init {
-        t.push(
+        t.builder.push(
             body,
             Inst::StorageDead {
                 slot,
@@ -459,7 +459,7 @@ fn loop_token(entry_init: bool, mutant: bool) -> Vec<K> {
             },
         );
     }
-    t.jump(body, body, &[]);
+    t.builder.jump(body, body, &[]);
     t.check()
 }
 

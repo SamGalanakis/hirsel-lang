@@ -12,6 +12,7 @@ use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::runtime_abi::{HEADER_SIZE, HEADER_V2};
 use hirsel_lir::stage::*;
+use hirsel_lir::testing::UnitBuilder;
 use hirsel_lir::validate::{self, Inputs, ViolationKind};
 use hirsel_syntax::{ContentHash, DefPath, ItemPath, PackageId};
 
@@ -491,15 +492,12 @@ pub enum Undo {
 /// A unit under construction. Blocks collect instructions until `finish`
 /// lays them out in one arena.
 pub struct Lir<S> {
-    pub unit: LirUnit<S>,
+    pub builder: UnitBuilder<S>,
     pub table: LayoutTable,
     pub manifest: Manifest,
     pub operations: hirsel_lir::operation::OperationRegistry,
-    insts: Vec<Vec<Inst>>,
-    terms: Vec<Option<Terminator>>,
     types: Vec<((ValueRepr, LayoutId), LirTypeId)>,
     own: (Vec<(Passing, LayoutId)>, Option<LayoutId>),
-    propagate: Option<BlockId>,
     anchor: SourceAnchorId,
 }
 
@@ -534,20 +532,17 @@ impl<S: Stage> Lir<S> {
         });
         unit.tables.operations.push(operation());
         let mut lir = Self {
-            unit,
+            builder: UnitBuilder::new(unit),
             table,
             operations: Default::default(),
             manifest: manifest(Disposition::RuntimePrimitive("hirsel_rt_op".into())),
-            insts: Vec::new(),
-            terms: Vec::new(),
             types: Vec::new(),
             own: (params.to_vec(), result),
-            propagate: None,
             anchor: SourceAnchorId(0),
         };
         let abi = lir.abi(params, result);
-        lir.unit.header.abi = abi;
-        lir.block(BlockKind::Body, &[]);
+        lir.builder.unit.header.abi = abi;
+        lir.builder.block(BlockKind::Body, &[]);
         lir
     }
 
@@ -610,7 +605,7 @@ impl<S: Stage> Lir<S> {
             r.layout = map[r.layout.0 as usize];
         }
         self.table.fn_abis[abi.0 as usize] = expected;
-        self.unit.tables.operations = vec![operation.clone()];
+        self.builder.unit.tables.operations = vec![operation.clone()];
         let mut row = self.manifest.rows().next().unwrap().clone();
         row.id = operation;
         self.manifest = Manifest::skeleton([row.id.clone()]);
@@ -698,16 +693,16 @@ impl<S: Stage> Lir<S> {
         if let Some(&(_, id)) = self.types.iter().find(|(key, _)| *key == (repr, layout)) {
             return id;
         }
-        self.unit.types.push(LirType { repr, layout });
-        let id = LirTypeId(self.unit.types.len() as u32 - 1);
+        self.builder.unit.types.push(LirType { repr, layout });
+        let id = LirTypeId(self.builder.unit.types.len() as u32 - 1);
         self.types.push(((repr, layout), id));
         id
     }
 
     pub fn value_as(&mut self, repr: ValueRepr, layout: LayoutId, holding: Holding) -> ValueId {
         let ty = self.ty(repr, layout);
-        self.unit.values.push(ValueInfo { ty, holding });
-        ValueId(self.unit.values.len() as u32 - 1)
+        self.builder.unit.values.push(ValueInfo { ty, holding });
+        ValueId(self.builder.unit.values.len() as u32 - 1)
     }
 
     /// A value of the layout's default representation.
@@ -726,7 +721,7 @@ impl<S: Stage> Lir<S> {
 
     /// Declare the value of the next own parameter.
     pub fn param(&mut self, value: ValueId) -> ValueId {
-        self.unit.parameters.push(value);
+        self.builder.unit.parameters.push(value);
         value
     }
 
@@ -734,16 +729,16 @@ impl<S: Stage> Lir<S> {
     /// environment content (`LirUnit::captures`).
     pub fn slot(&mut self, layout: LayoutId, kind: SlotKind, scope: ScopeId) -> SlotId {
         let ty = self.ty(repr_of(layout), layout);
-        self.unit.slots.push(SlotInfo { ty, kind, scope });
+        self.builder.unit.slots.push(SlotInfo { ty, kind, scope });
         if let SlotKind::Capture(i) = kind {
             let version = self.plain(layout);
-            let captures = &mut self.unit.captures;
+            let captures = &mut self.builder.unit.captures;
             if captures.len() <= i as usize {
                 captures.resize(i as usize + 1, version);
             }
             captures[i as usize] = version;
         }
-        SlotId(self.unit.slots.len() as u32 - 1)
+        SlotId(self.builder.unit.slots.len() as u32 - 1)
     }
 
     pub fn address(
@@ -753,45 +748,16 @@ impl<S: Stage> Lir<S> {
         layout: LayoutId,
     ) -> AddressId {
         let ty = self.ty(repr_of(layout), layout);
-        let projection = PoolRange::push(&mut self.unit.pools.projections, steps.iter().copied());
-        self.unit.addresses.push(AddressInfo {
+        let projection = PoolRange::push(
+            &mut self.builder.unit.pools.projections,
+            steps.iter().copied(),
+        );
+        self.builder.unit.addresses.push(AddressInfo {
             base,
             projection,
             ty,
         });
-        AddressId(self.unit.addresses.len() as u32 - 1)
-    }
-
-    pub fn block(&mut self, kind: BlockKind, params: &[ValueId]) -> BlockId {
-        let parameters = PoolRange::push(&mut self.unit.pools.values, params.iter().copied());
-        self.unit.blocks.push(Block {
-            kind,
-            parameters,
-            instructions: PoolRange::EMPTY,
-            anchor: self.anchor,
-        });
-        self.insts.push(Vec::new());
-        self.terms.push(None);
-        BlockId(self.unit.blocks.len() as u32 - 1)
-    }
-
-    pub fn push(&mut self, b: BlockId, inst: Inst) {
-        self.insts[b.index()].push(inst);
-    }
-
-    pub fn term(&mut self, b: BlockId, term: Terminator) {
-        self.terms[b.index()] = Some(term);
-    }
-
-    pub fn edge(&mut self, target: BlockId, args: &[ValueId]) -> EdgeId {
-        let arguments = PoolRange::push(&mut self.unit.pools.values, args.iter().copied());
-        self.unit.tables.edges.push(Edge { target, arguments });
-        EdgeId(self.unit.tables.edges.len() as u32 - 1)
-    }
-
-    pub fn jump(&mut self, from: BlockId, to: BlockId, args: &[ValueId]) {
-        let e = self.edge(to, args);
-        self.term(from, Terminator::Jump(e));
+        AddressId(self.builder.unit.addresses.len() as u32 - 1)
     }
 
     pub fn failure_disposing(
@@ -800,35 +766,24 @@ impl<S: Stage> Lir<S> {
         args: &[ValueId],
         dispose: &[ValueId],
     ) -> FailureId {
-        let cleanup = self.edge(target, args);
-        let dispose = PoolRange::push(&mut self.unit.pools.values, dispose.iter().copied());
-        self.unit.tables.failures.push(FailureEdge {
+        let cleanup = self.builder.edge(target, args);
+        let dispose = PoolRange::push(&mut self.builder.unit.pools.values, dispose.iter().copied());
+        self.builder.unit.tables.failures.push(FailureEdge {
             cleanup,
             rule: None,
             anchor: self.anchor,
             dispose,
         });
-        FailureId(self.unit.tables.failures.len() as u32 - 1)
+        FailureId(self.builder.unit.tables.failures.len() as u32 - 1)
     }
 
     pub fn failure(&mut self, target: BlockId) -> FailureId {
         self.failure_disposing(target, &[], &[])
     }
 
-    /// The shared failure-cleanup block that only propagates.
-    pub fn propagate(&mut self) -> BlockId {
-        if let Some(b) = self.propagate {
-            return b;
-        }
-        let b = self.block(BlockKind::FailureCleanup, &[]);
-        self.term(b, Terminator::Propagate);
-        self.propagate = Some(b);
-        b
-    }
-
     /// A failure edge to plain propagation.
     pub fn fails(&mut self) -> FailureId {
-        let p = self.propagate();
+        let p = self.builder.propagate();
         self.failure(p)
     }
 
@@ -843,11 +798,11 @@ impl<S: Stage> Lir<S> {
     /// slot's address is prepared at the block's start and retries the block.
     pub fn cleanup(&mut self, steps: &[Undo]) -> BlockId {
         if steps.is_empty() {
-            return self.propagate();
+            return self.builder.propagate();
         }
-        let b = self.block(BlockKind::FailureCleanup, &[]);
+        let b = self.builder.block(BlockKind::FailureCleanup, &[]);
         self.run(b, steps, b);
-        self.term(b, Terminator::Propagate);
+        self.builder.term(b, Terminator::Propagate);
         b
     }
 
@@ -860,7 +815,7 @@ impl<S: Stage> Lir<S> {
     /// A normal-exit cleanup block running `steps`, then returning `result`.
     /// Its address preparations and failures continue in failure cleanup.
     pub fn cleanup_exit(&mut self, steps: &[Undo], result: Option<ValueId>) -> BlockId {
-        let b = self.block(BlockKind::Cleanup, &[]);
+        let b = self.builder.block(BlockKind::Cleanup, &[]);
         let mut with_result = steps.to_vec();
         with_result.extend(result.map(Undo::Release));
         // Only slot drops prepare an address that may retry the cleanup.
@@ -870,7 +825,7 @@ impl<S: Stage> Lir<S> {
             b
         };
         self.run_then(b, steps, retry, result);
-        self.ret(b, result);
+        self.builder.ret(b, result);
         b
     }
 
@@ -878,10 +833,12 @@ impl<S: Stage> Lir<S> {
         let mut addresses = Vec::new();
         for step in steps {
             if let Undo::Drop(slot) = *step {
-                let layout = self.unit.types[self.unit.slots[slot.index()].ty.index()].layout;
+                let layout = self.builder.unit.types
+                    [self.builder.unit.slots[slot.index()].ty.index()]
+                .layout;
                 let a = self.address(AddressBase::Slot(slot), &[], layout);
                 let failure = self.failure(retry);
-                self.push(
+                self.builder.push(
                     b,
                     Inst::Address {
                         address: a,
@@ -907,7 +864,7 @@ impl<S: Stage> Lir<S> {
                     let failure = self.failure(target);
                     let anchor = self.cleanup_anchor();
                     let address = addresses.next().unwrap();
-                    self.push(
+                    self.builder.push(
                         b,
                         Inst::Drop {
                             address,
@@ -929,17 +886,21 @@ impl<S: Stage> Lir<S> {
     }
 
     pub fn cleanup_anchor(&mut self) -> CleanupAnchorId {
-        self.unit.tables.cleanup_anchors.push(CleanupAnchor {
-            body: 0,
-            cleanup: self.unit.tables.cleanup_anchors.len() as u32,
-            action: 0,
-            site: SiteRange { start: 0, end: 1 },
-        });
-        CleanupAnchorId(self.unit.tables.cleanup_anchors.len() as u32 - 1)
+        self.builder
+            .unit
+            .tables
+            .cleanup_anchors
+            .push(CleanupAnchor {
+                body: 0,
+                cleanup: self.builder.unit.tables.cleanup_anchors.len() as u32,
+                action: 0,
+                site: SiteRange { start: 0, end: 1 },
+            });
+        CleanupAnchorId(self.builder.unit.tables.cleanup_anchors.len() as u32 - 1)
     }
 
     pub fn payload(&self, value: ValueId) -> LayoutId {
-        let ty = &self.unit.types[self.unit.values[value.index()].ty.index()];
+        let ty = &self.builder.unit.types[self.builder.unit.values[value.index()].ty.index()];
         match self.table.layouts[ty.layout.0 as usize].kind {
             LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
             _ => ty.layout,
@@ -949,7 +910,7 @@ impl<S: Stage> Lir<S> {
     pub fn release_with(&mut self, b: BlockId, value: ValueId, failure: FailureId) {
         let layout = self.payload(value);
         let anchor = self.cleanup_anchor();
-        self.push(
+        self.builder.push(
             b,
             Inst::Release {
                 value,
@@ -972,14 +933,14 @@ impl<S: Stage> Lir<S> {
     pub fn prepare(&mut self, b: BlockId, address: AddressId, live: &[ValueId]) {
         let target = self.releasing(live);
         let failure = self.failure(target);
-        self.push(b, Inst::Address { address, failure });
+        self.builder.push(b, Inst::Address { address, failure });
     }
 
     /// Prepare an address in `b`, failing into the cleanup `undo`.
     pub fn prepare_undo(&mut self, b: BlockId, address: AddressId, undo: &[Undo]) {
         let target = self.cleanup(undo);
         let failure = self.failure(target);
-        self.push(b, Inst::Address { address, failure });
+        self.builder.push(b, Inst::Address { address, failure });
     }
 
     /// A slot address, prepared in `b`.
@@ -1011,13 +972,17 @@ impl<S: Stage> Lir<S> {
     }
 
     pub fn loan(&mut self, address: AddressId, mutable: bool) -> LoanId {
-        self.unit.tables.loans.push(LoanInfo { address, mutable });
-        LoanId(self.unit.tables.loans.len() as u32 - 1)
+        self.builder
+            .unit
+            .tables
+            .loans
+            .push(LoanInfo { address, mutable });
+        LoanId(self.builder.unit.tables.loans.len() as u32 - 1)
     }
 
     pub fn begin(&mut self, b: BlockId, loan: LoanId) {
-        let info = self.unit.tables.loans[loan.index()].clone();
-        self.push(
+        let info = self.builder.unit.tables.loans[loan.index()].clone();
+        self.builder.push(
             b,
             Inst::BeginLoan {
                 loan,
@@ -1029,7 +994,7 @@ impl<S: Stage> Lir<S> {
     }
 
     pub fn end(&mut self, b: BlockId, loan: LoanId) {
-        self.push(
+        self.builder.push(
             b,
             Inst::EndLoan {
                 loan,
@@ -1047,13 +1012,14 @@ impl<S: Stage> Lir<S> {
         mode: ReadMode,
         loan: Option<LoanId>,
     ) -> ValueId {
-        let layout = self.unit.types[self.unit.addresses[address.index()].ty.index()].layout;
+        let layout =
+            self.builder.unit.types[self.builder.unit.addresses[address.index()].ty.index()].layout;
         let result = match (mode, loan) {
             (ReadMode::Borrow, Some(loan)) => self.borrowed(layout, loan),
             (ReadMode::Take, _) => self.owned_or_plain(layout),
             _ => self.plain(layout),
         };
-        self.push(
+        self.builder.push(
             b,
             Inst::Read {
                 result,
@@ -1073,13 +1039,13 @@ impl<S: Stage> Lir<S> {
         value: ValueId,
         slot: SlotId,
     ) -> ValueId {
-        let ty = self.unit.slots[slot.index()].ty;
-        self.unit.values.push(ValueInfo {
+        let ty = self.builder.unit.slots[slot.index()].ty;
+        self.builder.unit.values.push(ValueInfo {
             ty,
             holding: Holding::Plain,
         });
-        let version = ValueId(self.unit.values.len() as u32 - 1);
-        self.push(
+        let version = ValueId(self.builder.unit.values.len() as u32 - 1);
+        self.builder.push(
             b,
             Inst::Store {
                 address,
@@ -1092,20 +1058,22 @@ impl<S: Stage> Lir<S> {
 
     /// A plain version value of `slot`'s type (a parameter or join).
     pub fn version_of(&mut self, slot: SlotId) -> ValueId {
-        let ty = self.unit.slots[slot.index()].ty;
-        self.unit.values.push(ValueInfo {
+        let ty = self.builder.unit.slots[slot.index()].ty;
+        self.builder.unit.values.push(ValueInfo {
             ty,
             holding: Holding::Plain,
         });
-        ValueId(self.unit.values.len() as u32 - 1)
+        ValueId(self.builder.unit.values.len() as u32 - 1)
     }
 
     fn place_layout(&self, base: AddressBase, steps: &[ProjectionStep]) -> LayoutId {
         let mut layout = match base {
-            AddressBase::Slot(s) => self.unit.types[self.unit.slots[s.index()].ty.index()].layout,
+            AddressBase::Slot(s) => {
+                self.builder.unit.types[self.builder.unit.slots[s.index()].ty.index()].layout
+            }
             AddressBase::Value(v) => self.payload(v),
             AddressBase::Address(a) => {
-                self.unit.types[self.unit.addresses[a.index()].ty.index()].layout
+                self.builder.unit.types[self.builder.unit.addresses[a.index()].ty.index()].layout
             }
         };
         for step in steps {
@@ -1161,12 +1129,12 @@ impl<S: Stage> Lir<S> {
         placement: Option<Placement>,
     ) -> ConstructId {
         let fields = PoolRange::push(
-            &mut self.unit.pools.fields,
+            &mut self.builder.unit.pools.fields,
             fields
                 .iter()
                 .map(|&(field, value)| FieldValue { field, value }),
         );
-        self.unit.tables.constructs.push(ConstructSite {
+        self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
             constructor,
             layout,
@@ -1175,7 +1143,7 @@ impl<S: Stage> Lir<S> {
             placement,
             anchor: self.anchor,
         });
-        ConstructId(self.unit.tables.constructs.len() as u32 - 1)
+        ConstructId(self.builder.unit.tables.constructs.len() as u32 - 1)
     }
 
     /// The placement a construction needs at this stage: heap from Placed on.
@@ -1211,7 +1179,7 @@ impl<S: Stage> Lir<S> {
         let result = self.owned(block_layout);
         let target = self.cleanup(undo);
         let failure = self.failure(target);
-        self.push(
+        self.builder.push(
             b,
             Inst::Construct {
                 result,
@@ -1223,24 +1191,24 @@ impl<S: Stage> Lir<S> {
     }
 
     pub fn symbol(&mut self, kind: SymbolKind) -> SymbolId {
-        self.unit.tables.symbols.push(Symbol {
+        self.builder.unit.tables.symbols.push(Symbol {
             kind,
-            definition: path(&format!("s{}", self.unit.tables.symbols.len())),
+            definition: path(&format!("s{}", self.builder.unit.tables.symbols.len())),
             instance: None,
         });
-        SymbolId(self.unit.tables.symbols.len() as u32 - 1)
+        SymbolId(self.builder.unit.tables.symbols.len() as u32 - 1)
     }
 
     /// A fresh i64 constant.
     pub fn int(&mut self, b: BlockId) -> ValueId {
         let ty = self.ty(repr_of(l::I64), l::I64);
-        self.unit.tables.constants.push(ConstantData {
+        self.builder.unit.tables.constants.push(ConstantData {
             ty,
             value: ConstantValue::Integer(7),
         });
-        let constant = ConstantId(self.unit.tables.constants.len() as u32 - 1);
+        let constant = ConstantId(self.builder.unit.tables.constants.len() as u32 - 1);
         let result = self.plain(l::I64);
-        self.push(b, Inst::Const { result, constant });
+        self.builder.push(b, Inst::Const { result, constant });
         result
     }
 
@@ -1250,20 +1218,20 @@ impl<S: Stage> Lir<S> {
 
     pub fn bool_const(&mut self, b: BlockId, value: bool) -> ValueId {
         let ty = self.ty(repr_of(l::BOOL), l::BOOL);
-        self.unit.tables.constants.push(ConstantData {
+        self.builder.unit.tables.constants.push(ConstantData {
             ty,
             value: ConstantValue::Bool(value),
         });
-        let constant = ConstantId(self.unit.tables.constants.len() as u32 - 1);
+        let constant = ConstantId(self.builder.unit.tables.constants.len() as u32 - 1);
         let result = self.plain(l::BOOL);
-        self.push(b, Inst::Const { result, constant });
+        self.builder.push(b, Inst::Const { result, constant });
         result
     }
 
     /// A drop flag of `slot` (LIR schema revision 8), to be a block parameter.
     pub fn flag(&mut self, slot: SlotId) -> ValueId {
         let value = self.plain(l::BOOL);
-        self.unit.tables.init_flags.push(InitFlag {
+        self.builder.unit.tables.init_flags.push(InitFlag {
             path: PoolRange::EMPTY,
             value,
             slot,
@@ -1280,16 +1248,18 @@ impl<S: Stage> Lir<S> {
         yes: (BlockId, &[ValueId]),
         no: (BlockId, &[ValueId]),
     ) {
-        let yes = self.edge(yes.0, yes.1);
-        let no = self.edge(no.0, no.1);
-        self.term(b, Terminator::Branch { condition, yes, no });
+        let yes = self.builder.edge(yes.0, yes.1);
+        let no = self.builder.edge(no.0, no.1);
+        self.builder
+            .term(b, Terminator::Branch { condition, yes, no });
     }
 
     pub fn branch(&mut self, b: BlockId, yes: (BlockId, &[ValueId]), no: (BlockId, &[ValueId])) {
         let condition = self.boolean(b);
-        let yes = self.edge(yes.0, yes.1);
-        let no = self.edge(no.0, no.1);
-        self.term(b, Terminator::Branch { condition, yes, no });
+        let yes = self.builder.edge(yes.0, yes.1);
+        let no = self.builder.edge(no.0, no.1);
+        self.builder
+            .term(b, Terminator::Branch { condition, yes, no });
     }
 
     /// A direct call; `failure` names the failure target. Returns the result.
@@ -1329,7 +1299,7 @@ impl<S: Stage> Lir<S> {
         failure: BlockId,
     ) -> Option<ValueId> {
         let arguments = PoolRange::push(
-            &mut self.unit.pools.call_arguments,
+            &mut self.builder.unit.pools.call_arguments,
             params
                 .iter()
                 .zip(args)
@@ -1341,7 +1311,7 @@ impl<S: Stage> Lir<S> {
                 }),
         );
         let result = result.map(|layout| self.owned_or_plain(layout));
-        self.unit.tables.calls.push(CallSite {
+        self.builder.unit.tables.calls.push(CallSite {
             operation_arguments: Vec::new(),
             callee,
             abi,
@@ -1351,10 +1321,10 @@ impl<S: Stage> Lir<S> {
             declared: Effects::ALL,
             anchor: self.anchor,
         });
-        let call = CallId(self.unit.tables.calls.len() as u32 - 1);
-        let normal = self.edge(normal.0, normal.1);
+        let call = CallId(self.builder.unit.tables.calls.len() as u32 - 1);
+        let normal = self.builder.edge(normal.0, normal.1);
         let failure = self.failure(failure);
-        self.term(
+        self.builder.term(
             b,
             Terminator::Call {
                 call,
@@ -1368,7 +1338,7 @@ impl<S: Stage> Lir<S> {
     /// A diverging direct call through `abi`: no result and no normal edge.
     pub fn diverging_call(&mut self, b: BlockId, abi: FnAbiId, failure: BlockId) {
         let callee = Callee::Direct(self.symbol(SymbolKind::Function));
-        self.unit.tables.calls.push(CallSite {
+        self.builder.unit.tables.calls.push(CallSite {
             operation_arguments: Vec::new(),
             callee,
             abi,
@@ -1378,9 +1348,9 @@ impl<S: Stage> Lir<S> {
             declared: Effects::ALL,
             anchor: self.anchor,
         });
-        let call = CallId(self.unit.tables.calls.len() as u32 - 1);
+        let call = CallId(self.builder.unit.tables.calls.len() as u32 - 1);
         let failure = self.failure(failure);
-        self.term(
+        self.builder.term(
             b,
             Terminator::Call {
                 call,
@@ -1405,27 +1375,11 @@ impl<S: Stage> Lir<S> {
         }
     }
 
-    pub fn ret(&mut self, b: BlockId, value: Option<ValueId>) {
-        self.term(b, Terminator::Return(value));
-    }
-
-    pub fn finish(mut self) -> (LirUnit<S>, LayoutTable, Manifest) {
-        for (b, insts) in self.insts.iter().enumerate() {
-            let range = PoolRange::push(&mut self.unit.instructions, insts.iter().copied());
-            self.unit.blocks[b].instructions = range;
-        }
-        self.unit.terminators = self
-            .terms
-            .iter()
-            .enumerate()
-            .map(|(b, t)| {
-                t.clone()
-                    .unwrap_or_else(|| panic!("block {b} has no terminator"))
-            })
-            .collect();
-        self.unit.header.layouts = self.table.digest();
+    pub fn finish(self) -> (LirUnit<S>, LayoutTable, Manifest) {
+        let mut unit = self.builder.finish();
+        unit.header.layouts = self.table.digest();
         let _ = &self.own;
-        (self.unit, self.table, self.manifest)
+        (unit, self.table, self.manifest)
     }
 
     /// Every violation of the finished unit.

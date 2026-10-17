@@ -26,7 +26,7 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
     } else {
         CallMultiplicity::Once
     };
-    t.unit.header.abi = abi;
+    t.builder.unit.header.abi = abi;
     let mut environment = t.table.layouts[l::PAIR.0 as usize].clone();
     environment.kind = LayoutKind::Environment { movable: vec![0] };
     environment.size = SizeSpec::Fixed(24);
@@ -59,9 +59,9 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
     t.table.layouts.push(environment);
     let capture = t.slot(l::ERASED_ONCE, SlotKind::Capture(0), ROOT);
     let flags = t.slot(l::U64, SlotKind::Capture(1), ROOT);
-    t.unit.tables.init_flags.push(InitFlag {
+    t.builder.unit.tables.init_flags.push(InitFlag {
         path: PoolRange::EMPTY,
-        value: t.unit.captures[1],
+        value: t.builder.unit.captures[1],
         slot: flags,
         environment: Some(id),
     });
@@ -69,11 +69,17 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
     let word = t.address(AddressBase::Slot(flags), &[], l::U64);
     t.prepare(ENTRY, at, &[]);
     t.prepare(ENTRY, word, &[]);
-    let reaching = t.unit.captures[0];
+    let reaching = t.builder.unit.captures[0];
     let moved = t.read(ENTRY, at, reaching, ReadMode::Take, None);
-    let old = t.read(ENTRY, word, t.unit.captures[1], ReadMode::Bits, None);
+    let old = t.read(
+        ENTRY,
+        word,
+        t.builder.unit.captures[1],
+        ReadMode::Bits,
+        None,
+    );
     let next = t.plain(l::U64);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::UpdateMask {
             result: next,
@@ -85,14 +91,14 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
     let flag_version = if !matches!(mutation, Mutation::MissingStore) {
         t.store(ENTRY, word, next, flags)
     } else {
-        t.unit.captures[1]
+        t.builder.unit.captures[1]
     };
     t.release(ENTRY, moved, &[]);
     if matches!(mutation, Mutation::DoubleMove) {
         let value = t.read(ENTRY, at, reaching, ReadMode::Take, None);
         let old = t.read(ENTRY, word, flag_version, ReadMode::Bits, None);
         let next = t.plain(l::U64);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::UpdateMask {
                 result: next,
@@ -106,7 +112,7 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
     }
     if matches!(mutation, Mutation::ReadAfterMove) {
         let loan = t.loan(at, false);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::BeginLoan {
                 loan,
@@ -116,7 +122,7 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
             },
         );
         t.read(ENTRY, at, reaching, ReadMode::Borrow, Some(loan));
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::EndLoan {
                 loan,
@@ -124,7 +130,7 @@ fn capture_take(mutation: Mutation) -> Vec<K> {
             },
         );
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -173,12 +179,12 @@ fn a_stored_live_word_update_is_exactly_one_u64_bit() {
                 let mut t = Lir::<Ready>::new(&[], None);
                 let layout = if mutant { layout } else { l::U64 };
                 let word = t.plain(layout);
-                let constant = ConstantId(t.unit.tables.constants.len() as u32);
-                t.unit.tables.constants.push(ConstantData {
-                    ty: t.unit.values[word.index()].ty,
+                let constant = ConstantId(t.builder.unit.tables.constants.len() as u32);
+                t.builder.unit.tables.constants.push(ConstantData {
+                    ty: t.builder.unit.values[word.index()].ty,
                     value: ConstantValue::Integer(1),
                 });
-                t.push(
+                t.builder.push(
                     ENTRY,
                     Inst::Const {
                         result: word,
@@ -186,7 +192,7 @@ fn a_stored_live_word_update_is_exactly_one_u64_bit() {
                     },
                 );
                 let next = t.plain(layout);
-                t.push(
+                t.builder.push(
                     ENTRY,
                     Inst::UpdateMask {
                         result: next,
@@ -195,7 +201,7 @@ fn a_stored_live_word_update_is_exactly_one_u64_bit() {
                         initialized: false,
                     },
                 );
-                t.ret(ENTRY, None);
+                t.builder.ret(ENTRY, None);
                 t.check()
             },
             |kind| *kind == K::Type("mask update"),

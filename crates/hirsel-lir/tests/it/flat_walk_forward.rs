@@ -12,20 +12,20 @@ fn control(forged: bool) -> Vec<K> {
     let index = t.plain(l::U64);
     let offset = t.plain(l::U64);
     let version = t.plain(l::FLAT_ITEMS_BLK);
-    let header = t.block(BlockKind::Body, &[index, offset, version]);
+    let header = t.builder.block(BlockKind::Body, &[index, offset, version]);
     let forwarded = t.plain(l::FLAT_ITEMS_BLK);
-    let latch = t.block(BlockKind::Body, &[forwarded]);
-    let exit = t.block(BlockKind::Body, &[]);
+    let latch = t.builder.block(BlockKind::Body, &[forwarded]);
+    let exit = t.builder.block(BlockKind::Body, &[]);
     let zero = t.plain(l::U64);
     let one = t.plain(l::U64);
     for (value, n) in [(zero, 0), (one, 1)] {
-        let constant = ConstantId(t.unit.tables.constants.len() as u32);
-        let ty = t.unit.values[value.index()].ty;
-        t.unit.tables.constants.push(ConstantData {
+        let constant = ConstantId(t.builder.unit.tables.constants.len() as u32);
+        let ty = t.builder.unit.values[value.index()].ty;
+        t.builder.unit.tables.constants.push(ConstantData {
             ty,
             value: ConstantValue::Integer(n),
         });
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Const {
                 result: value,
@@ -33,7 +33,7 @@ fn control(forged: bool) -> Vec<K> {
             },
         );
     }
-    t.jump(ENTRY, header, &[zero, zero, input]);
+    t.builder.jump(ENTRY, header, &[zero, zero, input]);
     let address = t.address(
         AddressBase::Slot(root),
         &[
@@ -46,9 +46,9 @@ fn control(forged: bool) -> Vec<K> {
         l::FLAT_WRAP,
     );
     let failure = t.fails();
-    t.push(header, Inst::Address { address, failure });
+    t.builder.push(header, Inst::Address { address, failure });
     let next = t.plain(l::U64);
-    t.push(
+    t.builder.push(
         header,
         Inst::FlatNext {
             result: next,
@@ -57,7 +57,7 @@ fn control(forged: bool) -> Vec<K> {
     );
     let increment = t.plain(l::U64);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         header,
         Inst::Binary {
             result: increment,
@@ -68,8 +68,8 @@ fn control(forged: bool) -> Vec<K> {
         },
     );
     t.branch(header, (latch, &[version]), (exit, &[]));
-    t.jump(latch, header, &[increment, next, forwarded]);
-    t.ret(exit, None);
+    t.builder.jump(latch, header, &[increment, next, forwarded]);
+    t.builder.ret(exit, None);
     t.check()
 }
 

@@ -38,7 +38,7 @@ fn convert(
     t.param(x);
     let result = t.plain(to);
     let flag = flag_kind.map(|k| flag(&mut t, k));
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Convert {
             result,
@@ -47,7 +47,7 @@ fn convert(
             mode,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -169,7 +169,7 @@ fn int_arith(layout: LayoutId, op: BinaryOp, mode: ArithMode, with_flag: bool) -
     t.param(b);
     let result = t.plain(layout);
     let flag = with_flag.then(|| flag(&mut t, ScalarKind::Bool));
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::IntArith {
             result,
@@ -180,7 +180,7 @@ fn int_arith(layout: LayoutId, op: BinaryOp, mode: ArithMode, with_flag: bool) -
             right: b,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -229,7 +229,7 @@ fn mul_add(layout: LayoutId) -> Vec<K> {
         t.param(v);
     }
     let result = t.plain(layout);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::MulAdd {
             result,
@@ -238,7 +238,7 @@ fn mul_add(layout: LayoutId) -> Vec<K> {
             addend: operands[2],
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -258,7 +258,7 @@ fn binary(layout: LayoutId, op: BinaryOp, result: LayoutId) -> Vec<K> {
     t.param(b);
     let r = t.plain(result);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Binary {
             result: r,
@@ -268,7 +268,7 @@ fn binary(layout: LayoutId, op: BinaryOp, result: LayoutId) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -330,7 +330,7 @@ fn ready_operation(native: Disposition, result: LayoutId, instruction: bool) -> 
     t.param(x);
     if instruction {
         let r = t.plain(result);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Convert {
                 result: r,
@@ -339,11 +339,11 @@ fn ready_operation(native: Disposition, result: LayoutId, instruction: bool) -> 
                 mode: ConvertMode::Truncate,
             },
         );
-        t.ret(ENTRY, Some(r));
+        t.builder.ret(ENTRY, Some(r));
         return t.check();
     }
-    let n = t.block(BlockKind::Body, &[]);
-    let fail = t.propagate();
+    let n = t.builder.block(BlockKind::Body, &[]);
+    let fail = t.builder.propagate();
     let abi = t.abi(&[borrow(l::I64)], Some(result));
     let result_type = if result == l::I32 {
         hirsel_types::Primitive::I32
@@ -376,7 +376,7 @@ fn ready_operation(native: Disposition, result: LayoutId, instruction: bool) -> 
             fail,
         )
         .unwrap();
-    t.ret(n, Some(r));
+    t.builder.ret(n, Some(r));
     t.check()
 }
 

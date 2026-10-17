@@ -18,7 +18,7 @@ fn program(target: &TargetSpec) -> Program {
     // `fn stop() -> Never` fails LANG-9; its own ABI diverges, so it has no Return.
     let mut stop = Unit::new(&table, "stop", "stop");
     let failure = stop.fails(Some("LANG-9"));
-    stop.term(ENTRY, Terminator::Raise(failure));
+    stop.builder.term(ENTRY, Terminator::Raise(failure));
     // `fn probe() { stop() }` ends in the diverging call.
     let mut probe = Unit::new(&table, "probe", "probe");
     let symbol = probe.symbol(SymbolKind::Function, "stop");

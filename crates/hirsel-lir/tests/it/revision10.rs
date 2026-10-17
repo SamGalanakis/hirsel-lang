@@ -19,7 +19,7 @@ fn path_or_handle(mutant: bool) -> Vec<K> {
     }
     let layout = hirsel_lir::layout_types::LayoutId(t.table.layouts.len() as u32);
     t.table.layouts.push(record);
-    t.unit.header.abi = t.abi(
+    t.builder.unit.header.abi = t.abi(
         &[(Passing::Borrow, layout), (Passing::Borrow, layout)],
         Some(l::BOOL),
     );
@@ -27,7 +27,7 @@ fn path_or_handle(mutant: bool) -> Vec<K> {
     t.param(a);
     let b = t.plain(layout);
     t.param(b);
-    for ty in &mut t.unit.types {
+    for ty in &mut t.builder.unit.types {
         if ty.layout == layout {
             ty.repr = if mutant {
                 ValueRepr::Handle
@@ -38,7 +38,7 @@ fn path_or_handle(mutant: bool) -> Vec<K> {
     }
     let result = t.plain(l::BOOL);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Compare {
             result,
@@ -49,7 +49,7 @@ fn path_or_handle(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 #[test]

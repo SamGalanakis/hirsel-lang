@@ -34,13 +34,13 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
     let code = t.symbol(SymbolKind::Function);
     let x = t.int(ENTRY);
     let captures = PoolRange::push(
-        &mut t.unit.pools.captures,
+        &mut t.builder.unit.pools.captures,
         [CaptureValue {
             value: x,
             usage: CaptureUse::Copy,
         }],
     );
-    t.unit.tables.closures.push(ClosureSite {
+    t.builder.unit.tables.closures.push(ClosureSite {
         code: Some(ClosureCode { symbol: code, abi }),
         environment: l::ENV,
         captures,
@@ -48,10 +48,10 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
         placement: t.heap(),
         anchor: SourceAnchorId(0),
     });
-    let closure = ClosureId(t.unit.tables.closures.len() as u32 - 1);
+    let closure = ClosureId(t.builder.unit.tables.closures.len() as u32 - 1);
     let made = t.owned(l::CLOSURE);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Closure {
             result: made,
@@ -60,17 +60,17 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
         },
     );
     let s = t.slot(l::CLOSURE, SlotKind::Local, ROOT);
-    t.push(ENTRY, Inst::StorageLive { slot: s });
+    t.builder.push(ENTRY, Inst::StorageLive { slot: s });
     let a = t.at(ENTRY, s, &[], &[Undo::Release(made)]);
     let first = t.store(ENTRY, a, made, s);
 
     let at_head = t.version_of(s);
-    let head = t.block(BlockKind::Body, &[at_head]);
+    let head = t.builder.block(BlockKind::Body, &[at_head]);
     let at_body = t.version_of(s);
-    let body = t.block(BlockKind::Body, &[at_body]);
+    let body = t.builder.block(BlockKind::Body, &[at_body]);
     let at_exit = t.version_of(s);
-    let exit = t.block(BlockKind::Body, &[at_exit]);
-    t.jump(ENTRY, head, &[first]);
+    let exit = t.builder.block(BlockKind::Body, &[at_exit]);
+    t.builder.jump(ENTRY, head, &[first]);
     t.branch(head, (body, &[at_head]), (exit, &[at_head]));
 
     let loan = t.loan(a, false);
@@ -83,7 +83,7 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
     if forgery == Some(Forgery::EndsLoanBeforeCall) {
         t.end(body, loan);
     }
-    let after = t.block(BlockKind::Body, &[]);
+    let after = t.builder.block(BlockKind::Body, &[]);
     let failed = t.cleanup(&[Undo::End(loan), Undo::Drop(s)]);
     t.call_to(
         body,
@@ -106,7 +106,7 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
             let copy = t.owned(l::CLOSURE);
             let rest = t.cleanup(&[Undo::Drop(s)]);
             let failure = t.failure(rest);
-            t.push(
+            t.builder.push(
                 after,
                 Inst::Copy {
                     result: copy,
@@ -117,7 +117,7 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
             );
             copy
         };
-        tail = t.block(BlockKind::Body, &[]);
+        tail = t.builder.block(BlockKind::Body, &[]);
         let failed = t.cleanup(&[Undo::Drop(s)]);
         t.call(
             after,
@@ -128,18 +128,18 @@ fn kernel(escape: bool, forgery: Option<Forgery>) -> Vec<K> {
             failed,
         );
     }
-    t.jump(tail, head, &[at_body]);
+    t.builder.jump(tail, head, &[at_body]);
 
     let done = t.read(exit, a, at_exit, ReadMode::Take, None);
     t.release(exit, done, &[]);
-    t.push(
+    t.builder.push(
         exit,
         Inst::StorageDead {
             slot: s,
             if_live: false,
         },
     );
-    t.ret(exit, None);
+    t.builder.ret(exit, None);
     t.check()
 }
 

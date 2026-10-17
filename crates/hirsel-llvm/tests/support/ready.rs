@@ -72,17 +72,17 @@ impl Unit<'_> {
     pub fn select(&mut self, b: BlockId, cond: ValueId, yes: i64, no: i64) -> (BlockId, ValueId) {
         let i64_l = self.table.scalar(ScalarKind::I64);
         let result = self.plain(i64_l);
-        let join = self.block(BlockKind::Body, &[result]);
+        let join = self.builder.block(BlockKind::Body, &[result]);
         let (y, n) = (
-            self.block(BlockKind::Body, &[]),
-            self.block(BlockKind::Body, &[]),
+            self.builder.block(BlockKind::Body, &[]),
+            self.builder.block(BlockKind::Body, &[]),
         );
         for (block, value) in [(y, yes), (n, no)] {
             let v = self.int(block, ScalarKind::I64, u128::from(value as u64));
-            self.jump(block, join, &[v]);
+            self.builder.jump(block, join, &[v]);
         }
-        let (yes, no) = (self.edge(y, &[]), self.edge(n, &[]));
-        self.term(
+        let (yes, no) = (self.builder.edge(y, &[]), self.builder.edge(n, &[]));
+        self.builder.term(
             b,
             Terminator::Branch {
                 condition: cond,
@@ -118,7 +118,7 @@ impl Unit<'_> {
     ) -> ValueId {
         let bool_l = self.table.scalar(ScalarKind::Bool);
         let result = self.plain(bool_l);
-        self.push(
+        self.builder.push(
             b,
             Inst::Compare {
                 result,
@@ -143,12 +143,12 @@ impl Unit<'_> {
         failure: FailureId,
     ) -> ValueId {
         let fields = PoolRange::push(
-            &mut self.lir.pools.fields,
+            &mut self.builder.unit.pools.fields,
             fields
                 .iter()
                 .map(|&(field, value)| FieldValue { field, value }),
         );
-        self.lir.tables.constructs.push(ConstructSite {
+        self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
             constructor,
             layout: payload,
@@ -159,14 +159,14 @@ impl Unit<'_> {
             ))),
             anchor: SourceAnchorId(0),
         });
-        let construct = ConstructId(self.lir.tables.constructs.len() as u32 - 1);
+        let construct = ConstructId(self.builder.unit.tables.constructs.len() as u32 - 1);
         let ty = self.ty(ValueRepr::Uncounted, block);
-        self.lir.values.push(ValueInfo {
+        self.builder.unit.values.push(ValueInfo {
             ty,
             holding: Holding::Plain,
         });
-        let result = ValueId(self.lir.values.len() as u32 - 1);
-        self.push(
+        let result = ValueId(self.builder.unit.values.len() as u32 - 1);
+        self.builder.push(
             b,
             Inst::Construct {
                 result,
@@ -180,18 +180,18 @@ impl Unit<'_> {
     /// Enters the unit's one local region; returns its mark.
     pub fn enter_region(&mut self, b: BlockId) -> ValueId {
         let anchor = self.anchor(0, 5);
-        self.lir.tables.regions.push(RegionInstance {
+        self.builder.unit.tables.regions.push(RegionInstance {
             scope: ScopeId(0),
             anchor,
         });
         let i64_l = self.table.scalar(ScalarKind::I64);
         let ty = self.ty(ValueRepr::RegionMark, i64_l);
-        self.lir.values.push(ValueInfo {
+        self.builder.unit.values.push(ValueInfo {
             ty,
             holding: Holding::Owned,
         });
-        let mark = ValueId(self.lir.values.len() as u32 - 1);
-        self.push(
+        let mark = ValueId(self.builder.unit.values.len() as u32 - 1);
+        self.builder.push(
             b,
             Inst::RegionEnter {
                 result: mark,
@@ -203,16 +203,16 @@ impl Unit<'_> {
 
     /// A failure edge that exits the region of `mark` and propagates.
     pub fn exits(&mut self, mark: ValueId) -> FailureId {
-        let cleanup = self.block(BlockKind::FailureCleanup, &[]);
+        let cleanup = self.builder.block(BlockKind::FailureCleanup, &[]);
         self.exit_region(cleanup, mark);
-        let p = self.propagate();
-        self.jump(cleanup, p, &[]);
+        let p = self.builder.propagate();
+        self.builder.jump(cleanup, p, &[]);
         self.failure_to(cleanup, None, SourceAnchorId(0))
     }
 
     pub fn exit_region(&mut self, b: BlockId, mark: ValueId) {
         let failure = self.fails(None);
-        self.push(
+        self.builder.push(
             b,
             Inst::RegionExit {
                 mark,
@@ -230,17 +230,21 @@ impl Unit<'_> {
         value: ConstantValue,
     ) -> ValueId {
         let ty = self.ty(repr_of(&self.table.table, layout), layout);
-        self.lir.tables.constants.push(ConstantData { ty, value });
-        let constant = ConstantId(self.lir.tables.constants.len() as u32 - 1);
+        self.builder
+            .unit
+            .tables
+            .constants
+            .push(ConstantData { ty, value });
+        let constant = ConstantId(self.builder.unit.tables.constants.len() as u32 - 1);
         let result = self.value(layout, Holding::Owned);
-        self.push(b, Inst::Const { result, constant });
+        self.builder.push(b, Inst::Const { result, constant });
         result
     }
 
     pub fn is_unique(&mut self, b: BlockId, value: ValueId) -> ValueId {
         let bool_l = self.table.scalar(ScalarKind::Bool);
         let result = self.plain(bool_l);
-        self.push(b, Inst::IsUnique { result, value });
+        self.builder.push(b, Inst::IsUnique { result, value });
         result
     }
 
@@ -258,12 +262,12 @@ impl Unit<'_> {
     ) -> ValueId {
         let code = self.symbol(SymbolKind::Function, code);
         let captures = PoolRange::push(
-            &mut self.lir.pools.captures,
+            &mut self.builder.unit.pools.captures,
             captures
                 .iter()
                 .map(|&(value, usage)| CaptureValue { value, usage }),
         );
-        self.lir.tables.closures.push(ClosureSite {
+        self.builder.unit.tables.closures.push(ClosureSite {
             code: Some(ClosureCode {
                 symbol: code,
                 abi: self.table.abi(abi),
@@ -274,9 +278,9 @@ impl Unit<'_> {
             placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
             anchor: SourceAnchorId(0),
         });
-        let closure = ClosureId(self.lir.tables.closures.len() as u32 - 1);
+        let closure = ClosureId(self.builder.unit.tables.closures.len() as u32 - 1);
         let result = self.value(callable, Holding::Owned);
-        self.push(
+        self.builder.push(
             b,
             Inst::Closure {
                 result,
@@ -291,7 +295,7 @@ impl Unit<'_> {
     pub fn capture(&mut self, ordinal: u32, layout: LayoutId) -> (SlotId, ValueId) {
         let slot = self.slot(layout, SlotKind::Capture(ordinal));
         let version = self.version(slot);
-        self.lir.captures.push(version);
+        self.builder.unit.captures.push(version);
         (slot, version)
     }
 
@@ -643,7 +647,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         } else {
             (inner, box_i64_l, i64_l)
         };
-        u.push(ENTRY, Inst::StorageLive { slot });
+        u.builder.push(ENTRY, Inst::StorageLive { slot });
         let version = u.store(ENTRY, whole, holder, slot);
         let steps = if nested {
             vec![ProjectionStep::Payload, ProjectionStep::Payload]
@@ -651,9 +655,9 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             vec![ProjectionStep::Payload]
         };
         let at = u.address(AddressBase::Slot(slot), &steps, i64_l);
-        let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+        let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
         let pointer = u.value(outer_l, Holding::Owned);
-        u.push(
+        u.builder.push(
             cleanup,
             Inst::Read {
                 result: pointer,
@@ -662,7 +666,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
                 mode: ReadMode::Take,
             },
         );
-        u.push(
+        u.builder.push(
             cleanup,
             Inst::StorageDead {
                 slot,
@@ -670,9 +674,9 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             },
         );
         u.release(cleanup, pointer, outer_payload);
-        u.term(cleanup, Terminator::Propagate);
+        u.builder.term(cleanup, Terminator::Propagate);
         let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Address {
                 address: at,
@@ -680,7 +684,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             },
         );
         let old = u.plain(i64_l);
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Read {
                 result: old,
@@ -692,7 +696,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         let version = u.store(ENTRY, at, y, slot);
         let read = u.read(ENTRY, at, version);
         let pointer = u.value(outer_l, Holding::Owned);
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Read {
                 result: pointer,
@@ -701,7 +705,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
                 mode: ReadMode::Take,
             },
         );
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::StorageDead {
                 slot,
@@ -709,7 +713,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             },
         );
         u.release(ENTRY, pointer, outer_payload);
-        u.ret(ENTRY, Some(read));
+        u.builder.ret(ENTRY, Some(read));
         add(u);
     }
 
@@ -721,7 +725,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     let x = u.read(ENTRY, at, version);
     let sum = u.binary(ENTRY, BinaryOp::Add, x, y);
-    u.ret(ENTRY, Some(sum));
+    u.builder.ret(ENTRY, Some(sum));
     add(u);
 
     // inc(x) = x + 1
@@ -729,7 +733,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let x = u.param(i64_l);
     let one = u.int(ENTRY, ScalarKind::I64, 1);
     let r = u.binary(ENTRY, BinaryOp::Add, x, one);
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // closure_take(x, y) = (|v| Box(Rec { x }).0 + v)(y), the box taken into the
@@ -764,19 +768,19 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             &[(b, usage)],
             failure,
         );
-        let normal = u.block(BlockKind::Body, &[]);
+        let normal = u.builder.block(BlockKind::Body, &[]);
         // The copied box outlives the callable.
         let copied: &[(ValueId, LayoutId)] = match usage {
             CaptureUse::Copy => &[(b, rec1_l)],
             _ => &[],
         };
-        let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+        let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
         u.release_callable(cleanup, f, box_fun_l, copied);
         if usage == CaptureUse::Copy {
             u.release(cleanup, b, rec1_l);
         }
-        let p = u.propagate();
-        u.jump(cleanup, p, &[]);
+        let p = u.builder.propagate();
+        u.builder.jump(cleanup, p, &[]);
         let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
         let r = u
             .call(
@@ -793,7 +797,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         if usage == CaptureUse::Copy {
             u.release(normal, b, rec1_l);
         }
-        u.ret(normal, Some(r));
+        u.builder.ret(normal, Some(r));
         add(u);
     }
 
@@ -804,12 +808,13 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let symbol = u.symbol(SymbolKind::Function, "inc");
     // An owned callable over the static empty environment, released like any other.
     let f = u.value(fun_l, Holding::Owned);
-    u.push(ENTRY, Inst::FunctionRef { result: f, symbol });
-    let normal = u.block(BlockKind::Body, &[]);
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+    u.builder
+        .push(ENTRY, Inst::FunctionRef { result: f, symbol });
+    let normal = u.builder.block(BlockKind::Body, &[]);
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
     u.release_callable(cleanup, f, box_fun_l, &[]);
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
     let r = u
         .call(
@@ -824,7 +829,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         .unwrap();
     u.release_callable(normal, f, box_fun_l, &[]);
     let sum = u.binary(normal, BinaryOp::Add, r, y);
-    u.ret(normal, Some(sum));
+    u.builder.ret(normal, Some(sum));
     add(u);
 
     // is_unique(x, _): one holder is unique, two are not: 2 * unique + unique-after-dup.
@@ -840,13 +845,13 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         &[(0, x)],
     );
     let one = u.is_unique(ENTRY, b);
-    u.push(ENTRY, Inst::Dup { value: b });
+    u.builder.push(ENTRY, Inst::Dup { value: b });
     let two = u.is_unique(ENTRY, b);
     let failure = u.releasing(&[(b, rec1_l)], None, SourceAnchorId(0));
     u.release_to(ENTRY, b, rec1_l, failure);
     u.release(ENTRY, b, rec1_l);
     let (end, r) = u.weigh(ENTRY, &[one, two]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // weaken(x, y): the many-call closure weakened to a once-call one, called and released.
@@ -872,15 +877,15 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         failure,
     );
     let once = u.value(once_l, Holding::Owned);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Weaken {
             result: once,
             value: many,
         },
     );
-    let normal = u.block(BlockKind::Body, &[]);
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+    let normal = u.builder.block(BlockKind::Body, &[]);
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
     let once_payload = payload(&table, "box_once");
     let release_once = |u: &mut Unit<'_>, block: BlockId| {
         let failure = u.fails(None);
@@ -896,8 +901,8 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         u.release(block, holder, once_payload);
     };
     release_once(&mut u, cleanup);
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
     let r = u
         .call(
@@ -911,7 +916,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         )
         .unwrap();
     release_once(&mut u, normal);
-    u.ret(normal, Some(r));
+    u.builder.ret(normal, Some(r));
     add(u);
 
     // compare_boxes(x, y): Box(Rec1 { x }) against Box(Rec1 { y }) by <, == and >.
@@ -945,7 +950,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     u.release_to(ENTRY, a, rec1_l, failure);
     u.release(ENTRY, b, rec1_l);
     let (end, r) = u.weigh(ENTRY, &bits);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // compare_options(x, y): Some(x) against Some(y), and None below Some(y).
@@ -972,7 +977,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         bits.push(u.compare(ENTRY, op, l, r, opt_l, failure));
     }
     let (end, r) = u.weigh(ENTRY, &bits);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // compare_floats: records of f64 under IEEE order, NaN unordered at its first field.
@@ -1013,7 +1018,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         bits.push(u.compare(ENTRY, op, l, r, rec_f_l, failure));
     }
     let (end, r) = u.weigh(ENTRY, &bits);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // compare_chain(n, _): a chain of n links (each a box and a variant field, two levels)
@@ -1030,11 +1035,11 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let nil = u.construct_block(ENTRY, link(0), chain_l, box_chain_l, &[]);
     let zero = u.int(ENTRY, ScalarKind::I64, 0);
     let (i, acc) = (u.plain(i64_l), u.value(box_chain_l, Holding::Owned));
-    let head = u.block(BlockKind::Body, &[i, acc]);
-    u.jump(ENTRY, head, &[zero, nil]);
+    let head = u.builder.block(BlockKind::Body, &[i, acc]);
+    u.builder.jump(ENTRY, head, &[zero, nil]);
     let more = u.plain(bool_l);
     let failure = u.releasing(&[(acc, chain_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         head,
         Inst::Binary {
             result: more,
@@ -1044,9 +1049,12 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             failure,
         },
     );
-    let (body, done) = (u.block(BlockKind::Body, &[]), u.block(BlockKind::Body, &[]));
-    let (yes, no) = (u.edge(body, &[]), u.edge(done, &[]));
-    u.term(
+    let (body, done) = (
+        u.builder.block(BlockKind::Body, &[]),
+        u.builder.block(BlockKind::Body, &[]),
+    );
+    let (yes, no) = (u.builder.edge(body, &[]), u.builder.edge(done, &[]));
+    u.builder.term(
         head,
         Terminator::Branch {
             condition: more,
@@ -1057,7 +1065,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let failure = u.releasing(&[(acc, chain_l)], None, SourceAnchorId(0));
     let one = u.int(body, ScalarKind::I64, 1);
     let next = u.plain(i64_l);
-    u.push(
+    u.builder.push(
         body,
         Inst::Binary {
             result: next,
@@ -1077,17 +1085,17 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         failure_cons,
         None,
     );
-    u.jump(body, head, &[next, cons]);
+    u.builder.jump(body, head, &[next, cons]);
     let depth = u.anchor(100, 110);
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
     u.release(cleanup, acc, chain_l);
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, Some("MEM-3"), depth);
     let eq = u.compare(done, CompareOp::Eq, acc, acc, box_chain_l, failure);
     u.release(done, acc, chain_l);
     let (end, r) = u.weigh(done, &[eq]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // read_static(x, _) = x + BASE, an i64 static.
@@ -1105,7 +1113,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let _ = u.param(i64_l);
     let symbol = u.symbol(SymbolKind::Constant, "BASE");
     let block = u.value(box_i64_l, Holding::Owned);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::ReadStatic {
             result: block,
@@ -1114,7 +1122,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     );
     let at = u.address(AddressBase::Value(block), &[], i64_l);
     let failure = u.releasing(&[(block, i64_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -1124,7 +1132,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let base = u.read(ENTRY, at, block);
     u.release(ENTRY, block, i64_l);
     let r = u.binary(ENTRY, BinaryOp::Add, x, base);
-    u.ret(ENTRY, Some(r));
+    u.builder.ret(ENTRY, Some(r));
     add(u);
 
     // static_box(x, _) = BOXED.0 + x + 2 * unique(BOXED): an immortal static block.
@@ -1142,7 +1150,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let _ = u.param(i64_l);
     let symbol = u.symbol(SymbolKind::Constant, "BOXED");
     let boxed = u.value(box_rec1_l, Holding::Owned);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::ReadStatic {
             result: boxed,
@@ -1155,7 +1163,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         i64_l,
     );
     let failure = u.releasing(&[(boxed, rec1_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -1169,7 +1177,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let sum = u.binary(ENTRY, BinaryOp::Add, v, x);
     let (end, w) = u.weigh(ENTRY, &[unique]);
     let r = u.binary(end, BinaryOp::Add, sum, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // literal_byte(i, _) = b"hello"[i] == 'l', failing MEM-14 past the end: a bytes literal
@@ -1181,7 +1189,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let at = u.address(AddressBase::Value(lit), &[ProjectionStep::Index(i)], u8_l);
     let bounds = u.anchor(60, 70);
     let failure = u.releasing(&[(lit, payload(&table, "bytes"))], Some("MEM-14"), bounds);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -1193,7 +1201,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let l = u.int(ENTRY, ScalarKind::U8, u128::from(b'l'));
     let eq = u.binary(ENTRY, BinaryOp::Eq, byte, l);
     let (end, r) = u.weigh(ENTRY, &[eq]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // unique_copy(x, y): a deep copy of Box(Rec2 { x, Box(Rec1 { y }) }), both unique,
@@ -1217,7 +1225,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         box_rec2_l,
         &[(0, x), (1, inner)],
     );
-    u.lir.tables.constructs.push(ConstructSite {
+    u.builder.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
         constructor: ConstructorKind::Record(rec2_symbol),
         layout: rec2_l,
@@ -1226,10 +1234,10 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
         anchor: SourceAnchorId(0),
     });
-    let construct = ConstructId(u.lir.tables.constructs.len() as u32 - 1);
+    let construct = ConstructId(u.builder.unit.tables.constructs.len() as u32 - 1);
     let copy = u.value(box_rec2_l, Holding::Owned);
     let failure = u.releasing(&[(outer, rec2_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::UniqueCopy {
             result: copy,
@@ -1244,7 +1252,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let field = |u: &mut Unit<'_>, steps: &[ProjectionStep], layout| {
         let at = u.address(AddressBase::Value(copy), steps, layout);
         let failure = u.releasing(&[(copy, rec2_l)], None, SourceAnchorId(0));
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Address {
                 address: at,
@@ -1267,7 +1275,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let scaled = u.binary(ENTRY, BinaryOp::Mul, sum, four);
     let (end, w) = u.weigh(ENTRY, &[unique]);
     let r = u.binary(end, BinaryOp::Add, scaled, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // compare_strings: "abc" against "abd" and "ab" by <, ==, > over static literal slices
@@ -1288,7 +1296,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         bits.push(u.compare(ENTRY, op, l, r, string_l, failure));
     }
     let (end, r) = u.weigh(ENTRY, &bits);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
     let _ = bool_l;
 
@@ -1304,16 +1312,16 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let zero = u.int(ENTRY, ScalarKind::I64, 0);
     let nonzero = u.binary(ENTRY, BinaryOp::Ne, v, zero);
     let check = u.anchor(30, 40);
-    let p = u.propagate();
+    let p = u.builder.propagate();
     let failure = u.failure_to(p, Some("LANG-9"), check);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Check {
             condition: nonzero,
             failure,
         },
     );
-    u.ret(ENTRY, None);
+    u.builder.ret(ENTRY, None);
     add(u);
 
     // finalize_box(x, _) = x after releasing Box(Res { x }), whose drop body runs through
@@ -1324,10 +1332,10 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let symbol = u.symbol(SymbolKind::Type, "Res");
     let r = u.construct(ENTRY, ConstructorKind::Record(symbol), res_l, &[(0, x)]);
     // A resource holds its finalization obligation.
-    u.lir.values[r.index()].holding = Holding::Owned;
+    u.builder.unit.values[r.index()].holding = Holding::Owned;
     let b = u.construct_block(ENTRY, ConstructorKind::Box, res_l, box_res_l, &[(0, r)]);
     u.release(ENTRY, b, res_l);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // finalize_explicit(x, _) = x after finalizing a local Res { x } explicitly: begin, the
@@ -1338,31 +1346,31 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let _ = u.param(i64_l);
     let symbol = u.symbol(SymbolKind::Type, "Res");
     let slot = u.slot(res_l, SlotKind::Local);
-    u.push(ENTRY, Inst::StorageLive { slot });
+    u.builder.push(ENTRY, Inst::StorageLive { slot });
     let at = u.address(AddressBase::Slot(slot), &[], res_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     let r = u.construct(ENTRY, ConstructorKind::Record(symbol), res_l, &[(0, x)]);
-    u.lir.values[r.index()].holding = Holding::Owned;
+    u.builder.unit.values[r.index()].holding = Holding::Owned;
     let v = u.store(ENTRY, at, r, slot);
     let anchor = u.cleanup_anchor(50, 60);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FinalizeBegin {
             address: at,
             anchor,
         },
     );
-    let normal = u.block(BlockKind::Body, &[]);
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+    let normal = u.builder.block(BlockKind::Body, &[]);
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
     for block in [normal, cleanup] {
-        u.push(
+        u.builder.push(
             block,
             Inst::EndLoan {
-                loan: LoanId(u.lir.tables.loans.len() as u32),
+                loan: LoanId(u.builder.unit.tables.loans.len() as u32),
                 if_active: false,
             },
         );
-        u.push(
+        u.builder.push(
             block,
             Inst::FinalizeEnd {
                 address: at,
@@ -1371,7 +1379,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         );
         // Res has no owning field, so its finalized storage is empty (C's slot-emptiness
         // predicate): nothing is taken or forgotten.
-        u.push(
+        u.builder.push(
             block,
             Inst::StorageDead {
                 slot,
@@ -1379,15 +1387,15 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             },
         );
     }
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
-    u.lir.tables.loans.push(LoanInfo {
+    u.builder.unit.tables.loans.push(LoanInfo {
         address: at,
         mutable: false,
     });
-    let loan = LoanId(u.lir.tables.loans.len() as u32 - 1);
-    u.push(
+    let loan = LoanId(u.builder.unit.tables.loans.len() as u32 - 1);
+    u.builder.push(
         ENTRY,
         Inst::BeginLoan {
             loan,
@@ -1397,7 +1405,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let this = u.value(res_l, Holding::Borrowed(loan));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Read {
             result: this,
@@ -1416,7 +1424,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         &[],
         failure,
     );
-    u.ret(normal, Some(x));
+    u.builder.ret(normal, Some(x));
     add(u);
 
     // region_sum(x, y) = 2 * (x + y) + (Box(Rec1 { x }) < Box(Rec1 { y })), both boxes in
@@ -1447,7 +1455,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let read = |u: &mut Unit<'_>, v| {
         let at = u.address(AddressBase::Value(v), &[ProjectionStep::Field(0)], i64_l);
         let failure = u.exits(mark);
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Address {
                 address: at,
@@ -1465,7 +1473,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let doubled = u.binary(ENTRY, BinaryOp::Add, sum, sum);
     let (end, w) = u.weigh(ENTRY, &[lt]);
     let r = u.binary(end, BinaryOp::Add, doubled, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // region_resource(x, _) = x, with Box(Res { x }) in a local region: its drop body runs
@@ -1475,8 +1483,11 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let _ = u.param(i64_l);
     let symbol = u.symbol(SymbolKind::Type, "Res");
     let mark = u.enter_region(ENTRY);
-    let fields = PoolRange::push(&mut u.lir.pools.fields, [FieldValue { field: 0, value: x }]);
-    u.lir.tables.constructs.push(ConstructSite {
+    let fields = PoolRange::push(
+        &mut u.builder.unit.pools.fields,
+        [FieldValue { field: 0, value: x }],
+    );
+    u.builder.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
         constructor: ConstructorKind::Record(symbol),
         layout: res_l,
@@ -1485,10 +1496,10 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
         anchor: SourceAnchorId(0),
     });
-    let construct = ConstructId(u.lir.tables.constructs.len() as u32 - 1);
+    let construct = ConstructId(u.builder.unit.tables.constructs.len() as u32 - 1);
     let r = u.value(res_l, Holding::Owned);
     let failure = u.exits(mark);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Construct {
             result: r,
@@ -1506,7 +1517,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         failure,
     );
     u.exit_region(ENTRY, mark);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // bump(mut x): x += 1 through its exclusive address.
@@ -1520,11 +1531,11 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let next = u.binary(ENTRY, BinaryOp::Add, v, one);
     // The old content moves to a displaced slot, which dies with nothing to release.
     let displaced = u.slot(i64_l, SlotKind::Displaced);
-    u.push(ENTRY, Inst::StorageLive { slot: displaced });
+    u.builder.push(ENTRY, Inst::StorageLive { slot: displaced });
     let version = u.version(slot);
     let displaced_version = u.version(displaced);
     let failure = u.fails(None);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Replace {
             address: at,
@@ -1536,14 +1547,14 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             failure,
         },
     );
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: displaced,
             if_live: false,
         },
     );
-    u.ret(ENTRY, None);
+    u.builder.ret(ENTRY, None);
     add(u);
 
     // mut_caller(x, y) = { let mut m = x; bump(&mut m); m + y }.
@@ -1551,22 +1562,22 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let x = u.param(i64_l);
     let y = u.param(i64_l);
     let slot = u.slot(i64_l, SlotKind::Local);
-    u.push(ENTRY, Inst::StorageLive { slot });
+    u.builder.push(ENTRY, Inst::StorageLive { slot });
     let at = u.address(AddressBase::Slot(slot), &[], i64_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     u.store(ENTRY, at, x, slot);
     let written = u.version(slot);
-    let normal = u.block(BlockKind::Body, &[]);
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
-    u.push(
+    let normal = u.builder.block(BlockKind::Body, &[]);
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
+    u.builder.push(
         cleanup,
         Inst::StorageDead {
             slot,
             if_live: false,
         },
     );
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
     let bump = u.symbol(SymbolKind::Function, "bump");
     u.call(
@@ -1585,7 +1596,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         failure,
     );
     let m = u.read(normal, at, written);
-    u.push(
+    u.builder.push(
         normal,
         Inst::StorageDead {
             slot,
@@ -1593,7 +1604,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let r = u.binary(normal, BinaryOp::Add, m, y);
-    u.ret(normal, Some(r));
+    u.builder.ret(normal, Some(r));
     add(u);
 
     // niche_option(x, _) = 4 * x + 2 * (Box(Some(Box(Rec1 { x }))) > Box(None))
@@ -1629,7 +1640,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let both = [(some, opt_l), (none, opt_l)];
     let failure = u.releasing(&both, None, SourceAnchorId(0));
     let gt = u.compare(ENTRY, CompareOp::Gt, some, none, box_opt_l, failure);
-    u.lir.tables.constructs.push(ConstructSite {
+    u.builder.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
         constructor: variant(1),
         layout: opt_l,
@@ -1638,10 +1649,10 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
         anchor: SourceAnchorId(0),
     });
-    let construct = ConstructId(u.lir.tables.constructs.len() as u32 - 1);
+    let construct = ConstructId(u.builder.unit.tables.constructs.len() as u32 - 1);
     let copy = u.value(box_opt_l, Holding::Owned);
     let failure = u.releasing(&both, None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::UniqueCopy {
             result: copy,
@@ -1664,7 +1675,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         i64_l,
     );
     let failure = u.releasing(&all, None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -1678,7 +1689,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let scaled = u.binary(ENTRY, BinaryOp::Mul, v, four);
     let (end, w) = u.weigh(ENTRY, &[gt, unique]);
     let r = u.binary(end, BinaryOp::Add, scaled, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // Trace_drop(self): fails LANG-9 when self.count.0 is zero.
@@ -1696,16 +1707,16 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let zero = u.int(ENTRY, ScalarKind::I64, 0);
     let nonzero = u.binary(ENTRY, BinaryOp::Ne, v, zero);
     let check = u.anchor(30, 40);
-    let p = u.propagate();
+    let p = u.builder.propagate();
     let failure = u.failure_to(p, Some("LANG-9"), check);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Check {
             condition: nonzero,
             failure,
         },
     );
-    u.ret(ENTRY, None);
+    u.builder.ret(ENTRY, None);
     add(u);
 
     // finalize_trace(x, _) = x after releasing Box(Trace { "trace", Box(Rec1 { x }) }): the
@@ -1730,10 +1741,10 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         trace_l,
         &[(0, text), (1, count)],
     );
-    u.lir.values[t.index()].holding = Holding::Owned;
+    u.builder.unit.values[t.index()].holding = Holding::Owned;
     let b = u.construct_block(ENTRY, ConstructorKind::Box, trace_l, box_trace_l, &[(0, t)]);
     u.release(ENTRY, b, trace_l);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // env_res_add(y) = y: a closure body whose environment holds a Box<Res>.
@@ -1742,7 +1753,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let mut u = Unit::new(&table, "env_res_add", "closure i64 -> i64");
     let y = u.param(i64_l);
     let _ = u.capture(0, box_res_l);
-    u.ret(ENTRY, Some(y));
+    u.builder.ret(ENTRY, Some(y));
     add(u);
 
     // release_held(x, _) = x after an inline Release of { Box(Res { x }), "held" }: the box's
@@ -1753,7 +1764,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let res_symbol = u.symbol(SymbolKind::Type, "Res");
     let held_symbol = u.symbol(SymbolKind::Type, "Held");
     let r = u.construct(ENTRY, ConstructorKind::Record(res_symbol), res_l, &[(0, x)]);
-    u.lir.values[r.index()].holding = Holding::Owned;
+    u.builder.unit.values[r.index()].holding = Holding::Owned;
     let b = u.construct_block(ENTRY, ConstructorKind::Box, res_l, box_res_l, &[(0, r)]);
     let text = u.constant(ENTRY, string_l, ConstantValue::String("held".into()));
     let h = u.construct(
@@ -1762,9 +1773,9 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         held_l,
         &[(0, b), (1, text)],
     );
-    u.lir.values[h.index()].holding = Holding::Owned;
+    u.builder.unit.values[h.index()].holding = Holding::Owned;
     u.release(ENTRY, h, held_l);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // release_closure(x, _) = x after an inline Release of a closure over Box(Res { x }):
@@ -1774,7 +1785,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let _ = u.param(i64_l);
     let res_symbol = u.symbol(SymbolKind::Type, "Res");
     let r = u.construct(ENTRY, ConstructorKind::Record(res_symbol), res_l, &[(0, x)]);
-    u.lir.values[r.index()].holding = Holding::Owned;
+    u.builder.unit.values[r.index()].holding = Holding::Owned;
     let b = u.construct_block(ENTRY, ConstructorKind::Box, res_l, box_res_l, &[(0, r)]);
     let failure = u.fails(None);
     let f = u.closure(
@@ -1787,7 +1798,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         failure,
     );
     u.release(ENTRY, f, fun_l);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // release_variant(x, _) = x after inline Releases of None and Some(x, Box(Res { x })),
@@ -1802,15 +1813,15 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         variant,
     };
     let none = u.construct(ENTRY, variant(0), rel_l, &[]);
-    u.lir.values[none.index()].holding = Holding::Owned;
+    u.builder.unit.values[none.index()].holding = Holding::Owned;
     u.release(ENTRY, none, rel_l);
     let r = u.construct(ENTRY, ConstructorKind::Record(res_symbol), res_l, &[(0, x)]);
-    u.lir.values[r.index()].holding = Holding::Owned;
+    u.builder.unit.values[r.index()].holding = Holding::Owned;
     let b = u.construct_block(ENTRY, ConstructorKind::Box, res_l, box_res_l, &[(0, r)]);
     let some = u.construct(ENTRY, variant(1), rel_l, &[(0, x), (1, b)]);
-    u.lir.values[some.index()].holding = Holding::Owned;
+    u.builder.unit.values[some.index()].holding = Holding::Owned;
     u.release(ENTRY, some, rel_l);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // copy_pair(x, _) = 4 * x + 2 * unique(box copy) + unique(taken box): a Ready Copy of
@@ -1851,12 +1862,12 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         pair_s_l,
         &[(0, inner), (1, text)],
     );
-    u.lir.values[p.index()].holding = Holding::Owned;
-    u.push(ENTRY, Inst::StorageLive { slot });
+    u.builder.unit.values[p.index()].holding = Holding::Owned;
+    u.builder.push(ENTRY, Inst::StorageLive { slot });
     let v = u.store(ENTRY, whole, p, slot);
     let take = |u: &mut Unit<'_>, b: BlockId, address, layout| {
         let result = u.value(layout, Holding::Owned);
-        u.push(
+        u.builder.push(
             b,
             Inst::Read {
                 result,
@@ -1869,9 +1880,9 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     };
     // A failure edge while the slot is full: its content is taken and released with `live`.
     let emptying = |u: &mut Unit<'_>, live: &[(ValueId, LayoutId)]| {
-        let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+        let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
         let content = take(u, cleanup, whole, pair_s_l);
-        u.push(
+        u.builder.push(
             cleanup,
             Inst::StorageDead {
                 slot,
@@ -1881,13 +1892,13 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         let mut all = vec![(content, pair_s_l)];
         all.extend_from_slice(live);
         u.release_all(cleanup, &all);
-        let p = u.propagate();
-        u.jump(cleanup, p, &[]);
+        let p = u.builder.propagate();
+        u.builder.jump(cleanup, p, &[]);
         u.failure_to(cleanup, None, SourceAnchorId(0))
     };
     let copy = |u: &mut Unit<'_>, address, layout, failure| {
         let result = u.value(layout, Holding::Owned);
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Copy {
                 result,
@@ -1905,7 +1916,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let shared = u.is_unique(ENTRY, box_copy);
     let boxed = take(&mut u, ENTRY, first, box_rec1_l);
     let text = take(&mut u, ENTRY, second, string_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot,
@@ -1924,7 +1935,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         i64_l,
     );
     let failure = u.releasing(&rest[1..], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Address {
             address: at,
@@ -1937,7 +1948,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let scaled = u.binary(ENTRY, BinaryOp::Mul, read, four);
     let (end, w) = u.weigh(ENTRY, &[shared, unique]);
     let r = u.binary(end, BinaryOp::Add, scaled, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // finalize_trace_explicit(x, _) = x after finalizing a local Trace { "trace",
@@ -1950,7 +1961,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let rec1_symbol = u.symbol(SymbolKind::Type, "Rec1");
     let trace_symbol = u.symbol(SymbolKind::Type, "Trace");
     let slot = u.slot(trace_l, SlotKind::Local);
-    u.push(ENTRY, Inst::StorageLive { slot });
+    u.builder.push(ENTRY, Inst::StorageLive { slot });
     let at = u.address(AddressBase::Slot(slot), &[], trace_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     let count_at = u.address(
@@ -1979,27 +1990,27 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         trace_l,
         &[(0, text), (1, count)],
     );
-    u.lir.values[t.index()].holding = Holding::Owned;
+    u.builder.unit.values[t.index()].holding = Holding::Owned;
     let v = u.store(ENTRY, at, t, slot);
     let anchor = u.cleanup_anchor(50, 60);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FinalizeBegin {
             address: at,
             anchor,
         },
     );
-    let normal = u.block(BlockKind::Body, &[]);
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+    let normal = u.builder.block(BlockKind::Body, &[]);
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
     for block in [normal, cleanup] {
-        u.push(
+        u.builder.push(
             block,
             Inst::EndLoan {
-                loan: LoanId(u.lir.tables.loans.len() as u32),
+                loan: LoanId(u.builder.unit.tables.loans.len() as u32),
                 if_active: false,
             },
         );
-        u.push(
+        u.builder.push(
             block,
             Inst::FinalizeEnd {
                 address: at,
@@ -2008,7 +2019,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         );
         let take = |u: &mut Unit<'_>, address, layout| {
             let result = u.value(layout, Holding::Owned);
-            u.push(
+            u.builder.push(
                 block,
                 Inst::Read {
                     result,
@@ -2021,7 +2032,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         };
         let count = take(&mut u, count_at, box_rec1_l);
         let text = take(&mut u, text_at, string_l);
-        u.push(
+        u.builder.push(
             block,
             Inst::StorageDead {
                 slot,
@@ -2032,15 +2043,15 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         u.release_to(block, count, rec1_l, failure);
         u.release(block, text, string_l);
     }
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
-    u.lir.tables.loans.push(LoanInfo {
+    u.builder.unit.tables.loans.push(LoanInfo {
         address: at,
         mutable: false,
     });
-    let loan = LoanId(u.lir.tables.loans.len() as u32 - 1);
-    u.push(
+    let loan = LoanId(u.builder.unit.tables.loans.len() as u32 - 1);
+    u.builder.push(
         ENTRY,
         Inst::BeginLoan {
             loan,
@@ -2050,7 +2061,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let this = u.value(trace_l, Holding::Borrowed(loan));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Read {
             result: this,
@@ -2069,16 +2080,20 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         &[],
         failure,
     );
-    u.ret(normal, Some(x));
+    u.builder.ret(normal, Some(x));
     add(u);
 
     // Revision 5: a unique block's field moved out by value, a masked release and reset, a
     // reuse that keeps a field in place, and a closure's environment as a reuse donor.
     let (pair_l, box_pair_l) = (payload(&table, "box_pair"), table.layout("box_pair"));
     let mask = |u: &mut Unit<'_>, bits: u64| {
-        let words = PoolRange::push(&mut u.lir.pools.mask_words, [bits]);
-        u.lir.tables.masks.push(FieldMask { fields: 2, words });
-        MaskId(u.lir.tables.masks.len() as u32 - 1)
+        let words = PoolRange::push(&mut u.builder.unit.pools.mask_words, [bits]);
+        u.builder
+            .unit
+            .tables
+            .masks
+            .push(FieldMask { fields: 2, words });
+        MaskId(u.builder.unit.tables.masks.len() as u32 - 1)
     };
     // Box(Pair { Box(Rec1 { x }), Box(Rec1 { y }) }) and its first field taken out by value.
     let split = |u: &mut Unit<'_>, x, y| {
@@ -2105,7 +2120,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             box_rec1_l,
         );
         let failure = u.releasing(&[(d, pair_l)], None, SourceAnchorId(0));
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Address {
                 address: first,
@@ -2113,7 +2128,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             },
         );
         let taken = u.value(box_rec1_l, Holding::Owned);
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Read {
                 result: taken,
@@ -2131,7 +2146,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             i64_l,
         );
         let failure = u.releasing(live, None, SourceAnchorId(0));
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Address {
                 address: at,
@@ -2150,7 +2165,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let live = mask(&mut u, 0b10);
     let anchor = u.cleanup_anchor(80, 90);
     let failure = u.releasing(&[(taken, rec1_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Release {
             value: d,
@@ -2162,7 +2177,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     );
     let v = field0(&mut u, taken, &[(taken, rec1_l)]);
     u.release(ENTRY, taken, rec1_l);
-    u.ret(ENTRY, Some(v));
+    u.builder.ret(ENTRY, Some(v));
     add(u);
 
     // reuse_kept(x, y) = 4 * (x + y + 1) + 2 * same + unique: Box(Pair { a, b }) is reset
@@ -2177,14 +2192,14 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let live = mask(&mut u, 0b10);
     let kept = mask(&mut u, 0b01);
     let token_ty = u.ty(ValueRepr::Token, u.table.header);
-    u.lir.values.push(ValueInfo {
+    u.builder.unit.values.push(ValueInfo {
         ty: token_ty,
         holding: Holding::Owned,
     });
-    let token = ValueId(u.lir.values.len() as u32 - 1);
+    let token = ValueId(u.builder.unit.values.len() as u32 - 1);
     let anchor = u.cleanup_anchor(80, 90);
     let failure = u.releasing(&[(taken, rec1_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Reset {
             result: token,
@@ -2199,8 +2214,8 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let pair_symbol = u.symbol(SymbolKind::Type, "Pair");
     // A failure with the token live disposes of it on the edge.
     let failure = u.releasing(&[(taken, rec1_l)], None, SourceAnchorId(0));
-    u.lir.tables.failures[failure.index()].dispose =
-        PoolRange::push(&mut u.lir.pools.values, [token]);
+    u.builder.unit.tables.failures[failure.index()].dispose =
+        PoolRange::push(&mut u.builder.unit.pools.values, [token]);
     let fresh = u.construct_block_to(
         ENTRY,
         ConstructorKind::Record(rec1_symbol),
@@ -2225,7 +2240,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         let steps = [ProjectionStep::Field(k), ProjectionStep::Field(0)];
         let at = u.address(AddressBase::Value(r), &steps, i64_l);
         let failure = u.releasing(&[(r, pair_l)], None, SourceAnchorId(0));
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Address {
                 address: at,
@@ -2241,7 +2256,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let scaled = u.binary(ENTRY, BinaryOp::Mul, sum, four);
     let (end, w) = u.weigh(ENTRY, &[unique]);
     let r = u.binary(end, BinaryOp::Add, scaled, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // closure_reset(x, y) = x + y: the closure over Box(Rec1 { x }) is called, then its
@@ -2267,11 +2282,11 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         &[(b, CaptureUse::Take)],
         failure,
     );
-    let normal = u.block(BlockKind::Body, &[]);
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+    let normal = u.builder.block(BlockKind::Body, &[]);
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
     u.release(cleanup, f, fun_l);
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
     let sum = u
         .call(
@@ -2285,14 +2300,14 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         )
         .unwrap();
     let token_ty = u.ty(ValueRepr::Token, u.table.header);
-    u.lir.values.push(ValueInfo {
+    u.builder.unit.values.push(ValueInfo {
         ty: token_ty,
         holding: Holding::Owned,
     });
-    let token = ValueId(u.lir.values.len() as u32 - 1);
+    let token = ValueId(u.builder.unit.values.len() as u32 - 1);
     let anchor = u.cleanup_anchor(80, 90);
     let failure = u.fails(None);
-    u.push(
+    u.builder.push(
         normal,
         Inst::Reset {
             result: token,
@@ -2315,7 +2330,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     );
     let at = u.address(AddressBase::Value(n), &[ProjectionStep::Field(0)], i64_l);
     let failure = u.releasing(&[(n, rec1_l)], None, SourceAnchorId(0));
-    u.push(
+    u.builder.push(
         normal,
         Inst::Address {
             address: at,
@@ -2324,7 +2339,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     );
     let v = u.read(normal, at, n);
     u.release(normal, n, rec1_l);
-    u.ret(normal, Some(v));
+    u.builder.ret(normal, Some(v));
     add(u);
 
     // Revision 4: FlatFormatV0 values built, viewed, counted, indexed and copied.
@@ -2364,7 +2379,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         let at = u.address(AddressBase::Value(base), steps, layout);
         let bounds = u.anchor(60, 70);
         let failure = u.releasing(live, Some("MEM-14"), bounds);
-        u.push(
+        u.builder.push(
             ENTRY,
             Inst::Address {
                 address: at,
@@ -2377,7 +2392,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let n = u.read(ENTRY, n_at, b);
     let text_at = prepared(&mut u, b, &[ProjectionStep::Field(0)], text_l, &live);
     let len = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FlatLength {
             result: len,
@@ -2387,12 +2402,12 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let index = [ProjectionStep::Field(0), ProjectionStep::Index(i)];
     let byte_at = prepared(&mut u, b, &index, byte_l, &live);
     let byte = u.read(ENTRY, byte_at, b);
-    u.lir.tables.loans.push(LoanInfo {
+    u.builder.unit.tables.loans.push(LoanInfo {
         address: text_at,
         mutable: false,
     });
-    let loan = LoanId(u.lir.tables.loans.len() as u32 - 1);
-    u.push(
+    let loan = LoanId(u.builder.unit.tables.loans.len() as u32 - 1);
+    u.builder.push(
         ENTRY,
         Inst::BeginLoan {
             loan,
@@ -2402,7 +2417,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let view = u.value(string_l, Holding::Borrowed(loan));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FlatView {
             result: view,
@@ -2410,8 +2425,8 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     // The comparison's failure edge ends the view's loan before releasing its block.
-    let cleanup = u.block(BlockKind::FailureCleanup, &[]);
-    u.push(
+    let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
+    u.builder.push(
         cleanup,
         Inst::EndLoan {
             loan,
@@ -2419,12 +2434,12 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     u.release_all(cleanup, &live);
-    let p = u.propagate();
-    u.jump(cleanup, p, &[]);
+    let p = u.builder.propagate();
+    u.builder.jump(cleanup, p, &[]);
     let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
     let other = u.constant(ENTRY, string_l, ConstantValue::String("hello".into()));
     let eq = u.compare(ENTRY, CompareOp::Eq, view, other, string_l, failure);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::EndLoan {
             loan,
@@ -2438,7 +2453,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let is_five = u.binary(ENTRY, BinaryOp::Eq, len, five);
     let (end, w) = u.weigh(ENTRY, &[eq, is_l, is_five]);
     let r = u.binary(end, BinaryOp::Add, n, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // flat_point(x, y) = 4 * x + 2 * (copy.a == x) + (copy.b == y): the fixed flat record
@@ -2456,13 +2471,13 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         &[(0, x), (1, y)],
     );
     let slot = u.slot(point_l, SlotKind::Local);
-    u.push(ENTRY, Inst::StorageLive { slot });
+    u.builder.push(ENTRY, Inst::StorageLive { slot });
     let at = u.address(AddressBase::Slot(slot), &[], point_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     let v = u.store(ENTRY, at, p, slot);
     let copy = u.plain(point_l);
     let failure = u.fails(None);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FlatCopy {
             result: copy,
@@ -2472,7 +2487,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let _ = v;
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot,
@@ -2480,7 +2495,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let other = u.slot(point_l, SlotKind::Local);
-    u.push(ENTRY, Inst::StorageLive { slot: other });
+    u.builder.push(ENTRY, Inst::StorageLive { slot: other });
     let at = u.address(AddressBase::Slot(other), &[], point_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     let w = u.store(ENTRY, at, copy, other);
@@ -2490,7 +2505,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let b_at = u.address(AddressBase::Slot(other), &[ProjectionStep::Field(1)], pb_l);
     u.prepare(ENTRY, b_at, None, SourceAnchorId(0));
     let b = u.read(ENTRY, b_at, w);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot: other,
@@ -2503,7 +2518,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let scaled = u.binary(ENTRY, BinaryOp::Mul, x, four);
     let (end, w) = u.weigh(ENTRY, &[is_x, is_y]);
     let r = u.binary(end, BinaryOp::Add, scaled, w);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // flat_outer(x, y) = 4 * (len(outer.item.text) == 3) + 2 * (outer.item.n < outer.k)
@@ -2550,7 +2565,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let text_steps = [inner.as_slice(), &[ProjectionStep::Field(0)]].concat();
     let text_at = prepared(&mut u, o, &text_steps, text_l, &live);
     let len = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FlatLength {
             result: len,
@@ -2563,7 +2578,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let below = u.binary(ENTRY, BinaryOp::Lt, n, k);
     let same = u.binary(ENTRY, BinaryOp::Eq, n, k);
     let (end, r) = u.weigh(ENTRY, &[is_three, below, same]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // flat_items(i, _) = 8 * (len(items) == 2) + 4 * (items[i].n == 7) + 2 * (items[i].n == 9)
@@ -2597,11 +2612,12 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let _ = u.param(i64_l);
     let symbol = u.symbol(SymbolKind::Constant, "ITEMS");
     let st = u.value(box_items_l, Holding::Owned);
-    u.push(ENTRY, Inst::ReadStatic { result: st, symbol });
+    u.builder
+        .push(ENTRY, Inst::ReadStatic { result: st, symbol });
     let live = [(st, items_l)];
     let list_at = prepared(&mut u, st, &[ProjectionStep::Field(0)], list_l, &live);
     let count = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FlatLength {
             result: count,
@@ -2619,7 +2635,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let text_steps = [element.as_slice(), &[ProjectionStep::Field(0)]].concat();
     let text_at = prepared(&mut u, st, &text_steps, text_l, &live);
     let text_len = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FlatLength {
             result: text_len,
@@ -2635,7 +2651,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let is_seven = u.binary(ENTRY, BinaryOp::Eq, n, seven);
     let is_nine = u.binary(ENTRY, BinaryOp::Eq, n, nine);
     let (end, r) = u.weigh(ENTRY, &[pair, is_seven, is_nine, short]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
     let _ = element_l;
 
@@ -2646,7 +2662,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let file_l = table.layout("file");
     let mut u = Unit::new(&table, "close_held", CLOSE_ABI);
     let h = u.param(file_l);
-    u.lir.values[h.index()].holding = Holding::Owned;
+    u.builder.unit.values[h.index()].holding = Holding::Owned;
     let x = u.param(i64_l);
     let rec1_symbol = u.symbol(SymbolKind::Type, "Rec1");
     let held_symbol = u.symbol(SymbolKind::Type, "HeldFile");
@@ -2666,9 +2682,9 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         held_file_l,
         &[(0, h), (1, b)],
     );
-    u.lir.values[held.index()].holding = Holding::Owned;
+    u.builder.unit.values[held.index()].holding = Holding::Owned;
     u.release(ENTRY, held, held_file_l);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     add(u);
 
     // simd_lanes(x, y) = 4 * (lane 0 == lane 2) + 2 * (lane 1 == lane 3) + (lane 0 < lane 1)
@@ -2691,7 +2707,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         &[(0, x), (1, y), (2, x), (3, y)],
     );
     let slot = u.slot(simd_l, SlotKind::Local);
-    u.push(ENTRY, Inst::StorageLive { slot });
+    u.builder.push(ENTRY, Inst::StorageLive { slot });
     let at = u.address(AddressBase::Slot(slot), &[], simd_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     let version = u.store(ENTRY, at, v, slot);
@@ -2706,7 +2722,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         u.read(ENTRY, at, version)
     };
     let lanes = [lane(0), lane(1), lane(2), lane(3)];
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::StorageDead {
             slot,
@@ -2717,7 +2733,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let same_odd = u.binary(ENTRY, BinaryOp::Eq, lanes[1], lanes[3]);
     let rising = u.binary(ENTRY, BinaryOp::Lt, lanes[0], lanes[1]);
     let (end, r) = u.weigh(ENTRY, &[same_even, same_odd, rising]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // LIR schema revision 7. push_i64(mut xs, x): a library body appending as
@@ -2725,18 +2741,18 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     // a `Slot` step, then `SeqSetLen`. Its caller holds the only reference.
     let (list_l, seq_l) = (table.layout("list64"), payload(&table, "list64"));
     let mut u = Unit::new(&table, "push_i64", "push list64");
-    u.lir.header.origin = UnitOrigin::Library;
+    u.builder.unit.header.origin = UnitOrigin::Library;
     let this = u.param(list_l);
     let x = u.param(i64_l);
     let slot = u.slot(list_l, SlotKind::Parameter(0));
     let at = u.address(AddressBase::Slot(slot), &[], list_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
-    u.lir.tables.loans.push(LoanInfo {
+    u.builder.unit.tables.loans.push(LoanInfo {
         address: at,
         mutable: false,
     });
-    let loan = LoanId(u.lir.tables.loans.len() as u32 - 1);
-    u.push(
+    let loan = LoanId(u.builder.unit.tables.loans.len() as u32 - 1);
+    u.builder.push(
         ENTRY,
         Inst::BeginLoan {
             loan,
@@ -2746,7 +2762,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let view = u.value(list_l, Holding::Borrowed(loan));
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Read {
             result: view,
@@ -2756,7 +2772,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let len = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::SeqLen {
             result: len,
@@ -2764,14 +2780,14 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let capacity = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::SeqCapacity {
             result: capacity,
             value: view,
         },
     );
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::EndLoan {
             loan,
@@ -2779,12 +2795,12 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let full = u.binary(ENTRY, BinaryOp::Ge, len, capacity);
-    let grow = u.block(BlockKind::Body, &[]);
+    let grow = u.builder.block(BlockKind::Body, &[]);
     let joined = u.version(slot);
-    let append = u.block(BlockKind::Body, &[joined]);
-    let yes = u.edge(grow, &[]);
-    let no = u.edge(append, &[this]);
-    u.term(
+    let append = u.builder.block(BlockKind::Body, &[joined]);
+    let yes = u.builder.edge(grow, &[]);
+    let no = u.builder.edge(append, &[this]);
+    u.builder.term(
         ENTRY,
         Terminator::Branch {
             condition: full,
@@ -2797,7 +2813,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let four = u.int(grow, ScalarKind::U64, 4);
     let wanted = u.binary(grow, BinaryOp::Add, twice, four);
     let grown = u.version(slot);
-    u.push(
+    u.builder.push(
         grow,
         Inst::SeqReserve {
             address: at,
@@ -2805,14 +2821,14 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             version: grown,
         },
     );
-    u.jump(grow, append, &[grown]);
+    u.builder.jump(grow, append, &[grown]);
     let element = u.address(AddressBase::Slot(slot), &[ProjectionStep::Slot(len)], i64_l);
     u.prepare(append, element, None, SourceAnchorId(0));
     u.store(append, element, x, slot);
     let one = u.int(append, ScalarKind::U64, 1);
     let count = u.binary(append, BinaryOp::Add, len, one);
     let counted = u.version(slot);
-    u.push(
+    u.builder.push(
         append,
         Inst::SeqSetLen {
             address: at,
@@ -2820,7 +2836,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             version: counted,
         },
     );
-    u.ret(append, None);
+    u.builder.ret(append, None);
     add(u);
 
     // seq_push(a, b) = 16 * (len == 4) + 8 * (capacity >= 4) + 4 * (hash(xs) == hash(ys))
@@ -2831,7 +2847,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let a = u.param(i64_l);
     let b = u.param(i64_l);
     let slot = u.slot(list_l, SlotKind::Local);
-    u.push(ENTRY, Inst::StorageLive { slot });
+    u.builder.push(ENTRY, Inst::StorageLive { slot });
     let at = u.address(AddressBase::Slot(slot), &[], list_l);
     u.prepare(ENTRY, at, None, SourceAnchorId(0));
     let xs = u.construct_block(ENTRY, ConstructorKind::Sequence, seq_l, list_l, &[(0, a)]);
@@ -2842,11 +2858,11 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     for _ in 0..3 {
         // A `mut` argument names the slot's version after the call, on both edges.
         version = u.version(slot);
-        let normal = u.block(BlockKind::Body, &[]);
+        let normal = u.builder.block(BlockKind::Body, &[]);
         // A failed push leaves the list in the slot: take and release it.
-        let cleanup = u.block(BlockKind::FailureCleanup, &[]);
+        let cleanup = u.builder.block(BlockKind::FailureCleanup, &[]);
         let held = u.value(list_l, Holding::Owned);
-        u.push(
+        u.builder.push(
             cleanup,
             Inst::Read {
                 result: held,
@@ -2856,15 +2872,15 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             },
         );
         u.release(cleanup, held, seq_l);
-        u.push(
+        u.builder.push(
             cleanup,
             Inst::StorageDead {
                 slot,
                 if_live: false,
             },
         );
-        let p = u.propagate();
-        u.jump(cleanup, p, &[]);
+        let p = u.builder.propagate();
+        u.builder.jump(cleanup, p, &[]);
         let failure = u.failure_to(cleanup, None, SourceAnchorId(0));
         u.call(
             current,
@@ -2887,7 +2903,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         current = normal;
     }
     let pushed = u.value(list_l, Holding::Owned);
-    u.push(
+    u.builder.push(
         current,
         Inst::Read {
             result: pushed,
@@ -2896,7 +2912,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             mode: ReadMode::Take,
         },
     );
-    u.push(
+    u.builder.push(
         current,
         Inst::StorageDead {
             slot,
@@ -2915,7 +2931,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     );
     let live = [(pushed, seq_l), (ys, seq_l)];
     let len = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         current,
         Inst::SeqLen {
             result: len,
@@ -2923,7 +2939,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let capacity = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         current,
         Inst::SeqCapacity {
             result: capacity,
@@ -2933,7 +2949,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let hash = |u: &mut Unit<'_>, value| {
         let result = u.plain(u64_l);
         let failure = u.releasing(&live, Some("MEM-3"), SourceAnchorId(0));
-        u.push(
+        u.builder.push(
             current,
             Inst::Hash {
                 result,
@@ -2955,7 +2971,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
             i64_l,
         );
         let failure = u.releasing(&live, Some("MEM-14"), SourceAnchorId(0));
-        u.push(
+        u.builder.push(
             current,
             Inst::Address {
                 address: at,
@@ -2974,7 +2990,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let first = u.binary(current, BinaryOp::Eq, x0, a);
     let last = u.binary(current, BinaryOp::Eq, x3, b);
     let (end, r) = u.weigh(current, &[counted, room, hashed, first, last]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     // flat_walk(i, _) = 2 * (items[0].n == 7) + (items[i].n == 9) over the static Items:
@@ -2985,7 +3001,8 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let _ = u.param(i64_l);
     let symbol = u.symbol(SymbolKind::Constant, "ITEMS");
     let st = u.value(box_items_l, Holding::Owned);
-    u.push(ENTRY, Inst::ReadStatic { result: st, symbol });
+    u.builder
+        .push(ENTRY, Inst::ReadStatic { result: st, symbol });
     let live = [(st, items_l)];
     let zero = u.int(ENTRY, ScalarKind::U64, 0);
     let first = [
@@ -2997,7 +3014,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     ];
     let first_at = prepared(&mut u, st, &first, element_l, &live);
     let next = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::FlatNext {
             result: next,
@@ -3011,7 +3028,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let n0 = u.read(ENTRY, n0_at, st);
     // The index as a u64: i64 to u64 keeps the bits.
     let index = u.plain(u64_l);
-    u.push(
+    u.builder.push(
         ENTRY,
         Inst::Convert {
             result: index,
@@ -3038,7 +3055,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let is_seven = u.binary(ENTRY, BinaryOp::Eq, n0, seven);
     let is_nine = u.binary(ENTRY, BinaryOp::Eq, ni, nine);
     let (end, r) = u.weigh(ENTRY, &[is_seven, is_nine]);
-    u.ret(end, Some(r));
+    u.builder.ret(end, Some(r));
     add(u);
 
     let mut finalizers = BTreeMap::new();

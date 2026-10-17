@@ -14,6 +14,7 @@ hirsel-syntax = { path = "../hirsel-syntax" }
 llvm-sys = { version = "=211.0.1", default-features = false, features = ["strict-versioning", "force-dynamic"] }
 
 [dev-dependencies]
+hirsel-lir = { path = "../hirsel-lir", features = ["testing"] }
 hirsel-heapcheck = { path = "../hirsel-heapcheck" }
 hirsel-interp = { path = "../hirsel-interp" }
 hirsel-tir = { path = "../hirsel-tir" }

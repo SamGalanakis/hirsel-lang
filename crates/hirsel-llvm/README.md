@@ -472,3 +472,7 @@ cases run on pool workers, including when `--include-ignored` selects them.
 
 Type-store test fixtures use `hirsel_types::testing::Types` through the test-only
 `testing` feature; layout derivation and validation remain in this suite.
+
+The opt-in `hirsel_lir::testing::UnitBuilder` buffers hand-built LIR blocks,
+instructions and terminators for validator and backend tests. Suite-specific
+layout tables, identities, cleanup recipes and assertions remain in test support.

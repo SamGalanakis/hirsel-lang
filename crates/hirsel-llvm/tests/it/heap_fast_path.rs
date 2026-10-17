@@ -33,11 +33,11 @@ fn program(target: &TargetSpec) -> Program {
         table.layout("cell"),
         &[(0, x)],
     );
-    u.push(ENTRY, Inst::Dup { value: b });
+    u.builder.push(ENTRY, Inst::Dup { value: b });
     let failure = u.releasing(&[(b, payload)], None, SourceAnchorId(0));
     u.release_to(ENTRY, b, payload, failure);
     u.release(ENTRY, b, payload);
-    u.ret(ENTRY, Some(x));
+    u.builder.ret(ENTRY, Some(x));
     let units = vec![seal(&table, &manifest, u.finish())];
     Program {
         table,

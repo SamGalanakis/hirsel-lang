@@ -12,7 +12,7 @@ use support::*;
 
 /// Mark a fixture unit as built by `hirsel_rc::library`.
 fn library<S>(t: &mut Lir<S>) {
-    t.unit.header.origin = UnitOrigin::Library;
+    t.builder.unit.header.origin = UnitOrigin::Library;
 }
 
 /// `SeqLen` (or `SeqCapacity`) of a borrowed parameter of `layout`, into a value of
@@ -22,7 +22,7 @@ fn length(capacity: bool, layout: LayoutId, result: LayoutId) -> Vec<K> {
     let x = t.plain(layout);
     t.param(x);
     let r = t.plain(result);
-    t.push(
+    t.builder.push(
         ENTRY,
         if capacity {
             Inst::SeqCapacity {
@@ -36,7 +36,7 @@ fn length(capacity: bool, layout: LayoutId, result: LayoutId) -> Vec<K> {
             }
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -119,7 +119,7 @@ fn write(set_len: bool, case: Write) -> Vec<K> {
         t.store(ENTRY, element, v, s);
     } else {
         let version = t.version_of(s);
-        t.push(
+        t.builder.push(
             ENTRY,
             if set_len {
                 Inst::SeqSetLen {
@@ -136,7 +136,7 @@ fn write(set_len: bool, case: Write) -> Vec<K> {
             },
         );
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -218,7 +218,7 @@ fn slot_store_mut() -> Vec<K> {
     t.param(v);
     let element = t.at(ENTRY, s, &[ProjectionStep::Slot(n)], &[]);
     t.store(ENTRY, element, v, s);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -238,7 +238,7 @@ fn slot_read(source: bool) -> Vec<K> {
     t.param(n);
     let at = t.through(ENTRY, x, &[ProjectionStep::Slot(n)], &[]);
     let r = t.read(ENTRY, at, x, ReadMode::Bits, None);
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -249,7 +249,7 @@ fn hash(layout: LayoutId, result: LayoutId) -> Vec<K> {
     t.param(x);
     let r = t.plain(result);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Hash {
             result: r,
@@ -258,7 +258,7 @@ fn hash(layout: LayoutId, result: LayoutId) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -288,7 +288,7 @@ fn recast(source: bool, both_sequence: bool) -> Vec<K> {
     let view = t.read(ENTRY, at, sv, ReadMode::Borrow, Some(loan));
     let to = if both_sequence { l::SEQBLK } else { l::SOURCE };
     let opaque = t.borrowed(to, loan);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Recast {
             result: opaque,
@@ -296,7 +296,7 @@ fn recast(source: bool, both_sequence: bool) -> Vec<K> {
         },
     );
     let back = t.borrowed(l::SEQBLK, loan);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Recast {
             result: back,
@@ -304,7 +304,7 @@ fn recast(source: bool, both_sequence: bool) -> Vec<K> {
         },
     );
     let n = t.plain(l::U64);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::SeqLen {
             result: n,
@@ -312,7 +312,7 @@ fn recast(source: bool, both_sequence: bool) -> Vec<K> {
         },
     );
     t.end(ENTRY, loan);
-    t.ret(ENTRY, Some(n));
+    t.builder.ret(ENTRY, Some(n));
     t.check()
 }
 
@@ -330,13 +330,13 @@ fn iterator_closure(result: LayoutId) -> Vec<K> {
     let code = t.symbol(SymbolKind::Function);
     let abi = t.abi_shaped(CallableShape::Closure, &[], Some(result));
     let captures = PoolRange::push(
-        &mut t.unit.pools.captures,
+        &mut t.builder.unit.pools.captures,
         [CaptureValue {
             value: x,
             usage: CaptureUse::Borrow,
         }],
     );
-    t.unit.tables.closures.push(ClosureSite {
+    t.builder.unit.tables.closures.push(ClosureSite {
         code: Some(ClosureCode {
             symbol: code,
             abi: abi,
@@ -347,10 +347,10 @@ fn iterator_closure(result: LayoutId) -> Vec<K> {
         placement: None,
         anchor: SourceAnchorId(0),
     });
-    let closure = ClosureId(t.unit.tables.closures.len() as u32 - 1);
+    let closure = ClosureId(t.builder.unit.tables.closures.len() as u32 - 1);
     let iterator = t.owned(l::ITER);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Closure {
             result: iterator,
@@ -358,7 +358,7 @@ fn iterator_closure(result: LayoutId) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(iterator));
+    t.builder.ret(ENTRY, Some(iterator));
     t.check()
 }
 
@@ -368,8 +368,8 @@ fn iterator_call(result: LayoutId) -> Vec<K> {
     let it = t.plain(l::ITER);
     t.param(it);
     let abi = t.abi_shaped(CallableShape::Closure, &[], Some(result));
-    let after = t.block(BlockKind::Body, &[]);
-    let fb = t.propagate();
+    let after = t.builder.block(BlockKind::Body, &[]);
+    let fb = t.builder.propagate();
     let r = t
         .call_to(
             ENTRY,
@@ -382,7 +382,7 @@ fn iterator_call(result: LayoutId) -> Vec<K> {
             fb,
         )
         .unwrap();
-    t.ret(after, Some(r));
+    t.builder.ret(after, Some(r));
     t.check()
 }
 
@@ -408,7 +408,7 @@ fn early_unique(case: u8) -> Vec<K> {
     );
     library(&mut t);
     if case == 1 {
-        t.unit.header.origin = UnitOrigin::Source;
+        t.builder.unit.header.origin = UnitOrigin::Source;
     }
     let r = &mut t.table.layouts[l::RESCNT.0 as usize];
     let mut finalizer = support::path("owned_cursor_drop");
@@ -464,7 +464,7 @@ fn early_unique(case: u8) -> Vec<K> {
         loan,
     );
     let flag = t.plain(l::BOOL);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::IsUnique {
             result: flag,
@@ -473,7 +473,7 @@ fn early_unique(case: u8) -> Vec<K> {
     );
     if case == 3 {
         let len = t.plain(l::U64);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::SeqLen {
                 result: len,
@@ -490,7 +490,7 @@ fn early_unique(case: u8) -> Vec<K> {
         version: "1".into(),
     };
     path.0.modules = vec!["$intrinsic".into()];
-    t.unit.tables.symbols[symbol.index()].definition = path;
+    t.builder.unit.tables.symbols[symbol.index()].definition = path;
     let construct = t.construct_site(
         ConstructorKind::Record(symbol),
         l::RESCNT,
@@ -499,7 +499,7 @@ fn early_unique(case: u8) -> Vec<K> {
     );
     let cursor = t.owned(l::RESCNT);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result: cursor,
@@ -510,7 +510,7 @@ fn early_unique(case: u8) -> Vec<K> {
     if let Some(l) = loan {
         t.end(ENTRY, l);
     }
-    t.ret(ENTRY, Some(cursor));
+    t.builder.ret(ENTRY, Some(cursor));
     t.check()
 }
 
@@ -541,7 +541,7 @@ fn moving_recast(foreign: bool, repeated: bool) -> Vec<K> {
     let at = t.at(ENTRY, s, &[], &[Undo::Drop(s)]);
     let source = t.read(ENTRY, at, sv, ReadMode::Take, None);
     let result = t.owned(l::SOURCE);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Recast {
             result,
@@ -550,7 +550,7 @@ fn moving_recast(foreign: bool, repeated: bool) -> Vec<K> {
     );
     if repeated {
         let len = t.plain(l::U64);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::SeqLen {
                 result: len,
@@ -558,7 +558,7 @@ fn moving_recast(foreign: bool, repeated: bool) -> Vec<K> {
             },
         );
     }
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -591,7 +591,7 @@ fn live_resource_slot_take(source_field: bool, borrowed: bool) -> Vec<K> {
     }
     let at = t.at(ENTRY, s, &steps, &[]);
     let result = t.read(ENTRY, at, version, ReadMode::Take, None);
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -617,28 +617,28 @@ fn cleanup_slot_incarnation(case: u8) -> Vec<K> {
     let other = t.slot(l::BLK, SlotKind::Temporary, ROOT);
     let a = t.at(ENTRY, s, &[], &[]);
     let oa = t.at(ENTRY, other, &[], &[]);
-    let head = t.block(BlockKind::FailureCleanup, &[]);
-    let stop = t.propagate();
+    let head = t.builder.block(BlockKind::FailureCleanup, &[]);
+    let stop = t.builder.propagate();
     // A failing address operation enters the cleanup loop; no owned state yet.
     let trigger = t.address(AddressBase::Slot(s), &[], l::BLK);
     let failure = t.failure(head);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Address {
             address: trigger,
             failure,
         },
     );
-    t.ret(ENTRY, None);
-    t.push(head, Inst::StorageLive { slot: s });
+    t.builder.ret(ENTRY, None);
+    t.builder.push(head, Inst::StorageLive { slot: s });
     let x = t.new_block(head, &[]);
     t.store(head, a, x, s);
     if case == 1 {
-        t.push(head, Inst::StorageLive { slot: other });
+        t.builder.push(head, Inst::StorageLive { slot: other });
         let y = t.new_block(head, &[Undo::Drop(s)]);
         t.store(head, oa, y, other);
     }
-    let retire = t.block(BlockKind::FailureCleanup, &[]);
+    let retire = t.builder.block(BlockKind::FailureCleanup, &[]);
     if case != 2 {
         let failure = if case == 1 {
             let rest = t.cleanup(&[Undo::Drop(other)]);
@@ -647,7 +647,7 @@ fn cleanup_slot_incarnation(case: u8) -> Vec<K> {
             t.failure(retire)
         };
         let anchor = t.cleanup_anchor();
-        t.push(
+        t.builder.push(
             head,
             Inst::Drop {
                 address: a,
@@ -659,7 +659,7 @@ fn cleanup_slot_incarnation(case: u8) -> Vec<K> {
         if case == 1 {
             let failure = t.failure(retire);
             let anchor = t.cleanup_anchor();
-            t.push(
+            t.builder.push(
                 head,
                 Inst::Drop {
                     address: oa,
@@ -668,7 +668,7 @@ fn cleanup_slot_incarnation(case: u8) -> Vec<K> {
                     failure,
                 },
             );
-            t.push(
+            t.builder.push(
                 head,
                 Inst::StorageDead {
                     slot: other,
@@ -676,8 +676,8 @@ fn cleanup_slot_incarnation(case: u8) -> Vec<K> {
                 },
             );
         }
-        t.jump(head, retire, &[]);
-        t.push(
+        t.builder.jump(head, retire, &[]);
+        t.builder.push(
             retire,
             Inst::StorageDead {
                 slot: s,
@@ -685,11 +685,11 @@ fn cleanup_slot_incarnation(case: u8) -> Vec<K> {
             },
         );
     } else {
-        t.jump(head, retire, &[]);
+        t.builder.jump(head, retire, &[]);
     }
-    let yes = t.edge(head, &[]);
-    let no = t.edge(stop, &[]);
-    t.term(
+    let yes = t.builder.edge(head, &[]);
+    let no = t.builder.edge(stop, &[]);
+    t.builder.term(
         retire,
         Terminator::Branch {
             condition: again,
@@ -737,20 +737,20 @@ fn inline_constant_moves(case: u8) -> Vec<K> {
     }];
     r.copy = CopyRecipe::NotCopyable;
     t.table.layouts.push(r);
-    t.unit.header.abi = t.abi(&[(Passing::Take, inline)], None);
+    t.builder.unit.header.abi = t.abi(&[(Passing::Take, inline)], None);
     let slot = t.slot(inline, SlotKind::Parameter(0), ROOT);
     let version = t.version_of(slot);
     t.param(version);
     let mut addresses = Vec::new();
     for i in 0..3 {
         let index = t.plain(l::U64);
-        let ty = t.unit.values[index.index()].ty;
-        let constant = ConstantId(t.unit.tables.constants.len() as u32);
-        t.unit.tables.constants.push(ConstantData {
+        let ty = t.builder.unit.values[index.index()].ty;
+        let constant = ConstantId(t.builder.unit.tables.constants.len() as u32);
+        t.builder.unit.tables.constants.push(ConstantData {
             ty,
             value: ConstantValue::Integer(if case == 1 && i == 2 { 1 } else { i }),
         });
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Const {
                 result: index,
@@ -767,9 +767,9 @@ fn inline_constant_moves(case: u8) -> Vec<K> {
     }
     for &address in addresses.iter().take(if case == 2 { 2 } else { 3 }) {
         let value = t.read(ENTRY, address, version, ReadMode::Take, None);
-        t.push(ENTRY, Inst::Forget { value });
+        t.builder.push(ENTRY, Inst::Forget { value });
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -820,7 +820,7 @@ fn borrowed_holder_return(mutation: u8) -> Vec<K> {
         .as_mut()
         .unwrap()
         .borrowed_parameters = vec![0];
-    t.unit.header.abi = abi;
+    t.builder.unit.header.abi = abi;
     let mut parameters = Vec::new();
     for ordinal in 0..2 {
         let slot = t.slot(l::BLK, SlotKind::Parameter(ordinal), ROOT);
@@ -831,7 +831,7 @@ fn borrowed_holder_return(mutation: u8) -> Vec<K> {
     let (slot, version) = if mutation == 3 {
         let value = t.new_block(ENTRY, &[]);
         let slot = t.slot(l::BLK, SlotKind::Local, ROOT);
-        t.push(ENTRY, Inst::StorageLive { slot });
+        t.builder.push(ENTRY, Inst::StorageLive { slot });
         let at = t.at(ENTRY, slot, &[], &[Undo::Release(value)]);
         let version = t.store(ENTRY, at, value, slot);
         (slot, version)
@@ -852,7 +852,7 @@ fn borrowed_holder_return(mutation: u8) -> Vec<K> {
     let value = t.plain(holder);
     let cleanup = t.cleanup(&[Undo::End(loan)]);
     let failure = t.failure(cleanup);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result: value,
@@ -865,46 +865,46 @@ fn borrowed_holder_return(mutation: u8) -> Vec<K> {
             t.end(ENTRY, loan);
         }
         let forwarded = t.plain(holder);
-        let next = t.block(BlockKind::Body, &[forwarded]);
-        t.jump(ENTRY, next, &[value]);
+        let next = t.builder.block(BlockKind::Body, &[forwarded]);
+        t.builder.jump(ENTRY, next, &[value]);
         if mutation == 10 {
             t.begin(next, loan);
         }
-        t.ret(next, Some(forwarded));
+        t.builder.ret(next, Some(forwarded));
         return t.check();
     }
     if mutation == 2 {
         t.end(ENTRY, loan);
     }
     if mutation >= 4 {
-        t.unit.header.abi = t.abi(
+        t.builder.unit.header.abi = t.abi(
             &[(Passing::Borrow, l::BLK), (Passing::Borrow, l::BLK)],
             None,
         );
         let cursor = t.slot(holder, SlotKind::Local, ROOT);
-        t.push(ENTRY, Inst::StorageLive { slot: cursor });
+        t.builder.push(ENTRY, Inst::StorageLive { slot: cursor });
         let at = t.address(AddressBase::Slot(cursor), &[], holder);
         t.prepare_undo(ENTRY, at, &[Undo::End(loan)]);
         let stored = t.store(ENTRY, at, value, cursor);
         if mutation >= 6 {
             t.end(ENTRY, loan);
             let joined = t.version_of(cursor);
-            let next = t.block(BlockKind::Body, &[joined]);
-            t.jump(ENTRY, next, &[stored]);
+            let next = t.builder.block(BlockKind::Body, &[joined]);
+            t.builder.jump(ENTRY, next, &[stored]);
             if mutation == 7 {
                 let cursor_loan = t.loan(at, false);
                 t.begin(next, cursor_loan);
                 t.read(next, at, joined, ReadMode::Borrow, None);
                 t.end(next, cursor_loan);
             }
-            t.push(
+            t.builder.push(
                 next,
                 Inst::StorageDead {
                     slot: cursor,
                     if_live: false,
                 },
             );
-            t.ret(next, None);
+            t.builder.ret(next, None);
             return t.check();
         }
         if mutation == 5 {
@@ -912,9 +912,9 @@ fn borrowed_holder_return(mutation: u8) -> Vec<K> {
         }
         let abi = t.abi(&[(Passing::Mut, holder)], None);
         let version = t.version_of(cursor);
-        let normal = t.block(BlockKind::Body, &[]);
+        let normal = t.builder.block(BlockKind::Body, &[]);
         let failed = if mutation == 5 {
-            t.propagate()
+            t.builder.propagate()
         } else {
             t.cleanup(&[Undo::End(loan)])
         };
@@ -935,17 +935,17 @@ fn borrowed_holder_return(mutation: u8) -> Vec<K> {
         if mutation != 5 {
             t.end(normal, loan);
         }
-        t.push(
+        t.builder.push(
             normal,
             Inst::StorageDead {
                 slot: cursor,
                 if_live: false,
             },
         );
-        t.ret(normal, None);
+        t.builder.ret(normal, None);
         return t.check();
     }
-    t.ret(ENTRY, Some(value));
+    t.builder.ret(ENTRY, Some(value));
     t.check()
 }
 
@@ -986,12 +986,12 @@ fn forwarded_expired_view(read: bool) -> Vec<K> {
     let source = t.read(ENTRY, at, version, ReadMode::Borrow, Some(loan));
     t.end(ENTRY, loan);
     let forwarded = t.borrowed(l::BLK, loan);
-    let next = t.block(BlockKind::Body, &[forwarded]);
-    t.jump(ENTRY, next, &[source]);
+    let next = t.builder.block(BlockKind::Body, &[forwarded]);
+    t.builder.jump(ENTRY, next, &[source]);
     t.begin(next, loan);
     if read {
         let result = t.plain(l::BOOL);
-        t.push(
+        t.builder.push(
             next,
             Inst::IsUnique {
                 result,
@@ -1000,7 +1000,7 @@ fn forwarded_expired_view(read: bool) -> Vec<K> {
         );
     }
     t.end(next, loan);
-    t.ret(next, None);
+    t.builder.ret(next, None);
     t.check()
 }
 
@@ -1039,10 +1039,10 @@ fn an_expired_join_cannot_revive_when_forwarded_to_itself() {
                 loans.push(loan);
             }
             let joined = t.borrowed(l::BLK, loans[0]);
-            let repeat = t.block(BlockKind::Body, &[joined]);
+            let repeat = t.builder.block(BlockKind::Body, &[joined]);
             t.branch(ENTRY, (repeat, &[sources[0]]), (repeat, &[sources[1]]));
             let result = t.plain(l::BOOL);
-            t.push(
+            t.builder.push(
                 repeat,
                 Inst::IsUnique {
                     result,
@@ -1053,7 +1053,7 @@ fn an_expired_join_cannot_revive_when_forwarded_to_itself() {
                 t.end(repeat, loans[0]);
                 t.begin(repeat, loans[0]);
             }
-            t.jump(repeat, repeat, &[joined]);
+            t.builder.jump(repeat, repeat, &[joined]);
             t.check()
         },
         |k| matches!(k, K::StaleView(_)),
@@ -1070,7 +1070,7 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
     let mut t = Lir::<Value>::new(&[(passing, l::PAIRBLK)], Some(l::RESCNT));
     library(&mut t);
     if case == 5 {
-        t.unit.header.origin = UnitOrigin::Source;
+        t.builder.unit.header.origin = UnitOrigin::Source;
     }
     let core = |module: Option<&str>, name: &str| {
         let mut p = support::path(name);
@@ -1129,7 +1129,7 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
         t.begin(ENTRY, loan);
         let view = t.read(ENTRY, address, version, ReadMode::Borrow, Some(loan));
         let flag = t.plain(l::BOOL);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::IsUnique {
                 result: flag,
@@ -1142,7 +1142,7 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
     let flag = t.plain(l::BOOL);
     let cleanup = t.cleanup(&[Undo::Drop(slot)]);
     let failure = t.failure(cleanup);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Binary {
             result: flag,
@@ -1159,7 +1159,7 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
     if case == 4 {
         let extra = t.plain(l::BOOL);
         let failure = t.failure(cleanup);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Binary {
                 result: extra,
@@ -1172,12 +1172,12 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
     }
     let source = t.read(ENTRY, root, version, ReadMode::Take, None);
     let zero = t.plain(l::U64);
-    let constant = ConstantId(t.unit.tables.constants.len() as u32);
-    t.unit.tables.constants.push(ConstantData {
-        ty: t.unit.values[zero.index()].ty,
+    let constant = ConstantId(t.builder.unit.tables.constants.len() as u32);
+    t.builder.unit.tables.constants.push(ConstantData {
+        ty: t.builder.unit.values[zero.index()].ty,
         value: ConstantValue::Integer(0),
     });
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Const {
             result: zero,
@@ -1185,7 +1185,8 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
         },
     );
     let symbol = t.symbol(SymbolKind::Type);
-    t.unit.tables.symbols[symbol.index()].definition = core(Some("$intrinsic"), "OwnedMapCursor");
+    t.builder.unit.tables.symbols[symbol.index()].definition =
+        core(Some("$intrinsic"), "OwnedMapCursor");
     let construct = t.construct_site(
         ConstructorKind::Record(symbol),
         l::RESCNT,
@@ -1194,7 +1195,7 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
     );
     let result = t.owned(l::RESCNT);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result,
@@ -1202,7 +1203,7 @@ fn map_cursor_uniqueness(case: u8) -> Vec<K> {
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 

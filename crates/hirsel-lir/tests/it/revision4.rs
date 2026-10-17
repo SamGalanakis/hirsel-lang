@@ -28,7 +28,7 @@ fn construct_flat(record: LayoutId, block: LayoutId, fields: &[LayoutId]) -> Vec
     let site = t.construct_site(ConstructorKind::Record(symbol), record, &values, placement);
     let result = t.owned(block);
     let failure = t.fails();
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result,
@@ -36,7 +36,7 @@ fn construct_flat(record: LayoutId, block: LayoutId, fields: &[LayoutId]) -> Vec
             failure,
         },
     );
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -100,7 +100,7 @@ fn encode_owned(release: bool) -> Vec<K> {
     let result = t.owned(l::FLAT_OUTER_BLK);
     let target = t.releasing(&[x]);
     let failure = t.failure(target);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::Construct {
             result,
@@ -111,7 +111,7 @@ fn encode_owned(release: bool) -> Vec<K> {
     if release {
         t.release(ENTRY, x, &[result]);
     }
-    t.ret(ENTRY, Some(result));
+    t.builder.ret(ENTRY, Some(result));
     t.check()
 }
 
@@ -162,7 +162,7 @@ fn view(case: View) -> Vec<K> {
     } else {
         t.borrowed(layout, loan)
     };
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::FlatView {
             result,
@@ -172,7 +172,7 @@ fn view(case: View) -> Vec<K> {
     if case != View::Ended {
         t.end(ENTRY, loan);
     }
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 
@@ -230,10 +230,11 @@ fn a_flat_copy_materializes_only_the_encoding_source_layout() {
                 let x = t.plain(owner);
                 t.param(x);
                 let at = t.through(ENTRY, x, &[ProjectionStep::Field(0)], &[]);
-                let layout = t.unit.types[t.unit.addresses[at.index()].ty.index()].layout;
+                let layout =
+                    t.builder.unit.types[t.builder.unit.addresses[at.index()].ty.index()].layout;
                 let value = t.owned(result_layout);
                 let failure = t.fails();
-                t.push(
+                t.builder.push(
                     ENTRY,
                     Inst::FlatCopy {
                         result: value,
@@ -242,7 +243,7 @@ fn a_flat_copy_materializes_only_the_encoding_source_layout() {
                         failure,
                     },
                 );
-                t.ret(ENTRY, Some(value));
+                t.builder.ret(ENTRY, Some(value));
                 t.check()
             },
             |k| *k == K::Type("flat copy"),
@@ -261,10 +262,11 @@ fn a_flat_copy_of_bytes_requires_ordinary_sequence_storage() {
             let x = t.plain(l::FLAT_ITEM_BLK);
             t.param(x);
             let at = t.through(ENTRY, x, &[ProjectionStep::Field(0)], &[]);
-            let layout = t.unit.types[t.unit.addresses[at.index()].ty.index()].layout;
+            let layout =
+                t.builder.unit.types[t.builder.unit.addresses[at.index()].ty.index()].layout;
             let value = t.owned(l::SLICE);
             let failure = t.fails();
-            t.push(
+            t.builder.push(
                 ENTRY,
                 Inst::FlatCopy {
                     result: value,
@@ -273,7 +275,7 @@ fn a_flat_copy_of_bytes_requires_ordinary_sequence_storage() {
                     failure,
                 },
             );
-            t.ret(ENTRY, Some(value));
+            t.builder.ret(ENTRY, Some(value));
             t.check()
         },
         |k| *k == K::Type("flat copy"),
@@ -303,14 +305,14 @@ fn length(steps: &[ProjectionStep], result: LayoutId) -> Vec<K> {
     t.param(x);
     let at = t.through(ENTRY, x, steps, &[]);
     let r = t.plain(result);
-    t.push(
+    t.builder.push(
         ENTRY,
         Inst::FlatLength {
             result: r,
             address: at,
         },
     );
-    t.ret(ENTRY, Some(r));
+    t.builder.ret(ENTRY, Some(r));
     t.check()
 }
 
@@ -367,10 +369,10 @@ fn element(mutant: bool) -> Vec<K> {
     let at = t.address(AddressBase::Value(x), &steps, layout);
     t.prepare(ENTRY, at, &[]);
     if mutant {
-        t.ret(ENTRY, Some(i));
+        t.builder.ret(ENTRY, Some(i));
     } else {
         let r = t.plain(l::U64);
-        t.push(
+        t.builder.push(
             ENTRY,
             Inst::Read {
                 result: r,
@@ -379,7 +381,7 @@ fn element(mutant: bool) -> Vec<K> {
                 mode: ReadMode::Bits,
             },
         );
-        t.ret(ENTRY, Some(r));
+        t.builder.ret(ENTRY, Some(r));
     }
     t.check()
 }
@@ -413,7 +415,7 @@ fn element_write(in_list: bool) -> Vec<K> {
     let at = t.at(ENTRY, s, &steps, &[]);
     let v = t.read(ENTRY, at, sv, ReadMode::Take, None);
     t.store(ENTRY, at, v, s);
-    t.ret(ENTRY, None);
+    t.builder.ret(ENTRY, None);
     t.check()
 }
 

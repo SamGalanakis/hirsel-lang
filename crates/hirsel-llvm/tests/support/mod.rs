@@ -4,6 +4,7 @@
 //! emitter sees the same physical facts real programs will have. Every unit is sealed by
 //! the LIR validator (`validate::<Ready>`); a fixture the validator rejects fails its test.
 
+use hirsel_lir::testing::UnitBuilder;
 pub mod glue;
 pub mod native;
 pub mod programs;
@@ -294,10 +295,7 @@ pub fn repr_of(table: &LayoutTable, layout: LayoutId) -> ValueRepr {
 /// One Ready unit under construction against a finished table.
 pub struct Unit<'t> {
     pub table: &'t Table,
-    pub lir: LirUnit<Ready>,
-    insts: Vec<Vec<Inst>>,
-    terms: Vec<Option<Terminator>>,
-    propagate: Option<BlockId>,
+    pub builder: UnitBuilder<Ready>,
 }
 
 pub const ENTRY: BlockId = BlockId(0);
@@ -327,39 +325,36 @@ impl<'t> Unit<'t> {
         });
         let mut unit = Self {
             table,
-            lir,
-            insts: Vec::new(),
-            terms: Vec::new(),
-            propagate: None,
+            builder: UnitBuilder::new(lir),
         };
-        unit.block(BlockKind::Body, &[]);
+        unit.builder.block(BlockKind::Body, &[]);
         unit
     }
 
     /// A source anchor at a byte range; failures and sites name it.
     pub fn anchor(&mut self, start: u32, end: u32) -> SourceAnchorId {
-        self.lir.tables.source_anchors.push(SourceAnchor {
+        self.builder.unit.tables.source_anchors.push(SourceAnchor {
             body: 0,
             block: 0,
             statement: 0,
             site: SiteRange { start, end },
         });
-        SourceAnchorId(self.lir.tables.source_anchors.len() as u32 - 1)
+        SourceAnchorId(self.builder.unit.tables.source_anchors.len() as u32 - 1)
     }
 
     pub fn ty(&mut self, repr: ValueRepr, layout: LayoutId) -> LirTypeId {
         let ty = LirType { repr, layout };
-        if let Some(i) = self.lir.types.iter().position(|t| *t == ty) {
+        if let Some(i) = self.builder.unit.types.iter().position(|t| *t == ty) {
             return LirTypeId(i as u32);
         }
-        self.lir.types.push(ty);
-        LirTypeId(self.lir.types.len() as u32 - 1)
+        self.builder.unit.types.push(ty);
+        LirTypeId(self.builder.unit.types.len() as u32 - 1)
     }
 
     pub fn value(&mut self, layout: LayoutId, holding: Holding) -> ValueId {
         let ty = self.ty(repr_of(&self.table.table, layout), layout);
-        self.lir.values.push(ValueInfo { ty, holding });
-        ValueId(self.lir.values.len() as u32 - 1)
+        self.builder.unit.values.push(ValueInfo { ty, holding });
+        ValueId(self.builder.unit.values.len() as u32 - 1)
     }
 
     pub fn plain(&mut self, layout: LayoutId) -> ValueId {
@@ -369,18 +364,18 @@ impl<'t> Unit<'t> {
     /// The value of the next declared parameter.
     pub fn param(&mut self, layout: LayoutId) -> ValueId {
         let v = self.plain(layout);
-        self.lir.parameters.push(v);
+        self.builder.unit.parameters.push(v);
         v
     }
 
     pub fn slot(&mut self, layout: LayoutId, kind: SlotKind) -> SlotId {
         let ty = self.ty(repr_of(&self.table.table, layout), layout);
-        self.lir.slots.push(SlotInfo {
+        self.builder.unit.slots.push(SlotInfo {
             ty,
             kind,
             scope: ScopeId(0),
         });
-        SlotId(self.lir.slots.len() as u32 - 1)
+        SlotId(self.builder.unit.slots.len() as u32 - 1)
     }
 
     pub fn address(
@@ -390,56 +385,16 @@ impl<'t> Unit<'t> {
         layout: LayoutId,
     ) -> AddressId {
         let ty = self.ty(repr_of(&self.table.table, layout), layout);
-        let projection = PoolRange::push(&mut self.lir.pools.projections, steps.iter().copied());
-        self.lir.addresses.push(AddressInfo {
+        let projection = PoolRange::push(
+            &mut self.builder.unit.pools.projections,
+            steps.iter().copied(),
+        );
+        self.builder.unit.addresses.push(AddressInfo {
             base,
             projection,
             ty,
         });
-        AddressId(self.lir.addresses.len() as u32 - 1)
-    }
-
-    pub fn block(&mut self, kind: BlockKind, params: &[ValueId]) -> BlockId {
-        let parameters = PoolRange::push(&mut self.lir.pools.values, params.iter().copied());
-        self.lir.blocks.push(Block {
-            kind,
-            parameters,
-            instructions: PoolRange::EMPTY,
-            anchor: SourceAnchorId(0),
-        });
-        self.insts.push(Vec::new());
-        self.terms.push(None);
-        BlockId(self.lir.blocks.len() as u32 - 1)
-    }
-
-    pub fn push(&mut self, b: BlockId, inst: Inst) {
-        self.insts[b.index()].push(inst);
-    }
-
-    pub fn term(&mut self, b: BlockId, term: Terminator) {
-        self.terms[b.index()] = Some(term);
-    }
-
-    pub fn edge(&mut self, target: BlockId, args: &[ValueId]) -> EdgeId {
-        let arguments = PoolRange::push(&mut self.lir.pools.values, args.iter().copied());
-        self.lir.tables.edges.push(Edge { target, arguments });
-        EdgeId(self.lir.tables.edges.len() as u32 - 1)
-    }
-
-    pub fn jump(&mut self, from: BlockId, to: BlockId, args: &[ValueId]) {
-        let e = self.edge(to, args);
-        self.term(from, Terminator::Jump(e));
-    }
-
-    /// The shared failure-cleanup block that only propagates.
-    pub fn propagate(&mut self) -> BlockId {
-        if let Some(b) = self.propagate {
-            return b;
-        }
-        let b = self.block(BlockKind::FailureCleanup, &[]);
-        self.term(b, Terminator::Propagate);
-        self.propagate = Some(b);
-        b
+        AddressId(self.builder.unit.addresses.len() as u32 - 1)
     }
 
     /// A failure edge into `target` that starts `rule` (None propagates a callee's).
@@ -449,28 +404,32 @@ impl<'t> Unit<'t> {
         rule: Option<&str>,
         anchor: SourceAnchorId,
     ) -> FailureId {
-        let cleanup = self.edge(target, &[]);
-        self.lir.tables.failures.push(FailureEdge {
+        let cleanup = self.builder.edge(target, &[]);
+        self.builder.unit.tables.failures.push(FailureEdge {
             cleanup,
             rule: rule.map(str::to_owned),
             anchor,
             dispose: PoolRange::EMPTY,
         });
-        FailureId(self.lir.tables.failures.len() as u32 - 1)
+        FailureId(self.builder.unit.tables.failures.len() as u32 - 1)
     }
 
     /// A failure edge to plain propagation.
     pub fn fails(&mut self, rule: Option<&str>) -> FailureId {
-        let p = self.propagate();
+        let p = self.builder.propagate();
         self.failure_to(p, rule, SourceAnchorId(0))
     }
 
     pub fn constant(&mut self, b: BlockId, layout: LayoutId, value: ConstantValue) -> ValueId {
         let ty = self.ty(repr_of(&self.table.table, layout), layout);
-        self.lir.tables.constants.push(ConstantData { ty, value });
-        let constant = ConstantId(self.lir.tables.constants.len() as u32 - 1);
+        self.builder
+            .unit
+            .tables
+            .constants
+            .push(ConstantData { ty, value });
+        let constant = ConstantId(self.builder.unit.tables.constants.len() as u32 - 1);
         let result = self.plain(layout);
-        self.push(b, Inst::Const { result, constant });
+        self.builder.push(b, Inst::Const { result, constant });
         result
     }
 
@@ -495,12 +454,12 @@ impl<'t> Unit<'t> {
         ) {
             self.table.scalar(ScalarKind::Bool)
         } else {
-            self.lir.types[self.lir.values[left.index()].ty.index()].layout
+            self.builder.unit.types[self.builder.unit.values[left.index()].ty.index()].layout
         };
         let result = self.plain(layout);
-        let p = self.propagate();
+        let p = self.builder.propagate();
         let failure = self.failure_to(p, Some(rule), anchor);
-        self.push(
+        self.builder.push(
             b,
             Inst::Binary {
                 result,
@@ -518,10 +477,11 @@ impl<'t> Unit<'t> {
     }
 
     pub fn unary(&mut self, b: BlockId, op: UnaryOp, operand: ValueId) -> ValueId {
-        let layout = self.lir.types[self.lir.values[operand.index()].ty.index()].layout;
+        let layout =
+            self.builder.unit.types[self.builder.unit.values[operand.index()].ty.index()].layout;
         let result = self.plain(layout);
         let failure = self.fails(Some("SEM-1"));
-        self.push(
+        self.builder.push(
             b,
             Inst::Unary {
                 result,
@@ -541,15 +501,16 @@ impl<'t> Unit<'t> {
         rule: Option<&str>,
         anchor: SourceAnchorId,
     ) {
-        let p = self.propagate();
+        let p = self.builder.propagate();
         let failure = self.failure_to(p, rule, anchor);
-        self.push(b, Inst::Address { address, failure });
+        self.builder.push(b, Inst::Address { address, failure });
     }
 
     pub fn read(&mut self, b: BlockId, address: AddressId, reaching: ValueId) -> ValueId {
-        let layout = self.lir.types[self.lir.addresses[address.index()].ty.index()].layout;
+        let layout =
+            self.builder.unit.types[self.builder.unit.addresses[address.index()].ty.index()].layout;
         let result = self.plain(layout);
-        self.push(
+        self.builder.push(
             b,
             Inst::Read {
                 result,
@@ -570,7 +531,7 @@ impl<'t> Unit<'t> {
         slot: SlotId,
     ) -> ValueId {
         let version = self.version(slot);
-        self.push(
+        self.builder.push(
             b,
             Inst::Store {
                 address,
@@ -583,12 +544,12 @@ impl<'t> Unit<'t> {
 
     /// A fresh version name of `slot`'s type.
     pub fn version(&mut self, slot: SlotId) -> ValueId {
-        let ty = self.lir.slots[slot.index()].ty;
-        self.lir.values.push(ValueInfo {
+        let ty = self.builder.unit.slots[slot.index()].ty;
+        self.builder.unit.values.push(ValueInfo {
             ty,
             holding: Holding::Plain,
         });
-        ValueId(self.lir.values.len() as u32 - 1)
+        ValueId(self.builder.unit.values.len() as u32 - 1)
     }
 
     pub fn construct(
@@ -599,12 +560,12 @@ impl<'t> Unit<'t> {
         fields: &[(u32, ValueId)],
     ) -> ValueId {
         let fields = PoolRange::push(
-            &mut self.lir.pools.fields,
+            &mut self.builder.unit.pools.fields,
             fields
                 .iter()
                 .map(|&(field, value)| FieldValue { field, value }),
         );
-        self.lir.tables.constructs.push(ConstructSite {
+        self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
             constructor,
             layout,
@@ -613,10 +574,10 @@ impl<'t> Unit<'t> {
             placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
             anchor: SourceAnchorId(0),
         });
-        let construct = ConstructId(self.lir.tables.constructs.len() as u32 - 1);
+        let construct = ConstructId(self.builder.unit.tables.constructs.len() as u32 - 1);
         let result = self.plain(layout);
         let failure = self.fails(None);
-        self.push(
+        self.builder.push(
             b,
             Inst::Construct {
                 result,
@@ -654,12 +615,12 @@ impl<'t> Unit<'t> {
         token: Option<(ValueId, Option<MaskId>)>,
     ) -> ValueId {
         let fields = PoolRange::push(
-            &mut self.lir.pools.fields,
+            &mut self.builder.unit.pools.fields,
             fields
                 .iter()
                 .map(|&(field, value)| FieldValue { field, value }),
         );
-        self.lir.tables.constructs.push(ConstructSite {
+        self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
             constructor,
             layout: payload,
@@ -668,7 +629,7 @@ impl<'t> Unit<'t> {
             placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
             anchor: SourceAnchorId(0),
         });
-        let construct = ConstructId(self.lir.tables.constructs.len() as u32 - 1);
+        let construct = ConstructId(self.builder.unit.tables.constructs.len() as u32 - 1);
         let result = self.value(block, Holding::Owned);
         let inst = match token {
             None => Inst::Construct {
@@ -684,19 +645,23 @@ impl<'t> Unit<'t> {
                 failure,
             },
         };
-        self.push(b, inst);
+        self.builder.push(b, inst);
         result
     }
 
     /// A cleanup anchor at a byte range.
     pub fn cleanup_anchor(&mut self, start: u32, end: u32) -> CleanupAnchorId {
-        self.lir.tables.cleanup_anchors.push(CleanupAnchor {
-            body: 0,
-            cleanup: self.lir.tables.cleanup_anchors.len() as u32,
-            action: 0,
-            site: SiteRange { start, end },
-        });
-        CleanupAnchorId(self.lir.tables.cleanup_anchors.len() as u32 - 1)
+        self.builder
+            .unit
+            .tables
+            .cleanup_anchors
+            .push(CleanupAnchor {
+                body: 0,
+                cleanup: self.builder.unit.tables.cleanup_anchors.len() as u32,
+                action: 0,
+                site: SiteRange { start, end },
+            });
+        CleanupAnchorId(self.builder.unit.tables.cleanup_anchors.len() as u32 - 1)
     }
 
     /// A failure edge (starting `rule` at `anchor`, if given) into a cleanup block that
@@ -707,10 +672,10 @@ impl<'t> Unit<'t> {
         rule: Option<&str>,
         anchor: SourceAnchorId,
     ) -> FailureId {
-        let cleanup = self.block(BlockKind::FailureCleanup, &[]);
+        let cleanup = self.builder.block(BlockKind::FailureCleanup, &[]);
         self.release_all(cleanup, blocks);
-        let p = self.propagate();
-        self.jump(cleanup, p, &[]);
+        let p = self.builder.propagate();
+        self.builder.jump(cleanup, p, &[]);
         self.failure_to(cleanup, rule, anchor)
     }
 
@@ -736,7 +701,7 @@ impl<'t> Unit<'t> {
         failure: FailureId,
     ) {
         let anchor = self.cleanup_anchor(80, 90);
-        self.push(
+        self.builder.push(
             b,
             Inst::Release {
                 value,
@@ -752,7 +717,7 @@ impl<'t> Unit<'t> {
     pub fn release(&mut self, b: BlockId, value: ValueId, payload: LayoutId) {
         let anchor = self.cleanup_anchor(80, 90);
         let failure = self.fails(None);
-        self.push(
+        self.builder.push(
             b,
             Inst::Release {
                 value,
@@ -770,11 +735,18 @@ impl<'t> Unit<'t> {
             definition: path(name),
             instance: Some(instance(name)),
         };
-        if let Some(i) = self.lir.tables.symbols.iter().position(|s| *s == symbol) {
+        if let Some(i) = self
+            .builder
+            .unit
+            .tables
+            .symbols
+            .iter()
+            .position(|s| *s == symbol)
+        {
             return SymbolId(i as u32);
         }
-        self.lir.tables.symbols.push(symbol);
-        SymbolId(self.lir.tables.symbols.len() as u32 - 1)
+        self.builder.unit.tables.symbols.push(symbol);
+        SymbolId(self.builder.unit.tables.symbols.len() as u32 - 1)
     }
 
     /// Terminates `b` with a call; returns the result defined on the normal edge.
@@ -792,7 +764,7 @@ impl<'t> Unit<'t> {
         let abi_id = self.table.abi(abi);
         let fn_abi = self.table.table.fn_abis[abi_id.0 as usize].clone();
         let arguments = PoolRange::push(
-            &mut self.lir.pools.call_arguments,
+            &mut self.builder.unit.pools.call_arguments,
             args.iter()
                 .enumerate()
                 .map(|(i, &(passing, value))| CallArgument {
@@ -802,7 +774,7 @@ impl<'t> Unit<'t> {
                 }),
         );
         let result = fn_abi.result.as_ref().map(|r| self.plain(r.layout));
-        self.lir.tables.calls.push(CallSite {
+        self.builder.unit.tables.calls.push(CallSite {
             operation_arguments: Vec::new(),
             callee,
             abi: abi_id,
@@ -812,9 +784,9 @@ impl<'t> Unit<'t> {
             declared: Effects::ALL,
             anchor: SourceAnchorId(0),
         });
-        let call = CallId(self.lir.tables.calls.len() as u32 - 1);
-        let normal = self.edge(normal, normal_args);
-        self.term(
+        let call = CallId(self.builder.unit.tables.calls.len() as u32 - 1);
+        let normal = self.builder.edge(normal, normal_args);
+        self.builder.term(
             b,
             Terminator::Call {
                 call,
@@ -829,7 +801,7 @@ impl<'t> Unit<'t> {
     /// has a Never result, so only the failure edge continues.
     pub fn diverging_call(&mut self, b: BlockId, callee: Callee, abi: &str, failure: FailureId) {
         let abi = self.table.abi(abi);
-        self.lir.tables.calls.push(CallSite {
+        self.builder.unit.tables.calls.push(CallSite {
             operation_arguments: Vec::new(),
             callee,
             abi,
@@ -839,8 +811,8 @@ impl<'t> Unit<'t> {
             declared: Effects::ALL,
             anchor: SourceAnchorId(0),
         });
-        let call = CallId(self.lir.tables.calls.len() as u32 - 1);
-        self.term(
+        let call = CallId(self.builder.unit.tables.calls.len() as u32 - 1);
+        self.builder.term(
             b,
             Terminator::Call {
                 call,
@@ -850,25 +822,8 @@ impl<'t> Unit<'t> {
         );
     }
 
-    pub fn ret(&mut self, b: BlockId, value: Option<ValueId>) {
-        self.term(b, Terminator::Return(value));
-    }
-
-    pub fn finish(mut self) -> LirUnit<Ready> {
-        for (b, insts) in self.insts.iter().enumerate() {
-            let range = PoolRange::push(&mut self.lir.instructions, insts.iter().copied());
-            self.lir.blocks[b].instructions = range;
-        }
-        self.lir.terminators = self
-            .terms
-            .iter()
-            .enumerate()
-            .map(|(b, t)| {
-                t.clone()
-                    .unwrap_or_else(|| panic!("block {b} has no terminator"))
-            })
-            .collect();
-        self.lir
+    pub fn finish(self) -> LirUnit<Ready> {
+        self.builder.finish()
     }
 }
 

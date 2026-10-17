@@ -833,6 +833,13 @@
         },
         {
           "kind": "dev",
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
           "name": "hirsel-types",
           "path": "crates/hirsel-types",
           "req": "*",
@@ -901,6 +908,13 @@
           "kind": "dev",
           "name": "hirsel-interp",
           "path": "crates/hirsel-interp",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "hirsel-lir",
+          "path": "crates/hirsel-lir",
           "req": "*",
           "uses_default_features": true
         },

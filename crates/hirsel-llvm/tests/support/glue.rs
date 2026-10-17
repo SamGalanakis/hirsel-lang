@@ -211,11 +211,11 @@ pub fn corpus(target: &TargetSpec) -> Corpus {
             let unit_name = format!("drop_{name}");
             let mut u = Unit::new(&table, &unit_name, name);
             let x = u.param(table.layout(name));
-            u.lir.values[x.index()].holding = Holding::Owned;
+            u.builder.unit.values[x.index()].holding = Holding::Owned;
             u.param(table.scalar(ScalarKind::I64));
             u.release(ENTRY, x, payload);
             let zero = u.int(ENTRY, ScalarKind::I64, 0);
-            u.ret(ENTRY, Some(zero));
+            u.builder.ret(ENTRY, Some(zero));
             units.push(seal(&table, &manifest, u.finish()));
             symbol_name(&path(&unit_name), Some(&instance(&unit_name)))
         });
@@ -272,11 +272,11 @@ pub fn binarytrees_corpus(target: &TargetSpec) -> Corpus {
     let payload = programs::payload(&table, "tree");
     let mut unit = Unit::new(&table, "drop_tree", "tree");
     let root = unit.param(table.layout("tree"));
-    unit.lir.values[root.index()].holding = Holding::Owned;
+    unit.builder.unit.values[root.index()].holding = Holding::Owned;
     unit.param(table.scalar(ScalarKind::I64));
     unit.release(ENTRY, root, payload);
     let zero = unit.int(ENTRY, ScalarKind::I64, 0);
-    unit.ret(ENTRY, Some(zero));
+    unit.builder.ret(ENTRY, Some(zero));
     let units = vec![seal(&table, &manifest, unit.finish())];
     Corpus {
         program: Program {
