@@ -14,7 +14,9 @@ For example, `{"grants":["Io","Args"],"projections":["stdout","dir"],
 "args":["in.txt"],"files":{"in.txt":"hello\n"}}`. These are explicit simulation
 launch configs; they grant no host filesystem access. Native supplied-file tests
 use the explicit driver fixture boundary. To grant real host inputs to either
-CLI backend, export a bound record and fill its grants and argument snapshot:
+CLI backend, pass a grants template with `--grants grants.json` (the same `io`
+and `args` fields below, without semantic binding fields), or export a bound
+record and fill its grants and argument snapshot:
 
 ```sh
 hirsel export --run examples/wordscan/hirsel.json -o /tmp/wordscan-run.json

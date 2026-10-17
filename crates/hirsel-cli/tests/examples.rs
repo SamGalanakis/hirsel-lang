@@ -564,6 +564,14 @@ fn cli_interpreter_step_limits() {
         "evaluator tooling limit: Steps\n",
     );
     invoke(&["--run", record.to_str().unwrap()], 0, "");
+    let grants = fixture.0.join("grants.json");
+    std::fs::write(&grants, "{}").unwrap();
+    invoke(
+        &["--grants", grants.to_str().unwrap(), "--max-steps=1"],
+        2,
+        "evaluator tooling limit: Steps\n",
+    );
+    invoke(&["--grants", grants.to_str().unwrap()], 0, "");
 }
 
 #[test]
