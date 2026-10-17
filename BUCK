@@ -72,6 +72,7 @@ hirsel_binary(
     name = "hirsel-cli-bin-hirsel",
     bin_name = "hirsel",
     deps = [
+        "//:hirsel-cli-args",
         "//:hirsel-driver",
         "//:hirsel-engine",
         "//third-party:serde_json",
@@ -89,6 +90,7 @@ hirsel_binary(
 hirsel_test(
     name = "hirsel-cli-test-cli",
     deps = [
+        "//:hirsel-cli-args",
         "//:hirsel-driver",
         "//:hirsel-engine",
         "//third-party:serde_json",
@@ -110,6 +112,33 @@ hirsel_test(
     features = [],
     manifest_dir = "crates/hirsel-cli",
     package_name = "hirsel-cli",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_library(
+    name = "hirsel-cli-args",
+    deps = ["//third-party:lexopt"],
+    crate = "hirsel_cli_args",
+    crate_root = "crates/hirsel-cli-args/src/lib.rs",
+    srcs = glob(["crates/hirsel-cli-args/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-cli-args",
+    package_name = "hirsel-cli-args",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-cli-args-unittest",
+    deps = ["//third-party:lexopt"],
+    data = glob(["crates/hirsel-cli-args/Cargo.toml"]) + glob(["crates/hirsel-cli-args/src/**"], exclude = ["crates/hirsel-cli-args/src/**/*.rs"]),
+    crate = "hirsel_cli_args",
+    crate_root = "crates/hirsel-cli-args/src/lib.rs",
+    srcs = glob(["crates/hirsel-cli-args/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-cli-args",
+    package_name = "hirsel-cli-args",
     version = "0.1.0",
     edition = "2024",
 )
@@ -144,6 +173,7 @@ hirsel_test(
 hirsel_library(
     name = "hirsel-conformance",
     deps = [
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -169,6 +199,7 @@ hirsel_library(
 hirsel_test(
     name = "hirsel-conformance-unittest",
     deps = [
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -207,6 +238,7 @@ hirsel_binary(
     bin_name = "agree",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -234,6 +266,7 @@ hirsel_binary(
     bin_name = "corpus-fmt",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -261,6 +294,7 @@ hirsel_binary(
     bin_name = "hirsel-conformance",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -288,6 +322,7 @@ hirsel_binary(
     bin_name = "native",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -314,6 +349,7 @@ hirsel_test(
     name = "hirsel-conformance-bin-native-unittest",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -379,6 +415,7 @@ hirsel_binary(
     bin_name = "profile",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -405,6 +442,7 @@ hirsel_test(
     name = "hirsel-conformance-test-it",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
@@ -454,6 +492,7 @@ hirsel_test(
     name = "hirsel-conformance-test-spec_links",
     deps = [
         "//:hirsel-conformance",
+        "//:hirsel-cli-args",
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",

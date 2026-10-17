@@ -1,0 +1,9 @@
+[package]
+name = "hirsel-cli-args"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lexopt = "=0.3.2"

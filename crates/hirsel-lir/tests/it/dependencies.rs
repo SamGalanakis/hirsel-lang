@@ -57,6 +57,7 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-engine", Class::Wiring),
     ("hirsel-driver", Class::Wiring),
     ("hirsel-cli", Class::Tool),
+    ("hirsel-cli-args", Class::Tool),
     ("hirsel-conformance", Class::Tool),
     ("hirsel-native-build", Class::Tool),
     ("hirsel-pipeline-tests", Class::Tool),
@@ -129,6 +130,7 @@ fn check_edge(from: &str, to: &str, kind: Kind) -> Result<(), String> {
         (Class::Tool, Class::Wiring | Class::Implementation) => true,
         (Class::Data, _) => false,
         (Class::Implementation, _) => false,
+        (Class::Tool, Class::Tool) => to == "hirsel-cli-args",
         (_, Class::Tool) => false,
         (Class::Wiring, Class::Wiring) => from == "hirsel-driver" && to == "hirsel-engine",
     };
@@ -268,6 +270,17 @@ fn implementation_to_implementation_production_and_build_edges_are_rejected() {
         );
         assert!(check_edge(from, to, Kind::Build).is_err(), "{from} -> {to}");
         assert!(check_edge(from, to, Kind::Dev).is_ok(), "{from} -> {to}");
+    }
+}
+
+#[test]
+fn argument_parser_is_shared_only_by_tools() {
+    for tool in ["hirsel-cli", "hirsel-conformance"] {
+        assert!(check_edge(tool, "hirsel-cli-args", Kind::Production).is_ok());
+    }
+    for compiler in ["hirsel-driver", "hirsel-engine", "hirsel-rc", "hirsel-lir"] {
+        assert!(check_edge(compiler, "hirsel-cli-args", Kind::Production).is_err());
+        assert!(check_edge(compiler, "hirsel-cli-args", Kind::Build).is_err());
     }
 }
 

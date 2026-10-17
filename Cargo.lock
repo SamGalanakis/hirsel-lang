@@ -210,9 +210,17 @@ dependencies = [
 name = "hirsel-cli"
 version = "0.1.0"
 dependencies = [
+ "hirsel-cli-args",
  "hirsel-driver",
  "hirsel-engine",
  "serde_json",
+]
+
+[[package]]
+name = "hirsel-cli-args"
+version = "0.1.0"
+dependencies = [
+ "lexopt",
 ]
 
 [[package]]
@@ -226,6 +234,7 @@ dependencies = [
 name = "hirsel-conformance"
 version = "0.1.0"
 dependencies = [
+ "hirsel-cli-args",
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
@@ -656,6 +665,12 @@ name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
+name = "lexopt"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803ec87c9cfb29b9d2633f20cba1f488db3fd53f2158b1024cbefb47ba05d413"
 
 [[package]]
 name = "libc"

@@ -67,6 +67,7 @@ CRATE_CAMPAIGNS = {
     'hirsel-engine': ALL,
     'hirsel-driver': ALL,
     'hirsel-conformance': ALL,
+    'hirsel-cli-args': ALL,
     # The backend, the runtime and LLVM.
     'hirsel-core-contract': frozenset({NATIVE_SMOKE}),
     'hirsel-lir': frozenset({NATIVE_SMOKE}),

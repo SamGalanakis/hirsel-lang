@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| lexopt | command-line parser dependency | `crates/hirsel-cli-args` | blyxxyz/lexopt 0.3.2 | MIT |
 | Zig standard library | `lib/std/Uri.zig`, `fmt.zig` parseIntWithSign | `stdlib/std@1/uri.hir`, `crates/hirsel-driver/tests/it-stdlib/stdlib_uri.rs` | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | Zig standard library | `lib/std/Io/net/HostName.zig` validate, fromUri | `stdlib/std@1/net.hir`, `crates/hirsel-run-config` grant validation, their tests | same | MIT |
 | Zig standard library | `lib/std/http/Client.zig`, `HeaderIterator.zig`, `ChunkParser.zig`, `http.zig`, `ascii.zig` | `stdlib/std@1/http_wire.hir`, `stdlib/std@1/http.hir`, `crates/hirsel-driver/tests/it-stdlib/stdlib_http_wire.rs`, `crates/hirsel-driver/tests/it/stdlib_http.rs` | same | MIT |
@@ -35,6 +36,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
 ## Copyright notices
 
+- lexopt: Copyright (c) 2021 Jan Verbeek
 - Zig standard library: Copyright (c) Zig contributors
 - Rust standard library: Copyright (c) The Rust Project Contributors
 - unicode-segmentation: Copyright (c) 2015 The Rust Project Developers

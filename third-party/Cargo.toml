@@ -14,6 +14,7 @@ path = "lib.rs"
 
 [dependencies]
 insta = { version = "=1.49.0", default-features = false, features = ["colors", "console", "default"] }
+lexopt = { version = "=0.3.2", default-features = false, features = [] }
 libc = { version = "=0.2.190", default-features = false, features = ["default", "std"] }
 llvm-sys = { version = "=211.0.1", default-features = false, features = ["force-dynamic", "strict-versioning"] }
 proptest = { version = "=1.11.0", default-features = false, features = ["bit-set", "default", "fork", "regex-syntax", "rusty-fork", "std", "tempfile", "timeout"] }
