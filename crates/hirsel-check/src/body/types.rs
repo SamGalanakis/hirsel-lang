@@ -666,6 +666,33 @@ impl Checker<'_, '_> {
                     if let Some(variant) = self.expected_variant(id, path, expected, callee)? {
                         return Ok(variant);
                     }
+                    let nominal = self.packed_payload(expected).unwrap_or(expected);
+                    let (owner, representation) = self.representation(nominal)?;
+                    if let TypeKind::Variant(variants) = self.kind(representation) {
+                        let name = path
+                            .segments
+                            .last()
+                            .map(|s| self.name(*s))
+                            .unwrap_or_default();
+                        if !variants.iter().any(|variant| variant.name == name) {
+                            let type_name = owner
+                                .as_ref()
+                                .map_or("expected type", |p| p.0.name.as_str());
+                            let names = variants
+                                .iter()
+                                .map(|variant| variant.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            self.report(
+                                const { RuleId::of("LANG-2") },
+                                self.span(id),
+                                &format!(
+                                    "{name} is not a variant of {type_name}; variants: {names}"
+                                ),
+                            );
+                            return Ok(self.error());
+                        }
+                    }
                 }
                 self.report(
                     const { RuleId::of("LANG-2") },

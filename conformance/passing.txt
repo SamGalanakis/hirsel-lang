@@ -1159,6 +1159,8 @@ conformance/LANG/LANG-2-try-codec-expected-ok.hir
 conformance/LANG/LANG-2-try-expected-bad.hir
 conformance/LANG/LANG-2-try-expected-ok.hir
 conformance/LANG/LANG-2-try-std-expected-ok.hir
+conformance/LANG/LANG-2-unknown-variant-bad.hir
+conformance/LANG/LANG-2-unknown-variant-ok.hir
 conformance/LANG/LANG-2-untyped-binary-bad.hir
 conformance/LANG/LANG-2-untyped-binary-ok.hir
 conformance/LANG/LANG-2-untyped-range-bad.hir

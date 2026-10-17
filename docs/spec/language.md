@@ -29,6 +29,13 @@ fn literals() -> u64 {
 }
 ```
 
+When a bare constructor has a known expected variant type but its name is absent,
+LANG-2 names the missing variant and expected type and lists the declared variants:
+`Fault is not a variant of FileError; variants: FileFault, Canceled, NotGranted,
+NotFound, PermissionDenied, AlreadyExists, IsDirectory, NotDirectory`. With no
+unambiguous expected variant type, the diagnostic remains `bare variant needs an
+unambiguous expected type`.
+
 `let n = 3` with no annotation, no suffix and no other operand is LANG-2 at the literal.
 
 A generic function may be named only as a direct callee; any other use of its name as a

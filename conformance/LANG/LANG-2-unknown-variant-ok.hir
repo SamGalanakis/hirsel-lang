@@ -1,0 +1,5 @@
+// rule: LANG-2
+// expect: accept
+fn lookup() -> Result[u64, FileError] {
+  Error(FileFault(0u32))
+}

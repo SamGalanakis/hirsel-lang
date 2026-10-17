@@ -44,3 +44,27 @@ fn header_diagnostics_point_to_the_offending_name_and_earlier_binding() {
         }
     });
 }
+
+// Corpus headers pin rule/site; this pins the diagnostic's actionable text.
+#[test]
+fn unknown_variant_lists_the_expected_types_variants() {
+    with_compiler_stack(|| {
+        for (source, expected) in [
+            (
+                "fn lookup() -> Result[u64, FileError] { Error(Fault()) }",
+                "Fault is not a variant of FileError; variants: FileFault, Canceled, NotGranted, NotFound, PermissionDenied, AlreadyExists, IsDirectory, NotDirectory",
+            ),
+            (
+                "fn lookup() { let x = Fault() }",
+                "bare variant needs an unambiguous expected type",
+            ),
+        ] {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let file = engine.sources.add("variant.hir", source.into()).unwrap();
+            let output = check_progress(&mut engine, file, &default_context()).unwrap();
+            let diagnostic = output.diagnostics.first().unwrap();
+            assert_eq!(diagnostic.rule.as_str(), "LANG-2");
+            assert_eq!(diagnostic.message, expected);
+        }
+    });
+}
