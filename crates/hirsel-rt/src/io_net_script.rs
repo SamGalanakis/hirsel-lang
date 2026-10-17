@@ -310,9 +310,10 @@ impl NetProvider for ScriptNet {
     }
 }
 
-/// Cloneable, socket-free network capability model for driver-owned execution
-/// oracles. Policy, brands and peer transitions are the same State/ScriptNet
-/// path used by native execution; no runtime allocation helper is involved.
+/// Cloneable, socket-free network and process capability model for driver-owned
+/// execution oracles. Policy, brands, peer transitions and scripted runs are the same
+/// State path used by native execution; no runtime allocation helper is involved, and
+/// no host program runs.
 #[derive(Clone, Debug, Default)]
 pub struct ScriptIo {
     state: crate::io::State,
@@ -331,6 +332,7 @@ impl ScriptIo {
     ) -> Result<crate::io::Completion, AdapterError> {
         use crate::io::{Request, Tree};
         if !crate::net::is_net_request(&request)
+            && !crate::process::is_process_request(&request)
             && !matches!(request, Request::Net { .. } | Request::Close { .. })
         {
             return Err(AdapterError::Unsupported("network model request".into()));

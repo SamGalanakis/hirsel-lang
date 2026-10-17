@@ -1096,6 +1096,21 @@ unsafe fn execute(
             }
         }
     };
+    // The launcher's root Proc grant (`HIRSEL_RT_PROCESS`), like `HIRSEL_RT_NET`.
+    let process = if requested.is_some() {
+        None
+    } else {
+        match std::env::var("HIRSEL_RT_PROCESS") {
+            Ok(text) => match hirsel_run_config::validate_process_grant(text.as_bytes()) {
+                Ok(grant) => Some(grant),
+                Err(error) => return refuse(&format!("the process grant: {error}")),
+            },
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return refuse("the process grant is not UTF-8");
+            }
+        }
+    };
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
     let net_peers = net.and_then(|grant| grant.peers);
@@ -1144,6 +1159,9 @@ unsafe fn execute(
                 arguments = tape.arguments;
                 let mut io = SimIo::new(tape.tree, tape.events);
                 io.set_net_rules(net_rules.clone());
+                if let Some(grant) = &process {
+                    io.set_process_grant(grant);
+                }
                 if let Some(peers) = net_peers.clone()
                     && let Err(error) = io.set_net_script(peers)
                 {
@@ -1191,6 +1209,9 @@ unsafe fn execute(
             ) {
                 Ok(mut io) => {
                     io.set_net_rules(net_rules.clone());
+                    if let Some(grant) = &process {
+                        io.set_process_grant(grant);
+                    }
                     if let Some(peers) = net_peers.clone()
                         && let Err(error) = io.set_net_script(peers)
                     {

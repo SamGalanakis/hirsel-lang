@@ -25,6 +25,7 @@ mod rt_io_native;
 mod rt_measurement_native;
 mod rt_net_native;
 mod rt_operations;
+mod rt_process_native;
 mod rt_text_native;
 mod rt_tls_native;
 mod stdlib_http_tls;

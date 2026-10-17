@@ -236,13 +236,13 @@ fn address(a: SocketAddr) -> OpValue {
     ])
 }
 impl Io {
-    fn network_id(&self, value: &OpValue) -> Option<u64> {
+    pub(super) fn network_id(&self, value: &OpValue) -> Option<u64> {
         let OpValue::Handle(h) = value else {
             return None;
         };
         self.network_handles.get(h).copied()
     }
-    fn network_handle(&mut self, id: u64, owned: bool) -> OpValue {
+    pub(super) fn network_handle(&mut self, id: u64, owned: bool) -> OpValue {
         let external = self.next;
         self.next += 1;
         self.network_handles.insert(external, id);

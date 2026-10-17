@@ -45,6 +45,8 @@ conformance/CAP/CAP-1-process-projection-bad.hir
 conformance/CAP/CAP-1-process-projection-ok.hir
 conformance/CAP/CAP-1-process-run-bad.hir
 conformance/CAP/CAP-1-process-run-ok.hir
+conformance/CAP/CAP-1-process-scripted-run.hir
+conformance/CAP/CAP-1-process-ungranted-run.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
 conformance/CAP/CAP-1-random-projection-ok.hir
 conformance/CAP/CAP-1-stderr-parameter-bad.hir

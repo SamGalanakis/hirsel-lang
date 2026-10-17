@@ -189,7 +189,8 @@ that feeds stdin and drains both pipes, killing a child past `max_output` on eit
 stream. SIGPIPE is blocked on the calling thread for the loop and a raised one is
 discarded, so a child that ignores its stdin cannot end the program. `SimIo` replays
 the recorded completion in place of the host and rejects one that contradicts the
-re-derived checks. Tape forms are `process`, `test_process` and `process_run`
+re-derived checks. A launch without a run record reads the root Proc's `io.process`
+grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. Tape forms are `process`, `test_process` and `process_run`
 requests and a `process` completion (`host_io_tape.rs`).
 
 ## Bounded arenas

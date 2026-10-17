@@ -1338,7 +1338,7 @@ impl Binding {
             .map(String::as_str)
             .unwrap_or_else(|| crate::fault("unknown run-context Path identity"))
     }
-    fn path(&self, id: u64) -> String {
+    pub(crate) fn path(&self, id: u64) -> String {
         self.path_text(id).to_owned()
     }
     /// # Safety
@@ -2033,6 +2033,7 @@ grant_projection_export!(hirsel_rt_v2_io_stdout, Stdout);
 grant_projection_export!(hirsel_rt_v2_io_random, Random);
 grant_projection_export!(hirsel_rt_v2_io_tasks, Tasks);
 grant_projection_export!(hirsel_rt_v2_io_net, Net);
+grant_projection_export!(hirsel_rt_v2_io_process, Process);
 
 /// Result with an eight-byte success payload and a nullary error tag.
 #[repr(C)]

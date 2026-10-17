@@ -47,6 +47,7 @@ uint8_t hirsel_rt_v2_test_check_case(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t
 uint8_t hirsel_rt_v2_test_fail(hirsel_rt_v2_ctx*, const uint64_t*);
 uint8_t hirsel_rt_v2_test_dir(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_test_net(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, hirsel_rt_v2_header*);
+uint8_t hirsel_rt_v2_test_process(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, hirsel_rt_v2_header*);
 
 
 /* Unicode 16 borrowed cursors retain the slice origin; position is slice-relative.
@@ -130,3 +131,7 @@ uint8_t hirsel_rt_v2_tls_close(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_r
 
 uint8_t hirsel_rt_v2_io_tasks(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
 uint8_t hirsel_rt_v2_io_net(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
+uint8_t hirsel_rt_v2_io_process(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
+/* Result[ProcessOutput, ProcessError]: ExitStatus or ProcessError at 8, stdout at 16, stderr at 40. */
+typedef struct { uint32_t tag, padding, kind, code; hirsel_rt_v2_slice stdout_bytes, stderr_bytes; } hirsel_rt_v2_process_result;
+uint8_t hirsel_rt_v2_proc_run(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_process_result*, const uint64_t*, const uint64_t*, hirsel_rt_v2_header*, hirsel_rt_v2_header*, uint64_t, uint64_t, const void*, uint64_t);

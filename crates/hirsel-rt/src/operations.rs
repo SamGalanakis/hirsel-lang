@@ -125,7 +125,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "io.wall_clock" | "clock.monotonic" | "clock.wall" | "instant.ticks" | "io.random"
         | "io.tasks" | "io.net" | "test.check" | "test.check_case" | "test.fail" | "test.dir"
         | "test.net" | "file.read_bytes" | "file.walk" | "io.stdin" | "io.stderr"
-        | "stdin.read" | "err.print" | "env.get" => {
+        | "stdin.read" | "err.print" | "env.get" | "io.process" | "proc.run" | "test.process" => {
             Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
         }
         // Streams and listeners use the same explicit Net policy.
@@ -176,6 +176,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "io.net"
             | "test.dir"
             | "test.net"
+            | "io.process"
+            | "proc.run"
+            | "test.process"
             | "file.open"
             | "file.read"
             | "file.seek"
@@ -560,6 +563,33 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((16, 8)),
         parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_io_process",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_proc_run",
+        destination: true,
+        result: Some((64, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::Pointer,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_test_process",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_io_random",

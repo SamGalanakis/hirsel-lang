@@ -2253,29 +2253,30 @@ fn real_host_processes_run_granted_echo_and_false_and_refuse_everything_else() {
     let grants = file(
         r#"{"io":{"stdout":"stdout.bytes@1","dirs":[],"process":{"provider":"process.spawn@1","rules":[{"program":"/bin/echo"},{"program":"/bin/false"}]}}}"#,
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
-        .arg(&source)
-        .arg("--grants")
-        .arg(&grants)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "echo ok\nfalse exited 1\nsh not granted\nsearch name refused\n"
-    );
+    let run = |native: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.arg("run").arg(&source).arg("--grants").arg(&grants);
+        if native {
+            command.arg("--native");
+        }
+        command.output().unwrap()
+    };
+    for native in [false, true] {
+        let output = run(native);
+        assert_eq!(output.status.code(), Some(0), "native={native}: {output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "echo ok\nfalse exited 1\nsh not granted\nsearch name refused\n",
+            "native={native}"
+        );
+    }
     // Without the process grant there is no Proc: main returns its GrantError.
     std::fs::write(&grants, r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]}}"#).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
-        .arg(&source)
-        .arg("--grants")
-        .arg(&grants)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(output.stdout.is_empty());
+    for native in [false, true] {
+        let output = run(native);
+        assert_eq!(output.status.code(), Some(1), "native={native}: {output:?}");
+        assert!(output.stdout.is_empty());
+    }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(grants).unwrap();
 }

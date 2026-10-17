@@ -252,3 +252,81 @@ fn native_and_interpreted_recordings_replay_in_either_engine_and_executables() {
     }
     assert_edited_refuses(&fixture, true, &native_tape);
 }
+
+/// Runs a private copy of echo; replay returns its recorded output with the copy deleted,
+/// so nothing is spawned.
+const PROCESS_PROGRAM: &str = r#"pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let p = io.process(rt)?
+  let program = match arg.path(args, 0u64) {
+    Ok(program) => program,
+    Error(_) => path.of("/missing"),
+  }
+  match proc.run(p, program, ["recorded"], b"", None(), 64) {
+    Ok(o) => {
+      if o.status == Exited(0) && o.stdout == b"recorded\n" {
+        let _ = out.print(out, "echo ran\n")
+      }
+    },
+    Error(_) => {
+      let _ = out.print(out, "echo failed\n")
+    },
+  }
+  Ok(())
+}
+"#;
+
+#[test]
+fn process_recordings_replay_in_either_engine_without_spawning() {
+    let root = std::env::temp_dir().join(format!("hirsel-replay-process-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let echo = root.join("echo");
+    std::fs::copy("/bin/echo", &echo).unwrap();
+    let source = root.join("main.hir");
+    std::fs::write(&source, PROCESS_PROGRAM).unwrap();
+    let grants = root.join("grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[],"process":{"provider":"process.spawn@1","rules":[{"program":echo}]}},"args":[echo]}).to_string(),
+    )
+    .unwrap();
+    let tapes = [false, true].map(|native| {
+        let tape = root.join(format!("tape-{native}"));
+        let output = hirsel(
+            native,
+            &source,
+            &[
+                "--grants".as_ref(),
+                grants.as_os_str(),
+                "--record".as_ref(),
+                tape.as_os_str(),
+            ],
+        )
+        .output()
+        .unwrap();
+        assert_eq!(output.stdout, b"echo ran\n", "native={native}: {output:?}");
+        assert!(
+            std::fs::read_to_string(&tape)
+                .unwrap()
+                .contains("process_run ")
+        );
+        tape
+    });
+    std::fs::remove_file(&echo).unwrap();
+    for tape in &tapes {
+        for native in [false, true] {
+            assert_replayed(
+                &replay(hirsel(
+                    native,
+                    &source,
+                    &["--replay".as_ref(), tape.as_os_str()],
+                )),
+                b"echo ran\n",
+                &format!("{} replayed native={native}", tape.display()),
+            );
+        }
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}

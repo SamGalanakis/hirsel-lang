@@ -81,6 +81,9 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
                 })?;
         }
     }
+    if let Some(grant) = run.process_grant() {
+        io.set_process_grant(grant);
+    }
     Ok((io, run))
 }
 

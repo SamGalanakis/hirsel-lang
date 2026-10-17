@@ -163,3 +163,20 @@ pub fn encode_process_runs(runs: &[ProcessRun]) -> Vec<u8> {
 pub fn decode_process_runs(bytes: &[u8]) -> Result<Vec<ProcessRun>, RunRefusal> {
     serde_json::from_slice(bytes).map_err(|error| invalid("io.process.runs", &error.to_string()))
 }
+
+/// A launcher's standalone `io.process` grant: the JSON of a RunConfig's `io.process`
+/// field, admitted exactly as that field is. Scripted runs never widen the rules.
+pub fn validate_process_grant(bytes: &[u8]) -> Result<ProcessGrant, RunRefusal> {
+    let mut grant: ProcessGrant =
+        serde_json::from_slice(bytes).map_err(|error| invalid("io.process", &error.to_string()))?;
+    if !matches!(
+        ProviderContract::parse(&grant.provider),
+        Some(ProviderContract::ProcessSpawn | ProviderContract::ProcessScript)
+    ) {
+        return Err(RunRefusal::Unsupported {
+            field: "io.process.provider".into(),
+        });
+    }
+    grant.validate()?;
+    Ok(grant)
+}

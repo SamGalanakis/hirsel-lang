@@ -14,6 +14,7 @@ use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod net;
+mod process;
 
 /// The Io operations with a native entry (`hirsel_rt::operations`), over
 /// logical handles numbered as the runtime's adapter numbers them.
@@ -107,6 +108,9 @@ impl Operations for Io {
             }
         }
         if let Some(outcome) = self.net(module, &path.name, args) {
+            return outcome;
+        }
+        if let Some(outcome) = self.process(module, &path.name, args) {
             return outcome;
         }
         if let Some(outcome) = self.io(module, &path.name, args) {

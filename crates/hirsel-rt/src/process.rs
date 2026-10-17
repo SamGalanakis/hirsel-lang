@@ -384,3 +384,174 @@ fn drain(
     }
     Ok(Some((out, err)))
 }
+
+/// `Result[ProcessOutput, ProcessError]`. Ok: ExitStatus (u32 tag, i32) at 8, stdout at
+/// 16, stderr at 40. Error: ProcessError (u32 tag, Fault's u32) at 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProcessResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub kind: u32,
+    pub code: u32,
+    pub stdout: crate::views::Slice,
+    pub stderr: crate::views::Slice,
+}
+
+unsafe fn list<T>(
+    owner: *mut crate::Header,
+    stride: usize,
+    mut item: impl FnMut(*const u8) -> T,
+) -> Vec<T> {
+    let payload = crate::alloc::payload(owner);
+    let count = usize::try_from(unsafe { payload.cast::<u64>().read() })
+        .unwrap_or_else(|_| crate::fault("process list overflow"));
+    let first = crate::alloc::sequence_elements_offset(8) as usize;
+    (0..count)
+        .map(|index| {
+            let offset = index
+                .checked_mul(stride)
+                .and_then(|n| n.checked_add(first))
+                .filter(|n| *n <= isize::MAX as usize)
+                .unwrap_or_else(|| crate::fault("process list element overflow"));
+            item(unsafe { payload.add(offset) })
+        })
+        .collect()
+}
+unsafe fn slice(at: *const u8) -> Vec<u8> {
+    let slice = unsafe { at.cast::<crate::views::Slice>().read() };
+    unsafe { crate::io::slice_bytes(slice.owner, slice.start, slice.length) }.to_vec()
+}
+unsafe fn text(at: *const u8) -> String {
+    String::from_utf8(unsafe { slice(at) })
+        .unwrap_or_else(|_| crate::fault("process String is not UTF-8"))
+}
+fn failure_parts(failure: ProcessFailure) -> (u32, u32) {
+    match failure {
+        ProcessFailure::NotGranted => (0, 0),
+        ProcessFailure::InvalidInput => (1, 0),
+        ProcessFailure::NotFound => (2, 0),
+        ProcessFailure::PermissionDenied => (3, 0),
+        ProcessFailure::OutputLimit => (4, 0),
+        ProcessFailure::Fault(code) => (5, code),
+    }
+}
+/// One `ProcessScript` (96 bytes): program String at 0, args List at 24, outcome
+/// `Result[ProcessOutput, ProcessError]` at 32.
+unsafe fn script(at: *const u8) -> ProcessRun {
+    let outcome = unsafe { at.add(32) };
+    let kind = unsafe { outcome.add(8).cast::<u32>().read() };
+    let code = unsafe { outcome.add(12).cast::<u32>().read() };
+    ProcessRun {
+        program: unsafe { text(at) },
+        args: unsafe {
+            list(at.add(24).cast::<*mut crate::Header>().read(), 24, |a| {
+                text(a)
+            })
+        },
+        outcome: match unsafe { outcome.cast::<u32>().read() } {
+            0 => ProcessOutcome::Output {
+                status: match kind {
+                    0 => ExitStatus::Exited(code as i32),
+                    1 => ExitStatus::Signaled(code as i32),
+                    _ => crate::fault("ExitStatus tag"),
+                },
+                stdout: unsafe { slice(outcome.add(16)) },
+                stderr: unsafe { slice(outcome.add(40)) },
+            },
+            1 => ProcessOutcome::Error(match (kind, code) {
+                (0, _) => ProcessFailure::NotGranted,
+                (1, _) => ProcessFailure::InvalidInput,
+                (2, _) => ProcessFailure::NotFound,
+                (3, _) => ProcessFailure::PermissionDenied,
+                (4, _) => ProcessFailure::OutputLimit,
+                (5, code) => ProcessFailure::Fault(code),
+                _ => crate::fault("ProcessError tag"),
+            }),
+            _ => crate::fault("ProcessScript outcome tag"),
+        },
+    }
+}
+
+/// # Safety
+/// Context is bound; Proc, Path, the List[String] block, the Bytes slice and the
+/// `Option[Dir]` (u32 tag, Dir at 8) are borrowed live values; out is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ProcessResult,
+    process: *const u64,
+    program: *const u64,
+    args: *mut crate::Header,
+    stdin_owner: *mut crate::Header,
+    stdin_start: u64,
+    stdin_length: u64,
+    directory: *const u8,
+    max_output: u64,
+) -> u8 {
+    let request = Request::ProcessRun {
+        process: unsafe { process.read() },
+        program: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { program.read() }),
+        args: unsafe { list(args, 24, |a| text(a)) },
+        stdin: unsafe { crate::io::slice_bytes(stdin_owner, stdin_start, stdin_length) }.to_vec(),
+        directory: match unsafe { directory.cast::<u32>().read() } {
+            0 => None,
+            _ => Some(unsafe { directory.add(8).cast::<u64>().read() }),
+        },
+        max_output,
+    };
+    let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Process(outcome) = completion else {
+        crate::fault("process completion mismatch")
+    };
+    // Zero padding and the inactive arm; no pointer is made from error bits.
+    let mut result: ProcessResult = unsafe { std::mem::zeroed() };
+    match outcome {
+        ProcessOutcome::Output {
+            status,
+            stdout,
+            stderr,
+        } => {
+            (result.kind, result.code) = match status {
+                ExitStatus::Exited(code) => (0, code as u32),
+                ExitStatus::Signaled(signal) => (1, signal as u32),
+            };
+            result.stdout = unsafe { crate::text::allocate_bytes(ctx, &stdout) };
+            result.stderr = unsafe { crate::text::allocate_bytes(ctx, &stderr) };
+        }
+        ProcessOutcome::Error(failure) => {
+            result.tag = 1;
+            (result.kind, result.code) = failure_parts(failure);
+        }
+    }
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+
+/// # Safety
+/// Context is bound; Test and the List[ProcessScript] block are borrowed live values;
+/// out is writable. No borrowed input is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_process(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    test: *const u64,
+    runs: *mut crate::Header,
+) -> u8 {
+    let request = Request::TestProcess {
+        test: unsafe { test.read() },
+        runs: unsafe { list(runs, 96, |at| script(at)) },
+    };
+    let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Handle(Ok(process)) = completion else {
+        crate::fault("Test Proc completion mismatch")
+    };
+    unsafe { out.write(process) };
+    crate::STATUS_OK
+}
