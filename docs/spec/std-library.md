@@ -41,7 +41,7 @@ fn std@1/input.read_all(s: Stdin) -> Result[Bytes, InputError]
 fn std@1/input.read_line(s: Stdin) -> Result[Option[String], InputError]
 ```
 
-Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`
+Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`
 and the `format_into` and NFC functions below) define their contracts by their declared
 signatures and the rules in this part.
 
@@ -194,6 +194,60 @@ InvalidFormat | InvalidPort | InvalidHostName`. A reference with a syntactically
 keeps its absolute-parse error; only scheme-less references are parsed as relative, so
 `resolve(base, "http://127.1")` is `InvalidHostName`. Hosts apply the numeric-host rule after
 percent decoding.
+
+## Buffered reads
+
+`std@1/bufio` adapts Rust `BufReader`'s refill/consume and delimiter loops. A `Reader`
+is opaque buffer state, independent of its source; keep one reader with a source while
+unread bytes remain. `ReadError[E] = Source(E) | Limit | UnexpectedEof | InvalidUtf8 |
+InvalidRead`. The callback takes explicit mutable source state, appends at most the
+requested number of bytes to its output list, and returns the appended count. Zero is
+EOF for that operation; a later operation may retry the source. Count/length disagreement
+or a count above the requested maximum is `InvalidRead`. The callback must preserve the
+existing list prefix.
+
+```text
+fn std@1/bufio.new(capacity: u64) -> Reader uses {}
+fn std@1/bufio.buffered(r: Reader) -> u64 uses {}
+fn std@1/bufio.contents(r: Reader) -> Bytes uses {}
+fn std@1/bufio.consume(mut r: Reader, count: u64) -> () uses {}
+fn std@1/bufio.read_more[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], max: u64) -> Result[u64,ReadError[E]]
+fn std@1/bufio.read[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,ReadError[E]]
+fn std@1/bufio.read_exact[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], count: u64) -> Result[(),ReadError[E]]
+fn std@1/bufio.read_until[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[E]]
+fn std@1/bufio.read_line[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[String,ReadError[E]]
+fn std@1/bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[u64,ReadError[NetError]]
+fn std@1/bufio.stream_read(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[NetError]]
+fn std@1/bufio.stream_read_exact(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[NetError]]
+fn std@1/bufio.stream_read_until(n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[NetError]]
+fn std@1/bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[String,ReadError[NetError]]
+```
+
+`new(0)` uses capacity one. Capacity bounds each refill, not accumulated unread data.
+`read_more` compacts consumed bytes and appends a single bounded refill even if bytes
+remain; bounded protocol parsers must also bound their accumulated input. `buffered`
+reports unread bytes, `contents` returns an owned snapshot of them without reading, and
+`consume` advances by the smaller of its count and the unread length.
+
+`read` appends at most `max` bytes, using unread bytes first, and returns zero at EOF.
+`read_exact` appends exactly `count` bytes or returns `UnexpectedEof`, preserving partial
+output. Zero `max` or `count` succeeds without calling the source. `read_until` appends
+through the delimiter, including it, or through EOF, and returns the appended count.
+Its limit bounds newly appended bytes; `Limit` preserves partial output and leaves the
+next byte unread. A zero limit returns `Limit` without reading. `read_line` applies that
+loop to LF and decodes owned UTF-8, preserving the LF; EOF before any bytes yields `""`.
+Invalid UTF-8 returns `InvalidUtf8` after consuming those bytes. All reads propagate source
+errors as `Source`; operations taking an output list retain already appended bytes. The Stream adapters use
+`core@1/net.read` with the same rules and preserve the stream's Net brand.
+
+A line read over an existing branded Stream needs only persistent buffer state:
+
+```hirsel
+fn line(n: Net, mut stream: Stream of n) -> Result[String, std@1/bufio.ReadError[NetError]] {
+  let mut reader = std@1/bufio.new(4096)
+  std@1/bufio.stream_read_line(n, mut stream, mut reader, 8192)
+}
+```
 
 ## HTTP wire format
 

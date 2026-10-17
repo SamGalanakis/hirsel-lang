@@ -2854,6 +2854,8 @@ conformance/PROG/PROG-1-dependency-role-ok.hir
 conformance/PROG/PROG-1-dependency-version-bad.hir
 conformance/PROG/PROG-1-dependency-version-ok.hir
 conformance/PROG/PROG-1-source-dependencies-run.hir
+conformance/PROG/PROG-2-buffered-reader-opaque-bad.hir
+conformance/PROG/PROG-2-buffered-reader-opaque-ok.hir
 conformance/PROG/PROG-2-contract6-private-cursor-bad.hir
 conformance/PROG/PROG-2-contract6-private-cursor-ok.hir
 conformance/PROG/PROG-2-contract6-private-operations-direct-bad.hir
@@ -3609,6 +3611,8 @@ conformance/SEM/SEM-4-array-take.hir
 conformance/SEM/SEM-4-borrow-source-readable.hir
 conformance/SEM/SEM-4-borrowed-counted-map-pair.hir
 conformance/SEM/SEM-4-borrowed-grapheme-alias-continue.hir
+conformance/SEM/SEM-4-buffered-reader-run.hir
+conformance/SEM/SEM-4-buffered-stream-run.hir
 conformance/SEM/SEM-4-call-source-not-iterable.hir
 conformance/SEM/SEM-4-call-sources.hir
 conformance/SEM/SEM-4-collection-source-sweep.hir

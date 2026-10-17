@@ -16,6 +16,7 @@ the license named in its row; the license texts follow once each.
 | Zig standard library | `lib/std/Io/Threaded.zig` netLookup, `lib/std/Io/net.zig` ListenOptions | `crates/hirsel-rt/src/net_host.rs` | same | MIT |
 | Zig standard library | `lib/std/json/dynamic.zig` | std@1 JSON ordered-object duplicates | same | MIT |
 | Zig standard library | `lib/std/testing.zig`, `lib/std/math.zig` | std@1 test helpers and their vectors | same | MIT |
+| Rust standard library | `library/alloc/src/io/buffered/{bufreader.rs,bufreader/buffer.rs}`, `library/alloc/src/io/{read,buf_read}.rs`, `library/alloctests/tests/io/buffered.rs` refill/consume, exact-read, delimiter, line and short-read vectors | `stdlib/std@1/bufio.hir`, buffered reader conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/alloc/src/io/{read,buf_read}.rs`, `library/alloctests/tests/io/mod.rs` read-to-end and delimiter/EOF vectors | `stdlib/std@1/input.hir`, host input tests | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/std/src/fs/tests.rs` incremental read/absolute seek vectors; `Read`/`Write` interrupted-call loops | file stream providers and conformance/host replay tests | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/std/src/net/tcp/tests.rs` | `crates/hirsel-interp/src/library/net_tests.rs`, `crates/hirsel-rt/tests/it/net_script.rs` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |

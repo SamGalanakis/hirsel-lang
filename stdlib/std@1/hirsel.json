@@ -236,6 +236,12 @@
       "module": [
         "input"
       ]
+    },
+    {
+      "path": "bufio.hir",
+      "module": [
+        "bufio"
+      ]
     }
   ],
   "dependencies": []

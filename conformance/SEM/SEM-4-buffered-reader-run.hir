@@ -1,0 +1,222 @@
+// rule: SEM-4
+// expect: run
+// Rust BufReader read_until/read_line/short-read vectors, f6c1107f.
+type Input {
+  data: Bytes,
+  offset: u64,
+  fail_at: u64,
+  calls: u64,
+}
+
+type InputError = Broken()
+
+fn input(data: Bytes) -> Input uses {} {
+  Input(data: unique data, offset: 0, fail_at: 18446744073709551615, calls: 0)
+}
+
+fn refill(mut source: Input, mut out: List[u8], max: u64) -> Result[u64, InputError] uses {} {
+  source.calls += 1
+  if source.offset == source.fail_at {
+    return Error(Broken())
+  }
+  let mut n: u64 = 0
+  while n < max && source.offset < bytes.len(source.data) && source.offset < source.fail_at {
+    list.push(mut out, source.data[source.offset])
+    source.offset += 1
+    n += 1
+  }
+  Ok(n)
+}
+
+fn delimiters(t: Test) {
+  let mut source = input(b"\x00\x01\x02\x01\x00")
+  let mut r = std@1/bufio.new(2)
+  let mut out: List[u8] = [9]
+  test.check(
+    t,
+    std@1/bufio.read_until(mut r, mut source, refill, 0, mut out, 10) == Ok(1)
+  )
+  test.check(t, out == [9, 0])
+  out = []
+  test.check(
+    t,
+    std@1/bufio.read_until(mut r, mut source, refill, 2, mut out, 10) == Ok(2)
+  )
+  test.check(t, out == [1, 2])
+  out = []
+  test.check(
+    t,
+    std@1/bufio.read_until(mut r, mut source, refill, 1, mut out, 10) == Ok(1)
+  )
+  test.check(t, out == [1])
+  out = []
+  test.check(
+    t,
+    std@1/bufio.read_until(mut r, mut source, refill, 8, mut out, 10) == Ok(1)
+  )
+  test.check(t, out == [0])
+  out = []
+  test.check(
+    t,
+    std@1/bufio.read_until(mut r, mut source, refill, 9, mut out, 10) == Ok(0)
+  )
+  test.check(t, out == [])
+}
+
+fn lines(t: Test) {
+  let mut source = input(b"a\nb\nc")
+  let mut r = std@1/bufio.new(2)
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 10) == Ok("a\n"))
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 10) == Ok("b\n"))
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 10) == Ok("c"))
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 10) == Ok(""))
+  source = input(b"\xc3\xa9\n\xff\nok\n")
+  r = std@1/bufio.new(1)
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 10) == Ok("é\n"))
+  test.check(
+    t,
+    std@1/bufio.read_line(mut r, mut source, refill, 10) == Error(InvalidUtf8())
+  )
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 10) == Ok("ok\n"))
+}
+
+fn exact_and_limits(t: Test) {
+  let mut source = input(b"abcdef")
+  let mut r = std@1/bufio.new(4)
+  let mut out: List[u8] = []
+  test.check(t, std@1/bufio.read(mut r, mut source, refill, mut out, 1) == Ok(1))
+  test.check(t, std@1/bufio.buffered(r) == 3 && source.calls == 1)
+  test.check(t, std@1/bufio.contents(r) == b"bcd")
+  test.check(t, std@1/bufio.read_exact(mut r, mut source, refill, mut out, 3) == Ok(()))
+  test.check(t, out == [97, 98, 99, 100] && source.calls == 1)
+  test.check(
+    t,
+    std@1/bufio.read_exact(mut r, mut source, refill, mut out, 3) == Error(
+      UnexpectedEof()
+    )
+  )
+  test.check(t, out == [97, 98, 99, 100, 101, 102])
+  source = input(b"abc\n")
+  r = std@1/bufio.new(4)
+  out = []
+  test.check(
+    t,
+    std@1/bufio.read_until(mut r, mut source, refill, 10, mut out, 2) == Error(Limit())
+  )
+  test.check(t, out == [97, 98])
+  test.check(t, std@1/bufio.contents(r) == b"c\n")
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 2) == Ok("c\n"))
+  test.check(t, std@1/bufio.read_exact(mut r, mut source, refill, mut out, 0) == Ok(()))
+  test.check(t, std@1/bufio.read(mut r, mut source, refill, mut out, 0) == Ok(0))
+}
+
+fn errors(t: Test) {
+  let mut source = input(b"abcd")
+  source.fail_at = 2
+  let mut r = std@1/bufio.new(1)
+  let mut out: List[u8] = [0]
+  test.check(
+    t,
+    std@1/bufio.read_exact(mut r, mut source, refill, mut out, 4) == Error(
+      Source(Broken())
+    )
+  )
+  test.check(t, out == [0, 97, 98])
+  source.fail_at = 18446744073709551615
+  test.check(t, std@1/bufio.read_exact(mut r, mut source, refill, mut out, 2) == Ok(()))
+  test.check(t, out == [0, 97, 98, 99, 100])
+}
+
+fn wrong_count(mut state: (), mut out: List[u8], max: u64) -> Result[u64, InputError] uses {} {
+  Ok(1)
+}
+
+fn oversized(mut state: (), mut out: List[u8], max: u64) -> Result[u64, InputError] uses {} {
+  let mut n: u64 = 0
+  while n <= max {
+    list.push(mut out, 7)
+    n += 1
+  }
+  Ok(n)
+}
+
+type Shorts {
+  lengths: List[u64],
+  offset: u64,
+}
+
+fn short_refill(mut source: Shorts, mut out: List[u8], max: u64) -> Result[
+  u64,
+  InputError
+] uses {} {
+  if source.offset == list.len(source.lengths) {
+    return Ok(0)
+  }
+  let count = source.lengths[source.offset]
+  source.offset += 1
+  let mut n: u64 = 0
+  while n < count && n < max {
+    list.push(mut out, 7)
+    n += 1
+  }
+  Ok(n)
+}
+
+fn short_reads(t: Test) {
+  let mut source = Shorts(lengths: [0, 1, 2, 0, 1, 0], offset: 0)
+  let mut r = std@1/bufio.new(2)
+  let mut out: List[u8] = []
+  let counts: List[u64] = [0, 1, 2, 0, 1, 0, 0]
+  for count in counts {
+    test.check(
+      t,
+      std@1/bufio.read(mut r, mut source, short_refill, mut out, 2) == Ok(count)
+    )
+  }
+  test.check(t, out == [7, 7, 7, 7])
+}
+
+fn buffer_controls(t: Test) {
+  let mut source = input(b"abcde")
+  let mut r = std@1/bufio.new(2)
+  let mut out: List[u8] = []
+  test.check(t, std@1/bufio.read_more(mut r, mut source, refill, 0) == Ok(0))
+  test.check(
+    t,
+    std@1/bufio.read_until(mut r, mut source, refill, 10, mut out, 0) == Error(Limit())
+  )
+  test.check(t, std@1/bufio.read_exact(mut r, mut source, refill, mut out, 0) == Ok(()))
+  test.check(t, std@1/bufio.read(mut r, mut source, refill, mut out, 0) == Ok(0))
+  test.check(t, source.calls == 0 && out == [])
+  test.check(t, std@1/bufio.read_more(mut r, mut source, refill, 99) == Ok(2))
+  std@1/bufio.consume(mut r, 1)
+  test.check(t, std@1/bufio.read_more(mut r, mut source, refill, 99) == Ok(2))
+  let snapshot = std@1/bufio.contents(r)
+  test.check(t, snapshot == b"bcd" && std@1/bufio.buffered(r) == 3)
+  std@1/bufio.consume(mut r, 18446744073709551615)
+  test.check(t, snapshot == b"bcd" && std@1/bufio.buffered(r) == 0)
+  test.check(t, std@1/bufio.read_line(mut r, mut source, refill, 1) == Ok("e"))
+  source = input(b"a")
+  r = std@1/bufio.new(0)
+  test.check(t, std@1/bufio.read_more(mut r, mut source, refill, 99) == Ok(1))
+  let mut state = ()
+  r = std@1/bufio.new(1)
+  test.check(
+    t,
+    std@1/bufio.read_more(mut r, mut state, wrong_count, 1) == Error(InvalidRead())
+  )
+  test.check(
+    t,
+    std@1/bufio.read_more(mut r, mut state, oversized, 1) == Error(InvalidRead())
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  delimiters(t)
+  lines(t)
+  exact_and_limits(t)
+  errors(t)
+  short_reads(t)
+  buffer_controls(t)
+  Ok(())
+}

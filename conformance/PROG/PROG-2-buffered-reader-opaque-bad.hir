@@ -1,0 +1,7 @@
+// rule: PROG-2
+// expect: reject PROG-2 at line 5
+pub fn main() -> Result[(), ()] {
+  let r = std@1/bufio.new(2)
+  let position = r.offset
+  Ok(())
+}

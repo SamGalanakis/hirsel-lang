@@ -1,0 +1,289 @@
+// Rust alloc/src/io/buffered/bufreader.rs fill_buf/consume and
+// alloctests/tests/io/buffered.rs delimiter/line vectors, f6c1107f.
+pub type ReadError[E] = Source(E) | Limit | UnexpectedEof | InvalidUtf8 | InvalidRead
+
+pub opaque type Reader: copyable + inert + noalloc_drop uses {} {
+  input: List[u8],
+  offset: u64,
+  capacity: u64,
+}
+
+pub fn new(capacity: u64) -> Reader uses {} {
+  Reader(
+    input: [],
+    offset: 0,
+    capacity: if capacity == 0 {
+      1
+    } else {
+      capacity
+    }
+  )
+}
+
+pub fn buffered(r: Reader) -> u64 uses {} {
+  core@1/list.len(r.input) - r.offset
+}
+
+pub fn contents(r: Reader) -> Bytes uses {} {
+  let mut out: List[u8] = []
+  let mut i = r.offset
+  while i < core@1/list.len(r.input) {
+    core@1/list.push(mut out, r.input[i])
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+pub fn consume(mut r: Reader, count: u64) -> () uses {} {
+  let have = buffered(r)
+  r.offset += if count < have {
+    count
+  } else {
+    have
+  }
+}
+
+pub fn read_more[S, E](
+  mut r: Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  max: u64
+) -> Result[u64, ReadError[E]] {
+  if max == 0 {
+    return Ok(0)
+  }
+  let mut unread: List[u8] = []
+  let mut i = r.offset
+  while i < core@1/list.len(r.input) {
+    core@1/list.push(mut unread, r.input[i])
+    i += 1
+  }
+  r.input = take unread
+  r.offset = 0
+  let previous_len = core@1/list.len(r.input)
+  let limit = if max < r.capacity {
+    max
+  } else {
+    r.capacity
+  }
+  let n = refill(mut source, mut r.input, limit) ? Source
+  let current_len = core@1/list.len(r.input)
+  if current_len < previous_len || current_len - previous_len != n || n > limit {
+    return Error(InvalidRead())
+  }
+  Ok(n)
+}
+
+fn fill[S, E](
+  mut r: Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E]
+) -> Result[u64, ReadError[E]] {
+  if buffered(r) != 0 {
+    return Ok(buffered(r))
+  }
+  let capacity = r.capacity
+  read_more(mut r, mut source, refill, capacity)
+}
+
+pub fn read[S, E](
+  mut r: Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  mut out: List[u8],
+  max: u64
+) -> Result[u64, ReadError[E]] {
+  if max == 0 {
+    return Ok(0)
+  }
+  let have = fill(mut r, mut source, refill)?
+  let count = if have < max {
+    have
+  } else {
+    max
+  }
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, r.input[r.offset])
+    r.offset += 1
+    i += 1
+  }
+  Ok(count)
+}
+
+pub fn read_exact[S, E](
+  mut r: Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  mut out: List[u8],
+  count: u64
+) -> Result[(), ReadError[E]] {
+  let mut remaining = count
+  while remaining != 0 {
+    let n = read(mut r, mut source, refill, mut out, remaining)?
+    if n == 0 {
+      return Error(UnexpectedEof())
+    }
+    remaining -= n
+  }
+  Ok(())
+}
+
+pub fn read_until[S, E](
+  mut r: Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  delimiter: u8,
+  mut out: List[u8],
+  limit: u64
+) -> Result[u64, ReadError[E]] {
+  if limit == 0 {
+    return Error(Limit())
+  }
+  let mut total: u64 = 0
+  while true {
+    if fill(mut r, mut source, refill)? == 0 {
+      return Ok(total)
+    }
+    if total == limit {
+      return Error(Limit())
+    }
+    let remaining = limit - total
+    let have = buffered(r)
+    let available = if have < remaining {
+      have
+    } else {
+      remaining
+    }
+    let mut count: u64 = 0
+    let mut done = false
+    while count < available {
+      let b = r.input[r.offset + count]
+      core@1/list.push(mut out, b)
+      count += 1
+      if b == delimiter {
+        done = true
+        break
+      }
+    }
+    r.offset += count
+    total += count
+    if done {
+      return Ok(total)
+    }
+  }
+  Ok(total)
+}
+
+pub fn read_line[S, E](
+  mut r: Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  limit: u64
+) -> Result[String, ReadError[E]] {
+  let mut out: List[u8] = []
+  let _ = read_until(mut r, mut source, refill, 10u8, mut out, limit)?
+  match core@1/string.from_bytes(core@1/bytes.from_list(take out)) {
+    Ok(text) => Ok(take text),
+    Error(_) => Error(InvalidUtf8()),
+  }
+}
+
+pub fn stream_read_until(
+  n: Net,
+  mut s: Stream of n,
+  mut r: Reader,
+  delimiter: u8,
+  mut out: List[u8],
+  limit: u64
+) -> Result[u64, ReadError[NetError]] {
+  read_until(
+    mut r,
+    mut s,
+    fn(mut stream: Stream of n, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      NetError
+    ] {
+      core@1/net.read(n, mut stream, mut buffer, requested)
+    },
+    delimiter,
+    mut out,
+    limit
+  )
+}
+
+pub fn stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[
+  u64,
+  ReadError[NetError]
+] {
+  read_more(
+    mut r,
+    mut s,
+    fn(mut stream: Stream of n, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      NetError
+    ] {
+      core@1/net.read(n, mut stream, mut buffer, requested)
+    },
+    max
+  )
+}
+
+pub fn stream_read_exact(
+  n: Net,
+  mut s: Stream of n,
+  mut r: Reader,
+  mut out: List[u8],
+  count: u64
+) -> Result[(), ReadError[NetError]] {
+  read_exact(
+    mut r,
+    mut s,
+    fn(mut stream: Stream of n, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      NetError
+    ] {
+      core@1/net.read(n, mut stream, mut buffer, requested)
+    },
+    mut out,
+    count
+  )
+}
+
+pub fn stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[
+  String,
+  ReadError[NetError]
+] {
+  read_line(
+    mut r,
+    mut s,
+    fn(mut stream: Stream of n, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      NetError
+    ] {
+      core@1/net.read(n, mut stream, mut buffer, requested)
+    },
+    limit
+  )
+}
+
+pub fn stream_read(
+  n: Net,
+  mut s: Stream of n,
+  mut r: Reader,
+  mut out: List[u8],
+  max: u64
+) -> Result[u64, ReadError[NetError]] {
+  read(
+    mut r,
+    mut s,
+    fn(mut stream: Stream of n, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      NetError
+    ] {
+      core@1/net.read(n, mut stream, mut buffer, requested)
+    },
+    mut out,
+    max
+  )
+}
