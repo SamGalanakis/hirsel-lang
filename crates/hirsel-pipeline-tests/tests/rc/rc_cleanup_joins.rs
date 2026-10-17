@@ -1,7 +1,11 @@
 //! Hand-built joins keep resources and failure suffixes independent of source lowering.
 use crate::rc_support as support;
 use hirsel_core_contract::Passing;
-use hirsel_heapcheck::{Config, NoOperations, build::Layouts, build::UnitBuilder};
+use hirsel_heapcheck::{
+    Config, NoOperations,
+    build::{Layouts, fixture_unit},
+};
+use hirsel_lir::testing::UnitBuilder;
 use hirsel_lir::{
     abi_types::*,
     ir::*,
@@ -30,7 +34,7 @@ fn constant(
 }
 fn jump(b: &mut UnitBuilder<Rc>, from: BlockId, to: BlockId, values: &[ValueId]) {
     let edge = b.edge(to, values);
-    b.end(from, Terminator::Jump(edge));
+    b.term(from, Terminator::Jump(edge));
 }
 fn fresh_failure(b: &mut UnitBuilder<Rc>, template: FailureId) -> FailureId {
     let f = b.unit.tables.failures[template.index()].clone();
@@ -90,13 +94,13 @@ fn fixture(choice: u32, looped: bool, fail_arm: bool, fail_finalizer: bool) -> F
         extension: ScalarExtension::None,
     }];
     table.fn_abis.push(abi);
-    let mut f = UnitBuilder::<Rc>::new(finalizer_path.clone());
+    let mut f = UnitBuilder::<Rc>::new(fixture_unit(finalizer_path.clone()));
     f.unit.header.stage = StageKind::Rc;
     f.unit.header.abi = FnAbiId(1);
     let body = f.block(BlockKind::Body, &[]);
     f.unit.entry = body;
     let failure = f.block(BlockKind::FailureCleanup, &[]);
-    f.end(failure, Terminator::Propagate);
+    f.term(failure, Terminator::Propagate);
     let self_value = f.plain(ValueRepr::Aggregate, resource);
     f.parameter(self_value);
     f.slot(ValueRepr::Aggregate, resource, SlotKind::Parameter(0));
@@ -112,8 +116,8 @@ fn fixture(choice: u32, looped: bool, fail_arm: bool, fail_finalizer: bool) -> F
         let failure = f.failure(edge, Some("SEM-1"), &[]);
         f.push(body, Inst::Check { condition, failure });
     }
-    f.end(body, Terminator::Return(None));
-    let finalizer = hirsel_rc::insert::Editor::new(f.finish(&table)).finish();
+    f.term(body, Terminator::Return(None));
+    let finalizer = hirsel_rc::insert::Editor::new(f.finish_with_layouts(&table)).finish();
     let finalizers = Finalizers(BTreeMap::from([(
         resource,
         Finalizer {
@@ -124,12 +128,12 @@ fn fixture(choice: u32, looped: bool, fail_arm: bool, fail_finalizer: bool) -> F
         },
     )]));
 
-    let mut b = UnitBuilder::<Rc>::new(path("main"));
+    let mut b = UnitBuilder::<Rc>::new(fixture_unit(path("main")));
     b.unit.header.stage = StageKind::Rc;
     let entry = b.block(BlockKind::Body, &[]);
     b.unit.entry = entry;
     let propagated = b.block(BlockKind::FailureCleanup, &[]);
-    b.end(propagated, Terminator::Propagate);
+    b.term(propagated, Terminator::Propagate);
     let edge = b.edge(propagated, &[]);
     let empty_failure = b.failure(edge, None, &[]);
     let root = b.slot(ValueRepr::Aggregate, record, SlotKind::Local);
@@ -292,7 +296,7 @@ fn fixture(choice: u32, looped: bool, fail_arm: bool, fail_finalizer: bool) -> F
         jump(&mut b, entry, header, &[first]);
         let yes = b.edge(body, &[]);
         let no = b.edge(intact, &[]);
-        b.end(
+        b.term(
             header,
             Terminator::Branch {
                 condition: flag,
@@ -312,7 +316,7 @@ fn fixture(choice: u32, looped: bool, fail_arm: bool, fail_finalizer: bool) -> F
         let feedback = b.block(BlockKind::Body, &[]);
         let yes = b.edge(after, &[]);
         let no = b.edge(feedback, &[]);
-        b.end(
+        b.term(
             intact,
             Terminator::Branch {
                 condition: keep,
@@ -351,7 +355,7 @@ fn fixture(choice: u32, looped: bool, fail_arm: bool, fail_finalizer: bool) -> F
                 },
             ],
         );
-        b.end(
+        b.term(
             entry,
             Terminator::Switch {
                 value: selected,
@@ -367,11 +371,11 @@ fn fixture(choice: u32, looped: bool, fail_arm: bool, fail_finalizer: bool) -> F
         }
     }
     drop_slot(&mut b, after, addresses[0], cleanup);
-    b.end(after, Terminator::Return(None));
+    b.term(after, Terminator::Return(None));
     Fixture {
         table: table.clone(),
         units: vec![
-            hirsel_rc::insert::Editor::new(b.finish(&table)).finish(),
+            hirsel_rc::insert::Editor::new(b.finish_with_layouts(&table)).finish(),
             finalizer,
         ],
         finalizers,

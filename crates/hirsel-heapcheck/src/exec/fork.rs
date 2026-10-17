@@ -200,9 +200,10 @@ pub(crate) fn campaign<S: Stage>(
 mod tests {
     use super::*;
     use crate::NoOperations;
-    use crate::build::{Layouts, UnitBuilder, path};
+    use crate::build::{Layouts, fixture_unit, path};
     use hirsel_lir::layout_types::TargetSpec;
     use hirsel_lir::stage::Rc;
+    use hirsel_lir::testing::UnitBuilder;
 
     #[derive(Clone, Copy, Debug)]
     enum Fault {
@@ -442,10 +443,10 @@ mod tests {
         let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
         let float = layouts.scalar(ScalarKind::F64);
         let (target, table) = layouts.finish();
-        let mut b = UnitBuilder::<Rc>::new(path("main"));
+        let mut b = UnitBuilder::<Rc>::new(fixture_unit(path("main")));
         let block = b.block(BlockKind::Body, &[]);
         let fail_block = b.block(BlockKind::FailureCleanup, &[]);
-        b.end(fail_block, Terminator::Propagate);
+        b.term(fail_block, Terminator::Propagate);
         let edge = b.edge(fail_block, &[]);
         let failure = b.failure(edge, None, &[]);
         let operand = b.plain(ValueRepr::Scalar(ScalarKind::F64), float);
@@ -460,11 +461,11 @@ mod tests {
                 failure,
             },
         );
-        b.end(block, Terminator::Return(None));
+        b.term(block, Terminator::Return(None));
         let program = Program {
             target,
             layouts: table.clone(),
-            units: vec![b.finish(&table)],
+            units: vec![b.finish_with_layouts(&table)],
             statics: vec![],
         };
         let config = Config::default();

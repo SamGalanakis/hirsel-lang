@@ -2,25 +2,26 @@
 use crate::fixtures;
 use fixtures::run;
 use hirsel_core_contract::{OperationId, Passing};
-use hirsel_heapcheck::build::{Layouts, UnitBuilder, path};
+use hirsel_heapcheck::build::{Layouts, fixture_unit, path};
 use hirsel_heapcheck::{Config, NoOperations, Program, ViolationKind};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
 use hirsel_lir::stage::Ready;
+use hirsel_lir::testing::UnitBuilder;
 
 fn control(initialized: u8) -> Program<Ready> {
     let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
     let word = layouts.scalar(ScalarKind::U64);
     let record = layouts.record(&[word, word]);
     let (target, table) = layouts.finish();
-    let mut b = UnitBuilder::<Ready>::new(path("main"));
+    let mut b = UnitBuilder::<Ready>::new(fixture_unit(path("main")));
     let entry = b.block(BlockKind::Body, &[]);
     let unused = b.block(BlockKind::Body, &[]);
     let slot = b.slot(ValueRepr::Aggregate, record, SlotKind::Local);
     let address = b.address(AddressBase::Slot(slot), &[], ValueRepr::Aggregate, record);
     b.push(entry, Inst::StorageLive { slot });
     let failed = b.block(BlockKind::FailureCleanup, &[]);
-    b.end(failed, Terminator::Propagate);
+    b.term(failed, Terminator::Propagate);
     let edge = b.edge(failed, &[]);
     let failure = b.failure(edge, None, &[]);
     if initialized != 0 {
@@ -83,7 +84,7 @@ fn control(initialized: u8) -> Program<Ready> {
     let phi = b.plain(ValueRepr::Aggregate, record);
     let joined = b.block(BlockKind::Body, &[phi]);
     let normal = b.edge(joined, &[future]);
-    b.end(
+    b.term(
         unused,
         Terminator::Call {
             call,
@@ -91,7 +92,7 @@ fn control(initialized: u8) -> Program<Ready> {
             failure,
         },
     );
-    b.end(entry, Terminator::Jump(normal));
+    b.term(entry, Terminator::Jump(normal));
     b.push(
         joined,
         Inst::StorageDead {
@@ -99,11 +100,11 @@ fn control(initialized: u8) -> Program<Ready> {
             if_live: false,
         },
     );
-    b.end(joined, Terminator::Return(None));
+    b.term(joined, Terminator::Return(None));
     Program {
         target,
         layouts: table.clone(),
-        units: vec![b.finish(&table)],
+        units: vec![b.finish_with_layouts(&table)],
         statics: vec![],
     }
 }

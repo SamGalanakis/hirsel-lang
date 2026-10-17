@@ -469,7 +469,7 @@ fn expired_view_on_an_edge(read_after: bool) -> Run {
     let parameter = f.b.value(BLOCK, c.boxed, Holding::Borrowed(loan));
     let next = f.b.block(BlockKind::Body, &[parameter]);
     let edge = f.b.edge(next, &[view]);
-    f.b.end(f.cur, Terminator::Jump(edge));
+    f.b.term(f.cur, Terminator::Jump(edge));
     f.cur = next;
     if read_after {
         let value = f.unbox(parameter);

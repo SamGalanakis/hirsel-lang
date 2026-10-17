@@ -326,10 +326,11 @@ fn returned_temporary_content_keeps_region_credits_consistent() {
 
 #[test]
 fn a_failing_return_construction_keeps_the_region_active_until_preparation_finishes() {
-    use hirsel_heapcheck::build::{CLEANUP, Layouts, UnitBuilder, path};
+    use hirsel_heapcheck::build::{CLEANUP, Layouts, fixture_unit, path};
     use hirsel_lir::abi_types::AbiResult;
     use hirsel_lir::ir::*;
     use hirsel_lir::stage::Value;
+    use hirsel_lir::testing::UnitBuilder;
     let mut layouts = Layouts::new(target());
     layouts.scalar(hirsel_lir::layout_types::ScalarKind::Bool);
     let number = layouts.scalar(hirsel_lir::layout_types::ScalarKind::U64);
@@ -354,12 +355,12 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     });
     layouts.table.fn_abis.push(abi);
     let (_, table) = layouts.finish();
-    let mut builder = UnitBuilder::<Value>::new(path("region_return"));
+    let mut builder = UnitBuilder::<Value>::new(fixture_unit(path("region_return")));
     let entry = builder.block(BlockKind::Body, &[]);
     let body = builder.block(BlockKind::Body, &[]);
     let failed = builder.block(BlockKind::FailureCleanup, &[]);
     let end = builder.block(BlockKind::FailureCleanup, &[]);
-    builder.end(end, Terminator::Propagate);
+    builder.term(end, Terminator::Propagate);
     let end_edge = builder.edge(end, &[]);
     let empty_failure = builder.failure(end_edge, None, &[]);
     let cleanup = builder.edge(failed, &[]);
@@ -378,7 +379,7 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
         },
     );
     let into = builder.edge(body, &[]);
-    builder.end(entry, Terminator::Jump(into));
+    builder.term(entry, Terminator::Jump(into));
     let operand = builder.plain(
         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::U64),
         number,
@@ -433,13 +434,13 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     ] {
         builder.push(body, inst);
     }
-    builder.end(body, Terminator::Return(Some(returned)));
+    builder.term(body, Terminator::Return(Some(returned)));
     let end_edge = builder.edge(end, &[]);
-    builder.end(failed, Terminator::Jump(end_edge));
+    builder.term(failed, Terminator::Jump(end_edge));
     for site in &mut builder.unit.tables.constructs {
         site.placement = None;
     }
-    let value = builder.finish(&table);
+    let value = builder.finish_with_layouts(&table);
     let rows = hirsel_core_contract::Manifest::skeleton([]);
     let target = target();
     let inputs = Inputs {
@@ -472,13 +473,13 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     let violations = hirsel_lir::validate::check(&rc, &inputs);
     assert!(violations.is_empty(), "{violations:?}\n{}", dump(&rc));
     // Invoke the block-returning fixture from an ordinary scalar entry.
-    let mut caller = UnitBuilder::<Rc>::new(path("entry"));
+    let mut caller = UnitBuilder::<Rc>::new(fixture_unit(path("entry")));
     caller.unit.header.stage = hirsel_lir::stage::StageKind::Rc;
     caller.unit.header.abi = hirsel_lir::abi_types::FnAbiId(1);
     let entry = caller.block(BlockKind::Body, &[]);
     let normal = caller.block(BlockKind::Body, &[]);
     let failed = caller.block(BlockKind::FailureCleanup, &[]);
-    caller.end(failed, Terminator::Propagate);
+    caller.term(failed, Terminator::Propagate);
     let failure_edge = caller.edge(failed, &[]);
     let failure = caller.failure(failure_edge, None, &[]);
     let slot = caller.slot(ValueRepr::Block, block_layout, SlotKind::Temporary);
@@ -507,7 +508,7 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     let call = caller.call(callee, &[], Some(returned));
     caller.unit.tables.calls[call.index()].destination = None;
     let into = caller.edge(normal, &[]);
-    caller.end(
+    caller.term(
         entry,
         Terminator::Call {
             call,
@@ -538,7 +539,7 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
         },
     );
     let onward = caller.edge(failed, &[]);
-    caller.end(dropping, Terminator::Jump(onward));
+    caller.term(dropping, Terminator::Jump(onward));
     let preparation = caller.edge(dropping, &[]);
     let preparation = caller.failure(preparation, None, &[]);
     caller.push(
@@ -568,8 +569,8 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
             failure,
         },
     );
-    caller.end(normal, Terminator::Return(Some(answer)));
-    let caller = caller.finish(&table);
+    caller.term(normal, Terminator::Return(Some(answer)));
+    let caller = caller.finish_with_layouts(&table);
     let violations = hirsel_lir::validate::check(&caller, &inputs);
     assert!(violations.is_empty(), "{violations:?}\n{}", dump(&caller));
     let program = hirsel_heapcheck::Program {

@@ -27,11 +27,12 @@ fn layouts_bool(
 }
 fn option_finalizer(variant: u8, failing: bool) {
     use hirsel_core_contract::Passing;
-    use hirsel_heapcheck::build::{ANCHOR, CLEANUP, Layouts, UnitBuilder};
+    use hirsel_heapcheck::build::{ANCHOR, CLEANUP, Layouts, fixture_unit};
     use hirsel_lir::abi_types::*;
     use hirsel_lir::ir::*;
     use hirsel_lir::layout_types::*;
     use hirsel_lir::stage::{Rc, StageKind};
+    use hirsel_lir::testing::UnitBuilder;
     use hirsel_rc::cleanup::Finalizer;
     use std::collections::BTreeMap;
     let mut layouts = Layouts::new(target());
@@ -83,14 +84,14 @@ fn option_finalizer(variant: u8, failing: bool) {
         extension: ScalarExtension::None,
     }];
     table.fn_abis.push(abi);
-    let mut f = UnitBuilder::<Rc>::new(finalizer_path.clone());
+    let mut f = UnitBuilder::<Rc>::new(fixture_unit(finalizer_path.clone()));
     f.unit.header.stage = StageKind::Rc;
     f.unit.header.abi = FnAbiId(1);
     f.unit.header.origin = UnitOrigin::Source;
     let body = f.block(BlockKind::Body, &[]);
     f.unit.entry = body;
     let failure_body = f.block(BlockKind::FailureCleanup, &[]);
-    f.end(failure_body, Terminator::Propagate);
+    f.term(failure_body, Terminator::Propagate);
     let e = f.edge(failure_body, &[]);
     let failure = f.failure(e, None, &[]);
     let self_value = f.plain(ValueRepr::Aggregate, resource);
@@ -127,15 +128,15 @@ fn option_finalizer(variant: u8, failing: bool) {
         let failure = f.failure(edge, Some("SEM-1"), &[]);
         f.push(body, Inst::Check { condition, failure });
     }
-    f.end(body, Terminator::Return(None));
-    let finalizer = f.finish(&table);
-    let mut b = UnitBuilder::<Rc>::new(path("main"));
+    f.term(body, Terminator::Return(None));
+    let finalizer = f.finish_with_layouts(&table);
+    let mut b = UnitBuilder::<Rc>::new(fixture_unit(path("main")));
     b.unit.header.stage = StageKind::Rc;
     let prologue = b.block(BlockKind::Body, &[]);
     let entry = b.block(BlockKind::Body, &[]);
     b.unit.entry = prologue;
     let propagated = b.block(BlockKind::FailureCleanup, &[]);
-    b.end(propagated, Terminator::Propagate);
+    b.term(propagated, Terminator::Propagate);
     let e = b.edge(propagated, &[]);
     let failure = b.failure(e, None, &[]);
     let slot = b.slot(ValueRepr::Aggregate, option, SlotKind::Local);
@@ -143,7 +144,7 @@ fn option_finalizer(variant: u8, failing: bool) {
     let address = b.address(AddressBase::Slot(slot), &[], ValueRepr::Aggregate, option);
     b.push(prologue, Inst::Address { address, failure });
     let e = b.edge(entry, &[]);
-    b.end(prologue, Terminator::Jump(e));
+    b.term(prologue, Terminator::Jump(e));
     let record_symbol = b.symbol(SymbolKind::Type, path("record"));
     let value = if variant == 2 || variant == 4 {
         let value = b.owned(ValueRepr::Aggregate, option);
@@ -311,7 +312,7 @@ fn option_finalizer(variant: u8, failing: bool) {
                 },
             );
             let edge = b.edge(propagated, &[]);
-            b.end(cleanup, Terminator::Jump(edge));
+            b.term(cleanup, Terminator::Jump(edge));
             let block = b.owned(ValueRepr::Block, block_layout);
             let construct = b.construct(
                 ConstructorKind::Record(record_symbol),
@@ -392,8 +393,8 @@ fn option_finalizer(variant: u8, failing: bool) {
             failure,
         },
     );
-    b.end(entry, Terminator::Return(None));
-    let caller = b.finish(&table);
+    b.term(entry, Terminator::Return(None));
+    let caller = b.finish_with_layouts(&table);
     let finalizers = Finalizers(BTreeMap::from([(
         resource,
         Finalizer {

@@ -22,8 +22,8 @@ allocation, count or drop helpers), `hirsel-interp` or its checked mode,
 Modules: `ledger` (allocations, extents, resources, tokens, regions, handles,
 exemptions, counters, trace), `exec` (the machine), `scalar` (checked integer
 and IEEE arithmetic), `observe` (the observation), `program` (link set, harness
-inputs, configuration, snapshot format), `build` (fixture builders for layout
-tables and units), `violation`. Tests: `tests/it/heap.rs` (the acceptance fixtures
+inputs, configuration, snapshot format), `build` (fixture layout tables and unit identities; block and side-table
+assembly uses `hirsel_lir::testing::UnitBuilder`), `violation`. Tests: `tests/it/heap.rs` (the acceptance fixtures
 and their snapshots in `native-tests/heap/`), `tests/it/programs.rs` (fault
 campaigns, failure audits, exemptions, closures, tokens, COW, deep release),
 `tests/it/vectors.rs`.

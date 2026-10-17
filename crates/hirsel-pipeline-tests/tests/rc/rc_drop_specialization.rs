@@ -9,13 +9,14 @@
 use crate::rc_support as support;
 
 use hirsel_core_contract::Manifest;
-use hirsel_heapcheck::build::{CLEANUP, Layouts, UnitBuilder, path};
+use hirsel_heapcheck::build::{CLEANUP, Layouts, fixture_unit, path};
 use hirsel_heapcheck::{Arg, Config, Counters, NoOperations, Observation, Program, ViolationKind};
 use hirsel_lir::abi_types::*;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::runtime_abi::HEADER_V2;
 use hirsel_lir::stage::{Rc, Reuse, Stage};
+use hirsel_lir::testing::UnitBuilder;
 use hirsel_lir::validate::{Inputs, ViolationKind as K};
 use hirsel_rc::reuse::Options;
 use support::{dump, target};
@@ -128,11 +129,11 @@ struct F {
 
 impl F {
     fn new(name: &str, l: L) -> Self {
-        let mut b = UnitBuilder::<Rc>::new(path(name));
+        let mut b = UnitBuilder::<Rc>::new(fixture_unit(path(name)));
         b.unit.header.abi = FnAbiId(1);
         let cur = b.block(BlockKind::Body, &[]);
         let propagate = b.block(BlockKind::FailureCleanup, &[]);
-        b.end(propagate, Terminator::Propagate);
+        b.term(propagate, Terminator::Propagate);
         Self {
             b,
             cur,
@@ -174,7 +175,7 @@ impl F {
             },
         );
         let e = self.b.edge(next, &[]);
-        self.b.end(block, Terminator::Jump(e));
+        self.b.term(block, Terminator::Jump(e));
         block
     }
     fn own(&mut self, v: ValueId, layout: LayoutId) {
@@ -310,7 +311,7 @@ impl F {
         v
     }
     fn ret(&mut self, v: ValueId) {
-        self.b.end(self.cur, Terminator::Return(Some(v)));
+        self.b.term(self.cur, Terminator::Return(Some(v)));
     }
 }
 
@@ -561,7 +562,7 @@ fn pair(shape: Pair) -> Fixture {
         f.release(d, lay.pair);
     }
     f.ret(r);
-    let main = f.b.finish(&l.table);
+    let main = f.b.finish_with_layouts(&l.table);
     fixture(l, vec![main], Vec::new())
 }
 
@@ -655,7 +656,7 @@ fn variant(same: bool) -> Fixture {
     };
     f.release(e, lay.either);
     f.ret(r);
-    let main = f.b.finish(&l.table);
+    let main = f.b.finish_with_layouts(&l.table);
     fixture(l, vec![main], Vec::new())
 }
 
@@ -698,7 +699,7 @@ fn a_donor_with_nested_inline_pointers_releases_them_at_the_reset() {
     });
     f.release(e, lay.nested);
     f.ret(r);
-    let main = f.b.finish(&l.table);
+    let main = f.b.finish_with_layouts(&l.table);
     let [on, off] = run_both(&fixture(l, vec![main], Vec::new()));
     assert_eq!(returned(&on.observation), 5);
     assert_eq!(on.counters.reuses, 1);
@@ -736,7 +737,7 @@ fn diamond() -> (Layouts, LirUnit<Rc>) {
     let no = f.b.block(BlockKind::Body, &[]);
     let join = f.b.block(BlockKind::Body, &[h]);
     let (ey, en) = (f.b.edge(yes, &[]), f.b.edge(no, &[]));
-    f.b.end(
+    f.b.term(
         f.cur,
         Terminator::Branch {
             condition: flag,
@@ -748,12 +749,12 @@ fn diamond() -> (Layouts, LirUnit<Rc>) {
     let k = f.boxed(4);
     f.release(d, lay.boxed);
     let e = f.b.edge(join, &[k]);
-    f.b.end(yes, Terminator::Jump(e));
+    f.b.term(yes, Terminator::Jump(e));
     f.disown(k);
     f.cur = no;
     f.own(d, lay.boxed);
     let e = f.b.edge(join, &[d]);
-    f.b.end(no, Terminator::Jump(e));
+    f.b.term(no, Terminator::Jump(e));
     f.disown(d);
     f.cur = join;
     f.own(h, lay.boxed);
@@ -762,7 +763,7 @@ fn diamond() -> (Layouts, LirUnit<Rc>) {
     f.release(h, lay.boxed);
     f.release(n, lay.boxed);
     f.ret(r);
-    let main = f.b.finish(&l.table);
+    let main = f.b.finish_with_layouts(&l.table);
     (l, main)
 }
 
@@ -817,7 +818,7 @@ fn irreducible(flag: bool) -> Fixture {
     let b = f.b.block(BlockKind::Body, &[ib, db]);
     let exit = f.b.block(BlockKind::Body, &[]);
     let (ea, eb) = (f.b.edge(a, &[zero, d]), f.b.edge(b, &[zero, d]));
-    f.b.end(
+    f.b.term(
         f.cur,
         Terminator::Branch {
             condition: enter_a,
@@ -846,7 +847,7 @@ fn irreducible(flag: bool) -> Fixture {
         let done = f.b.block(BlockKind::Body, &[]);
         let (back, out) = (f.b.edge(other, &[next, fresh]), f.b.edge(done, &[]));
         f.disown(fresh);
-        f.b.end(
+        f.b.term(
             this,
             Terminator::Branch {
                 condition: more,
@@ -858,12 +859,12 @@ fn irreducible(flag: bool) -> Fixture {
         f.own(fresh, lay.boxed);
         f.release(fresh, lay.boxed);
         let e = f.b.edge(exit, &[]);
-        f.b.end(done, Terminator::Jump(e));
+        f.b.term(done, Terminator::Jump(e));
     }
     f.cur = exit;
     let r = f.int(3);
     f.ret(r);
-    let main = f.b.finish(&l.table);
+    let main = f.b.finish_with_layouts(&l.table);
     fixture(l, vec![main], Vec::new())
 }
 

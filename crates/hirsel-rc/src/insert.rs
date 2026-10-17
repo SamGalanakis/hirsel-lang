@@ -4620,13 +4620,14 @@ mod tests {
     }
     #[test]
     fn version_renaming_reaches_planned_detaches_and_failure_transports() {
-        use hirsel_heapcheck::build::{Layouts, UnitBuilder, path};
+        use hirsel_heapcheck::build::{Layouts, fixture_unit, path};
         use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
+        use hirsel_lir::testing::UnitBuilder;
         let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
         let scalar = layouts.scalar(ScalarKind::U64);
         let (_, table) = layouts.finish();
         let repr = ValueRepr::Scalar(ScalarKind::U64);
-        let mut builder = UnitBuilder::<Rc>::new(path("rename"));
+        let mut builder = UnitBuilder::<Rc>::new(fixture_unit(path("rename")));
         let from = builder.plain(repr, scalar);
         let to = builder.plain(repr, scalar);
         let result = builder.plain(repr, scalar);
@@ -4638,7 +4639,7 @@ mod tests {
         let failed_value = builder.plain(repr, scalar);
         let failed = builder.block(BlockKind::FailureCleanup, &[failed_value]);
         let into = builder.edge(rest, &[from]);
-        builder.end(entry, Terminator::Jump(into));
+        builder.term(entry, Terminator::Jump(into));
         let cleanup = builder.edge(failed, &[from]);
         let failure = builder.failure(cleanup, None, &[]);
         builder.push(rest, Inst::Address { address, failure });
@@ -4652,12 +4653,12 @@ mod tests {
             },
         );
         let next = builder.edge(later, &[]);
-        builder.end(rest, Terminator::Jump(next));
+        builder.term(rest, Terminator::Jump(next));
         // Feedback transports the joined version rather than reviving `from`.
         let back = builder.edge(rest, &[from]);
-        builder.end(later, Terminator::Jump(back));
-        builder.end(failed, Terminator::Propagate);
-        let mut ed = Editor::new(builder.finish(&table));
+        builder.term(later, Terminator::Jump(back));
+        builder.term(failed, Terminator::Propagate);
+        let mut ed = Editor::new(builder.finish_with_layouts(&table));
         let mut targets = [Target {
             block: later,
             index: 0,
@@ -4691,14 +4692,15 @@ mod tests {
     /// kept switches share would be renumbered twice.
     #[test]
     fn finishing_keeps_only_the_arms_of_kept_switches_renumbered_once() {
-        use hirsel_heapcheck::build::{Layouts, UnitBuilder, path};
+        use hirsel_heapcheck::build::{Layouts, fixture_unit, path};
         use hirsel_lir::ir::SwitchArm;
         use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
+        use hirsel_lir::testing::UnitBuilder;
         let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
         let scalar = layouts.scalar(ScalarKind::U64);
         let (_, table) = layouts.finish();
         let repr = ValueRepr::Scalar(ScalarKind::U64);
-        let mut builder = UnitBuilder::<Rc>::new(path("arms"));
+        let mut builder = UnitBuilder::<Rc>::new(fixture_unit(path("arms")));
         builder.unit.header.stage = Rc::KIND;
         let tag = builder.plain(repr, scalar);
         builder.parameter(tag);
@@ -4728,7 +4730,7 @@ mod tests {
                 edge: dead_arm,
             }],
         );
-        builder.end(
+        builder.term(
             entry,
             Terminator::Switch {
                 value: tag,
@@ -4736,7 +4738,7 @@ mod tests {
                 otherwise: to_right,
             },
         );
-        builder.end(
+        builder.term(
             dead,
             Terminator::Switch {
                 value: tag,
@@ -4744,7 +4746,7 @@ mod tests {
                 otherwise: dead_else,
             },
         );
-        builder.end(
+        builder.term(
             left,
             Terminator::Switch {
                 value: tag,
@@ -4752,9 +4754,9 @@ mod tests {
                 otherwise: to_done,
             },
         );
-        builder.end(right, Terminator::Jump(to_done));
-        builder.end(done, Terminator::Return(None));
-        let unit = Editor::new(builder.finish(&table)).finish();
+        builder.term(right, Terminator::Jump(to_done));
+        builder.term(done, Terminator::Return(None));
+        let unit = Editor::new(builder.finish_with_layouts(&table)).finish();
         assert_eq!(unit.check_identity(&table), Ok(()));
         assert_eq!(unit.tables.edges.len(), 3);
         assert_eq!(unit.pools.switch_arms.len(), 2);

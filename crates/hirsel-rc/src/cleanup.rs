@@ -2411,9 +2411,10 @@ fn in_place(path: &[Step]) -> bool {
 #[cfg(test)]
 mod pending_tests {
     use super::*;
-    use hirsel_heapcheck::build::{Layouts, UnitBuilder, path};
+    use hirsel_heapcheck::build::{Layouts, fixture_unit, path};
     use hirsel_lir::ir::{AddressBase, SlotKind};
     use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
+    use hirsel_lir::testing::UnitBuilder;
 
     /// Defuse's FieldsPending state plans normal and local failure cleanup
     /// without changing the version or the remaining field obligations.
@@ -2425,14 +2426,14 @@ mod pending_tests {
         let resource = layouts.resource(&[block, block], Some(path("drop_parent")));
         let (_, table) = layouts.finish();
         let lay = Lay(&table);
-        let mut builder = UnitBuilder::<Ready>::new(path("fixture"));
+        let mut builder = UnitBuilder::<Ready>::new(fixture_unit(path("fixture")));
         let entry = builder.block(BlockKind::Body, &[]);
         builder.unit.entry = entry;
-        builder.end(entry, Terminator::Return(None));
+        builder.term(entry, Terminator::Return(None));
         let slot = builder.slot(ValueRepr::Aggregate, resource, SlotKind::Local);
         let address = builder.address(AddressBase::Slot(slot), &[], ValueRepr::Aggregate, resource);
         let version = builder.plain(ValueRepr::Aggregate, resource);
-        let unit = builder.finish(&table);
+        let unit = builder.finish_with_layouts(&table);
         let mut facts = Facts::new(&unit, &table);
         let mut ed = Editor::new(unit);
         let flow = Flow {
@@ -2502,11 +2503,11 @@ mod pending_tests {
             table.layout(parent).unwrap().fields[0].offset,
             table.layout(parent).unwrap().fields[1].offset
         );
-        let mut builder = UnitBuilder::<Ready>::new(path("zero_sized_cleanup"));
+        let mut builder = UnitBuilder::<Ready>::new(fixture_unit(path("zero_sized_cleanup")));
         builder.unit.header.stage = StageKind::Ready;
         let entry = builder.block(BlockKind::Body, &[]);
-        builder.end(entry, Terminator::Return(None));
-        let unit = builder.finish(&table);
+        builder.term(entry, Terminator::Return(None));
+        let unit = builder.finish_with_layouts(&table);
         let mut facts = Facts::new(&unit, &table);
         let mut ed = Editor::new(unit);
         let finalizers = Finalizers::default();

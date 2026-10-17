@@ -2,11 +2,12 @@
 //! corrected twin, built by one function with `fixed` selecting the twin.
 //! Every pair prints the same bytes, so only the heap audit tells them apart.
 use hirsel_core_contract::{OperationId, Passing};
-use hirsel_heapcheck::build::{CLEANUP, Layouts, UnitBuilder, path};
+use hirsel_heapcheck::build::{CLEANUP, Layouts, fixture_unit, path};
 use hirsel_heapcheck::{OpOutcome, OpValue, Operations, Program, ViolationKind};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{LayoutId, LayoutTable, ScalarKind, TargetSpec};
 use hirsel_lir::stage::{Rc, Ready, Reuse, Stage};
+use hirsel_lir::testing::UnitBuilder;
 use hirsel_syntax::ContentHash;
 
 pub fn print_op() -> OperationId {
@@ -78,10 +79,10 @@ pub struct F<S> {
 
 impl<S: Stage> F<S> {
     pub fn new(name: &str, c: Common) -> Self {
-        let mut b = UnitBuilder::<S>::new(path(name));
+        let mut b = UnitBuilder::<S>::new(fixture_unit(path(name)));
         let cur = b.block(BlockKind::Body, &[]);
         let propagate = b.block(BlockKind::FailureCleanup, &[]);
-        b.end(propagate, Terminator::Propagate);
+        b.term(propagate, Terminator::Propagate);
         Self {
             b,
             cur,
@@ -169,7 +170,7 @@ impl<S: Stage> F<S> {
         let next = self.b.block(BlockKind::Body, &[]);
         let normal = self.b.edge(next, &[]);
         let failure = self.propagates();
-        self.b.end(
+        self.b.term(
             self.cur,
             Terminator::Call {
                 call,
@@ -197,10 +198,10 @@ impl<S: Stage> F<S> {
         });
     }
     pub fn ret(&mut self, v: Option<ValueId>) {
-        self.b.end(self.cur, Terminator::Return(v));
+        self.b.term(self.cur, Terminator::Return(v));
     }
     pub fn finish(self, table: &LayoutTable) -> LirUnit<S> {
-        self.b.finish(table)
+        self.b.finish_with_layouts(table)
     }
 }
 
@@ -805,7 +806,7 @@ pub fn view_after_detach(fixed: bool) -> Program<Rc> {
 
 /// Hand-built source drop bodies declare the same Borrow-self ABI as source.
 pub fn source_finalizer<S: hirsel_lir::stage::Stage>(
-    b: &mut hirsel_heapcheck::build::UnitBuilder<S>,
+    b: &mut UnitBuilder<S>,
     table: &mut hirsel_lir::layout_types::LayoutTable,
     layout: hirsel_lir::layout_types::LayoutId,
 ) {

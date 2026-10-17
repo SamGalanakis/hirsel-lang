@@ -2,11 +2,12 @@
 use crate::fixtures;
 use fixtures::run;
 use hirsel_core_contract::{OperationId, Passing};
-use hirsel_heapcheck::build::{CLEANUP, Layouts, UnitBuilder, path};
+use hirsel_heapcheck::build::{CLEANUP, Layouts, fixture_unit, path};
 use hirsel_heapcheck::{Config, OpOutcome, OpValue, Operations, Program, ViolationKind};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::stage::Ready;
+use hirsel_lir::testing::UnitBuilder;
 
 #[derive(Clone, Copy)]
 enum ResultKind {
@@ -86,7 +87,7 @@ fn call(
     let call = b.call(callee, args, result);
     let next = b.block(BlockKind::Body, &[]);
     let normal = b.edge(next, &[]);
-    b.end(
+    b.term(
         block,
         Terminator::Call {
             call,
@@ -127,10 +128,10 @@ fn program(kind: ResultKind) -> Program<Ready> {
     r.copy = CopyRecipe::Dup;
     let variant = layouts.variant(&[&[slice], &[slice]]);
     let (target, table) = layouts.finish();
-    let mut b = UnitBuilder::<Ready>::new(path("main"));
+    let mut b = UnitBuilder::<Ready>::new(fixture_unit(path("main")));
     let first = b.block(BlockKind::Body, &[]);
     let failed = b.block(BlockKind::FailureCleanup, &[]);
-    b.end(failed, Terminator::Propagate);
+    b.term(failed, Terminator::Propagate);
     let edge = b.edge(failed, &[]);
     let failure = b.failure(edge, None, &[]);
     let source = b.owned(ValueRepr::Aggregate, slice);
@@ -196,11 +197,11 @@ fn program(kind: ResultKind) -> Program<Ready> {
             failure,
         },
     );
-    b.end(current, Terminator::Return(None));
+    b.term(current, Terminator::Return(None));
     Program {
         target,
         layouts: table.clone(),
-        units: vec![b.finish(&table)],
+        units: vec![b.finish_with_layouts(&table)],
         statics: vec![],
     }
 }
@@ -288,10 +289,10 @@ fn handle_control(kind: HandleControl) -> Program<Ready> {
     record.drop = vec![DropStep::CloseHandle { offset: 0 }];
     record.copy = CopyRecipe::NotCopyable;
     let (target, table) = layouts.finish();
-    let mut b = UnitBuilder::<Ready>::new(path("main"));
+    let mut b = UnitBuilder::<Ready>::new(fixture_unit(path("main")));
     let entry = b.block(BlockKind::Body, &[]);
     let failed = b.block(BlockKind::FailureCleanup, &[]);
-    b.end(failed, Terminator::Propagate);
+    b.term(failed, Terminator::Propagate);
     let edge = b.edge(failed, &[]);
     let failure = b.failure(edge, None, &[]);
     let file = b.owned(ValueRepr::Handle, handle);
@@ -452,11 +453,11 @@ fn handle_control(kind: HandleControl) -> Program<Ready> {
             },
         );
     }
-    b.end(block, Terminator::Return(None));
+    b.term(block, Terminator::Return(None));
     Program {
         target,
         layouts: table.clone(),
-        units: vec![b.finish(&table)],
+        units: vec![b.finish_with_layouts(&table)],
         statics: vec![],
     }
 }
@@ -557,10 +558,10 @@ fn nested_aggregate_sequence_operands_and_results_stay_under_the_ledger() {
     let list = l.block(payload);
     let variant = l.variant(&[&[], &[list]]);
     let (target, table) = l.finish();
-    let mut b = UnitBuilder::<Ready>::new(path("main"));
+    let mut b = UnitBuilder::<Ready>::new(fixture_unit(path("main")));
     let entry = b.block(BlockKind::Body, &[]);
     let failed = b.block(BlockKind::FailureCleanup, &[]);
-    b.end(failed, Terminator::Propagate);
+    b.term(failed, Terminator::Propagate);
     let edge = b.edge(failed, &[]);
     let failure = b.failure(edge, None, &[]);
     let value = b.owned(ValueRepr::Aggregate, variant);
@@ -585,11 +586,11 @@ fn nested_aggregate_sequence_operands_and_results_stay_under_the_ledger() {
             failure,
         },
     );
-    b.end(block, Terminator::Return(None));
+    b.term(block, Terminator::Return(None));
     let program = Program {
         target,
         layouts: table.clone(),
-        units: vec![b.finish(&table)],
+        units: vec![b.finish_with_layouts(&table)],
         statics: vec![],
     };
     for wrong_scalar in [false, true] {
@@ -701,10 +702,10 @@ fn scalar_buffer_updates_audit_inline_and_counted_storage_and_require_mut_access
             } else {
                 ValueRepr::Block
             };
-            let mut b = UnitBuilder::<Ready>::new(path("main"));
+            let mut b = UnitBuilder::<Ready>::new(fixture_unit(path("main")));
             let entry = b.block(BlockKind::Body, &[]);
             let failed = b.block(BlockKind::FailureCleanup, &[]);
-            b.end(failed, Terminator::Propagate);
+            b.term(failed, Terminator::Propagate);
             let edge = b.edge(failed, &[]);
             let failure = b.failure(edge, None, &[]);
             let value = b.owned(repr, buffer);
@@ -779,11 +780,11 @@ fn scalar_buffer_updates_audit_inline_and_counted_storage_and_require_mut_access
                     if_live: false,
                 },
             );
-            b.end(block, Terminator::Return(None));
+            b.term(block, Terminator::Return(None));
             let p = Program {
                 target,
                 layouts: table.clone(),
-                units: vec![b.finish(&table)],
+                units: vec![b.finish_with_layouts(&table)],
                 statics: vec![],
             };
             let result = run(&p, &path("main"), &[], &mut BufferModel, &Config::default()).result;

@@ -39,8 +39,8 @@ fn a_tooling_budget_still_stops_a_runaway_and_accepts_its_finite_twin() {
         if runaway {
             let body = f.b.block(BlockKind::Body, &[]);
             let edge = f.b.edge(body, &[]);
-            f.b.end(f.cur, Terminator::Jump(edge));
-            f.b.end(body, Terminator::Jump(edge));
+            f.b.term(f.cur, Terminator::Jump(edge));
+            f.b.term(body, Terminator::Jump(edge));
         } else {
             f.inst(Inst::FrameLeave);
             f.ret(None);
@@ -90,7 +90,7 @@ fn campaign_program_with_return(leaky: bool, return_resource: bool) -> Program<R
     fin.b.parameter(this);
     let leave = fin.b.block(BlockKind::FailureCleanup, &[]);
     fin.b.push(leave, Inst::FrameLeave);
-    fin.b.end(leave, Terminator::Propagate);
+    fin.b.term(leave, Terminator::Propagate);
     let entered = fin.propagates();
     fin.inst(Inst::FrameEnter { failure: entered });
     let t = {
@@ -171,7 +171,7 @@ fn campaign_program_with_return(leaky: bool, return_resource: bool) -> Program<R
     let normal = f.b.edge(next, &[]);
     let e = f.b.edge(fail_s, &[]);
     let failure = f.b.failure(e, None, &[]);
-    f.b.end(
+    f.b.term(
         f.cur,
         Terminator::Call {
             call,
@@ -216,7 +216,7 @@ fn campaign_program_with_return(leaky: bool, return_resource: bool) -> Program<R
     });
     f.release(x, boxed);
     f.inst(Inst::FrameLeave);
-    f.b.end(drop_failed, Terminator::Propagate);
+    f.b.term(drop_failed, Terminator::Propagate);
     // Before s holds the resource.
     f.cur = fail_s;
     let failure = f.propagates();
@@ -232,13 +232,13 @@ fn campaign_program_with_return(leaky: bool, return_resource: bool) -> Program<R
     });
     f.release(x, boxed);
     f.inst(Inst::FrameLeave);
-    f.b.end(fail_s, Terminator::Propagate);
+    f.b.term(fail_s, Terminator::Propagate);
     f.cur = fail_x;
     if !leaky {
         f.release(x, boxed);
     }
     f.inst(Inst::FrameLeave);
-    f.b.end(fail_x, Terminator::Propagate);
+    f.b.term(fail_x, Terminator::Propagate);
     let main = f.finish(&table);
     program(target, table, vec![main, fin])
 }
@@ -309,7 +309,7 @@ fn failing_check(release: bool) -> Program<Rc> {
     if release {
         f.release(x, boxed);
     }
-    f.b.end(cleanup, Terminator::Propagate);
+    f.b.term(cleanup, Terminator::Propagate);
     let main = f.finish(&table);
     program(target, table, vec![main])
 }
@@ -680,7 +680,7 @@ fn chain_program(n: u128) -> Program<Rc> {
     });
     let zero = f.int(0);
     let enter = f.b.edge(body, &[zero, nil]);
-    f.b.end(f.cur, Terminator::Jump(enter));
+    f.b.term(f.cur, Terminator::Jump(enter));
     f.cur = body;
     // acc = Link(next: Box(acc)); i += 1
     let boxed_k = f.b.construct(ConstructorKind::Box, next, &[(0, acc)], HEAP);
@@ -731,7 +731,7 @@ fn chain_program(n: u128) -> Program<Rc> {
     let last = f.b.owned(ValueRepr::Aggregate, list);
     let out = f.b.block(BlockKind::Body, &[last]);
     let leave = f.b.edge(out, &[acc2]);
-    f.b.end(
+    f.b.term(
         body,
         Terminator::Branch {
             condition: more,
@@ -742,7 +742,7 @@ fn chain_program(n: u128) -> Program<Rc> {
     f.cur = out;
     f.release(last, list);
     let e = f.b.edge(done, &[]);
-    f.b.end(out, Terminator::Jump(e));
+    f.b.term(out, Terminator::Jump(e));
     f.cur = done;
     f.ret(None);
     let main = f.finish(&table);

@@ -1,11 +1,12 @@
 //! Source-free controls for ownership transferred from an entry to its harness.
 use hirsel_core_contract::Manifest;
-use hirsel_heapcheck::build::{CLEANUP, Layouts, UnitBuilder, path};
+use hirsel_heapcheck::build::{CLEANUP, Layouts, fixture_unit, path};
 use hirsel_heapcheck::{Config, NoOperations, Observed, Program, ViolationKind};
 use hirsel_lir::abi_types::AbiResult;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
 use hirsel_lir::stage::Rc;
+use hirsel_lir::testing::UnitBuilder;
 
 fn propagates(b: &mut UnitBuilder<Rc>, target: BlockId) -> FailureId {
     let edge = b.edge(target, &[]);
@@ -32,13 +33,13 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
     });
     layouts.table.fn_abis.push(abi);
     let (target, table) = layouts.finish();
-    let mut b = UnitBuilder::<Rc>::new(path("region_return"));
+    let mut b = UnitBuilder::<Rc>::new(fixture_unit(path("region_return")));
     if !regional {
         b.unit.tables.cleanup_anchors.clear();
     }
     let body = b.block(BlockKind::Body, &[]);
     let failed = b.block(BlockKind::FailureCleanup, &[]);
-    b.end(failed, Terminator::Propagate);
+    b.term(failed, Terminator::Propagate);
     let repr = ValueRepr::Scalar(ScalarKind::U64);
     let value = b.plain(repr, number);
     let constant = b.constant(repr, number, ConstantValue::Integer(7));
@@ -126,7 +127,7 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
     }
     if let Some((mark, region)) = mark {
         let end = b.block(BlockKind::FailureCleanup, &[]);
-        b.end(end, Terminator::Propagate);
+        b.term(end, Terminator::Propagate);
         let drop_return = b.block(BlockKind::FailureCleanup, &[]);
         let failure = propagates(&mut b, end);
         b.push(
@@ -139,7 +140,7 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
                 failure,
             },
         );
-        b.end(drop_return, Terminator::Propagate);
+        b.term(drop_return, Terminator::Propagate);
         let exit_failure = propagates(&mut b, drop_return);
         b.push(
             body,
@@ -175,8 +176,8 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
         let failure = propagates(&mut b, drop_return);
         b.push(body, Inst::Check { condition, failure });
     }
-    b.end(body, Terminator::Return(Some(returned)));
-    let unit = b.finish(&table);
+    b.term(body, Terminator::Return(Some(returned)));
+    let unit = b.finish_with_layouts(&table);
     if !leak {
         let manifest = Manifest::skeleton([]);
         let violations = hirsel_lir::validate::check(
@@ -190,19 +191,19 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
         );
         assert!(violations.is_empty(), "{violations:?}");
     }
-    let mut caller = UnitBuilder::<Rc>::new(path("entry"));
+    let mut caller = UnitBuilder::<Rc>::new(fixture_unit(path("entry")));
     caller.unit.header.abi = hirsel_lir::abi_types::FnAbiId(1);
     let entry = caller.block(BlockKind::Body, &[]);
     let normal = caller.block(BlockKind::Body, &[]);
     let failed = caller.block(BlockKind::FailureCleanup, &[]);
-    caller.end(failed, Terminator::Propagate);
+    caller.term(failed, Terminator::Propagate);
     let failure = propagates(&mut caller, failed);
     let returned = caller.owned(ValueRepr::Block, block);
     let callee = caller.direct(path("region_return"));
     let call = caller.call(callee, &[], Some(returned));
     caller.unit.tables.calls[call.index()].destination = None;
     let normal_edge = caller.edge(normal, &[]);
-    caller.end(
+    caller.term(
         entry,
         Terminator::Call {
             call,
@@ -228,7 +229,7 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
             failure,
         },
     );
-    caller.end(drop_return, Terminator::Propagate);
+    caller.term(drop_return, Terminator::Propagate);
     let failure = propagates(&mut caller, drop_return);
     caller.push(
         normal,
@@ -258,8 +259,8 @@ fn returning_block(leak: bool, regional: bool) -> Program<Rc> {
             failure,
         },
     );
-    caller.end(normal, Terminator::Return(Some(answer)));
-    let caller = caller.finish(&table);
+    caller.term(normal, Terminator::Return(Some(answer)));
+    let caller = caller.finish_with_layouts(&table);
     let manifest = Manifest::skeleton([]);
     let violations = hirsel_lir::validate::check(
         &caller,
