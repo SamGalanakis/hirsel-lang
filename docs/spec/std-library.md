@@ -221,6 +221,11 @@ fn std@1/bufio.stream_read(n: Net, mut s: Stream of n, mut r: Reader, mut out: L
 fn std@1/bufio.stream_read_exact(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[NetError]]
 fn std@1/bufio.stream_read_until(n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[NetError]]
 fn std@1/bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[String,ReadError[NetError]]
+fn std@1/bufio.file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Result[u64,ReadError[FileError]]
+fn std@1/bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[FileError]]
+fn std@1/bufio.file_read_exact(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[FileError]]
+fn std@1/bufio.file_read_until(d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[FileError]]
+fn std@1/bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[String,ReadError[FileError]]
 ```
 
 `new(0)` uses capacity one. Capacity bounds each refill, not accumulated unread data.
@@ -239,6 +244,8 @@ loop to LF and decodes owned UTF-8, preserving the LF; EOF before any bytes yiel
 Invalid UTF-8 returns `InvalidUtf8` after consuming those bytes. All reads propagate source
 errors as `Source`; operations taking an output list retain already appended bytes. The Stream adapters use
 `core@1/net.read` with the same rules and preserve the stream's Net brand.
+The File adapters mirror them using `core@1/file.read`, preserving `File of d`.
+Discard buffered state before seeking or otherwise reading the underlying File directly.
 
 A line read over an existing branded Stream needs only persistent buffer state:
 

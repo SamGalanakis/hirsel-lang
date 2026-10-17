@@ -1,0 +1,46 @@
+// rule: SEM-4
+// expect: run
+pub type ReadFailure = Storage(FileError) | Buffered(std@1/bufio.ReadError[FileError])
+
+pub fn main(t: Test) -> Result[(), ReadFailure] {
+  let d = test.dir(
+    t,
+    [(path.of("lines"), b"first\nlonger than one buffer\n\n\xc3\xa9\nlast")]
+  )
+  let mut f = file.open(d, path.of("lines")) ? Storage
+  let mut r = std@1/bufio.new(3)
+  let expected: List[String] = [
+    "first\n",
+    "longer than one buffer\n",
+    "\n",
+    "é\n",
+    "last"
+  ]
+  for line in expected {
+    test.check(t, std@1/bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == line)
+  }
+  test.check(t, std@1/bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == "")
+  test.check(t, std@1/bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == "")
+  file.seek(d, mut f, 0) ? Storage
+  r = std@1/bufio.new(3)
+  test.check(t, std@1/bufio.file_read_more(d, mut f, mut r, 99) ? Buffered == 3)
+  test.check(t, std@1/bufio.contents(r) == b"fir")
+  std@1/bufio.consume(mut r, 1)
+  let mut out: List[u8] = []
+  test.check(t, std@1/bufio.file_read(d, mut f, mut r, mut out, 1) ? Buffered == 1)
+  test.check(t, out == [105])
+  test.check(
+    t,
+    std@1/bufio.file_read_until(d, mut f, mut r, 10, mut out, 16) ? Buffered == 4
+  )
+  test.check(t, out == [105, 114, 115, 116, 10])
+  out = []
+  std@1/bufio.file_read_exact(d, mut f, mut r, mut out, 4) ? Buffered
+  test.check(t, out == [108, 111, 110, 103])
+  file.seek(d, mut f, 0) ? Storage
+  r = std@1/bufio.new(3)
+  test.check(t, std@1/bufio.file_read_line(d, mut f, mut r, 2) == Error(Limit()))
+  test.check(t, std@1/bufio.contents(r) == b"r")
+  test.check(t, std@1/bufio.file_read_line(d, mut f, mut r, 16) ? Buffered == "rst\n")
+  Ok(())
+}

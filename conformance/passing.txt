@@ -2941,6 +2941,8 @@ conformance/PROV/PROV-1-branded-list-literal-element-bad.hir
 conformance/PROV/PROV-1-branded-list-literal-element-ok.hir
 conformance/PROV/PROV-1-branded-map-from-empty-bad.hir
 conformance/PROV/PROV-1-branded-map-from-empty-ok.hir
+conformance/PROV/PROV-1-buffered-file-dir-bad.hir
+conformance/PROV/PROV-1-buffered-file-dir-ok.hir
 conformance/PROV/PROV-1-callable-parameter-brand-bad.hir
 conformance/PROV/PROV-1-callable-parameter-brand-ok.hir
 conformance/PROV/PROV-1-captured-element-field-run.hir
@@ -3611,6 +3613,7 @@ conformance/SEM/SEM-4-array-take.hir
 conformance/SEM/SEM-4-borrow-source-readable.hir
 conformance/SEM/SEM-4-borrowed-counted-map-pair.hir
 conformance/SEM/SEM-4-borrowed-grapheme-alias-continue.hir
+conformance/SEM/SEM-4-buffered-file-run.hir
 conformance/SEM/SEM-4-buffered-reader-run.hir
 conformance/SEM/SEM-4-buffered-stream-run.hir
 conformance/SEM/SEM-4-call-source-not-iterable.hir

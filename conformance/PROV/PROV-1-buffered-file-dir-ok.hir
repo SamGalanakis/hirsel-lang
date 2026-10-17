@@ -1,0 +1,9 @@
+// rule: PROV-1
+// expect: accept
+fn line(d: Dir, other: Dir, mut f: File of d) -> Result[
+  String,
+  std@1/bufio.ReadError[FileError]
+] {
+  let mut r = std@1/bufio.new(3)
+  std@1/bufio.file_read_line(d, mut f, mut r, 32)
+}

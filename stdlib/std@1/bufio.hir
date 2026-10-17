@@ -287,3 +287,99 @@ pub fn stream_read(
     max
   )
 }
+
+pub fn file_read_until(
+  d: Dir,
+  mut f: File of d,
+  mut r: Reader,
+  delimiter: u8,
+  mut out: List[u8],
+  limit: u64
+) -> Result[u64, ReadError[FileError]] {
+  read_until(
+    mut r,
+    mut f,
+    fn(mut source: File of d, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(d, mut source, mut buffer, requested)
+    },
+    delimiter,
+    mut out,
+    limit
+  )
+}
+
+pub fn file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Result[
+  u64,
+  ReadError[FileError]
+] {
+  read_more(
+    mut r,
+    mut f,
+    fn(mut source: File of d, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(d, mut source, mut buffer, requested)
+    },
+    max
+  )
+}
+
+pub fn file_read_exact(
+  d: Dir,
+  mut f: File of d,
+  mut r: Reader,
+  mut out: List[u8],
+  count: u64
+) -> Result[(), ReadError[FileError]] {
+  read_exact(
+    mut r,
+    mut f,
+    fn(mut source: File of d, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(d, mut source, mut buffer, requested)
+    },
+    mut out,
+    count
+  )
+}
+
+pub fn file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[
+  String,
+  ReadError[FileError]
+] {
+  read_line(
+    mut r,
+    mut f,
+    fn(mut source: File of d, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(d, mut source, mut buffer, requested)
+    },
+    limit
+  )
+}
+
+pub fn file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[
+  u64,
+  ReadError[FileError]
+] {
+  read(
+    mut r,
+    mut f,
+    fn(mut source: File of d, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(d, mut source, mut buffer, requested)
+    },
+    mut out,
+    max
+  )
+}
