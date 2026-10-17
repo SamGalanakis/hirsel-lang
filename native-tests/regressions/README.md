@@ -31,8 +31,8 @@ The native differential gate's checked-in state.
   requests describe the size-class allocator's slab blocks, region reservations
   and arena blocks.
 - `*.hir`: programs for defects the gate found, each named in `smoke.txt`.
-- `open/INDEX.tsv`: every open reason of `exclusions.tsv` with its row count and
-  shortest corpus case.
+- `open/INDEX.tsv`: every open reason of `exclusions.tsv` and every kind of
+  `agree-known.txt`, with its last evidence and the program that shows it.
 - `open/*.hir`: one minimal valid program per open defect the gate holds, with
   the discrepancy in its first lines. They are not run by any gate (each is
   represented by rows in `exclusions.tsv` or a kind in `agree-known.txt`);

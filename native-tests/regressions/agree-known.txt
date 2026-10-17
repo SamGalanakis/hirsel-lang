@@ -1,6 +1,9 @@
 # Kinds of discrepancy `agree --native full` finds in valid variants of programs inside an
 # engine's declared support. Each is an
 # open defect, not a waiver: a new kind fails the gate, and so does a kind that no longer occurs.
+# Unverified on current main: the last complete campaign (main 7dd85479, 2026-10-14) no longer saw
+# four of these kinds and found fourteen it does not list (open/INDEX.tsv). The two MissingDefinition
+# kinds are gone, fixed by library/value.rs. Refresh with tools/buck2/agree.py --native-full.
 native/heap/heap: Malformed: read names ValueId(N) but SlotId(N) holds ValueId(N)
 native/heap/heap: TypeConfusion: dup copy of a non-block value
 native/heap/import: validator: CleanupOrder
