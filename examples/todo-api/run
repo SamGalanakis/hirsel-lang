@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Usage: ./run [port]. Serves on 127.0.0.1 (default 8080), keeping state in ./data.
+set -euo pipefail
+cd "$(dirname "$0")"
+port="${1:-8080}"
+mkdir -p data
+# A grant's host root must be absolute, so fill in this checkout's data directory.
+python3 - "$port" <<'PY'
+import json, sys
+from pathlib import Path
+port = sys.argv[1]
+grants = json.loads(Path('grants.json').read_text())
+grants['io']['dirs'][0]['host'] = str(Path('data').resolve())
+grants['io']['net']['rules'][0]['service'] = port
+grants['args'] = [port]
+Path('data/grants.json').write_text(json.dumps(grants))
+PY
+# A server outlives the interpreter's default step budget; lift it to the maximum.
+exec hirsel run hirsel.json --grants data/grants.json --max-steps 18446744073709551615

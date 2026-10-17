@@ -1,0 +1,563 @@
+// A JSON todo API. Each connection is served by its own task; the todo list lives in a
+// Mutex, and one writer task saves every change atomically to data/todos.json.
+pub type Todo {
+  id: u64,
+  title: String,
+  done: bool,
+}
+
+pub type Store {
+  next_id: u64,
+  version: u64,
+  todos: List[Todo],
+}
+
+// A snapshot of the store after a change, and where to report whether it was saved.
+pub type SaveJob {
+  version: u64,
+  text: unique String,
+  reply: Sender[bool],
+}
+
+// What a request does to the store, decided before taking the lock.
+pub type Action = Index | Create(String) | Show(u64) | Update(u64, bool) | Remove(u64)
+
+pub type Reply {
+  status: u16,
+  body: String,
+  allow: String,
+  save: Option[(u64, String)],
+}
+
+pub type ServerError = Grant(GrantError) | Network(NetError) | Files(FileError) | Corrupt(
+  String
+) | Usage(String)
+
+const STATE: String = "todos.json"
+
+// ---- JSON ----
+fn text_value(s: String) -> std@1/json.Value uses {} {
+  Text(unique s)
+}
+
+fn todo_value(t: Todo) -> std@1/json.Value uses {} {
+  let mut fields: Map[String, box std@1/json.Value] = map.empty()
+  map.insert(mut fields, "id", box Number(std@1/u64.to_string(t.id)))
+  map.insert(mut fields, "title", box text_value(t.title))
+  map.insert(mut fields, "done", box Bool(t.done))
+  Object(take fields)
+}
+
+fn todo_json(t: Todo) -> String uses {} {
+  match std@1/json.stringify(todo_value(t)) {
+    Ok(s) => take s,
+    Error(_) => "{}",
+  }
+}
+
+fn list_value(todos: List[Todo]) -> std@1/json.Value uses {} {
+  let mut items: List[box std@1/json.Value] = []
+  for t in todos {
+    list.push(mut items, box todo_value(t))
+  }
+  Array(take items)
+}
+
+fn store_json(st: Store) -> String uses {} {
+  let mut fields: Map[String, box std@1/json.Value] = map.empty()
+  map.insert(mut fields, "next_id", box Number(std@1/u64.to_string(st.next_id)))
+  map.insert(mut fields, "todos", box list_value(st.todos))
+  match std@1/json.stringify(Object(take fields)) {
+    Ok(s) => take s,
+    Error(_) => "{}",
+  }
+}
+
+fn error_json(message: String) -> String uses {} {
+  let mut fields: Map[String, box std@1/json.Value] = map.empty()
+  map.insert(mut fields, "error", box text_value(message))
+  match std@1/json.stringify(Object(take fields)) {
+    Ok(s) => take s,
+    Error(_) => "{}",
+  }
+}
+
+fn member(fields: Map[String, box std@1/json.Value], key: String) -> Option[
+  std@1/json.Value
+] uses {} {
+  let item = match map.get(fields, key) {
+    Some(item) => item,
+    None() => return None(),
+  }
+  let value: std@1/json.Value = match item {
+    Null() => Null(),
+    Bool(b) => Bool(b),
+    Number(n) => Number(unique n),
+    Text(s) => Text(unique s),
+    Array(xs) => Array(unique xs),
+    Object(xs) => Object(unique xs),
+  }
+  Some(take value)
+}
+
+fn as_u64(value: Option[std@1/json.Value]) -> Option[u64] uses {} {
+  match value {
+    Some(Number(n)) => match std@1/u64.parse(n) {
+      Ok(v) => Some(v),
+      Error(_) => None(),
+    },
+    _ => None(),
+  }
+}
+
+fn as_text(value: Option[std@1/json.Value]) -> Option[String] uses {} {
+  match value {
+    Some(Text(s)) => Some(unique s),
+    _ => None(),
+  }
+}
+
+fn as_bool(value: Option[std@1/json.Value]) -> Option[bool] uses {} {
+  match value {
+    Some(Bool(b)) => Some(b),
+    _ => None(),
+  }
+}
+
+fn parse_object(body: Bytes) -> Option[Map[String, box std@1/json.Value]] uses {} {
+  let text = match string.from_bytes(unique body) {
+    Ok(s) => take s,
+    Error(_) => return None(),
+  }
+  match std@1/json.parse(take text) {
+    Ok(Object(fields)) => Some(copy fields),
+    _ => None(),
+  }
+}
+
+fn parse_store(take text: String) -> Result[Store, ServerError] uses {} {
+  let fields = match std@1/json.parse(take text) {
+    Ok(Object(fields)) => copy fields,
+    _ => return Error(Corrupt("state is not a JSON object")),
+  }
+  let next_id = match as_u64(member(fields, "next_id")) {
+    Some(n) => n,
+    None() => return Error(Corrupt("next_id")),
+  }
+  let items = match member(fields, "todos") {
+    Some(Array(xs)) => copy xs,
+    _ => return Error(Corrupt("todos")),
+  }
+  let mut todos: List[Todo] = []
+  for item in items {
+    let entry = match item {
+      Object(xs) => copy xs,
+      _ => return Error(Corrupt("todo")),
+    }
+    let id = match as_u64(member(entry, "id")) {
+      Some(n) => n,
+      None() => return Error(Corrupt("todo id")),
+    }
+    let title = match as_text(member(entry, "title")) {
+      Some(s) => take s,
+      None() => return Error(Corrupt("todo title")),
+    }
+    let done = match as_bool(member(entry, "done")) {
+      Some(b) => b,
+      None() => return Error(Corrupt("todo done")),
+    }
+    list.push(mut todos, Todo(id: id, title: take title, done: done))
+  }
+  Ok(Store(next_id: next_id, version: 0, todos: take todos))
+}
+
+// ---- persistence ----
+fn load(dir: Dir) -> Result[Store, ServerError] {
+  match file.read_bytes(dir, path.of(STATE)) {
+    Ok(data) => {
+      let text = match string.from_bytes(copy data) {
+        Ok(s) => take s,
+        Error(_) => return Error(Corrupt("state is not UTF-8")),
+      }
+      parse_store(take text)
+    },
+    Error(NotFound()) => Ok(Store(next_id: 1, version: 0, todos: [])),
+    Error(e) => Error(Files(e)),
+  }
+}
+
+fn save(dir: Dir, text: String) -> Result[(), FileError] {
+  let mut f = file.create_atomic(dir, path.of(STATE))?
+  file.write_all(dir, mut f, string.as_bytes(text))?
+  file.commit(dir, take f)
+}
+
+// Saves arrive in lock order up to channel interleaving; a later version already
+// written makes an earlier one redundant, so the file only moves forward.
+fn write_loop(tasks: Tasks, dir: Dir, take receiver: Receiver[SaveJob]) -> () {
+  let mut jobs = take receiver
+  let mut written: u64 = 0
+  while true {
+    let SaveJob(version: version, text: text, reply: reply_to) = match channel.receive(
+      tasks,
+      mut jobs
+    ) {
+      Ok(j) => take j,
+      Error(_) => return (),
+    }
+    let mut ok = true
+    if version > written {
+      ok = match save(dir, text) {
+        Ok(()) => true,
+        Error(_) => false,
+      }
+      if ok {
+        written = version
+      }
+    }
+    let mut reply = take reply_to
+    let _ = channel.send(tasks, mut reply, ok)
+  }
+}
+
+// ---- routing ----
+fn not_found() -> Reply uses {} {
+  Reply(status: 404u16, body: error_json("not found"), allow: "", save: None())
+}
+
+fn bad_request(message: String) -> Reply uses {} {
+  Reply(status: 400u16, body: error_json(message), allow: "", save: None())
+}
+
+fn method_not_allowed(allow: String) -> Reply uses {} {
+  Reply(
+    status: 405u16,
+    body: error_json("method not allowed"),
+    allow: unique allow,
+    save: None()
+  )
+}
+
+fn unsupported_media() -> Reply uses {} {
+  Reply(
+    status: 415u16,
+    body: error_json("Content-Type must be application/json"),
+    allow: "",
+    save: None()
+  )
+}
+
+fn find(todos: List[Todo], id: u64) -> Option[u64] uses {} {
+  for i in 0u64..list.len(todos) {
+    if todos[i].id == id {
+      return Some(i)
+    }
+  }
+  None()
+}
+
+// The caller has already bumped the version; the snapshot goes to the writer task.
+fn snapshot_reply(st: Store, status: u16, take body: String) -> Reply uses {} {
+  Reply(
+    status: status,
+    body: take body,
+    allow: "",
+    save: Some((st.version, store_json(st)))
+  )
+}
+
+fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
+  match action {
+    Index() => Reply(
+      status: 200u16,
+      body: match std@1/json.stringify(list_value(st.todos)) {
+        Ok(s) => take s,
+        Error(_) => "[]",
+      },
+      allow: "",
+      save: None()
+    ),
+    Create(title) => {
+      let item = Todo(id: st.next_id, title: unique title, done: false)
+      st.next_id += 1
+      let body = todo_json(item)
+      list.push(mut st.todos, take item)
+      st.version += 1
+      snapshot_reply(st, 201u16, take body)
+    },
+    Show(id) => match find(st.todos, id) {
+      Some(i) => Reply(
+        status: 200u16,
+        body: todo_json(st.todos[i]),
+        allow: "",
+        save: None()
+      ),
+      None() => not_found(),
+    },
+    Update(id, done) => match find(st.todos, id) {
+      Some(i) => {
+        st.todos[i].done = done
+        let body = todo_json(st.todos[i])
+        st.version += 1
+        snapshot_reply(st, 200u16, take body)
+      },
+      None() => not_found(),
+    },
+    Remove(id) => match find(st.todos, id) {
+      Some(i) => {
+        let mut kept: List[Todo] = []
+        for j in 0u64..list.len(st.todos) {
+          if j != i {
+            list.push(mut kept, unique st.todos[j])
+          }
+        }
+        st.todos = unique kept
+        st.version += 1
+        snapshot_reply(st, 204u16, "")
+      },
+      None() => not_found(),
+    },
+  }
+}
+
+fn json_content(request: std@1/http.ServerRequest) -> bool uses {} {
+  match std@1/http.header(request.headers, "content-type") {
+    Some(value) => {
+      let lower = std@1/string.ascii_lower(value)
+      let media = match std@1/string.find(lower, ";") {
+        Some(pos) => string.slice(
+          lower,
+          match string.position(lower, 0) {
+            Some(start) => start,
+            None() => return false,
+          },
+          pos
+        ),
+        None() => lower,
+      }
+      std@1/string.trim(media) == "application/json"
+    },
+    None() => false,
+  }
+}
+
+// Decide the action from method, path and body; an error is the reply to send.
+fn route(request: std@1/http.ServerRequest) -> Result[Action, Reply] uses {} {
+  let target = match std@1/string.find(request.target, "?") {
+    Some(pos) => string.slice(
+      request.target,
+      match string.position(request.target, 0) {
+        Some(start) => start,
+        None() => return Error(not_found()),
+      },
+      pos
+    ),
+    None() => request.target,
+  }
+  let parts = std@1/string.split(unique target, "/")
+  if list.len(parts) < 2 || parts[0] != "" || parts[1] != "todos" || list.len(parts) > 3 {
+    return Error(not_found())
+  }
+  if list.len(parts) == 2 {
+    if request.method == "GET" {
+      return Ok(Index())
+    }
+    if request.method != "POST" {
+      return Error(method_not_allowed("GET, POST"))
+    }
+    if !json_content(request) {
+      return Error(unsupported_media())
+    }
+    let fields = match parse_object(request.body) {
+      Some(f) => copy f,
+      None() => return Error(bad_request("body must be a JSON object")),
+    }
+    return match as_text(member(fields, "title")) {
+      Some(title) => if string.byte_len(title) == 0 {
+        Error(bad_request("title must not be empty"))
+      } else {
+        Ok(Create(copy title))
+      },
+      None() => Error(bad_request("title must be a string")),
+    }
+  }
+  let id = match std@1/u64.parse(parts[2]) {
+    Ok(n) => n,
+    Error(_) => return Error(not_found()),
+  }
+  if request.method == "GET" {
+    return Ok(Show(id))
+  }
+  if request.method == "DELETE" {
+    return Ok(Remove(id))
+  }
+  if request.method != "PATCH" {
+    return Error(method_not_allowed("GET, PATCH, DELETE"))
+  }
+  if !json_content(request) {
+    return Error(unsupported_media())
+  }
+  let fields = match parse_object(request.body) {
+    Some(f) => copy f,
+    None() => return Error(bad_request("body must be a JSON object")),
+  }
+  match as_bool(member(fields, "done")) {
+    Some(done) => Ok(Update(id, done)),
+    None() => Error(bad_request("done must be a boolean")),
+  }
+}
+
+// ---- connections ----
+fn send_reply(n: Net, mut stream: Stream of n, reply: Reply) -> Result[
+  (),
+  std@1/http.HttpError
+] {
+  let mut headers: List[std@1/http.Header] = []
+  if string.byte_len(reply.body) > 0 {
+    list.push(
+      mut headers,
+      std@1/http.Header(name: "Content-Type", value: "application/json")
+    )
+  }
+  if string.byte_len(reply.allow) > 0 {
+    list.push(mut headers, std@1/http.Header(name: "Allow", value: unique reply.allow))
+  }
+  std@1/http.respond(n, mut stream, reply.status, headers, string.as_bytes(reply.body))
+}
+
+// A Sender destructured from channel.open is not yet provably sendable inside a
+// record; receiving it as a taken parameter is.
+fn queue(
+  tasks: Tasks,
+  mut saves: Sender[SaveJob],
+  version: u64,
+  take text: unique String,
+  take reply: Sender[bool]
+) -> bool {
+  match channel.send(
+    tasks,
+    mut saves,
+    SaveJob(version: version, text: take text, reply: take reply)
+  ) {
+    Ok(()) => true,
+    Error(_) => false,
+  }
+}
+
+fn handle(
+  tasks: Tasks,
+  state: Mutex[Store],
+  mut saves: Sender[SaveJob],
+  request: std@1/http.ServerRequest
+) -> Reply {
+  let action = match route(request) {
+    Ok(a) => take a,
+    Error(reply) => return take reply,
+  }
+  let reply = mutex.with(
+    tasks,
+    state,
+    fn(mut store: unique Store) -> Reply uses {} {
+      unique apply(mut store, action)
+    }
+  )
+  let (version, text) = match reply.save {
+    Some((v, t)) => (v, unique t),
+    None() => return take reply,
+  }
+  let (done_tx, done_rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let mut done = take done_rx
+  let saved = if queue(tasks, mut saves, version, take text, take done_tx) {
+    match channel.receive(tasks, mut done) {
+      Ok(ok) => ok,
+      Error(_) => false,
+    }
+  } else {
+    false
+  }
+  if saved {
+    take reply
+  } else {
+    Reply(status: 500u16, body: error_json("could not save"), allow: "", save: None())
+  }
+}
+
+fn serve(
+  n: Net,
+  tasks: Tasks,
+  state: Mutex[Store],
+  take saves: Sender[SaveJob],
+  take incoming: Stream of n
+) -> () {
+  let mut stream = take incoming
+  let mut jobs = take saves
+  let reply = match std@1/http.receive_request(n, mut stream, 16384, 65536) {
+    Ok(request) => handle(tasks, state, mut jobs, request),
+    Error(_) => bad_request("malformed HTTP request"),
+  }
+  let _ = send_reply(n, mut stream, reply)
+  net.close(n, take stream)
+}
+
+fn port_arg(args: Args) -> Result[u16, ServerError] {
+  if arg.count(args) == 0 {
+    return Ok(8080u16)
+  }
+  let text = match arg.text(args, 0) {
+    Ok(t) => take t,
+    Error(_) => return Error(Usage("port must be UTF-8")),
+  }
+  match std@1/u16.parse(text) {
+    Ok(p) => Ok(p),
+    Error(_) => Error(Usage("port must be a number from 0 to 65535")),
+  }
+}
+
+// Arguments: [port], default 8080; port 0 picks a free port. Prints the bound address.
+pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
+  let port = port_arg(args)?
+  let n = io.net(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let dir = io.dir(rt, path.of("data")) ? Files
+  // load's result is not provably unique through `?`; the deep copy makes it so.
+  let store: unique Store = unique load(dir)?
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network
+  let bound = net.local_addr(n, listener) ? Network
+  let output = io.stdout(rt) ? Grant
+  let _ = out.print(
+    output,
+    std@1/string.concat(
+      "listening on 127.0.0.1:",
+      std@1/string.concat(std@1/u16.to_string(bound.port), "\n")
+    )
+  )
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[(), ServerError] {
+      // Created inside the scope: a child task using a Mutex or Sender that the
+      // scope body captured from outside currently fails IR validation (ExpiredLoan).
+      let state: Mutex[Store] = mutex.create(tasks, take store)
+      let (saves, jobs): (Sender[SaveJob], Receiver[SaveJob]) = channel.open(tasks)
+      let writer = task.async(
+        s,
+        fn() -> () {
+          write_loop(tasks, dir, take jobs)
+        }
+      )
+      task.detach(s, take writer)
+      let mut accepting = take listener
+      while true {
+        let (stream, _) = net.accept(n, mut accepting) ? Network
+        let jobs_tx = sender.dup(tasks, saves)
+        let child = task.async(
+          s,
+          fn() -> () {
+            serve(n, tasks, state, take jobs_tx, take stream)
+          }
+        )
+        task.detach(s, take child)
+      }
+      Ok(())
+    }
+  )
+}

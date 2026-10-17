@@ -639,3 +639,286 @@ fn calculator_stdin_session() {
         }
     }
 }
+
+/// The todo API server, killed on drop; `port` is the one it printed.
+struct TodoServer {
+    child: std::process::Child,
+    port: u16,
+}
+
+impl TodoServer {
+    fn start(manifest: &std::path::Path, grants: &std::path::Path) -> Self {
+        use std::io::BufRead;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(manifest)
+            .arg("--grants")
+            .arg(grants)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (send, recv) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(stdout).read_line(&mut line);
+            let _ = send.send(line);
+        });
+        let line = recv
+            .recv_timeout(std::time::Duration::from_secs(90))
+            .expect("server readiness");
+        let port = line
+            .strip_prefix("listening on 127.0.0.1:")
+            .unwrap_or_else(|| panic!("readiness line {line:?}"))
+            .trim()
+            .parse()
+            .unwrap();
+        Self { child, port }
+    }
+
+    /// Send one raw request and return the status code, the head and the body.
+    fn send(&self, request: &[u8]) -> (u16, String, String) {
+        use std::io::{Read, Write};
+        let mut stream =
+            std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, self.port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(60)))
+            .unwrap();
+        stream.write_all(request).unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        let status = head[9..12].parse().unwrap();
+        (status, head.to_owned(), body.to_owned())
+    }
+
+    fn call(&self, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
+        let request = match body {
+            Some(body) => format!(
+                "{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+            None => format!("{method} {path} HTTP/1.1\r\nHost: x\r\n\r\n"),
+        };
+        let (status, head, body) = self.send(request.as_bytes());
+        if body.is_empty() {
+            assert!(!head.contains("Content-Type"), "{head}");
+        } else {
+            assert!(
+                head.contains("\r\nContent-Type: application/json\r\n"),
+                "{head}"
+            );
+        }
+        (status, body)
+    }
+}
+
+impl Drop for TodoServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Copy the example into a fresh directory with the shipped grants, granting its data
+/// directory and an ephemeral port; returns the directory, manifest and grants paths.
+fn todo_api_fixture() -> (PathBuf, PathBuf, PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "hirsel-example-{}-{}-todo-api",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(
+        dir.join("main.hir"),
+        include_str!("../../../examples/todo-api/main.hir"),
+    )
+    .unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../examples/todo-api/hirsel.json")).unwrap();
+    manifest["dependencies"][0]["manifest"] = serde_json::json!(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stdlib/std@1/hirsel.json")
+            .canonicalize()
+            .unwrap()
+    );
+    std::fs::write(dir.join("hirsel.json"), manifest.to_string()).unwrap();
+    // The shipped grants, with this run's data directory and an ephemeral port.
+    let mut grants: serde_json::Value =
+        serde_json::from_str(include_str!("../../../examples/todo-api/grants.json")).unwrap();
+    grants["io"]["dirs"][0]["host"] = serde_json::json!(data.canonicalize().unwrap());
+    grants["io"]["net"]["rules"][0]["service"] = serde_json::json!("0");
+    grants["args"] = serde_json::json!(["0"]);
+    std::fs::write(dir.join("grants.json"), grants.to_string()).unwrap();
+    (
+        dir.clone(),
+        dir.join("hirsel.json"),
+        dir.join("grants.json"),
+    )
+}
+
+/// Two clients create todos while an incomplete request holds its own task; returns the
+/// list the held request finally received.
+fn todo_api_concurrent_creates(server: &TodoServer, first_id: u64) -> String {
+    use std::io::{Read, Write};
+    let mut held =
+        std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, server.port)).unwrap();
+    held.set_read_timeout(Some(std::time::Duration::from_secs(60)))
+        .unwrap();
+    held.write_all(b"GET /todos HTTP/1.1\r\nHost:").unwrap();
+    let created: Vec<String> = std::thread::scope(|scope| {
+        let clients: Vec<_> = ["sheep", "goats"]
+            .map(|title| {
+                scope.spawn(move || {
+                    server.call("POST", "/todos", Some(&format!(r#"{{"title":"{title}"}}"#)))
+                })
+            })
+            .into_iter()
+            .collect();
+        clients
+            .into_iter()
+            .map(|client| {
+                let (status, body) = client.join().unwrap();
+                assert_eq!(status, 201);
+                body
+            })
+            .collect()
+    });
+    let mut ids: Vec<u64> = created
+        .iter()
+        .map(|body| body[6..body.find(',').unwrap()].parse().unwrap())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, [first_id, first_id + 1], "{created:?}");
+    held.write_all(b" x\r\n\r\n").unwrap();
+    held.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    held.read_to_string(&mut response).unwrap();
+    let listed = response.split_once("\r\n\r\n").unwrap().1.to_string();
+    for body in &created {
+        assert!(listed.contains(body.as_str()), "{listed}");
+    }
+    listed
+}
+
+#[test]
+fn todo_api_serves_clients_concurrently_and_persists() {
+    let (dir, manifest, grants) = todo_api_fixture();
+    // A missing state file starts empty.
+    let server = TodoServer::start(&manifest, &grants);
+    assert_eq!(server.call("GET", "/todos", None), (200, "[]".into()));
+    let listed = todo_api_concurrent_creates(&server, 1);
+    drop(server);
+    let server = TodoServer::start(&manifest, &grants);
+    assert_eq!(server.call("GET", "/todos", None), (200, listed));
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_todo_api_serves_every_route_and_persists() {
+    let (dir, manifest, grants) = todo_api_fixture();
+    let state = dir.join("data/todos.json");
+    // A missing state file starts empty.
+    let server = TodoServer::start(&manifest, &grants);
+    assert_eq!(server.call("GET", "/todos", None), (200, "[]".into()));
+    assert!(!state.exists());
+    let created = r#"{"id":1,"title":"feed the \"sheep\"","done":false}"#;
+    assert_eq!(
+        server.call("POST", "/todos", Some(r#"{"title":"feed the \"sheep\""}"#)),
+        (201, created.into())
+    );
+    assert_eq!(server.call("GET", "/todos/1", None), (200, created.into()));
+    let done = r#"{"id":1,"title":"feed the \"sheep\"","done":true}"#;
+    assert_eq!(
+        server.call("PATCH", "/todos/1?verbose", Some(r#"{"done":true}"#)),
+        (200, done.into())
+    );
+    assert_eq!(
+        server.call("POST", "/todos", Some(r#"{"title":"mend gate"}"#)),
+        (201, r#"{"id":2,"title":"mend gate","done":false}"#.into())
+    );
+    assert_eq!(
+        server.call("DELETE", "/todos/2", None),
+        (204, String::new())
+    );
+    assert_eq!(
+        server.call("GET", "/todos", None),
+        (200, format!("[{done}]"))
+    );
+
+    let not_found = (404, r#"{"error":"not found"}"#.to_string());
+    for path in ["/todos/2", "/todos/x", "/todos/1/x", "/", "/nope"] {
+        assert_eq!(server.call("GET", path, None), not_found, "{path}");
+    }
+    assert_eq!(server.call("DELETE", "/todos/2", None), not_found);
+    assert_eq!(
+        server.call("PATCH", "/todos/9", Some(r#"{"done":true}"#)),
+        not_found
+    );
+    for (body, error) in [
+        ("{", "body must be a JSON object"),
+        ("[]", "body must be a JSON object"),
+        (r#"{"title":1}"#, "title must be a string"),
+        (r#"{"title":""}"#, "title must not be empty"),
+    ] {
+        assert_eq!(
+            server.call("POST", "/todos", Some(body)),
+            (400, format!(r#"{{"error":"{error}"}}"#)),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        server.call("PATCH", "/todos/1", Some(r#"{"done":"yes"}"#)),
+        (400, r#"{"error":"done must be a boolean"}"#.into())
+    );
+    for (path, allow) in [("/todos", "GET, POST"), ("/todos/1", "GET, PATCH, DELETE")] {
+        let (status, head, body) = server.send(format!("PUT {path} HTTP/1.1\r\n\r\n").as_bytes());
+        assert_eq!(status, 405);
+        assert!(head.contains(&format!("\r\nAllow: {allow}\r\n")), "{head}");
+        assert_eq!(body, r#"{"error":"method not allowed"}"#);
+    }
+    let unsupported = r#"{"error":"Content-Type must be application/json"}"#;
+    for content_type in ["", "Content-Type: text/plain\r\n"] {
+        let body = r#"{"title":"x"}"#;
+        let (status, _, response) = server.send(
+            format!(
+                "POST /todos HTTP/1.1\r\n{content_type}Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        );
+        assert_eq!((status, response.as_str()), (415, unsupported));
+    }
+    let (status, _, body) = server.send(
+        b"PATCH /todos/1 HTTP/1.1\r\nContent-Type: Application/JSON; charset=utf-8\r\nContent-Length: 14\r\n\r\n{\"done\":false}",
+    );
+    assert_eq!((status, body.as_str()), (200, created));
+    let (status, _, body) = server.send(b"BAD\0 / HTTP/1.1\r\n\r\n");
+    assert_eq!(
+        (status, body.as_str()),
+        (400, r#"{"error":"malformed HTTP request"}"#)
+    );
+
+    let listed = todo_api_concurrent_creates(&server, 3);
+    assert_eq!(listed.matches("\"id\":").count(), 3, "{listed}");
+
+    // The state file holds the latest list and next id; a restart serves it unchanged.
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
+    assert_eq!(saved["next_id"], 5);
+    assert_eq!(saved["todos"].as_array().unwrap().len(), 3);
+    drop(server);
+    let server = TodoServer::start(&manifest, &grants);
+    assert_eq!(server.call("GET", "/todos", None), (200, listed));
+    assert_eq!(
+        server.call("POST", "/todos", Some(r#"{"title":"shear"}"#)),
+        (201, r#"{"id":5,"title":"shear","done":false}"#.into())
+    );
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
