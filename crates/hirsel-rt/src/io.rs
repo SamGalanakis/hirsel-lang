@@ -644,9 +644,11 @@ impl State {
         request: &Request,
         input: Completion,
     ) -> Result<Completion, AdapterError> {
+        if let Request::ReadStdin { stdin, .. } = request {
+            self.expect(*stdin, Grant::Stdin)?;
+        }
         match (request, &input) {
-            (Request::ReadStdin { stdin, max }, Completion::Input(value)) => {
-                self.expect(*stdin, Grant::Stdin)?;
+            (Request::ReadStdin { max, .. }, Completion::Input(value)) => {
                 let valid = match value {
                     Err(InputError::InvalidInput) => *max == 0,
                     Ok(bytes) => *max > 0 && bytes.len() as u64 <= *max,

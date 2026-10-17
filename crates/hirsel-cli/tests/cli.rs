@@ -1182,9 +1182,9 @@ fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")
-        .arg(&source)
         .arg("--simulation")
         .arg(&simulation)
+        .arg(&source)
         .output()
         .unwrap();
     assert_eq!(
@@ -1202,9 +1202,9 @@ fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")
-        .arg(&source)
         .arg("--simulation")
         .arg(&simulation)
+        .arg(&source)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
