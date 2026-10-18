@@ -14,7 +14,7 @@ Opaque representations stay hidden; bodies are not checked or evaluated.
 
 <a id="def-core_401_2fArgError"></a>
 
-- `type ArgError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = MissingArgument() | InvalidUtf8()`
+- `type ArgError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = MissingArgument() | InvalidUtf8()`
 
 <a id="def-core_401_2fArgError_23InvalidUtf8"></a>
 
@@ -70,7 +70,7 @@ Variant of Bounded.
 
 <a id="def-core_401_2fCancelCause"></a>
 
-- `type CancelCause: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Requested() | Parent() | ChildFailed() | DeadlineExceeded()`
+- `type CancelCause: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Requested() | Parent() | ChildFailed() | DeadlineExceeded()`
 
 <a id="def-core_401_2fCancelCause_23ChildFailed"></a>
 
@@ -98,7 +98,7 @@ Variant of CancelCause.
 
 <a id="def-core_401_2fCancelError"></a>
 
-- `type CancelError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Canceled(CancelCause)`
+- `type CancelError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Canceled(CancelCause)`
 
 <a id="def-core_401_2fCancelError_23Canceled"></a>
 
@@ -108,7 +108,7 @@ Variant of CancelError.
 
 <a id="def-core_401_2fChannelError"></a>
 
-- `type ChannelError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Closed() | Canceled(CancelCause)`
+- `type ChannelError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Closed() | Canceled(CancelCause)`
 
 <a id="def-core_401_2fChannelError_23Canceled"></a>
 
@@ -186,7 +186,7 @@ Variant of ChildStep.
 
 <a id="def-core_401_2fCliError"></a>
 
-- `type CliError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Usage(ArgError) | Files(FileError) | Output(OutputError)`
+- `type CliError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Usage(ArgError) | Files(FileError) | Output(OutputError)`
 
 <a id="def-core_401_2fCliError_23Files"></a>
 
@@ -208,7 +208,7 @@ Variant of CliError.
 
 <a id="def-core_401_2fClockError"></a>
 
-- `type ClockError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Unavailable() | OutOfRange()`
+- `type ClockError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Unavailable() | OutOfRange()`
 
 <a id="def-core_401_2fClockError_23OutOfRange"></a>
 
@@ -236,7 +236,7 @@ Variant of ClockError.
 
 <a id="def-core_401_2fDecodeError"></a>
 
-- `type DecodeError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Version() | SchemaMismatch() | Truncated() | Trailing() | Scalar() | Utf8() | Tag() | Length() | Duplicate() | Order()`
+- `type DecodeError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Version() | SchemaMismatch() | Truncated() | Trailing() | Scalar() | Utf8() | Tag() | Length() | Duplicate() | Order()`
 
 <a id="def-core_401_2fDecodeError_23Duplicate"></a>
 
@@ -312,7 +312,7 @@ Variant of DecodeError.
 
 <a id="def-core_401_2fEnvError"></a>
 
-- `type EnvError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotGranted() | InvalidUtf8()`
+- `type EnvError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = NotGranted() | InvalidUtf8()`
 
 <a id="def-core_401_2fEnvError_23InvalidUtf8"></a>
 
@@ -332,7 +332,7 @@ Variant of EnvError.
 
 <a id="def-core_401_2fExitStatus"></a>
 
-- `type ExitStatus: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Exited(i32) | Signaled(i32)`
+- `type ExitStatus: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Exited(i32) | Signaled(i32)`
 
 <a id="def-core_401_2fExitStatus_23Exited"></a>
 
@@ -348,11 +348,11 @@ Variant of ExitStatus.
 
 <a id="def-core_401_2fFailure"></a>
 
-- `type Failure uses {} = { kind: FailureKind, rule: String, site: SourceSite, spawn: List[u64], cause: Option[box Failure] }`
+- `type Failure: serializable uses {} = { kind: FailureKind, rule: String, site: SourceSite, spawn: List[u64], cause: Option[box Failure] }`
 
 <a id="def-core_401_2fFailureKind"></a>
 
-- `type FailureKind: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Check() | Contract() | Depth() | OutOfSpace() | DeadMutex()`
+- `type FailureKind: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Check() | Contract() | Depth() | OutOfSpace() | DeadMutex()`
 
 <a id="def-core_401_2fFailureKind_23Check"></a>
 
@@ -394,7 +394,7 @@ Variant of FailureKind.
 
 <a id="def-core_401_2fFileError"></a>
 
-- `type FileError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()`
+- `type FileError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()`
 
 <a id="def-core_401_2fFileError_23AlreadyExists"></a>
 
@@ -458,7 +458,7 @@ Variant of FileError.
 
 <a id="def-core_401_2fFileKind"></a>
 
-- `type FileKind: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Regular() | Directory() | Symlink() | Other()`
+- `type FileKind: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Regular() | Directory() | Symlink() | Other()`
 
 <a id="def-core_401_2fFileKind_23Directory"></a>
 
@@ -486,7 +486,7 @@ Variant of FileKind.
 
 <a id="def-core_401_2fFloatIntError"></a>
 
-- `type FloatIntError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotFinite() | OutOfRange()`
+- `type FloatIntError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = NotFinite() | OutOfRange()`
 
 <a id="def-core_401_2fFloatIntError_23NotFinite"></a>
 
@@ -502,7 +502,7 @@ Variant of FloatIntError.
 
 <a id="def-core_401_2fGrantError"></a>
 
-- `type GrantError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotGranted()`
+- `type GrantError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = NotGranted()`
 
 <a id="def-core_401_2fGrantError_23NotGranted"></a>
 
@@ -524,7 +524,7 @@ Variant of GrantError.
 
 <a id="def-core_401_2fInputError"></a>
 
-- `type InputError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()`
+- `type InputError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()`
 
 <a id="def-core_401_2fInputError_23Canceled"></a>
 
@@ -560,7 +560,7 @@ Variant of InputError.
 
 <a id="def-core_401_2fIpAddr"></a>
 
-- `type IpAddr: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = V4(Inline[u8, 4]) | V6(Inline[u8, 16])`
+- `type IpAddr: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = V4(Inline[u8, 4]) | V6(Inline[u8, 16])`
 
 <a id="def-core_401_2fIpAddr_23V4"></a>
 
@@ -592,7 +592,7 @@ Variant of IpAddr.
 
 <a id="def-core_401_2fMetadata"></a>
 
-- `type Metadata uses {} = { kind: FileKind, size: u64, modified_unix_ns: Option[i128], permissions: u32 }`
+- `type Metadata: serializable uses {} = { kind: FileKind, size: u64, modified_unix_ns: Option[i128], permissions: u32 }`
 
 <a id="def-core_401_2fMonotonicClock"></a>
 
@@ -634,7 +634,7 @@ Variant of NetConnection.
 
 <a id="def-core_401_2fNetError"></a>
 
-- `type NetError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotGranted() | Canceled(CancelCause) | InvalidInput() | UnknownHost() | ResolverFailure() | ConnectionRefused() | ConnectionReset() | ConnectionAborted() | NotConnected() | AddrInUse() | AddrNotAvailable() | HostUnreachable() | NetworkUnreachable() | NetworkDown() | BrokenPipe() | TimedOut() | Tls(TlsFailure) | Fault(u32)`
+- `type NetError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = NotGranted() | Canceled(CancelCause) | InvalidInput() | UnknownHost() | ResolverFailure() | ConnectionRefused() | ConnectionReset() | ConnectionAborted() | NotConnected() | AddrInUse() | AddrNotAvailable() | HostUnreachable() | NetworkUnreachable() | NetworkDown() | BrokenPipe() | TimedOut() | Tls(TlsFailure) | Fault(u32)`
 
 <a id="def-core_401_2fNetError_23AddrInUse"></a>
 
@@ -892,7 +892,7 @@ Variant of Option.
 
 <a id="def-core_401_2fOutOfSpace"></a>
 
-- `type OutOfSpace: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = OutOfSpace()`
+- `type OutOfSpace: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = OutOfSpace()`
 
 <a id="def-core_401_2fOutOfSpace_23OutOfSpace"></a>
 
@@ -902,7 +902,7 @@ Variant of OutOfSpace.
 
 <a id="def-core_401_2fOutputError"></a>
 
-- `type OutputError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = OutputFault(u32) | Canceled(CancelCause)`
+- `type OutputError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = OutputFault(u32) | Canceled(CancelCause)`
 
 <a id="def-core_401_2fOutputError_23Canceled"></a>
 
@@ -958,7 +958,7 @@ Variant of PeerTls.
 
 <a id="def-core_401_2fPipelineOutput"></a>
 
-- `type PipelineOutput uses {} = { statuses: List[ExitStatus], stdout: Bytes, stderr: Bytes }`
+- `type PipelineOutput: serializable uses {} = { statuses: List[ExitStatus], stdout: Bytes, stderr: Bytes }`
 
 <a id="def-core_401_2fPositionView"></a>
 
@@ -970,7 +970,7 @@ Variant of PeerTls.
 
 <a id="def-core_401_2fProcessError"></a>
 
-- `type ProcessError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotGranted() | InvalidInput() | NotFound() | PermissionDenied() | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause) | InputClosed()`
+- `type ProcessError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = NotGranted() | InvalidInput() | NotFound() | PermissionDenied() | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause) | InputClosed()`
 
 <a id="def-core_401_2fProcessError_23Canceled"></a>
 
@@ -1028,7 +1028,7 @@ Variant of ProcessError.
 
 <a id="def-core_401_2fProcessOutput"></a>
 
-- `type ProcessOutput uses {} = { status: ExitStatus, stdout: Bytes, stderr: Bytes }`
+- `type ProcessOutput: serializable uses {} = { status: ExitStatus, stdout: Bytes, stderr: Bytes }`
 
 <a id="def-core_401_2fProcessScript"></a>
 
@@ -1044,7 +1044,7 @@ Variant of ProcessError.
 
 <a id="def-core_401_2fRandomError"></a>
 
-- `type RandomError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Unavailable()`
+- `type RandomError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Unavailable()`
 
 <a id="def-core_401_2fRandomError_23Unavailable"></a>
 
@@ -1204,7 +1204,7 @@ Variant of Signal.
 
 <a id="def-core_401_2fSocketAddr"></a>
 
-- `type SocketAddr uses {} = { ip: IpAddr, port: u16 }`
+- `type SocketAddr: serializable uses {} = { ip: IpAddr, port: u16 }`
 
 <a id="def-core_401_2fSortedMap"></a>
 
@@ -1212,7 +1212,7 @@ Variant of Signal.
 
 <a id="def-core_401_2fSourceSite"></a>
 
-- `type SourceSite uses {} = { definition: String, line: u64, column: u64 }`
+- `type SourceSite: serializable uses {} = { definition: String, line: u64, column: u64 }`
 
 <a id="def-core_401_2fStderr"></a>
 
@@ -1288,7 +1288,7 @@ Variant of TlsClientAuth.
 
 <a id="def-core_401_2fTlsFailure"></a>
 
-- `type TlsFailure: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = UnknownIssuer() | Expired() | NotYetValid() | NameMismatch() | Revoked() | BadCertificate() | AlertReceived(u8) | HandshakeFailure() | PeerMisbehaved() | Truncated()`
+- `type TlsFailure: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = UnknownIssuer() | Expired() | NotYetValid() | NameMismatch() | Revoked() | BadCertificate() | AlertReceived(u8) | HandshakeFailure() | PeerMisbehaved() | Truncated()`
 
 <a id="def-core_401_2fTlsFailure_23AlertReceived"></a>
 
@@ -1396,7 +1396,7 @@ Variant of TxFailure.
 
 <a id="def-core_401_2fUdpReceived"></a>
 
-- `type UdpReceived uses {} = { count: u64, peer: SocketAddr, truncated: bool }`
+- `type UdpReceived: serializable uses {} = { count: u64, peer: SocketAddr, truncated: bool }`
 
 <a id="def-core_401_2fUdpSocket"></a>
 
@@ -1412,7 +1412,7 @@ Variant of TxFailure.
 
 <a id="def-core_401_2fWaitError"></a>
 
-- `type WaitError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Clock(ClockError) | Canceled(CancelCause)`
+- `type WaitError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Clock(ClockError) | Canceled(CancelCause)`
 
 <a id="def-core_401_2fWaitError_23Canceled"></a>
 
