@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-551 exported definitions; 210 variants.
+641 exported definitions; 216 variants.
 
 
 ## Types and roots
@@ -57,6 +57,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Utf8() -> DecodeError` — Variant of DecodeError. <!-- core@1/DecodeError#Utf8 -->
 - `Version() -> DecodeError` — Variant of DecodeError. <!-- core@1/DecodeError#Version -->
 - `@capability(global) opaque type Dir: plain + copyable + sendable + noalloc_drop uses {Dir}` <!-- core@1/Dir -->
+- `type DirEntry uses {} = { path: Path, kind: FileKind }` <!-- core@1/DirEntry -->
 - `@capability(global) opaque type Env: plain + copyable + sendable + noalloc_drop uses {Env}` <!-- core@1/Env -->
 - `type EnvError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotGranted() | InvalidUtf8()` <!-- core@1/EnvError -->
 - `InvalidUtf8() -> EnvError` — Variant of EnvError. <!-- core@1/EnvError#InvalidUtf8 -->
@@ -73,15 +74,22 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Depth() -> FailureKind` — Variant of FailureKind. <!-- core@1/FailureKind#Depth -->
 - `OutOfSpace() -> FailureKind` — Variant of FailureKind. <!-- core@1/FailureKind#OutOfSpace -->
 - `opaque resource type File: noalloc_drop uses {Dir}` <!-- core@1/File -->
-- `type FileError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory()` <!-- core@1/FileError -->
+- `type FileError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()` <!-- core@1/FileError -->
 - `AlreadyExists() -> FileError` — Variant of FileError. <!-- core@1/FileError#AlreadyExists -->
 - `Canceled(CancelCause) -> FileError` — Variant of FileError. <!-- core@1/FileError#Canceled -->
+- `CrossDevice() -> FileError` — Variant of FileError. <!-- core@1/FileError#CrossDevice -->
+- `DirectoryNotEmpty() -> FileError` — Variant of FileError. <!-- core@1/FileError#DirectoryNotEmpty -->
 - `FileFault(u32) -> FileError` — Variant of FileError. <!-- core@1/FileError#FileFault -->
 - `IsDirectory() -> FileError` — Variant of FileError. <!-- core@1/FileError#IsDirectory -->
 - `NotDirectory() -> FileError` — Variant of FileError. <!-- core@1/FileError#NotDirectory -->
 - `NotFound() -> FileError` — Variant of FileError. <!-- core@1/FileError#NotFound -->
 - `NotGranted() -> FileError` — Variant of FileError. <!-- core@1/FileError#NotGranted -->
 - `PermissionDenied() -> FileError` — Variant of FileError. <!-- core@1/FileError#PermissionDenied -->
+- `type FileKind: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Regular() | Directory() | Symlink() | Other()` <!-- core@1/FileKind -->
+- `Directory() -> FileKind` — Variant of FileKind. <!-- core@1/FileKind#Directory -->
+- `Other() -> FileKind` — Variant of FileKind. <!-- core@1/FileKind#Other -->
+- `Regular() -> FileKind` — Variant of FileKind. <!-- core@1/FileKind#Regular -->
+- `Symlink() -> FileKind` — Variant of FileKind. <!-- core@1/FileKind#Symlink -->
 - `type FloatIntError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotFinite() | OutOfRange()` <!-- core@1/FloatIntError -->
 - `NotFinite() -> FloatIntError` — Variant of FloatIntError. <!-- core@1/FloatIntError#NotFinite -->
 - `OutOfRange() -> FloatIntError` — Variant of FloatIntError. <!-- core@1/FloatIntError#OutOfRange -->
@@ -103,6 +111,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `type List[T] uses {T}` <!-- core@1/List -->
 - `opaque resource type Listener: sendable + noalloc_drop uses {Net}` <!-- core@1/Listener -->
 - `type Map[K: key, V] uses {K, V}` <!-- core@1/Map -->
+- `type Metadata uses {} = { kind: FileKind, size: u64, modified_unix_ns: Option[i128] }` <!-- core@1/Metadata -->
 - `@capability(global) opaque type MonotonicClock: plain + copyable + sendable + noalloc_drop uses {MonotonicClock}` <!-- core@1/MonotonicClock -->
 - `type Mutex[T] uses {Tasks, T}` <!-- core@1/Mutex -->
 - `@capability(global) opaque type Net: plain + copyable + sendable + noalloc_drop uses {Net}` <!-- core@1/Net -->
@@ -403,11 +412,17 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `fn file.commit(d: Dir, take f: AtomicFile of d) -> Result[(), FileError]` <!-- core@1/file/commit -->
 - `fn file.create(d: Dir, p: Path) -> Result[File of d, FileError]` <!-- core@1/file/create -->
 - `fn file.create_atomic(d: Dir, p: Path) -> Result[AtomicFile of d, FileError]` <!-- core@1/file/create_atomic -->
+- `fn file.metadata(d: Dir, p: Path) -> Result[Metadata, FileError]` <!-- core@1/file/metadata -->
+- `fn file.mkdir(d: Dir, p: Path) -> Result[(), FileError]` <!-- core@1/file/mkdir -->
+- `pub fn file.mkdir_all(d: Dir, p: Path) -> Result[(), FileError]` — Adapted from Zig Io.Dir.createDirPath and Rust fs::create_dir_all (MIT option; third-party/NOTICES.md). <!-- std@1/file/mkdir_all -->
 - `fn file.narrow(d: Dir, take f: File) -> Option[File of d]` <!-- core@1/file/narrow -->
 - `fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]` <!-- core@1/file/open -->
 - `fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]` <!-- core@1/file/read -->
 - `fn file.read_bytes(d: Dir, p: Path) -> Result[Bytes, FileError] in d` <!-- core@1/file/read_bytes -->
+- `fn file.read_dir(d: Dir, p: Path) -> Result[List[DirEntry], FileError]` <!-- core@1/file/read_dir -->
 - `@noalloc fn file.remove(d: Dir, p: Path) -> Result[(), FileError]` <!-- core@1/file/remove -->
+- `fn file.remove_dir(d: Dir, p: Path) -> Result[(), FileError]` <!-- core@1/file/remove_dir -->
+- `fn file.rename(d: Dir, from: Path, to: Path) -> Result[(), FileError]` <!-- core@1/file/rename -->
 - `fn file.seek(d: Dir, mut f: File of d, offset: u64) -> Result[(), FileError]` <!-- core@1/file/seek -->
 - `fn file.size(d: Dir, p: Path) -> Result[u64, FileError]` <!-- core@1/file/size -->
 - `fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]` <!-- core@1/file/walk -->
@@ -533,43 +548,83 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## i128
 
+- `@noalloc pub fn i128.checked_mul(a: i128, b: i128) -> Option[i128] uses {}` <!-- std@1/i128/checked_mul -->
+- `@noalloc pub fn i128.checked_sub(a: i128, b: i128) -> Option[i128] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/i128/checked_sub -->
 - `@noalloc pub fn i128.format[n: size](value: i128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i128/format -->
 - `pub fn i128.format_into(value: i128, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i128/format_into -->
+- `pub fn i128.format_radix(value: i128, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/i128/format_radix -->
 - `const i128.order: Order[i128]` <!-- core@1/i128/order -->
 - `@noalloc pub fn i128.parse(text: String) -> Result[i128, scalar.ParseError] uses {}` <!-- std@1/i128/parse -->
+- `@noalloc pub fn i128.parse_radix(text: String, radix: u8) -> Result[i128, scalar.ParseError] uses {}` <!-- std@1/i128/parse_radix -->
+- `@noalloc pub fn i128.saturating_mul(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/saturating_mul -->
+- `@noalloc pub fn i128.saturating_sub(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/saturating_sub -->
 - `pub fn i128.to_string(value: i128) -> String uses {}` <!-- std@1/i128/to_string -->
+- `@noalloc pub fn i128.wrapping_mul(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/wrapping_mul -->
+- `@noalloc pub fn i128.wrapping_sub(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/wrapping_sub -->
 
 ## i16
 
+- `@noalloc pub fn i16.checked_mul(a: i16, b: i16) -> Option[i16] uses {}` <!-- std@1/i16/checked_mul -->
+- `@noalloc pub fn i16.checked_sub(a: i16, b: i16) -> Option[i16] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/i16/checked_sub -->
 - `@noalloc pub fn i16.format[n: size](value: i16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i16/format -->
 - `pub fn i16.format_into(value: i16, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i16/format_into -->
+- `pub fn i16.format_radix(value: i16, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/i16/format_radix -->
 - `const i16.order: Order[i16]` <!-- core@1/i16/order -->
 - `@noalloc pub fn i16.parse(text: String) -> Result[i16, scalar.ParseError] uses {}` <!-- std@1/i16/parse -->
+- `@noalloc pub fn i16.parse_radix(text: String, radix: u8) -> Result[i16, scalar.ParseError] uses {}` <!-- std@1/i16/parse_radix -->
+- `@noalloc pub fn i16.saturating_mul(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/saturating_mul -->
+- `@noalloc pub fn i16.saturating_sub(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/saturating_sub -->
 - `pub fn i16.to_string(value: i16) -> String uses {}` <!-- std@1/i16/to_string -->
+- `@noalloc pub fn i16.wrapping_mul(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/wrapping_mul -->
+- `@noalloc pub fn i16.wrapping_sub(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/wrapping_sub -->
 
 ## i32
 
+- `@noalloc pub fn i32.checked_mul(a: i32, b: i32) -> Option[i32] uses {}` <!-- std@1/i32/checked_mul -->
+- `@noalloc pub fn i32.checked_sub(a: i32, b: i32) -> Option[i32] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/i32/checked_sub -->
 - `@noalloc pub fn i32.format[n: size](value: i32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i32/format -->
 - `pub fn i32.format_into(value: i32, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i32/format_into -->
+- `pub fn i32.format_radix(value: i32, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/i32/format_radix -->
 - `const i32.order: Order[i32]` <!-- core@1/i32/order -->
 - `@noalloc pub fn i32.parse(text: String) -> Result[i32, scalar.ParseError] uses {}` <!-- std@1/i32/parse -->
+- `@noalloc pub fn i32.parse_radix(text: String, radix: u8) -> Result[i32, scalar.ParseError] uses {}` <!-- std@1/i32/parse_radix -->
+- `@noalloc pub fn i32.saturating_mul(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/saturating_mul -->
+- `@noalloc pub fn i32.saturating_sub(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/saturating_sub -->
 - `pub fn i32.to_string(value: i32) -> String uses {}` <!-- std@1/i32/to_string -->
+- `@noalloc pub fn i32.wrapping_mul(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/wrapping_mul -->
+- `@noalloc pub fn i32.wrapping_sub(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/wrapping_sub -->
 
 ## i64
 
+- `@noalloc pub fn i64.checked_mul(a: i64, b: i64) -> Option[i64] uses {}` <!-- std@1/i64/checked_mul -->
+- `@noalloc pub fn i64.checked_sub(a: i64, b: i64) -> Option[i64] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/i64/checked_sub -->
 - `@noalloc pub fn i64.format[n: size](value: i64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i64/format -->
 - `pub fn i64.format_into(value: i64, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i64/format_into -->
+- `pub fn i64.format_radix(value: i64, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/i64/format_radix -->
 - `const i64.order: Order[i64]` <!-- core@1/i64/order -->
 - `@noalloc pub fn i64.parse(text: String) -> Result[i64, scalar.ParseError] uses {}` <!-- std@1/i64/parse -->
+- `@noalloc pub fn i64.parse_radix(text: String, radix: u8) -> Result[i64, scalar.ParseError] uses {}` <!-- std@1/i64/parse_radix -->
+- `@noalloc pub fn i64.saturating_mul(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/saturating_mul -->
+- `@noalloc pub fn i64.saturating_sub(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/saturating_sub -->
 - `pub fn i64.to_string(value: i64) -> String uses {}` <!-- std@1/i64/to_string -->
+- `@noalloc pub fn i64.wrapping_mul(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/wrapping_mul -->
+- `@noalloc pub fn i64.wrapping_sub(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/wrapping_sub -->
 
 ## i8
 
+- `@noalloc pub fn i8.checked_mul(a: i8, b: i8) -> Option[i8] uses {}` <!-- std@1/i8/checked_mul -->
+- `@noalloc pub fn i8.checked_sub(a: i8, b: i8) -> Option[i8] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/i8/checked_sub -->
 - `@noalloc pub fn i8.format[n: size](value: i8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i8/format -->
 - `pub fn i8.format_into(value: i8, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i8/format_into -->
+- `pub fn i8.format_radix(value: i8, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/i8/format_radix -->
 - `const i8.order: Order[i8]` <!-- core@1/i8/order -->
 - `@noalloc pub fn i8.parse(text: String) -> Result[i8, scalar.ParseError] uses {}` <!-- std@1/i8/parse -->
+- `@noalloc pub fn i8.parse_radix(text: String, radix: u8) -> Result[i8, scalar.ParseError] uses {}` <!-- std@1/i8/parse_radix -->
+- `@noalloc pub fn i8.saturating_mul(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/saturating_mul -->
+- `@noalloc pub fn i8.saturating_sub(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/saturating_sub -->
 - `pub fn i8.to_string(value: i8) -> String uses {}` <!-- std@1/i8/to_string -->
+- `@noalloc pub fn i8.wrapping_mul(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/wrapping_mul -->
+- `@noalloc pub fn i8.wrapping_sub(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/wrapping_sub -->
 
 ## input
 
@@ -611,12 +666,13 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn internal.decimal.append(mut out: List[u8], magnitude: u128, negative: bool) -> () uses {}` — Appends the decimal text of 'magnitude' to 'out', after a minus sign when 'negative', after one reservation of its exact count. <!-- std@1/internal/decimal/append -->
 - `pub fn internal.decimal.append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> () uses {}` — Appends the first 'count' bytes of a 'format' buffer. <!-- std@1/internal/decimal/append_prefix -->
 - `pub fn internal.decimal.finish(take builder: List[u8]) -> String uses {}` — The UTF-8 text a formatter appended to an empty builder. <!-- std@1/internal/decimal/finish -->
-- `@noalloc pub fn internal.decimal.read_unsigned( text: String, signed: bool, positive_limit: u128, negative_limit: u128 ) -> Result[(u128, bool), scalar.ParseError] uses {}` — Overflow does not excuse invalid trailing syntax: validate the complete input. <!-- std@1/internal/decimal/read_unsigned -->
 - `@noalloc pub fn internal.decimal.write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Count first so capacity failure leaves every byte unchanged. <!-- std@1/internal/decimal/write_unsigned -->
 - `@noalloc pub fn internal.float_decimal.parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.ParseError] uses {}` — At most 800 significant decimal digits are retained. <!-- std@1/internal/float_decimal/parse -->
 - `@noalloc pub fn internal.float_decimal.render[n: size]( significand: u64, scale: i32, negative: bool, mut buffer: Inline[u8, n] ) -> Result[u64, scalar.FormatError] uses {}` — Number::toString fixed/scientific thresholds: https://tc39.es/ecma262/#sec-numeric-types-number-tostring <!-- std@1/internal/float_decimal/render -->
 - `@noalloc pub fn internal.float_decimal.shortest(m: u64, e: i32, asymmetric: bool) -> (u64, i32) uses {}` <!-- std@1/internal/float_decimal/shortest -->
 - `@noalloc pub fn internal.float_decimal.special[n: size](text: String, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` <!-- std@1/internal/float_decimal/special -->
+- `pub fn internal.integer.format_radix(value: u128, negative: bool, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/internal/integer/format_radix -->
+- `@noalloc pub fn internal.integer.read_radix(text: String, radix: u8, signed: bool, positive_limit: u128, negative_limit: u128) -> Result[(u128, bool), scalar.ParseError] uses {}` — Go internal/strconv/{atoi,itoa}.go radix loops (ebe2feef). <!-- std@1/internal/integer/read_radix -->
 - `@noalloc pub fn internal.sample.below(draw: u64, upper: u64) -> Option[u64] uses {}` — Adapted from Zig lib/std/Random.zig uintLessThan (Lemire's multiply-shift with O'Neill's threshold), commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md). <!-- std@1/internal/sample/below -->
 - `pub type internal.superacc.Accumulator { plus: Inline[u64, 70], minus: Inline[u64, 70], }` — Exact binary superaccumulator (Kulisch): 2240 bits, separate signs. <!-- std@1/internal/superacc/Accumulator -->
 - `@noalloc pub fn internal.superacc.acc_add(mut accumulator: Accumulator, mantissa: u64, shift: u64, negative: bool) -> () uses {}` <!-- std@1/internal/superacc/acc_add -->
@@ -915,43 +971,83 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## u128
 
+- `@noalloc pub fn u128.checked_mul(a: u128, b: u128) -> Option[u128] uses {}` <!-- std@1/u128/checked_mul -->
+- `@noalloc pub fn u128.checked_sub(a: u128, b: u128) -> Option[u128] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/u128/checked_sub -->
 - `@noalloc pub fn u128.format[n: size](value: u128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u128/format -->
 - `pub fn u128.format_into(value: u128, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u128/format_into -->
+- `pub fn u128.format_radix(value: u128, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/u128/format_radix -->
 - `const u128.order: Order[u128]` <!-- core@1/u128/order -->
 - `@noalloc pub fn u128.parse(text: String) -> Result[u128, scalar.ParseError] uses {}` <!-- std@1/u128/parse -->
+- `@noalloc pub fn u128.parse_radix(text: String, radix: u8) -> Result[u128, scalar.ParseError] uses {}` <!-- std@1/u128/parse_radix -->
+- `@noalloc pub fn u128.saturating_mul(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/saturating_mul -->
+- `@noalloc pub fn u128.saturating_sub(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/saturating_sub -->
 - `pub fn u128.to_string(value: u128) -> String uses {}` <!-- std@1/u128/to_string -->
+- `@noalloc pub fn u128.wrapping_mul(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/wrapping_mul -->
+- `@noalloc pub fn u128.wrapping_sub(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/wrapping_sub -->
 
 ## u16
 
+- `@noalloc pub fn u16.checked_mul(a: u16, b: u16) -> Option[u16] uses {}` <!-- std@1/u16/checked_mul -->
+- `@noalloc pub fn u16.checked_sub(a: u16, b: u16) -> Option[u16] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/u16/checked_sub -->
 - `@noalloc pub fn u16.format[n: size](value: u16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u16/format -->
 - `pub fn u16.format_into(value: u16, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u16/format_into -->
+- `pub fn u16.format_radix(value: u16, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/u16/format_radix -->
 - `const u16.order: Order[u16]` <!-- core@1/u16/order -->
 - `@noalloc pub fn u16.parse(text: String) -> Result[u16, scalar.ParseError] uses {}` <!-- std@1/u16/parse -->
+- `@noalloc pub fn u16.parse_radix(text: String, radix: u8) -> Result[u16, scalar.ParseError] uses {}` <!-- std@1/u16/parse_radix -->
+- `@noalloc pub fn u16.saturating_mul(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/saturating_mul -->
+- `@noalloc pub fn u16.saturating_sub(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/saturating_sub -->
 - `pub fn u16.to_string(value: u16) -> String uses {}` <!-- std@1/u16/to_string -->
+- `@noalloc pub fn u16.wrapping_mul(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/wrapping_mul -->
+- `@noalloc pub fn u16.wrapping_sub(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/wrapping_sub -->
 
 ## u32
 
+- `@noalloc pub fn u32.checked_mul(a: u32, b: u32) -> Option[u32] uses {}` <!-- std@1/u32/checked_mul -->
+- `@noalloc pub fn u32.checked_sub(a: u32, b: u32) -> Option[u32] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/u32/checked_sub -->
 - `@noalloc pub fn u32.format[n: size](value: u32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u32/format -->
 - `pub fn u32.format_into(value: u32, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u32/format_into -->
+- `pub fn u32.format_radix(value: u32, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/u32/format_radix -->
 - `const u32.order: Order[u32]` <!-- core@1/u32/order -->
 - `@noalloc pub fn u32.parse(text: String) -> Result[u32, scalar.ParseError] uses {}` <!-- std@1/u32/parse -->
+- `@noalloc pub fn u32.parse_radix(text: String, radix: u8) -> Result[u32, scalar.ParseError] uses {}` <!-- std@1/u32/parse_radix -->
+- `@noalloc pub fn u32.saturating_mul(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/saturating_mul -->
+- `@noalloc pub fn u32.saturating_sub(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/saturating_sub -->
 - `pub fn u32.to_string(value: u32) -> String uses {}` <!-- std@1/u32/to_string -->
+- `@noalloc pub fn u32.wrapping_mul(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/wrapping_mul -->
+- `@noalloc pub fn u32.wrapping_sub(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/wrapping_sub -->
 
 ## u64
 
+- `@noalloc pub fn u64.checked_mul(a: u64, b: u64) -> Option[u64] uses {}` <!-- std@1/u64/checked_mul -->
+- `@noalloc pub fn u64.checked_sub(a: u64, b: u64) -> Option[u64] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/u64/checked_sub -->
 - `@noalloc pub fn u64.format[n: size](value: u64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u64/format -->
 - `pub fn u64.format_into(value: u64, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u64/format_into -->
+- `pub fn u64.format_radix(value: u64, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/u64/format_radix -->
 - `const u64.order: Order[u64]` <!-- core@1/u64/order -->
 - `@noalloc pub fn u64.parse(text: String) -> Result[u64, scalar.ParseError] uses {}` <!-- std@1/u64/parse -->
+- `@noalloc pub fn u64.parse_radix(text: String, radix: u8) -> Result[u64, scalar.ParseError] uses {}` <!-- std@1/u64/parse_radix -->
+- `@noalloc pub fn u64.saturating_mul(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/saturating_mul -->
+- `@noalloc pub fn u64.saturating_sub(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/saturating_sub -->
 - `pub fn u64.to_string(value: u64) -> String uses {}` <!-- std@1/u64/to_string -->
+- `@noalloc pub fn u64.wrapping_mul(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/wrapping_mul -->
+- `@noalloc pub fn u64.wrapping_sub(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/wrapping_sub -->
 
 ## u8
 
+- `@noalloc pub fn u8.checked_mul(a: u8, b: u8) -> Option[u8] uses {}` <!-- std@1/u8/checked_mul -->
+- `@noalloc pub fn u8.checked_sub(a: u8, b: u8) -> Option[u8] uses {}` — Generated by tools/generate-integer-ops.py; edit the template there. <!-- std@1/u8/checked_sub -->
 - `@noalloc pub fn u8.format[n: size](value: u8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u8/format -->
 - `pub fn u8.format_into(value: u8, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u8/format_into -->
+- `pub fn u8.format_radix(value: u8, radix: u8) -> Result[String, scalar.ParseError] uses {}` <!-- std@1/u8/format_radix -->
 - `const u8.order: Order[u8]` <!-- core@1/u8/order -->
 - `@noalloc pub fn u8.parse(text: String) -> Result[u8, scalar.ParseError] uses {}` <!-- std@1/u8/parse -->
+- `@noalloc pub fn u8.parse_radix(text: String, radix: u8) -> Result[u8, scalar.ParseError] uses {}` <!-- std@1/u8/parse_radix -->
+- `@noalloc pub fn u8.saturating_mul(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/saturating_mul -->
+- `@noalloc pub fn u8.saturating_sub(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/saturating_sub -->
 - `pub fn u8.to_string(value: u8) -> String uses {}` <!-- std@1/u8/to_string -->
+- `@noalloc pub fn u8.wrapping_mul(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/wrapping_mul -->
+- `@noalloc pub fn u8.wrapping_sub(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/wrapping_sub -->
 
 ## unicode
 
