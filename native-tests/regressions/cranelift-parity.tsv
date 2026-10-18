@@ -2,4 +2,3 @@
 # reason (`native --cranelift`). Each row is unfinished backend work, not a waiver;
 # a row whose case now passes fails the gate until it is removed.
 # case	reason
-conformance/MEM/MEM-6-soa-list-push-run.hir	compiler-error: emission: invalid Ready unit: a sequence operand that is no sequence block
