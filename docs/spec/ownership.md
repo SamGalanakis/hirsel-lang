@@ -173,9 +173,13 @@ accepts only unique arguments and only unique whole-value assignments, so its ro
 updated in place, and it hands back a unique value: on every return and at every
 evaluation that may fail, `x` must be unique, or MODE-2 is reported there. A counted
 result related to `x`, such as `map.get(x, k)`'s, holds a share of it and ends its
-uniqueness while the result may live; its shares stay local to the borrow, so at a return
-that hands back no counted content, and at a failure site, they have been dropped and `x`
-counts as unique again. The caller keeps treating `x` as unique after a failure too: a
+uniqueness while the result may live; its shares stay local to the borrow, so `x` counts
+as unique again once no live binding and no temporary of an unfinished statement holds a
+value derived from that result (a temporary lives to the end of its statement), at a
+return whose value derives none of them (`unique value` copies a borrow into fresh storage
+that derives nothing from it), and at a failure site. A share passed by `take` to a call,
+or produced by calling a function value, may be kept anywhere, so it ends `x`'s uniqueness
+for good. The caller keeps treating `x` as unique after a failure too: a
 `mutex.with` body that fails after a plain `mut` call installed a share in its unique
 payload would leave that share in the mutex, and the next holder would update it in
 place. Without `unique`, in-place update still happens whenever the run-time count allows

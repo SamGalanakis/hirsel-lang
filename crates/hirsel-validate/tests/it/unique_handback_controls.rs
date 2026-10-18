@@ -428,3 +428,171 @@ fn a_foreign_promise_is_not_used() {
     });
     handback_error(&f, "preserved unique hand-back");
 }
+
+/// Where the share `view(x)` returns is when the body next needs `x` unique.
+#[derive(Clone, Copy, PartialEq)]
+enum Share {
+    /// Dropped first.
+    Dropped,
+    /// Still in its temporary.
+    Held,
+    /// Moved to another local, which still holds it.
+    Moved,
+    /// Held until the return of the body's taken `y` releases it.
+    Returned,
+}
+
+/// `fn main(mut x: unique String, take y: String)` borrowing `x` into
+/// `view(x) -> String in x`, then calling `need(mut x: unique String)` or,
+/// for `Returned`, returning `y`.
+fn viewed_then_needed(share: Share) -> Fixture {
+    let (mut f, x) = handback(true);
+    let string = TypeKind::Primitive(Primitive::String);
+    let y = param(&mut f, string.clone());
+    if share == Share::Returned {
+        f.body().blocks[0].instructions.remove(0);
+        f.body().rvalues.clear();
+        let row = f.body().places[y as usize].ty;
+        f.body().result = row;
+        f.body().locals[0].ty = row;
+        f.body().places[0].ty = row;
+    }
+    let entry = f.cleanup(vec![drop(y)]);
+    f.emit(InstructionKind::BeginLoan {
+        id: LoanId(0),
+        place: PlaceId(x),
+        mutable: false,
+        if_inactive: false,
+    });
+    f.body().blocks[0]
+        .instructions
+        .last_mut()
+        .unwrap()
+        .on_failure = CleanupId(entry);
+    let via = f.through_loan(x, 0);
+    let view = f.slot(string.clone(), Storage::Temporary);
+    let lent = f.cleanup(vec![
+        CleanupAction::EndLoan {
+            loan: LoanId(0),
+            if_active: false,
+        },
+        drop(y),
+    ]);
+    f.body().blocks[0].terminator = Terminator::Call {
+        callee: Callee::Definition {
+            path: path("view"),
+            arguments: vec![],
+        },
+        arguments: vec![CallArgument {
+            parameter: ParamId(0),
+            value: operand(via, UseKind::Borrow),
+        }],
+        returns: Some(CallReturn {
+            destination: PlaceId(view),
+            next: BlockId(1),
+        }),
+        on_failure: CleanupId(lent),
+    };
+    let mut after = vec![inst(
+        InstructionKind::EndLoan {
+            loan: LoanId(0),
+            if_active: false,
+        },
+        f.cleanup(vec![drop(view), drop(y)]),
+    )];
+    let holder = match share {
+        Share::Dropped => {
+            after.push(inst(
+                InstructionKind::Drop {
+                    place: PlaceId(view),
+                    if_live: false,
+                },
+                entry,
+            ));
+            None
+        }
+        Share::Held | Share::Returned => Some(view),
+        Share::Moved => {
+            let kept = f.slot(string.clone(), Storage::Local);
+            let id = RvalueId(f.body().rvalues.len() as u32);
+            f.body().rvalues.push(Rvalue::Use(take(view)));
+            after.push(inst(
+                InstructionKind::Assign {
+                    destination: PlaceId(kept),
+                    value: id,
+                },
+                f.cleanup(vec![drop(view), drop(y)]),
+            ));
+            Some(kept)
+        }
+    };
+    let held: Vec<_> = holder.into_iter().map(drop).collect();
+    if share == Share::Returned {
+        let exit = f.cleanup(held);
+        f.body().blocks.push(block(after, ret(y, exit)));
+    } else {
+        let unit = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
+        let failed = f.cleanup(held.iter().cloned().chain([drop(y)]).collect());
+        f.body().blocks.push(block(
+            after,
+            Terminator::Call {
+                callee: Callee::Definition {
+                    path: path("need"),
+                    arguments: vec![],
+                },
+                arguments: vec![CallArgument {
+                    parameter: ParamId(0),
+                    value: operand(x, UseKind::Mut),
+                }],
+                returns: Some(CallReturn {
+                    destination: PlaceId(unit),
+                    next: BlockId(2),
+                }),
+                on_failure: CleanupId(failed),
+            },
+        ));
+        let exit = f.cleanup(held.into_iter().chain([drop(unit), drop(y)]).collect());
+        f.body().blocks.push(block(vec![], ret(0, exit)));
+    }
+    owner_sig(&mut f, &[PassingMode::Mut, PassingMode::Take]);
+    let mut callee = function_signature(
+        "view",
+        vec![(PassingMode::Borrow, string.clone())],
+        string.clone(),
+    );
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    let mut result = callee.types.get(fun.result).unwrap().clone();
+    result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
+    fun.result = callee.types.push(result);
+    f.signatures.insert(path("view"), callee);
+    let mut need = function_signature(
+        "need",
+        vec![(PassingMode::Mut, string)],
+        TypeKind::Tuple(vec![].into()),
+    );
+    let SignatureKind::Function(fun) = &mut need.kind else {
+        panic!()
+    };
+    let mut row = need.types.get(fun.parameters[0].ty).unwrap().clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    fun.parameters[0].ty = need.types.push(row);
+    f.signatures.insert(path("need"), need);
+    f
+}
+
+#[test]
+fn a_dead_related_share_leaves_its_storage_unique_mid_body() {
+    // The share died before the body needs `x` unique again.
+    viewed_then_needed(Share::Dropped).valid();
+    // Its temporary, or the local it moved to, still holds it.
+    assert!(!viewed_then_needed(Share::Held).kinds().is_empty());
+    assert!(!viewed_then_needed(Share::Moved).kinds().is_empty());
+}
+
+#[test]
+fn a_returned_value_keeps_only_the_shares_it_derives_from() {
+    // The returned `y` is counted but unrelated to `x`'s dead share.
+    viewed_then_needed(Share::Returned).valid();
+}

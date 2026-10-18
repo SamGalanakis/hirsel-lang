@@ -67,37 +67,6 @@ fn nested_generic_plain_bound_cannot_copy_a_mixed_outer_payload() {
     );
 }
 
-#[test]
-fn scoped_callback_results_retain_their_borrowed_captures_and_callee_storage() {
-    for unique_receiver in [false, true] {
-        let receiver = if unique_receiver { "unique " } else { "" };
-        let source = format!(
-            "fn invoke(f:fn()->Bytes in env uses{{}})->Bytes in f uses{{}}{{f()}}\nfn need(mut x:{receiver}Bytes){{}}\nfn example(mut x:{receiver}Bytes){{{{let v=invoke(fn()->Bytes in env uses{{}}{{x}});()}};need(mut x)}}"
-        );
-        let mut engine = hirsel_engine::QueryEngine::new(
-            hirsel_engine::default_environment(),
-            hirsel_driver::compiler_adapters(),
-        );
-        let file = engine
-            .sources
-            .add("scoped-result.hir", source.clone())
-            .unwrap();
-        let diagnostics =
-            hirsel_engine::check_snapshot(&mut engine, file, &hirsel_engine::default_context())
-                .unwrap_or_else(|error| match error {
-                    QueryError::Diagnostics(diagnostics) => diagnostics,
-                    error => panic!("{source}: {error:?}"),
-                });
-        assert_eq!(
-            diagnostics
-                .first()
-                .map(|diagnostic| diagnostic.rule.as_str()),
-            unique_receiver.then_some("MODE-2"),
-            "{source}: {diagnostics:?}"
-        );
-    }
-}
-
 /// Spec issue #50: a branch, arm or block is transparent to its consumer's
 /// use. The published use of the joined value is the join over every path, in
 /// whichever order the paths were analysed, and a part read from a borrowed

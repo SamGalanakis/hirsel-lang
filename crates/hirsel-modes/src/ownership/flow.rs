@@ -177,9 +177,12 @@ struct Value {
     part_of: Option<(usize, BTreeSet<usize>)>,
     /// MODE-2: aliased only by a related call result's counted shares. They
     /// are local to this storage's borrow, so none outlives the body except
-    /// through a counted result, and the hand-back of a body returning no
-    /// counted content still finds the storage unique.
+    /// through a value derived from it: once no live binding or temporary
+    /// holds one, the storage is unique again (`restore_borrowed`).
     borrow_only: bool,
+    /// The evaluated temporaries past their last use that may still hold
+    /// such a share until their statement releases them.
+    parked: Arc<BTreeSet<ExprId>>,
 }
 impl Value {
     fn new(modes: Modes) -> Self {
@@ -199,6 +202,7 @@ impl Value {
             fresh_receipt: false,
             part_of: None,
             borrow_only: false,
+            parked: Arc::default(),
         }
     }
     /// A related call result holds counted shares of this storage (MODE-2).
@@ -207,12 +211,15 @@ impl Value {
         self.modes.uniqueness = Uniqueness::Aliased;
         self.fresh_receipt = false;
     }
-    /// Unique, or aliased only by borrowed shares and leaving no counted result.
-    fn unique_at_exit(&self, counted_result: bool) -> bool {
-        self.modes.uniqueness == Uniqueness::Unique || self.borrow_only && !counted_result
+    /// No value holds a related call result's share any more (MODE-2).
+    fn restore_borrowed(&mut self) {
+        self.modes.uniqueness = Uniqueness::Unique;
+        self.borrow_only = false;
+        self.parked = Arc::default();
     }
     fn share(&mut self) {
         self.borrow_only = false;
+        self.parked = Arc::default();
         self.modes.uniqueness = Uniqueness::Aliased;
         self.fresh_receipt = false;
     }
@@ -564,6 +571,11 @@ impl Value {
         self.borrow_only = !(unique(self) && unique(other))
             && (self.borrow_only || unique(self))
             && (other.borrow_only || unique(other));
+        if !self.borrow_only {
+            self.parked = Arc::default();
+        } else if !other.parked.is_subset(&self.parked) {
+            Arc::make_mut(&mut self.parked).extend(other.parked.iter().copied());
+        }
         self.modes = self.modes.join(&other.modes);
         // Values aliasing different storage depend on both, and the join
         // aliases the first.
@@ -1670,9 +1682,7 @@ fn solve(
         let mut output = inputs[id].clone().unwrap();
         checker.node = id;
         checker.transfer(&graph.nodes[id].op, &mut output);
-        output
-            .values
-            .retain(|key, _| live[id].contains(&Holder::Temporary(*key)));
+        checker.release_temporaries(&mut output, &live[id]);
         for successor in &graph.nodes[id].next {
             let changed = if let Some(input) = &mut inputs[*successor] {
                 input.join(&output, &mut slots)
@@ -2516,7 +2526,80 @@ impl Checker<'_> {
                 _ => None,
             })
     }
-    fn mutable_crossing_exit(&mut self, state: &State, site: Span, counted_result: bool) {
+    /// The bindings a value may hold storage of: those it reaches, and those
+    /// they reach in turn, even once they are dead (MODE-5).
+    fn reached_bindings(&self, state: &State, value: &Value) -> BTreeSet<usize> {
+        let mut seen = BTreeSet::new();
+        let mut pending = value.roots();
+        while let Some(binding) = pending.pop() {
+            if seen.insert(binding) {
+                pending.extend(state.slots[binding].value.roots());
+            }
+        }
+        seen
+    }
+    /// Temporaries past their last use leave the flow state. One that may
+    /// hold a related call result's share stays parked on that storage until
+    /// its statement releases it (MODE-2).
+    fn release_temporaries(&self, state: &mut State, live: &BTreeSet<Holder>) {
+        let released: Vec<ExprId> = state
+            .values
+            .keys()
+            .copied()
+            .filter(|key| !live.contains(&Holder::Temporary(*key)))
+            .collect();
+        for key in released {
+            let value = state.values.remove(&key).unwrap();
+            if self.property(key).is_some_and(|p| p.plain) {
+                continue;
+            }
+            for root in self.reached_bindings(state, &value) {
+                let slot = &mut state.slots[root].value;
+                if slot.borrow_only && !slot.parked.contains(&key) {
+                    Arc::make_mut(&mut slot.parked).insert(key);
+                }
+            }
+        }
+    }
+    /// MODE-2: storage aliased only by related call results' shares is unique
+    /// again once no live binding, evaluated temporary or parked temporary
+    /// holds one.
+    fn restore_borrowed(&self, state: &mut State) {
+        let borrowed: Vec<usize> = state
+            .slots
+            .entries()
+            .into_iter()
+            .filter(|(_, slot)| slot.value.borrow_only && slot.value.parked.is_empty())
+            .map(|(index, _)| index)
+            .collect();
+        if borrowed.is_empty() {
+            return;
+        }
+        let mut held = BTreeSet::new();
+        for (index, slot) in state.slots.entries() {
+            if slot.available & LIVE != 0
+                && !self.properties[self.body.bindings[index].ty.index()].plain
+            {
+                held.extend(
+                    self.reached_bindings(state, &slot.value)
+                        .into_iter()
+                        .filter(|root| *root != index),
+                );
+            }
+        }
+        for (key, value) in &state.values {
+            if !self.property(*key).is_some_and(|p| p.plain) {
+                held.extend(self.reached_bindings(state, value));
+            }
+        }
+        for root in borrowed {
+            if !held.contains(&root) {
+                state.slots[root].value.restore_borrowed();
+            }
+        }
+    }
+    /// `held`: the bindings a returned value may hold storage of.
+    fn mutable_crossing_exit(&mut self, state: &State, site: Span, held: &BTreeSet<usize>) {
         if !self.emit {
             return;
         }
@@ -2538,7 +2621,8 @@ impl Checker<'_> {
                     || self.unique_proof.is_none()
                         && self.body.types.get(binding.ty).unwrap().modes.uniqueness
                             == Uniqueness::Unique)
-                && !state.slots[index].value.unique_at_exit(counted_result)
+                && state.slots[index].value.modes.uniqueness != Uniqueness::Unique
+                && !(state.slots[index].value.borrow_only && !held.contains(&index))
                 && !self.properties[binding.ty.index()].plain
                 && !self.properties[binding.ty.index()].shared
                 && self.lost_handbacks.insert(index)
@@ -2597,10 +2681,10 @@ impl Checker<'_> {
             }
         }
     }
-    fn record_return_uniqueness(&mut self, state: &State, counted_result: bool) {
+    fn record_return_uniqueness(&mut self, state: &State, held: &BTreeSet<usize>) {
         let mut site = self.graph.nodes[self.node].span;
         site.start = site.end.saturating_sub(1);
-        self.mutable_crossing_exit(state, site, counted_result);
+        self.mutable_crossing_exit(state, site, held);
         if self.emit && self.graph.clause.is_none() {
             for &index in &self.parameters {
                 let ResolvedName::Parameter(parameter) = self.body.bindings[index].binding else {
@@ -3278,11 +3362,11 @@ impl Checker<'_> {
                     .any(|part| matches!(part, Projection::Elements))
             })
         {
-            self.mutable_crossing_exit(state, *operation, false);
+            self.mutable_crossing_exit(state, *operation, &BTreeSet::new());
         }
         match op {
             Op::Nop => {}
-            Op::ReturnUnit => self.record_return_uniqueness(state, false),
+            Op::ReturnUnit => self.record_return_uniqueness(state, &BTreeSet::new()),
             Op::IdentityReady(site) => {
                 if self.emit {
                     for (owner, origin, ordinal) in
@@ -3338,6 +3422,27 @@ impl Checker<'_> {
                     state.slots[*binding].value.content = Content::default();
                     state.slots[*binding].value.set_alias(None);
                 }
+                self.restore_borrowed(state);
+            }
+            Op::StatementEnd(statement) => {
+                let statements = &self.graph.statements;
+                let ended = |key: &ExprId| {
+                    statements
+                        .temporaries
+                        .get(key)
+                        .is_some_and(|s| statements.within(*s, *statement))
+                };
+                let parked: Vec<usize> = state
+                    .slots
+                    .entries()
+                    .into_iter()
+                    .filter(|(_, slot)| slot.value.parked.iter().any(ended))
+                    .map(|(index, _)| index)
+                    .collect();
+                for index in parked {
+                    Arc::make_mut(&mut state.slots[index].value.parked).retain(|key| !ended(key));
+                }
+                self.restore_borrowed(state);
             }
             Op::Use {
                 expression,
@@ -5084,6 +5189,24 @@ impl Checker<'_> {
                 parts,
                 captures,
             } => {
+                // MODE-2: a callee owns what it takes and may keep it beyond
+                // this body, so a related result's share it receives is real.
+                if !*constructor {
+                    for (argument, requirement) in arguments.iter().zip(requirements) {
+                        if requirement
+                            .as_ref()
+                            .is_some_and(|r| r.passing == PassingMode::Take)
+                            && !self.property(argument.value).is_some_and(|p| p.plain)
+                        {
+                            let value = self.value(state, argument.value);
+                            for root in self.reached_bindings(state, &value) {
+                                if state.slots[root].value.borrow_only {
+                                    state.slots[root].value.share();
+                                }
+                            }
+                        }
+                    }
+                }
                 let mut loans: Vec<(Place, bool, ExprId)> = vec![];
                 let call_site = self.span_of(*expression);
                 let callee_name = self.spelled(*callee).unwrap_or_else(|| "the callee".into());
@@ -5787,8 +5910,15 @@ impl Checker<'_> {
                             roots.insert(root);
                             roots.extend(source.aliased().into_iter().chain(source.sources()));
                         }
+                        // A function value's body is unproved: its result's
+                        // share may be kept anywhere.
+                        let direct = self.callee_definition(*callee).is_some();
                         for root in roots {
-                            state.slots[root].value.borrow_share();
+                            if direct {
+                                state.slots[root].value.borrow_share();
+                            } else {
+                                state.slots[root].value.share();
+                            }
                             if !self.properties[self.body.bindings[root].ty.index()]
                                 .sendable_aliased
                             {
@@ -6057,8 +6187,14 @@ impl Checker<'_> {
                     result.relation = Relation::environment();
                 }
                 let result = &result;
-                let counted = self.property(*value).is_some_and(|p| !p.plain);
-                self.record_return_uniqueness(state, counted);
+                // MODE-2: the result keeps only the shares it derives from.
+                let held = if self.property(*value).is_some_and(|p| !p.plain) {
+                    let returned = self.value(state, *value);
+                    self.reached_bindings(state, &returned)
+                } else {
+                    BTreeSet::new()
+                };
+                self.record_return_uniqueness(state, &held);
                 if self.property(*value).is_some() {
                     let actual = self.value(state, *value);
                     let cause = if result.uniqueness == Uniqueness::Unique
@@ -6232,7 +6368,7 @@ impl Checker<'_> {
             _ => None,
         };
         if let Some(expression) = failure_site {
-            self.mutable_crossing_exit(state, self.span_of(expression), false);
+            self.mutable_crossing_exit(state, self.span_of(expression), &BTreeSet::new());
         }
     }
     /// Project the finite parameter-prefix observations used by this frame's

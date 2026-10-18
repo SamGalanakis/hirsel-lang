@@ -1,5 +1,5 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 20
+// expect: reject MODE-2 at line 18
 fn invoke(f: fn() -> Bytes in env uses {}) -> Bytes in f uses {} {
   f()
 }
@@ -15,7 +15,6 @@ fn example(mut x: unique Bytes) -> () {
         x
       }
     )
-    ()
+    need(mut x)
   }
-  need(mut x)
 }

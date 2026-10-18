@@ -1,0 +1,29 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// `unique value` copies the map.get borrow into fresh storage, so the returned
+// String holds no share of the map, which is handed back unique and passed
+// unique again. Twin is MODE-2-map-get-borrow-return-bad.
+fn read(mut m: unique Map[String, String], key: String) -> String uses {} {
+  match map.get(m, key) {
+    Some(value) => unique value,
+    None() => "missing",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut m: unique Map[String, String] = unique map.empty()
+  map.insert(mut m, unique "k", unique "stored")
+  let found = read(mut m, "k")
+  let missing = read(mut m, "other")
+  let ok = found == "stored" && missing == "missing"
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

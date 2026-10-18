@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+// Returning the map.get borrow itself keeps its share of the map past the
+// call, so the map cannot be handed back unique. Twin is
+// MODE-2-map-get-fresh-copy-return-run.
+fn read(mut m: unique Map[String, String], key: String) -> String in m uses {} {
+  match map.get(m, key) {
+    Some(value) => value,
+    None() => "missing",
+  }
+}

@@ -490,8 +490,12 @@ promise lists it `unretained` (`callee_unretained`: `sorted_map.insert`'s `by`);
 result uniqueness is flow evidence only, so the published call row stays the
 declared one, as V derives it. A `mut x: unique T` parameter must be unique at every
 return and evaluation failure site (`mutable_crossing_exit`); a related call result's
-counted shares only mark it `borrow_only`, which a failure site or a return of no counted
-content accepts (`unique_at_exit`). A `@preserves_unique`
+counted shares only mark it `borrow_only`. A failure site accepts that, and so does a
+return whose value reaches none of it (`reached_bindings`). A temporary released after
+its last use stays `parked` on the storage until its statement's `StatementEnd`;
+`restore_borrowed` makes the storage unique again, at each statement end and kill, once
+no live binding, evaluated temporary or parked temporary reaches it. A taken argument of
+a call reaching it makes the share real (`share`). A `@preserves_unique`
 body is checked a second time (`flow::check` with a proof parameter) with its
 selected and taken or `mut` parameters entering unique; a selected `mut` parameter
 must be unique at the same sites, a selected `take` parameter's result at every

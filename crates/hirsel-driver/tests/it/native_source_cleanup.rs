@@ -56,23 +56,27 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
                     .add("expired.hir", expired.clone())
                     .unwrap();
                 let output = check_progress(&mut rejected, file, &default_context()).unwrap();
+                // MODE-2: the dead `kept` held only a direct call's related
+                // share, which ends with it; a function value's may be kept.
                 let expected = if action.starts_with("change") {
-                    "MODE-2"
+                    view.starts_with('{').then_some("MODE-2")
                 } else if action.starts_with("let frozen") {
-                    "MEM-11"
+                    Some("MEM-11")
                 } else {
-                    "MODE-4"
+                    Some("MODE-4")
                 };
                 assert_eq!(
-                    output.diagnostics[0].rule.as_str(),
+                    output.diagnostics.first().map(|d| d.rule.as_str()),
                     expected,
                     "{expired}: {:?}",
                     output.diagnostics
                 );
-                assert_eq!(
-                    rejected.sources.slice(output.diagnostics[0].primary),
-                    Some(site)
-                );
+                if expected.is_some() {
+                    assert_eq!(
+                        rejected.sources.slice(output.diagnostics[0].primary),
+                        Some(site)
+                    );
+                }
                 let operation = action.replace("xs", "fresh");
                 let allowed = format!(
                     "{prelude}fn probe(take input:unique List[Bytes]){{let mut xs:unique List[Bytes]=take input;let kept=(copy {view},);let mut fresh=unique xs;{operation}}}"

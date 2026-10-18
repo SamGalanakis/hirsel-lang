@@ -366,8 +366,12 @@ parameter makes the call's destination currently unique. A `mut` use of a part o
 currently unique root is unique. `mutable_storage_exit` requires a `mut x: unique T`
 parameter to be unique at each exit and at each evaluation failure edge, but not on
 a release's failure edge, where source checking sees no evaluation. A root shared
-only by a related call result's counted shares is `borrow_only`, which a failure edge or
-a return of no counted content accepts (`returning_counted`). A
+only by a related call result's counted shares is `borrow_only`. `borrowed_shares` records,
+per local, the roots whose such shares its content may hold, through every assignment,
+replacement, snapshot and call (a call's result and `mut` arguments receive every
+argument's). Before each instruction and terminator, `restore_borrowed` makes a root
+unique again once no live local holds one; a failure edge accepts `borrow_only`, and so
+does a return whose value holds none (`returning_shares`). A
 `@preserves_unique` body is re-proved by a second flow run (`flow_with`) whose entry
 makes the selected and taken or `mut` parameters current-unique; a selected `mut`
 parameter is held to the same exits and a selected `take` parameter's returned value

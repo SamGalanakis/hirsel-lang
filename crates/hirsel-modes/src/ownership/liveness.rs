@@ -211,7 +211,7 @@ impl Liveness<'_> {
                     }
                 }
             }
-            Op::Nop | Op::ReturnUnit | Op::IdentityReady(_) => {}
+            Op::Nop | Op::ReturnUnit | Op::IdentityReady(_) | Op::StatementEnd(_) => {}
         }
         (uses, writes)
     }

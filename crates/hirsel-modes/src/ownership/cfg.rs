@@ -96,6 +96,8 @@ pub(super) enum Op {
         result: Modes,
     },
     Kill(Vec<usize>),
+    /// The block statement's temporaries are released (LANG-3).
+    StatementEnd(StmtId),
     LocalFunction(StmtId),
 }
 #[derive(Clone, Debug)]
@@ -125,6 +127,29 @@ pub(super) struct Graph {
     /// with that block and its consumer's operation: a consumer that only
     /// borrows the part would read storage the block ends (LANG-11).
     pub ending: BTreeMap<ExprId, (ExprId, ExprId)>,
+    pub statements: Statements,
+}
+/// The block statement whose temporaries hold each evaluated value, and the
+/// statement each block statement is nested in. A block's tail belongs to
+/// the statement holding the block, as lowering extracts it there.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Statements {
+    pub temporaries: BTreeMap<ExprId, StmtId>,
+    pub parents: BTreeMap<StmtId, StmtId>,
+}
+impl Statements {
+    /// Whether `inner` is `outer` or nested in it.
+    pub fn within(&self, mut inner: StmtId, outer: StmtId) -> bool {
+        loop {
+            if inner == outer {
+                return true;
+            }
+            let Some(&parent) = self.parents.get(&inner) else {
+                return false;
+            };
+            inner = parent;
+        }
+    }
 }
 /// Lexical source lifetimes, recorded while constructing the ownership graph.
 /// Occurrences belong to the enclosing scope; a block creates a child for its
@@ -172,6 +197,8 @@ struct Environment {
     /// The nearest operation that consumes this expression's value through
     /// transparent blocks, branches and arms (LANG-11).
     consumer: Option<ExprId>,
+    /// The block statement whose temporaries this expression's value joins.
+    statement: Option<StmtId>,
 }
 enum Job {
     Expr {
@@ -355,12 +382,14 @@ pub(super) fn build(
             lifetime: 0,
             result: result.clone(),
             consumer: None,
+            statement: None,
         };
         // Places in the value position of a block that declares their binding:
         // the value leaves the block and the binding does not, so a read moves
         // an owned local out instead of borrowing storage about to end.
         let mut leaving: BTreeSet<ExprId> = BTreeSet::new();
         let mut ending: BTreeMap<ExprId, (ExprId, ExprId)> = BTreeMap::new();
+        let mut statements = Statements::default();
         let mut jobs = vec![Job::Expr {
             entry,
             expression: root,
@@ -412,6 +441,9 @@ pub(super) fn build(
                     }
                     expressions.push(expression);
                     lifetimes.expressions.insert(expression, env.lifetime);
+                    if let Some(statement) = env.statement {
+                        statements.temporaries.insert(expression, statement);
+                    }
                     let expr = &tree.expressions[expression.0 as usize];
                     nodes[entry].span = expr.origin.span;
                     if place(body, expression, rows).is_some()
@@ -627,8 +659,11 @@ pub(super) fn build(
                                 fresh: false,
                             }
                         }
-                        ExprKind::Block { statements, tail } => {
-                            let patterns: Vec<_> = statements
+                        ExprKind::Block {
+                            statements: block_statements,
+                            tail,
+                        } => {
+                            let patterns: Vec<_> = block_statements
                                 .iter()
                                 .filter_map(|s| match tree.statements[s.0 as usize].kind {
                                     StmtKind::Let { pattern, .. } => Some(pattern),
@@ -636,7 +671,7 @@ pub(super) fn build(
                                 })
                                 .collect();
                             let mut locals = binders(rows, &patterns, tree);
-                            let mut statement_bindings: Vec<_> = statements
+                            let mut statement_bindings: Vec<_> = block_statements
                                 .iter()
                                 .flat_map(|s| rows.at(NameSite::Statement(*s)))
                                 .collect();
@@ -732,16 +767,25 @@ pub(super) fn build(
                                     expr.origin.span,
                                 )
                             };
-                            for statement in statements.iter().rev() {
-                                let child = reserve(
+                            for statement in block_statements.iter().rev() {
+                                let span = tree.statements[statement.0 as usize].origin.span;
+                                let child = reserve(&mut nodes, span);
+                                let end = node(
                                     &mut nodes,
-                                    tree.statements[statement.0 as usize].origin.span,
+                                    Op::StatementEnd(*statement),
+                                    vec![current],
+                                    span,
                                 );
+                                if let Some(parent) = env.statement {
+                                    statements.parents.insert(*statement, parent);
+                                }
+                                let mut env = env.clone();
+                                env.statement = Some(*statement);
                                 jobs.push(Job::Stmt {
                                     entry: child,
                                     statement: *statement,
-                                    next: current,
-                                    env: env.clone(),
+                                    next: end,
+                                    env,
                                 });
                                 current = child;
                             }
@@ -1541,6 +1585,7 @@ pub(super) fn build(
             lifetimes: std::sync::Arc::new(lifetimes),
             leaving,
             ending,
+            statements,
         });
     }
     Ok(graphs)

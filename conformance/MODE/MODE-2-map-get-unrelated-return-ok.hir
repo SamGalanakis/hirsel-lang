@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+// The returned `other` is counted but derives nothing from the map.get result,
+// so the map is handed back unique. Twin is
+// MODE-2-map-get-derived-return-bad.
+fn look(mut m: unique Map[String, String], k: String, take other: String) -> String {
+  let n = match map.get(m, k) {
+    Some(v) => string.byte_len(v),
+    None() => 0,
+  }
+  other
+}

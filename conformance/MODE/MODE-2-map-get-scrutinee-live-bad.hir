@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+// Inside the arm the matched map.get result still lives until the match's
+// statement ends, so the map is aliased when `need` requires it unique. Twin is
+// MODE-2-map-get-borrow-dies-mid-body-ok.
+fn need(mut m: unique Map[String, String]) -> () {}
+
+fn look(mut m: unique Map[String, String], k: String) -> u64 {
+  match map.get(m, k) {
+    Some(_) => {
+      need(mut m)
+      0
+    },
+    None() => 0,
+  }
+}

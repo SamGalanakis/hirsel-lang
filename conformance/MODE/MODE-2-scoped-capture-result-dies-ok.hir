@@ -1,0 +1,23 @@
+// rule: MODE-2
+// expect: accept
+// The closure's result `v` and the closure itself die with the block, so `x`
+// is unique again for `need`. Twin is MODE-2-scoped-capture-result-bad.
+fn invoke(f: fn() -> Bytes in env uses {}) -> Bytes in f uses {} {
+  f()
+}
+
+fn need(mut x: unique Bytes) -> () {
+  ()
+}
+
+fn example(mut x: unique Bytes) -> () {
+  {
+    let v = invoke(
+      fn() -> Bytes in env uses {} {
+        x
+      }
+    )
+    ()
+  }
+  need(mut x)
+}

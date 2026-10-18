@@ -86,6 +86,9 @@ pub(super) struct State {
     /// body except through a counted result: the hand-back of a body
     /// returning no counted content still finds it unique.
     borrow_only: Rows<bool>,
+    /// The roots whose related call result shares a local's content may
+    /// hold, through every value transfer from that result (MODE-2).
+    borrowed_shares: Rows<BTreeSet<usize>>,
     /// Current content evidence, independent of the receiving storage contract.
     current_unique: Rows<bool>,
     crossing_parts: Rows<crossing::Parts>,
@@ -173,6 +176,8 @@ impl State {
             }
         }
         self.shared.union(&other.shared, |a, b| *a |= b);
+        self.borrowed_shares
+            .union(&other.borrowed_shares, |a, b| a.extend(b));
         self.current_unique
             .join(&other.current_unique, |a, b| *a &= b);
         self.crossing_parts
@@ -238,8 +243,8 @@ struct Model {
     /// The failure edge being checked is a release's, which ends no uniqueness
     /// hand-back proof: source checking sees failures at evaluation sites.
     releasing: std::cell::Cell<bool>,
-    /// While a return's cleanup runs, whether it returns counted content.
-    returning_counted: std::cell::Cell<bool>,
+    /// While a return's cleanup runs, the roots whose shares it returns.
+    returning_shares: std::cell::RefCell<BTreeSet<usize>>,
 }
 impl Model {
     fn new(checker: &mut Checker<'_>) -> Self {
@@ -820,7 +825,7 @@ impl Model {
             depth,
             unique_proof: None,
             releasing: std::cell::Cell::new(false),
-            returning_counted: std::cell::Cell::new(false),
+            returning_shares: std::cell::RefCell::new(BTreeSet::new()),
         }
     }
     fn refresh_cleanup(&self, state: &mut State, root: usize) {
@@ -1002,6 +1007,8 @@ impl Model {
             shared: Rows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             borrow_only: Rows::new(false, body.locals.len())
+                .with_copy_counter(Counter::ValidateCopiedRows),
+            borrowed_shares: Rows::new(BTreeSet::new(), body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             current_unique: Rows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
@@ -3906,6 +3913,8 @@ impl Checker<'_> {
                     || !needs_release(self, self.place_type(value.place), &self.definition.types));
         let new_loans = self.operand_loans(model, state, value);
         let old_loans = self.installed_loans(state, destination);
+        let new_shares = self.operand_shares(state, value);
+        let old_shares = state.borrowed_shares[root].clone();
         let dependencies = new_loans.held();
         let sources = self.sources(model, state, value);
         if !owned
@@ -4008,6 +4017,7 @@ impl Checker<'_> {
         self.set_authority(model, state, displaced, old_authority);
         self.install_tags(model, state, displaced, old_tags);
         self.set_loan_content(model, state, displaced, &old_loans);
+        self.set_borrowed_shares(state, displaced, old_shares, true);
         self.set_sources(
             model,
             state,
@@ -4043,6 +4053,7 @@ impl Checker<'_> {
         self.set_authority(model, state, destination, new_authority);
         self.install_tags(model, state, destination, new_tags);
         self.set_loan_content(model, state, destination, &new_loans);
+        self.set_borrowed_shares(state, destination, new_shares, true);
         self.set_sources(model, state, destination, sources);
         state.origins.identities[target] = incoming.origins.identities[source].clone();
         state.origins.owners[target] = incoming.origins.owners[source].clone();
@@ -4174,6 +4185,58 @@ impl Checker<'_> {
             _ => false,
         })
     }
+    /// The roots whose borrow-only shares an operand's counted content may hold.
+    fn operand_shares(&self, state: &State, operand: &Operand) -> BTreeSet<usize> {
+        if !needs_release(self, self.place_type(operand.place), &self.definition.types) {
+            return BTreeSet::new();
+        }
+        state.borrowed_shares[self.body.places[operand.place.0 as usize].root.0 as usize].clone()
+    }
+    /// Install `shares` in the place's root, replacing them on a whole write.
+    fn set_borrowed_shares(
+        &self,
+        state: &mut State,
+        place: PlaceId,
+        shares: BTreeSet<usize>,
+        whole: bool,
+    ) {
+        let access = &self.body.places[place.0 as usize];
+        let root = access.root.0 as usize;
+        if whole && access.projection.is_empty() {
+            if state.borrowed_shares[root] != shares {
+                state.borrowed_shares.set(root, shares);
+            }
+        } else if !shares.is_subset(&state.borrowed_shares[root]) {
+            state.borrowed_shares[root].extend(shares);
+        }
+    }
+    /// MODE-2: a root aliased only by related call results' shares is unique
+    /// again once no live local holds one.
+    fn restore_borrowed(&self, model: &Model, state: &mut State) {
+        let borrowed: Vec<usize> = state
+            .borrow_only
+            .entries()
+            .into_iter()
+            .filter(|(_, only)| **only)
+            .map(|(root, _)| root)
+            .collect();
+        for root in borrowed {
+            let held = state
+                .borrowed_shares
+                .entries()
+                .into_iter()
+                .any(|(local, shares)| {
+                    shares.contains(&root)
+                        && model
+                            .contents(model.roots[local])
+                            .any(|i| state.places[i] & LIVE != 0)
+                });
+            if !held {
+                state.shared.set(root, false);
+                state.borrow_only.set(root, false);
+            }
+        }
+    }
     fn mutable_storage_exit(&mut self, model: &Model, state: &State, report: bool) {
         for root in 0..model.mutable_parameters.len() {
             if !model.mutable_parameters[root] {
@@ -4195,7 +4258,8 @@ impl Checker<'_> {
                 && needs_release(self, ty, &self.definition.types)
                 && !super::handle_root(&self.definition.types, ty)
                 && (state.shared[root]
-                    && !(state.borrow_only[root] && !model.returning_counted.get())
+                    && !(state.borrow_only[root]
+                        && !model.returning_shares.borrow().contains(&root))
                     || !state.current_unique[root])
             {
                 self.flow_error(
@@ -4275,6 +4339,7 @@ impl Checker<'_> {
         for (i, instruction) in block.instructions.iter().enumerate() {
             self.site.instruction = Some(i as u32);
             self.acquisitions(state, report);
+            self.restore_borrowed(model, state);
             match &instruction.kind {
                 InstructionKind::BindOrigin {
                     source,
@@ -4979,6 +5044,22 @@ impl Checker<'_> {
                     self.install_tags(model, state, *destination, tag_parts);
                     self.set_loan_content(model, state, *destination, &content_loans);
                     self.set_sources(model, state, *destination, sources);
+                    // A deep copy shares nothing it read (MODE-2).
+                    let shares = if matches!(
+                        rvalue,
+                        Rvalue::Unary {
+                            op: hirsel_syntax::UnaryOp::Unique,
+                            ..
+                        }
+                    ) {
+                        BTreeSet::new()
+                    } else {
+                        typing::operands(rvalue)
+                            .into_iter()
+                            .flat_map(|o| self.operand_shares(state, o))
+                            .collect()
+                    };
+                    self.set_borrowed_shares(state, *destination, shares, true);
                     let root = self.body.places[destination.0 as usize].root.0 as usize;
                     if model.mutable_parameters[root] {
                         if let Rvalue::Use(operand) = rvalue {
@@ -5031,9 +5112,11 @@ impl Checker<'_> {
                     let sendable = transfer_store.get(transferred).unwrap().modes.sendability
                         == Sendability::Sendable;
                     let crossing = self.operand_crossing_parts(state, value);
+                    let shares = self.operand_shares(state, value);
                     self.mode_transfer(state, self.place_type(*destination), value, report);
                     self.read(model, state, value, report);
                     self.reset_unique(state, *destination);
+                    self.set_borrowed_shares(state, *destination, shares, true);
                     self.set_current_sendable(state, *destination, sendable);
                     self.install_crossing_parts(
                         state,
@@ -5144,6 +5227,7 @@ impl Checker<'_> {
         }
         self.site.instruction = None;
         self.acquisitions(state, report);
+        self.restore_borrowed(model, state);
         match &block.terminator {
             Terminator::Branch { condition, .. } => self.read(model, state, condition, report),
             Terminator::Switch { value, .. } => self.read(model, state, value, report),
@@ -5324,6 +5408,13 @@ impl Checker<'_> {
                         }
                     }
                 }
+                // MODE-2: the result and each `mut` argument may receive the
+                // borrow-only shares of every argument.
+                let argument_shares: BTreeSet<usize> = arguments
+                    .iter()
+                    .flat_map(|a| self.operand_shares(state, &a.value))
+                    .collect();
+                let mut borrowed = argument_shares.clone();
                 let result = if let Some(destination) = destination {
                     let (result_arguments, result_environment) =
                         self.result_arguments(callee, arguments);
@@ -5417,6 +5508,7 @@ impl Checker<'_> {
                                 for (r, restorable) in restorable.into_iter().enumerate() {
                                     if restorable && state.shared[r] {
                                         state.borrow_only.set(r, true);
+                                        borrowed.insert(r);
                                     }
                                 }
                             }
@@ -5487,6 +5579,14 @@ impl Checker<'_> {
                         share_root(
                             state,
                             self.body.places[a.value.place.0 as usize].root.0 as usize,
+                        );
+                    }
+                    if a.value.usage == UseKind::Mut {
+                        self.set_borrowed_shares(
+                            state,
+                            a.value.place,
+                            argument_shares.clone(),
+                            false,
                         );
                     }
                     self.read(model, state, &a.value, report);
@@ -5713,6 +5813,7 @@ impl Checker<'_> {
                     sources
                 };
                 self.set_sources(model, state, destination, sources);
+                self.set_borrowed_shares(state, destination, borrowed, true);
                 let result_origins = super::flow_origins::remember(
                     &self.definition.types,
                     &self.scratch.origin_types[self.site.body.0 as usize],
@@ -5880,14 +5981,10 @@ impl Checker<'_> {
                     })
                     .collect();
                 self.read(model, state, value, report);
-                // MODE-2: a counted result may keep a borrow-only share.
-                model.returning_counted.set(needs_release(
-                    self,
-                    self.place_type(value.place),
-                    &self.definition.types,
-                ));
+                // MODE-2: a result keeps the borrow-only shares it derives from.
+                *model.returning_shares.borrow_mut() = self.operand_shares(state, value);
                 self.cleanup(model, state, *cleanup, true, report, true);
-                model.returning_counted.set(false);
+                model.returning_shares.borrow_mut().clear();
                 if model
                     .contents(returned_origin)
                     .any(|i| !state.origins.expired[i].is_empty())
