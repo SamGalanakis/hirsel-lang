@@ -1,4 +1,4 @@
-//! Network operations at the Hirsel ABI v1 (`HIRSEL_ABI_EXPORTS`).
+//! Network operations at the Hirsel ABI v2 (`HIRSEL_ABI_EXPORTS`).
 //! Each export builds one typed `Request`; policy and recording happen in the adapter.
 //! Expected network errors are `Error` results; a stream reached through a Net that does
 //! not brand it is a CAP-2 refusal (status 1, recorded by the compiled caller).
@@ -220,12 +220,12 @@ pub(crate) unsafe fn text(owner: *mut Header, start: u64, len: u64) -> String {
 pub(crate) unsafe fn call_recording(ctx: *mut RunCtx, request: Request) -> Option<Completion> {
     match unsafe { crate::io::capability_call(ctx, request) } {
         Ok(Completion::Checked(false)) => {
-            crate::failure::record_runtime(ctx, "LANG-9", 0);
+            crate::failure::record_runtime(ctx, "LANG-9", 0, 0);
             None
         }
         Ok(completion) => Some(completion),
         Err(()) => {
-            crate::failure::record_runtime(ctx, "CAP-2", 0);
+            crate::failure::record_runtime(ctx, "CAP-2", 0, 0);
             None
         }
     }

@@ -487,6 +487,7 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
             (*owner).index(),
             std::ptr::null(),
             0,
+            0,
         );
         real.borrow_mut().inject(Fault {
             error: IoError::Canceled(2),
@@ -587,6 +588,7 @@ fn walk_step_stops_after_the_first_error_and_releases_its_environment() {
             environment,
             (*environment).index(),
             std::ptr::null(),
+            0,
             0,
         );
     }

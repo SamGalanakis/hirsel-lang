@@ -366,9 +366,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         let mut args = Vec::new();
         let mut result_place = None;
+        let codes = self.caller_sites(self.anchor_code(site.anchor)?, site.forward_caller);
         for hidden in &signature.hidden {
             match hidden {
                 Hidden::Context => args.push(self.context),
+                Hidden::CallerSite => args.push(codes.0),
+                Hidden::OperationSite => args.push(codes.1),
                 Hidden::Environment => match environment {
                     Some(env) => args.push(env),
                     None => return self.invalid("an environment argument without a callable"),
@@ -613,15 +616,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.module.const_int(self.module.int_type(8), 0),
         );
         let failure_block = self.failure_block(failure)?;
-        let fail = if self.unit.header.origin == UnitOrigin::Library {
+        // An unanchored primitive failure must cross the original function-value
+        // boundary before the surrounding marked frame's ordinary failure edge.
+        let fail = if site.forward_caller {
             failure_block
         } else {
             let block = self.module.append_block(self.function);
             let here = self.builder.current();
             self.builder.position(block);
+            let (caller, operation) = self.failure_sites_for(self.anchor_code(site.anchor)?, false);
             let reanchor = self.runtime(RuntimeEntry::FailureReanchor)?;
-            let anchor = self.const_u64(self.anchor_code(site.anchor)?);
-            self.builder.call(reanchor, &[self.context, anchor, anchor]);
+            self.builder
+                .call(reanchor, &[self.context, caller, operation]);
             self.builder.br(failure_block);
             self.builder.position(here);
             block
@@ -646,7 +652,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let record = self.module.append_block(self.function);
             self.builder.position(record);
             let begin = self.runtime(RuntimeEntry::FailureBegin)?;
-            let site = self.anchor_code(site.anchor)?;
+            let (site, operation) =
+                self.failure_sites_for(self.anchor_code(site.anchor)?, site.forward_caller);
             let i32_ty = self.module.int_type(32);
             self.builder.call(
                 begin,
@@ -654,8 +661,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.context,
                     self.module.const_int(i32_ty, u128::from(code.kind)),
                     self.module.const_int(i32_ty, u128::from(code.rule)),
-                    self.const_u64(site),
-                    self.const_u64(site),
+                    site,
+                    operation,
                 ],
             );
             self.builder.br(fail);

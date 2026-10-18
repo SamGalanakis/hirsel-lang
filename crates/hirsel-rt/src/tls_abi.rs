@@ -1,4 +1,4 @@
-//! TLS Hirsel ABI v1. Layouts are the ordinary core TlsRoots/Stream layouts;
+//! TLS Hirsel ABI v2. Layouts are the ordinary core TlsRoots/Stream layouts;
 //! this adapter adds no TLS representation to the language.
 use crate::io::{Binding, Completion, Request};
 use crate::net::RootsDigest;

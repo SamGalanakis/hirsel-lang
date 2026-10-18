@@ -722,15 +722,16 @@ pub(crate) unsafe fn drain(
     mask: *const u64,
     keep_root: bool,
     anchor: u64,
+    operation_site: u64,
 ) -> Drained {
     #[cfg(test)]
     crate::header_tests::count_drain();
     // SAFETY: caller contract.
     unsafe {
         if mask.is_null() && !keep_root {
-            drain_items::<false>(ctx, base, root, mask, keep_root, anchor)
+            drain_items::<false>(ctx, base, root, mask, keep_root, anchor, operation_site)
         } else {
-            drain_items::<true>(ctx, base, root, mask, keep_root, anchor)
+            drain_items::<true>(ctx, base, root, mask, keep_root, anchor, operation_site)
         }
     }
 }
@@ -745,6 +746,7 @@ unsafe fn drain_items<const ROOTED: bool>(
     mask: *const u64,
     keep_root: bool,
     anchor: u64,
+    operation_site: u64,
 ) -> Drained {
     let mut status = STATUS_OK;
     let mut kept_root = false;
@@ -760,7 +762,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                     if !is_cleanup(item) {
                         ctx.heap.set_state(item, STATE_FINALIZING);
                     }
-                    status |= run_finalizer(ctx, layout, value, anchor);
+                    status |= run_finalizer(ctx, layout, value, anchor, operation_site);
                 }
                 if !is_cleanup(item) {
                     ctx.heap.set_state(item, STATE_FIELDS_PENDING);
@@ -792,6 +794,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                     nest,
                     item_mask,
                     anchor,
+                    operation_site,
                     &mut status,
                 );
             } else {
@@ -844,6 +847,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                             0,
                             item_mask,
                             anchor,
+                            operation_site,
                             &mut status,
                         );
                         break;
@@ -925,6 +929,7 @@ unsafe fn run_step(
     at: *mut u8,
     pc: &mut usize,
     anchor: u64,
+    operation_site: u64,
     status: &mut u8,
 ) -> *mut Header {
     // SAFETY: `at` addresses the step's field inside the value being dropped.
@@ -941,11 +946,16 @@ unsafe fn run_step(
                     *pc += step.span as usize;
                 }
             }
-            STEP_FINALIZE => *status |= run_finalizer(ctx, step.layout, at, anchor),
+            STEP_FINALIZE => *status |= run_finalizer(ctx, step.layout, at, anchor, operation_site),
             // The last root died: the value is ordinary again before its steps release it.
             STEP_THAW => crate::shared::thaw_value(ctx, step.layout, at),
             STEP_CLOSE_HANDLE => {
-                *status |= run_close(ctx, at.cast::<u64>().read_unaligned(), anchor);
+                *status |= run_close(
+                    ctx,
+                    at.cast::<u64>().read_unaligned(),
+                    anchor,
+                    operation_site,
+                );
             }
             _ => fault("a drop step has an unknown kind"),
         }
@@ -968,6 +978,7 @@ unsafe fn walk_frames(
     mut nest: u64,
     mask: *const u64,
     anchor: u64,
+    operation_site: u64,
     status: &mut u8,
 ) -> (*mut Header, u64) {
     // SAFETY: as `drain`; `frame` is a frame of this item's program.
@@ -1050,7 +1061,7 @@ unsafe fn walk_frames(
                 }
                 _ => {
                     let at = frame.base.wrapping_add(step.offset as usize);
-                    let child = run_step(ctx, step, at, &mut pc, anchor, status);
+                    let child = run_step(ctx, step, at, &mut pc, anchor, operation_site, status);
                     if !child.is_null() {
                         return (child, suspended(pc, &frame, nest));
                     }
@@ -1146,6 +1157,7 @@ pub(crate) unsafe fn release_block(
     block: *mut Header,
     mask: *const u64,
     anchor: u64,
+    operation_site: u64,
 ) -> u8 {
     // SAFETY: caller owns one credit of a live block.
     unsafe {
@@ -1175,7 +1187,7 @@ pub(crate) unsafe fn release_block(
         // T04 DropLast — Finite(1) -> Dead, then drain.
         let base = ctx.work;
         push(ctx, block, mask.is_null());
-        drain(ctx, base, block, mask, false, anchor).status
+        drain(ctx, base, block, mask, false, anchor, operation_site).status
     }
 }
 
@@ -1195,6 +1207,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_release(
     index: u32,
     live_mask: *const u64,
     anchor: u64,
+    operation_site: u64,
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
@@ -1202,7 +1215,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_release(
         if ctx.heap.diagnostic {
             check_root(ctx, block, ctx.descriptor(index), live_mask);
         }
-        release_block(ctx, block, live_mask, anchor)
+        release_block(ctx, block, live_mask, anchor, operation_site)
     }
 }
 
@@ -1220,6 +1233,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
     index: u32,
     live_mask: *const u64,
     anchor: u64,
+    operation_site: u64,
     out_token: *mut *mut Header,
 ) -> u8 {
     // SAFETY: caller contract.
@@ -1230,7 +1244,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
         }
         out_token.write(ptr::null_mut());
         if (*block).count != 1 || (*block).domain() != DOMAIN_HEAP {
-            return release_block(ctx, block, live_mask, anchor);
+            return release_block(ctx, block, live_mask, anchor, operation_site);
         }
         let base = ctx.work;
         push(ctx, block, live_mask.is_null());
@@ -1239,7 +1253,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
             ctx.heap.measurement.record("count_decrements", 1);
             ctx.heap.measurement.count_decrements += 1;
         }
-        let drained = drain(ctx, base, block, live_mask, true, anchor);
+        let drained = drain(ctx, base, block, live_mask, true, anchor, operation_site);
         if drained.kept_root {
             // The donor is gone: its payload is unaddressable until a reuse installs a value.
             #[cfg(feature = "memcheck")]

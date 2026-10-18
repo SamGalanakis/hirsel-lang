@@ -1086,6 +1086,9 @@ impl<S: Stage> Checker<'_, '_, S> {
     fn parameters(&mut self) -> Vec<(Passing, Option<SlotId>)> {
         let unit = self.cx.unit;
         let abi = &self.cx.layouts.0.fn_abis[unit.header.abi.0 as usize];
+        if unit.header.track_caller && !abi.caller_site {
+            self.add(Site::UNIT, K::Type("caller metadata"));
+        }
         if unit.parameters.len() != abi.parameters.len() {
             self.add(Site::UNIT, K::Arity("parameters"));
         }

@@ -29,7 +29,7 @@ fn node(ctx: *mut RunCtx, layout: &Layout, id: u64) -> *mut Header {
 }
 
 fn release(ctx: *mut RunCtx, block: *mut Header) -> u8 {
-    unsafe { hirsel_rt_v2_release(ctx, block, (*block).index(), ptr::null(), 0) }
+    unsafe { hirsel_rt_v2_release(ctx, block, (*block).index(), ptr::null(), 0, 0) }
 }
 
 fn primary(ctx: &Ctx) -> Option<FailureRecord> {
@@ -159,7 +159,12 @@ thread_local! {
     static SEEN_SHIELD: Cell<u8> = const { Cell::new(9) };
 }
 
-unsafe extern "C" fn shield_probe(ctx: *mut RunCtx, _value: *mut u8, _anchor: u64) -> u8 {
+unsafe extern "C" fn shield_probe(
+    ctx: *mut RunCtx,
+    _value: *mut u8,
+    _anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     SEEN_SHIELD.with(|seen| seen.set(unsafe { hirsel_rt_v2_shielded(ctx) }));
     0
 }
@@ -205,10 +210,15 @@ thread_local! {
 
 /// An Io adapter's close thunk: handle 13 fails, recording rule 77 at the anchor; any other
 /// handle closes. It notes the handle, the anchor and whether it ran shielded.
-unsafe extern "C" fn close_probe(ctx: *mut RunCtx, handle: u64, anchor: u64) -> u8 {
+unsafe extern "C" fn close_probe(
+    ctx: *mut RunCtx,
+    handle: u64,
+    anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     CLOSED.with(|seen| seen.set((handle, anchor, unsafe { hirsel_rt_v2_shielded(ctx) })));
     if handle == 13 {
-        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 77, anchor, anchor) };
+        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 77, anchor, _operation_site) };
         return 1;
     }
     0
@@ -220,7 +230,7 @@ unsafe extern "C" fn close_probe(ctx: *mut RunCtx, handle: u64, anchor: u64) -> 
 fn compiled_handle_close_runs_shielded_and_reports_a_failing_close() {
     if in_child("compiled_handle_close_runs_shielded_and_reports_a_failing_close") {
         let ctx = context();
-        unsafe { hirsel_rt_v2_close_handle(ctx.0, 12, 3) };
+        unsafe { hirsel_rt_v2_close_handle(ctx.0, 12, 3, 3) };
         return;
     }
     assert_child_aborts(
@@ -231,14 +241,14 @@ fn compiled_handle_close_runs_shielded_and_reports_a_failing_close() {
         close_handle: Some(close_probe),
         ..hirsel_rt::Config::new()
     });
-    assert_eq!(unsafe { hirsel_rt_v2_close_handle(ctx.0, 13, 5) }, 1);
+    assert_eq!(unsafe { hirsel_rt_v2_close_handle(ctx.0, 13, 5, 5) }, 1);
     assert_eq!(CLOSED.with(Cell::get), (13, 5, 1));
     let failure = primary(&ctx).unwrap();
     assert_eq!((failure.rule, failure.site), (77, 5));
     assert_eq!(unsafe { hirsel_rt_v2_shielded(ctx.0) }, 0);
     // Accepted twin: a close that succeeds records nothing.
     unsafe { hirsel_rt_v2_failure_clear(ctx.0) };
-    assert_eq!(unsafe { hirsel_rt_v2_close_handle(ctx.0, 12, 6) }, 0);
+    assert_eq!(unsafe { hirsel_rt_v2_close_handle(ctx.0, 12, 6, 6) }, 0);
     assert_eq!(CLOSED.with(Cell::get), (12, 6, 1));
     assert!(primary(&ctx).is_none());
 }
@@ -248,10 +258,24 @@ thread_local! {
 }
 
 /// A finalizer whose body releases a block it owns, as user drop code may.
-unsafe extern "C" fn releasing_drop(ctx: *mut RunCtx, value: *mut u8, anchor: u64) -> u8 {
-    unsafe { log_drop(ctx, value, anchor) };
+unsafe extern "C" fn releasing_drop(
+    ctx: *mut RunCtx,
+    value: *mut u8,
+    anchor: u64,
+    _operation_site: u64,
+) -> u8 {
+    unsafe { log_drop(ctx, value, anchor, _operation_site) };
     let owned = OWNED.with(|owned| owned.replace(ptr::null_mut()));
-    unsafe { hirsel_rt_v2_release(ctx, owned, (*owned).index(), ptr::null(), anchor) }
+    unsafe {
+        hirsel_rt_v2_release(
+            ctx,
+            owned,
+            (*owned).index(),
+            ptr::null(),
+            anchor,
+            _operation_site,
+        )
+    }
 }
 
 #[test]
@@ -295,6 +319,7 @@ fn an_inline_resource_finalizes_through_its_continuation_and_releases_its_fields
             ptr::null(),
             continuation.as_mut_ptr(),
             4,
+            4,
         )
     };
     assert_eq!(status, 1);
@@ -320,6 +345,7 @@ fn a_partially_built_inline_value_releases_only_its_live_fields() {
             value.as_mut_ptr().cast(),
             mask.as_ptr(),
             continuation.as_mut_ptr(),
+            0,
             0,
         )
     };
@@ -364,7 +390,12 @@ fn a_failing_unsafe_ffi_field_ends_the_process_even_inside_a_safe_value() {
     );
 }
 
-unsafe extern "C" fn bad_status_drop(_ctx: *mut RunCtx, _value: *mut u8, _anchor: u64) -> u8 {
+unsafe extern "C" fn bad_status_drop(
+    _ctx: *mut RunCtx,
+    _value: *mut u8,
+    _anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     7
 }
 
@@ -381,7 +412,12 @@ fn a_finalizer_status_other_than_zero_or_one_is_an_invariant_fault() {
     );
 }
 
-unsafe extern "C" fn silent_failure_drop(_ctx: *mut RunCtx, _value: *mut u8, _anchor: u64) -> u8 {
+unsafe extern "C" fn silent_failure_drop(
+    _ctx: *mut RunCtx,
+    _value: *mut u8,
+    _anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     1
 }
 
@@ -481,4 +517,62 @@ fn caller_attribution_keeps_operation_sites_and_ordered_causes() {
     assert_eq!(primary(&ctx), Some(primary_record));
     assert_eq!(cause(0), first);
     assert_eq!(cause(1), second);
+}
+
+/// The public cleanup ABI carries both codes through an independent host descriptor,
+/// including every later field failure after an already anchored primary failure.
+#[test]
+fn cleanup_abi_preserves_distinct_sites_and_anchored_causes() {
+    for inline in [false, true] {
+        let ctx = context();
+        // Bind the fixture descriptors before recording state in the context.
+        index(ctx.0, pair(failing_drop));
+        unsafe { hirsel_rt_v2_failure_begin(ctx.0, 1, 99, 11, 12) };
+        let first = node(ctx.0, resource(failing_drop), 2);
+        let second = node(ctx.0, resource(failing_drop), 3);
+        let status = if inline {
+            let mut value = [1u64, first as u64, second as u64];
+            let mut continuation = MaybeUninit::<Cleanup>::uninit();
+            unsafe {
+                hirsel_rt_v2_finalize(
+                    ctx.0,
+                    index(ctx.0, pair(failing_drop)),
+                    value.as_mut_ptr().cast(),
+                    ptr::null(),
+                    continuation.as_mut_ptr(),
+                    101,
+                    202,
+                )
+            }
+        } else {
+            let root = node(ctx.0, pair(failing_drop), 1);
+            write_ref(root, 8, first);
+            write_ref(root, 16, second);
+            unsafe { hirsel_rt_v2_release(ctx.0, root, (*root).index(), ptr::null(), 101, 202) }
+        };
+        assert_eq!(status, 1);
+        let first = primary(&ctx).unwrap();
+        assert_eq!((first.rule, first.site, first.operation_site), (99, 11, 12));
+        assert_eq!(cause_rules(&ctx), [1, 3, 2]);
+        for ordinal in 0..3 {
+            let mut record = MaybeUninit::uninit();
+            assert_eq!(
+                unsafe { hirsel_rt_v2_failure_cause(ctx.0, ordinal, record.as_mut_ptr()) },
+                1
+            );
+            let record = unsafe { record.assume_init() };
+            assert_eq!((record.site, record.operation_site), (101, 202));
+        }
+        assert_eq!(ctx.stats().live_blocks, 0);
+    }
+    let ctx = Ctx::with(hirsel_rt::Config {
+        close_handle: Some(close_probe),
+        ..hirsel_rt::Config::new()
+    });
+    assert_eq!(unsafe { hirsel_rt_v2_close_handle(ctx.0, 13, 303, 404) }, 1);
+    let failure = primary(&ctx).unwrap();
+    assert_eq!((failure.site, failure.operation_site), (303, 404));
+    unsafe { hirsel_rt_v2_failure_clear(ctx.0) };
+    assert_eq!(unsafe { hirsel_rt_v2_close_handle(ctx.0, 12, 303, 404) }, 0);
+    assert!(primary(&ctx).is_none());
 }

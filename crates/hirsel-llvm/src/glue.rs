@@ -258,7 +258,7 @@ fn declare<'m>(
     pending: &mut Vec<Pending<'m>>,
 ) -> Glued<Function<'m>> {
     let (ptr, i64_ty) = (module.ptr_type(), module.int_type(64));
-    let ty = module.function_type(module.int_type(8), &[ptr, ptr, i64_ty, i64_ty]);
+    let ty = module.function_type(module.int_type(8), &[ptr, ptr, i64_ty, i64_ty, i64_ty]);
     let name = name(layout);
     let fresh = !module.defines(&name);
     let function = module.function(&name, ty).map_err(GlueError)?;
@@ -289,11 +289,12 @@ pub(crate) fn define<'m>(
         let int = |n: u64| module.const_int(i64_ty, u128::from(n));
         let status = builder.alloca(i8_ty, 1);
         builder.store(module.const_int(i8_ty, 0), status, 1);
-        let (context, block, anchor, budget) = (
+        let (context, block, anchor, operation_site, budget) = (
             module.parameter(function, 0),
             module.parameter(function, 1),
             module.parameter(function, 2),
             module.parameter(function, 3),
+            module.parameter(function, 4),
         );
         let [spent, drop] = std::array::from_fn(|_| module.append_block(function));
         let done = drop_edge(
@@ -318,7 +319,10 @@ pub(crate) fn define<'m>(
             module.const_int(module.int_type(32), 0x1fffffff),
         );
         let null = module.const_zero(ptr_ty);
-        let drained = builder.call(runtime.release, &[context, block, descriptor, null, anchor]);
+        let drained = builder.call(
+            runtime.release,
+            &[context, block, descriptor, null, anchor, operation_site],
+        );
         builder.ret(if infallible(layouts, layout) {
             module.const_int(i8_ty, 0)
         } else {
@@ -337,6 +341,7 @@ pub(crate) fn define<'m>(
             builder: &builder,
             context,
             anchor,
+            operation_site,
             budget: builder.binary(BinOp::Sub, budget, int(1)),
             status,
             pending: &mut pending,
@@ -369,6 +374,7 @@ pub(crate) struct Walk<'m, 'g> {
     pub(crate) context: Value<'m>,
     /// The cleanup anchor every finalizer and close of this release reports.
     pub(crate) anchor: Value<'m>,
+    pub(crate) operation_site: Value<'m>,
     /// Nested glue frames a child released here may still hold (an `i64`).
     pub(crate) budget: Value<'m>,
     /// An `i8` in the frame that every runtime status is or-ed into: a failing leaf does
@@ -435,7 +441,14 @@ impl<'m, 'g> Walk<'m, 'g> {
                 self.module.const_int(self.module.int_type(32), 0x1fffffff),
             );
             let null = self.module.const_zero(ptr_ty);
-            let arguments = [self.context, block, descriptor, null, self.anchor];
+            let arguments = [
+                self.context,
+                block,
+                descriptor,
+                null,
+                self.anchor,
+                self.operation_site,
+            ];
             self.accumulate(self.builder.call(self.runtime.release, &arguments));
             self.builder.br(done);
             self.builder.position(done);
@@ -447,7 +460,13 @@ impl<'m, 'g> Walk<'m, 'g> {
             .is_some_and(|record| record.drop.is_empty());
         if !leaf {
             let glue = declare(self.module, payload, self.pending)?;
-            let arguments = [self.context, block, self.anchor, self.budget];
+            let arguments = [
+                self.context,
+                block,
+                self.anchor,
+                self.operation_site,
+                self.budget,
+            ];
             let status = self.builder.call(glue, &arguments);
             if !infallible(self.layouts, payload) {
                 self.accumulate(status);
@@ -549,7 +568,7 @@ impl<'m, 'g> Walk<'m, 'g> {
                 let handle = self
                     .builder
                     .load(i64_ty, self.at(base, *offset), word(*offset));
-                let arguments = [self.context, handle, self.anchor];
+                let arguments = [self.context, handle, self.anchor, self.operation_site];
                 self.accumulate(self.builder.call(self.runtime.close_handle, &arguments));
                 Ok(())
             }

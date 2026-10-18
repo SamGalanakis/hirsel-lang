@@ -35,7 +35,12 @@ const TASKS: u64 = 7;
 
 /// `Some(id * 100)` after one yield: traces `id1`, `id2` around the yield and `id3` with the
 /// slot's tag once its result left (`id30` delivered, `id31` dropped).
-unsafe extern "C" fn yielding(ctx: *mut RunCtx, environment: *mut Header) -> u8 {
+unsafe extern "C" fn yielding(
+    ctx: *mut RunCtx,
+    environment: *mut Header,
+    _caller_site: u64,
+    _operation_site: u64,
+) -> u8 {
     let id = read_u64(environment, 0);
     trace(id * 10 + 1);
     unsafe { yield_now(ctx) };
@@ -52,7 +57,12 @@ unsafe extern "C" fn yielding(ctx: *mut RunCtx, environment: *mut Header) -> u8 
 }
 
 /// Fails with rule `id` at once.
-unsafe extern "C" fn failing(ctx: *mut RunCtx, environment: *mut Header) -> u8 {
+unsafe extern "C" fn failing(
+    ctx: *mut RunCtx,
+    environment: *mut Header,
+    _caller_site: u64,
+    _operation_site: u64,
+) -> u8 {
     let id = read_u64(environment, 0);
     trace(id * 10 + 1);
     unsafe { hirsel_rt_v2_failure_begin(ctx, 0, id as u32, id, id) }
@@ -66,6 +76,8 @@ fn spawn(ctx: *mut RunCtx, scope: u64, code: hirsel_rt::tasks::TaskCode, id: u64
         unsafe {
             hirsel_rt_v2_task_spawn(
                 ctx,
+                0,
+                0,
                 std::ptr::null_mut(),
                 &mut task,
                 &scope,
@@ -239,7 +251,12 @@ fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
             Ok(self.0.get() == 100)
         }
     }
-    unsafe extern "C" fn sleeper(ctx: *mut RunCtx, env: *mut Header) -> u8 {
+    unsafe extern "C" fn sleeper(
+        ctx: *mut RunCtx,
+        env: *mut Header,
+        _caller_site: u64,
+        _operation_site: u64,
+    ) -> u8 {
         let id = read_u64(env, 0);
         let deadline = if id == 1 { 30 } else { 10 };
         let mut result = MaybeUninit::<UnitResult>::uninit();

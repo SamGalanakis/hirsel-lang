@@ -45,7 +45,7 @@ use crate::region::Region;
 use crate::{Header, STATUS_FAILURE, STATUS_OK, fault};
 
 /// A spawned task's entry: compiled closure code taking its environment.
-pub type TaskCode = unsafe extern "C" fn(*mut RunCtx, *mut Header) -> u8;
+pub type TaskCode = unsafe extern "C" fn(*mut RunCtx, *mut Header, u64, u64) -> u8;
 
 /// `CancelCause` ordinals (core library).
 pub(crate) const CANCEL_REQUESTED: u32 = 0;
@@ -151,7 +151,7 @@ struct Task {
     /// Scopes this task has entered and not yet exited, innermost last.
     scopes: Vec<u32>,
     saved: Saved,
-    code: Option<(TaskCode, *mut Header)>,
+    code: Option<(TaskCode, *mut Header, u64)>,
     slot: Option<Slot>,
     /// What the task waits for while parked.
     wait: Option<Wait>,
@@ -682,13 +682,21 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     let ctx = ctx.cast::<RunCtx>();
     let index = task as usize as u32;
     recycle(ctx);
-    let Some((code, environment)) = scheduler(ctx).task(index).code.take() else {
+    let Some((code, environment, operation_site)) = scheduler(ctx).task(index).code.take() else {
         fault("a task started without code");
     };
     // SAFETY: compiled closure code and its owned environment, called once.
-    let mut status = unsafe { code(ctx, environment) };
+    let mut status = unsafe { code(ctx, environment, operation_site, operation_site) };
     // The caller of a closure releases its environment wholesale.
-    status |= unsafe { crate::release::release_block(&mut *ctx, environment, std::ptr::null(), 0) };
+    status |= unsafe {
+        crate::release::release_block(
+            &mut *ctx,
+            environment,
+            std::ptr::null(),
+            operation_site,
+            operation_site,
+        )
+    };
     unsafe { complete(ctx, index, status) }
 }
 
@@ -966,6 +974,8 @@ unsafe fn exit_scope(ctx: *mut RunCtx, scope: *const u64, error: u8) -> (u8, boo
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     ctx: *mut RunCtx,
+    _caller_site: u64,
+    operation_site: u64,
     _destination: *mut u8,
     out: *mut u64,
     scope: *const u64,
@@ -985,7 +995,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     parent.spawned += 1;
     let generation = s.fresh_generation();
     let mut task = Task::new(generation, Some(scope), path, canceled);
-    task.code = Some((code, environment));
+    task.code = Some((code, environment, operation_site));
     let index = match s.vacant_tasks.pop() {
         Some(index) => index,
         None => {
@@ -1601,7 +1611,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
 ///
 /// # Safety
 /// `ctx` is live and `word` an open endpoint of its run.
-pub(crate) unsafe fn close_endpoint(ctx: *mut RunCtx, word: u64, anchor: u64) -> u8 {
+pub(crate) unsafe fn close_endpoint(
+    ctx: *mut RunCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> u8 {
     if word & TASK_SET != 0 {
         // A dropped task set: its members stay children of their scope, joined at its exit.
         let s = scheduler(ctx);
@@ -1622,7 +1637,13 @@ pub(crate) unsafe fn close_endpoint(ctx: *mut RunCtx, word: u64, anchor: u64) ->
     for message in left {
         // SAFETY: each queued message is one owned credit of its block.
         status |= unsafe {
-            crate::release::release_block(&mut *ctx, message.as_ptr(), std::ptr::null(), anchor)
+            crate::release::release_block(
+                &mut *ctx,
+                message.as_ptr(),
+                std::ptr::null(),
+                anchor,
+                operation_site,
+            )
         };
     }
     status
@@ -1714,7 +1735,7 @@ pub(crate) fn end_run(ctx: &mut RunCtx) {
     };
     for block in s.sync.end() {
         // SAFETY: the cell owned the block's credit.
-        if unsafe { crate::release::release_block(ctx, block.as_ptr(), std::ptr::null(), 0) }
+        if unsafe { crate::release::release_block(ctx, block.as_ptr(), std::ptr::null(), 0, 0) }
             != STATUS_OK
         {
             fault("a mutex payload's release failed");

@@ -767,10 +767,9 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     ] {
         let mut b = Builder::new(generics).with_declarations(&out);
         let f = b.function(params, result, false);
-        publish(
-            b.signature(name, SignatureKind::Function(f), false),
-            &mut out,
-        );
+        let mut signature = b.signature(name, SignatureKind::Function(f), false);
+        signature.metadata.track_caller = name == "$intrinsic.TaskSpawn";
+        publish(signature, &mut out);
     }
     // All declaration snapshots exist before deriving structural properties.
     // This replaces the spelling-based plain/sendable allowlists in Builder.

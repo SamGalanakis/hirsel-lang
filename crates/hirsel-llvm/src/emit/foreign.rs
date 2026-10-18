@@ -386,6 +386,9 @@ pub(super) fn define_callback_thunk<'m>(
     for hidden in &signature.hidden {
         match hidden {
             Hidden::Context => arguments.push(run),
+            Hidden::CallerSite | Hidden::OperationSite => {
+                arguments.push(module.const_zero(module.int_type(64)))
+            }
             Hidden::Destination => arguments.push(module.const_zero(ptr)),
             // A unit result has no bytes; anything else returns in a register.
             Hidden::Result => match abi.result.as_ref().and_then(|r| layouts.layout(r.layout)) {

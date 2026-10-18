@@ -275,6 +275,7 @@ pub fn check_runtime_calls(program: &ReadyProgram) -> Result<(), NativeError> {
                 .collect();
             if !abi.context
                 || abi.environment
+                || abi.caller_site != export.caller_site
                 || abi.destination != export.destination
                 || result != export.result
                 || slots.as_deref() != Some(export.parameters)

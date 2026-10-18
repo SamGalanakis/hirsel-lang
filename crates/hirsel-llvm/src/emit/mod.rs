@@ -501,6 +501,9 @@ fn define_function_thunk<'m>(
     let count = signature.types.len();
     let mut types = signature.types.clone();
     types.insert(1, module.ptr_type());
+    if !signature.abi.caller_site {
+        types.splice(2..2, [module.int_type(64), module.int_type(64)]);
+    }
     let ty = module.function_type(signature.returns, &types);
     let thunk = module
         .function(name, ty)
@@ -511,7 +514,8 @@ fn define_function_thunk<'m>(
     let builder = Builder::new(module);
     builder.position(module.append_block(thunk));
     let mut arguments = vec![module.parameter(thunk, 0)];
-    arguments.extend((1..count as u32).map(|i| module.parameter(thunk, i + 1)));
+    let inserted = if signature.abi.caller_site { 1 } else { 3 };
+    arguments.extend((1..count as u32).map(|i| module.parameter(thunk, i + inserted)));
     let status = builder.call(target, &arguments);
     signature.attribute_call(module, status);
     builder.ret(status);
@@ -850,6 +854,7 @@ mod tests {
             multiplicity: CallMultiplicity::Many,
             context: true,
             environment: false,
+            caller_site: false,
             destination: false,
             result: None,
             result_arena: None,

@@ -223,7 +223,7 @@ int main(void) {{
     data = hirsel_rt_v2_payload(root);
     assert(root->count == 1 && data[0] == 1 && data[{word}] == 42);
     hirsel_rt_v2_failure_clear(ctx);
-    assert(hirsel_rt_v2_release(ctx, root, {index}, NULL, 0) == 0);
+    assert(hirsel_rt_v2_release(ctx, root, {index}, NULL, 0, 0) == 0);
   }}
   hirsel_rt_v2_stats stats;
   hirsel_rt_v2_ctx_stats(ctx, &stats);

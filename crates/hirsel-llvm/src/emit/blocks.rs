@@ -175,7 +175,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     rule: rule.clone(),
                 });
             };
-            let site = self.anchor_code(edge.anchor)?;
+            let (site, operation) = self.failure_sites(self.anchor_code(edge.anchor)?);
             let begin = self.runtime(RuntimeEntry::FailureBegin)?;
             let i32_ty = self.module.int_type(32);
             self.builder.call(
@@ -184,10 +184,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.context,
                     self.module.const_int(i32_ty, u128::from(code.kind)),
                     self.module.const_int(i32_ty, u128::from(code.rule)),
-                    self.const_u64(site),
-                    self.const_u64(site),
+                    site,
+                    operation,
                 ],
             );
+        }
+        if edge.rule.is_none() {
+            let (site, operation) = self.failure_sites(self.anchor_code(edge.anchor)?);
+            let reanchor = self.runtime(RuntimeEntry::FailureReanchor)?;
+            self.builder
+                .call(reanchor, &[self.context, site, operation]);
         }
         let dispose = self.pool(edge.dispose, &self.unit.pools.values)?;
         if !dispose.is_empty() {
@@ -232,6 +238,49 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let zero = self.module.const_int(self.module.int_type(8), 0);
         let failed = self.builder.icmp(IntPredicate::Ne, status, zero);
         self.guard(failed, failure)
+    }
+
+    /// Raw inherited attribution remains zero when the entry has no language caller.
+    /// A library's actual operation comes from its source invocation, never its synthetic span.
+    pub(super) fn caller_sites(&self, code: u64, forward: bool) -> (Value<'m>, Value<'m>) {
+        self.caller_site_values(self.const_u64(code), forward)
+    }
+    fn caller_site_values(&self, code: Value<'m>, forward: bool) -> (Value<'m>, Value<'m>) {
+        let incoming = |hidden| {
+            self.signature
+                .hidden_index(hidden)
+                .map(|i| self.module.parameter(self.function, i))
+                .unwrap_or_else(|| self.const_u64(0))
+        };
+        let operation = if self.unit.header.origin == UnitOrigin::Library {
+            incoming(|h| matches!(h, Hidden::OperationSite))
+        } else {
+            code
+        };
+        let caller = if forward
+            && (self.unit.header.track_caller || self.unit.header.origin == UnitOrigin::Library)
+        {
+            incoming(|h| matches!(h, Hidden::CallerSite))
+        } else {
+            operation
+        };
+        (caller, operation)
+    }
+    pub(super) fn failure_sites(&self, code: u64) -> (Value<'m>, Value<'m>) {
+        self.failure_sites_for(code, true)
+    }
+    pub(super) fn failure_sites_for(&self, code: u64, forward: bool) -> (Value<'m>, Value<'m>) {
+        self.failure_site_values_for(self.const_u64(code), forward)
+    }
+    pub(super) fn failure_site_values(&self, code: Value<'m>) -> (Value<'m>, Value<'m>) {
+        self.failure_site_values_for(code, true)
+    }
+    fn failure_site_values_for(&self, code: Value<'m>, forward: bool) -> (Value<'m>, Value<'m>) {
+        let (caller, operation) = self.caller_site_values(code, forward);
+        let present = self
+            .builder
+            .icmp(IntPredicate::Ne, caller, self.const_u64(0));
+        (self.builder.select(present, caller, operation), operation)
     }
 
     /// The site code of a source anchor.

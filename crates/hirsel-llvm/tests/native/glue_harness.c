@@ -40,7 +40,7 @@ struct scenario {
     uint32_t count;
 };
 
-static uint8_t fin_log(ctx_t *ctx, void *value, uint64_t anchor);
+static uint8_t fin_log(ctx_t *ctx, void *value, uint64_t anchor, uint64_t operation_site);
 #include "glue_cases.h"
 
 static char *trace;
@@ -69,29 +69,29 @@ static unsigned events, fail_every;
 static uint8_t *payload_of(uint32_t index) { return hirsel_rt_v2_payload(blocks[index]); }
 
 /* Every `fail_every`th finalizer or close fails with its own rule. */
-static uint8_t event(ctx_t *ctx, uint64_t anchor) {
+static uint8_t event(ctx_t *ctx, uint64_t anchor, uint64_t operation_site) {
     events++;
     if (fail_every == 0 || events % fail_every != 0) return 0;
-    hirsel_rt_v2_failure_begin(ctx, 1, 100 + events, anchor, anchor);
+    hirsel_rt_v2_failure_begin(ctx, 1, 100 + events, anchor, operation_site);
     return 1;
 }
 
-static uint8_t fin_log(ctx_t *ctx, void *value, uint64_t anchor) {
+static uint8_t fin_log(ctx_t *ctx, void *value, uint64_t anchor, uint64_t operation_site) {
     for (uint32_t i = 0; i < current->count; i++) {
         uint8_t *start = payload_of(i);
         uint32_t size = current->blocks[i].size ? current->blocks[i].size : 1;
         if ((uint8_t *)value >= start && (uint8_t *)value < start + size) {
             say("finalize b%u+%u\n", i, (unsigned)((uint8_t *)value - start));
-            return event(ctx, anchor);
+            return event(ctx, anchor, operation_site);
         }
     }
     say("finalize ?\n");
-    return event(ctx, anchor);
+    return event(ctx, anchor, operation_site);
 }
 
-static uint8_t close_log(ctx_t *ctx, uint64_t handle, uint64_t anchor) {
+static uint8_t close_log(ctx_t *ctx, uint64_t handle, uint64_t anchor, uint64_t operation_site) {
     say("close %" PRIu64 "\n", handle);
-    return event(ctx, anchor);
+    return event(ctx, anchor, operation_site);
 }
 
 static uint64_t live_blocks(ctx_t *ctx) {
@@ -151,7 +151,7 @@ static void run(const struct scenario *scenario, uint32_t flags, unsigned failin
     fail_every = failing;
     int64_t result = 0;
     uint8_t status = glue ? scenario->entry(ctx, &result, blocks[0], 0)
-                          : hirsel_rt_v2_release(ctx, blocks[0], blocks[0]->descriptor & 0x1fffffffu, NULL, 7);
+                          : hirsel_rt_v2_release(ctx, blocks[0], blocks[0]->descriptor & 0x1fffffffu, NULL, 7, 7);
     say("status %u\n", status);
     say_failures(ctx);
     for (uint32_t i = 0; i < n; i++) {
@@ -177,7 +177,7 @@ static void run(const struct scenario *scenario, uint32_t flags, unsigned failin
     fail_every = 0;
     for (uint32_t i = 0; i < n; i++) {
         for (uint32_t h = 0; h < scenario->blocks[i].held; h++) {
-            hirsel_rt_v2_release(ctx, blocks[i], blocks[i]->descriptor & 0x1fffffffu, NULL, 7);
+            hirsel_rt_v2_release(ctx, blocks[i], blocks[i]->descriptor & 0x1fffffffu, NULL, 7, 7);
         }
     }
     hirsel_rt_v2_failure_clear(ctx);

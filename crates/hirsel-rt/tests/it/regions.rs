@@ -36,7 +36,7 @@ fn reserve(ctx: &Ctx, region: &mut Region, extent: u64, align: u64) -> *mut u8 {
 }
 
 fn exit(ctx: &Ctx, region: &mut Region) -> u8 {
-    unsafe { hirsel_rt_v2_region_exit(ctx.0, region, 0) }
+    unsafe { hirsel_rt_v2_region_exit(ctx.0, region, 0, 0) }
 }
 
 fn node(ctx: *mut RunCtx, layout: &Layout, id: u64) -> *mut Header {
@@ -101,7 +101,7 @@ fn an_immortal_owner_in_region_storage_accepts_diagnostic_count_operations() {
             hirsel_rt_v2_dup(ctx.0, owner);
             assert_ne!((*owner).count, 1);
             assert_eq!(
-                hirsel_rt_v2_release(ctx.0, owner, index(ctx.0, layout), ptr::null(), 0),
+                hirsel_rt_v2_release(ctx.0, owner, index(ctx.0, layout), ptr::null(), 0, 0),
                 0
             );
             assert_eq!((*owner).count, COUNT_IMMORTAL);

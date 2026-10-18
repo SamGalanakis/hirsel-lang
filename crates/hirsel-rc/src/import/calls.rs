@@ -433,6 +433,10 @@ impl Importer<'_, '_> {
         let arguments = PoolRange::push(&mut self.out.pools.call_arguments, args);
         let call = CallId(self.out.tables.calls.len() as u32);
         self.out.tables.calls.push(CallSite {
+            forward_caller: match callee {
+                tir::Callee::Definition { .. } => true,
+                tir::Callee::Indirect { forward_caller, .. } => *forward_caller,
+            },
             callee: lir_callee,
             operation_arguments,
             abi,
@@ -594,6 +598,13 @@ impl Importer<'_, '_> {
             .layouts
             .fn_abi(&callee.store, callable, CallableShape::Definition)
             .map_err(|e| PassError::Layout(path.clone(), e))?;
+        let abi = if signature.metadata.track_caller {
+            self.layouts
+                .with_caller_site(abi)
+                .map_err(|e| PassError::Layout(path.clone(), e))?
+        } else {
+            abi
+        };
         Ok((abi, arguments))
     }
 }

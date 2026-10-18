@@ -401,7 +401,7 @@ fn native_abi_denies_mount_acquisition_and_writes_and_consumes_owned_bytes() {
             let mut file = result.value;
             hirsel_rt_v2_file_narrow(ctx.0, std::ptr::null_mut(), &mut result, &sub, &mut file);
             assert_eq!((result.tag, file), (1, 0));
-            hirsel_rt_v2_io_close(ctx.0, result.value, 0);
+            hirsel_rt_v2_io_close(ctx.0, result.value, 0, 0);
             let (bytes, start) = byte_block(&ctx, b"native");
             assert_eq!(
                 hirsel_rt_v2_file_write_bytes(

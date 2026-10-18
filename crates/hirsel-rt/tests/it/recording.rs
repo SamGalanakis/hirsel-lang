@@ -144,6 +144,7 @@ unsafe extern "C" fn entry(
             (*bytes.owner).index(),
             std::ptr::null(),
             0,
+            0,
         )
     };
     match std::env::var("TAPE_PROBE").unwrap().as_str() {
@@ -153,7 +154,7 @@ unsafe extern "C" fn entry(
             unsafe { hirsel_rt_v2_io_stdout(ctx, std::ptr::null_mut(), &mut extra, io) };
         }
         "close" => {
-            unsafe { hirsel_rt::io::hirsel_rt_v2_io_close(ctx, 99, 0) };
+            unsafe { hirsel_rt::io::hirsel_rt_v2_io_close(ctx, 99, 0, 0) };
         }
         "seeds" => assert_eq!(unsafe { hirsel_rt::hirsel_rt_v2_hash_begin(ctx) }, 2),
         _ => {}

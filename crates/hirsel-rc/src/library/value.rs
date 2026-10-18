@@ -11,6 +11,7 @@ use super::builder::{Body, Cx};
 use super::{LibraryBody, native_path};
 use crate::PassError;
 use hirsel_core_contract::Passing;
+use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
 use hirsel_lir::operation::OperationArgument;
 use hirsel_lir::stage::Value;
@@ -61,7 +62,24 @@ fn forward(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .ok_or_else(|| PassError::Malformed(format!("{path:?} is not an operation")))?;
     let operation_arguments = hirsel_layout::operation::collect_arguments(&cx.store, &cx.arguments)
         .map_err(|e| PassError::Layout(path.clone(), e))?;
-    let abi = cx.abi;
+    // The forwarding body carries caller metadata independently of the primitive's
+    // declared physical ABI. Only primitives that explicitly need it receive it.
+    let abi = cx
+        .layouts
+        .fn_abi(&cx.store, cx.callable, CallableShape::Definition)
+        .map_err(|e| PassError::Layout(path.clone(), e))?;
+    let abi = if cx
+        .program
+        .signatures
+        .get(&path)
+        .is_some_and(|s| s.metadata.track_caller)
+    {
+        cx.layouts
+            .with_caller_site(abi)
+            .map_err(|e| PassError::Layout(path.clone(), e))?
+    } else {
+        abi
+    };
     let sources: Vec<u32> = cx.fn_abi().parameters.iter().map(|p| p.source).collect();
     let mut b = Body::new(cx)?;
     let mut arguments = Vec::new();

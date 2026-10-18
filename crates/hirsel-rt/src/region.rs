@@ -958,13 +958,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_exhausted(
     kind: u32,
     rule: u32,
     site: u64,
+    operation_site: u64,
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
         check_active(region);
         let index = (*ctx).failure.count();
         (*region).exhausted = failure_index(index) + 1;
-        crate::failure::hirsel_rt_v2_failure_begin(ctx, kind, rule, site, site)
+        crate::failure::hirsel_rt_v2_failure_begin(ctx, kind, rule, site, operation_site)
     }
 }
 
@@ -1096,6 +1097,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
     ctx: *mut RunCtx,
     region: *mut Region,
     anchor: u64,
+    operation_site: u64,
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
@@ -1114,9 +1116,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
                     .map_addr(|address| address | 1);
                 let base = ctx.work;
                 push(ctx, item, true);
-                status |= drain(ctx, base, item, ptr::null(), false, anchor).status;
+                status |= drain(ctx, base, item, ptr::null(), false, anchor, operation_site).status;
             } else {
-                status |= release_block(ctx, (*entry).block, ptr::null(), anchor);
+                status |= release_block(ctx, (*entry).block, ptr::null(), anchor, operation_site);
             }
             entry = prev;
         }

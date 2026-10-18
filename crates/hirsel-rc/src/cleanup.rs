@@ -1967,6 +1967,7 @@ impl Lowering<'_, '_> {
         );
         let id = CallId(self.ed.unit.tables.calls.len() as u32);
         self.ed.unit.tables.calls.push(CallSite {
+            forward_caller: true,
             operation_arguments: Vec::new(),
             callee: Callee::Direct(symbol),
             abi: finalizer.abi,

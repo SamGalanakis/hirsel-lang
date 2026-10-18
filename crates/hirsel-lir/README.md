@@ -627,3 +627,12 @@ SortedMap reuses `LAYOUT_KEYED`: its sole payload field is the entries List at
 offset zero. It has no index. Its placed constructor tracks both blocks, and
 `sorted_map.insert` charges a vacant entry with `ArenaPush` before taking the
 key/value. Existing detach and deep-copy machinery charges and tracks its entries.
+
+LIR revision 37 / ABI revision 2 retain caller attribution independently of the
+callable language type. `FnAbi.caller_site` describes two physical hidden u64 slots;
+`UnitHeader.track_caller` selects attribution policy. They differ because ordinary
+closures need the uniform physical carrier while reporting their own failures.
+`CallSite.forward_caller` preserves source invocation boundaries through callee
+specialization. The independent validator requires carriers on callable ABIs and
+tracked bodies and excludes them from foreign ABIs. Hand-built controls in
+`abi.rs` and `invalid_ir.rs` each have guard-removal witnesses.

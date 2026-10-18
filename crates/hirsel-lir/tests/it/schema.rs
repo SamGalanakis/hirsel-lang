@@ -313,6 +313,10 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
                 shape,
                 CallableShape::Closure | CallableShape::IterNext | CallableShape::IterDrop
             ),
+            caller_site: matches!(
+                shape,
+                CallableShape::Closure | CallableShape::IterNext | CallableShape::IterDrop
+            ),
             destination: shape == CallableShape::Definition,
             result: (shape != CallableShape::IterDrop).then(|| AbiResult {
                 borrowed_parameters: vec![],
@@ -343,6 +347,7 @@ fn input() -> InputIdentity {
 /// every enum family the unit schema contains.
 fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     let mut u = LirUnit::<S>::new(UnitHeader {
+        track_caller: false,
         stage: StageKind::Value,
         lir_version: hirsel_lir::LIR_VERSION,
         origin: UnitOrigin::Source,
@@ -617,6 +622,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     ]
     .into_iter()
     .map(|callee| CallSite {
+        forward_caller: true,
         operation_arguments: Vec::new(),
         callee,
         abi: FnAbiId(0),

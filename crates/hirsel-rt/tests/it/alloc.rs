@@ -27,7 +27,7 @@ fn alloc(ctx: &Ctx, layout: &Layout, extent: u64, align: u64) -> *mut Header {
 
 fn release(ctx: &Ctx, block: *mut Header, layout: &Layout) {
     assert_eq!(
-        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0) },
+        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0, 0) },
         0
     );
 }
@@ -936,6 +936,7 @@ fn the_compiled_token_key_of_every_request_is_the_runtimes() {
                         block,
                         index(ctx.0, empty),
                         ptr::null(),
+                        0,
                         0,
                         &mut token
                     ),

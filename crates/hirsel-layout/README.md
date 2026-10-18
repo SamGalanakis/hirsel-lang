@@ -20,6 +20,11 @@ callable convention and environment layout, excluding implementation revisions.
 Operation schema tags convert exhaustively in both directions and preserve the
 canonical snapshot bytes. Nullable Ptr/FnPtr options use the null-pointer niche (layout version 4); the
 internal aggregate ABI remains unchanged, while C adapters use one pointer word.
+Canonical snapshots retain explicit layout, ABI and LIR versions.
 
 Flat Lists of zero-size elements store a u64 count after the byte-extent
 prefix, just as variable-element Lists do. Their elements remain fixed-size.
+
+`with_caller_site` derives and memoizes ABI v2's optional inert source-code pair,
+without changing a FunctionType. All closure/iterator callable ABIs carry it;
+marked source bodies and compiled library bodies select it for their direct ABI.

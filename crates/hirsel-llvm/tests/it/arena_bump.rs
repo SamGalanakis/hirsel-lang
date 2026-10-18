@@ -181,7 +181,7 @@ int main(void) {{
         assert(entries[q](ctx, NULL, &r, &arena) == 0 && arena.cursor == end && arena.end == end);
         assert(entries[q](ctx, NULL, &r, &arena) == 0 && arena.end != end);
       }}
-      assert(hirsel_rt_v2_region_exit(ctx, &arena, 0) == 0);
+      assert(hirsel_rt_v2_region_exit(ctx, &arena, 0, 0) == 0);
     }}
     hirsel_rt_v2_stats stats;
     hirsel_rt_v2_ctx_stats(ctx, &stats);

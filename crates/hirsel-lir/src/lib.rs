@@ -37,10 +37,10 @@ pub use stage::{
 /// The front-end interface version these schemas consume
 /// (`QueryEnvironment.interface_version`). A change invalidates every artifact.
 pub const INTERFACE_VERSION: u32 = 11;
-pub const LIR_VERSION: u32 = 36;
+pub const LIR_VERSION: u32 = 37;
 pub const LAYOUT_VERSION: u32 = 4;
-/// Hirsel cross-unit ABI v1.
-pub const ABI_VERSION: u32 = 1;
+/// Hirsel cross-unit ABI v2.
+pub const ABI_VERSION: u32 = 2;
 /// `hirsel_rt_v2`.
 pub const RUNTIME_ABI_VERSION: u32 = runtime_abi::ABI_VERSION;
 /// Private FlatFormatV0, separate from the canonical SER-2 codec.

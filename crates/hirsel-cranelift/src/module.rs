@@ -57,11 +57,13 @@ pub(crate) fn scalar_type(kind: ScalarKind) -> ir::Type {
     }
 }
 
-/// A hidden parameter of a Hirsel ABI v1 entry.
+/// A hidden parameter of a Hirsel ABI v2 entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Hidden {
     Context,
     Environment,
+    CallerSite,
+    OperationSite,
     Destination,
     Result,
 }
@@ -101,13 +103,21 @@ pub(crate) fn signature<'a>(
     if abi.environment {
         hidden.push(Hidden::Environment);
     }
+    if abi.caller_site {
+        hidden.extend([Hidden::CallerSite, Hidden::OperationSite]);
+    }
     if abi.destination {
         hidden.push(Hidden::Destination);
     }
     if abi.result.is_some() && value.is_none() {
         hidden.push(Hidden::Result);
     }
-    ir.params.extend(hidden.iter().map(|_| AbiParam::new(PTR)));
+    ir.params.extend(hidden.iter().map(|h| {
+        AbiParam::new(match h {
+            Hidden::CallerSite | Hidden::OperationSite => types::I64,
+            _ => PTR,
+        })
+    }));
     let mut first = Vec::new();
     for parameter in &abi.parameters {
         first.push(ir.params.len());
@@ -155,7 +165,7 @@ pub(crate) enum Helper {
     /// `hirsel.hash.<layout>`.
     Hash { layout: LayoutId },
     /// `hirsel.drop.<layout>`, calling the drop body `body`.
-    Drop { body: FuncId },
+    Drop { body: FuncId, caller_site: bool },
 }
 
 /// The object being emitted: its Cranelift module, the declarations made so far and the
@@ -282,7 +292,7 @@ pub(crate) fn emit(
             }
         }
         if let Some(thunk) = thunk {
-            let thunk_sig = thunk_signature(&sig.ir);
+            let thunk_sig = thunk_signature(&sig.ir, abi.caller_site);
             let thunk_id = emitter.declare_function(&thunk, linkage, &thunk_sig)?;
             emitter.define_thunk(&thunk, thunk_id, id, &thunk_sig, &sig.ir)?;
         }
@@ -353,9 +363,13 @@ pub(crate) fn emit(
 }
 
 /// A thunk takes the environment after the context and otherwise the entry's parameters.
-fn thunk_signature(entry: &ir::Signature) -> ir::Signature {
+fn thunk_signature(entry: &ir::Signature, caller_site: bool) -> ir::Signature {
     let mut sig = entry.clone();
     sig.params.insert(1, AbiParam::new(PTR));
+    if !caller_site {
+        sig.params
+            .splice(2..2, [AbiParam::new(types::I64), AbiParam::new(types::I64)]);
+    }
     sig
 }
 
@@ -521,7 +535,8 @@ impl<'a> Emitter<'a> {
             b.switch_to_block(entry);
             let params = b.block_params(entry).to_vec();
             let mut args = vec![params[0]];
-            args.extend_from_slice(&params[2..]);
+            let inserted = sig.params.len() - target_sig.params.len();
+            args.extend_from_slice(&params[1 + inserted..]);
             debug_assert_eq!(args.len(), target_sig.params.len());
             let callee = self.module.declare_func_in_func(target, b.func);
             let call = b.ins().call(callee, &args);
@@ -579,7 +594,9 @@ impl<'a> Emitter<'a> {
                 Helper::Hash { layout } => {
                     crate::compare::define_hasher(self, b, layout, definition)?
                 }
-                Helper::Drop { body } => self.define_drop_wrapper(b, body),
+                Helper::Drop { body, caller_site } => {
+                    self.define_drop_wrapper(b, body, caller_site)
+                }
             }
         }
         self.define(&name, id, context)
@@ -683,6 +700,7 @@ pub struct ReportNode {
 pub fn launch_object(
     target: &TargetSpec,
     entry: &str,
+    caller_site: bool,
     root_words: &[u64],
     report: &ExitReport,
     calls: &[(&str, Vec<LaunchArgument>)],
@@ -690,7 +708,15 @@ pub fn launch_object(
     arguments: &[LaunchArgument],
 ) -> Result<Vec<u8>, CodegenError> {
     named_launch_object(
-        "main", target, entry, root_words, report, calls, launcher, arguments,
+        "main",
+        target,
+        entry,
+        caller_site,
+        root_words,
+        report,
+        calls,
+        launcher,
+        arguments,
     )
 }
 
@@ -700,6 +726,7 @@ pub fn named_launch_object(
     main_symbol: &str,
     target: &TargetSpec,
     entry: &str,
+    caller_site: bool,
     root_words: &[u64],
     report: &ExitReport,
     calls: &[(&str, Vec<LaunchArgument>)],
@@ -728,7 +755,7 @@ pub fn named_launch_object(
     let mut entry_sig = ir::Signature::new(call_conv);
     entry_sig.params.extend(std::iter::repeat_n(
         AbiParam::new(PTR),
-        3 + root_words.len(),
+        3 + root_words.len() + if caller_site { 2 } else { 0 },
     ));
     entry_sig.returns.push(AbiParam::new(types::I8).uext());
     let entry_id = module
@@ -763,7 +790,12 @@ pub fn named_launch_object(
         b.append_block_params_for_function_params(block);
         b.switch_to_block(block);
         let params = b.block_params(block).to_vec();
-        let mut args = params[..3].to_vec();
+        let mut args = vec![params[0]];
+        if caller_site {
+            let zero = b.ins().iconst(types::I64, 0);
+            args.extend([zero, zero]);
+        }
+        args.extend_from_slice(&params[1..3]);
         for &word in root_words {
             args.push(b.ins().iadd_imm_s(params[3], (word * 8) as i64));
         }

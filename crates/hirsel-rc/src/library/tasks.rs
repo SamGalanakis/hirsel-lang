@@ -112,6 +112,13 @@ pub(super) fn intrinsic(
         .layouts
         .fn_abi(&actuals.store, callable, CallableShape::Definition)
         .map_err(|e| PassError::Layout(path.clone(), e))?;
+    let abi = if signature.metadata.track_caller {
+        cx.layouts
+            .with_caller_site(abi)
+            .map_err(|e| PassError::Layout(path.clone(), e))?
+    } else {
+        abi
+    };
     let arguments = hirsel_layout::operation::collect_arguments(&actuals.store, &actuals.arguments)
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     Ok(Intrinsic {
@@ -208,6 +215,7 @@ pub(super) fn invoke(
     let arguments = PoolRange::push(&mut b.ed.unit.pools.call_arguments, arguments);
     let call = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        forward_caller: !matches!(callee.0, Callee::Indirect(_) | Callee::Bound { .. }),
         operation_arguments: callee.1,
         callee: callee.0,
         abi,

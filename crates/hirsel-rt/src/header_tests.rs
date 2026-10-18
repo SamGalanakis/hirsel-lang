@@ -60,7 +60,7 @@ impl Ctx {
     }
     fn release(&self, block: *mut Header) {
         assert_eq!(
-            unsafe { hirsel_rt_v2_release(self.0, block, (*block).index(), ptr::null(), 0) },
+            unsafe { hirsel_rt_v2_release(self.0, block, (*block).index(), ptr::null(), 0, 0) },
             0
         );
     }
@@ -155,7 +155,7 @@ fn mixed_simple_wide_shared_children_reset_and_cross_layout_reuse() {
         }
         let mut token = ptr::null_mut();
         assert_eq!(
-            unsafe { hirsel_rt_v2_reset(ctx.0, block, 3, ptr::null(), 0, &mut token) },
+            unsafe { hirsel_rt_v2_reset(ctx.0, block, 3, ptr::null(), 0, 0, &mut token) },
             0
         );
         assert_eq!(token, block);
@@ -310,16 +310,21 @@ fn packed_consumed_slots_and_live_bit_guards_survive_reversal() {
 }
 
 thread_local! { static EVENTS: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) }; }
-unsafe extern "C" fn finalizer(ctx: *mut RunCtx, value: *mut u8, anchor: u64) -> u8 {
+unsafe extern "C" fn finalizer(
+    ctx: *mut RunCtx,
+    value: *mut u8,
+    anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     unsafe {
         assert_eq!(finalize::hirsel_rt_v2_shielded(ctx), 1);
         let id = value.cast::<u64>().read();
         EVENTS.with(|events| events.borrow_mut().push(id));
         // Reentrant allocation/release must restore the outer drain's work identity.
         let temporary = hirsel_rt_v2_alloc(ctx, 0, 16, 8, DOMAIN_HEAP, 0);
-        hirsel_rt_v2_release(ctx, temporary, 0, ptr::null(), anchor);
+        hirsel_rt_v2_release(ctx, temporary, 0, ptr::null(), anchor, _operation_site);
         if id == 2 {
-            failure::hirsel_rt_v2_failure_begin(ctx, 1, 2, anchor, anchor)
+            failure::hirsel_rt_v2_failure_begin(ctx, 1, 2, anchor, _operation_site)
         } else {
             0
         }
@@ -353,7 +358,7 @@ fn reentrant_failing_finalizers_finish_siblings_and_inline_continuations() {
         }
         let mut token = ptr::null_mut();
         assert_eq!(
-            unsafe { hirsel_rt_v2_reset(ctx.0, root, 3, ptr::null(), 7, &mut token) },
+            unsafe { hirsel_rt_v2_reset(ctx.0, root, 3, ptr::null(), 7, 7, &mut token) },
             1
         );
         assert!(token.is_null());
@@ -369,6 +374,7 @@ fn reentrant_failing_finalizers_finish_siblings_and_inline_continuations() {
                     (&raw mut value).cast(),
                     ptr::null(),
                     continuation.as_mut_ptr(),
+                    7,
                     7,
                 )
             },

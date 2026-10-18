@@ -11,7 +11,7 @@ _Static_assert(sizeof(hirsel_rt_v2_scalar_option) == 8, "scalar option");
 _Static_assert(sizeof(hirsel_rt_v2_position_option) == 16, "position option");
 
 static void release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *owner) {
-    assert(hirsel_rt_v2_release(ctx, owner, 0, NULL, 0) == 0);
+    assert(hirsel_rt_v2_release(ctx, owner, 0, NULL, 0, 0) == 0);
 }
 static size_t utf8(uint32_t c, unsigned char *out) {
     if(c < 0x80) { out[0]=(unsigned char)c; return 1; }

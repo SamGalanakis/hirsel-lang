@@ -1639,6 +1639,16 @@ impl<'a> Validator<'a> {
                 "only closure and iterator thunks take an environment",
             );
         }
+        if environment && !abi.caller_site {
+            self.fail(
+                s.clone(),
+                Obligation::Abi,
+                "a callable ABI carries caller sites",
+            );
+        }
+        if foreign && abi.caller_site {
+            self.fail(s.clone(), Obligation::Abi, "an extern has no caller sites");
+        }
         // A C function returns a number or pointer, or nothing.
         if foreign
             && (abi.destination

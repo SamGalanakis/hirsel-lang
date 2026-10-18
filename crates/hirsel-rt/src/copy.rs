@@ -529,7 +529,7 @@ pub(crate) unsafe fn detach_sized(
             },
         );
         // Not unique, so the credit never frees it.
-        crate::release::release_block(ctx, block, ptr::null(), 0);
+        crate::release::release_block(ctx, block, ptr::null(), 0, 0);
         (copy, capacity)
     }
 }

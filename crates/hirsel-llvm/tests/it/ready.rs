@@ -140,10 +140,10 @@ fn harness(program: &Program) -> String {
     let _ = write!(
         c,
         "static unsigned closes;\n\
-         static uint8_t close_probe(ctx_t *c, uint64_t handle, uint64_t anchor) {{\n\
+         static uint8_t close_probe(ctx_t *c, uint64_t handle, uint64_t anchor, uint64_t operation_site) {{\n\
            closes++;\n\
            if (handle != 13) return 0;\n\
-           hirsel_rt_v2_failure_begin(c, {}, {}, anchor, anchor);\n\
+           hirsel_rt_v2_failure_begin(c, {}, {}, anchor, operation_site);\n\
            return 1;\n\
          }}\n",
         lang9.kind, lang9.rule

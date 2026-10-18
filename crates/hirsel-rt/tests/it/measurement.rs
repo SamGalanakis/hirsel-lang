@@ -45,11 +45,11 @@ fn a_shared_pair_copy_reset_and_reuse_has_exact_counts() {
             0
         );
         assert_eq!(
-            hirsel_rt_v2_release(ctx.0, detached, index(ctx.0, pair), ptr::null(), 0),
+            hirsel_rt_v2_release(ctx.0, detached, index(ctx.0, pair), ptr::null(), 0, 0),
             0
         );
         assert_eq!(
-            hirsel_rt_v2_release(ctx.0, copied, index(ctx.0, pair), ptr::null(), 0),
+            hirsel_rt_v2_release(ctx.0, copied, index(ctx.0, pair), ptr::null(), 0, 0),
             0
         );
         assert_eq!(
@@ -58,6 +58,7 @@ fn a_shared_pair_copy_reset_and_reuse_has_exact_counts() {
                 parent,
                 index(ctx.0, pair),
                 ptr::null(),
+                0,
                 0,
                 &mut token
             ),
@@ -80,11 +81,11 @@ fn a_shared_pair_copy_reset_and_reuse_has_exact_counts() {
             0
         );
         assert_eq!(
-            hirsel_rt_v2_release(ctx.0, reused, index(ctx.0, leaf), ptr::null(), 0),
+            hirsel_rt_v2_release(ctx.0, reused, index(ctx.0, leaf), ptr::null(), 0, 0),
             0
         );
         assert_eq!(
-            hirsel_rt_v2_release(ctx.0, fresh, index(ctx.0, leaf), ptr::null(), 0),
+            hirsel_rt_v2_release(ctx.0, fresh, index(ctx.0, leaf), ptr::null(), 0, 0),
             0
         );
         let before_noop = (&*ctx.0).measurements().clone();
@@ -99,8 +100,8 @@ fn a_shared_pair_copy_reset_and_reuse_has_exact_counts() {
         hirsel_rt_v2_region_reserve(ctx.0, outer.as_mut_ptr(), 8, 8, &mut out);
         hirsel_rt_v2_region_enter(ctx.0, inner.as_mut_ptr());
         hirsel_rt_v2_region_reserve(ctx.0, inner.as_mut_ptr(), 8, 8, &mut out);
-        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner.as_mut_ptr(), 0), 0);
-        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer.as_mut_ptr(), 0), 0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner.as_mut_ptr(), 0, 0), 0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer.as_mut_ptr(), 0, 0), 0);
     }
     // Two original blocks + shallow root + deep root/child + null-token fresh = six.
     // Dup: original second child edge + two detach edges + repeated deep-copy edge = four.
@@ -161,20 +162,20 @@ fn nested_site_scopes_restore_the_caller_and_totals_sum_over_all_sites() {
         for _ in 0..5 {
             hirsel_rt_v2_dup(ctx.0, block);
             assert_eq!(
-                hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0),
+                hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0, 0),
                 0
             );
         }
         hirsel_rt_v2_profile_leave(ctx.0, inner);
         for _ in 0..3 {
             assert_eq!(
-                hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0),
+                hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0, 0),
                 0
             );
         }
         hirsel_rt_v2_profile_leave(ctx.0, outer);
         assert_eq!(
-            hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0),
+            hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0, 0),
             0
         );
     }

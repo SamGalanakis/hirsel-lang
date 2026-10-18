@@ -2024,3 +2024,18 @@ fn a_function_reference_is_a_callable_or_a_callback_address() {
     let integer = function_ref(ValueRepr::Scalar(ScalarKind::I64), l::I64);
     assert_eq!(integer, vec![K::Type("function reference")]);
 }
+
+#[test]
+fn a_tracked_body_requires_a_physical_caller_site_carrier() {
+    pair(
+        |mutant| {
+            let mut t = Lir::<Ready>::new(&[], None);
+            t.builder.unit.header.track_caller = true;
+            let own = t.builder.unit.header.abi;
+            t.table.fn_abis[own.0 as usize].caller_site = !mutant;
+            t.builder.ret(ENTRY, None);
+            t.check()
+        },
+        |k| *k == K::Type("caller metadata"),
+    );
+}

@@ -1,3 +1,6 @@
+// rule: LANG-2
+// expect: run
+// stdout: ok
 // An operation used as a function value is called through its forwarding body: runtime
 // primitives (out.print, string.from_bytes) and an inline length (string.byte_len) each
 // reach native code as a FunctionRef with the operation's own ABI.

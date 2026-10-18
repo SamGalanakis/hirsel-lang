@@ -158,14 +158,14 @@ int main(void) {{
         assert(call_churn(ctx, &r, round * 3000 + i) == 0 && r == round * 3000 + i);
       }}
       for (unsigned i = round % 2; i < 5000; i += 2)
-        assert(hirsel_rt_v2_release(ctx, held[i], {index}, NULL, 0) == 0);
+        assert(hirsel_rt_v2_release(ctx, held[i], {index}, NULL, 0, 0) == 0);
       for (uint64_t i = 0; i < 3000; i++) {{
         uint64_t r = 0;
         assert(call_churn(ctx, &r, i) == 0);
       }}
       for (unsigned i = 1 - round % 2; i < 5000; i += 2) {{
         assert(*(uint64_t *)hirsel_rt_v2_payload(held[i]) == i);
-        assert(hirsel_rt_v2_release(ctx, held[i], {index}, NULL, 0) == 0);
+        assert(hirsel_rt_v2_release(ctx, held[i], {index}, NULL, 0, 0) == 0);
       }}
       hirsel_rt_v2_stats stats;
       hirsel_rt_v2_ctx_stats(ctx, &stats);

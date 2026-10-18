@@ -257,7 +257,12 @@ thread_local! {
     static CALLS: RefCell<Vec<(u64, bool)>> = const { RefCell::new(Vec::new()) };
 }
 
-unsafe extern "C" fn model_finalizer(ctx: *mut RunCtx, value: *mut u8, anchor: u64) -> u8 {
+unsafe extern "C" fn model_finalizer(
+    ctx: *mut RunCtx,
+    value: *mut u8,
+    anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     let ok = OUTCOMES
         .with(|o| o.borrow_mut().pop_front())
         .expect("the runtime ran more finalizers than the vector has finalize steps");
@@ -265,7 +270,7 @@ unsafe extern "C" fn model_finalizer(ctx: *mut RunCtx, value: *mut u8, anchor: u
     if ok {
         0
     } else {
-        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 15, anchor, anchor) }
+        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 15, anchor, _operation_site) }
     }
 }
 
@@ -483,6 +488,7 @@ impl Adapter {
                 (*block).index(),
                 mask.as_ref().map_or(ptr::null(), |m| m.as_ptr()),
                 0,
+                0,
             )
         };
         self.settle(status);
@@ -640,6 +646,7 @@ impl Adapter {
                         (*block).index(),
                         mask.as_ref().map_or(ptr::null(), |m| m.as_ptr()),
                         0,
+                        0,
                         &mut token,
                     )
                 };
@@ -747,7 +754,7 @@ impl Adapter {
             }
             Op::RegionClose { g } => {
                 let region = self.region(g);
-                let status = unsafe { hirsel_rt_v2_region_exit(ctx, region, 0) };
+                let status = unsafe { hirsel_rt_v2_region_exit(ctx, region, 0, 0) };
                 self.settle(status);
                 let (_, _, blocks) = self.regions.remove(0);
                 for a in blocks {

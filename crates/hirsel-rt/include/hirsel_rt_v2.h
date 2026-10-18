@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 18
+#define HIRSEL_RT_V2_ABI_VERSION 19
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
@@ -190,10 +190,10 @@ typedef struct hirsel_rt_v2_header {
 typedef struct hirsel_rt_v2_extent { uint64_t capacity, align; } hirsel_rt_v2_extent;
 
 /* A user drop body: borrowed value, cleanup anchor; records its failure before returning 1. */
-typedef uint8_t (*hirsel_rt_v2_drop_thunk)(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor);
+typedef uint8_t (*hirsel_rt_v2_drop_thunk)(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor, uint64_t operation_site);
 
 /* Closes a run-context handle (the Io adapter's); records its failure before returning 1. */
-typedef uint8_t (*hirsel_rt_v2_close_thunk)(hirsel_rt_v2_ctx *ctx, uint64_t handle, uint64_t anchor);
+typedef uint8_t (*hirsel_rt_v2_close_thunk)(hirsel_rt_v2_ctx *ctx, uint64_t handle, uint64_t anchor, uint64_t operation_site);
 
 typedef struct hirsel_rt_v2_step {
     uint32_t kind;
@@ -361,7 +361,7 @@ void *hirsel_rt_v2_payload(hirsel_rt_v2_header *block);
 uint64_t hirsel_rt_v2_capacity(hirsel_rt_v2_header *block);
 void hirsel_rt_v2_dup(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 uint8_t hirsel_rt_v2_release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint32_t index,
-                             const uint64_t *live_mask, uint64_t anchor);
+                             const uint64_t *live_mask, uint64_t anchor, uint64_t operation_site);
 /* For compiled drop glue (the count word contract above): return the storage of a block whose
  * count the glue read as COUNT_UNIQUE and whose fields it has released. */
 void hirsel_rt_v2_free(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
@@ -455,7 +455,7 @@ void hirsel_rt_v2_region_owner(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *regio
 
 /* Raw reuse tokens. */
 uint8_t hirsel_rt_v2_reset(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint32_t index,
-                           const uint64_t *live_mask, uint64_t anchor, hirsel_rt_v2_header **out_token);
+                           const uint64_t *live_mask, uint64_t anchor, uint64_t operation_site, hirsel_rt_v2_header **out_token);
 uint8_t hirsel_rt_v2_reuse(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token, uint32_t index,
                            uint64_t extent, uint64_t align, hirsel_rt_v2_header **out_block);
 void hirsel_rt_v2_dispose(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token);
@@ -484,10 +484,10 @@ void hirsel_rt_v2_thaw(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 
 /* Finalizers. */
 uint8_t hirsel_rt_v2_finalize(hirsel_rt_v2_ctx *ctx, uint32_t index, void *value,
-                              const uint64_t *live_mask, hirsel_rt_v2_cleanup *continuation, uint64_t anchor);
+                              const uint64_t *live_mask, hirsel_rt_v2_cleanup *continuation, uint64_t anchor, uint64_t operation_site);
 void hirsel_rt_v2_finalize_begin(hirsel_rt_v2_ctx *ctx, uint64_t anchor);
 void hirsel_rt_v2_finalize_end(hirsel_rt_v2_ctx *ctx, uint64_t anchor);
-uint8_t hirsel_rt_v2_close_handle(hirsel_rt_v2_ctx *ctx, uint64_t handle, uint64_t anchor);
+uint8_t hirsel_rt_v2_close_handle(hirsel_rt_v2_ctx *ctx, uint64_t handle, uint64_t anchor, uint64_t operation_site);
 uint8_t hirsel_rt_v2_shielded(hirsel_rt_v2_ctx *ctx);
 
 /* Regions. */
@@ -497,7 +497,7 @@ uint8_t hirsel_rt_v2_region_reserve(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *
 uint8_t hirsel_rt_v2_region_hold(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, hirsel_rt_v2_header *block);
 uint8_t hirsel_rt_v2_region_schedule(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region,
                                      uint32_t index, void *value);
-uint8_t hirsel_rt_v2_region_exit(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, uint64_t anchor);
+uint8_t hirsel_rt_v2_region_exit(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, uint64_t anchor, uint64_t operation_site);
 /* Arenas: an immortal region-kind block of layout `index` whose
  * payload the caller fills; the record is an arena's region. A LAYOUT_NO_EXTENT layout's block
  * is its eight-byte header and payload; every other block also has its extent before the header.
@@ -530,7 +530,7 @@ void hirsel_rt_v2_arena_enter(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region
 void hirsel_rt_v2_arena_bound(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, uint64_t capacity);
 /* Record the arena's own OutOfSpace failure (`kind`, `rule` at `site`); returns STATUS_FAILURE. */
 uint8_t hirsel_rt_v2_arena_exhausted(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region, uint32_t kind,
-                                     uint32_t rule, uint64_t site);
+                                     uint32_t rule, uint64_t site, uint64_t operation_site);
 /* 1 after forgetting the active failure when it is exactly the arena's own OutOfSpace, the one
  * failure recorded since its bound was set; else 0, the failure untouched. */
 uint8_t hirsel_rt_v2_arena_recover(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region);

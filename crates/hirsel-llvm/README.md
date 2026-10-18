@@ -120,7 +120,7 @@ Invariants:
   `Propagate` returns 1. A rule without a code is an error, never an invented code.
   A diverging call (LIR revision 19) is not `noreturn`: its failure still returns
   status 1. A zero status branches to `unreachable`; nonzero takes the failure edge.
-- ABI v1 (`FnAbi`): context, [environment], [caller destination], [result pointer], then
+- ABI v2 (`FnAbi`): context, [environment], [caller site, operation site], [caller destination], [result pointer], then
   each declared parameter's physical slots. Emitted code provides the declared scalar
   extension (call-site attributes) but never assumes it from a caller or callee, because
   AAPCS64 C code does not extend narrow integers.
@@ -162,7 +162,7 @@ Invariants:
   `REGISTER_PAIR` with `PairField::word` the pair's fields, from which emission builds the returned struct
   and `c_entry` writes the C typedefs (`c_pairs_are_the_emitted_pair_field_by_field` pins both). No C harness
   restates it: `c_call(layouts, abi, symbol, name)` declares an entry as emission lowers it
-  and defines `static uint8_t name(...)` of its ABI v1 signature (result pointer included)
+  and defines `static uint8_t name(...)` of its host harness signature (result pointer included; caller metadata supplied as zero)
   calling it, and `c_definition(layouts, abi, symbol, body)` defines a C-implemented entry
   over a body of that signature. Every harness calling or defining an entry (`tests/native/*.c`,
   the generated harnesses in `tests/it/`, `hirsel-pipeline-tests`' `rc/maps/seed.c`, and
@@ -562,3 +562,12 @@ On Linux AArch64, foreign calls and C callback thunks normalize narrow integer
 registers explicitly. AAPCS64 leaves upper bits unspecified: C-facing register
 slots are read at full width, truncated to the declared scalar, and extended
 when handed back to C or to the internal ABI. No C return extension is assumed.
+
+Caller attribution uses two inert u64 ABI slots, independently of callable language
+types. Marked source bodies forward raw inherited attribution through direct calls;
+function-value calls reset it to their actual invocation even after specialization.
+An entry without a language caller retains zero and falls back to its own failing
+operation. Library bodies forward the pair transparently. Function-reference thunks
+accept the uniform callable carrier and discard it when entering an unmarked direct
+target. Failure edges fill unknown records before cleanup and preserve anchored
+children; release glue and descriptor wrappers carry both codes explicitly.

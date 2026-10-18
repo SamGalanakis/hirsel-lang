@@ -534,6 +534,7 @@ impl<S: Stage> Lir<S> {
     pub fn new(params: &[(Passing, LayoutId)], result: Option<LayoutId>) -> Self {
         let table = table();
         let mut unit = LirUnit::<S>::new(UnitHeader {
+            track_caller: false,
             stage: S::KIND,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Source,
@@ -701,6 +702,7 @@ impl<S: Stage> Lir<S> {
             multiplicity: CallMultiplicity::Many,
             context: true,
             environment: shape == CallableShape::Closure,
+            caller_site: shape == CallableShape::Closure,
             destination: false,
             result: result.map(|layout| AbiResult {
                 borrowed_parameters: vec![],
@@ -1343,6 +1345,7 @@ impl<S: Stage> Lir<S> {
         );
         let result = result.map(|layout| self.owned_or_plain(layout));
         self.builder.unit.tables.calls.push(CallSite {
+            forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
             abi,
@@ -1370,6 +1373,7 @@ impl<S: Stage> Lir<S> {
     pub fn diverging_call(&mut self, b: BlockId, abi: FnAbiId, failure: BlockId) {
         let callee = Callee::Direct(self.symbol(SymbolKind::Function));
         self.builder.unit.tables.calls.push(CallSite {
+            forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
             abi,

@@ -170,7 +170,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let descriptor = self.descriptor_value(place.layout)?;
         let mask = self.live_mask(live)?;
         let anchor = self.cleanup_code(anchor)?;
-        let anchor = self.u64c(anchor);
+        let (anchor, operation_site) = self.failure_sites(anchor);
         // hirsel_rt_v2_cleanup: two u32s, a u64 cursor and two pointers on both targets.
         let (continuation, _) = self.stack_bytes(32, 8);
         self.rt1(
@@ -182,6 +182,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                 mask,
                 continuation,
                 anchor,
+                operation_site,
             ],
         )
     }

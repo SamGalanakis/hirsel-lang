@@ -539,8 +539,8 @@ audit in a diagnostic or measurement archive, or `audit unavailable` in producti
 Io that accepts exactly a recorded tape and refuses a mismatch, a missing event
 and an unconsumed one. Each completion is appended and flushed before delivery; an abort preserves its confirmed prefix. A missing trailer marks an unknown suffix and refuses complete replay or any resumability claim. Native stdout uses raw OS writes, so EPIPE and EBADF become recorded OutputError outcomes; generated main ignores SIGPIPE before entry. Replay divergence exits 3 with confirmed stdout, including during handle cleanup.
 
-A `RuntimePrimitive` manifest row names a symbol exported at the Hirsel ABI v1
-(`(ctx, [caller destination], [result pointer], parameters...) -> status`).
+A `RuntimePrimitive` manifest row names a symbol exported at the Hirsel ABI v2
+(`(ctx, [caller site, operation site], [caller destination], [result pointer], parameters...) -> status`).
 `operations::HIRSEL_ABI_EXPORTS` lists each such export with its physical
 signature, and the driver checks every call against it before linking. These include stdout/print, all directory and file leaves, Path/Args, MonotonicClock/WallClock/Random,
 Test check/check_case/fail/dir, IEEE bit primitives, Unicode cursors and text entries.
@@ -934,3 +934,9 @@ one virtual reading: runnable work never advances it, and an idle wait advances 
 to the earliest remaining timer. The ordinary park/ready tape protocol records and
 replays those waits. This setting is consumed only by the harness launch branch;
 production admission uses the selected RunConfig's clock grants.
+
+Runtime ABI 19 passes distinct attribution and operation codes through release,
+reset, inline finalization, region exit and both cleanup thunk types. Existing
+anchored failures remain intact while later field failures retain their own pair.
+TaskSpawn alone takes the hidden pair among runtime primitives; a child starts
+its callable with the actual spawn invocation as both codes.

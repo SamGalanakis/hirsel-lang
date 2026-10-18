@@ -601,3 +601,60 @@ fn foreign_results_admit_one_pointer_niche_without_admitting_aggregates() {
         }
     }
 }
+
+#[test]
+fn callable_abis_retain_the_caller_site_carrier() {
+    for shape in [
+        CallableShape::Closure,
+        CallableShape::IterNext,
+        CallableShape::IterDrop,
+    ] {
+        let owners = Owners::default();
+        let mut b = LayoutBuilder::new(&x86(), &owners);
+        let mut t = Ty::default();
+        let unit = t.add(TypeKind::Tuple(Vec::new().into()));
+        let f = t.function(&[], unit, Multiplicity::Many, 0);
+        let id = b.fn_abi(&t.store, f, shape).unwrap();
+        let mut table = checked(b);
+        assert!(table.fn_abis[id.0 as usize].caller_site);
+        table.fn_abis[id.0 as usize].caller_site = false;
+        assert!(
+            validate_table(&table, &x86())
+                .expect_err("missing carrier rejected")
+                .iter()
+                .any(|v| v.obligation == Obligation::Abi
+                    && v.detail == "a callable ABI carries caller sites")
+        );
+    }
+}
+
+#[test]
+fn foreign_abis_have_no_caller_site_carrier() {
+    let owners = Owners::default();
+    let mut b = LayoutBuilder::new(&x86(), &owners);
+    let mut t = Ty::default();
+    let unit = t.add(TypeKind::Tuple(Vec::new().into()));
+    let plain = t.function(&[], unit, Multiplicity::Many, 0);
+    let mut row = t.store.get(plain).unwrap().clone();
+    let TypeKind::Function(ref mut function) = row.kind else {
+        unreachable!()
+    };
+    function.foreign = Some(ForeignContract {
+        abi: "c".into(),
+        blocking: false,
+        aliasing_contract: "No arguments or result.".into(),
+    });
+    let foreign = t.store.push(row);
+    let id = b.fn_abi(&t.store, foreign, CallableShape::Foreign).unwrap();
+    assert!(b.with_caller_site(id).is_err());
+    let mut table = checked(b);
+    assert!(!table.fn_abis[id.0 as usize].caller_site);
+    table.fn_abis[id.0 as usize].caller_site = true;
+    assert!(
+        validate_table(&table, &x86())
+            .expect_err("foreign carrier rejected")
+            .iter()
+            .any(|v| v.obligation == Obligation::Abi
+                && v.detail == "an extern has no caller sites")
+    );
+}

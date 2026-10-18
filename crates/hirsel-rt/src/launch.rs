@@ -2,7 +2,7 @@
 //! then report what it observably did. Launch and tool failures use their own exit codes
 //! and never impersonate a language outcome.
 //!
-//! The entry is a compiled `fn(rt: Io, args: Args) -> Result[(), E]` at the Hirsel ABI v1:
+//! The entry is a compiled `fn(rt: Io, args: Args) -> Result[(), E]` at the Hirsel ABI v2:
 //! context, unused caller destination, the inline result, then the two handles by address according to their declared passing modes
 //! (borrow, take or mut). The process exits 0 for `Ok`, 1 for `Error` and [`EXIT_FAILURE`] for a language
 //! failure, with nothing printed beyond the program's own output.
@@ -103,7 +103,7 @@ impl Launch {
 /// The largest inline result an entry may return.
 pub const RESULT_MAX: u64 = 64;
 
-/// A compiled entry at the Hirsel ABI v1 (module documentation).
+/// A compiled entry at the Hirsel ABI v2 (module documentation).
 pub type Entry = unsafe extern "C" fn(
     ctx: *mut RunCtx,
     destination: *mut u8,
@@ -1688,6 +1688,7 @@ unsafe fn execute(
                 returned.value,
                 std::ptr::null(),
                 cleanup.as_mut_ptr(),
+                0,
                 0,
             )
         };

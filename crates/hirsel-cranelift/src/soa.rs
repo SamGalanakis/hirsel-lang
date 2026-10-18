@@ -235,7 +235,7 @@ impl FnEmitter<'_, '_, '_> {
         let null = self.u64c(0);
         self.rt(
             RuntimeEntry::Release,
-            &[self.context, old, descriptor, null, zero],
+            &[self.context, old, descriptor, null, zero, zero],
         )?;
         self.b.ins().jump(joined, &[]);
         self.b.switch_to_block(joined);

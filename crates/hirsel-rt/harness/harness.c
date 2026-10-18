@@ -26,9 +26,10 @@ static uint64_t closed[8];
 static int closed_count;
 
 /* The Io adapter's handle close: logs the handle id. */
-static uint8_t close_handle(hirsel_rt_v2_ctx *ctx, uint64_t handle, uint64_t anchor) {
+static uint8_t close_handle(hirsel_rt_v2_ctx *ctx, uint64_t handle, uint64_t anchor, uint64_t operation_site) {
     (void)ctx;
     (void)anchor;
+    (void)operation_site;
     if (closed_count < 8) closed[closed_count++] = handle;
     return HIRSEL_RT_V2_STATUS_OK;
 }
@@ -43,20 +44,21 @@ static hirsel_rt_v2_stats stats(hirsel_rt_v2_ctx *ctx) {
 static uint64_t events[64];
 static int event_count;
 
-static uint8_t log_drop(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor) {
+static uint8_t log_drop(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor, uint64_t operation_site) {
     (void)ctx;
     (void)anchor;
+    (void)operation_site;
     uint64_t id;
     memcpy(&id, value, sizeof id);
     if (event_count < 64) events[event_count++] = id;
     return HIRSEL_RT_V2_STATUS_OK;
 }
 
-static uint8_t failing_drop(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor) {
-    log_drop(ctx, value, anchor);
+static uint8_t failing_drop(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor, uint64_t operation_site) {
+    log_drop(ctx, value, anchor, operation_site);
     uint64_t id;
     memcpy(&id, value, sizeof id);
-    return hirsel_rt_v2_failure_begin(ctx, 1, (uint32_t)id, anchor, anchor);
+    return hirsel_rt_v2_failure_begin(ctx, 1, (uint32_t)id, anchor, operation_site);
 }
 
 #define STEP(kind_, field_, offset_)                                                               \
@@ -138,15 +140,15 @@ static void test_classes_and_alignment(void) {
         }
         memset(hirsel_rt_v2_payload(exact), 1, capacity(exact));
         memset(hirsel_rt_v2_payload(after), 1, capacity(after));
-        CHECK(hirsel_rt_v2_release(ctx, exact, descriptor_index(&empty), NULL, 0) == 0);
-        CHECK(hirsel_rt_v2_release(ctx, after, descriptor_index(&empty), NULL, 0) == 0);
+        CHECK(hirsel_rt_v2_release(ctx, exact, descriptor_index(&empty), NULL, 0, 0) == 0);
+        CHECK(hirsel_rt_v2_release(ctx, after, descriptor_index(&empty), NULL, 0, 0) == 0);
     }
     for (uint64_t align = 1; align <= 8192; align *= 2) {
         hirsel_rt_v2_header *block = alloc(ctx, &empty, 100, align);
         CHECK(((uintptr_t)hirsel_rt_v2_payload(block) % align) == 0);
         CHECK(((block->descriptor & (3u<<29)) == (1u<<29)) == (align > HIRSEL_RT_V2_SMALL_ALIGN_MAX));
         memset(hirsel_rt_v2_payload(block), 2, 100);
-        hirsel_rt_v2_release(ctx, block, descriptor_index(&empty), NULL, 0);
+        hirsel_rt_v2_release(ctx, block, descriptor_index(&empty), NULL, 0, 0);
     }
     hirsel_rt_v2_ctx_destroy(ctx);
 }
@@ -180,8 +182,8 @@ static void test_page_reuse(void) {
     hirsel_rt_v2_header *b = alloc(ctx, &empty, 40, 8);
     const uint64_t page_bytes = stats(ctx).backing_bytes;
     const uintptr_t page = page_of(a), stride = (uintptr_t)b - (uintptr_t)a;
-    hirsel_rt_v2_release(ctx, a, descriptor_index(&empty), NULL, 0);
-    hirsel_rt_v2_release(ctx, b, descriptor_index(&empty), NULL, 0);
+    hirsel_rt_v2_release(ctx, a, descriptor_index(&empty), NULL, 0, 0);
+    hirsel_rt_v2_release(ctx, b, descriptor_index(&empty), NULL, 0, 0);
     int count = 0;
     hirsel_rt_v2_header *block;
     do {
@@ -201,7 +203,7 @@ static void test_page_reuse(void) {
     int intact = 0;
     for (int index = 0; index < count; index++) {
         intact += key_of(live[index]) == (uint64_t)index;
-        hirsel_rt_v2_release(ctx, live[index], descriptor_index(&empty), NULL, 0);
+        hirsel_rt_v2_release(ctx, live[index], descriptor_index(&empty), NULL, 0, 0);
     }
     CHECK(intact == count);
     CHECK(stats(ctx).live_blocks == 0);
@@ -211,7 +213,7 @@ static void test_page_reuse(void) {
     intact = 0;
     for (int index = 0; index < count; index++) {
         intact += page_of(live[index]) == page && key_of(live[index]) == (uint64_t)index;
-        hirsel_rt_v2_release(ctx, live[index], descriptor_index(&empty), NULL, 0);
+        hirsel_rt_v2_release(ctx, live[index], descriptor_index(&empty), NULL, 0, 0);
     }
     CHECK(intact == count);
     CHECK(stats(ctx).live_blocks == 0);
@@ -226,7 +228,7 @@ static void test_counts_and_chain(void) {
     hirsel_rt_v2_header *block = alloc(ctx, &empty, 8, 8);
     for (int dup = 0; dup < 10; dup++) hirsel_rt_v2_dup(ctx, block);
     CHECK(block->count == HIRSEL_RT_V2_COUNT_IMMORTAL);
-    for (int release = 0; release < 20; release++) hirsel_rt_v2_release(ctx, block, descriptor_index(&empty), NULL, 0);
+    for (int release = 0; release < 20; release++) hirsel_rt_v2_release(ctx, block, descriptor_index(&empty), NULL, 0, 0);
     CHECK(block->count == HIRSEL_RT_V2_COUNT_IMMORTAL);
     CHECK(block->count != 1);
     CHECK(stats(ctx).immortalized_blocks == 1);
@@ -242,7 +244,7 @@ static void test_counts_and_chain(void) {
         set_ref(cons, 8, head);
         head = cons;
     }
-    CHECK(hirsel_rt_v2_release(ctx, head, descriptor_index(&cell), NULL, 0) == 0);
+    CHECK(hirsel_rt_v2_release(ctx, head, descriptor_index(&cell), NULL, 0, 0) == 0);
     CHECK(stats(ctx).live_blocks == 0);
 
     head = alloc(ctx, &niche_cell, 8, 8);
@@ -252,7 +254,7 @@ static void test_counts_and_chain(void) {
         set_ref(cons, 0, head);
         head = cons;
     }
-    CHECK(hirsel_rt_v2_release(ctx, head, descriptor_index(&niche_cell), NULL, 0) == 0);
+    CHECK(hirsel_rt_v2_release(ctx, head, descriptor_index(&niche_cell), NULL, 0, 0) == 0);
     CHECK(stats(ctx).live_blocks == 0);
     hirsel_rt_v2_ctx_destroy(ctx);
 }
@@ -270,7 +272,7 @@ static void test_sequence_loop(void) {
     }
     event_count = 0;
     closed_count = 0;
-    CHECK(hirsel_rt_v2_release(ctx, block, descriptor_index(&list), NULL, 0) == HIRSEL_RT_V2_STATUS_OK);
+    CHECK(hirsel_rt_v2_release(ctx, block, descriptor_index(&list), NULL, 0, 0) == HIRSEL_RT_V2_STATUS_OK);
     CHECK(event_count == 3 && events[0] == 12 && events[1] == 11 && events[2] == 10);
     CHECK(closed_count == 3 && closed[0] == 102 && closed[1] == 101 && closed[2] == 100);
     CHECK(stats(ctx).live_blocks == 0);
@@ -283,7 +285,7 @@ static void test_finalizer_failures(void) {
     set_ref(root, 8, node(ctx, &failing_leaf, 2));
     set_ref(root, 16, node(ctx, &logged_leaf, 3));
     event_count = 0;
-    CHECK(hirsel_rt_v2_release(ctx, root, descriptor_index(&failing_pair), NULL, 9) == HIRSEL_RT_V2_STATUS_FAILURE);
+    CHECK(hirsel_rt_v2_release(ctx, root, descriptor_index(&failing_pair), NULL, 9, 9) == HIRSEL_RT_V2_STATUS_FAILURE);
     CHECK(event_count == 3 && events[0] == 1 && events[1] == 3 && events[2] == 2);
     hirsel_rt_v2_failure primary;
     CHECK(hirsel_rt_v2_failure_primary(ctx, &primary) == 1 && primary.rule == 1 && primary.site == 9);
@@ -300,7 +302,7 @@ static void test_finalizer_failures(void) {
     memcpy(&value[2], &b, sizeof b);
     hirsel_rt_v2_cleanup continuation;
     event_count = 0;
-    CHECK(hirsel_rt_v2_finalize(ctx, descriptor_index(&failing_pair), value, NULL, &continuation, 0) == HIRSEL_RT_V2_STATUS_FAILURE);
+    CHECK(hirsel_rt_v2_finalize(ctx, descriptor_index(&failing_pair), value, NULL, &continuation, 0, 0) == HIRSEL_RT_V2_STATUS_FAILURE);
     CHECK(event_count == 3 && events[0] == 4 && events[1] == 6 && events[2] == 5);
     CHECK(hirsel_rt_v2_failure_primary(ctx, &primary) == 1 && primary.rule == 1);
     CHECK(hirsel_rt_v2_failure_cause_count(ctx) == 2);
@@ -328,7 +330,7 @@ static void test_regions(void) {
         hirsel_rt_v2_region_hold(ctx, &region, node(ctx, id % 2 ? &logged_leaf : &failing_leaf, id));
     }
     event_count = 0;
-    CHECK(hirsel_rt_v2_region_exit(ctx, &region, 0) == HIRSEL_RT_V2_STATUS_FAILURE);
+    CHECK(hirsel_rt_v2_region_exit(ctx, &region, 0, 0) == HIRSEL_RT_V2_STATUS_FAILURE);
     CHECK(event_count == 4 && events[0] == 4 && events[3] == 1);
     hirsel_rt_v2_stats after = stats(ctx);
     CHECK(after.live_blocks == 0);
@@ -365,12 +367,12 @@ static void panic_probe(void) { hirsel_rt_v2_diag_panic(); }
 static void mismatch_probe(void) {
     hirsel_rt_v2_ctx *ctx = create(HIRSEL_RT_V2_CONFIG_DIAGNOSTIC, 0);
     hirsel_rt_v2_header *block = alloc(ctx, &logged_leaf, 8, 8);
-    hirsel_rt_v2_release(ctx, block, descriptor_index(&empty), NULL, 0);
+    hirsel_rt_v2_release(ctx, block, descriptor_index(&empty), NULL, 0, 0);
 }
 
 static void unsafe_ffi_probe(void) {
     hirsel_rt_v2_ctx *ctx = create(0, 0);
-    hirsel_rt_v2_release(ctx, node(ctx, &ffi, 1), descriptor_index(&ffi), NULL, 0);
+    hirsel_rt_v2_release(ctx, node(ctx, &ffi, 1), descriptor_index(&ffi), NULL, 0, 0);
 }
 
 int main(void) {

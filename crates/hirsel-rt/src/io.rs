@@ -1669,13 +1669,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_close(
     ctx: *mut crate::RunCtx,
     handle: u64,
     anchor: u64,
+    operation_site: u64,
 ) -> u8 {
     let binding = unsafe { Binding::get(ctx) };
     match binding.adapter.call(Request::Close { handle }) {
         Ok(Completion::Unit(Ok(()))) => crate::STATUS_OK,
         // A dropped accepted stream or listener left a scripted client's Expect unmet.
         Ok(Completion::Checked(false)) => {
-            crate::failure::record_runtime(ctx, "LANG-9", anchor);
+            crate::failure::record_runtime(ctx, "LANG-9", anchor, operation_site);
             crate::STATUS_FAILURE
         }
         Err(error) => adapter_refusal(binding, error),
@@ -1718,7 +1719,7 @@ impl UnitResult {
         }
     }
 }
-/// `out.print` at the Hirsel ABI v1 of `fn(s: Stdout, text: String) -> Result[(), OutputError]`
+/// `out.print` at the Hirsel ABI v2 of `fn(s: Stdout, text: String) -> Result[(), OutputError]`
 /// (`HIRSEL_ABI_EXPORTS`): the context, the unused caller destination, the inline result,
 /// the borrowed `Stdout` handle by read-only address, then the String slice by value as
 /// its owner block, start and length. The text is the owner's sequence payload from
@@ -1875,7 +1876,7 @@ pub(crate) unsafe fn slice_bytes<'a>(owner: *mut crate::Header, start: u64, len:
 }
 macro_rules! path_export {
     ($name:ident, $request:ident, $field:ident, $completion:ident, $result:ty, $convert:expr) => {
-        /// Hirsel ABI v1. Expected errors are results; refused authority returns status 1.
+        /// Hirsel ABI v2. Expected errors are results; refused authority returns status 1.
         /// # Safety
         /// The bound context, borrowed ID addresses and writable result are live.
         #[unsafe(no_mangle)]
@@ -2158,7 +2159,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write_bytes(
     };
     let completion = unsafe { capability_call(ctx, request) };
     unsafe {
-        crate::release::hirsel_rt_v2_release(ctx, owner, (*owner).index(), std::ptr::null(), 0)
+        crate::release::hirsel_rt_v2_release(ctx, owner, (*owner).index(), std::ptr::null(), 0, 0)
     };
     let Ok(Completion::Unit(value)) = completion else {
         if completion.is_err() {

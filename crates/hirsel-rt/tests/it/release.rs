@@ -20,7 +20,7 @@ fn alloc(ctx: *mut RunCtx, layout: &Layout, extent: u64) -> *mut Header {
 fn release(ctx: *mut RunCtx, block: *mut Header, mask: Option<&[u64]>) -> u8 {
     let layout = unsafe { (*block).index() };
     let mask = mask.map_or(ptr::null(), <[u64]>::as_ptr);
-    unsafe { hirsel_rt_v2_release(ctx, block, layout, mask, 77) }
+    unsafe { hirsel_rt_v2_release(ctx, block, layout, mask, 77, 77) }
 }
 
 /// A logged resource with no fields: payload `id`.
@@ -337,7 +337,17 @@ fn reset_of_a_unique_donor_drains_it_into_a_raw_token_for_reuse() {
     take_events();
     let mut token = ptr::null_mut();
     assert_eq!(
-        unsafe { hirsel_rt_v2_reset(ctx.0, donor, index(ctx.0, pair), ptr::null(), 5, &mut token) },
+        unsafe {
+            hirsel_rt_v2_reset(
+                ctx.0,
+                donor,
+                index(ctx.0, pair),
+                ptr::null(),
+                5,
+                5,
+                &mut token,
+            )
+        },
         0
     );
     assert_eq!(token, donor);
@@ -391,6 +401,7 @@ fn a_moved_field_keeps_its_bits_through_reset_and_reuse() {
                 index(ctx.0, pair),
                 live.as_ptr(),
                 5,
+                5,
                 &mut token,
             )
         },
@@ -424,7 +435,17 @@ fn reset_of_a_shared_donor_releases_one_credit_and_yields_none() {
     unsafe { hirsel_rt_v2_dup(ctx.0, donor) };
     let mut token = ptr::dangling_mut::<Header>();
     assert_eq!(
-        unsafe { hirsel_rt_v2_reset(ctx.0, donor, index(ctx.0, leaf), ptr::null(), 0, &mut token) },
+        unsafe {
+            hirsel_rt_v2_reset(
+                ctx.0,
+                donor,
+                index(ctx.0, leaf),
+                ptr::null(),
+                0,
+                0,
+                &mut token,
+            )
+        },
         0
     );
     assert!(token.is_null());
@@ -452,6 +473,7 @@ fn a_failing_finalizer_during_reset_disposes_the_storage_and_yields_none() {
                 index(ctx.0, failing),
                 ptr::null(),
                 0,
+                0,
                 &mut token,
             )
         },
@@ -472,7 +494,17 @@ fn dispose_shallow_frees_a_token_without_running_finalizers() {
     write_ref(donor, 8, node(ctx.0, logged_leaf(), 2));
     write_ref(donor, 16, node(ctx.0, logged_leaf(), 3));
     let mut token = ptr::null_mut();
-    unsafe { hirsel_rt_v2_reset(ctx.0, donor, index(ctx.0, pair), ptr::null(), 0, &mut token) };
+    unsafe {
+        hirsel_rt_v2_reset(
+            ctx.0,
+            donor,
+            index(ctx.0, pair),
+            ptr::null(),
+            0,
+            0,
+            &mut token,
+        )
+    };
     take_events();
     unsafe { hirsel_rt_v2_dispose(ctx.0, token) };
     assert_eq!(take_events(), []);
@@ -487,7 +519,17 @@ fn a_reuse_token_with_another_key_is_rejected() {
         let leaf = leaf(8);
         let donor = alloc(ctx.0, leaf, 8);
         let mut token = ptr::null_mut();
-        unsafe { hirsel_rt_v2_reset(ctx.0, donor, index(ctx.0, leaf), ptr::null(), 0, &mut token) };
+        unsafe {
+            hirsel_rt_v2_reset(
+                ctx.0,
+                donor,
+                index(ctx.0, leaf),
+                ptr::null(),
+                0,
+                0,
+                &mut token,
+            )
+        };
         let mut block = ptr::null_mut();
         unsafe { hirsel_rt_v2_reuse(ctx.0, token, index(ctx.0, leaf), 100, 8, &mut block) };
         return;
@@ -505,7 +547,7 @@ fn a_header_layout_mismatch_is_rejected_in_diagnostic_mode() {
         let own = leaf(8);
         let other = leaf(8);
         let block = alloc(ctx.0, own, 8);
-        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, other), ptr::null(), 0) };
+        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, other), ptr::null(), 0, 0) };
         return;
     }
     assert_child_aborts(
@@ -517,7 +559,7 @@ fn a_header_layout_mismatch_is_rejected_in_diagnostic_mode() {
     let own = leaf(8);
     let block = alloc(ctx.0, own, 8);
     assert_eq!(
-        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, own), ptr::null(), 0) },
+        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, own), ptr::null(), 0, 0) },
         0
     );
 }
@@ -530,7 +572,7 @@ fn a_layout_larger_than_the_block_is_rejected_in_diagnostic_mode() {
         let big = leaf(64);
         let block = alloc(ctx.0, small, 8);
         unsafe { (*block).descriptor = index(ctx.0, big) };
-        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, big), ptr::null(), 0) };
+        unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, big), ptr::null(), 0, 0) };
         return;
     }
     assert_child_aborts(

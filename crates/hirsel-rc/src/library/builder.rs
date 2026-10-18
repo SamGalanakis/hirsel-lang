@@ -45,6 +45,7 @@ pub trait Layouts {
         callable: TypeId,
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError>;
+    fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError>;
     fn table(&self) -> &LayoutTable;
     fn owners(&self) -> &Owners;
     /// The cursor's opaque source (`OwnerRepresentation::Cursor`).
@@ -66,6 +67,9 @@ impl Layouts for LayoutBuilder<'_> {
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError> {
         LayoutBuilder::fn_abi(self, store, callable, shape)
+    }
+    fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError> {
+        LayoutBuilder::with_caller_site(self, base)
     }
     fn table(&self) -> &LayoutTable {
         LayoutBuilder::table(self)
@@ -280,6 +284,7 @@ impl<'c, 'a> Body<'c, 'a> {
         let table = cx.layouts.table();
         let key = cx.instances.view(cx.id).key.digest();
         let mut unit = LirUnit::<Value>::new(UnitHeader {
+            track_caller: false,
             stage: StageKind::Value,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: UnitOrigin::Library,
@@ -948,6 +953,7 @@ impl<'c, 'a> Body<'c, 'a> {
         let arguments = PoolRange::push(&mut self.ed.unit.pools.call_arguments, arguments);
         let id = CallId(self.ed.unit.tables.calls.len() as u32);
         self.ed.unit.tables.calls.push(CallSite {
+            forward_caller: !matches!(callee, Callee::Indirect(_) | Callee::Bound { .. }),
             operation_arguments,
             callee,
             abi,

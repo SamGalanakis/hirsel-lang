@@ -161,6 +161,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         anchor: Value<'m>,
         emit: impl FnOnce(&mut glue::Walk<'m, '_>) -> Result<(), glue::GlueError>,
     ) -> Emitted<Value<'m>> {
+        let (anchor, operation_site) = self.failure_site_values(anchor);
         let measure_release = if self.inputs.measurement {
             let name = "hirsel_rt_v2_measure_release";
             let ptr = self.module.ptr_type();
@@ -207,6 +208,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             builder: &self.builder,
             context: self.context,
             anchor,
+            operation_site,
             budget: self.const_u64(glue::GLUE_MAX_DEPTH),
             status,
             pending: &mut pending,

@@ -1,10 +1,12 @@
 use super::*;
 
-/// An LLVM parameter of a Hirsel ABI v1 entry.
+/// An LLVM parameter of a Hirsel ABI v2 entry.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Hidden {
     Context,
     Environment,
+    CallerSite,
+    OperationSite,
     Destination,
     Result,
 }
@@ -91,13 +93,22 @@ impl<'m, 'a> Signature<'m, 'a> {
         if abi.environment {
             hidden.push(Hidden::Environment);
         }
+        if abi.caller_site {
+            hidden.extend([Hidden::CallerSite, Hidden::OperationSite]);
+        }
         if abi.destination {
             hidden.push(Hidden::Destination);
         }
         if abi.result.is_some() && value.is_none() {
             hidden.push(Hidden::Result);
         }
-        let mut types = vec![ptr; hidden.len()];
+        let mut types = hidden
+            .iter()
+            .map(|h| match h {
+                Hidden::CallerSite | Hidden::OperationSite => module.int_type(64),
+                _ => ptr,
+            })
+            .collect::<Vec<_>>();
         let mut first = Vec::new();
         let mut extensions = Vec::new();
         for parameter in &abi.parameters {

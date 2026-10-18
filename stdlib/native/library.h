@@ -1,4 +1,4 @@
-/* Monomorphic internal library ABI v1. Declaration schemas remain registry-owned.
+/* Monomorphic internal library ABI v2. Declaration schemas remain registry-owned.
  * A symbol family's {F} template is resolved per call to f32/f64 (hirsel_lir::abi::resolve_symbol).
  * All lengths are u64. No Rust enum, Vec or host usize appears here.
  */
@@ -17,7 +17,7 @@ typedef struct { uint32_t tag, error, code; } hirsel_rt_v2_unit_result;
 typedef struct { _Alignas(16) uint64_t words[8]; } hirsel_rt_v2_metadata_result;
 typedef uint8_t (*hirsel_rt_v2_test_entry)(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
 int32_t hirsel_rt_v2_launch_test(hirsel_rt_v2_test_entry, uint64_t, const hirsel_rt_v2_layout *const *, uint32_t, const hirsel_rt_v2_launch_config *);
-uint8_t hirsel_rt_v2_io_close(hirsel_rt_v2_ctx*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_io_close(hirsel_rt_v2_ctx*, uint64_t, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_io_stdout(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
 uint8_t hirsel_rt_v2_out_print(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_io_dir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
@@ -144,7 +144,7 @@ uint8_t hirsel_rt_v2_task_scope_exit(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t
    exit writes 1 when the deadline fired. */
 uint8_t hirsel_rt_v2_task_scope_enter_until(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_task_scope_exit_until(hirsel_rt_v2_ctx*, uint8_t*, const uint64_t*, uint8_t);
-uint8_t hirsel_rt_v2_task_spawn(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, uint8_t (*)(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*), hirsel_rt_v2_header*);
+uint8_t hirsel_rt_v2_task_spawn(hirsel_rt_v2_ctx*, uint64_t, uint64_t, void*, uint64_t*, const uint64_t*, uint8_t (*)(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, uint64_t, uint64_t), hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_task_finish(hirsel_rt_v2_ctx*, uint8_t*, const uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_task_join(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_task_cancel(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*);

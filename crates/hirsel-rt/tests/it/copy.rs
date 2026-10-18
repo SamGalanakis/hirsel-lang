@@ -27,7 +27,7 @@ fn copy(ctx: *mut RunCtx, block: *mut Header) -> *mut Header {
 }
 
 fn release(ctx: *mut RunCtx, block: *mut Header) {
-    let status = unsafe { hirsel_rt_v2_release(ctx, block, (*block).index(), ptr::null(), 0) };
+    let status = unsafe { hirsel_rt_v2_release(ctx, block, (*block).index(), ptr::null(), 0, 0) };
     assert_eq!(status, 0);
 }
 
@@ -189,7 +189,7 @@ fn tags_and_element_loops_select_the_holders_copied() {
     assert_eq!(ctx.stats().live_blocks, 0);
 }
 
-unsafe extern "C" fn no_drop(_: *mut RunCtx, _: *mut u8, _: u64) -> u8 {
+unsafe extern "C" fn no_drop(_: *mut RunCtx, _: *mut u8, _: u64, _: u64) -> u8 {
     0
 }
 
@@ -468,8 +468,8 @@ fn graph_copies_use_the_destination_and_outlive_source_arenas() {
             );
             release(ctx.0, root);
             let escaped = copy(ctx.0, second);
-            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner.as_mut_ptr(), 0), 0);
-            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer.as_mut_ptr(), 0), 0);
+            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner.as_mut_ptr(), 0, 0), 0);
+            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer.as_mut_ptr(), 0, 0), 0);
             assert_eq!(read_u64(escaped, 16), 7);
             assert_eq!(read_u64(child(escaped, 0), 0), 42);
             assert_eq!(child(escaped, 0), child(escaped, 8));
@@ -523,7 +523,7 @@ fn a_bounded_copy_charges_every_reference_before_copying() {
                 assert_eq!((status, remaining), (hirsel_rt::STATUS_EXHAUSTED, 39));
                 assert!(out.is_null());
             }
-            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, arena.as_mut_ptr(), 0), 0);
+            assert_eq!(hirsel_rt_v2_region_exit(ctx.0, arena.as_mut_ptr(), 0, 0), 0);
         }
     }
     release(ctx.0, root);
@@ -556,22 +556,22 @@ fn a_bounded_arena_recovers_only_its_own_sole_out_of_space() {
         hirsel_rt_v2_arena_enter(ctx.0, inner);
         hirsel_rt_v2_arena_bound(ctx.0, inner, 10);
         // The inner callback exhausts the outer arena: only the outer recovers it.
-        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, outer, 1, 6, 0), 1);
+        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, outer, 1, 6, 0, 0), 1);
         assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, inner), 0);
         assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, outer), 1);
         assert_eq!(hirsel_rt_v2_failure_active(ctx.0), 0);
         // A cleanup failure after the arena's own keeps both.
-        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0), 1);
+        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0, 0), 1);
         assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0, 0), 1);
         assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, inner), 0);
         assert_eq!(hirsel_rt_v2_failure_cause_count(ctx.0), 1);
         hirsel_rt_v2_failure_clear(ctx.0);
-        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner, 0), 0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner, 0, 0), 0);
         // Bound while a failure is active: its own record is a cause, recovered alone.
         assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0, 0), 1);
         hirsel_rt_v2_arena_enter(ctx.0, inner);
         hirsel_rt_v2_arena_bound(ctx.0, inner, 10);
-        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0), 1);
+        assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0, 0), 1);
         assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, inner), 1);
         assert_eq!(
             (
@@ -581,7 +581,7 @@ fn a_bounded_arena_recovers_only_its_own_sole_out_of_space() {
             (1, 0)
         );
         hirsel_rt_v2_failure_clear(ctx.0);
-        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner, 0), 0);
-        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer, 0), 0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner, 0, 0), 0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx.0, outer, 0, 0), 0);
     }
 }

@@ -88,7 +88,7 @@ fn open(ctx: &Ctx, cap: Option<u64>) -> Box<MaybeUninit<Region>> {
 
 fn close(ctx: &Ctx, arena: &mut MaybeUninit<Region>) {
     assert_eq!(
-        unsafe { hirsel_rt_v2_region_exit(ctx.0, arena.as_mut_ptr(), 0) },
+        unsafe { hirsel_rt_v2_region_exit(ctx.0, arena.as_mut_ptr(), 0, 0) },
         0
     );
 }
@@ -153,7 +153,7 @@ fn a_tracked_block_is_unshared_until_a_dup_and_ignores_releases() {
         assert_eq!(count(block), COUNT_ARENA_SHARED);
         unsafe { hirsel_rt_v2_dup(ctx.0, block) };
         let status =
-            unsafe { hirsel_rt_v2_release(ctx.0, block, (*block).index(), ptr::null(), 0) };
+            unsafe { hirsel_rt_v2_release(ctx.0, block, (*block).index(), ptr::null(), 0, 0) };
         assert_eq!((status, count(block)), (0, COUNT_ARENA_SHARED));
         close(&ctx, &mut arena);
     }
@@ -313,7 +313,7 @@ fn a_push_leaves_a_heap_list_alone() {
         assert_eq!((list, count(list)), (heap, 2));
         for _ in 0..2 {
             let status =
-                unsafe { hirsel_rt_v2_release(ctx.0, list, (*list).index(), ptr::null(), 0) };
+                unsafe { hirsel_rt_v2_release(ctx.0, list, (*list).index(), ptr::null(), 0, 0) };
             assert_eq!(status, 0);
         }
         assert_eq!(ctx.stats().live_blocks, 0);
@@ -382,7 +382,7 @@ fn a_deep_copy_tracks_sequences_except_below_an_untracked_block() {
         close(&ctx, &mut arena);
         for block in [boxed, mapped] {
             let status =
-                unsafe { hirsel_rt_v2_release(ctx.0, block, (*block).index(), ptr::null(), 0) };
+                unsafe { hirsel_rt_v2_release(ctx.0, block, (*block).index(), ptr::null(), 0, 0) };
             assert_eq!(status, 0);
         }
         assert_eq!(ctx.stats().live_blocks, 0);
@@ -449,7 +449,7 @@ fn a_map_block_tracks_its_entries_and_never_its_index() {
             close(&ctx, &mut arena);
         }
         let status =
-            unsafe { hirsel_rt_v2_release(ctx.0, source, (*source).index(), ptr::null(), 0) };
+            unsafe { hirsel_rt_v2_release(ctx.0, source, (*source).index(), ptr::null(), 0, 0) };
         assert_eq!(status, 0);
         assert_eq!(ctx.stats().live_blocks, 0);
     }

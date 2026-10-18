@@ -303,7 +303,7 @@ static uint8_t entry(hirsel_rt_v2_ctx *ctx, uint8_t *destination, uint8_t *resul
   hirsel_rt_v2_header *block = hirsel_rt_v2_alloc(ctx, 0, 8, 8, HIRSEL_RT_V2_DOMAIN_HEAP, 0);
   memset(hirsel_rt_v2_payload(block), 0, 8);
 #ifdef FREE_TWIN
-  hirsel_rt_v2_release(ctx, block, 0, 0, 0);
+  hirsel_rt_v2_release(ctx, block, 0, 0, 0, 0);
 #endif
   memset(result, 0, 4);
   return 0;
@@ -400,23 +400,23 @@ static uint8_t entry(hirsel_rt_v2_ctx *ctx, uint8_t *destination, uint8_t *resul
   memset(hirsel_rt_v2_payload(bytes), 0, 8);
   /* A bare token reused for a bare request stays in place. */
   hirsel_rt_v2_header *token = NULL, *reused = NULL;
-  assert(hirsel_rt_v2_reset(ctx, bare, NODE, NULL, 0, &token) == 0 && token == bare);
+  assert(hirsel_rt_v2_reset(ctx, bare, NODE, NULL, 0, 0, &token) == 0 && token == bare);
   assert(hirsel_rt_v2_reuse(ctx, token, NODE, 16, 8, &reused) == 0 && reused == bare);
   /* Reused for a dynamic layout, it moves its bytes to storage with capacity metadata. */
   memset(hirsel_rt_v2_payload(bare), 0, 16);
   memcpy(hirsel_rt_v2_payload(bare) + 8, "kept\0\0\0", 8);
-  assert(hirsel_rt_v2_reset(ctx, bare, NODE, NULL, 0, &token) == 0);
+  assert(hirsel_rt_v2_reset(ctx, bare, NODE, NULL, 0, 0, &token) == 0);
   assert(hirsel_rt_v2_reuse(ctx, token, BYTES, 16, 8, &reused) == 0);
   assert(memcmp(hirsel_rt_v2_payload(reused) + 8, "kept", 5) == 0);
   assert(hirsel_rt_v2_capacity(reused) == 16 && reused->count == 1);
   assert(stats(ctx).live_blocks == before.live_blocks + 3);
-  assert(hirsel_rt_v2_release(ctx, reused, BYTES, NULL, 0) == 0);
-  assert(hirsel_rt_v2_release(ctx, bytes, BYTES, NULL, 0) == 0);
-  assert(hirsel_rt_v2_release(ctx, wide, NODE, NULL, 0) == 0);
+  assert(hirsel_rt_v2_release(ctx, reused, BYTES, NULL, 0, 0) == 0);
+  assert(hirsel_rt_v2_release(ctx, bytes, BYTES, NULL, 0, 0) == 0);
+  assert(hirsel_rt_v2_release(ctx, wide, NODE, NULL, 0, 0) == 0);
   hirsel_rt_v2_header *last = hirsel_rt_v2_alloc(ctx, NODE, 16, 8, HIRSEL_RT_V2_DOMAIN_HEAP, 0);
   memset(hirsel_rt_v2_payload(last), 0, 16);
 #ifndef LEAK
-  assert(hirsel_rt_v2_release(ctx, last, NODE, NULL, 0) == 0);
+  assert(hirsel_rt_v2_release(ctx, last, NODE, NULL, 0, 0) == 0);
   hirsel_rt_v2_stats after = stats(ctx);
   assert(after.live_blocks == before.live_blocks && after.live_bytes == before.live_bytes);
 #ifndef SLABS

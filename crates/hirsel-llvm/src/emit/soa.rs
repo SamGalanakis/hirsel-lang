@@ -275,6 +275,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.block_descriptor(old),
                 self.module.const_zero(self.module.ptr_type()),
                 self.const_u64(0),
+                self.const_u64(0),
             ],
         );
         self.builder.br(joined);

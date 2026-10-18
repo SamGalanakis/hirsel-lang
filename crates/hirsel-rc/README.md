@@ -486,7 +486,7 @@ a FunctionRef and inline Order construction, with no callable static-data format
 operation's own path and actuals, passes each parameter on as declared and calls
 the operation, so a call through the value fails and cleans up as a direct call
 does. Of the inline lowerings only the lengths have a value (their `SeqLen`); the
-others are unsupported as values. `native-tests/regressions/operation-as-value.hir`
+others are unsupported as values. `conformance/LANG/LANG-2-core-operation-values-run.hir`
 runs it in the native smoke.
 
 `flat_walk` strength-reduces zero-based, unit-stride loops over variable-element
@@ -625,3 +625,12 @@ projection. Only total field paths flatten through a view alias.
 SoA Lists use the ordinary list library bodies and checked element slots.
 Construction, reserve, push, pop, remove, iteration and lengths retain the
 column payload kind through lowering; empty Lists use the static empty header.
+
+Caller metadata lowers from the independently validated TIR body set and call
+forwarding bit into LIR's header policy and call boundary. Instances select ABI
+v2's carrier for marked source bodies, callable entries and library bodies.
+Closure specialization retains the call's original forwarding policy.
+
+Operation-value forwarding bodies retain the library carrier but derive their
+primitive call ABI independently from its declaration. Hidden source codes are
+therefore carried only by primitive exports that declare them (TaskSpawn).

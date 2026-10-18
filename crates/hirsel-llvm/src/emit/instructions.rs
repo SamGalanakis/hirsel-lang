@@ -1353,12 +1353,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let release = self.runtime(RuntimeEntry::Release)?;
                 let block = self.get(value)?;
                 let descriptor = self.block_descriptor(block);
+                let (anchor, operation_site) = self.failure_sites(self.cleanup_code(anchor)?);
                 let arguments = [
                     self.context,
                     block,
                     descriptor,
                     self.live_mask(live)?,
-                    self.const_u64(self.cleanup_code(anchor)?),
+                    anchor,
+                    operation_site,
                 ];
                 let status = self.builder.call(release, &arguments);
                 self.status_guard(status, failure)
@@ -1380,12 +1382,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let reset = self.runtime(RuntimeEntry::Reset)?;
                 let descriptor = self.block_descriptor(block);
                 let out = self.prologue.alloca(self.module.ptr_type(), 8);
+                let (anchor, operation_site) = self.failure_sites(self.cleanup_code(anchor)?);
                 let arguments = [
                     self.context,
                     block,
                     descriptor,
                     self.live_mask(live)?,
-                    self.const_u64(self.cleanup_code(anchor)?),
+                    anchor,
+                    operation_site,
                     out,
                 ];
                 let status = self.builder.call(reset, &arguments);
@@ -1463,11 +1467,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let Some(instance) = self.unit.tables.regions.get(region.index()) else {
                     return self.invalid("a region outside the region table");
                 };
-                let anchor = self.anchor_code(instance.anchor)?;
+                let (anchor, operation_site) =
+                    self.failure_sites(self.anchor_code(instance.anchor)?);
                 let exit = self.runtime(RuntimeEntry::RegionExit)?;
                 let status = self.builder.call(
                     exit,
-                    &[self.context, self.get(mark)?, self.const_u64(anchor)],
+                    &[self.context, self.get(mark)?, anchor, operation_site],
                 );
                 self.status_guard(status, failure)
             }

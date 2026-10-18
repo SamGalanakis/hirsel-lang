@@ -191,7 +191,7 @@ int main(void) {{
       words[1] = exact / 2;
       assert(queries[q](ctx, &result, &root) == 0 && result == exact / 2);
     }}
-    assert(hirsel_rt_v2_release(ctx, root, descriptors[q], NULL, 0) == 0);
+    assert(hirsel_rt_v2_release(ctx, root, descriptors[q], NULL, 0, 0) == 0);
   }}
   hirsel_rt_v2_stats stats;
   hirsel_rt_v2_ctx_stats(ctx, &stats);

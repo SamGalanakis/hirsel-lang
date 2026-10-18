@@ -21,7 +21,7 @@ fn dup(ctx: &Ctx, block: *mut Header) {
 }
 
 fn release(ctx: &Ctx, block: *mut Header, layout: &Layout) -> u8 {
-    unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0) }
+    unsafe { hirsel_rt_v2_release(ctx.0, block, index(ctx.0, layout), ptr::null(), 0, 0) }
 }
 
 fn unique(block: *mut Header) -> bool {

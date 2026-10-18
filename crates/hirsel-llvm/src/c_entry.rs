@@ -1,6 +1,7 @@
 //! The C view of an emitted entry, for harnesses that call one or define one. A C harness
 //! never spells the lowered convention itself: it calls or implements a function of the
-//! entry's ABI v1 signature (`FnAbi`: context, [environment], [caller destination],
+//! entry's harness signature (the `FnAbi` parameters without inert caller metadata:
+//! context, [environment], [caller destination],
 //! [result pointer], then each declared parameter's slots, returning the u8 status), and
 //! the text here bridges it to what emission lowers that signature to. The rule deciding
 //! the bridge is `register_result`, the emitter's own, so a change to it rewrites every
@@ -82,13 +83,23 @@ fn slot(ty: PhysicalType, passing: ParameterPassing, extension: ScalarExtension)
     }
 }
 
-/// The ABI v1 parameters of `abi` as (C type, name), the result pointer included, and the
+/// The harness parameters of `abi` as (C type, name), the result pointer included, and the
 /// index of the result pointer when there is one.
 fn parameters(abi: &FnAbi) -> (Vec<(&'static str, String)>, Option<usize>) {
     assert!(abi.context, "a Hirsel entry takes its run context");
     let mut out = vec![("hirsel_rt_v2_ctx *", "ctx".to_string())];
     if abi.environment {
         out.push(("void *", "environment".into()));
+    }
+    if abi.caller_site {
+        out.push((
+            "uint64_t __attribute__((unused))",
+            "hirsel_caller_site".into(),
+        ));
+        out.push((
+            "uint64_t __attribute__((unused))",
+            "hirsel_operation_site".into(),
+        ));
     }
     if abi.destination {
         out.push(("void *", "destination".into()));
@@ -121,12 +132,30 @@ fn names<'p>(parameters: impl Iterator<Item = &'p (&'static str, String)>) -> St
         .join(", ")
 }
 
+// Host harness calls have no Hirsel caller. Metadata is supplied at the machine
+// boundary and omitted from a host-implemented body's ordinary parameters.
+fn is_site(name: &str) -> bool {
+    matches!(name, "hirsel_caller_site" | "hirsel_operation_site")
+}
+
 /// C text that declares the emitted entry `symbol` of `abi` as emission lowers it, and
-/// defines `static uint8_t name(...)` of its ABI v1 signature calling it. A register
+/// defines `static uint8_t name(...)` of its harness signature calling it. A register
 /// result is written through `out` on success, in the result's own width (a float by bit
 /// pattern), as a result pointer would receive it; `out` is untouched on failure.
 pub fn c_call(layouts: &LayoutTable, abi: &FnAbi, symbol: &str, name: &str) -> String {
     let (all, result) = parameters(abi);
+    let harness: Vec<_> = all
+        .iter()
+        .filter(|(_, name)| !is_site(name))
+        .cloned()
+        .collect();
+    let host_names = |parameters: &[(&str, String)]| {
+        parameters
+            .iter()
+            .map(|(_, name)| if is_site(name) { "0" } else { name.as_str() })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let mut c = pairs();
     match (register_result(layouts, abi), result) {
         (Some(kind), Some(out)) => {
@@ -145,8 +174,8 @@ pub fn c_call(layouts: &LayoutTable, abi: &FnAbi, symbol: &str, name: &str) -> S
                  \x20 return r.{status};\n\
                  }}\n",
                 declaration(&lowered),
-                declaration(&all),
-                names(lowered.iter()),
+                declaration(&harness),
+                host_names(&lowered),
                 pair = pair(kind),
                 bits = bits(kind),
                 status = PairField::Status.name(),
@@ -159,8 +188,8 @@ pub fn c_call(layouts: &LayoutTable, abi: &FnAbi, symbol: &str, name: &str) -> S
                 "extern uint8_t {symbol}({});\n\
                  static uint8_t {name}({}) {{ return {symbol}({}); }}\n",
                 declaration(&all),
-                declaration(&all),
-                names(all.iter()),
+                declaration(&harness),
+                host_names(&all),
             );
         }
     }
@@ -168,7 +197,7 @@ pub fn c_call(layouts: &LayoutTable, abi: &FnAbi, symbol: &str, name: &str) -> S
 }
 
 /// C text that defines the entry `symbol` of `abi`, as emitted callers lower their call to
-/// it, over `body`: a function of its ABI v1 signature the harness declares first. For a
+/// it, over `body`: a function of its harness signature the harness declares first. For a
 /// register result, `body` writes the result through `out` in its own width, and the
 /// entry returns that word beside the status, zero on failure.
 pub fn c_definition(layouts: &LayoutTable, abi: &FnAbi, symbol: &str, body: &str) -> String {
@@ -185,6 +214,7 @@ pub fn c_definition(layouts: &LayoutTable, abi: &FnAbi, symbol: &str, body: &str
             let arguments: Vec<_> = all
                 .iter()
                 .enumerate()
+                .filter(|(_, (_, name))| !is_site(name))
                 .map(|(i, (_, name))| if i == out { "&v" } else { name.as_str() })
                 .collect();
             let _ = write!(
@@ -210,7 +240,7 @@ pub fn c_definition(layouts: &LayoutTable, abi: &FnAbi, symbol: &str, body: &str
                 c,
                 "uint8_t {symbol}({}) {{ return {body}({}); }}\n",
                 declaration(&all),
-                names(all.iter()),
+                names(all.iter().filter(|(_, name)| !is_site(name))),
             );
         }
     }
@@ -224,7 +254,7 @@ mod tests {
     use crate::emit::pair_type;
 
     /// Every register result's C typedef is the struct emission returns, field for field,
-    /// and both are ABI v1's `{ i8 status, word }` (README, Register results): a change to
+    /// and both are ABI v2's `{ i8 status, word }` (README, Register results): a change to
     /// `REGISTER_PAIR` or `PairField::word` fails here, not in a harness that misreads it.
     #[test]
     fn c_pairs_are_the_emitted_pair_field_by_field() {
@@ -276,7 +306,7 @@ mod tests {
             assert_eq!(
                 (emitted.as_slice(), names.as_slice()),
                 (&["i8", word][..], &["status", "value"][..]),
-                "{kind:?}: ABI v1 returns {{ i8 status, word }}"
+                "{kind:?}: ABI v2 returns {{ i8 status, word }}"
             );
         }
     }

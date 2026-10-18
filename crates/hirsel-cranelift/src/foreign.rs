@@ -344,6 +344,7 @@ impl Emitter<'_> {
             for hidden in &sig.hidden {
                 args.push(match hidden {
                     Hidden::Context => run,
+                    Hidden::CallerSite | Hidden::OperationSite => b.ins().iconst(ir::types::I64, 0),
                     Hidden::Destination => b.ins().iconst(PTR, 0),
                     Hidden::Result => {
                         let (size, align) = if c_result == Some(ScalarKind::Pointer) {

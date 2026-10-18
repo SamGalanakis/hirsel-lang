@@ -27,7 +27,7 @@ int main(void) {
     volatile unsigned char *payload = hirsel_rt_v2_payload(block);
     payload[0] = 1;
     if (payload[0] != 1) return 3;
-    if (hirsel_rt_v2_release(ctx, block, EMPTY, 0, 0) != HIRSEL_RT_V2_STATUS_OK) return 4;
+    if (hirsel_rt_v2_release(ctx, block, EMPTY, 0, 0, 0) != HIRSEL_RT_V2_STATUS_OK) return 4;
 #ifdef USE_AFTER_FREE
     unsigned char after = payload[0];
     (void)after;

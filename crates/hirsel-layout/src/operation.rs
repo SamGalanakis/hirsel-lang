@@ -262,6 +262,11 @@ impl OperationDeclarations for OperationRegistry {
         });
         let mut builder = LayoutBuilder::new(target, &self.owners);
         let abi = builder.fn_abi(&store, callable, CallableShape::Definition)?;
+        let abi = if signature.metadata.track_caller {
+            builder.with_caller_site(abi)?
+        } else {
+            abi
+        };
         let abi = builder.table().fn_abis[abi.0 as usize].clone();
         Ok((abi, builder.finish()))
     }

@@ -3,7 +3,7 @@
 //!
 //! It compiles the same LIR as `hirsel-llvm`, against the same backend-neutral interface
 //! (`hirsel_lir::emission`): the same `EmitInputs`, link names, failure codes, site codes,
-//! runtime descriptors, static blocks and Hirsel ABI v1, so its objects link with the same
+//! runtime descriptors, static blocks and Hirsel ABI v2, so its objects link with the same
 //! runtime archive and launcher. It keeps none of the LLVM backend's optimizations (no
 //! compiled drop glue, inline allocation fast paths, deferred counts or private root
 //! returns): every count edge, allocation and release goes through its runtime entry. A

@@ -37,7 +37,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let here = self.builder.current();
         let block = self.module.append_block(self.function);
         self.builder.position(block);
-        let site = self.anchor_code(anchor)?;
+        let (site, operation_site) = self.failure_sites(self.anchor_code(anchor)?);
         let exhausted = self.runtime(RuntimeEntry::ArenaExhausted)?;
         let i32_ty = self.module.int_type(32);
         self.builder.call(
@@ -47,7 +47,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 region,
                 self.module.const_int(i32_ty, u128::from(code.kind)),
                 self.module.const_int(i32_ty, u128::from(code.rule)),
-                self.const_u64(site),
+                site,
+                operation_site,
             ],
         );
         let dispose = self.pool(edge.dispose, &self.unit.pools.values)?;

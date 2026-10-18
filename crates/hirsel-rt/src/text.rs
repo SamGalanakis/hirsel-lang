@@ -1,4 +1,4 @@
-//! SEM-3 text leaves at the declaration's Hirsel ABI v1.
+//! SEM-3 text leaves at the declaration's Hirsel ABI v2.
 use crate::views::Slice;
 use crate::{
     DOMAIN_HEAP, Header, LAYOUT_DYNAMIC, LAYOUT_MAGIC, LAYOUT_VERSION, Layout, RunCtx,

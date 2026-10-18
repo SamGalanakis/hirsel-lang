@@ -354,6 +354,7 @@ fn fixture(
         .map(|r| b.value_as(repr(&b.table, r.layout), r.layout, Holding::Plain));
     let arguments = PoolRange::push(&mut b.builder.unit.pools.call_arguments, arguments);
     b.builder.unit.tables.calls.push(CallSite {
+        forward_caller: true,
         callee: Callee::Operation(OperationRef(0)),
         operation_arguments: actuals,
         abi: FnAbiId(0),

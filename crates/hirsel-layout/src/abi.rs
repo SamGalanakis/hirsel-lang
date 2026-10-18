@@ -1,4 +1,4 @@
-//! Hirsel cross-unit ABI v1 derivation (Target and ABI).
+//! Hirsel cross-unit ABI v2 derivation (Target and ABI).
 //!
 //! `FnAbi` is computed once from the specialized declared callable type. Its
 //! passing classes read only the declared parameter convention and the
@@ -55,7 +55,7 @@ impl<'o> LayoutBuilder<'o> {
             Multiplicity::Once => CallMultiplicity::Once,
         };
         let mut key = Vec::new();
-        atom(&mut key, b"hirsel.fn-abi.v1");
+        atom(&mut key, b"hirsel.fn-abi.v2");
         atom(&mut key, shape_name(shape).as_bytes());
         atom(&mut key, &[multiplicity as u8]);
         atom(&mut key, &(function.parameters.len() as u64).to_le_bytes());
@@ -171,6 +171,10 @@ impl<'o> LayoutBuilder<'o> {
                 shape,
                 CallableShape::Closure | CallableShape::IterNext | CallableShape::IterDrop
             ),
+            caller_site: matches!(
+                shape,
+                CallableShape::Closure | CallableShape::IterNext | CallableShape::IterDrop
+            ),
             destination,
             result,
             result_arena: None,
@@ -184,6 +188,34 @@ impl<'o> LayoutBuilder<'o> {
         let id = FnAbiId(self.table_mut_fn_abis().len() as u32);
         self.table_mut_fn_abis().push(abi);
         self.abi_memo.insert((callable_key, shape), id);
+        Ok(id)
+    }
+
+    /// Add the constant caller-site carrier without changing the callable's language type.
+    pub fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError> {
+        let mut abi = self
+            .table()
+            .fn_abis
+            .get(base.0 as usize)
+            .ok_or(LayoutError::MissingType)?
+            .clone();
+        if abi.caller_site {
+            return Ok(base);
+        }
+        if !abi.context {
+            return Err(LayoutError::Invalid(
+                "caller metadata on a foreign ABI".into(),
+            ));
+        }
+        abi.caller_site = true;
+        abi.key.callable =
+            ContentHash::of_parts("hirsel.caller-abi.v1", [abi.key.callable.0.as_slice()]);
+        if let Some(&id) = self.abi_memo.get(&(abi.key.callable, abi.shape)) {
+            return Ok(id);
+        }
+        let id = FnAbiId(self.table().fn_abis.len() as u32);
+        self.abi_memo.insert((abi.key.callable, abi.shape), id);
+        self.table_mut_fn_abis().push(abi);
         Ok(id)
     }
 

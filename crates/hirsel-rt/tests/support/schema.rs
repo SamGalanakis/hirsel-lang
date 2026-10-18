@@ -120,7 +120,12 @@ pub fn fail_at(addresses: Vec<u64>) {
 
 /// The finalizer of every derived resource and of leaf blocks: logs the value's address and,
 /// when told to, fails with rule 100 + its position in the [`fail_at`] list.
-pub unsafe extern "C" fn log_address(ctx: *mut RunCtx, value: *mut u8, anchor: u64) -> u8 {
+pub unsafe extern "C" fn log_address(
+    ctx: *mut RunCtx,
+    value: *mut u8,
+    anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     let address = value as u64;
     LOG.with(|log| log.borrow_mut().push(Event::Finalize(address)));
     match FAIL_AT.with(|f| f.borrow().iter().position(|&a| a == address)) {
@@ -138,7 +143,12 @@ pub unsafe extern "C" fn log_address(ctx: *mut RunCtx, value: *mut u8, anchor: u
 }
 
 /// The Io adapter's handle close: logs the handle.
-pub unsafe extern "C" fn log_close(_ctx: *mut RunCtx, handle: u64, _anchor: u64) -> u8 {
+pub unsafe extern "C" fn log_close(
+    _ctx: *mut RunCtx,
+    handle: u64,
+    _anchor: u64,
+    _operation_site: u64,
+) -> u8 {
     LOG.with(|log| log.borrow_mut().push(Event::Close(handle)));
     0
 }

@@ -15,7 +15,7 @@ static hirsel_rt_v2_header *block(hirsel_rt_v2_ctx *ctx, const char *bytes, uint
     return owner;
 }
 static void release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *owner) {
-    assert(hirsel_rt_v2_release(ctx, owner, owner->descriptor & 0x1fffffffu, NULL, 0) == 0);
+    assert(hirsel_rt_v2_release(ctx, owner, owner->descriptor & 0x1fffffffu, NULL, 0, 0) == 0);
 }
 static void shown(hirsel_rt_v2_slice value, const char *bytes, uint64_t length) {
     assert(value.length == length);

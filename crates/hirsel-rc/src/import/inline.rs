@@ -315,6 +315,7 @@ impl Inline for Importer<'_, '_> {
         let anchor = self.anchor_here();
         let id = CallId(self.out.tables.calls.len() as u32);
         self.out.tables.calls.push(CallSite {
+            forward_caller: false,
             operation_arguments: Vec::new(),
             callee: Callee::Indirect(callee),
             abi,
@@ -359,6 +360,7 @@ impl Inline for Importer<'_, '_> {
         let arguments = PoolRange::push(&mut self.out.pools.call_arguments, arguments);
         let call = CallId(self.out.tables.calls.len() as u32);
         self.out.tables.calls.push(CallSite {
+            forward_caller: true,
             operation_arguments: Vec::new(),
             callee: Callee::Direct(symbol),
             abi,

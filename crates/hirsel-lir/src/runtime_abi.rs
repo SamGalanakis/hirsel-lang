@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 18;
+pub const ABI_VERSION: u32 = 19;
 /// Caller-owned previous foreign context/site storage (two 64-bit words).
 pub const FOREIGN_SCOPE_BYTES: u64 = 16;
 pub const FOREIGN_SCOPE_ALIGN: u32 = 8;
@@ -509,6 +509,7 @@ const BLOCK: CParam = p("block", ptr(CName::Header, 1));
 const LAYOUT: CParam = p("index", U32);
 const LIVE_MASK: CParam = p("live_mask", cptr(CName::U64));
 const ANCHOR: CParam = p("anchor", U64);
+const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
@@ -621,7 +622,7 @@ impl RuntimeEntry {
             Self::Release => (
                 "hirsel_rt_v2_release",
                 U8,
-                const { &[CTX, BLOCK, LAYOUT, LIVE_MASK, ANCHOR] },
+                const { &[CTX, BLOCK, LAYOUT, LIVE_MASK, ANCHOR, OPERATION_SITE] },
             ),
             Self::Free => ("hirsel_rt_v2_free", VOID, const { &[CTX, BLOCK] }),
             Self::Reset => (
@@ -634,6 +635,7 @@ impl RuntimeEntry {
                         LAYOUT,
                         LIVE_MASK,
                         ANCHOR,
+                        OPERATION_SITE,
                         p("out_token", ptr(N::Header, 2)),
                     ]
                 },
@@ -765,6 +767,7 @@ impl RuntimeEntry {
                         LIVE_MASK,
                         p("continuation", ptr(N::Cleanup, 1)),
                         ANCHOR,
+                        OPERATION_SITE,
                     ]
                 },
             ),
@@ -777,7 +780,7 @@ impl RuntimeEntry {
             Self::CloseHandle => (
                 "hirsel_rt_v2_close_handle",
                 U8,
-                const { &[CTX, p("handle", U64), ANCHOR] },
+                const { &[CTX, p("handle", U64), ANCHOR, OPERATION_SITE] },
             ),
             Self::Shielded => ("hirsel_rt_v2_shielded", U8, const { &[CTX] }),
             Self::RegionEnter => ("hirsel_rt_v2_region_enter", VOID, const { &[CTX, REGION] }),
@@ -821,7 +824,7 @@ impl RuntimeEntry {
             Self::RegionExit => (
                 "hirsel_rt_v2_region_exit",
                 U8,
-                const { &[CTX, REGION, ANCHOR] },
+                const { &[CTX, REGION, ANCHOR, OPERATION_SITE] },
             ),
             Self::ArenaAlloc => (
                 "hirsel_rt_v2_arena_alloc",
@@ -878,7 +881,16 @@ impl RuntimeEntry {
             Self::ArenaExhausted => (
                 "hirsel_rt_v2_arena_exhausted",
                 U8,
-                const { &[CTX, REGION, p("kind", U32), p("rule", U32), p("site", U64)] },
+                const {
+                    &[
+                        CTX,
+                        REGION,
+                        p("kind", U32),
+                        p("rule", U32),
+                        p("site", U64),
+                        OPERATION_SITE,
+                    ]
+                },
             ),
             Self::ArenaRecover => ("hirsel_rt_v2_arena_recover", U8, const { &[CTX, REGION] }),
             Self::BuilderBegin => (
@@ -1003,7 +1015,7 @@ impl RuntimeEntry {
 pub const DROP_THUNK: RuntimeThunk = RuntimeThunk {
     name: "hirsel_rt_v2_drop_thunk",
     returns: U8,
-    parameters: &[CTX, p("value", ptr(CName::Void, 1)), ANCHOR],
+    parameters: &[CTX, p("value", ptr(CName::Void, 1)), ANCHOR, OPERATION_SITE],
 };
 
 /// The Io adapter's handle close, called for a `STEP_CLOSE_HANDLE`; records
@@ -1011,7 +1023,7 @@ pub const DROP_THUNK: RuntimeThunk = RuntimeThunk {
 pub const CLOSE_THUNK: RuntimeThunk = RuntimeThunk {
     name: "hirsel_rt_v2_close_thunk",
     returns: U8,
-    parameters: &[CTX, p("handle", U64), ANCHOR],
+    parameters: &[CTX, p("handle", U64), ANCHOR, OPERATION_SITE],
 };
 
 /// A compiler-generated callback type the runtime calls.

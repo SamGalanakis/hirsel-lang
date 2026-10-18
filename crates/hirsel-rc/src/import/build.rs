@@ -145,6 +145,10 @@ impl Importer<'_, '_> {
             .layouts
             .fn_abi(&request.actuals.store, request.callable, request.shape)
             .map_err(|e| PassError::Layout(request.path.clone(), e))?;
+        let abi = self
+            .layouts
+            .with_caller_site(abi)
+            .map_err(|e| PassError::Layout(request.path.clone(), e))?;
         let symbol = Symbol {
             kind: SymbolKind::Function,
             definition: request.path.clone(),

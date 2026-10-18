@@ -305,6 +305,7 @@ impl<'t> Unit<'t> {
     /// A unit named `name` with the signature `abi`, and its entry block.
     pub fn new(table: &'t Table, name: &str, abi: &str) -> Self {
         let mut lir = LirUnit::<Ready>::new(UnitHeader {
+            track_caller: false,
             stage: StageKind::Ready,
             lir_version: hirsel_lir::LIR_VERSION,
             origin: hirsel_lir::ir::UnitOrigin::Source,
@@ -780,6 +781,7 @@ impl<'t> Unit<'t> {
         );
         let result = fn_abi.result.as_ref().map(|r| self.plain(r.layout));
         self.builder.unit.tables.calls.push(CallSite {
+            forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
             abi: abi_id,
@@ -807,6 +809,7 @@ impl<'t> Unit<'t> {
     pub fn diverging_call(&mut self, b: BlockId, callee: Callee, abi: &str, failure: FailureId) {
         let abi = self.table.abi(abi);
         self.builder.unit.tables.calls.push(CallSite {
+            forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
             abi,

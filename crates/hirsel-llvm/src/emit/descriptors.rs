@@ -326,7 +326,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let ptr = self.module.ptr_type();
         let i8_ty = self.module.int_type(8);
         let body_name = symbol_name(&finalizer.definition, Some(instance));
-        let body_ty = self.module.function_type(i8_ty, &[ptr, ptr]);
+        let caller_site = finalizer.definition.0.package == DefPath::core("").0.package;
+        let i64_ty = self.module.int_type(64);
+        let body_slots = if caller_site {
+            vec![ptr, i64_ty, i64_ty, ptr]
+        } else {
+            vec![ptr, ptr]
+        };
+        let body_ty = self.module.function_type(i8_ty, &body_slots);
         let body = match self.module.function(&body_name, body_ty) {
             Ok(body) => body,
             Err(_) => {
@@ -346,7 +353,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             });
         let ty = self
             .module
-            .function_type(i8_ty, &[ptr, ptr, self.module.int_type(64)]);
+            .function_type(i8_ty, &[ptr, ptr, i64_ty, i64_ty]);
         let wrapper = match self
             .module
             .function(&format!("hirsel.drop.{}", layout.0), ty)
@@ -357,13 +364,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.module.make_private(wrapper);
         let builder = Builder::new(self.module);
         builder.position(self.module.append_block(wrapper));
-        let status = builder.call(
-            body,
-            &[
-                self.module.parameter(wrapper, 0),
-                self.module.parameter(wrapper, 1),
-            ],
-        );
+        let mut arguments = vec![self.module.parameter(wrapper, 0)];
+        if caller_site {
+            arguments.extend([
+                self.module.parameter(wrapper, 2),
+                self.module.parameter(wrapper, 3),
+            ]);
+        }
+        arguments.push(self.module.parameter(wrapper, 1));
+        let status = builder.call(body, &arguments);
         builder.ret(status);
         Ok(wrapper.value)
     }

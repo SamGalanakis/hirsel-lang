@@ -70,7 +70,7 @@ static void destroy(Node *node) {
     glue_destroy(ctx, &unused, node, 0);
 }
 #else
-static void destroy(Node *node) { hirsel_rt_v2_release(ctx, node, NODE_DESCRIPTOR_INDEX, NULL, 0); }
+static void destroy(Node *node) { hirsel_rt_v2_release(ctx, node, NODE_DESCRIPTOR_INDEX, NULL, 0, 0); }
 #endif
 
 #else

@@ -196,6 +196,7 @@ impl<S: Stage> UnitBuilder<S> {
                 }),
         );
         self.unit.tables.calls.push(CallSite {
+            forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
             abi: FnAbiId(0),

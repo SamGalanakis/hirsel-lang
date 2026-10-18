@@ -38,6 +38,7 @@ impl Layouts {
             multiplicity: CallMultiplicity::Many,
             context: true,
             environment: false,
+            caller_site: false,
             destination: false,
             result: None,
             result_arena: None,
@@ -376,6 +377,7 @@ pub const CLEANUP: CleanupAnchorId = CleanupAnchorId(0);
 pub fn fixture_unit<S: Stage>(definition: DefPath) -> LirUnit<S> {
     let revision = ContentHash::of_parts("heapcheck fixture", [definition.0.name.as_bytes()]);
     let mut unit = LirUnit::<S>::new(UnitHeader {
+        track_caller: false,
         stage: StageKind::Value,
         lir_version: hirsel_lir::LIR_VERSION,
         origin: UnitOrigin::Source,

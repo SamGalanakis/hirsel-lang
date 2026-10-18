@@ -382,7 +382,10 @@ pub(crate) fn launch_kind(signature: &hirsel_types::Signature) -> Option<LaunchK
         LaunchKind::Main(roots)
     })
 }
-fn entry_result(program: &ReadyProgram, entry: &DefPath) -> Result<(String, u64), NativeError> {
+fn entry_result(
+    program: &ReadyProgram,
+    entry: &DefPath,
+) -> Result<(String, u64, bool), NativeError> {
     let refuse = |what: &str| NativeError {
         definition: Some(entry.clone()),
         ..NativeError::new(StageName::Launch, format!("the entry contract: {what}"))
@@ -435,6 +438,7 @@ fn entry_result(program: &ReadyProgram, entry: &DefPath) -> Result<(String, u64)
     Ok((
         hirsel_lir::emission::symbol_name(entry, Some(instance)),
         size,
+        abi.caller_site,
     ))
 }
 
@@ -766,7 +770,7 @@ fn launcher_object(
     standalone: bool,
     main_symbol: &str,
 ) -> Result<Vec<u8>, NativeError> {
-    let (symbol, result_size) = entry_result(program, entry)?;
+    let (symbol, result_size, caller_site) = entry_result(program, entry)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
         &program.finalizers,
@@ -793,12 +797,14 @@ fn launcher_object(
     let result_index = registry
         .index(report.result)
         .ok_or_else(|| NativeError::new(StageName::Launch, "missing entry-result descriptor"))?;
+    let caller_parameters = if caller_site { ", i64, i64" } else { "" };
+    let caller_arguments = if caller_site { ", i64 0, i64 0" } else { "" };
     let declaration = format!(
         r#"{report_declarations}
 declare void @hirsel_rt_v2_exit_report(ptr, ptr, i32, i64, ptr)
-declare i8 @"{symbol}"(ptr, ptr, ptr{parameters})
+declare i8 @"{symbol}"(ptr{caller_parameters}, ptr, ptr{parameters})
 define private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{
-{loads} %s = call i8 @"{symbol}"(ptr %ctx, ptr %dest, ptr %out{arguments})
+{loads} %s = call i8 @"{symbol}"(ptr %ctx{caller_arguments}, ptr %dest, ptr %out{arguments})
  %ok = icmp eq i8 %s, 0
  br i1 %ok, label %returned, label %done
 returned:
@@ -997,6 +1003,7 @@ done:
             main_symbol,
             target,
             &symbol,
+            caller_site,
             &words,
             &report,
             &calls,
@@ -1026,7 +1033,7 @@ fn link_launcher(
     standalone: bool,
     main: &[u8],
 ) -> Result<PathBuf, NativeError> {
-    let (symbol, _) = entry_result(program, entry)?;
+    let (symbol, _, _) = entry_result(program, entry)?;
     let target = &program.target;
     let library_symbols: std::collections::BTreeSet<String> = program
         .units

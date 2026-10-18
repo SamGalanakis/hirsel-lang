@@ -1348,6 +1348,7 @@ conformance/LANG/LANG-2-byte-type-bad.hir
 conformance/LANG/LANG-2-byte-type-ok.hir
 conformance/LANG/LANG-2-character-type-bad.hir
 conformance/LANG/LANG-2-character-type-ok.hir
+conformance/LANG/LANG-2-core-operation-values-run.hir
 conformance/LANG/LANG-2-expected-holder-modes-ok.hir
 conformance/LANG/LANG-2-expected-local-result-callback-ok.hir
 conformance/LANG/LANG-2-expected-tuple.hir

@@ -1289,6 +1289,7 @@ pub struct CallArgument {
 /// effects (never body-derived public promises).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CallSite {
+    pub forward_caller: bool,
     pub callee: Callee,
     /// Concrete registry instantiation; read only for Operation callees (LIR 21).
     pub operation_arguments: Vec<crate::operation::OperationArgument>,
@@ -1467,6 +1468,7 @@ pub enum UnitOrigin {
 /// Identity and versions of one unit.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnitHeader {
+    pub track_caller: bool,
     pub stage: StageKind,
     pub lir_version: u32,
     pub origin: UnitOrigin,
@@ -3015,6 +3017,7 @@ snapshot_struct!(CallArgument {
     value
 });
 snapshot_struct!(CallSite {
+    forward_caller,
     callee,
     operation_arguments,
     abi,
@@ -3102,6 +3105,7 @@ snapshot_struct!(Pools {
 });
 snapshot_enum!(UnitOrigin { Source, Library });
 snapshot_struct!(UnitHeader {
+    track_caller,
     stage,
     lir_version,
     origin,

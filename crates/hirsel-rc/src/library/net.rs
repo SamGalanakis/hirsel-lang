@@ -92,6 +92,7 @@ fn read_into(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let arguments = PoolRange::push(&mut b.ed.unit.pools.call_arguments, arguments);
     let call = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        forward_caller: false,
         operation_arguments: vec![hirsel_lir::operation::OperationArgument::Size(k)],
         callee: Callee::Operation(reference),
         abi,

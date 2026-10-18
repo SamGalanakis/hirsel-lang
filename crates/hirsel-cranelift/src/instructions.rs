@@ -521,11 +521,11 @@ impl FnEmitter<'_, '_, '_> {
                 let descriptor = self.block_descriptor(block);
                 let mask = self.live_mask(live)?;
                 let anchor = self.cleanup_code(anchor)?;
-                let anchor = self.u64c(anchor);
+                let (anchor, operation_site) = self.failure_sites(anchor);
                 let context = self.context;
                 let status = self.rt1(
                     RuntimeEntry::Release,
-                    &[context, block, descriptor, mask, anchor],
+                    &[context, block, descriptor, mask, anchor, operation_site],
                 )?;
                 self.status_guard(status, failure)
             }
@@ -546,11 +546,19 @@ impl FnEmitter<'_, '_, '_> {
                 let out = self.out_word();
                 let mask = self.live_mask(live)?;
                 let anchor = self.cleanup_code(anchor)?;
-                let anchor = self.u64c(anchor);
+                let (anchor, operation_site) = self.failure_sites(anchor);
                 let context = self.context;
                 let status = self.rt1(
                     RuntimeEntry::Reset,
-                    &[context, block, descriptor, mask, anchor, out],
+                    &[
+                        context,
+                        block,
+                        descriptor,
+                        mask,
+                        anchor,
+                        operation_site,
+                        out,
+                    ],
                 )?;
                 self.status_guard(status, failure)?;
                 let token = self.load_ptr(out);
@@ -626,9 +634,12 @@ impl FnEmitter<'_, '_, '_> {
                 };
                 let anchor = self.anchor_code(instance.anchor)?;
                 let mark = self.get1(mark)?;
-                let anchor = self.u64c(anchor);
+                let (anchor, operation_site) = self.failure_sites(anchor);
                 let context = self.context;
-                let status = self.rt1(RuntimeEntry::RegionExit, &[context, mark, anchor])?;
+                let status = self.rt1(
+                    RuntimeEntry::RegionExit,
+                    &[context, mark, anchor, operation_site],
+                )?;
                 self.status_guard(status, failure)
             }
             Inst::FinalizeBegin { anchor, .. } => {

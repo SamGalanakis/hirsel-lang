@@ -80,3 +80,8 @@ writable pointer words are guarded before entering Hirsel, including unused resu
 Nullable pointer options use one C pointer word and ordinary niche storage inside
 Hirsel. Foreign contract violations terminate with PROG-4 at the active extern call's
 site; nested calls restore the enclosing callback context and site.
+
+ABI v2 has the same optional caller/operation u64 carrier and source attribution
+policy as LLVM. Function-value boundaries survive Direct/Bound specialization;
+root and C callback adapters provide zero when there is no Hirsel caller. Runtime
+cleanup and task startup pass the pair explicitly.

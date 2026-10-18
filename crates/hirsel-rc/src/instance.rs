@@ -253,6 +253,13 @@ impl Instances {
         let abi = layouts
             .fn_abi(&view.substitution.store, callable, shape)
             .map_err(|e| InstanceError::Layout(path, e))?;
+        let abi = if role.is_library() || view.definition.tracks_caller(view.body) {
+            layouts
+                .with_caller_site(abi)
+                .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?
+        } else {
+            abi
+        };
         view.caller_destination = layouts.table().fn_abis[abi.0 as usize].destination;
         let id = InstanceId(self.views.len() as u32);
         self.by_key.insert(view.key.clone(), id);

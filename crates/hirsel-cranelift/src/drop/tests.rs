@@ -229,6 +229,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         multiplicity: CallMultiplicity::Many,
         context: true,
         environment: false,
+        caller_site: false,
         destination: false,
         result: None,
         diverges: false,
@@ -237,6 +238,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         version: hirsel_lir::ABI_VERSION,
     };
     let mut unit = LirUnit::<Ready>::new(UnitHeader {
+        track_caller: false,
         stage: StageKind::Ready,
         lir_version: hirsel_lir::LIR_VERSION,
         origin: UnitOrigin::Source,
@@ -421,7 +423,7 @@ static hirsel_rt_v2_header *fresh(hirsel_rt_v2_ctx *ctx) {
     return hirsel_rt_v2_alloc(ctx, SCALAR_INDEX, 8, 8, HIRSEL_RT_V2_DOMAIN_HEAP, 0);
 }
 static void release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *p) {
-    assert(hirsel_rt_v2_release(ctx, p, SCALAR_INDEX, NULL, 0) == 0);
+    assert(hirsel_rt_v2_release(ctx, p, SCALAR_INDEX, NULL, 0, 0) == 0);
 }
 static uint64_t live(hirsel_rt_v2_ctx *ctx) {
     hirsel_rt_v2_stats s; hirsel_rt_v2_ctx_stats(ctx, &s); return s.live_blocks;

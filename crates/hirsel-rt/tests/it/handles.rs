@@ -85,7 +85,7 @@ fn bound_runtime_close_thunk_aborts_atomic_and_closes_once_without_ambient_state
             0
         );
         binding.bind(&mut *ctx);
-        assert_eq!(hirsel_rt_v2_io_close(ctx, atomic.0, 8), 0);
+        assert_eq!(hirsel_rt_v2_io_close(ctx, atomic.0, 8, 8), 0);
         (*ctx).bind_io_data(std::ptr::null_mut());
         hirsel_rt::context::hirsel_rt_v2_ctx_destroy(ctx);
     }

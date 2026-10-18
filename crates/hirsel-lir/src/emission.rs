@@ -262,7 +262,7 @@ pub fn scalar_shape(kind: &LayoutKind) -> Option<ScalarKind> {
 /// The scalar a Hirsel entry of `abi` returns in a register word, when its result is a
 /// plain scalar of at most 64 bits. Every other result keeps its result pointer.
 ///
-/// Register result invariant (ABI v1 lowering): such an entry returns the two-field
+/// Register result invariant (ABI v2 lowering): such an entry returns the two-field
 /// struct `{ i8 status, word }`, where the word is a pointer for a pointer result and 64 bits
 /// otherwise. On success the word holds the value's bits in its low bits (Bool as one
 /// byte, floats by bit pattern); emitted code zero-extends them and never assumes a

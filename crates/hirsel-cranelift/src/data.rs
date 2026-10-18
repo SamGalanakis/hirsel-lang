@@ -259,10 +259,15 @@ impl Emitter<'_> {
             );
         };
         let body_name = symbol_name(&finalizer.definition, Some(instance));
+        let caller_site = finalizer.definition.0.package == DefPath::core("").0.package;
         let mut body_sig = ir::Signature::new(self.call_conv);
-        body_sig
-            .params
-            .extend([AbiParam::new(PTR), AbiParam::new(PTR)]);
+        body_sig.params.push(AbiParam::new(PTR));
+        if caller_site {
+            body_sig
+                .params
+                .extend([AbiParam::new(types::I64), AbiParam::new(types::I64)]);
+        }
+        body_sig.params.push(AbiParam::new(PTR));
         body_sig.returns.push(AbiParam::new(types::I8).uext());
         let body = match self.import_function(&body_name, &body_sig) {
             Ok(body) => body,
@@ -283,10 +288,11 @@ impl Emitter<'_> {
             AbiParam::new(PTR),
             AbiParam::new(PTR),
             AbiParam::new(types::I64),
+            AbiParam::new(types::I64),
         ]);
         sig.returns.push(AbiParam::new(types::I8).uext());
         let name = format!("hirsel.drop.{}", layout.0);
-        self.helper(&name, &sig, |_| Helper::Drop { body })
+        self.helper(&name, &sig, |_| Helper::Drop { body, caller_site })
     }
 
     /// A private static immortal block named `name`: the immortal prefix with
@@ -408,13 +414,23 @@ impl Emitter<'_> {
     }
 
     /// `hirsel.drop.<layout>(ctx, self, anchor) -> i8`: the drop body's status.
-    pub(crate) fn define_drop_wrapper(&mut self, mut b: FunctionBuilder<'_>, body: FuncId) {
+    pub(crate) fn define_drop_wrapper(
+        &mut self,
+        mut b: FunctionBuilder<'_>,
+        body: FuncId,
+        caller_site: bool,
+    ) {
         let entry = b.create_block();
         b.append_block_params_for_function_params(entry);
         b.switch_to_block(entry);
         let params = b.block_params(entry).to_vec();
         let callee = self.module.declare_func_in_func(body, b.func);
-        let call = b.ins().call(callee, &params[..2]);
+        let args = if caller_site {
+            vec![params[0], params[2], params[3], params[1]]
+        } else {
+            params[..2].to_vec()
+        };
+        let call = b.ins().call(callee, &args);
         let status = b.inst_results(call)[0];
         b.ins().return_(&[status]);
         b.seal_all_blocks();

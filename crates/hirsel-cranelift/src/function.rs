@@ -94,8 +94,8 @@ enum Param {
 enum Deferred {
     /// A failure edge's start: the rule's begin, the token disposals, the cleanup edge.
     Failure { block: Block, failure: FailureId },
-    /// A failing call's re-anchoring at its site before its failure edge.
-    Reanchor {
+    /// An unanchored function-value invocation establishes its own boundary.
+    CallBoundary {
         block: Block,
         site: u64,
         then: Block,
@@ -105,6 +105,7 @@ enum Deferred {
         block: Block,
         code: FailureCode,
         site: u64,
+        forward_caller: bool,
         then: Block,
     },
     /// A bounded arena's `OutOfSpace` (MEM-6): recorded, then the failure edge's tokens
@@ -1241,14 +1242,20 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     let site = self.anchor_code(edge.anchor)?;
                     self.failure_begin(code, site)?;
                 }
+                if edge.rule.is_none() {
+                    let code = self.anchor_code(edge.anchor)?;
+                    let (site, operation) = self.failure_sites(code);
+                    let context = self.context;
+                    self.rt(RuntimeEntry::FailureReanchor, &[context, site, operation])?;
+                }
                 self.dispose_tokens(edge)?;
                 self.jump(edge.cleanup)
             }
-            Deferred::Reanchor { block, site, then } => {
+            Deferred::CallBoundary { block, site, then } => {
                 self.b.switch_to_block(block);
-                let site = self.u64c(site);
+                let (site, operation) = self.failure_sites_for(site, false);
                 let context = self.context;
-                self.rt(RuntimeEntry::FailureReanchor, &[context, site, site])?;
+                self.rt(RuntimeEntry::FailureReanchor, &[context, site, operation])?;
                 self.b.ins().jump(then, &[]);
                 Ok(())
             }
@@ -1256,10 +1263,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 block,
                 code,
                 site,
+                forward_caller,
                 then,
             } => {
                 self.b.switch_to_block(block);
-                self.failure_begin(code, site)?;
+                self.failure_begin_for(code, site, forward_caller)?;
                 self.b.ins().jump(then, &[]);
                 Ok(())
             }
@@ -1273,11 +1281,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 self.b.switch_to_block(block);
                 let kind = self.b.ins().iconst(types::I32, i64::from(code.kind));
                 let rule = self.b.ins().iconst(types::I32, i64::from(code.rule));
-                let site = self.u64c(site);
+                let (site, operation_site) = self.failure_sites(site);
                 let context = self.context;
                 self.rt(
                     RuntimeEntry::ArenaExhausted,
-                    &[context, region, kind, rule, site],
+                    &[context, region, kind, rule, site, operation_site],
                 )?;
                 let edge = self.failure_edge(failure)?;
                 self.dispose_tokens(edge)?;
@@ -1297,13 +1305,16 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     fn failure_begin(&mut self, code: FailureCode, site: u64) -> Emitted {
+        self.failure_begin_for(code, site, true)
+    }
+    fn failure_begin_for(&mut self, code: FailureCode, site: u64, forward: bool) -> Emitted {
         let kind = self.b.ins().iconst(types::I32, i64::from(code.kind));
         let rule = self.b.ins().iconst(types::I32, i64::from(code.rule));
-        let site = self.u64c(site);
+        let (site, operation) = self.failure_sites_for(site, forward);
         let context = self.context;
         self.rt(
             RuntimeEntry::FailureBegin,
-            &[context, kind, rule, site, site],
+            &[context, kind, rule, site, operation],
         )?;
         Ok(())
     }
@@ -1368,6 +1379,36 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     /// The site code of a source anchor.
+    pub(crate) fn caller_sites(&mut self, code: u64, forward: bool) -> (Value, Value) {
+        let operation = if self.unit.header.origin == UnitOrigin::Library {
+            self.sig
+                .hidden_index(Hidden::OperationSite)
+                .map(|i| self.entry_params[i])
+                .unwrap_or_else(|| self.u64c(0))
+        } else {
+            self.u64c(code)
+        };
+        let caller = if forward
+            && (self.unit.header.track_caller || self.unit.header.origin == UnitOrigin::Library)
+        {
+            self.sig
+                .hidden_index(Hidden::CallerSite)
+                .map(|i| self.entry_params[i])
+                .unwrap_or_else(|| self.u64c(0))
+        } else {
+            operation
+        };
+        (caller, operation)
+    }
+    pub(crate) fn failure_sites(&mut self, code: u64) -> (Value, Value) {
+        self.failure_sites_for(code, true)
+    }
+    fn failure_sites_for(&mut self, code: u64, forward: bool) -> (Value, Value) {
+        let (caller, operation) = self.caller_sites(code, forward);
+        let present = self.b.ins().icmp_imm_s(IntCC::NotEqual, caller, 0);
+        (self.b.ins().select(present, caller, operation), operation)
+    }
+
     pub(crate) fn anchor_code(&self, anchor: SourceAnchorId) -> Emitted<u64> {
         if self.unit.header.origin == UnitOrigin::Library {
             return Ok(0);
@@ -1695,9 +1736,13 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         };
         let mut args = Vec::new();
         let mut result_place = None;
+        let invocation_site = self.anchor_code(site.anchor)?;
+        let codes = self.caller_sites(invocation_site, site.forward_caller);
         for hidden in signature.hidden.clone() {
             match hidden {
                 Hidden::Context => args.push(self.context),
+                Hidden::CallerSite => args.push(codes.0),
+                Hidden::OperationSite => args.push(codes.1),
                 Hidden::Environment => match environment {
                     Some(env) => args.push(env),
                     None => return self.invalid("an environment argument without a callable"),
@@ -1813,13 +1858,13 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         }
         let status = returned[0];
         let failure_block = self.failure_block(failure)?;
-        let fail = if self.unit.header.origin == UnitOrigin::Library {
+        let fail = if site.forward_caller {
             failure_block
         } else {
             let block = self.b.create_block();
             self.b.set_cold_block(block);
             let site = self.anchor_code(site.anchor)?;
-            self.defer(Deferred::Reanchor {
+            self.defer(Deferred::CallBoundary {
                 block,
                 site,
                 then: failure_block,
@@ -1840,11 +1885,13 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
             let block = self.b.create_block();
             self.b.set_cold_block(block);
+            let site_forward_caller = site.forward_caller;
             let site = self.anchor_code(site.anchor)?;
             self.defer(Deferred::Record {
                 block,
                 code,
                 site,
+                forward_caller: site_forward_caller,
                 then: fail,
             });
             block

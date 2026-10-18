@@ -1,4 +1,4 @@
-//! The Hirsel cross-unit ABI v1 schema (Target and ABI).
+//! The Hirsel cross-unit ABI v2 schema (Target and ABI).
 //!
 //! `FnAbi` is computed once from the specialized declared callable type and its
 //! layouts (`abi.rs`); both emitters and the heap executor consume it.
@@ -122,6 +122,8 @@ pub struct FnAbi {
     /// Hidden `RunCtx*`; always present on Hirsel entries.
     pub context: bool,
     pub environment: bool,
+    /// Two hidden inert u64 codes: inherited attribution and actual source invocation.
+    pub caller_site: bool,
     /// Hidden caller allocation destination.
     pub destination: bool,
     pub result: Option<AbiResult>,
@@ -185,6 +187,7 @@ snapshot_struct!(FnAbi {
     multiplicity,
     context,
     environment,
+    caller_site,
     destination,
     result,
     diverges,
