@@ -99,10 +99,7 @@ fn bool_field(fields: Map[String, box json.Value], key: String) -> Option[bool] 
 
 fn u64_field(fields: Map[String, box json.Value], key: String) -> Option[u64] uses {} {
   match map.get(fields, key) {
-    Some(Number(n)) => match u64.parse(n) {
-      Ok(v) => Some(v),
-      Error(_) => None(),
-    },
+    Some(Number(n)) => results.ok(u64.parse(n)),
     _ => None(),
   }
 }
@@ -181,10 +178,7 @@ fn write_loop(tasks: Tasks, dir: Dir, take receiver: Receiver[SaveJob]) -> () {
     }
     let mut ok = true
     if version > written {
-      ok = match save(dir, text) {
-        Ok(()) => true,
-        Error(_) => false,
-      }
+      ok = results.is_ok(save(dir, text))
       if ok {
         written = version
       }
@@ -385,17 +379,17 @@ fn handle(
     Ok(a) => take a,
     Error(reply) => return take reply,
   }
-  let reply = mutex.with(
+  let mut reply = mutex.with(
     tasks,
     state,
     fn(mut store: unique Store) -> Reply uses {} {
       apply(mut store, action)
     }
   )
-  let (version, text): (u64, unique String) = match reply.save {
-    Some((v, t)) => (v, unique t),
-    None() => return take reply,
+  let Some((version, snapshot)) = option.remove(mut reply.save) else {
+    return take reply
   }
+  let text = unique take snapshot
   let (done_tx, done_rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
   let mut done = take done_rx
   let saved = match channel.send(
@@ -462,13 +456,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network
   let bound = net.local_addr(n, listener) ? Network
   let output = io.stdout(rt) ? Grant
-  let _ = out.print(
-    output,
-    string.concat(
-      "listening on 127.0.0.1:",
-      string.concat(u16.to_string(bound.port), "\n")
-    )
-  )
+  let _ = out.print(output, f"listening on 127.0.0.1:{bound.port}\n")
   task.scope(
     tasks,
     fn(s: Scope) -> Result[(), ServerError] {
@@ -494,4 +482,33 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
       Ok(())
     }
   )
+}
+
+@test
+fn ids_are_not_reused_after_removal(t: Test) {
+  let mut st: unique Store = Store(next_id: 1, version: 0, todos: [])
+  test.check(t, apply(mut st, Create("first")).status == 201u16)
+  test.check(t, apply(mut st, Update(1, true)).status == 200u16)
+  test.check(t, st.todos[0].done)
+  test.check(t, apply(mut st, Remove(1)).status == 204u16)
+  test.check(t, apply(mut st, Create("second")).status == 201u16)
+  test.check(t, st.todos[0].id == 2 && st.next_id == 3 && st.version == 4)
+  test.check(t, apply(mut st, Show(1)).status == 404u16)
+}
+
+@test
+fn state_round_trips_and_rejects_wrong_field_types(t: Test) {
+  let original = Store(
+    next_id: 4,
+    version: 0,
+    todos: [Todo(id: 3, title: "é", done: true)]
+  )
+  test.check(t, parse_store(store_json(original)) == Ok(original))
+  test.check(
+    t,
+    results.is_error(
+      parse_store(r#"{"next_id":4,"todos":[{"id":3,"title":"x","done":"yes"}]}"#)
+    )
+  )
+  test.check(t, results.is_error(parse_store("{}")))
 }

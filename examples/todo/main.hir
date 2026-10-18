@@ -6,7 +6,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     Error(_) => path.of("todo.txt"),
   }
   let dir = io.dir(rt, path.of("")) ? Files
-  let mut tasks: List[String] = []
+  let mut tasks: unique List[String] = []
   let data = match file.read_bytes(dir, state) {
     Ok(data) => take data,
     Error(NotFound()) => b"",
@@ -15,42 +15,51 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   let text = string.from_bytes(copy data) ? Utf8
   for line in string.split(take text, "\n") {
     if string.byte_len(line) > 0 {
-      list.push(mut tasks, copy line)
+      list.push(mut tasks, unique line)
     }
   }
-  for raw in string.split(take commands, "\n") {
-    let line = string.trim(raw)
-    if string.starts_with(line, "add ") {
-      list.push(mut tasks, common.slice(line, 4, string.byte_len(line)))
-    } else if string.starts_with(line, "done ") {
-      let n = match u64.parse(common.slice(line, 5, string.byte_len(line))) {
-        Ok(n) => n,
-        Error(_) => return Error(Invalid()),
-      }
-      if n == 0 || n > list.len(tasks) {
-        return Error(Invalid())
-      }
-      let mut remaining: List[String] = []
-      for i in 0u64..list.len(tasks) {
-        if i + 1 != n {
-          list.push(mut remaining, copy tasks[i])
-        }
-      }
-      tasks = take remaining
-    } else if line != "list" && string.byte_len(line) > 0 {
-      return Error(Invalid())
-    }
-  }
+  execute(mut tasks, take commands)?
   let saved = string.join(tasks, "\n")
   let mut file = file.create_atomic(dir, state) ? Files
   file.write_all(dir, mut file, string.as_bytes(saved)) ? Files
   file.commit(dir, take file) ? Files
   let mut builder: List[u8] = []
   for i in 0u64..list.len(tasks) {
-    u64.format_into(i + 1, mut builder)
-    text.append(mut builder, ". ")
-    text.append(mut builder, tasks[i])
-    text.append(mut builder, "\n")
+    text.append(mut builder, f"{i + 1}. {tasks[i]}\n")
   }
   common.print(rt, common.finish(take builder)?)
+}
+
+fn execute(mut tasks: unique List[String], take commands: String) -> Result[
+  (),
+  common.Error
+] {
+  for raw in string.split(take commands, "\n") {
+    let line = string.trim(raw)
+    if string.starts_with(line, "add ") {
+      list.push(mut tasks, common.slice(line, 4, string.byte_len(line)))
+    } else if string.starts_with(line, "done ") {
+      let Ok(n) = u64.parse(common.slice(line, 5, string.byte_len(line))) else {
+        return Error(Invalid())
+      }
+      if n == 0 || n > list.len(tasks) {
+        return Error(Invalid())
+      }
+      let _ = list.remove(mut tasks, n - 1)
+    } else if line != "list" && string.byte_len(line) > 0 {
+      return Error(Invalid())
+    }
+  }
+  Ok(())
+}
+
+@test
+fn removes_one_based_tasks_and_rejects_invalid_commands(t: Test) {
+  let mut tasks: unique List[String] = []
+  test.check(t, results.is_ok(execute(mut tasks, "add first\nadd last\ndone 1\nlist")))
+  test.check(t, tasks == ["last"])
+  test.check(t, results.is_error(execute(mut tasks, "done 0")))
+  test.check(t, results.is_error(execute(mut tasks, "done 2")))
+  test.check(t, results.is_error(execute(mut tasks, "unknown")))
+  test.check(t, tasks == ["last"])
 }

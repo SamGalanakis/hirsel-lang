@@ -739,7 +739,11 @@ fn hello_web(native: bool, concurrent: bool, cranelift: bool, deadline: bool) {
         let source = original
             .replace("8080u16", "0u16")
             .replace(
-                "while true",
+                if concurrent {
+                    "// Accept connections until stopped.\n      while true"
+                } else {
+                    "// Accept connections until stopped.\n  while true"
+                },
                 r#"
 let bound = net.local_addr(n, listener) ? Network
 let output = io.stdout(rt) ? Grant

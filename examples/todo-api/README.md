@@ -27,6 +27,6 @@ state file `data/todos.json` is loaded at startup (missing means empty) and repl
 atomically after every change, before the response is sent. Each connection runs in its
 own task; the list lives in a `Mutex`, and one writer task owns the file, skipping a
 snapshot when a newer one has already been written. The server reads at most 16 KiB of
-head and 64 KiB of body, closes each connection after its response, and runs in the
-interpreter only, since native tasks are not available yet. Host runs have no default
-step budget, so the server can keep accepting requests.
+head and 64 KiB of body, closes each connection after its response, and runs
+interpreted or compiled with native tasks. Host runs have no default step budget,
+so the server can keep accepting requests.

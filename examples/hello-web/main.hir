@@ -7,7 +7,7 @@ fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
   config.max_body_bytes = 1048576
   let mut connection = http.server_connection(n, take stream, config)
   match http.receive_request(mut connection, None()) {
-    Ok(incoming) => http.respond(
+    Ok(_) => http.respond(
       mut connection,
       200u16,
       [http.Header(name: "Content-Type", value: "text/plain")],
@@ -25,6 +25,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
     n,
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
   ) ? Network
+  // Accept connections until stopped.
   while true {
     serve(n, mut listener)?
   }

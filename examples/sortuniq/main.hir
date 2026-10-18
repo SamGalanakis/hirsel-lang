@@ -1,5 +1,4 @@
-pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let text = common.input(rt, args, "pear\napple\npear\nbanana\napple")?
+fn sorted_lines(take text: String) -> String {
   // Eliminate duplicate comparisons before sorting large repeated inputs.
   let mut seen: Set[String] = set.empty()
   let mut lines: List[String] = []
@@ -11,5 +10,16 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   }
   let mut ordered = unique take lines
   list.sort(mut ordered, string.compare)
-  common.print(rt, string.concat(string.join(ordered, "\n"), "\n"))
+  f"{string.join(ordered, "\n")}\n"
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(rt, args, "pear\napple\npear\nbanana\napple")?
+  common.print(rt, sorted_lines(take text))
+}
+
+@test
+fn retains_empty_fields_and_sorts_utf8(t: Test) {
+  test.check(t, sorted_lines("é\na\né\n") == "\na\né\n")
+  test.check(t, sorted_lines("") == "\n")
 }

@@ -1,10 +1,5 @@
 // Count severity tokens in insertion order; ignore blank lines.
-pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let text = common.input(
-    rt,
-    args,
-    "INFO boot\nWARN warm\nINFO ready\nERROR disk\nWARN retry\n"
-  )?
+fn summarize(take text: String) -> Result[String, common.Error] {
   let mut counts: Map[String, u64] = map.empty()
   for line in string.split(take text, "\n") {
     let fields = string.split_ascii_whitespace(copy line)
@@ -17,10 +12,25 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   }
   let mut builder: List[u8] = []
   for (level, count) in counts {
-    text.append(mut builder, level)
-    text.append(mut builder, " ")
-    u64.format_into(count, mut builder)
-    text.append(mut builder, "\n")
+    text.append(mut builder, f"{level} {count}\n")
   }
-  common.print(rt, common.finish(take builder)?)
+  common.finish(take builder)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(
+    rt,
+    args,
+    "INFO boot\nWARN warm\nINFO ready\nERROR disk\nWARN retry\n"
+  )?
+  common.print(rt, summarize(take text)?)
+}
+
+@test
+fn merges_case_in_first_seen_order(t: Test) {
+  test.check(
+    t,
+    summarize("warn first\n\t\nINFO next\nWarn again") == Ok("WARN 2\nINFO 1\n")
+  )
+  test.check(t, summarize("") == Ok(""))
 }

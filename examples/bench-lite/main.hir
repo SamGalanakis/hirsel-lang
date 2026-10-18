@@ -111,10 +111,7 @@ fn tally(words: List[String], mut counts: Map[String, u64], mut order: List[Stri
   let mut checksum = 14695981039346656037u64
   let mut ranked: List[Ranked] = []
   for w in order {
-    let n = match map.get(counts, w) {
-      Some(n) => n,
-      None() => 0u64,
-    }
+    let n = option.unwrap_or(map.get(counts, w), 0u64)
     checksum = mix(checksum, string.as_bytes(w))
     checksum = mix(checksum, string.as_bytes(u64.to_string(n)))
     list.push(mut ranked, Ranked(word: unique w, count: n))
@@ -167,7 +164,7 @@ fn number(args: Args, index: u64, default: u64) -> Result[u64, String] {
   }
   match u64.parse(text) {
     Ok(n) => Ok(n),
-    Error(_) => Error(string.concat("not a number: ", text)),
+    Error(_) => Error(f"not a number: {text}"),
   }
 }
 
@@ -186,10 +183,7 @@ fn run(args: Args) -> Result[String, String] {
 
 pub fn main(rt: Io, args: Args) -> Result[(), String] {
   // The host reports a returned error as `error: <message>` and exits 1.
-  let text = match run(args) {
-    Ok(text) => take text,
-    Error(message) => return Error(take message),
-  }
+  let text = run(args)?
   let output = match io.stdout(rt) {
     Ok(o) => o,
     Error(_) => return Error("no stdout"),
@@ -198,4 +192,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), String] {
     Ok(()) => Ok(()),
     Error(_) => Error("cannot write output"),
   }
+}
+
+@test
+fn corpus_is_reproducible_and_empty_summaries_agree(t: Test) {
+  test.check(t, corpus(12, 42) == corpus(12, 42))
+  let empty = corpus(0, 42)
+  test.check(t, arena_summary(empty, 65536) == Ok(heap_summary(empty)))
+  test.check(t, heap_summary(["ba", "ce", "ba"]).top == [("ba", 2u64), ("ce", 1u64)])
 }

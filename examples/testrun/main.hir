@@ -2,14 +2,6 @@
 // stop it at a deadline. Usage: testrun PROGRAM [MILLISECONDS], default 5000.
 pub type RunError = Grant(GrantError) | Usage(String) | Clock(ClockError)
 
-fn grant(e: GrantError) -> RunError uses {} {
-  Grant(e)
-}
-
-fn clock_error(e: ClockError) -> RunError uses {} {
-  Clock(e)
-}
-
 pub type Verdict = Passed | Failed(ExitStatus) | TimedOut | NotRun(ProcessError)
 
 fn limit(args: Args) -> Result[u64, RunError] {
@@ -22,7 +14,7 @@ fn limit(args: Args) -> Result[u64, RunError] {
   }
   match u64.parse(text) {
     Ok(n) => Ok(n),
-    Error(_) => Error(Usage(string.concat("not a number: ", text))),
+    Error(_) => Error(Usage(f"not a number: {text}")),
   }
 }
 
@@ -46,18 +38,14 @@ fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
   }
   child.close_stdin(p, mut test)
   let mut line: List[u8] = []
-  let mut open = true
-  while open {
+  while true {
     let mut chunk: List[u8] = []
     match child.read_stdout(p, mut test, mut chunk, 4096u64) {
-      Ok(0u64) => {
-        open = false
-      },
+      Ok(0u64) => break,
       Ok(n) => {
         for i in 0u64..n {
-          if chunk[i] == 10u8 {
-            print_line(out, take line)
-            line = []
+          if chunk[i] == b'\n' {
+            print_line(out, replace(mut line, []))
           } else {
             list.push(mut line, chunk[i])
           }
@@ -77,10 +65,10 @@ fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
-  let out = io.stdout(rt) ? grant
-  let p = io.process(rt) ? grant
-  let tasks = io.tasks(rt) ? grant
-  let clock = io.monotonic_clock(rt) ? grant
+  let out = io.stdout(rt) ? Grant
+  let p = io.process(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
   if arg.count(args) < 1 || arg.count(args) > 2 {
     return Error(Usage("usage: testrun PROGRAM [MILLISECONDS]"))
   }
@@ -88,7 +76,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
     Ok(program) => program,
     Error(_) => return Error(Usage("PROGRAM must be a path")),
   }
-  let start = clock.monotonic(clock) ? clock_error
+  let start = clock.monotonic(clock) ? Clock
   let deadline = match instant.checked_add(clock, start, limit(args)? * 1000000u64) {
     Some(at) => at,
     None() => return Error(Usage("MILLISECONDS is too large")),
@@ -104,15 +92,24 @@ pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
     Finished(ran) => ran,
     Expired(_) => TimedOut(),
   }
-  let _ = out.print(
-    out,
-    match verdict {
-      Passed() => "PASS\n",
-      Failed(Exited(code)) => f"FAIL: exit {code}\n",
-      Failed(Signaled(signal)) => f"FAIL: signal {signal}\n",
-      TimedOut() => "TIMEOUT\n",
-      NotRun(_) => "NOT RUN\n",
-    }
-  )
+  let _ = out.print(out, verdict_text(verdict))
   Ok(())
+}
+
+fn verdict_text(verdict: Verdict) -> String {
+  match verdict {
+    Passed() => "PASS\n",
+    Failed(Exited(code)) => f"FAIL: exit {code}\n",
+    Failed(Signaled(signal)) => f"FAIL: signal {signal}\n",
+    TimedOut() => "TIMEOUT\n",
+    NotRun(_) => "NOT RUN\n",
+  }
+}
+
+@test
+fn reports_exit_signal_and_deadline(t: Test) {
+  test.check(t, verdict_text(Passed()) == "PASS\n")
+  test.check(t, verdict_text(Failed(Exited(7))) == "FAIL: exit 7\n")
+  test.check(t, verdict_text(Failed(Signaled(15))) == "FAIL: signal 15\n")
+  test.check(t, verdict_text(TimedOut()) == "TIMEOUT\n")
 }

@@ -1,7 +1,6 @@
 type Room = Meadow | Cave | Home
 
-pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let commands = common.input(rt, args, "look\nnorth\ntake key\nsouth\neast\n")?
+fn play(take commands: String) -> Result[String, common.Error] {
   let mut room: Room = Meadow()
   let mut key: bool = false
   let mut builder: List[u8] = []
@@ -33,8 +32,23 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
       },
       Home() => "The adventure is complete.",
     }
-    text.append(mut builder, reply)
-    text.append(mut builder, "\n")
+    text.append(mut builder, f"{reply}\n")
   }
-  common.print(rt, common.finish(take builder)?)
+  common.finish(take builder)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let commands = common.input(rt, args, "look\nnorth\ntake key\nsouth\neast\n")?
+  common.print(rt, play(take commands)?)
+}
+
+@test
+fn gate_requires_key_and_home_is_terminal(t: Test) {
+  test.check(
+    t,
+    play("east\nnorth\ntake key\nsouth\neast\nlook") == Ok(
+      "The gate is locked.\nA dark cave.\nKey collected.\nBack in the meadow.\nHome. You win!\nThe adventure is complete.\n"
+    )
+  )
+  test.check(t, play(" \n") == Ok(""))
 }

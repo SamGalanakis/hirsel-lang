@@ -43,7 +43,7 @@ printf '1 + 2\n9 / 3\n' | hirsel run --native examples/calculator/hirsel.json --
 
 Each expression produces a line immediately; blank lines are ignored and malformed
 expressions produce `error`. EOF ends the session, including a final unterminated line.
-Interpreted CLI runs default to one billion execution steps; `--max-steps <n>`
+Simulated interpreted CLI runs default to one billion execution steps; `--max-steps <n>`
 selects an explicit bound.
 
 | Program | Job and optional second argument |
@@ -57,7 +57,7 @@ selects an explicit bound.
 | [todo](todo/main.hir) | Execute `add TEXT`, `done NUMBER`, `list`; missing state starts empty; load and atomically save newline-separated tasks (second argument is state path, default `todo.txt`). |
 | [adventure](adventure/main.hir) | Play a command-file state machine with a key, cave and locked gate. |
 | [httpget](httpget/main.hir) | Fetch a UTF-8 HTTP response from an explicitly granted endpoint; `demo.json` supplies a scripted local peer. |
-| [testrun](testrun/main.hir) | Run one test program, print each line it writes, prefixed, as it arrives, and report `PASS`, `FAIL` or `TIMEOUT`: at the deadline (second argument, milliseconds, default 5000) a watchdog task on the program's monotonic clock cancels the stream, which kills the test. Grant the test's exact path, cooperative tasks and the clock with `--grants`, as `testrun/README.md` shows. |
+| [testrun](testrun/main.hir) | Run one test program, print each line it writes, prefixed, as it arrives, and report `PASS`, `FAIL` or `TIMEOUT`: at the deadline (second argument, milliseconds, default 5000) `task.scope_until` cancels the stream on the program's monotonic clock, which kills the test. Grant the test's exact path, cooperative tasks and the clock with `--grants`, as `testrun/README.md` shows. |
 | [filesystem](filesystem/README.md) | Create nested directories, list typed entries and metadata, rename within a grant and remove files and empty directories. |
 | [sortuniq](sortuniq/main.hir) | Sort distinct UTF-8 lines by byte order; empty fields, including the final field after a newline, are retained. |
 | [logq](logq/main.hir) | Query a JSON-lines or plain log: `[--level L] [--match TEXT] [--field KEY=VALUE] [--top N] FILE` prints matches per level and the most frequent messages; bad input exits 1 with `error: ...` on stderr. Takes flags and the file, with no demo. |
@@ -91,6 +91,10 @@ remains proportional to the input row count. Errors return exit 1 after an
 explicit escaped JSON-lines log record when stderr is granted. The launcher
 then reports the returned `Invalid` error, as specified by PROG-3.
 
-Calculator and mdtoc include `@test` suites for their private parsing helpers. Run
-`hirsel test examples/calculator/hirsel.json` or
-`hirsel test examples/mdtoc/hirsel.json`; no host grants are needed.
+The tools with parsing, transformation or state logic include `@test` suites next
+to those helpers. For example, run `hirsel test examples/calculator/hirsel.json`
+or `hirsel test examples/kvstore/hirsel.json`; no host grants are needed.
+`hirsel test examples/jsonquery/hirsel.json --native` runs the same assertions
+in a compiled executable. `hirsel doc examples/kvstore/hirsel.json` documents
+the package's public declarations. The filesystem and HTTP wrappers use their
+interpreted and native E2Es to exercise capability behavior.

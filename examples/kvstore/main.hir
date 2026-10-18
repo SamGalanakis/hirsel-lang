@@ -93,10 +93,7 @@ fn write_loop(tasks: Tasks, dir: Dir, take receiver: Receiver[SaveJob]) -> () {
     }
     let mut ok = true
     if version > written {
-      ok = match save(dir, text) {
-        Ok(()) => true,
-        Error(_) => false,
-      }
+      ok = results.is_ok(save(dir, text))
       if ok {
         written = version
       }
@@ -250,17 +247,17 @@ fn handle(
     Ok(a) => take a,
     Error(reply) => return take reply,
   }
-  let reply = mutex.with(
+  let mut reply = mutex.with(
     tasks,
     state,
     fn(mut store: unique Store) -> Reply uses {} {
       unique apply(mut store, action)
     }
   )
-  let (version, text) = match reply.save {
-    Some((v, t)) => (v, unique t),
-    None() => return take reply,
+  let Some((version, snapshot)) = option.remove(mut reply.save) else {
+    return take reply
   }
+  let text = unique take snapshot
   let (done_tx, done_rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
   let mut done = take done_rx
   let saved = if queue(tasks, mut saves, version, take text, take done_tx) {
@@ -322,13 +319,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network
   let bound = net.local_addr(n, listener) ? Network
   let output = io.stdout(rt) ? Grant
-  let _ = out.print(
-    output,
-    string.concat(
-      "listening on 127.0.0.1:",
-      string.concat(u16.to_string(bound.port), "\n")
-    )
-  )
+  let _ = out.print(output, f"listening on 127.0.0.1:{bound.port}\n")
   task.scope(
     tasks,
     fn(s: Scope) -> Result[(), ServerError] {
@@ -356,4 +347,29 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
       Ok(())
     }
   )
+}
+
+@test
+fn mutations_advance_versions_and_snapshot_state(t: Test) {
+  let mut st: unique Store = Store(version: 0, entries: map.empty())
+  let created = apply(mut st, Write("key", "first"))
+  test.check(t, created.status == 201u16 && option.is_some(created.save))
+  let updated = apply(mut st, Write("key", "last"))
+  test.check(t, updated.status == 200u16 && st.version == 2)
+  test.check(t, apply(mut st, Read("key")).body == "last")
+  test.check(t, apply(mut st, Delete("key")).status == 204u16)
+  test.check(t, st.version == 3)
+  test.check(t, apply(mut st, Delete("key")).status == 404u16)
+  test.check(t, st.version == 3)
+}
+
+@test
+fn persisted_entries_round_trip_and_reject_non_strings(t: Test) {
+  let Ok(entries) = parse_entries(r#"{"é":"value"}"#) else {
+    test.fail(t)
+    return ()
+  }
+  test.check(t, entries_json(entries) == r#"{"é":"value"}"#)
+  test.check(t, results.is_error(parse_entries(r#"{"key":1}"#)))
+  test.check(t, results.is_error(parse_entries("[]")))
 }

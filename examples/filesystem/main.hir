@@ -13,11 +13,7 @@ pub fn main(rt: Io) -> Result[(), Error] {
       Other() => "other",
     }
     let meta = file.metadata(d, entry.path) ? Files
-    out.print(
-      out,
-      string.join([path.text(entry.path), kind, u64.to_string(meta.size)], " ")
-    ) ? Output
-    out.print(out, "\n") ? Output
+    out.print(out, f"{path.text(entry.path)} {kind} {meta.size}\n") ? Output
   }
   file.rename(d, path.of("build"), path.of("finished")) ? Files
   file.remove(d, path.of("finished/value")) ? Files

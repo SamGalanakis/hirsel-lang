@@ -18,13 +18,11 @@ pub fn print(rt: Io, text: String) -> Result[(), Error] {
   Ok(())
 }
 
-pub fn slice(text: String, start: u64, end: u64) -> String {
-  let data = string.as_bytes(text)
-  let mut builder: List[u8] = []
-  for i in start..end {
-    list.push(mut builder, data[i])
-  }
-  results.unwrap_or(text.finish(take builder), "")
+pub fn slice(text: String, start: u64, end: u64) -> unique String {
+  results.unwrap_or(
+    string.from_bytes(unique bytes.slice(string.as_bytes(text), start, end)),
+    ""
+  )
 }
 
 pub fn finish(take builder: List[u8]) -> Result[String, Error] {

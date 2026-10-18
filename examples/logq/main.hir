@@ -123,13 +123,12 @@ fn parse_line(number: u64, line: String) -> Result[Option[Entry], String] {
       Some(l) => string.ascii_upper(l),
       None() => "UNKNOWN",
     }
-    let message = match text_member(fields, "msg") {
-      Some(m) => take m,
-      None() => match text_member(fields, "message") {
-        Some(m) => take m,
-        None() => "",
-      },
-    }
+    let message = option.unwrap_or_else(
+      text_member(fields, "msg"),
+      fn() -> String {
+        option.unwrap_or(text_member(fields, "message"), "")
+      }
+    )
     return Ok(Some(Entry(level: level, message: take message, fields: take fields)))
   }
   let words = string.split_ascii_whitespace(unique trimmed)
@@ -165,10 +164,7 @@ fn keep(query: Query, entry: Entry) -> bool {
 }
 
 fn bump(mut counts: Map[String, u64], take key: String) {
-  let n = match map.get(counts, key) {
-    Some(n) => n,
-    None() => 0u64,
-  }
+  let n = option.unwrap_or(map.get(counts, key), 0u64)
   map.insert(mut counts, take key, n + 1)
 }
 
@@ -195,9 +191,7 @@ fn report(query: Query, levels: Map[String, u64], messages: Map[String, u64]) ->
   for (_, n) in levels {
     total += n
   }
-  text.append(mut out, "matched ")
-  u64.format_into(total, mut out)
-  text.append(mut out, "\n")
+  text.append(mut out, f"matched {total}\n")
   for name in sorted_names {
     text.append(mut out, name)
     text.append(mut out, " ")
@@ -220,11 +214,7 @@ fn report(query: Query, levels: Map[String, u64], messages: Map[String, u64]) ->
       break
     }
     shown += 1
-    text.append(mut out, "  ")
-    u64.format_into(r.count, mut out)
-    text.append(mut out, " ")
-    text.append(mut out, r.message)
-    text.append(mut out, "\n")
+    text.append(mut out, f"  {r.count} {r.message}\n")
   }
   match text.finish(take out) {
     Ok(s) => take s,
@@ -258,9 +248,8 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
       break
     }
     number += 1
-    let entry = match parse_line(number, line)? {
-      Some(e) => take e,
-      None() => continue,
+    let Some(entry) = parse_line(number, line)? else {
+      continue
     }
     if keep(query, entry) {
       bump(mut levels, copy entry.level)
@@ -284,4 +273,37 @@ pub fn main(rt: Io, args: Args) -> Result[(), String] {
     },
     Error(message) => Error(take message),
   }
+}
+
+@test
+fn parses_json_fallbacks_and_blank_lines(t: Test) {
+  let Ok(Some(entry)) = parse_line(3, r#"{"level":"warn","message":"retry","ok":true}"#) else {
+    test.fail(t)
+    return ()
+  }
+  test.check(t, entry.level == "WARN" && entry.message == "retry")
+  test.check(t, text_member(entry.fields, "ok") == Some("true"))
+  test.check(t, parse_line(4, " \t") == Ok(None()))
+  test.check(t, parse_line(5, "{") == Error("line 5: invalid JSON object"))
+}
+
+@test
+fn combines_filters_and_ranks_ties_by_message(t: Test) {
+  let query = Query(
+    level: Some("INFO"),
+    pattern: Some("ready"),
+    field: None(),
+    top: 2,
+    file: ""
+  )
+  let entry = Entry(level: "INFO", message: "ready now", fields: map.empty())
+  test.check(t, keep(query, entry))
+  let other = Entry(level: "WARN", message: "ready now", fields: map.empty())
+  test.check(t, !keep(query, other))
+  let mut ranked: unique List[Ranked] = [
+    Ranked(message: "z", count: 1),
+    Ranked(message: "a", count: 1)
+  ]
+  list.sort(mut ranked, by_count)
+  test.check(t, ranked[0].message == "a")
 }

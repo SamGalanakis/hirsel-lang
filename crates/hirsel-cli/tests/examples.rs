@@ -1688,24 +1688,58 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
     }
 }
 
-#[test]
-fn example_packages_run_their_declared_tests() {
-    for (name, source) in [
-        (
-            "calculator",
-            include_str!("../../../examples/calculator/main.hir"),
-        ),
-        ("mdtoc", include_str!("../../../examples/mdtoc/main.hir")),
-    ] {
-        let fixture = Fixture::new(name, source);
-        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .args(["test", "--json"])
-            .arg(fixture.0.join("hirsel.json"))
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+fn check_example_tests(name: &str, source: &str, count: u64) {
+    let fixture = Fixture::new(&name.replace('-', "_"), source);
+    for backend in [None, Some("llvm"), Some("cranelift")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.args(["test", "--json"]);
+        if let Some(backend) = backend {
+            command.args(["--native", "--backend", backend]);
+        }
+        let output = command.arg(fixture.0.join("hirsel.json")).output().unwrap();
+        assert!(output.status.success(), "{name} {backend:?}: {output:?}");
         let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(json["summary"]["total"], 2, "{name}: {json}");
-        assert_eq!(json["summary"]["failed"], 0, "{name}: {json}");
+        assert_eq!(
+            json["summary"]["total"], count,
+            "{name} {backend:?}: {json}"
+        );
+        assert_eq!(json["summary"]["failed"], 0, "{name} {backend:?}: {json}");
     }
 }
+
+#[test]
+fn example_packages_run_their_declared_tests() {
+    check_example_tests(
+        "calculator",
+        include_str!("../../../examples/calculator/main.hir"),
+        3,
+    );
+    check_example_tests("mdtoc", include_str!("../../../examples/mdtoc/main.hir"), 2);
+}
+
+// Keep each package independently selectable in the shared pool's focus mode.
+macro_rules! example_tests {
+    ($case:ident, $package:literal, $count:literal) => {
+        #[test]
+        fn $case() {
+            check_example_tests(
+                $package,
+                include_str!(concat!("../../../examples/", $package, "/main.hir")),
+                $count,
+            );
+        }
+    };
+}
+example_tests!(adventure_package_tests, "adventure", 1);
+example_tests!(bench_lite_package_tests, "bench-lite", 1);
+example_tests!(csvjson_package_tests, "csvjson", 2);
+example_tests!(jsonquery_package_tests, "jsonquery", 2);
+example_tests!(kvstore_package_tests, "kvstore", 2);
+example_tests!(logq_package_tests, "logq", 2);
+example_tests!(logsummary_package_tests, "logsummary", 1);
+example_tests!(markdown_package_tests, "markdown", 1);
+example_tests!(sortuniq_package_tests, "sortuniq", 1);
+example_tests!(testrun_package_tests, "testrun", 1);
+example_tests!(todo_package_tests, "todo", 1);
+example_tests!(todo_api_package_tests, "todo-api", 2);
+example_tests!(wordscan_package_tests, "wordscan", 1);

@@ -1,21 +1,13 @@
 // A deliberately small line-oriented subset, escaping all raw HTML.
-fn escape(take text: String) -> String {
-  let amp = bytes.replace(string.as_bytes(text), b"&", b"&amp;")
-  let lt = bytes.replace(amp, b"<", b"&lt;")
-  let gt = bytes.replace(lt, b">", b"&gt;")
-  match string.from_bytes(take gt) {
-    Ok(s) => take s,
-    Error(_) => "",
-  }
+fn escape(text: String) -> String {
+  string.replace(
+    string.replace(string.replace(text, "&", "&amp;"), "<", "&lt;"),
+    ">",
+    "&gt;"
+  )
 }
 
-pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let text = common.input(rt, args, r"# Flock
-
-Sheep & <grass>
-- ewe
-- lamb
-")?
+fn render(take text: String) -> Result[String, common.Error] {
   let mut builder: List[u8] = []
   let mut in_list: bool = false
   for raw in string.split(take text, "\n") {
@@ -44,16 +36,37 @@ Sheep & <grass>
       tag = "li"
       start = 2
     }
-    text.append(mut builder, "<")
-    text.append(mut builder, tag)
-    text.append(mut builder, ">")
-    text.append(mut builder, escape(common.slice(line, start, string.byte_len(line))))
-    text.append(mut builder, "</")
-    text.append(mut builder, tag)
-    text.append(mut builder, ">\n")
+    let content = escape(common.slice(line, start, string.byte_len(line)))
+    text.append(mut builder, f"<{tag}>{content}</{tag}>\n")
   }
   if in_list {
     text.append(mut builder, "</ul>\n")
   }
-  common.print(rt, common.finish(take builder)?)
+  common.finish(take builder)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(
+    rt,
+    args,
+    r"# Flock
+
+Sheep & <grass>
+- ewe
+- lamb
+"
+  )?
+  common.print(rt, render(take text)?)
+}
+
+@test
+fn escapes_html_and_closes_lists(t: Test) {
+  test.check(
+    t,
+    render("- <&>\nplain") == Ok("<ul>\n<li>&lt;&amp;&gt;</li>\n</ul>\n<p>plain</p>\n")
+  )
+  test.check(
+    t,
+    render("## title\n- last") == Ok("<h2>title</h2>\n<ul>\n<li>last</li>\n</ul>\n")
+  )
 }

@@ -32,7 +32,7 @@ fn slug(title: String) -> String {
 fn heading(line: String) -> Option[Heading] {
   let bytes = string.as_bytes(line)
   let mut level = 0u64
-  while level < bytes.len(bytes) && bytes[level] == 0x23 {
+  while level < bytes.len(bytes) && bytes[level] == b'#' {
     level += 1
   }
   if level == 0 || level > 6 {
@@ -46,13 +46,13 @@ fn heading(line: String) -> Option[Heading] {
     end -= 1
   }
   let mut closing = end
-  while closing > level && bytes[closing - 1] == 0x23 {
+  while closing > level && bytes[closing - 1] == b'#' {
     closing -= 1
   }
   if closing == level || blank(bytes[closing - 1]) {
     end = closing
   }
-  let raw = match string.from_bytes(bytes.from_list(slice_bytes(bytes, level, end))) {
+  let raw = match string.from_bytes(unique bytes.slice(bytes, level, end)) {
     Ok(s) => take s,
     Error(_) => return None(),
   }
@@ -62,17 +62,9 @@ fn heading(line: String) -> Option[Heading] {
 // A space or a tab.
 fn blank(byte: u8) -> bool {
   match byte {
-    0x20 | 0x09 => true,
+    b' ' | b'\t' => true,
     _ => false,
   }
-}
-
-fn slice_bytes(data: Bytes, start: u64, end: u64) -> List[u8] {
-  let mut out: List[u8] = []
-  for i in start..end {
-    list.push(mut out, data[i])
-  }
-  take out
 }
 
 // A fence opens with three or more backticks or tildes and closes with the same.
@@ -137,19 +129,12 @@ fn toc(found: List[Heading]) -> String {
       Some(n) => f"{base}-{n}",
       None() => copy base,
     }
-    let count = match map.get(seen, base) {
-      Some(n) => n + 1,
-      None() => 1u64,
-    }
+    let count = option.unwrap_or(map.get(seen, base), 0u64) + 1
     map.insert(mut seen, take base, count)
     for _ in top..h.level {
       text.append(mut out, "  ")
     }
-    text.append(mut out, "- [")
-    text.append(mut out, h.title)
-    text.append(mut out, "](#")
-    text.append(mut out, anchor)
-    text.append(mut out, ")\n")
+    text.append(mut out, f"- [{h.title}](#{anchor})\n")
   }
   match text.finish(take out) {
     Ok(s) => take s,
@@ -183,10 +168,7 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
 
 pub fn main(rt: Io, args: Args) -> Result[(), String] {
   // The host reports a returned error as `error: <message>` and exits 1.
-  let text = match run(rt, args) {
-    Ok(text) => take text,
-    Error(message) => return Error(take message),
-  }
+  let text = run(rt, args)?
   let output = match io.stdout(rt) {
     Ok(o) => o,
     Error(_) => return Error("no stdout"),

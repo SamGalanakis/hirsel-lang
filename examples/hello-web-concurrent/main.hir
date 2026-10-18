@@ -1,17 +1,5 @@
 pub type ServerError = Grant(GrantError) | Network(NetError) | Http(http.HttpError)
 
-fn grant_error(e: GrantError) -> ServerError uses {} {
-  Grant(e)
-}
-
-fn network_error(e: NetError) -> ServerError uses {} {
-  Network(e)
-}
-
-fn http_error(e: http.HttpError) -> ServerError uses {} {
-  Http(e)
-}
-
 fn serve(n: Net, clock: MonotonicClock, take incoming_stream: Stream of n) -> Result[
   (),
   ServerError
@@ -22,8 +10,7 @@ fn serve(n: Net, clock: MonotonicClock, take incoming_stream: Stream of n) -> Re
   config.max_body_bytes = 1048576
   config.read_timeout = Some(duration.from_parts(30, 0))
   let mut connection = http.server_connection(n, take stream, config)
-  let mut serving = true
-  while serving {
+  while true {
     match http.receive_request(mut connection, Some(clock)) {
       Ok(incoming) => http.respond(
         mut connection,
@@ -31,16 +18,11 @@ fn serve(n: Net, clock: MonotonicClock, take incoming_stream: Stream of n) -> Re
         [http.Header(name: "Content-Type", value: "text/plain")],
         b"Hello, world",
         false
-      ) ? http_error,
-      Error(Closed()) => {
-        serving = false
-      },
-      Error(RequestTimeout()) => {
-        serving = false
-      },
+      ) ? Http,
+      Error(Closed() | RequestTimeout()) => break,
       Error(_) => {
-        http.respond(mut connection, 400u16, [], b"Bad Request", true) ? http_error
-        serving = false
+        http.respond(mut connection, 400u16, [], b"Bad Request", true) ? Http
+        break
       },
     }
   }
@@ -48,18 +30,19 @@ fn serve(n: Net, clock: MonotonicClock, take incoming_stream: Stream of n) -> Re
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
-  let n = io.net(rt) ? grant_error
-  let clock = io.monotonic_clock(rt) ? grant_error
+  let n = io.net(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
   let listener = net.listen(
     n,
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
-  ) ? network_error
+  ) ? Network
   task.scope(
-    io.tasks(rt) ? grant_error,
+    io.tasks(rt) ? Grant,
     fn(s: Scope) -> Result[(), ServerError] {
       let mut accepting = take listener
+      // Accept connections until stopped.
       while true {
-        let (stream, _) = net.accept(n, mut accepting) ? network_error
+        let (stream, _) = net.accept(n, mut accepting) ? Network
         let child = task.async(
           s,
           fn() -> Result[(), ServerError] {

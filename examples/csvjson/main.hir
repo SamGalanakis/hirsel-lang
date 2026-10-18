@@ -29,6 +29,7 @@ fn file_refill(mut source: FileSource, mut out: List[u8], max: u64) -> Result[
   )
 }
 
+// bufio's refill mutates a source; stdin.read itself only borrows the capability.
 fn stdin_bytes(mut input: Stdin, mut out: List[u8], max: u64) -> Result[u64, InputError] {
   stdin.read(input, mut out, max)
 }
@@ -209,31 +210,16 @@ Lin,"a ""quote"""
 
 fn describe(error: Error) -> String {
   match error {
-    Flags(UnknownFlag(index)) => string.concat(
-      "unknown flag at argument ",
-      u64.to_string(index)
-    ),
-    Flags(MissingValue(index)) => string.concat(
-      "missing flag value at argument ",
-      u64.to_string(index)
-    ),
-    Flags(UnexpectedValue(index)) => string.concat(
-      "unexpected flag value at argument ",
-      u64.to_string(index)
-    ),
+    Flags(UnknownFlag(index)) => f"unknown flag at argument {index}",
+    Flags(MissingValue(index)) => f"missing flag value at argument {index}",
+    Flags(UnexpectedValue(index)) => f"unexpected flag value at argument {index}",
     Flags(InvalidSpec()) => "invalid flag specification",
-    Csv(Syntax(offset)) => string.concat(
-      "malformed CSV at byte ",
-      u64.to_string(offset)
-    ),
-    Csv(UnequalFields(offset)) => string.concat(
-      "unequal CSV width at byte ",
-      u64.to_string(offset)
-    ),
+    Csv(Syntax(offset)) => f"malformed CSV at byte {offset}",
+    Csv(UnequalFields(offset)) => f"unequal CSV width at byte {offset}",
     Csv(RecordTooLarge()) => "CSV record limit exceeded",
     Csv(InvalidUtf8()) => "CSV field contains invalid UTF-8",
     Csv(InvalidDelimiter()) => "invalid CSV delimiter",
-    Encoding(_, value) => string.concat("invalid base64 field: ", value),
+    Encoding(_, value) => f"invalid base64 field: {value}",
     Arguments(_) => "argument is unavailable",
     Input(_) => "input read failed",
     Files(_) => "file read failed",
@@ -264,4 +250,33 @@ pub fn main(rt: Io, args: Args) -> Result[(), Error] {
       Error(Invalid())
     },
   }
+}
+
+@test
+fn converts_quoted_csv_and_hashes_base64(t: Test) {
+  let mut source = MemorySource(
+    data: br#"id,body
+1,"YWJj"
+"#,
+    offset: 0
+  )
+  let Ok(output) = convert(mut source, memory_refill, Some("body")) else {
+    test.fail(t)
+    return ()
+  }
+  test.check(
+    t,
+    output == "[{\"id\":\"1\",\"body\":\"YWJj\",\"body_sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}]\n"
+  )
+}
+
+@test
+fn rejects_duplicate_headers_and_width_mismatches(t: Test) {
+  let invalid: List[Bytes] = [b"a,a\n1,2\n", b"a,b\n1\n"]
+  for csv in invalid {
+    let mut source = MemorySource(data: copy csv, offset: 0)
+    test.check(t, results.is_error(convert(mut source, memory_refill, None())))
+  }
+  let mut source = MemorySource(data: b"body,body_sha256\nYWJj,x\n", offset: 0)
+  test.check(t, results.is_error(convert(mut source, memory_refill, Some("body"))))
 }

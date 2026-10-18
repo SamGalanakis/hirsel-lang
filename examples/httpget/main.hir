@@ -2,9 +2,8 @@
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   let url = path.text(arg.path(args, 0) ? Arguments)
   let net = io.net(rt) ? Grant
-  let response = match http.fetch(net, http.default_config(), Get(), url, [], None()) {
-    Ok(response) => take response,
-    Error(_) => return Error(Invalid()),
+  let Ok(response) = http.fetch(net, http.default_config(), Get(), url, [], None()) else {
+    return Error(Invalid())
   }
   let text = string.from_bytes(copy response.body) ? Utf8
   common.print(rt, text)

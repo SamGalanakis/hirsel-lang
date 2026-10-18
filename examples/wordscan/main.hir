@@ -1,10 +1,5 @@
 // Count lines/words/UTF-8 bytes and print lines containing an optional needle.
-pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let text = common.input(rt, args, "red sheep\nblue sheep\nred fox\n")?
-  let needle = match arg.path(args, 1) {
-    Ok(p) => path.text(p),
-    Error(_) => "red",
-  }
+fn scan(take text: String, needle: String) -> Result[String, common.Error] {
   let mut lines: u64 = 0
   let mut words: u64 = 0
   let mut in_word: bool = false
@@ -12,28 +7,39 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     if c == '\n' {
       lines += 1
     }
-    let space = c == ' ' || c >= '\t' && c <= '\r'
+    let space = match c {
+      ' ' | '\t'..='\r' => true,
+      _ => false,
+    }
     if !space && !in_word {
       words += 1
     }
     in_word = !space
   }
   let mut builder: List[u8] = []
-  text.append(mut builder, "lines=")
-  u64.format_into(lines, mut builder)
-  text.append(mut builder, " words=")
-  u64.format_into(words, mut builder)
-  text.append(mut builder, " bytes=")
-  u64.format_into(string.byte_len(text), mut builder)
-  text.append(mut builder, "\n")
-  for line in string.split(copy text, "\n") {
-    match string.find(line, needle) {
-      Some(_) => {
-        text.append(mut builder, line)
-        text.append(mut builder, "\n")
-      },
-      None() => (),
+  text.append(
+    mut builder,
+    f"lines={lines} words={words} bytes={string.byte_len(text)}\n"
+  )
+  for line in string.split(take text, "\n") {
+    if option.is_some(string.find(line, needle)) {
+      text.append(mut builder, f"{line}\n")
     }
   }
-  common.print(rt, common.finish(take builder)?)
+  common.finish(take builder)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
+  let text = common.input(rt, args, "red sheep\nblue sheep\nred fox\n")?
+  let needle = results.unwrap_or(arg.text(args, 1), "red")
+  common.print(rt, scan(take text, needle)?)
+}
+
+@test
+fn counts_ascii_whitespace_and_utf8(t: Test) {
+  test.check(
+    t,
+    scan("é\tred\r\nfox", "red") == Ok("lines=1 words=3 bytes=11\né\tred\r\n")
+  )
+  test.check(t, scan("", "missing") == Ok("lines=0 words=0 bytes=0\n"))
 }
