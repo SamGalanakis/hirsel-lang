@@ -1,0 +1,68 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A scripted child plays its steps in order: output is available at once, an Expect
+// waits for the program's writes, and Exit ends it. Spawns make the run checks first.
+fn bc() -> ChildScript uses {} {
+  ChildScript(
+    program: "/usr/bin/bc",
+    args: ["-q"],
+    steps: [
+      Print(b"ready\n"),
+      Expect(b"1+1\n"),
+      Print(b"2\n"),
+      PrintErr(b"bye\n"),
+      Exit(Exited(3))
+    ]
+  )
+}
+
+fn refused(p: Proc, r: Result[Child of p, ProcessError], e: ProcessError) -> bool {
+  match r {
+    Error(found) => found == e,
+    Ok(_) => false,
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), ProcessError] {
+  let path = path.of("/usr/bin/bc")
+  let quit = ChildScript(
+    program: "/usr/bin/bc",
+    args: ["-q"],
+    steps: [Expect(b"quit\n")]
+  )
+  let p = test.process(t, [], [bc(), quit])
+  test.check(
+    t,
+    refused(p, proc.spawn(p, path.of("bc"), ["-q"], None()), InvalidInput())
+  )
+  test.check(
+    t,
+    refused(p, proc.spawn(p, path.of("/usr/bin/dc"), [], None()), NotGranted())
+  )
+  test.check(t, refused(p, proc.spawn(p, path, [], None()), NotFound()))
+  let mut c = proc.spawn(p, path, ["-q"], None())?
+  let mut out: List[u8] = []
+  test.check(t, child.read_stdout(p, mut c, mut out, 64u64)? == 6u64)
+  test.check(t, child.read_stdout(p, mut c, mut out, 0u64) == Error(InvalidInput()))
+  // Written bytes accumulate until they complete the Expect.
+  child.write(p, mut c, b"1+")?
+  child.write(p, mut c, b"1\n")?
+  test.check(t, child.read_stdout(p, mut c, mut out, 1u64)? == 1u64)
+  test.check(t, child.read_stdout(p, mut c, mut out, 64u64)? == 1u64)
+  test.check(t, list.len(out) == 8u64 && out[6u64] == 50u8)
+  let mut err: List[u8] = []
+  test.check(t, child.read_stderr(p, mut c, mut err, 64u64)? == 4u64)
+  // After Exit each stream ends and input is closed.
+  test.check(t, child.read_stdout(p, mut c, mut out, 64u64)? == 0u64)
+  test.check(t, child.write(p, mut c, b"more") == Error(InputClosed()))
+  child.close_stdin(p, mut c)
+  test.check(t, child.write(p, mut c, b"x") == Error(InvalidInput()))
+  test.check(t, child.wait(p, take c) == Ok(Exited(3)))
+  // A kill ends the script without checking its Expect.
+  let mut second = proc.spawn(p, path, ["-q"], None())?
+  child.kill(p, mut second)
+  test.check(t, child.wait(p, take second) == Ok(Signaled(9)))
+  test.check(t, refused(p, proc.spawn(p, path, ["-q"], None()), NotFound()))
+  Ok(())
+}

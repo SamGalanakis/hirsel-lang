@@ -1,0 +1,34 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+// The accepted twin of the scripted-child failures: every Expect is met before the
+// child's input closes, by close_stdin, by wait or by drop.
+fn cat(take steps: List[ChildStep]) -> ChildScript uses {} {
+  ChildScript(program: "/bin/cat", args: [], steps: steps)
+}
+
+pub fn trial(t: Test) -> Result[(), ProcessError] {
+  let p = test.process(
+    t,
+    [],
+    [
+      cat([Expect(b"ping\n"), Print(b"ping\n")]),
+      cat([Expect(b"ping\n")]),
+      cat([Expect(b"ping\n")])
+    ]
+  )
+  let program = path.of("/bin/cat")
+  let mut first = proc.spawn(p, program, [], None())?
+  child.write(p, mut first, b"pi")?
+  child.write(p, mut first, b"ng\n")?
+  child.close_stdin(p, mut first)
+  let mut echoed: List[u8] = []
+  test.check(t, child.read_stdout(p, mut first, mut echoed, 64u64)? == 5u64)
+  test.check(t, child.wait(p, take first) == Ok(Exited(0)))
+  let mut second = proc.spawn(p, program, [], None())?
+  child.write(p, mut second, b"ping\n")?
+  test.check(t, child.wait(p, take second) == Ok(Exited(0)))
+  let mut third = proc.spawn(p, program, [], None())?
+  child.write(p, mut third, b"ping\n")?
+  Ok(())
+}

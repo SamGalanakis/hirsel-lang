@@ -155,7 +155,13 @@ pub fn replay_interpreter_with_fixture(
                 }
                 Request::Process { .. }
                 | Request::TestProcess { .. }
-                | Request::ProcessRun { .. } => {
+                | Request::ProcessRun { .. }
+                | Request::ProcessSpawn { .. }
+                | Request::ChildWrite { .. }
+                | Request::ChildCloseStdin { .. }
+                | Request::ChildRead { .. }
+                | Request::ChildWait { .. }
+                | Request::ChildKill { .. } => {
                     panic!("process tapes replay through tests/it/process.rs")
                 }
                 Request::Ready { .. } => {
@@ -567,6 +573,9 @@ pub fn replay_interpreter_with_fixture(
                                 },
                                 rules: rules.clone(),
                             }
+                        }
+                        hirsel_rt::handles::Grant::Child { process, .. } => {
+                            ObservedGrant::Child { process: *process }
                         }
                         hirsel_rt::handles::Grant::Stdin => ObservedGrant::Root("Stdin".into()),
                         hirsel_rt::handles::Grant::Stderr => ObservedGrant::Root("Stderr".into()),

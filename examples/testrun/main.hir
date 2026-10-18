@@ -1,0 +1,145 @@
+// A test runner: run one test program, stream each line it prints as it arrives, and
+// stop it at a deadline. Usage: testrun PROGRAM [MILLISECONDS], default 5000.
+pub type RunError = Grant(GrantError) | Usage(String) | Clock(ClockError) | Wait(
+  WaitError
+)
+
+fn grant(e: GrantError) -> RunError uses {} {
+  Grant(e)
+}
+
+fn clock_error(e: ClockError) -> RunError uses {} {
+  Clock(e)
+}
+
+fn wait_error(e: WaitError) -> RunError uses {} {
+  Wait(e)
+}
+
+pub type Verdict = Passed | Failed(ExitStatus) | TimedOut | NotRun(ProcessError)
+
+fn limit(args: Args) -> Result[u64, RunError] {
+  if arg.count(args) < 2 {
+    return Ok(5000)
+  }
+  let text = match arg.text(args, 1) {
+    Ok(t) => take t,
+    Error(_) => return Error(Usage("MILLISECONDS must be UTF-8")),
+  }
+  match u64.parse(text) {
+    Ok(n) => Ok(n),
+    Error(_) => Error(Usage(string.concat("not a number: ", text))),
+  }
+}
+
+fn print_line(out: Stdout, take line: List[u8]) -> () {
+  match text.finish(take line) {
+    Ok(s) => {
+      let _ = out.print(out, f"| {s}\n")
+    },
+    Error(_) => {
+      let _ = out.print(out, "| (not UTF-8)\n")
+    },
+  }
+}
+
+// Spawn the test and print its output line by line until it ends. A cancellation at the
+// deadline ends the read; returning then drops the Child, which kills the test.
+fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
+  let mut test = match proc.spawn(p, program, [], None()) {
+    Ok(c) => take c,
+    Error(e) => return NotRun(e),
+  }
+  child.close_stdin(p, mut test)
+  let mut line: List[u8] = []
+  let mut open = true
+  while open {
+    let mut chunk: List[u8] = []
+    match child.read_stdout(p, mut test, mut chunk, 4096u64) {
+      Ok(0u64) => {
+        open = false
+      },
+      Ok(n) => {
+        for i in 0u64..n {
+          if chunk[i] == 10u8 {
+            print_line(out, take line)
+            line = []
+          } else {
+            list.push(mut line, chunk[i])
+          }
+        }
+      },
+      Error(Canceled(_)) => return TimedOut(),
+      Error(e) => return NotRun(e),
+    }
+  }
+  if list.len(line) > 0u64 {
+    print_line(out, take line)
+  }
+  match child.wait(p, take test) {
+    Ok(Exited(0)) => Passed(),
+    Ok(status) => Failed(status),
+    Error(e) => NotRun(e),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
+  let out = io.stdout(rt) ? grant
+  let p = io.process(rt) ? grant
+  let tasks = io.tasks(rt) ? grant
+  let clock = io.monotonic_clock(rt) ? grant
+  if arg.count(args) < 1 || arg.count(args) > 2 {
+    return Error(Usage("usage: testrun PROGRAM [MILLISECONDS]"))
+  }
+  let program = match arg.path(args, 0) {
+    Ok(program) => program,
+    Error(_) => return Error(Usage("PROGRAM must be a path")),
+  }
+  let start = clock.monotonic(clock) ? clock_error
+  let deadline = match instant.checked_add(clock, start, limit(args)? * 1000000u64) {
+    Some(at) => at,
+    None() => return Error(Usage("MILLISECONDS is too large")),
+  }
+  let done = atomic.create(tasks, false)
+  let verdict = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[Verdict, RunError] {
+      let running = task.async(
+        s,
+        fn() -> Verdict {
+          let verdict = stream(p, out, program)
+          atomic.store(tasks, done, true)
+          verdict
+        }
+      )
+      // The watchdog reads the clock the program holds: at the deadline it cancels the
+      // stream, which kills the test.
+      let mut watching = true
+      while watching && !atomic.load(tasks, done) {
+        let now = clock.monotonic(clock) ? clock_error
+        if instant.ticks(now) >= instant.ticks(deadline) {
+          task.cancel(s, running)
+          watching = false
+        } else {
+          let soon = match instant.checked_add(clock, now, 10000000u64) {
+            Some(at) => at,
+            None() => deadline,
+          }
+          clock.sleep_until(clock, soon) ? wait_error
+        }
+      }
+      Ok(task.await(s, take running))
+    }
+  )?
+  let _ = out.print(
+    out,
+    match verdict {
+      Passed() => "PASS\n",
+      Failed(Exited(code)) => f"FAIL: exit {code}\n",
+      Failed(Signaled(signal)) => f"FAIL: signal {signal}\n",
+      TimedOut() => "TIMEOUT\n",
+      NotRun(_) => "NOT RUN\n",
+    }
+  )
+  Ok(())
+}

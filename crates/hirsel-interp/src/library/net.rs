@@ -1192,7 +1192,7 @@ impl super::Library {
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
         let result = self
             .simulation
-            .net_call(name, call, context, self.tasks.canceled());
+            .waiting_call(name, call, context, self.tasks.canceled());
         match result {
             Err(Error::Blocked(mut waits)) => {
                 let token = self.next_callback;
@@ -1236,7 +1236,7 @@ impl super::Library {
             return Ok(None);
         }
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-        let result = self.simulation.net_call(
+        let result = self.simulation.waiting_call(
             &wait.name,
             &OperationCall {
                 runtime: &Default::default(),

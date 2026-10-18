@@ -243,6 +243,22 @@ children) and `process_run` (with its deadline as `clock:ticks` or `none`) reque
 raises the latest monotonic reading to it as a completed timer wait does; a scripted
 world times out only a deadline that reading already reached.
 
+`proc.spawn` makes the same checks and mints a `Grant::Child` of its Proc, which every
+child request names (CAP-2); the policy tracks whether its input is open. A scripted
+world plays the entry with `hirsel_run_config::ScriptChild`: a read at an `Expect` is
+`AdapterError::Blocked`, and a contradicted or unmet `Expect` writes its Test report and
+completes `Checked(false)` (LANG-9). A host child goes through `HostCall` to
+`host_child::HostChildren`, three nonblocking pipes per child: a write or read that would
+block records its pipe as the token's interest and parks (a write that accepted bytes is
+committed, so it is no longer a cancellation point), and without cooperative admission it
+polls that pipe. `child.wait` closes input, discards the remaining output and reaps, as a
+`HostJob` under cooperative admission. Dropping a Child (`Request::Close`) closes its
+input, SIGKILLs and reaps it, then closes its outputs; a cancelled wait drops the Child
+it took (`host_waits.rs`). Child tape forms are `process_spawn`, `child_write`,
+`child_close_stdin`, `child_read` (with `stdout` or `stderr`), `child_wait` and
+`child_kill` requests, the dropped Child's `close`, and `spawned`, `child_unit`,
+`child_bytes` and `child_exit` completions; `SimIo` replays them without spawning.
+
 ## Random draws and timer waits
 
 `RandomSource` is the admitted Random provider: `random.splitmix64@1` keeps the SplitMix64

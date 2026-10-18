@@ -176,7 +176,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "ChildStep",
             "",
-            "Stdout(Bytes)|Stderr(Bytes)|Expect(Bytes)|Exit(ExitStatus)",
+            "Print(Bytes)|PrintErr(Bytes)|Expect(Bytes)|Exit(ExitStatus)",
         ),
         (
             "ProcessError",

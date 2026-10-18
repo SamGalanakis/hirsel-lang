@@ -187,6 +187,13 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "env.get"
         | "io.process"
         | "proc.run"
+        | "proc.spawn"
+        | "child.write"
+        | "child.close_stdin"
+        | "child.read_stdout"
+        | "child.read_stderr"
+        | "child.wait"
+        | "child.kill"
         | "test.process"
         | "random.bytes"
         | "clock.sleep_until"
@@ -274,6 +281,13 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "test.net"
             | "io.process"
             | "proc.run"
+            | "proc.spawn"
+            | "child.write"
+            | "child.close_stdin"
+            | "child.read_stdout"
+            | "child.read_stderr"
+            | "child.wait"
+            | "child.kill"
             | "test.process"
             | "file.open"
             | "file.read"
@@ -300,11 +314,17 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
     {
         row.failure = Some(hirsel_core_contract::RuleCode("CAP-2".into()));
     }
-    // A scripted client's unmet Expect fails these LANG-9, so the runtime records
-    // their failures itself (`hirsel_core_contract::RUNTIME_RULES`).
+    // A scripted client's or child's unmet Expect fails these LANG-9, so the runtime
+    // records their failures itself (`hirsel_core_contract::RUNTIME_RULES`).
     if matches!(
         name.as_str(),
-        "net.write" | "net.write_all" | "net.close" | "tls.close"
+        "net.write"
+            | "net.write_all"
+            | "net.close"
+            | "tls.close"
+            | "child.write"
+            | "child.close_stdin"
+            | "child.wait"
     ) {
         row.failure = None;
     }
@@ -899,6 +919,69 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((8, 8)),
         parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_proc_spawn",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_child_write",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_child_close_stdin",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_child_read_stdout",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_child_read_stderr",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_child_wait",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_child_kill",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_io_random",

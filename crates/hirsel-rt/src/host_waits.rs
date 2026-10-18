@@ -55,6 +55,24 @@ unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Option<Co
         Request::ProcessRun { .. } => {
             Completion::Process(ProcessOutcome::Error(ProcessFailure::Canceled(cause)))
         }
+        Request::ProcessSpawn { .. } => Completion::Spawned(Err(ProcessFailure::Canceled(cause))),
+        Request::ChildWrite { .. } => Completion::ChildUnit(Err(ProcessFailure::Canceled(cause))),
+        Request::ChildRead { max: 0, .. } => {
+            Completion::ChildBytes(Err(ProcessFailure::InvalidInput))
+        }
+        Request::ChildRead { .. } => Completion::ChildBytes(Err(ProcessFailure::Canceled(cause))),
+        // The wait took the Child: it is dropped, which kills the child.
+        Request::ChildWait { child, .. } => {
+            let binding = unsafe { Binding::get(ctx) };
+            match binding.adapter.call(Request::Close { handle: *child }) {
+                Ok(Completion::Unit(Ok(()))) => {}
+                // Closing a scripted child's input at an unmet Expect fails LANG-9.
+                Ok(Completion::Checked(false)) => return Some(Completion::Checked(false)),
+                Ok(_) => crate::fault("a canceled wait's Child close failed"),
+                Err(error) => crate::io::adapter_refusal(binding, error),
+            }
+            Completion::ChildExit(Err(ProcessFailure::Canceled(cause)))
+        }
         Request::Resolve { .. } => Completion::Addresses(Err(e)),
         Request::Connect { .. } | Request::ConnectAddr { .. } => Completion::NetHandle(Err(e)),
         Request::Accept { .. } => Completion::Accepted(Err(e)),
@@ -76,11 +94,16 @@ unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Option<Co
 }
 
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer
-/// wait, a process run or a network request.
+/// wait, a process run, a child write, read or wait, or a network request.
 pub(crate) fn may_park(request: &Request) -> bool {
     matches!(
         request,
-        Request::ReadStdin { .. } | Request::SleepUntil { .. } | Request::ProcessRun { .. }
+        Request::ReadStdin { .. }
+            | Request::SleepUntil { .. }
+            | Request::ProcessRun { .. }
+            | Request::ChildWrite { .. }
+            | Request::ChildRead { .. }
+            | Request::ChildWait { .. }
     ) || crate::net::is_net_request(request)
 }
 

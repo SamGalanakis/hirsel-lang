@@ -137,8 +137,8 @@ from them exactly as `test.process` does; both are invalid under any other provi
 `{"output": {"status": status, "stdout": [bytes], "stderr": [bytes]}}`, with status
 `{"exited": code}` or `{"signaled": number}`, or `{"error": error}`, with error
 `"not_granted"`, `"invalid_input"`, `"not_found"`, `"permission_denied"`, `"output_limit"`,
-`{"fault": code}`, `"timed_out"` or `"input_closed"`. A step is `{"stdout": [bytes]}`,
-`{"stderr": [bytes]}`, `{"expect": [bytes]}` or `{"exit": status}`. Script entries grant
+`{"fault": code}`, `"timed_out"` or `"input_closed"`. A step is `{"print": [bytes]}`,
+`{"print_err": [bytes]}`, `{"expect": [bytes]}` or `{"exit": status}`. Script entries grant
 no authority beyond the explicit rules.
 
 **Canonical form.** The record has one strict canonical representation: schema-order object

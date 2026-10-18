@@ -46,8 +46,8 @@ pub struct ChildRun {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ChildStep {
-    Stdout(Vec<u8>),
-    Stderr(Vec<u8>),
+    Print(Vec<u8>),
+    PrintErr(Vec<u8>),
     Expect(Vec<u8>),
     Exit(ExitStatus),
 }

@@ -1,0 +1,14 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 11
+// stdout: test failure: child /bin/cat expected b"ping\n" but the program closed its input after writing b"pi"
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ProcessError] {
+  let p = test.process(
+    t,
+    [],
+    [ChildScript(program: "/bin/cat", args: [], steps: [Expect(b"ping\n")])]
+  )
+  let mut c = proc.spawn(p, path.of("/bin/cat"), [], None())?
+  child.write(p, mut c, b"pi")?
+  Ok(())
+}

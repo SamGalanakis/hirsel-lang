@@ -235,18 +235,12 @@ impl Adapter for SimIo {
                 _ => None,
             },
         };
-        let result = if let Request::ProcessRun { .. } = request {
+        let result = if state.is_process(&request) {
             if event.fault.is_some() {
                 return Err(AdapterError::InvalidCompletion);
             }
             // The recorded completion stands in for the host; the checks are re-derived.
-            state.execute_process(
-                &mut |_| match &event.completion {
-                    Completion::Process(outcome) => Ok(outcome.clone()),
-                    _ => Err(AdapterError::InvalidCompletion),
-                },
-                &request,
-            )
+            state.execute_process(&mut |_| Ok(event.completion.clone()), &request)
         } else if matches!(
             request,
             Request::Monotonic { .. }

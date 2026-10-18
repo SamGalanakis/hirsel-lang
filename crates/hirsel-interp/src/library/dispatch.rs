@@ -937,6 +937,10 @@ impl Library {
     pub fn task_path(&self) -> Vec<u32> {
         self.tasks.path()
     }
+    /// A host-owned handle's drop raised a scripted child's LANG-9 failure.
+    pub fn fail_drop(&mut self, kind: &str) {
+        self.drop_failure = Some(("LANG-9".into(), kind.into()));
+    }
 }
 impl Operations for Library {
     fn entry_returned(
@@ -1130,6 +1134,31 @@ impl Operations for Library {
             }
             return Ok(());
         }
+        if kind == "Child" {
+            if !matches!(
+                self.simulation.grants.get(&id),
+                Some(super::simulation::Grant::Child { .. })
+            ) {
+                return Ok(());
+            }
+            let report = self.simulation.close_child(id);
+            if let Some(report) = &report {
+                context.stdout.extend_from_slice(report.as_bytes());
+                self.drop_failure = Some(("LANG-9".into(), "scripted child unmet".into()));
+            }
+            self.simulation.record(
+                "Proc",
+                "child.close",
+                id.to_le_bytes().to_vec(),
+                if report.is_some() {
+                    b"failure:LANG-9".to_vec()
+                } else {
+                    vec![]
+                },
+                context,
+            )?;
+            return Ok(());
+        }
         if !matches!(kind, "File" | "AtomicFile") {
             return Ok(());
         }
@@ -1264,16 +1293,12 @@ primary_operations! { self, call, context, name, a, value;
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" => {
         return self.network_call(name, &call, context).map(Some);
     },
-    Capability: "io.process" | "proc.run" | "test.process" => {
-        // A rejected replay never publishes effects or consumes script entries.
-        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-        self.tasks.yield_now = true;
-        let result = self.simulation.process_call(name, &call, context, self.tasks.canceled());
-        if result.is_err() && let Some(saved) = saved { self.simulation = saved; }
-        return result.map(Some);
+    // A rejected replay never publishes effects or consumes script entries; a scripted
+    // child's read parks as a scripted peer's does.
+    Capability: "io.process" | "proc.run" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" => {
+        return self.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
-    Unavailable: "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" => { return Err(Error::Unavailable(format!("{name}: streaming children are not implemented yet"))); },
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Unavailable: "reservations.insert" | "stock.get" | "stock.put" | "store.transact" => { return Err(Error::Unavailable(format!("{name} is a signature-only application fixture"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),

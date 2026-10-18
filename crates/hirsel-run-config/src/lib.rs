@@ -15,6 +15,8 @@ pub use net::{
     first_expecting_client, net_client_mismatch, net_client_unaccepted, net_client_unmet,
     validate_net_grant,
 };
+mod child;
+pub use child::{ChildStream, ScriptChild, ScriptRead, child_mismatch, child_unmet};
 mod process;
 pub use process::{
     ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule,

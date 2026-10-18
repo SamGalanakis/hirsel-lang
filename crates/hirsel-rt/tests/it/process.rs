@@ -540,3 +540,363 @@ fn cancelling_a_parked_run_kills_its_child_at_once() {
     assert!(!temp.0.join("survived").exists());
     assert!(!io.wait().unwrap());
 }
+
+fn spawn(process: u64, program: &str, args: &[&str]) -> Request {
+    Request::ProcessSpawn {
+        process,
+        program: program.into(),
+        args: args.iter().map(|a| (*a).into()).collect(),
+        directory: None,
+    }
+}
+
+fn spawned(io: &mut RealIo, request: Request) -> u64 {
+    match io.call(request) {
+        Ok(Completion::Spawned(Ok(child))) => child,
+        other => panic!("spawn: {other:?}"),
+    }
+}
+
+fn write(process: u64, child: u64, bytes: &[u8]) -> Request {
+    Request::ChildWrite {
+        process,
+        child,
+        bytes: bytes.to_vec(),
+    }
+}
+
+fn read(process: u64, child: u64, max: u64) -> Request {
+    Request::ChildRead {
+        process,
+        child,
+        stream: ChildStream::Stdout,
+        max,
+    }
+}
+
+const UNIT: Completion = Completion::ChildUnit(Ok(()));
+
+/// Read stdout until `want` bytes arrived or end of stream.
+fn read_line(io: &mut RealIo, p: u64, c: u64, want: usize) -> Vec<u8> {
+    let mut got = vec![];
+    while got.len() < want {
+        let Ok(Completion::ChildBytes(Ok(bytes))) = io.call(read(p, c, 64)) else {
+            panic!("child read")
+        };
+        if bytes.is_empty() {
+            break;
+        }
+        got.extend(bytes);
+    }
+    got
+}
+
+#[test]
+fn a_cat_child_streams_a_line_protocol_until_its_input_closes() {
+    let (_temp, mut io, p) = host(&[("/bin/cat", &[])]);
+    let c = spawned(&mut io, spawn(p, "/bin/cat", &[]));
+    for line in [&b"ping\n"[..], b"pong\n", b""] {
+        assert_eq!(io.call(write(p, c, line)), Ok(UNIT));
+        assert_eq!(read_line(&mut io, p, c, line.len()), line);
+    }
+    assert_eq!(
+        io.call(read(p, c, 0)),
+        Ok(Completion::ChildBytes(Err(ProcessFailure::InvalidInput)))
+    );
+    let close = Request::ChildCloseStdin {
+        process: p,
+        child: c,
+    };
+    assert_eq!(io.call(close.clone()), Ok(UNIT));
+    assert_eq!(io.call(close), Ok(UNIT));
+    assert_eq!(
+        io.call(write(p, c, b"late")),
+        Ok(Completion::ChildUnit(Err(ProcessFailure::InvalidInput)))
+    );
+    // End of input ends cat: its output reaches end of stream, and the wait reaps it.
+    assert_eq!(
+        io.call(read(p, c, 64)),
+        Ok(Completion::ChildBytes(Ok(vec![])))
+    );
+    let wait = Request::ChildWait {
+        process: p,
+        child: c,
+    };
+    assert_eq!(
+        io.call(wait.clone()),
+        Ok(Completion::ChildExit(Ok(ExitStatus::Exited(0))))
+    );
+    // The wait consumed the Child.
+    assert_eq!(io.call(wait), Err(AdapterError::InvalidHandle(c)));
+}
+
+#[test]
+fn spawns_make_the_run_checks_and_child_operations_need_their_own_proc() {
+    let (_temp, mut io, p) = host(&[("/bin/cat", &[]), ("/no/such/program", &[])]);
+    for (program, failure) in [
+        ("/bin/./cat", ProcessFailure::InvalidInput),
+        ("/bin/sh", ProcessFailure::NotGranted),
+        ("/no/such/program", ProcessFailure::NotFound),
+    ] {
+        assert_eq!(
+            io.call(spawn(p, program, &[])),
+            Ok(Completion::Spawned(Err(failure)))
+        );
+    }
+    let c = spawned(&mut io, spawn(p, "/bin/cat", &[]));
+    let Ok(Completion::Handle(Ok(other))) = io.call(Request::Process { io: 1 }) else {
+        panic!("second Proc")
+    };
+    assert_eq!(
+        io.call(write(other, c, b"x")),
+        Err(AdapterError::InvalidHandle(c))
+    );
+    assert_eq!(io.call(write(p, c, b"x")), Ok(UNIT));
+}
+
+#[test]
+fn kill_signals_the_child_writes_after_exit_are_input_closed_and_a_drop_kills() {
+    let (temp, mut io, p) = host(&[(SH, &[]), ("/bin/true", &[])]);
+    let c = spawned(&mut io, spawn(p, SH, &["-c", "sleep 5"]));
+    let kill = Request::ChildKill {
+        process: p,
+        child: c,
+    };
+    assert_eq!(io.call(kill.clone()), Ok(UNIT));
+    assert_eq!(io.call(kill), Ok(UNIT));
+    assert_eq!(
+        io.call(Request::ChildWait {
+            process: p,
+            child: c
+        }),
+        Ok(Completion::ChildExit(Ok(ExitStatus::Signaled(9))))
+    );
+    // Once true's output ends it has exited, and its input is closed.
+    let c = spawned(&mut io, spawn(p, "/bin/true", &[]));
+    assert_eq!(read_line(&mut io, p, c, 1), b"");
+    assert_eq!(
+        io.call(write(p, c, b"x")),
+        Ok(Completion::ChildUnit(Err(ProcessFailure::InputClosed)))
+    );
+    let Ok(Completion::Handle(Ok(dir))) = io.call(Request::Directory {
+        io: 1,
+        path: "".into(),
+    }) else {
+        panic!("root Dir")
+    };
+    let c = spawned(
+        &mut io,
+        Request::ProcessSpawn {
+            process: p,
+            program: SH.into(),
+            args: vec!["-c".into(), "sleep 0.3; touch survived".into()],
+            directory: Some(dir),
+        },
+    );
+    let begun = std::time::Instant::now();
+    assert_eq!(
+        io.call(Request::Close { handle: c }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    assert!(begun.elapsed() < std::time::Duration::from_millis(250));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!temp.0.join("survived").exists());
+}
+
+#[test]
+fn children_record_and_replay_without_spawning() {
+    use hirsel_rt::launch::{parse_tape, render_tape};
+    let (_temp, mut io, p) = host(&[("/bin/cat", &[])]);
+    let c = spawned(&mut io, spawn(p, "/bin/cat", &["-u"]));
+    io.call(write(p, c, b"echo\n")).unwrap();
+    assert_eq!(read_line(&mut io, p, c, 5), b"echo\n");
+    io.call(Request::ChildKill {
+        process: p,
+        child: c,
+    })
+    .unwrap();
+    io.call(Request::ChildWait {
+        process: p,
+        child: c,
+    })
+    .unwrap();
+    let c = spawned(&mut io, spawn(p, "/bin/cat", &[]));
+    io.call(Request::Close { handle: c }).unwrap();
+    io.call(spawn(p, "/bin/sh", &[])).unwrap();
+    let tape = io.tape().to_vec();
+    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    let replay = |tape: Vec<Event>| {
+        let mut sim = SimIo::new(Tree::default(), tape.clone());
+        sim.set_process_grant(&grant(&[("/bin/cat", &[])]));
+        tape.iter()
+            .map(|event| sim.call(event.request.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        replay(tape.clone()),
+        tape.iter()
+            .map(|e| Ok(e.completion.clone()))
+            .collect::<Vec<_>>()
+    );
+    let spawn_at = |program: &str| {
+        tape.iter()
+            .position(
+                |e| matches!(&e.request, Request::ProcessSpawn { program: p, .. } if p == program),
+            )
+            .unwrap()
+    };
+    let read_at = tape
+        .iter()
+        .position(|e| matches!(e.request, Request::ChildRead { .. }))
+        .unwrap();
+    let Request::ChildRead { max, .. } = tape[read_at].request else {
+        unreachable!()
+    };
+    // Replay re-derives the checks: a spawned ungranted program, a refused granted one
+    // and a read longer than its bound contradict the bound configuration.
+    for (index, forged) in [
+        (spawn_at("/bin/sh"), Completion::Spawned(Ok(99))),
+        (
+            spawn_at("/bin/cat"),
+            Completion::Spawned(Err(ProcessFailure::NotGranted)),
+        ),
+        (
+            read_at,
+            Completion::ChildBytes(Ok(vec![b'x'; max as usize + 1])),
+        ),
+    ] {
+        let mut tape = tape.clone();
+        tape[index].completion = forged;
+        assert!(replay(tape)[index].is_err());
+    }
+}
+
+#[test]
+fn cooperative_reads_and_waits_park_and_a_cancelled_wait_kills_its_child() {
+    let (temp, mut io, p) = host(&[(SH, &[])]);
+    io.set_cooperative(hirsel_rt::readiness::Readiness::default());
+    let c = spawned(&mut io, spawn(p, SH, &["-c", "sleep 0.1; echo late"]));
+    io.enter(5);
+    assert_eq!(io.call(read(p, c, 64)), Err(AdapterError::Blocked));
+    assert!(io.cancellable(5));
+    while !io.ready(5).unwrap() {
+        assert!(io.wait().unwrap());
+    }
+    io.enter(5);
+    assert_eq!(
+        io.call(read(p, c, 64)),
+        Ok(Completion::ChildBytes(Ok(b"late\n".to_vec())))
+    );
+    io.finish(5);
+    let wait = Request::ChildWait {
+        process: p,
+        child: c,
+    };
+    io.enter(6);
+    let status = loop {
+        match io.call(wait.clone()) {
+            Err(AdapterError::Blocked) => {
+                while !io.ready(6).unwrap() {
+                    assert!(io.wait().unwrap());
+                }
+                io.enter(6);
+            }
+            other => break other,
+        }
+    };
+    io.finish(6);
+    assert_eq!(status, Ok(Completion::ChildExit(Ok(ExitStatus::Exited(0)))));
+    let Ok(Completion::Handle(Ok(dir))) = io.call(Request::Directory {
+        io: 1,
+        path: "".into(),
+    }) else {
+        panic!("root Dir")
+    };
+    let c = spawned(
+        &mut io,
+        Request::ProcessSpawn {
+            process: p,
+            program: SH.into(),
+            args: vec!["-c".into(), "sleep 0.3; touch survived".into()],
+            directory: Some(dir),
+        },
+    );
+    io.enter(7);
+    assert_eq!(
+        io.call(Request::ChildWait {
+            process: p,
+            child: c
+        }),
+        Err(AdapterError::Blocked)
+    );
+    // Cancelling finishes the token, which kills the child the wait took; its drop
+    // then closes the Child.
+    let begun = std::time::Instant::now();
+    io.finish(7);
+    assert_eq!(
+        io.call(Request::Close { handle: c }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    assert!(begun.elapsed() < std::time::Duration::from_millis(250));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!temp.0.join("survived").exists());
+    assert!(!io.wait().unwrap());
+}
+
+#[test]
+fn scripted_children_play_steps_wait_at_an_expect_and_fail_a_contradiction() {
+    let child = |steps| ChildRun {
+        program: "/usr/bin/bc".into(),
+        args: vec![],
+        steps,
+    };
+    let temp = Disposable::new();
+    let mut io = RealIo::grant(&temp.0).unwrap();
+    io.test_context(0);
+    let Ok(Completion::Handle(Ok(p))) = io.call(Request::TestProcess {
+        test: 1,
+        runs: vec![],
+        children: vec![
+            child(vec![
+                ChildStep::Print(b"ready\n".to_vec()),
+                ChildStep::Expect(b"1+1\n".to_vec()),
+                ChildStep::Print(b"2\n".to_vec()),
+                ChildStep::Exit(ExitStatus::Exited(4)),
+            ]),
+            child(vec![ChildStep::Expect(b"quit\n".to_vec())]),
+        ],
+    }) else {
+        panic!("scripted Proc")
+    };
+    let c = spawned(&mut io, spawn(p, "/usr/bin/bc", &[]));
+    assert_eq!(
+        io.call(read(p, c, 64)),
+        Ok(Completion::ChildBytes(Ok(b"ready\n".to_vec())))
+    );
+    assert_eq!(io.call(read(p, c, 64)), Err(AdapterError::Blocked));
+    assert_eq!(io.call(write(p, c, b"1+1\n")), Ok(UNIT));
+    assert_eq!(
+        io.call(read(p, c, 1)),
+        Ok(Completion::ChildBytes(Ok(b"2".to_vec())))
+    );
+    assert_eq!(
+        io.call(write(p, c, b"more")),
+        Ok(Completion::ChildUnit(Err(ProcessFailure::InputClosed)))
+    );
+    assert_eq!(
+        io.call(Request::ChildWait {
+            process: p,
+            child: c
+        }),
+        Ok(Completion::ChildExit(Ok(ExitStatus::Exited(4))))
+    );
+    let c = spawned(&mut io, spawn(p, "/usr/bin/bc", &[]));
+    assert_eq!(
+        io.call(spawn(p, "/usr/bin/bc", &[])),
+        Ok(Completion::Spawned(Err(ProcessFailure::NotFound)))
+    );
+    assert_eq!(
+        io.call(write(p, c, b"exit\n")),
+        Ok(Completion::Checked(false))
+    );
+}

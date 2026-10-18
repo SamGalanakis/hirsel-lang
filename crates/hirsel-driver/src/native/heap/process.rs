@@ -68,9 +68,25 @@ fn failure(f: ProcessFailure) -> OpValue {
 /// (`hirsel-rt/src/host_waits.rs`), or None for any other operation.
 pub(super) fn canceled(module: Option<&str>, name: &str, cause: u32) -> Option<OpValue> {
     match (module, name) {
-        (Some("proc"), "run") => Some(v(1, failure(ProcessFailure::Canceled(cause)))),
+        (Some("proc"), "run" | "spawn")
+        | (Some("child"), "write" | "read_stdout" | "read_stderr") => {
+            Some(v(1, failure(ProcessFailure::Canceled(cause))))
+        }
         _ => None,
     }
+}
+fn status_value(status: ExitStatus) -> OpValue {
+    let (tag, code) = match status {
+        ExitStatus::Exited(code) => (0, code),
+        ExitStatus::Signaled(signal) => (1, signal),
+    };
+    v(
+        tag,
+        OpValue::Bits {
+            scalar: ScalarKind::I32,
+            bits: u128::from(code as u32),
+        },
+    )
 }
 fn status(v: &OpValue) -> Option<ExitStatus> {
     let (tag, code) = variant(v)?;
@@ -98,8 +114,8 @@ fn child_script(v: &OpValue) -> Option<ChildRun> {
             .iter()
             .map(|step| {
                 Some(match variant(step)? {
-                    (0, b) => ChildStep::Stdout(bytes(b)?),
-                    (1, b) => ChildStep::Stderr(bytes(b)?),
+                    (0, b) => ChildStep::Print(bytes(b)?),
+                    (1, b) => ChildStep::PrintErr(bytes(b)?),
                     (2, b) => ChildStep::Expect(bytes(b)?),
                     (3, s) => ChildStep::Exit(status(s)?),
                     _ => return None,
@@ -193,12 +209,57 @@ impl Io {
                     deadline: None,
                 }
             }
+            (Some("proc"), "spawn", [p, OpValue::Handle(path), argv, dir]) => {
+                match variant(dir)? {
+                    (0, _) => {}
+                    (1, OpValue::Handle(d))
+                        if matches!(self.grants.get(d), Some(IoGrant::Dir { .. })) => {}
+                    _ => return Some(OpOutcome::Fail("CAP-2".into())),
+                }
+                R::ProcessSpawn {
+                    process: self.network_id(p)?,
+                    program: self.paths.get(path.checked_sub(1)? as usize)?.clone(),
+                    args: strings(argv)?,
+                    directory: None,
+                }
+            }
+            (Some("child"), _, [p, c, rest @ ..]) => {
+                let (process, child) = (self.network_id(p)?, self.network_id(c)?);
+                let request = match (name, rest) {
+                    ("write", [data]) => R::ChildWrite {
+                        process,
+                        child,
+                        bytes: bytes(data)?,
+                    },
+                    ("close_stdin", []) => R::ChildCloseStdin { process, child },
+                    ("read_stdout" | "read_stderr", [_, max]) => R::ChildRead {
+                        process,
+                        child,
+                        stream: if name == "read_stdout" {
+                            hirsel_rt::process::ChildStream::Stdout
+                        } else {
+                            hirsel_rt::process::ChildStream::Stderr
+                        },
+                        max: word(max)?,
+                    },
+                    ("wait", []) => R::ChildWait { process, child },
+                    ("kill", []) => R::ChildKill { process, child },
+                    _ => return None,
+                };
+                return Some(self.child(name, args, request));
+            }
             _ => return None,
         };
         let completion = match self.network.call(request) {
             Ok(c) => c,
             Err(_) => return Some(OpOutcome::Unsupported),
         };
+        if let C::Spawned(spawned) = completion {
+            return Some(OpOutcome::Value(match spawned {
+                Ok(child) => io_ok(self.network_handle(child, true)),
+                Err(f) => v(1, failure(f)),
+            }));
+        }
         Some(OpOutcome::Value(match completion {
             C::Handle(Ok(id)) if module == Some("test") => self.network_handle(id, false),
             C::Handle(Ok(id)) => io_ok(self.network_handle(id, false)),
@@ -227,5 +288,79 @@ impl Io {
             C::Process(ProcessOutcome::Error(f)) => v(1, failure(f)),
             _ => return Some(OpOutcome::Unsupported),
         }))
+    }
+    /// A child operation's outcome; `child.wait` consumes its Child on every outcome.
+    fn child(&mut self, name: &str, args: &[OpValue], request: R) -> OpOutcome {
+        let completion = match self.network.call(request) {
+            Ok(c) => c,
+            Err(_) => return OpOutcome::Unsupported,
+        };
+        let value = match completion {
+            C::ChildUnit(Ok(())) if name == "write" => io_ok(OpValue::Unit),
+            C::ChildUnit(Ok(())) => OpValue::Unit,
+            C::ChildBytes(Ok(read)) => {
+                let Some(mut buffer) = bytes(&args[2]) else {
+                    return OpOutcome::Unsupported;
+                };
+                let count = read.len() as u64;
+                buffer.extend_from_slice(&read);
+                return OpOutcome::Updated {
+                    value: io_ok(OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: count.into(),
+                    }),
+                    arguments: vec![(
+                        2,
+                        OpValue::Elements {
+                            scalar: ScalarKind::U8,
+                            bits: buffer.into_iter().map(u128::from).collect(),
+                        },
+                    )],
+                };
+            }
+            C::ChildExit(Ok(status)) => io_ok(status_value(status)),
+            C::ChildUnit(Err(f)) | C::ChildBytes(Err(f)) | C::ChildExit(Err(f)) => v(1, failure(f)),
+            // A scripted child's contradicted or unmet Expect.
+            C::Checked(false) if name == "wait" => {
+                self.forget(&args[1]);
+                return OpOutcome::Complete {
+                    result: Err("LANG-9".into()),
+                    consumed: vec![1],
+                };
+            }
+            C::Checked(false) => return OpOutcome::Fail("LANG-9".into()),
+            _ => return OpOutcome::Unsupported,
+        };
+        if name == "wait" {
+            self.forget(&args[1]);
+            return OpOutcome::Complete {
+                result: Ok(value),
+                consumed: vec![1],
+            };
+        }
+        OpOutcome::Value(value)
+    }
+    fn forget(&mut self, child: &OpValue) {
+        if let OpValue::Handle(h) = child {
+            self.network_handles.remove(h);
+        }
+    }
+    /// A cancelled `child.wait`: the Child it took is dropped, which closes it.
+    pub(super) fn close_canceled_child(&mut self, c: &OpValue, cause: u32) -> OpOutcome {
+        let Some(child) = self.network_id(c) else {
+            return OpOutcome::Unsupported;
+        };
+        self.forget(c);
+        match self.network.call(R::Close { handle: child }) {
+            Ok(C::Unit(Ok(()))) => OpOutcome::Complete {
+                result: Ok(v(1, failure(ProcessFailure::Canceled(cause)))),
+                consumed: vec![1],
+            },
+            Ok(C::Checked(false)) => OpOutcome::Complete {
+                result: Err("LANG-9".into()),
+                consumed: vec![1],
+            },
+            _ => OpOutcome::Unsupported,
+        }
     }
 }

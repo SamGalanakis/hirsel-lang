@@ -9,8 +9,9 @@ use super::{
 };
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
-    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule,
-    ProcessRun, ProviderContract, bounded, canonical_program, check, scriptable,
+    ChildRun, ChildStep, ChildStream, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome,
+    ProcessRule, ProcessRun, ProviderContract, ScriptChild, ScriptRead, bounded, canonical_program,
+    check, scriptable,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
@@ -291,8 +292,8 @@ fn child_script(v: &Value) -> Result<ChildRun, Error> {
         .iter()
         .map(|step| {
             Ok(match variant_fields(step)? {
-                (0, b) if b.len() == 1 => ChildStep::Stdout(bytes(b[0])?.to_vec()),
-                (1, b) if b.len() == 1 => ChildStep::Stderr(bytes(b[0])?.to_vec()),
+                (0, b) if b.len() == 1 => ChildStep::Print(bytes(b[0])?.to_vec()),
+                (1, b) if b.len() == 1 => ChildStep::PrintErr(bytes(b[0])?.to_vec()),
                 (2, b) if b.len() == 1 => ChildStep::Expect(bytes(b[0])?.to_vec()),
                 (3, s) if s.len() == 1 => ChildStep::Exit(exit_status(s[0])?),
                 _ => return Err(invalid("ChildStep representation")),
@@ -472,8 +473,294 @@ impl Simulation {
                 self.record("Proc", name, request, encode_completion(&outcome), cx)?;
                 outcome_value(&outcome)
             }
+            "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout"
+            | "child.read_stderr" | "child.wait" | "child.kill" => {
+                return self.child_call(name, call, cx, canceled);
+            }
             _ => return Err(invalid("unknown process operation")),
         };
         Ok(OperationResult::returned(value))
+    }
+    /// A network or process operation: either can wait at a scripted peer or child.
+    pub(super) fn waiting_call(
+        &mut self,
+        name: &str,
+        call: &OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+        canceled: Option<u32>,
+    ) -> Result<OperationResult, Error> {
+        if name.starts_with("proc.")
+            || name.starts_with("child.")
+            || matches!(name, "io.process" | "test.process")
+        {
+            self.process_call(name, call, cx, canceled)
+        } else {
+            self.net_call(name, call, cx, canceled)
+        }
+    }
+    /// The Child `c` of Proc `p` and whether its input is open.
+    fn child_grant(&self, p: &Value, c: &Value) -> Result<(u64, bool), Error> {
+        let process = self.id(p, "Proc")?;
+        let child = self.id(c, "Child")?;
+        match self.grants.get(&child) {
+            Some(Grant::Child {
+                process: owner,
+                stdin_open,
+            }) if *owner == process => Ok((child, *stdin_open)),
+            _ => Err(invalid("Child of another Proc")),
+        }
+    }
+    fn script_child(&mut self, child: u64) -> Result<&mut ScriptChild, Error> {
+        self.script_children
+            .get_mut(&child)
+            .ok_or_else(|| invalid("missing scripted child"))
+    }
+    fn close_child_input(&mut self, child: u64) {
+        if let Some(Grant::Child { stdin_open, .. }) = self.grants.get_mut(&child) {
+            *stdin_open = false;
+        }
+    }
+    /// Drop a Child: its input closes first, so an unmet Expect reports.
+    pub(super) fn close_child(&mut self, child: u64) -> Option<String> {
+        let open = matches!(
+            self.grants.remove(&child),
+            Some(Grant::Child {
+                stdin_open: true,
+                ..
+            })
+        );
+        let script = self.script_children.remove(&child)?;
+        if open { script.close_stdin() } else { None }
+    }
+    /// `proc.spawn` and the streaming child operations of scripted worlds
+    /// (docs/spec/core-library.md#processes); a host child needs a host adapter.
+    fn child_call(
+        &mut self,
+        name: &str,
+        call: &OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+        canceled: Option<u32>,
+    ) -> Result<OperationResult, Error> {
+        let a = call.arguments;
+        let mut updates = vec![];
+        let mut consumed = vec![];
+        let mut input = encode_arguments(a);
+        let mut recorded = None;
+        // A scripted child's contradicted or unmet Expect fails LANG-9 after its report.
+        let mut report = None;
+        let value = match name {
+            "proc.spawn" => {
+                let (world, rules) = self.process_grant(arg(a, 0)?)?;
+                let process = self.id(arg(a, 0)?, "Proc")?;
+                let program = super::dispatch::path_text(arg(a, 1)?)?.to_owned();
+                let args = strings(arg(a, 2)?)?;
+                match variant_fields(arg(a, 3)?)? {
+                    (0, d) if d.is_empty() => {}
+                    (1, d) if d.len() == 1 => {
+                        self.id(d[0], "Dir")?;
+                    }
+                    _ => return Err(invalid("Option[Dir] representation")),
+                }
+                let checked = match canceled {
+                    Some(cause) => Err(ProcessFailure::Canceled(cause)),
+                    None => check(&program, &args, &rules),
+                };
+                match checked {
+                    Err(failure) => error(failure_value(failure)),
+                    Ok(())
+                        if world == 0
+                            && self.config.process.as_ref().is_some_and(|p| {
+                                ProviderContract::parse(&p.provider)
+                                    == Some(ProviderContract::ProcessSpawn)
+                            }) =>
+                    {
+                        return Err(Error::Unavailable(format!(
+                            "the reference spawns host children only through a host adapter; simulation requires {}",
+                            ProviderContract::ProcessScript.name()
+                        )));
+                    }
+                    Ok(()) => {
+                        let children = self
+                            .process_children
+                            .get_mut(&world)
+                            .ok_or_else(|| invalid("missing process world"))?;
+                        match children.iter_mut().find(|c| {
+                            c.as_ref()
+                                .is_some_and(|c| c.program == program && c.args == args)
+                        }) {
+                            None => error(failure_value(ProcessFailure::NotFound)),
+                            Some(entry) => {
+                                let script = ScriptChild::new(entry.take().unwrap());
+                                let child = self.handle(
+                                    "Child",
+                                    Grant::Child {
+                                        process,
+                                        stdin_open: true,
+                                    },
+                                );
+                                self.script_children
+                                    .insert(self.id(&child, "Child")?, script);
+                                ok(child)
+                            }
+                        }
+                    }
+                }
+            }
+            "child.write" => {
+                let data = bytes(arg(a, 2)?)?.to_vec();
+                // A canceled write is Canceled before its Child is consulted (CONC-3).
+                match canceled {
+                    Some(cause) => error(failure_value(ProcessFailure::Canceled(cause))),
+                    None => {
+                        let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                        if !open {
+                            error(failure_value(ProcessFailure::InvalidInput))
+                        } else if data.is_empty() {
+                            ok(Value::Unit)
+                        } else {
+                            match self.script_child(child)?.write(&data) {
+                                Ok(Ok(())) => ok(Value::Unit),
+                                Ok(Err(failure)) => error(failure_value(failure)),
+                                Err(text) => {
+                                    report = Some(text);
+                                    Value::Unit
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "child.close_stdin" => {
+                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                if open {
+                    self.close_child_input(child);
+                    report = self.script_child(child)?.close_stdin();
+                }
+                Value::Unit
+            }
+            "child.read_stdout" | "child.read_stderr" => {
+                let max = match arg(a, 3)? {
+                    Value::Integer(n) if n.kind() == Primitive::U64 => n.bits() as u64,
+                    _ => return Err(invalid("max requires u64")),
+                };
+                input = encode_arguments(&[a[0].clone(), a[1].clone(), a[3].clone()]);
+                // A zero-byte read is invalid before it is a cancellation point.
+                if max == 0 {
+                    error(failure_value(ProcessFailure::InvalidInput))
+                } else if let Some(cause) = canceled {
+                    error(failure_value(ProcessFailure::Canceled(cause)))
+                } else {
+                    let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                    let stream = if name == "child.read_stdout" {
+                        ChildStream::Stdout
+                    } else {
+                        ChildStream::Stderr
+                    };
+                    match self.script_child(child)?.read(stream, max) {
+                        ScriptRead::Waiting => {
+                            let anchor =
+                                cx.anchor().cloned().unwrap_or(crate::observation::Anchor {
+                                    definition: call.path.clone(),
+                                    body: hirsel_tir::BodyId(0),
+                                    cleanup: None,
+                                    site: call.site,
+                                });
+                            return Err(Error::Blocked(vec![crate::BlockedWait {
+                                spawn_path: vec![],
+                                anchor,
+                                kind: name.into(),
+                                targets: vec![child],
+                            }]));
+                        }
+                        ScriptRead::Bytes(read) => {
+                            let mut buffer = arg(a, 2)?.clone();
+                            let Value::Sequence { elements, .. } = &mut buffer else {
+                                return Err(invalid("read buffer sequence"));
+                            };
+                            elements.extend(read.iter().map(|b| {
+                                Some(Value::Integer(
+                                    crate::Integer::new(Primitive::U8, (*b).into()).unwrap(),
+                                ))
+                            }));
+                            updates.push((2, buffer));
+                            recorded = Some(encode_value(&ok(Value::Bytes(read.clone()))));
+                            ok(super::dispatch::u64_value(read.len() as u64))
+                        }
+                    }
+                }
+            }
+            "child.wait" => {
+                // The wait consumes its Child on every outcome.
+                consumed.push(1);
+                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                match canceled {
+                    // A canceled wait drops the Child it took.
+                    Some(cause) => {
+                        report = self.close_child(child);
+                        error(failure_value(ProcessFailure::Canceled(cause)))
+                    }
+                    None => {
+                        if open {
+                            report = self.script_child(child)?.close_stdin();
+                        }
+                        let status = self.script_child(child)?.status();
+                        self.grants.remove(&child);
+                        self.script_children.remove(&child);
+                        match (report.is_some(), status) {
+                            (true, _) => Value::Unit,
+                            (false, Some(status)) => ok(status_value(status)),
+                            (false, None) => return Err(invalid("scripted child never ended")),
+                        }
+                    }
+                }
+            }
+            "child.kill" => {
+                let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                self.script_child(child)?.kill();
+                Value::Unit
+            }
+            _ => return Err(invalid("unknown child operation")),
+        };
+        if let Some(report) = report {
+            cx.stdout.extend_from_slice(report.as_bytes());
+            let failure = super::dispatch::fail(call, cx, "LANG-9", "scripted child unmet");
+            self.record("Proc", name, input, b"failure:LANG-9".to_vec(), cx)?;
+            return Ok(OperationResult::Failed(failure));
+        }
+        self.record(
+            "Proc",
+            name,
+            input,
+            recorded.unwrap_or_else(|| encode_value(&value)),
+            cx,
+        )?;
+        let mut result = OperationResult::returned(value).transferring(consumed);
+        if let OperationResult::Complete { arguments, .. } = &mut result {
+            *arguments = updates;
+        }
+        Ok(result)
+    }
+}
+
+/// The LANG-9 failure of a scripted child's contradicted or unmet Expect at the current
+/// operation, whose Test report was already written.
+pub fn child_failure(cx: &OperationContext<'_>) -> Result<OperationResult, Error> {
+    let site = cx
+        .anchor()
+        .ok_or_else(|| invalid("operation has no execution anchor"))?
+        .site;
+    Ok(OperationResult::Failed(crate::Failure {
+        rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+        line: cx.sources.location(site).map_or(0, |p| p.line),
+        site,
+        kind: "scripted child unmet".into(),
+    }))
+}
+
+/// An `ExitStatus` value.
+pub fn status_value(status: ExitStatus) -> Value {
+    match status {
+        ExitStatus::Exited(code) => variant(0, vec![i32_value(code)]),
+        ExitStatus::Signaled(signal) => variant(1, vec![i32_value(signal)]),
     }
 }

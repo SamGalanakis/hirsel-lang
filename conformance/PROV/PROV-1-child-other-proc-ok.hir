@@ -1,0 +1,6 @@
+// rule: PROV-1
+// expect: accept
+// A Child's operations take the Proc that spawned it.
+pub fn feed(p: Proc, other: Proc, mut c: Child of p) -> Result[(), ProcessError] {
+  child.write(p, mut c, b"ping\n")
+}

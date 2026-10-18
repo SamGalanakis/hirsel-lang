@@ -190,6 +190,19 @@ impl Operations for Io {
                     value: Box::new(OpValue::Plain(bytes)),
                 }
             }
+            // A zero-byte read is invalid before it is a cancellation point.
+            (
+                Some("child"),
+                "read_stdout" | "read_stderr",
+                [_, _, _, OpValue::Bits { bits: 0, .. }],
+            ) => {
+                return None;
+            }
+            // A canceled wait drops the Child it took.
+            (Some("child"), "wait", [_, c]) => {
+                self.yielded = true;
+                return Some(self.close_canceled_child(c, cause));
+            }
             (module, name, _) => net::canceled(module, name, cause)
                 .or_else(|| process::canceled(module, name, cause))?,
         };
@@ -217,6 +230,7 @@ impl Operations for Io {
             return outcome;
         }
         if let Some(outcome) = self.process(module, &path.name, args) {
+            output.extend(self.network.take_report());
             return outcome;
         }
         if let Some(outcome) = self.detached_filesystem(module, &path.name, args) {

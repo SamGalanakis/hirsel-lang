@@ -192,3 +192,15 @@ uint8_t hirsel_rt_v2_io_process(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*
 typedef struct { uint32_t tag, padding, kind, code; hirsel_rt_v2_slice stdout_bytes, stderr_bytes; } hirsel_rt_v2_process_result;
 /* The trailing operand is Option[Deadline]: its tag, then the clock at 8 and the Instant at 16. */
 uint8_t hirsel_rt_v2_proc_run(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_process_result*, const uint64_t*, const uint64_t*, hirsel_rt_v2_header*, hirsel_rt_v2_header*, uint64_t, uint64_t, const void*, uint64_t, const void*);
+/* Result[Child or u64, ProcessError]: the value, or ProcessError (tag, payload) at 8. */
+typedef struct { uint32_t tag, padding; uint64_t value; } hirsel_rt_v2_child_word_result;
+/* Result[() or ExitStatus, ProcessError]: the ExitStatus or ProcessError at 4. */
+typedef struct { uint32_t tag, kind, code; } hirsel_rt_v2_child_pair_result;
+uint8_t hirsel_rt_v2_proc_spawn(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, const uint64_t*, hirsel_rt_v2_header*, const void*);
+uint8_t hirsel_rt_v2_child_write(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_pair_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_child_close_stdin(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
+uint8_t hirsel_rt_v2_child_read_stdout(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);
+uint8_t hirsel_rt_v2_child_read_stderr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);
+/* The Child word is transferred and zeroed. */
+uint8_t hirsel_rt_v2_child_wait(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_pair_result*, const uint64_t*, uint64_t*);
+uint8_t hirsel_rt_v2_child_kill(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);

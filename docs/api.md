@@ -39,11 +39,11 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `TextInvariant() -> CheckRule` — Variant of CheckRule. <!-- core@1/CheckRule#TextInvariant -->
 - `opaque resource type Child: sendable + noalloc_drop uses {Proc}` <!-- core@1/Child -->
 - `type ChildScript uses {} = { program: String, args: List[String], steps: List[ChildStep] }` <!-- core@1/ChildScript -->
-- `type ChildStep uses {} = Stdout(Bytes) | Stderr(Bytes) | Expect(Bytes) | Exit(ExitStatus)` <!-- core@1/ChildStep -->
+- `type ChildStep uses {} = Print(Bytes) | PrintErr(Bytes) | Expect(Bytes) | Exit(ExitStatus)` <!-- core@1/ChildStep -->
 - `Exit(ExitStatus) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Exit -->
 - `Expect(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Expect -->
-- `Stderr(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Stderr -->
-- `Stdout(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Stdout -->
+- `Print(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Print -->
+- `PrintErr(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#PrintErr -->
 - `type CliError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Usage(ArgError) | Files(FileError) | Output(OutputError)` <!-- core@1/CliError -->
 - `Files(FileError) -> CliError` — Variant of CliError. <!-- core@1/CliError#Files -->
 - `Output(OutputError) -> CliError` — Variant of CliError. <!-- core@1/CliError#Output -->

@@ -143,6 +143,37 @@ pub enum Request {
         max_output: u64,
         deadline: Option<crate::process::Deadline>,
     },
+    /// `proc.spawn`; `directory` is the working directory's Dir handle.
+    ProcessSpawn {
+        process: u64,
+        program: String,
+        args: Vec<String>,
+        directory: Option<u64>,
+    },
+    /// The streaming child operations name their Proc, as stream operations name their Net.
+    ChildWrite {
+        process: u64,
+        child: u64,
+        bytes: Vec<u8>,
+    },
+    ChildCloseStdin {
+        process: u64,
+        child: u64,
+    },
+    ChildRead {
+        process: u64,
+        child: u64,
+        stream: hirsel_run_config::ChildStream,
+        max: u64,
+    },
+    ChildWait {
+        process: u64,
+        child: u64,
+    },
+    ChildKill {
+        process: u64,
+        child: u64,
+    },
     TestCheck {
         test: u64,
         condition: bool,
@@ -448,6 +479,13 @@ pub enum Completion {
     Address(Result<SocketAddr, NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
     Process(hirsel_run_config::ProcessOutcome),
+    /// `proc.spawn`: the Child handle.
+    Spawned(Result<u64, hirsel_run_config::ProcessFailure>),
+    /// `child.write`, `child.close_stdin` and `child.kill`.
+    ChildUnit(Result<(), hirsel_run_config::ProcessFailure>),
+    /// A child read: the bytes it delivered, empty at end of stream.
+    ChildBytes(Result<Vec<u8>, hirsel_run_config::ProcessFailure>),
+    ChildExit(Result<hirsel_run_config::ExitStatus, hirsel_run_config::ProcessFailure>),
     /// The request would block and its task parked; `committed` when it already made part
     /// of its effect, so cancellation no longer completes it.
     Blocked {
@@ -666,6 +704,8 @@ pub(crate) struct State {
     pub process_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ProcessRun>>>,
     /// Unused streaming-child entries of each scripted world, keyed by world.
     pub child_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ChildRun>>>,
+    /// Spawned scripted children, keyed by Child handle.
+    pub script_children: BTreeMap<u64, hirsel_run_config::ScriptChild>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -691,6 +731,7 @@ impl Default for State {
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
             child_scripts: BTreeMap::new(),
+            script_children: BTreeMap::new(),
             projections: [
                 "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
             ]
@@ -828,7 +869,7 @@ impl State {
             return self.execute_net(net, request);
         }
         // Process outcomes are provider inputs too; only a host adapter can spawn.
-        if crate::process::is_process_request(request) {
+        if self.is_process(request) {
             if fault.is_some() {
                 return Err(AdapterError::InvalidCompletion);
             }

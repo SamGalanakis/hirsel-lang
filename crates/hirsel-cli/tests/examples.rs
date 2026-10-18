@@ -1593,3 +1593,80 @@ fn csvjson_errors_are_one_escaped_structured_record() {
         "invalid base64 field: bad\"\nx"
     );
 }
+
+#[test]
+fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
+    use std::os::unix::fs::PermissionsExt;
+    let example = Example::new(
+        "testrun",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/testrun/main.hir"),
+        )],
+        include_str!("../../../examples/testrun/hirsel.json"),
+    );
+    let root = example.dir.canonicalize().unwrap();
+    let marker = root.join("survived");
+    let script = |name: &str, body: String| {
+        let path = root.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    };
+    let cases = [
+        (
+            script(
+                "pass.sh",
+                "echo one\nprintf 'two\\nthr'\nsleep 0.1\necho ee\n".into(),
+            ),
+            "| one\n| two\n| three\nPASS\n",
+        ),
+        (
+            script("fail.sh", "echo bad\nexit 3\n".into()),
+            "| bad\nFAIL: exit 3\n",
+        ),
+        (
+            script(
+                "hang.sh",
+                format!("echo started\nsleep 2\ntouch {}\n", marker.display()),
+            ),
+            "| started\nTIMEOUT\n",
+        ),
+    ];
+    for (program, expected) in &cases {
+        let grants = root.join("grants.json");
+        std::fs::write(
+            &grants,
+            serde_json::json!({"io": {
+                "stdout": "stdout.bytes@1",
+                "tasks": "tasks.cooperative@1",
+                "monotonic_clock": "clock.monotonic.ns@1",
+                "dirs": [],
+                "process": {"provider": "process.spawn@1", "rules": [{"program": program}]},
+            }, "args": [program, "300"]})
+            .to_string(),
+        )
+        .unwrap();
+        for native in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run").arg(root.join("hirsel.json"));
+            if native {
+                command.arg("--native");
+            }
+            let output = command.arg("--grants").arg(&grants).output().unwrap();
+            assert_eq!(
+                (
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout)
+                ),
+                (Some(0), (*expected).into()),
+                "native={native} {}: {}",
+                program.display(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+    // The deadline killed the hung test before it could leave its marker.
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert!(!marker.exists());
+}

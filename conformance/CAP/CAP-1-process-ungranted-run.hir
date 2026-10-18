@@ -9,5 +9,10 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     ),
     Bounds()
   )
+  let spawned: bool = match proc.spawn(p, path.of("/bin/cat"), [], None()) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  failure.check(spawned, Bounds())
   Ok(())
 }

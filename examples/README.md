@@ -57,6 +57,7 @@ selects an explicit bound.
 | [todo](todo/main.hir) | Execute `add TEXT`, `done NUMBER`, `list`; missing state starts empty; load and atomically save newline-separated tasks (second argument is state path, default `todo.txt`). |
 | [adventure](adventure/main.hir) | Play a command-file state machine with a key, cave and locked gate. |
 | [httpget](httpget/main.hir) | Fetch a UTF-8 HTTP response from an explicitly granted endpoint; `demo.json` supplies a scripted local peer. |
+| [testrun](testrun/main.hir) | Run one test program, print each line it writes, prefixed, as it arrives, and report `PASS`, `FAIL` or `TIMEOUT`: at the deadline (second argument, milliseconds, default 5000) a watchdog task on the program's monotonic clock cancels the stream, which kills the test. Grant the test's exact path, cooperative tasks and the clock with `--grants`, as `testrun/README.md` shows. |
 | [filesystem](filesystem/README.md) | Create nested directories, list typed entries and metadata, rename within a grant and remove files and empty directories. |
 | [sortuniq](sortuniq/main.hir) | Sort distinct UTF-8 lines by byte order; empty fields, including the final field after a newline, are retained. |
 | [logq](logq/main.hir) | Query a JSON-lines or plain log: `[--level L] [--match TEXT] [--field KEY=VALUE] [--top N] FILE` prints matches per level and the most frequent messages; bad input exits 1 with `error: ...` on stderr. Takes flags and the file, with no demo. |

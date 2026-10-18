@@ -590,7 +590,7 @@ Deadline      = { clock: MonotonicClock, at: Instant of .clock }
 ProcessScript = { program: String, args: List[String],
                   outcome: Result[ProcessOutput, ProcessError] }
 ChildScript   = { program: String, args: List[String], steps: List[ChildStep] }
-ChildStep     = Stdout(Bytes) | Stderr(Bytes) | Expect(Bytes) | Exit(ExitStatus)
+ChildStep     = Print(Bytes) | PrintErr(Bytes) | Expect(Bytes) | Exit(ExitStatus)
 ```
 
 `proc.run(p, program, args, stdin, dir, max_output, deadline)` runs one child to completion
@@ -685,8 +685,9 @@ the check before spawning, and an outcome `Error(TimedOut())` scripts a timeout.
 A `proc.spawn` on it takes the first unused child entry whose `program` and `args` equal
 its own (with none, `NotFound()`) and plays its steps in order:
 
-- `Stdout(b)` and `Stderr(b)` make `b` available on that stream, and the child moves on at
-  once. A read returns at most `max` bytes of one step and never crosses into the next.
+- `Print(b)` and `PrintErr(b)` make `b` available on standard output and standard error,
+  and the child moves on at once. A read returns at most `max` bytes of one step and never
+  crosses into the next.
 - `Expect(b)` waits until the program has written `b`'s length of bytes to standard input,
   which must equal `b`. Written bytes accumulate across writes and are compared at the
   write that completes them; a mismatch fails LANG-9 after reporting

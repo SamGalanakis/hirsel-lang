@@ -123,7 +123,7 @@ pub fn first_expecting_client(listener: &NetListener, next: usize) -> Option<usi
 }
 
 // A Hirsel byte-string literal: printable ASCII as is, other bytes escaped.
-fn byte_literal(bytes: &[u8]) -> String {
+pub(crate) fn byte_literal(bytes: &[u8]) -> String {
     let mut out = String::from("b\"");
     for &b in bytes {
         match b {

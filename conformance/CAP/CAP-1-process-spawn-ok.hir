@@ -1,0 +1,9 @@
+// rule: CAP-1
+// expect: accept
+// A Dir names the child's working directory; it is not authority to spawn a program.
+pub fn started(p: Proc, d: Dir) -> bool {
+  match proc.spawn(p, path.of("/bin/cat"), [], Some(d)) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}

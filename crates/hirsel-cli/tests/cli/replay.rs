@@ -418,6 +418,60 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 }
 "#;
 
+/// A line protocol with a streaming `cat`: each line written comes back, closing its input
+/// ends it, a killed child is Signaled(9), and a dropped one is killed.
+const STREAM_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
+fn failed(take e: ProcessError) -> () {}
+
+fn echo(p: Proc, mut c: Child of p, take text: Bytes) -> Result[Bytes, ProcessError] {
+  let want = bytes.len(text)
+  child.write(p, mut c, text)?
+  let mut got: List[u8] = []
+  while list.len(got) < want {
+    if child.read_stdout(p, mut c, mut got, 64u64)? == 0u64 {
+      return Error(InputClosed())
+    }
+  }
+  Ok(bytes.from_list(take got))
+}
+
+fn show(out: Stdout, take b: Bytes) -> () {
+  match string.from_bytes(take b) {
+    Ok(s) => {
+      let _ = out.print(out, s)
+    },
+    Error(_) => {},
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let p = io.process(rt) ? grant
+  let cat = match arg.path(args, 0u64) {
+    Ok(program) => program,
+    Error(_) => path.of("/missing"),
+  }
+  let mut c = proc.spawn(p, cat, [], None()) ? failed
+  show(out, echo(p, mut c, b"ping\n") ? failed)
+  show(out, echo(p, mut c, b"pong\n") ? failed)
+  child.close_stdin(p, mut c)
+  let mut rest: List[u8] = []
+  if child.read_stdout(p, mut c, mut rest, 64u64) == Ok(0u64) {
+    let _ = out.print(out, "eof\n")
+  }
+  if child.wait(p, take c) == Ok(Exited(0)) {
+    let _ = out.print(out, "exited 0\n")
+  }
+  let mut killed = proc.spawn(p, cat, [], None()) ? failed
+  child.kill(p, mut killed)
+  if child.wait(p, take killed) == Ok(Signaled(9)) {
+    let _ = out.print(out, "killed\n")
+  }
+  let _ = proc.spawn(p, cat, [], None())
+  Ok(())
+}
+"#;
+
 /// Record `program` with `grants` in both engines, then delete the granted program and
 /// replay each tape in both engines: nothing is spawned, and the output is the recorded one.
 fn process_round_trip(name: &str, program: &str, child: &Path, expected: &[u8]) -> PathBuf {
@@ -513,5 +567,19 @@ fn a_canceled_parent_kills_its_running_child_and_replays_without_spawning() {
     // Had either recorded run left its child alive, the marker would appear by now.
     std::thread::sleep(std::time::Duration::from_millis(1500));
     assert!(!marker.exists());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_streaming_cat_child_round_trips_lines_and_replays_without_spawning() {
+    let root = process_root("replay-stream");
+    let cat = root.join("cat");
+    std::fs::copy("/bin/cat", &cat).unwrap();
+    process_round_trip(
+        "stream",
+        STREAM_PROGRAM,
+        &cat,
+        b"ping\npong\neof\nexited 0\nkilled\n",
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }

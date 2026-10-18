@@ -159,6 +159,8 @@ hirsel_test(
         "examples/sortuniq/demo.json",
         "examples/sortuniq/hirsel.json",
         "examples/sortuniq/main.hir",
+        "examples/testrun/hirsel.json",
+        "examples/testrun/main.hir",
         "examples/todo-api/grants.json",
         "examples/todo-api/hirsel.json",
         "examples/todo-api/main.hir",
@@ -188,7 +190,7 @@ hirsel_test(
     bin_exes = {
         "hirsel": "//:hirsel-cli-bin-hirsel",
     },
-    shards = 35,
+    shards = 36,
     data = glob([
         "conformance/**",
         "packages/**",
@@ -246,6 +248,8 @@ hirsel_test(
         "examples/sortuniq/demo.json",
         "examples/sortuniq/hirsel.json",
         "examples/sortuniq/main.hir",
+        "examples/testrun/hirsel.json",
+        "examples/testrun/main.hir",
         "examples/todo-api/grants.json",
         "examples/todo-api/hirsel.json",
         "examples/todo-api/main.hir",

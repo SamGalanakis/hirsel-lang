@@ -23,6 +23,8 @@ pub struct RealIo {
     net: Box<dyn NetProvider>,
     /// Cooperative admission: the readiness its providers park on and the waits it records.
     cooperative: Option<(crate::readiness::Readiness, crate::readiness::WaitLog)>,
+    /// The host process provider's streaming children.
+    children: crate::host_child::HostChildren,
 }
 enum Input {
     Blocking(Box<dyn Read>),
@@ -146,6 +148,7 @@ impl RealIo {
             retain_history: true,
             net: Box::new(crate::net_host::HostNet::new()),
             cooperative: None,
+            children: Default::default(),
         })
     }
     /// Borrow the original admitted pins for every recorder check, without reopening paths.
@@ -485,7 +488,7 @@ impl RealIo {
         let fake = self.state.is_fake_request(&request);
         let mut fault = if self.state.denied_projection(&request)
             || crate::net::is_net_request(&request)
-            || crate::process::is_process_request(&request)
+            || self.state.is_process(&request)
             || matches!(&request, Request::ReadStdin { stdin, .. } if self.state.expect(*stdin, crate::handles::Grant::Stdin).is_err())
             || matches!(
                 request,
@@ -580,33 +583,13 @@ impl RealIo {
                 };
                 self.state.sample(&request, Completion::Wait(input))
             }
-            Request::ProcessRun { .. } => {
+            _ if self.state.is_process(&request) => {
                 let directories = &self.disk.directories;
                 let cooperative = self.cooperative.as_ref().map(|(readiness, _)| readiness);
-                self.state.execute_process(
-                    &mut |spec| {
-                        let cwd = match spec.directory {
-                            None => None,
-                            Some(d) => match directories.get(&d) {
-                                Some(pin) => Some(pin.as_raw_fd()),
-                                None => {
-                                    return Ok(crate::process::ProcessOutcome::Error(
-                                        crate::process::ProcessFailure::InvalidInput,
-                                    ));
-                                }
-                            },
-                        };
-                        // Under cooperative admission the run parks its task instead of
-                        // blocking the thread, and a cancellation kills its child.
-                        match cooperative {
-                            Some(readiness) => {
-                                crate::process::run_cooperative(readiness, spec, cwd)
-                            }
-                            None => Ok(crate::process::run_host(spec, cwd, None)),
-                        }
-                    },
-                    &request,
-                )
+                let children = &mut self.children;
+                let cwd = |d: u64| directories.get(&d).map(|pin| pin.as_raw_fd());
+                self.state
+                    .execute_process(&mut |call| children.call(call, &cwd, cooperative), &request)
             }
             _ => self
                 .state

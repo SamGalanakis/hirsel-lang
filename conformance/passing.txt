@@ -49,7 +49,10 @@ conformance/CAP/CAP-1-process-projection-bad.hir
 conformance/CAP/CAP-1-process-projection-ok.hir
 conformance/CAP/CAP-1-process-run-bad.hir
 conformance/CAP/CAP-1-process-run-ok.hir
+conformance/CAP/CAP-1-process-scripted-child-run.hir
 conformance/CAP/CAP-1-process-scripted-run.hir
+conformance/CAP/CAP-1-process-spawn-bad.hir
+conformance/CAP/CAP-1-process-spawn-ok.hir
 conformance/CAP/CAP-1-process-ungranted-run.hir
 conformance/CAP/CAP-1-random-draws-run.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
@@ -1479,6 +1482,9 @@ conformance/LANG/LANG-8-tour-12-bad-input-run.hir
 conformance/LANG/LANG-8-tour-12-valid-input-run.hir
 conformance/LANG/LANG-8-tour-option-result-run.hir
 conformance/LANG/LANG-8-variant-map.hir
+conformance/LANG/LANG-9-child-expect-met-run.hir
+conformance/LANG/LANG-9-child-expect-mismatch-fail.hir
+conformance/LANG/LANG-9-child-expect-unmet-drop-fail.hir
 conformance/LANG/LANG-9-explicit-check.hir
 conformance/LANG/LANG-9-fake-directory.hir
 conformance/LANG/LANG-9-native-for-all-fail.hir
@@ -3292,6 +3298,8 @@ conformance/PROV/PROV-1-buffered-file-dir-ok.hir
 conformance/PROV/PROV-1-callable-parameter-brand-bad.hir
 conformance/PROV/PROV-1-callable-parameter-brand-ok.hir
 conformance/PROV/PROV-1-captured-element-field-run.hir
+conformance/PROV/PROV-1-child-other-proc-bad.hir
+conformance/PROV/PROV-1-child-other-proc-ok.hir
 conformance/PROV/PROV-1-closure-copy-alias-loop-bad.hir
 conformance/PROV/PROV-1-closure-copy-field-loop-bad.hir
 conformance/PROV/PROV-1-closure-copy-loop-ok.hir

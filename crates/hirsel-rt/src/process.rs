@@ -12,8 +12,8 @@
 use crate::handles::Grant;
 use crate::io::{AdapterError, Completion, Request, State};
 pub use hirsel_run_config::{
-    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRule, ProcessRun,
-    bounded, canonical_program, check,
+    ChildRun, ChildStep, ChildStream, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRule,
+    ProcessRun, ScriptChild, ScriptRead, bounded, canonical_program, check,
 };
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -51,7 +51,42 @@ pub struct ProcessSpec<'a> {
     pub deadline: Option<u64>,
 }
 
+/// What a host provider performs after every check passed. Its answer is the completion
+/// the request returns, which the policy validates: in replay, the recorded one.
+pub enum HostCall<'a> {
+    /// `proc.run`: [`Completion::Process`].
+    Run(&'a ProcessSpec<'a>),
+    /// `proc.spawn` as Child handle `child` (the spec's `stdin` is empty and its bound 0):
+    /// [`Completion::Spawned`] with that handle.
+    Spawn {
+        child: u64,
+        spec: &'a ProcessSpec<'a>,
+    },
+    /// Nonempty `data` to open input: [`Completion::ChildUnit`].
+    Write { child: u64, data: &'a [u8] },
+    /// [`Completion::ChildUnit`] `Ok`.
+    CloseStdin { child: u64 },
+    /// A positive `max`: [`Completion::ChildBytes`].
+    Read {
+        child: u64,
+        stream: ChildStream,
+        max: u64,
+    },
+    /// [`Completion::ChildExit`].
+    Wait { child: u64 },
+    /// [`Completion::ChildUnit`] `Ok`.
+    Kill { child: u64 },
+    /// The drop of a Child never waited: [`Completion::Unit`] `Ok`.
+    Close { child: u64 },
+}
+
 impl State {
+    /// Whether `request` is the Process policy's: a process request, or the close of a Child.
+    pub(crate) fn is_process(&self, request: &Request) -> bool {
+        is_process_request(request)
+            || matches!(request, Request::Close { handle }
+                if matches!(self.handles.rows.get(handle), Some(Grant::Child { .. })))
+    }
     /// The admitted `io.process` grant: its rules, and for process.script@1 the root
     /// scripted world. Scripted runs never widen the rules.
     pub(crate) fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
@@ -79,7 +114,7 @@ impl State {
     /// ask `host` only for a checked host run. `host` is the recorded completion in replay.
     pub(crate) fn execute_process(
         &mut self,
-        host: &mut dyn FnMut(&ProcessSpec<'_>) -> Result<ProcessOutcome, AdapterError>,
+        host: &mut dyn FnMut(HostCall<'_>) -> Result<Completion, AdapterError>,
         request: &Request,
     ) -> Result<Completion, AdapterError> {
         match request {
@@ -184,7 +219,7 @@ impl State {
                     }
                     ProcessWorld::Host => {
                         let rule = rules.iter().find(|r| &r.program == program).unwrap();
-                        let outcome = host(&ProcessSpec {
+                        let Completion::Process(outcome) = host(HostCall::Run(&ProcessSpec {
                             program,
                             args,
                             stdin,
@@ -192,7 +227,10 @@ impl State {
                             directory: *directory,
                             max_output: *max_output,
                             deadline: deadline.map(|d| d.ticks),
-                        })?;
+                        }))?
+                        else {
+                            return Err(AdapterError::InvalidCompletion);
+                        };
                         // A provider can fail, time out or exceed the bound, never contradict
                         // the checks; cancellation never reaches it.
                         let valid = match &outcome {
@@ -222,19 +260,279 @@ impl State {
                 }
                 Ok(Completion::Process(outcome))
             }
+            Request::ProcessSpawn {
+                process,
+                program,
+                args,
+                directory,
+            } => {
+                let (rules, world) = self.process_grant(*process)?;
+                if let Some(d) = directory
+                    && !matches!(self.handles.rows.get(d), Some(Grant::Directory { .. }))
+                {
+                    return Err(AdapterError::InvalidHandle(*d));
+                }
+                if let Err(failure) = check(program, args, &rules) {
+                    return Ok(Completion::Spawned(Err(failure)));
+                }
+                let child = self.handles.next();
+                let spawned = match world {
+                    ProcessWorld::Script(id) => {
+                        let children = self
+                            .child_scripts
+                            .get_mut(&id)
+                            .ok_or(AdapterError::InvalidCompletion)?;
+                        match children.iter_mut().find(|c| {
+                            c.as_ref()
+                                .is_some_and(|c| &c.program == program && &c.args == args)
+                        }) {
+                            Some(entry) => {
+                                let script = ScriptChild::new(entry.take().unwrap());
+                                self.script_children.insert(child, script);
+                                Ok(child)
+                            }
+                            None => Err(ProcessFailure::NotFound),
+                        }
+                    }
+                    ProcessWorld::Host
+                        if directory.is_some_and(|d| self.fake_directories.contains_key(&d)) =>
+                    {
+                        Err(ProcessFailure::InvalidInput)
+                    }
+                    ProcessWorld::Host => {
+                        let rule = rules.iter().find(|r| &r.program == program).unwrap();
+                        let spec = ProcessSpec {
+                            program,
+                            args,
+                            stdin: &[],
+                            env: &rule.env,
+                            directory: *directory,
+                            max_output: 0,
+                            deadline: None,
+                        };
+                        match host(HostCall::Spawn { child, spec: &spec })? {
+                            Completion::Spawned(Ok(id)) if id == child => Ok(child),
+                            Completion::Spawned(Err(
+                                failure @ (ProcessFailure::NotFound
+                                | ProcessFailure::PermissionDenied
+                                | ProcessFailure::Fault(_)),
+                            )) => Err(failure),
+                            Completion::Spawned(Err(ProcessFailure::InvalidInput))
+                                if directory.is_some() =>
+                            {
+                                Err(ProcessFailure::InvalidInput)
+                            }
+                            _ => return Err(AdapterError::InvalidCompletion),
+                        }
+                    }
+                };
+                if spawned.is_ok() {
+                    self.handles.insert(Grant::Child {
+                        process: *process,
+                        world,
+                        stdin_open: true,
+                    });
+                }
+                Ok(Completion::Spawned(spawned))
+            }
+            Request::ChildWrite {
+                process,
+                child,
+                bytes,
+            } => {
+                let (world, stdin_open) = self.child_grant(*process, *child)?;
+                if !stdin_open {
+                    return Ok(Completion::ChildUnit(Err(ProcessFailure::InvalidInput)));
+                }
+                if bytes.is_empty() {
+                    return Ok(Completion::ChildUnit(Ok(())));
+                }
+                match world {
+                    ProcessWorld::Script(_) => match self.script_child(*child)?.write(bytes) {
+                        Ok(written) => Ok(Completion::ChildUnit(written)),
+                        Err(report) => Ok(self.child_failure(&report)),
+                    },
+                    ProcessWorld::Host => match host(HostCall::Write {
+                        child: *child,
+                        data: bytes,
+                    })? {
+                        completion @ Completion::ChildUnit(
+                            Ok(()) | Err(ProcessFailure::InputClosed | ProcessFailure::Fault(_)),
+                        ) => Ok(completion),
+                        _ => Err(AdapterError::InvalidCompletion),
+                    },
+                }
+            }
+            Request::ChildCloseStdin { process, child } => {
+                let (world, stdin_open) = self.child_grant(*process, *child)?;
+                if stdin_open {
+                    self.close_child_input(*child);
+                    match world {
+                        ProcessWorld::Script(_) => {
+                            if let Some(report) = self.script_child(*child)?.close_stdin() {
+                                return Ok(self.child_failure(&report));
+                            }
+                        }
+                        ProcessWorld::Host => {
+                            if host(HostCall::CloseStdin { child: *child })?
+                                != Completion::ChildUnit(Ok(()))
+                            {
+                                return Err(AdapterError::InvalidCompletion);
+                            }
+                        }
+                    }
+                }
+                Ok(Completion::ChildUnit(Ok(())))
+            }
+            Request::ChildRead {
+                process,
+                child,
+                stream,
+                max,
+            } => {
+                let (world, _) = self.child_grant(*process, *child)?;
+                if *max == 0 {
+                    return Ok(Completion::ChildBytes(Err(ProcessFailure::InvalidInput)));
+                }
+                match world {
+                    // At an Expect only the program's own writes can make bytes available.
+                    ProcessWorld::Script(_) => match self.script_child(*child)?.read(*stream, *max)
+                    {
+                        ScriptRead::Bytes(bytes) => Ok(Completion::ChildBytes(Ok(bytes))),
+                        ScriptRead::Waiting => Err(AdapterError::Blocked),
+                    },
+                    ProcessWorld::Host => match host(HostCall::Read {
+                        child: *child,
+                        stream: *stream,
+                        max: *max,
+                    })? {
+                        Completion::ChildBytes(Ok(bytes)) if bytes.len() as u64 <= *max => {
+                            Ok(Completion::ChildBytes(Ok(bytes)))
+                        }
+                        completion @ Completion::ChildBytes(Err(ProcessFailure::Fault(_))) => {
+                            Ok(completion)
+                        }
+                        _ => Err(AdapterError::InvalidCompletion),
+                    },
+                }
+            }
+            Request::ChildWait { process, child } => {
+                let (world, stdin_open) = self.child_grant(*process, *child)?;
+                let status = match world {
+                    ProcessWorld::Script(_) => {
+                        if stdin_open {
+                            self.close_child_input(*child);
+                            if let Some(report) = self.script_child(*child)?.close_stdin() {
+                                self.end_child(*child);
+                                return Ok(self.child_failure(&report));
+                            }
+                        }
+                        let status = self.script_child(*child)?.status();
+                        Ok(status.ok_or(AdapterError::InvalidCompletion)?)
+                    }
+                    ProcessWorld::Host => match host(HostCall::Wait { child: *child })? {
+                        Completion::ChildExit(Ok(status)) => Ok(status),
+                        Completion::ChildExit(Err(failure @ ProcessFailure::Fault(_))) => {
+                            Err(failure)
+                        }
+                        _ => return Err(AdapterError::InvalidCompletion),
+                    },
+                };
+                // The wait consumes the Child on every outcome.
+                self.end_child(*child);
+                Ok(Completion::ChildExit(status))
+            }
+            Request::ChildKill { process, child } => {
+                let (world, _) = self.child_grant(*process, *child)?;
+                match world {
+                    ProcessWorld::Script(_) => self.script_child(*child)?.kill(),
+                    ProcessWorld::Host => {
+                        if host(HostCall::Kill { child: *child })? != Completion::ChildUnit(Ok(()))
+                        {
+                            return Err(AdapterError::InvalidCompletion);
+                        }
+                    }
+                }
+                Ok(Completion::ChildUnit(Ok(())))
+            }
+            // A dropped Child: its input closes first, so an unmet Expect still fails.
+            Request::Close { handle } => {
+                let Some(Grant::Child {
+                    world, stdin_open, ..
+                }) = self.handles.rows.get(handle).cloned()
+                else {
+                    return Err(AdapterError::InvalidHandle(*handle));
+                };
+                let report = match world {
+                    ProcessWorld::Script(_) if stdin_open => {
+                        self.script_child(*handle)?.close_stdin()
+                    }
+                    ProcessWorld::Script(_) => None,
+                    ProcessWorld::Host => {
+                        if host(HostCall::Close { child: *handle })? != Completion::Unit(Ok(())) {
+                            return Err(AdapterError::InvalidCompletion);
+                        }
+                        None
+                    }
+                };
+                self.end_child(*handle);
+                Ok(match report {
+                    Some(report) => self.child_failure(&report),
+                    None => Completion::Unit(Ok(())),
+                })
+            }
             _ => Err(AdapterError::InvalidCompletion),
         }
+    }
+    /// The world and input state of `child`, which must be a Child of `process` (CAP-2).
+    fn child_grant(&self, process: u64, child: u64) -> Result<(ProcessWorld, bool), AdapterError> {
+        self.process_grant(process)?;
+        match self.handles.rows.get(&child) {
+            Some(Grant::Child {
+                process: owner,
+                world,
+                stdin_open,
+            }) if *owner == process => Ok((*world, *stdin_open)),
+            _ => Err(AdapterError::InvalidHandle(child)),
+        }
+    }
+    fn script_child(&mut self, child: u64) -> Result<&mut ScriptChild, AdapterError> {
+        self.script_children
+            .get_mut(&child)
+            .ok_or(AdapterError::InvalidCompletion)
+    }
+    fn close_child_input(&mut self, child: u64) {
+        if let Some(Grant::Child { stdin_open, .. }) = self.handles.rows.get_mut(&child) {
+            *stdin_open = false;
+        }
+    }
+    fn end_child(&mut self, child: u64) {
+        self.handles.rows.remove(&child);
+        self.script_children.remove(&child);
+    }
+    /// A scripted child's LANG-9 failure, after its Test report.
+    fn child_failure(&mut self, report: &str) -> Completion {
+        self.stdout.extend_from_slice(report.as_bytes());
+        Completion::Checked(false)
     }
 }
 
 pub(crate) fn is_process_request(request: &Request) -> bool {
     matches!(
         request,
-        Request::Process { .. } | Request::TestProcess { .. } | Request::ProcessRun { .. }
+        Request::Process { .. }
+            | Request::TestProcess { .. }
+            | Request::ProcessRun { .. }
+            | Request::ProcessSpawn { .. }
+            | Request::ChildWrite { .. }
+            | Request::ChildCloseStdin { .. }
+            | Request::ChildRead { .. }
+            | Request::ChildWait { .. }
+            | Request::ChildKill { .. }
     )
 }
 
-fn spawn_failure(error: &std::io::Error) -> ProcessFailure {
+pub(crate) fn spawn_failure(error: &std::io::Error) -> ProcessFailure {
     match error.kind() {
         std::io::ErrorKind::NotFound => ProcessFailure::NotFound,
         std::io::ErrorKind::PermissionDenied => ProcessFailure::PermissionDenied,
@@ -274,14 +572,14 @@ fn signaled(fd: Option<RawFd>) -> bool {
 }
 
 /// How a bounded wait for the child ended.
-enum Ended {
+pub(crate) enum Ended {
     Exited(std::process::ExitStatus),
     Expired,
     Canceled,
 }
 
 /// Wait for `child` to exit, until `deadline` or until `cancel` is readable.
-fn wait_child(
+pub(crate) fn wait_child(
     child: &mut std::process::Child,
     deadline: Option<u64>,
     cancel: Option<RawFd>,
@@ -535,7 +833,7 @@ pub(crate) fn run_cooperative(
 /// Run `body` with SIGPIPE blocked on this thread, then discard a SIGPIPE it raised:
 /// a child that closes its stdin early must not end the program, whose disposition of
 /// SIGPIPE is not the runtime's to change.
-fn without_sigpipe<T>(body: impl FnOnce() -> T) -> T {
+pub(crate) fn without_sigpipe<T>(body: impl FnOnce() -> T) -> T {
     // SAFETY: sigset_t values are initialized by sigemptyset before use, and the
     // thread mask is restored before returning.
     unsafe {
@@ -807,8 +1105,8 @@ unsafe fn child_script(at: *const u8) -> ChildRun {
             list(at.add(32).cast::<*mut crate::Header>().read(), 32, |step| {
                 let payload = step.add(8);
                 match step.cast::<u32>().read() {
-                    0 => ChildStep::Stdout(slice(payload)),
-                    1 => ChildStep::Stderr(slice(payload)),
+                    0 => ChildStep::Print(slice(payload)),
+                    1 => ChildStep::PrintErr(slice(payload)),
                     2 => ChildStep::Expect(slice(payload)),
                     3 => ChildStep::Exit(status_of(
                         payload.cast::<u32>().read(),
@@ -913,4 +1211,254 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_process(
     };
     unsafe { out.write(process) };
     crate::STATUS_OK
+}
+
+/// `Result[T, ProcessError]` for an eight-byte `T` (a Child or u64): the tag, then the value
+/// or the ProcessError (u32 tag, payload u32) at 8; 16 bytes, align 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChildWordResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub value: u64,
+}
+impl ChildWordResult {
+    pub fn of(value: Result<u64, ProcessFailure>) -> Self {
+        match value {
+            Ok(value) => Self {
+                value,
+                ..Self::default()
+            },
+            Err(failure) => {
+                let (kind, code) = failure_parts(failure);
+                Self {
+                    tag: 1,
+                    padding: 0,
+                    value: u64::from(kind) | u64::from(code) << 32,
+                }
+            }
+        }
+    }
+}
+/// `Result[T, ProcessError]` for `T` = `()` or `ExitStatus` (u32 tag, i32): the tag, then
+/// the value or the ProcessError at 4; 12 bytes, align 4.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChildPairResult {
+    pub tag: u32,
+    pub kind: u32,
+    pub code: u32,
+}
+impl ChildPairResult {
+    fn unit(value: Result<(), ProcessFailure>) -> Self {
+        value.map_or_else(Self::failure, |()| Self::default())
+    }
+    fn status(value: Result<ExitStatus, ProcessFailure>) -> Self {
+        match value {
+            Ok(ExitStatus::Exited(code)) => Self {
+                tag: 0,
+                kind: 0,
+                code: code as u32,
+            },
+            Ok(ExitStatus::Signaled(signal)) => Self {
+                tag: 0,
+                kind: 1,
+                code: signal as u32,
+            },
+            Err(failure) => Self::failure(failure),
+        }
+    }
+    fn failure(failure: ProcessFailure) -> Self {
+        let (kind, code) = failure_parts(failure);
+        Self { tag: 1, kind, code }
+    }
+}
+
+/// `proc.spawn(p, program, args, dir) -> Result[Child of p, ProcessError]`.
+/// # Safety
+/// Context is bound; Proc, Path, the List[String] block and the `Option[Dir]` (u32 tag, Dir
+/// at 8) are borrowed live values; out is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ChildWordResult,
+    process: *const u64,
+    program: *const u64,
+    args: *mut crate::Header,
+    directory: *const u8,
+) -> u8 {
+    let request = Request::ProcessSpawn {
+        process: unsafe { process.read() },
+        program: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { program.read() }),
+        args: unsafe { list(args, 24, |a| text(a)) },
+        directory: match unsafe { directory.cast::<u32>().read() } {
+            0 => None,
+            _ => Some(unsafe { directory.add(8).cast::<u64>().read() }),
+        },
+    };
+    let Ok(Completion::Spawned(value)) = (unsafe { crate::io::capability_call(ctx, request) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(ChildWordResult::of(value)) };
+    crate::STATUS_OK
+}
+
+/// `child.write(p, mut c, data: Bytes) -> Result[(), ProcessError]`; a scripted child's
+/// contradicted Expect fails LANG-9.
+/// # Safety
+/// Context is bound; p readable; c the exclusive address of a live Child; the data slice
+/// borrowed; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_write(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ChildPairResult,
+    p: *const u64,
+    c: *mut u64,
+    owner: *mut crate::Header,
+    start: u64,
+    length: u64,
+) -> u8 {
+    let request = Request::ChildWrite {
+        process: unsafe { p.read() },
+        child: unsafe { c.read() },
+        bytes: unsafe { crate::io::slice_bytes(owner, start, length) }.to_vec(),
+    };
+    let Some(Completion::ChildUnit(value)) =
+        (unsafe { crate::net_abi::call_recording(ctx, request) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(ChildPairResult::unit(value)) };
+    crate::STATUS_OK
+}
+
+/// `child.close_stdin(p, mut c)`; closing at a scripted child's unmet Expect fails LANG-9.
+/// # Safety
+/// Context is bound; p readable; c the exclusive address of a live Child.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_close_stdin(
+    ctx: *mut crate::RunCtx,
+    p: *const u64,
+    c: *mut u64,
+) -> u8 {
+    let request = Request::ChildCloseStdin {
+        process: unsafe { p.read() },
+        child: unsafe { c.read() },
+    };
+    match unsafe { crate::net_abi::call_recording(ctx, request) } {
+        Some(Completion::ChildUnit(Ok(()))) => crate::STATUS_OK,
+        Some(_) => crate::fault("child completion mismatch"),
+        None => crate::STATUS_FAILURE,
+    }
+}
+
+/// A child read appending to the caller's list, growing it through `hirsel_rt_v2_seq_grow`.
+unsafe fn child_read(
+    ctx: *mut crate::RunCtx,
+    out: *mut ChildWordResult,
+    p: *const u64,
+    c: *mut u64,
+    buffer: *mut *mut crate::Header,
+    max: u64,
+    stream: ChildStream,
+) -> u8 {
+    let request = Request::ChildRead {
+        process: unsafe { p.read() },
+        child: unsafe { c.read() },
+        stream,
+        max,
+    };
+    let Ok(Completion::ChildBytes(value)) = (unsafe { crate::io::capability_call(ctx, request) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    let value = value.map(|bytes| {
+        unsafe { crate::io::append_byte_list(ctx, buffer, &bytes) };
+        bytes.len() as u64
+    });
+    unsafe { out.write(ChildWordResult::of(value)) };
+    crate::STATUS_OK
+}
+
+/// `child.read_stdout(p, mut c, mut buffer: List[u8], max) -> Result[u64, ProcessError]`.
+/// # Safety
+/// Context is bound; p readable; c and buffer exclusive addresses of live values; out
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_read_stdout(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ChildWordResult,
+    p: *const u64,
+    c: *mut u64,
+    buffer: *mut *mut crate::Header,
+    max: u64,
+) -> u8 {
+    unsafe { child_read(ctx, out, p, c, buffer, max, ChildStream::Stdout) }
+}
+
+/// `child.read_stderr`, as [`hirsel_rt_v2_child_read_stdout`].
+/// # Safety
+/// As [`hirsel_rt_v2_child_read_stdout`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_read_stderr(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ChildWordResult,
+    p: *const u64,
+    c: *mut u64,
+    buffer: *mut *mut crate::Header,
+    max: u64,
+) -> u8 {
+    unsafe { child_read(ctx, out, p, c, buffer, max, ChildStream::Stderr) }
+}
+
+/// `child.wait(p, take c) -> Result[ExitStatus, ProcessError]`; the Child is consumed on
+/// every outcome, and closing at a scripted child's unmet Expect fails LANG-9.
+/// # Safety
+/// Context is bound; p readable; c the address of the transferred Child word; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_wait(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ChildPairResult,
+    p: *const u64,
+    c: *mut u64,
+) -> u8 {
+    let request = Request::ChildWait {
+        process: unsafe { p.read() },
+        child: unsafe { c.read() },
+    };
+    // Erasing the transferred word makes accidental reuse fail closed.
+    unsafe { c.write(0) };
+    let Some(Completion::ChildExit(value)) =
+        (unsafe { crate::net_abi::call_recording(ctx, request) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(ChildPairResult::status(value)) };
+    crate::STATUS_OK
+}
+
+/// `child.kill(p, mut c)`.
+/// # Safety
+/// Context is bound; p readable; c the exclusive address of a live Child.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_kill(
+    ctx: *mut crate::RunCtx,
+    p: *const u64,
+    c: *mut u64,
+) -> u8 {
+    let request = Request::ChildKill {
+        process: unsafe { p.read() },
+        child: unsafe { c.read() },
+    };
+    match unsafe { crate::io::capability_call(ctx, request) } {
+        Ok(Completion::ChildUnit(Ok(()))) => crate::STATUS_OK,
+        Ok(_) => crate::fault("child completion mismatch"),
+        Err(()) => crate::STATUS_FAILURE,
+    }
 }

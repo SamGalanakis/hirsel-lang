@@ -1,7 +1,7 @@
 //! Additional typed tape forms for host streams, exact environment reads, processes,
 //! random draws and timer waits.
 use crate::io::{ClockError, Completion, EnvError, InputError, RandomError, Request, WaitError};
-use hirsel_run_config::{ExitStatus, ProcessFailure, ProcessOutcome, hex};
+use hirsel_run_config::{ChildStream, ExitStatus, ProcessFailure, ProcessOutcome, hex};
 
 fn failure_word(failure: ProcessFailure) -> String {
     match failure {
@@ -61,8 +61,54 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             }
             text
         }
+        Request::ProcessSpawn {
+            process,
+            program,
+            args,
+            directory,
+        } => {
+            let mut text = format!(
+                "process_spawn {process} {} {} {}",
+                hex(program.as_bytes()),
+                directory.map_or_else(|| "none".into(), |d| d.to_string()),
+                args.len()
+            );
+            for arg in args {
+                text.push(' ');
+                text.push_str(&hex(arg.as_bytes()));
+            }
+            text
+        }
+        Request::ChildWrite {
+            process,
+            child,
+            bytes,
+        } => format!("child_write {process} {child} {}", hex(bytes)),
+        Request::ChildCloseStdin { process, child } => {
+            format!("child_close_stdin {process} {child}")
+        }
+        Request::ChildRead {
+            process,
+            child,
+            stream,
+            max,
+        } => format!(
+            "child_read {process} {child} {} {max}",
+            match stream {
+                ChildStream::Stdout => "stdout",
+                ChildStream::Stderr => "stderr",
+            }
+        ),
+        Request::ChildWait { process, child } => format!("child_wait {process} {child}"),
+        Request::ChildKill { process, child } => format!("child_kill {process} {child}"),
         _ => return None,
     })
+}
+fn status_words(status: ExitStatus) -> String {
+    match status {
+        ExitStatus::Exited(code) => format!("exited {code}"),
+        ExitStatus::Signaled(signal) => format!("signaled {signal}"),
+    }
 }
 pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
     Some(match completion {
@@ -100,6 +146,22 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         }
         Completion::Process(ProcessOutcome::Error(failure)) => {
             format!("process error {}", failure_word(*failure))
+        }
+        Completion::Spawned(Ok(child)) => format!("spawned ok {child}"),
+        Completion::ChildUnit(Ok(())) => "child_unit ok".into(),
+        Completion::ChildBytes(Ok(bytes)) => format!("child_bytes ok {}", hex(bytes)),
+        Completion::ChildExit(Ok(status)) => format!("child_exit ok {}", status_words(*status)),
+        Completion::Spawned(Err(failure))
+        | Completion::ChildUnit(Err(failure))
+        | Completion::ChildBytes(Err(failure))
+        | Completion::ChildExit(Err(failure)) => {
+            let head = match completion {
+                Completion::Spawned(_) => "spawned",
+                Completion::ChildUnit(_) => "child_unit",
+                Completion::ChildBytes(_) => "child_bytes",
+                _ => "child_exit",
+            };
+            format!("{head} error {}", failure_word(*failure))
         }
         _ => return None,
     })
@@ -201,8 +263,70 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
                 },
             }
         }
+        [
+            "process_spawn",
+            process,
+            program,
+            directory,
+            count,
+            args @ ..,
+        ] => {
+            if number::<usize>(count)? != args.len() {
+                return Err("process tape argument count".into());
+            }
+            Request::ProcessSpawn {
+                process: number(process)?,
+                program: text(program)?,
+                args: args.iter().map(|a| text(a)).collect::<Result<_, _>>()?,
+                directory: match *directory {
+                    "none" => None,
+                    d => Some(number(d)?),
+                },
+            }
+        }
+        ["child_write", process, child, b] => Request::ChildWrite {
+            process: number(process)?,
+            child: number(child)?,
+            bytes: bytes(b)?,
+        },
+        ["child_close_stdin", process, child] => Request::ChildCloseStdin {
+            process: number(process)?,
+            child: number(child)?,
+        },
+        ["child_read", process, child, stream, max] => Request::ChildRead {
+            process: number(process)?,
+            child: number(child)?,
+            stream: match *stream {
+                "stdout" => ChildStream::Stdout,
+                "stderr" => ChildStream::Stderr,
+                _ => return Err("bad child tape stream".into()),
+            },
+            max: number(max)?,
+        },
+        ["child_wait", process, child] => Request::ChildWait {
+            process: number(process)?,
+            child: number(child)?,
+        },
+        ["child_kill", process, child] => Request::ChildKill {
+            process: number(process)?,
+            child: number(child)?,
+        },
         _ => return Ok(None),
     }))
+}
+fn parse_failure(words: &[&str]) -> Result<ProcessFailure, String> {
+    Ok(match words {
+        ["not_granted"] => ProcessFailure::NotGranted,
+        ["invalid_input"] => ProcessFailure::InvalidInput,
+        ["not_found"] => ProcessFailure::NotFound,
+        ["permission_denied"] => ProcessFailure::PermissionDenied,
+        ["output_limit"] => ProcessFailure::OutputLimit,
+        ["fault", code] => ProcessFailure::Fault(number(code)?),
+        ["timed_out"] => ProcessFailure::TimedOut,
+        ["canceled", cause] => ProcessFailure::Canceled(number(cause)?),
+        ["input_closed"] => ProcessFailure::InputClosed,
+        _ => return Err("bad process tape error".into()),
+    })
 }
 pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, String> {
     Ok(Some(match words {
@@ -243,18 +367,28 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
             })
         }
         ["process", "error", failure @ ..] => {
-            Completion::Process(ProcessOutcome::Error(match failure {
-                ["not_granted"] => ProcessFailure::NotGranted,
-                ["invalid_input"] => ProcessFailure::InvalidInput,
-                ["not_found"] => ProcessFailure::NotFound,
-                ["permission_denied"] => ProcessFailure::PermissionDenied,
-                ["output_limit"] => ProcessFailure::OutputLimit,
-                ["fault", code] => ProcessFailure::Fault(number(code)?),
-                ["timed_out"] => ProcessFailure::TimedOut,
-                ["canceled", cause] => ProcessFailure::Canceled(number(cause)?),
-                ["input_closed"] => ProcessFailure::InputClosed,
-                _ => return Err("bad process tape error".into()),
+            Completion::Process(ProcessOutcome::Error(parse_failure(failure)?))
+        }
+        ["spawned", "ok", child] => Completion::Spawned(Ok(number(child)?)),
+        ["child_unit", "ok"] => Completion::ChildUnit(Ok(())),
+        ["child_bytes", "ok", b] => Completion::ChildBytes(Ok(bytes(b)?)),
+        ["child_exit", "ok", kind @ ("exited" | "signaled"), code] => {
+            let code = number(code)?;
+            Completion::ChildExit(Ok(if *kind == "exited" {
+                ExitStatus::Exited(code)
+            } else {
+                ExitStatus::Signaled(code)
             }))
+        }
+        ["spawned", "error", failure @ ..] => Completion::Spawned(Err(parse_failure(failure)?)),
+        ["child_unit", "error", failure @ ..] => {
+            Completion::ChildUnit(Err(parse_failure(failure)?))
+        }
+        ["child_bytes", "error", failure @ ..] => {
+            Completion::ChildBytes(Err(parse_failure(failure)?))
+        }
+        ["child_exit", "error", failure @ ..] => {
+            Completion::ChildExit(Err(parse_failure(failure)?))
         }
         _ => return Ok(None),
     }))

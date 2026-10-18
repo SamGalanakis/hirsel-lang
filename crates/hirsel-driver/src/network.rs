@@ -614,6 +614,9 @@ impl HostLibrary {
             ));
         }
         self.yield_now = true;
+        if name != "proc.run" {
+            return self.host_child(name, a, cx);
+        }
         if let Some(cause) = self.library.cancellation() {
             return Ok(OperationResult::returned(process_value(
                 ProcessOutcome::Error(ProcessFailure::Canceled(cause)),
@@ -640,6 +643,194 @@ impl HostLibrary {
                 kind: name.into(),
                 targets: vec![],
             },
+        })
+    }
+    /// `proc.spawn` or a child operation of a host Proc (`hirsel-rt/src/host_waits.rs`): a
+    /// cancellation point completes Canceled without a request, and a write, read or wait
+    /// parks its task until the child can proceed.
+    fn host_child(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        if let Some(cause) = self.library.cancellation()
+            && let Some(result) = self.child_canceled(name, a, cause, cx)?
+        {
+            return Ok(result);
+        }
+        if !matches!(
+            name,
+            "child.write" | "child.read_stdout" | "child.read_stderr" | "child.wait"
+        ) {
+            return self.child_request(name, a, None, cx);
+        }
+        let token = self.next_wait;
+        self.next_wait += 1;
+        match self.child_request(name, a, Some(token), cx) {
+            Err(Error::Blocked(_)) => {}
+            result => return result,
+        }
+        self.waits.insert(
+            token,
+            HostWait {
+                name: name.into(),
+                arguments: a.to_vec(),
+            },
+        );
+        Ok(OperationResult::Park {
+            token,
+            wait: hirsel_interp::BlockedWait {
+                spawn_path: self.library.task_path(),
+                anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                kind: name.into(),
+                targets: vec![],
+            },
+        })
+    }
+    /// The completion of a cancelled child operation that is a cancellation point; a
+    /// cancelled wait drops the Child it took.
+    fn child_canceled(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        cause: u32,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let canceled = error(hirsel_interp::library::process::failure_value(
+            ProcessFailure::Canceled(cause),
+        ));
+        Ok(Some(match name {
+            "proc.spawn" | "child.write" => OperationResult::returned(canceled),
+            // A zero-byte read is invalid before it is a cancellation point.
+            "child.read_stdout" | "child.read_stderr" if word(&a[3])? != 0 => {
+                OperationResult::returned(canceled)
+            }
+            "child.wait" => {
+                let handle = self.id(&a[1])?;
+                if let Value::Handle { id, .. } = a[1] {
+                    self.handles.remove(&id);
+                }
+                match self.host(R::Close { handle })? {
+                    C::Unit(Ok(())) => OperationResult::returned(canceled).transferring([1]),
+                    C::Checked(false) => hirsel_interp::library::process::child_failure(cx)?,
+                    _ => return Err(invalid()),
+                }
+            }
+            _ => return Ok(None),
+        }))
+    }
+    /// Issue a child request, under `token` when it can park.
+    fn child_request(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        token: Option<u64>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        use hirsel_interp::library::process::{child_failure, failure_value, status_value};
+        let process = self.id(&a[0])?;
+        let request = match name {
+            "proc.spawn" => R::ProcessSpawn {
+                process,
+                program: text(fields(&a[1])?[0])?,
+                args: fields(&a[2])?
+                    .into_iter()
+                    .map(text)
+                    .collect::<Result<_, _>>()?,
+                directory: match tag(&a[3])? {
+                    0 => None,
+                    _ => match self.id(fields(&a[3])?[0]) {
+                        Ok(directory) => Some(directory),
+                        // A test.dir Dir has no host directory to start in.
+                        Err(_) => {
+                            return Ok(OperationResult::returned(error(failure_value(
+                                ProcessFailure::InvalidInput,
+                            ))));
+                        }
+                    },
+                },
+            },
+            "child.write" => R::ChildWrite {
+                process,
+                child: self.id(&a[1])?,
+                bytes: bytes(&a[2])?,
+            },
+            "child.close_stdin" => R::ChildCloseStdin {
+                process,
+                child: self.id(&a[1])?,
+            },
+            "child.read_stdout" | "child.read_stderr" => R::ChildRead {
+                process,
+                child: self.id(&a[1])?,
+                stream: if name == "child.read_stdout" {
+                    hirsel_rt::process::ChildStream::Stdout
+                } else {
+                    hirsel_rt::process::ChildStream::Stderr
+                },
+                max: word(&a[3])?,
+            },
+            "child.wait" => R::ChildWait {
+                process,
+                child: self.id(&a[1])?,
+            },
+            "child.kill" => R::ChildKill {
+                process,
+                child: self.id(&a[1])?,
+            },
+            _ => return Err(Error::Unavailable(format!("host process {name}"))),
+        };
+        if let Some(token) = token {
+            self.io.adapter().enter(token);
+        }
+        let completion = self.host(request);
+        if let Some(token) = token
+            && !matches!(completion, Err(Error::Blocked(_)))
+        {
+            self.io.adapter().finish(token);
+        }
+        let completion = completion?;
+        // The wait consumes its Child on every outcome.
+        if name == "child.wait"
+            && let Value::Handle { id, .. } = a[1]
+        {
+            self.handles.remove(&id);
+        }
+        let mut updates = vec![];
+        let value = match completion {
+            C::Spawned(Ok(child)) => ok(self.handle(child, "Child")),
+            C::ChildUnit(Ok(())) if name == "child.write" => ok(Value::Unit),
+            C::ChildUnit(Ok(())) => Value::Unit,
+            C::ChildBytes(Ok(read)) => {
+                let n = read.len() as u64;
+                let mut buffer = bytes(&a[2])?;
+                buffer.extend_from_slice(&read);
+                updates.push((
+                    2,
+                    sequence(
+                        BuiltinType::List,
+                        buffer.into_iter().map(|b| int(Primitive::U8, b)),
+                    ),
+                ));
+                ok(u64_value(n))
+            }
+            C::ChildExit(Ok(status)) => ok(status_value(status)),
+            C::Spawned(Err(f))
+            | C::ChildUnit(Err(f))
+            | C::ChildBytes(Err(f))
+            | C::ChildExit(Err(f)) => error(failure_value(f)),
+            C::Checked(false) => return child_failure(cx),
+            _ => return Err(invalid()),
+        };
+        Ok(OperationResult::Complete {
+            value,
+            arguments: updates,
+            consumed: if name == "child.wait" {
+                vec![1]
+            } else {
+                vec![]
+            },
+            released: vec![],
         })
     }
     /// Issue `proc.run` under `token`: its completion, or Blocked while the child runs.
@@ -1324,6 +1515,24 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
             };
         }
+        if name.starts_with("child.") {
+            if canceled {
+                self.io.adapter().finish(token);
+                self.waits.remove(&token);
+                let cause = self.library.cancellation().unwrap();
+                return match self.child_canceled(&name, &arguments, cause, cx)? {
+                    Some(result) => Ok(Some(result)),
+                    None => Err(invalid()),
+                };
+            }
+            return match self.child_request(&name, &arguments, Some(token), cx) {
+                Err(Error::Blocked(_)) => Ok(None),
+                result => {
+                    self.waits.remove(&token);
+                    result.map(Some)
+                }
+            };
+        }
         if name == "stdin.read" {
             // A canceled read consumes nothing; the library reports Canceled.
             if canceled {
@@ -1393,7 +1602,8 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 return self.storage(&name, call.arguments).map(Some);
             }
             if name == "io.process"
-                || name == "proc.run" && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+                || (name == "proc.run" || name == "proc.spawn" || name.starts_with("child."))
+                    && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
                 if name == "io.process" {
                     // Validate the Io operand through the ordinary library before projecting it.
@@ -1442,10 +1652,15 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         id: u64,
         cx: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
-        if matches!(kind, "Stream" | "Listener" | "File" | "AtomicFile")
-            && let Some(handle) = self.handles.remove(&id)
+        if matches!(
+            kind,
+            "Stream" | "Listener" | "File" | "AtomicFile" | "Child"
+        ) && let Some(handle) = self.handles.remove(&id)
         {
-            self.host(R::Close { handle })?;
+            // Dropping a scripted child closes its input, which can leave an Expect unmet.
+            if self.host(R::Close { handle })? == C::Checked(false) && kind == "Child" {
+                self.library.fail_drop("scripted child unmet");
+            }
             return Ok(());
         }
         self.library.drop_handle(kind, id, cx)
