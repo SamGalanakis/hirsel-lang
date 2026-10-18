@@ -609,13 +609,19 @@ impl Checker<'_, '_> {
     ) -> Result<TypeId, QueryError> {
         let sharing = sharing_type_parameters(&self.body.types, function);
         let declarations = self.body.resolution.generic_declarations.clone();
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Contract {
+            Value,
+            Fixed,
+            BorrowedParameter,
+        }
         fn walk(
             builder: &mut Checker<'_, '_>,
             formal: TypeId,
             actual: TypeId,
             depth: u32,
             variance: Variance,
-            contract: bool,
+            contract: Contract,
             sharing: &BTreeSet<TypeParamId>,
             declarations: &GenericDeclarations,
         ) -> Result<TypeId, QueryError> {
@@ -623,7 +629,7 @@ impl Checker<'_, '_> {
             let mut row = builder.body.types.get(actual).unwrap().clone();
             if let TypeKind::Parameter(parameter) = expected.kind {
                 if parameter.binder() == GenericBinder::Bound(depth) {
-                    if !contract {
+                    if contract == Contract::Value {
                         let arenas = builder.arena_places(actual);
                         return generic_type_argument(&mut builder.body.types, actual, |o| {
                             arenas.contains(o)
@@ -635,6 +641,17 @@ impl Checker<'_, '_> {
                             })
                         });
                     }
+                    // A callback's borrow of an abstract T is an access view,
+                    // unlike T's declared relation in a nominal type argument.
+                    let actual = if contract == Contract::BorrowedParameter {
+                        row.modes.relation = row
+                            .modes
+                            .relation
+                            .retain(|r| !matches!(r, Reach::Environment));
+                        builder.body.types.push(row.clone())
+                    } else {
+                        actual
+                    };
                     if expected.sendability_requirement == SendabilityRequirement::Sendable {
                         row.sendability_requirement = SendabilityRequirement::None;
                         if !matches!(
@@ -661,20 +678,28 @@ impl Checker<'_, '_> {
                         builder.body.types = store;
                         return result;
                     }
+                    return Ok(actual);
                 }
                 return Ok(actual);
             }
             let edges = expected.kind.graph_edges();
             let actual_edges = row.kind.graph_edges();
             let mut replacement = Vec::new();
-            for ((a, b), child) in edges
+            for (index, ((a, b), child)) in edges
                 .into_iter()
                 .zip(actual_edges)
                 .zip(variance.edges(&expected.kind))
+                .enumerate()
             {
                 let contract = match a.role {
-                    TypeEdgeRole::TypeArgument | TypeEdgeRole::FunctionParameter => true,
-                    TypeEdgeRole::FunctionResult | TypeEdgeRole::FunctionError => false,
+                    TypeEdgeRole::FunctionParameter
+                        if matches!(&expected.kind, TypeKind::Function(f)
+                            if f.parameters[index].passing != ast::PassingMode::Take) =>
+                    {
+                        Contract::BorrowedParameter
+                    }
+                    TypeEdgeRole::TypeArgument | TypeEdgeRole::FunctionParameter => Contract::Fixed,
+                    TypeEdgeRole::FunctionResult | TypeEdgeRole::FunctionError => Contract::Value,
                     TypeEdgeRole::Component => contract,
                 };
                 replacement.push(walk(
@@ -740,7 +765,7 @@ impl Checker<'_, '_> {
             } else {
                 Variance::Exact
             },
-            false,
+            Contract::Value,
             &sharing,
             &declarations,
         )

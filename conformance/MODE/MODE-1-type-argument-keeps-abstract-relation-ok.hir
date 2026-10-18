@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: accept
+resource type Holder[T: copyable] {
+  value: T,
+}
+drop(x) {
+  keep(copy x.value)
+}
+
+type Pair[T: copyable] {
+  first: Holder[(T, T)],
+}
+
+fn keep[T: copyable](value: T) -> () {}
+
+fn pairs[T: copyable](value: T) -> () {
+  let pair = Pair(first: Holder(value: (copy value, copy value)))
+}

@@ -342,3 +342,10 @@ Call completion proves Serializable for every inferred actual before generic val
 Shape mismatch diagnostics print both expected and actual source-shaped types, with iterative graph traversal and cycle detection. Bytes loops yield u8 through checked bytes.len and index operations; mutable Bytes iteration is rejected before publication.
 
 Contextual variants use the complete expected type before global-definition fallback, including nested generic constructor arguments. The selected constructor replaces stale resolver context and is published to the later phases. Local and parameter lookup retains precedence.
+
+Generic callback inference removes the borrowed parameter's Environment access
+relation for abstract type parameters as well as concrete types. A callback's
+borrow of T cannot change a separate callback's promised T result; named source
+relations and explicit placement remain part of the inferred contract. Nominal
+type arguments and taken callback parameters retain their declared abstract
+relations.

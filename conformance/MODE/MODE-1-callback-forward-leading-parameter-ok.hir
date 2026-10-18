@@ -1,0 +1,23 @@
+// rule: MODE-1
+// expect: accept
+fn cases[T](t: Test, count: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
+  let value = gen(t)
+  core@1/test.check(t, law(value))
+}
+
+fn all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
+  cases(t, 100, gen, law)
+}
+
+fn generate(t: Test) -> u64 {
+  7
+}
+
+fn holds(n: u64) -> bool uses {} {
+  n == 7
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  all(t, generate, holds)
+  Ok(())
+}

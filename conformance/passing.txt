@@ -1949,6 +1949,7 @@ conformance/MODE/MODE-1-borrowed-relation-keeps-own-root-bad.hir
 conformance/MODE/MODE-1-borrowed-relation-keeps-own-root-ok.hir
 conformance/MODE/MODE-1-borrowed-result-bad.hir
 conformance/MODE/MODE-1-borrowed-result-ok.hir
+conformance/MODE/MODE-1-callback-forward-leading-parameter-ok.hir
 conformance/MODE/MODE-1-called-closure-local-result-bad.hir
 conformance/MODE/MODE-1-called-closure-local-result-ok.hir
 conformance/MODE/MODE-1-caller-local-field-reception-bad.hir
@@ -2222,6 +2223,7 @@ conformance/MODE/MODE-1-temporary-source-ok.hir
 conformance/MODE/MODE-1-temporary-source-replaced-bad.hir
 conformance/MODE/MODE-1-trim-split-copy-bad.hir
 conformance/MODE/MODE-1-trim-split-unique-run.hir
+conformance/MODE/MODE-1-type-argument-keeps-abstract-relation-ok.hir
 conformance/MODE/MODE-1-unique-local-taken-stays-local-bad.hir
 conformance/MODE/MODE-1-unique-local-taken-stays-local-ok.hir
 conformance/MODE/MODE-1-unique-taken-argument-bad.hir
