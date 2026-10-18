@@ -1606,34 +1606,42 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
         include_str!("../../../examples/testrun/hirsel.json"),
     );
     let root = example.dir.canonicalize().unwrap();
-    let marker = root.join("survived");
+    let pid = root.join("hang.pid");
     let script = |name: &str, body: String| {
         let path = root.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     };
+    // No outcome races the clock: a test that ends by itself has an hour, and the hung test
+    // never ends by itself, so only its deadline can stop it.
     let cases = [
         (
             script(
                 "pass.sh",
                 "echo one\nprintf 'two\\nthr'\nsleep 0.1\necho ee\n".into(),
             ),
+            "3600000",
             "| one\n| two\n| three\nPASS\n",
         ),
         (
             script("fail.sh", "echo bad\nexit 3\n".into()),
+            "3600000",
             "| bad\nFAIL: exit 3\n",
         ),
         (
             script(
                 "hang.sh",
-                format!("echo started\nsleep 2\ntouch {}\n", marker.display()),
+                format!(
+                    "echo $$ > {}\necho started\nexec sleep 3600\n",
+                    pid.display()
+                ),
             ),
+            "300",
             "| started\nTIMEOUT\n",
         ),
     ];
-    for (program, expected) in &cases {
+    for (program, limit, expected) in &cases {
         let grants = root.join("grants.json");
         std::fs::write(
             &grants,
@@ -1643,7 +1651,7 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
                 "monotonic_clock": "clock.monotonic.ns@1",
                 "dirs": [],
                 "process": {"provider": "process.spawn@1", "rules": [{"program": program}]},
-            }, "args": [program, "300"]})
+            }, "args": [program, limit]})
             .to_string(),
         )
         .unwrap();
@@ -1664,9 +1672,21 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
                 program.display(),
                 String::from_utf8_lossy(&output.stderr)
             );
+            if program.ends_with("hang.sh") {
+                // The deadline killed and reaped the hung test before testrun exited.
+                let hung = std::fs::read_to_string(&pid).unwrap();
+                let alive = Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(format!("kill -0 {} 2>/dev/null", hung.trim()))
+                    .status()
+                    .unwrap();
+                assert!(
+                    !alive.success(),
+                    "native={native}: the hung test {} survived",
+                    hung.trim()
+                );
+                std::fs::remove_file(&pid).unwrap();
+            }
         }
     }
-    // The deadline killed the hung test before it could leave its marker.
-    std::thread::sleep(std::time::Duration::from_millis(2500));
-    assert!(!marker.exists());
 }
