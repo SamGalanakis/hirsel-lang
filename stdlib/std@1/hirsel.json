@@ -560,6 +560,36 @@
       ]
     },
     {
+      "path": "digest.hir",
+      "module": [
+        "digest"
+      ]
+    },
+    {
+      "path": "constant_time.hir",
+      "module": [
+        "constant_time"
+      ]
+    },
+    {
+      "path": "hmac.hir",
+      "module": [
+        "hmac"
+      ]
+    },
+    {
+      "path": "hkdf.hir",
+      "module": [
+        "hkdf"
+      ]
+    },
+    {
+      "path": "pbkdf2.hir",
+      "module": [
+        "pbkdf2"
+      ]
+    },
+    {
       "path": "unicode_properties.hir",
       "module": [
         "unicode"

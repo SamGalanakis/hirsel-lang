@@ -526,3 +526,8 @@ pub fn digest(data: Bytes) -> Inline[u8, 64] uses {} {
 pub fn digest_hex(data: Bytes) -> unique String uses {} {
   std@1/hex.encode(std@1/bytes.from_inline(digest(data)))
 }
+
+// The dictionary that keys HMAC, HKDF and PBKDF2 with this hash.
+pub fn hash() -> std@1/digest.Hash[State, 64] uses {} {
+  std@1/digest.Hash(new: new, update: update, finish: finish, block_size: 128)
+}

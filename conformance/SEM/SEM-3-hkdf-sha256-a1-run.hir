@@ -1,0 +1,17 @@
+// rule: SEM-3
+// expect: run
+// RFC 5869 test case 1 (HKDF-SHA-256), through hkdf.derive.
+pub fn main() -> Result[(), ()] {
+  let okm = std@1/hkdf.derive(
+    std@1/sha256.hash(),
+    b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c",
+    b"\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b",
+    b"\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9",
+    42
+  )
+  failure.check(
+    std@1/hex.encode(okm) == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+    TextInvariant()
+  )
+  Ok(())
+}

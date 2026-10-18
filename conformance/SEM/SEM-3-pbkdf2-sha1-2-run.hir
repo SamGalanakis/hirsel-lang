@@ -1,0 +1,17 @@
+// rule: SEM-3
+// expect: run
+// RFC 6070 test 5 inputs at 2 iterations: PBKDF2-HMAC-SHA-1, 2 iterations, 25 bytes.
+pub fn main() -> Result[(), ()] {
+  let key = std@1/pbkdf2.derive(
+    std@1/sha1.hash(),
+    b"passwordPASSWORDpassword",
+    b"saltSALTsaltSALTsaltSALTsaltSALTsalt",
+    2,
+    25
+  )
+  failure.check(
+    std@1/hex.encode(key) == "8f2c3482e40bdbe537935153ef1692de0c7f4740bef78dd940",
+    TextInvariant()
+  )
+  Ok(())
+}

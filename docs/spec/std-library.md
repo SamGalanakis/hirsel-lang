@@ -1448,6 +1448,74 @@ slicing-by-8 or carry-less multiply); Adler-32 two additions per byte and two
 remainders per 5552 bytes; xxHash64 four multiply-rotate lanes per 32 bytes. They
 cost a small fraction of a cryptographic digest per byte. There is no bench gate.
 
+## Hash dictionaries, HMAC and key derivation
+
+`std@1/digest` names a cryptographic hash as an explicit dictionary
+([GEN-2](generics.md#gen-2-dictionaries)), the role Go's `hash.Hash` constructor
+plays for `crypto/hmac`:
+
+```text
+pub type digest.Hash[S: plain + inert, n: size] {
+  new: fn() -> S uses {},
+  update: fn(mut S, Bytes) -> () uses {},
+  finish: fn(take S) -> Inline[u8, n] uses {},
+  block_size: u64,
+}
+fn <hash>.hash() -> digest.Hash[State, n] uses {}
+```
+
+`sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha512_256`, `blake2b` and
+`blake2s` each return theirs from `hash()`, with block sizes 64, 64, 64, 128, 128,
+128, 128 and 64. `md5` has none, so it cannot key an HMAC, and the checksums have
+none. A record holding functions is not a compile-time constant, hence a function.
+Every operation below is generic over `[S: plain + inert, n: size]`, takes the
+dictionary first, and is ordinary allocating source:
+
+```text
+fn hmac.new(hash: digest.Hash[S, n], key: Bytes) -> hmac.State[S] uses {}
+fn hmac.update(hash: digest.Hash[S, n], mut state: hmac.State[S], data: Bytes) -> () uses {}
+fn hmac.finish(hash: digest.Hash[S, n], take state: hmac.State[S]) -> Inline[u8, n] uses {}
+fn hmac.mac(hash: digest.Hash[S, n], key: Bytes, data: Bytes) -> Inline[u8, n] uses {}
+fn hmac.verify(hash: digest.Hash[S, n], key: Bytes, data: Bytes, expected: Bytes) -> bool uses {}
+fn hkdf.extract(hash: digest.Hash[S, n], salt: Bytes, secret: Bytes) -> Inline[u8, n] uses {}
+fn hkdf.expand(hash: digest.Hash[S, n], prk: Bytes, info: Bytes, length: u64) -> unique Bytes uses {}
+fn hkdf.derive(hash: digest.Hash[S, n], salt: Bytes, secret: Bytes, info: Bytes, length: u64) -> unique Bytes uses {}
+fn pbkdf2.derive(hash: digest.Hash[S, n], password: Bytes, salt: Bytes, iterations: u64, length: u64) -> unique Bytes uses {}
+fn constant_time.equal(a: Bytes, b: Bytes) -> bool uses {}
+```
+
+HMAC is RFC 2104: a key longer than the block is hashed first, then the key is
+zero-padded to the block and masked with 0x36 (inner) and 0x5c (outer). The opaque
+`hmac.State[S]` is `plain + inert`, so copying a keyed state reuses its two
+compressed pad blocks; HKDF and PBKDF2 key once and copy per block or iteration.
+`hmac.verify` compares through `constant_time.equal`; comparing tags with `==`
+leaks how many leading bytes match. HKDF is RFC 5869: an empty salt is the RFC's
+default of `n` zero bytes (HMAC pads both identically), and `expand` fails SEM-3
+when `length` exceeds 255 * n. PBKDF2 is RFC 8018 with HMAC as the PRF: block
+indices are big-endian 32-bit, `iterations` below 1 and `length` above
+(2^32 - 1) * n fail SEM-3. PBKDF2 is a password-based key derivation function of
+the 2000s; choose its iteration count for the deployment, as current guidance
+asks for hundreds of thousands with SHA-256.
+
+**Constant time.** `constant_time.equal` returns whether `a` and `b` have equal
+length and contents. Lengths are public: unequal lengths return false at once. For
+equal lengths it reads every byte pair, ORs their XOR into one accumulator, and
+tests the accumulator once after the loop: there is no early exit, and the
+executed operation sequence (which instructions run, in which order, how many
+times) depends only on the length, never on the contents or on where they differ.
+This is the property Go's `crypto/subtle.ConstantTimeCompare` states; it promises
+nothing about what a native code generator or processor does below the operation
+sequence. The driver test `stdlib_constant_time` checks it on the reference
+interpreter: the full instruction and terminator trace and the step count of
+`equal` on 32 equal bytes are identical to those when the inputs differ at the
+first, middle or last byte, and its control shows an early-exit comparison changes
+that trace.
+
+Throughput: HMAC costs two extra compressions per key (the pads, done once per
+`new`), plus two finishes per tag; HKDF one HMAC per output block; PBKDF2 two
+compressions per iteration per output block, which is its intended cost.
+`constant_time.equal` is one pass. There is no bench gate.
+
 ## FNV-1a hashing
 
 `std@1/fnv` implements 64-bit FNV-1a in ordinary, allocation-free source, with the

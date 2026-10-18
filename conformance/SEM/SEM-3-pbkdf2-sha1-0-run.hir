@@ -1,0 +1,11 @@
+// rule: SEM-3
+// expect: run
+// RFC 6070 test 1: PBKDF2-HMAC-SHA-1, 1 iteration, 20 bytes.
+pub fn main() -> Result[(), ()] {
+  let key = std@1/pbkdf2.derive(std@1/sha1.hash(), b"password", b"salt", 1, 20)
+  failure.check(
+    std@1/hex.encode(key) == "0c60c80f961f0e71f3a9b524af6012062fe037a6",
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,15 @@
+// Go crypto/subtle ConstantTimeCompare (BSD-3-Clause): equality whose operation
+// sequence depends only on the input lengths, never on their contents.
+pub fn equal(a: Bytes, b: Bytes) -> bool uses {} {
+  let len = core@1/bytes.len(a)
+  if len != core@1/bytes.len(b) {
+    return false
+  }
+  let mut difference: u8 = 0
+  let mut i: u64 = 0
+  while i < len {
+    difference = difference | a[i] ^ b[i]
+    i += 1
+  }
+  difference == 0
+}

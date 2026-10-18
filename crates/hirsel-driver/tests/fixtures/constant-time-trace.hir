@@ -1,0 +1,21 @@
+// The control for the constant-time trace test: an equality that returns at the
+// first differing byte, so its operation sequence depends on the contents.
+pub fn early_exit(a: Bytes, b: Bytes) -> bool uses {} {
+  if bytes.len(a) != bytes.len(b) {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < bytes.len(a) {
+    if a[i] != b[i] {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(std@1/constant_time.equal(b"a", b"a"), TextInvariant())
+  failure.check(early_exit(b"a", b"a"), TextInvariant())
+  Ok(())
+}

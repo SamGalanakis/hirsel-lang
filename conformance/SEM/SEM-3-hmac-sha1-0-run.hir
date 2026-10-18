@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// RFC 2202 HMAC-SHA1 test cases 2, 6 and 7 and the FIPS 198 block-sized key
+// sample from Go crypto/hmac, verified through hmac.verify.
+fn check(key: Bytes, data: Bytes, expected: String) -> () {
+  let Ok(tag) = std@1/hex.decode(expected) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(std@1/hmac.verify(std@1/sha1.hash(), key, data, tag), TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    b"Jefe",
+    b"what do ya want for nothing?",
+    "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"
+  )
+  check(
+    b"\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa",
+    b"Test Using Larger Than Block-Size Key - Hash Key First",
+    "aa4ae5e15272d00e95705637ce8a3b55ed402112"
+  )
+  Ok(())
+}

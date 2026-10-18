@@ -1,0 +1,22 @@
+// rule: SEM-3
+// expect: run
+// RFC 4231 test case 7 inputs under HMAC-BLAKE2b, against Python hmac, verified through hmac.verify.
+fn check(key: Bytes, data: Bytes, expected: String) -> () {
+  let Ok(tag) = std@1/hex.decode(expected) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(
+    std@1/hmac.verify(std@1/blake2b.hash(), key, data, tag),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    b"\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa",
+    b"This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.",
+    "ab347980a64b5e825dd10e7d32fd43a01a8e6dea267ab9ad7d913524526618925311afbcb0c49519cbebdd709540a8d725fb911ac2aee9b2a3aa43d796123393"
+  )
+  Ok(())
+}

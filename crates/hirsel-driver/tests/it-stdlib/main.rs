@@ -4,6 +4,7 @@
 #[path = "../support/source_std.rs"]
 mod source_std;
 mod source_std_cache;
+mod stdlib_constant_time;
 mod stdlib_deque;
 mod stdlib_float_math;
 mod stdlib_graphemes;

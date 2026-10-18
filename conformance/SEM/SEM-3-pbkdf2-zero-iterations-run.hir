@@ -1,0 +1,8 @@
+// rule: SEM-3
+// expect: run
+// PBKDF2 with one iteration is the least accepted count; the -fail twin uses zero.
+pub fn main() -> Result[(), ()] {
+  let key = std@1/pbkdf2.derive(std@1/sha1.hash(), b"password", b"salt", 1, 20)
+  failure.check(bytes.len(key) == 20, TextInvariant())
+  Ok(())
+}

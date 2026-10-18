@@ -1,0 +1,8 @@
+// A cryptographic hash as an explicit dictionary (GEN-2), like Go's hash.Hash
+// constructor argument to crypto/hmac: HMAC, HKDF and PBKDF2 are generic over it.
+pub type Hash[S: plain + inert, n: size] {
+  new: fn() -> S uses {},
+  update: fn(mut S, Bytes) -> () uses {},
+  finish: fn(take S) -> Inline[u8, n] uses {},
+  block_size: u64,
+}

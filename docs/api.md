@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1142 exported definitions; 315 variants.
+1162 exported definitions; 315 variants.
 
 ## Types and roots
 
@@ -2056,6 +2056,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/blake2b/State`](#def-std_401_2fblake2b_2fState)
 
+<a id="def-std_401_2fblake2b_2fhash"></a>
+
+- `pub fn blake2b.hash() -> std@1/digest.Hash[State, 64] uses {}`
+
+References: [`std@1/blake2b/State`](#def-std_401_2fblake2b_2fState), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
+
 <a id="def-std_401_2fblake2b_2fnew"></a>
 
 - `@noalloc pub fn blake2b.new() -> State uses {}`
@@ -2098,6 +2104,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 - `@noalloc pub fn blake2s.finish(take state: State) -> Inline[u8, 32] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/blake2s/State`](#def-std_401_2fblake2s_2fState)
+
+<a id="def-std_401_2fblake2s_2fhash"></a>
+
+- `pub fn blake2s.hash() -> std@1/digest.Hash[State, 32] uses {}`
+
+References: [`std@1/blake2s/State`](#def-std_401_2fblake2s_2fState), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
 
 <a id="def-std_401_2fblake2s_2fnew"></a>
 
@@ -2550,6 +2562,15 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 <a id="def-core_401_2fcodegen_2fbody"></a>
 
 - `fn codegen.body[F](text: String) -> Body[F]`
+
+
+## constant_time
+
+<a id="def-std_401_2fconstant_5ftime_2fequal"></a>
+
+- `pub fn constant_time.equal(a: Bytes, b: Bytes) -> bool uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool)
 
 
 ## cookie
@@ -3324,6 +3345,15 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 - `pub fn derive.parsed[N, E](take value: Result[N, E], ty: String) -> Result[N, String] uses {value}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
+
+## digest
+
+<a id="def-std_401_2fdigest_2fHash"></a>
+
+- `pub type digest.Hash[S: plain + inert, n: size] { new: fn() -> S uses {}, update: fn(mut S, Bytes) -> () uses {}, finish: fn(take S) -> Inline[u8, n] uses {}, block_size: u64, }`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
 
 
 ## dir
@@ -4232,6 +4262,64 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 - `pub fn hex.encode(data: Bytes) -> unique String uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+
+## hkdf
+
+<a id="def-std_401_2fhkdf_2fderive"></a>
+
+- `pub fn hkdf.derive[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], salt: Bytes, secret: Bytes, info: Bytes, length: u64 ) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
+
+<a id="def-std_401_2fhkdf_2fexpand"></a>
+
+- `pub fn hkdf.expand[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], prk: Bytes, info: Bytes, length: u64 ) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
+
+<a id="def-std_401_2fhkdf_2fextract"></a>
+
+- `pub fn hkdf.extract[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], salt: Bytes, secret: Bytes ) -> Inline[u8, n] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
+
+
+## hmac
+
+<a id="def-std_401_2fhmac_2fState"></a>
+
+- `pub opaque type hmac.State[S: plain + inert]: plain + inert uses {}`
+
+<a id="def-std_401_2fhmac_2ffinish"></a>
+
+- `pub fn hmac.finish[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], take state: State[S] ) -> Inline[u8, n] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/hmac/State`](#def-std_401_2fhmac_2fState)
+
+<a id="def-std_401_2fhmac_2fmac"></a>
+
+- `pub fn hmac.mac[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], key: Bytes, data: Bytes ) -> Inline[u8, n] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
+
+<a id="def-std_401_2fhmac_2fnew"></a>
+
+- `pub fn hmac.new[S: plain + inert, n: size](hash: std@1/digest.Hash[S, n], key: Bytes) -> State[ S ] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/hmac/State`](#def-std_401_2fhmac_2fState)
+
+<a id="def-std_401_2fhmac_2fupdate"></a>
+
+- `pub fn hmac.update[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], mut state: State[S], data: Bytes ) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/hmac/State`](#def-std_401_2fhmac_2fState)
+
+<a id="def-std_401_2fhmac_2fverify"></a>
+
+- `pub fn hmac.verify[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], key: Bytes, data: Bytes, expected: Bytes ) -> bool uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
 
 
 ## http
@@ -6230,6 +6318,15 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core
 - `fn path.text(p: Path) -> String`
 
 
+## pbkdf2
+
+<a id="def-std_401_2fpbkdf2_2fderive"></a>
+
+- `pub fn pbkdf2.derive[S: plain + inert, n: size]( hash: std@1/digest.Hash[S, n], password: Bytes, salt: Bytes, iterations: u64, length: u64 ) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
+
+
 ## priority_queue
 
 <a id="def-std_401_2fpriority_5fqueue_2fHeap"></a>
@@ -6588,6 +6685,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha1/State`](#def-std_401_2fsha1_2fState)
 
+<a id="def-std_401_2fsha1_2fhash"></a>
+
+- `pub fn sha1.hash() -> std@1/digest.Hash[State, 20] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha1/State`](#def-std_401_2fsha1_2fState)
+
 <a id="def-std_401_2fsha1_2fnew"></a>
 
 - `@noalloc pub fn sha1.new() -> State uses {}`
@@ -6624,6 +6727,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 - `@noalloc pub fn sha224.finish(take state: State) -> Inline[u8, 28] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha224/State`](#def-std_401_2fsha224_2fState)
+
+<a id="def-std_401_2fsha224_2fhash"></a>
+
+- `pub fn sha224.hash() -> std@1/digest.Hash[State, 28] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha224/State`](#def-std_401_2fsha224_2fState)
 
 <a id="def-std_401_2fsha224_2fnew"></a>
 
@@ -6662,6 +6771,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha256/State`](#def-std_401_2fsha256_2fState)
 
+<a id="def-std_401_2fsha256_2fhash"></a>
+
+- `pub fn sha256.hash() -> std@1/digest.Hash[State, 32] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha256/State`](#def-std_401_2fsha256_2fState)
+
 <a id="def-std_401_2fsha256_2fnew"></a>
 
 - `@noalloc pub fn sha256.new() -> State uses {}`
@@ -6698,6 +6813,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 - `@noalloc pub fn sha384.finish(take state: State) -> Inline[u8, 48] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
+
+<a id="def-std_401_2fsha384_2fhash"></a>
+
+- `pub fn sha384.hash() -> std@1/digest.Hash[State, 48] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
 
 <a id="def-std_401_2fsha384_2fnew"></a>
 
@@ -6736,6 +6857,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha512/State`](#def-std_401_2fsha512_2fState)
 
+<a id="def-std_401_2fsha512_2fhash"></a>
+
+- `pub fn sha512.hash() -> std@1/digest.Hash[State, 64] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha512/State`](#def-std_401_2fsha512_2fState)
+
 <a id="def-std_401_2fsha512_2fnew"></a>
 
 - `@noalloc pub fn sha512.new() -> State uses {}`
@@ -6772,6 +6899,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 - `@noalloc pub fn sha512_256.finish(take state: State) -> Inline[u8, 32] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
+
+<a id="def-std_401_2fsha512_5f256_2fhash"></a>
+
+- `pub fn sha512_256.hash() -> std@1/digest.Hash[State, 32] uses {}`
+
+References: [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash), [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
 
 <a id="def-std_401_2fsha512_5f256_2fnew"></a>
 

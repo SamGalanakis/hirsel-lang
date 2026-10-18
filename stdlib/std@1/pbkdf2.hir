@@ -1,0 +1,56 @@
+// RFC 8018 PBKDF2 with HMAC over any digest.Hash, from Go
+// crypto/internal/fips140/pbkdf2 pbkdf2.go (BSD-3-Clause). The password is keyed
+// into HMAC once; every iteration copies that keyed state.
+// `length` bytes from `iterations` rounds per block. `iterations` is at least 1 and
+// `length` at most (2^32 - 1) * n, otherwise SEM-3.
+pub fn derive[S: plain + inert, n: size](
+  hash: std@1/digest.Hash[S, n],
+  password: Bytes,
+  salt: Bytes,
+  iterations: u64,
+  length: u64
+) -> unique Bytes uses {} {
+  core@1/failure.check(iterations >= 1, TextInvariant())
+  core@1/failure.check(length <= 4294967295 * n, TextInvariant())
+  let keyed = std@1/hmac.new(hash, password)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, length)
+  let mut index: u32 = 1
+  while core@1/list.len(out) < length {
+    let mut state = keyed
+    std@1/hmac.update(hash, mut state, salt)
+    std@1/hmac.update(
+      hash,
+      mut state,
+      core@1/bytes.from_list(
+        [
+          core@1/int.truncate(index >> 24),
+          core@1/int.truncate(index >> 16),
+          core@1/int.truncate(index >> 8),
+          core@1/int.truncate(index)
+        ]
+      )
+    )
+    let mut u = std@1/hmac.finish(hash, take state)
+    let mut t = u
+    let mut round: u64 = 1
+    while round < iterations {
+      let mut next = keyed
+      std@1/hmac.update(hash, mut next, std@1/bytes.from_inline(u))
+      u = std@1/hmac.finish(hash, take next)
+      let mut i: u64 = 0
+      while i < n {
+        t[i] = t[i] ^ u[i]
+        i += 1
+      }
+      round += 1
+    }
+    let mut i: u64 = 0
+    while i < n && core@1/list.len(out) < length {
+      core@1/list.push(mut out, t[i])
+      i += 1
+    }
+    index += 1
+  }
+  core@1/bytes.from_list(take out)
+}

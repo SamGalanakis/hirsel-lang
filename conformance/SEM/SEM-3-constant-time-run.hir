@@ -1,0 +1,45 @@
+// rule: SEM-3
+// expect: run
+// Go crypto/subtle ConstantTimeCompare vectors in both argument orders, and
+// hmac.verify accepting a true HMAC-SHA1 tag and rejecting one flipped bit.
+fn same(a: Bytes, b: Bytes, expected: bool) -> () {
+  failure.check(std@1/constant_time.equal(a, b) == expected, TextInvariant())
+  failure.check(std@1/constant_time.equal(b, a) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  same(b"", b"", true)
+  same(b"\x11", b"\x11", true)
+  same(b"\x12", b"\x11", false)
+  same(b"\x11", b"\x11\x12", false)
+  same(b"\x11\x12", b"\x11", false)
+  same(b"abc", b"abc", true)
+  same(b"xbc", b"abc", false)
+  same(b"abx", b"abc", false)
+  let tag = std@1/bytes.from_inline(
+    std@1/hmac.mac(std@1/sha1.hash(), b"key", b"message")
+  )
+  failure.check(
+    std@1/hmac.verify(std@1/sha1.hash(), b"key", b"message", tag),
+    TextInvariant()
+  )
+  let mut tampered: List[u8] = []
+  for byte in tag {
+    list.push(mut tampered, byte)
+  }
+  tampered[19] = tampered[19] ^ 1
+  failure.check(
+    !std@1/hmac.verify(
+      std@1/sha1.hash(),
+      b"key",
+      b"message",
+      bytes.from_list(take tampered)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    !std@1/constant_time.equal(tag, bytes.slice(tag, 0, 19)),
+    TextInvariant()
+  )
+  Ok(())
+}
