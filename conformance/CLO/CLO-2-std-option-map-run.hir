@@ -1,0 +1,13 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+fn length(take s: String) -> u64 {
+  string.byte_len(s)
+}
+
+pub fn main() -> Result[(), ()] {
+  let none: Option[String] = None
+  failure.check(option.map(Some("Hello, World!"), length) == Some(13u64), Bounds())
+  failure.check(option.map(take none, length) == None, Bounds())
+  Ok(())
+}

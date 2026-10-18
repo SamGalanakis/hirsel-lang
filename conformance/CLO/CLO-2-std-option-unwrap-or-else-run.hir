@@ -1,0 +1,36 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+pub fn main() -> Result[(), ()] {
+  let k = 10u32
+  let none: Option[u32] = None
+  failure.check(
+    option.unwrap_or_else(
+      Some(4u32),
+      fn() -> u32 {
+        2 * k
+      }
+    ) == 4,
+    Bounds()
+  )
+  failure.check(
+    option.unwrap_or_else(
+      take none,
+      fn() -> u32 {
+        2 * k
+      }
+    ) == 20,
+    Bounds()
+  )
+  failure.check(
+    option.unwrap_or_else(
+      Some(4u32),
+      fn() -> u32 {
+        failure.check(false, Bounds())
+        0
+      }
+    ) == 4,
+    Bounds()
+  )
+  Ok(())
+}

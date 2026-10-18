@@ -12,10 +12,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
       continue
     }
     let level = string.ascii_upper(fields[0])
-    let count = match map.get(counts, level) {
-      Some(n) => n,
-      None() => 0u64,
-    }
+    let count = option.unwrap_or(map.get(counts, level), 0u64)
     map.insert(mut counts, take level, count + 1)
   }
   let mut builder: List[u8] = []

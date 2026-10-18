@@ -258,6 +258,48 @@ input error
 ```
 <!-- /tour -->
 
+## Option and Result helpers
+
+Use `option.is_some` / `is_none` and `results.is_ok` / `is_error` to inspect a
+borrowed value. Both modules provide `map`, `and_then`, `or_else`, `flatten`,
+`unwrap_or` (eager fallback) and `unwrap_or_else` (lazy fallback). `option.filter`
+borrows its payload for the predicate; `ok_or` / `ok_or_else` turn absence into an
+error, and `zip` pairs present values. `results.map_error` transforms an error;
+`results.ok` / `error` keep one branch as an option. Transformations take their
+inputs and callbacks; callbacks may consume their captures once. Hirsel has no panicking `unwrap` or `expect`.
+
+<!-- tour: conformance/LANG/LANG-8-tour-option-result-run.hir -->
+[Runnable source](../conformance/LANG/LANG-8-tour-option-result-run.hir)
+
+```hirsel
+pub fn main() -> Result[(), ()] {
+  let present: Option[u64] = Some(21)
+  let doubled = option.map(
+    take present,
+    fn(take n: u64) -> u64 {
+      n * 2
+    }
+  )
+  failure.check(option.unwrap_or(take doubled, 0u64) == 42, Bounds())
+  let missing: Option[u64] = None
+  let value: Result[u64, String] = option.ok_or(take missing, "missing")
+  let recovered = results.unwrap_or_else(
+    take value,
+    fn(take error: String) -> u64 {
+      failure.check(error == "missing", Bounds())
+      7
+    }
+  )
+  failure.check(recovered == 7, Bounds())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 ## Rejecting invalid input
 
 Use `Result[(), String]` for an entry that needs to fail with an application

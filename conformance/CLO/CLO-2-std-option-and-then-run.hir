@@ -1,0 +1,40 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+fn square_text(take n: u32) -> Option[String] {
+  option.map(
+    u32.checked_mul(n, n),
+    fn(take sq: u32) -> String {
+      u32.to_string(sq)
+    }
+  )
+}
+
+fn second(take row: List[String]) -> Option[String] {
+  if list.len(row) > 1 {
+    Some(copy row[1])
+  } else {
+    None
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let none: Option[u32] = None
+  failure.check(option.and_then(Some(2u32), square_text) == Some("4"), Bounds())
+  failure.check(option.and_then(Some(1000000u32), square_text) == None, Bounds())
+  failure.check(option.and_then(take none, square_text) == None, Bounds())
+  let rows: List[List[String]] = [["A0", "A1"], ["B0", "B1"]]
+  let first: Option[List[String]] = if 0u64 < list.len(rows) {
+    Some(copy rows[0])
+  } else {
+    None
+  }
+  let missing: Option[List[String]] = if 2u64 < list.len(rows) {
+    Some(copy rows[2])
+  } else {
+    None
+  }
+  failure.check(option.and_then(take first, second) == Some("A1"), Bounds())
+  failure.check(option.and_then(take missing, second) == None, Bounds())
+  Ok(())
+}

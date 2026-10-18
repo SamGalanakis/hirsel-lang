@@ -1,0 +1,107 @@
+// Rust's Result helpers, adapted from core::result, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f.
+// Rust's Err, is_err and map_err are Error, is_error and map_error here.
+// Queries borrow; transformations take their input and callbacks.
+// Panicking unwrap and expect are omitted: Hirsel has no panic.
+// Tests for success without consuming the result.
+@noalloc
+pub fn is_ok[T, E](value: Result[T, E]) -> bool uses {} {
+  match value {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}
+
+// Tests for an error without consuming the result.
+@noalloc
+pub fn is_error[T, E](value: Result[T, E]) -> bool uses {} {
+  !is_ok(value)
+}
+
+// Keeps the success payload and discards any error.
+pub fn ok[T, E](take value: Result[T, E]) -> Option[T] uses {value} {
+  match take value {
+    Ok(item) => Some(take item),
+    Error(_) => None,
+  }
+}
+
+// Keeps the error payload and discards any success.
+pub fn error[T, E](take value: Result[T, E]) -> Option[E] uses {value} {
+  match take value {
+    Ok(_) => None,
+    Error(item) => Some(take item),
+  }
+}
+
+// Returns the success payload or the eagerly evaluated fallback.
+@preserves_unique(value)
+pub fn unwrap_or[T, E](take value: Result[T, E], take fallback: T) -> T uses {value, fallback} {
+  match take value {
+    Ok(item) => take item,
+    Error(_) => take fallback,
+  }
+}
+
+// Computes the fallback from the error only on failure.
+pub fn unwrap_or_else[T, E](
+  take value: Result[T, E],
+  take fallback: once fn(take E) -> T
+) -> T uses {value, fallback} {
+  match take value {
+    Ok(item) => take item,
+    Error(item) => fallback(take item),
+  }
+}
+
+// Transforms the success payload, passing errors through unchanged.
+pub fn map[T, U, E](take value: Result[T, E], take f: once fn(take T) -> U) -> Result[
+  U,
+  E
+] uses {value, f} {
+  match take value {
+    Ok(item) => Ok(f(take item)),
+    Error(item) => Error(take item),
+  }
+}
+
+// Transforms the error payload, passing successes through unchanged.
+pub fn map_error[T, E, F](take value: Result[T, E], take f: once fn(take E) -> F) -> Result[
+  T,
+  F
+] uses {value, f} {
+  match take value {
+    Ok(item) => Ok(take item),
+    Error(item) => Error(f(take item)),
+  }
+}
+
+// Chains a fallible success transformation.
+pub fn and_then[T, U, E](
+  take value: Result[T, E],
+  take f: once fn(take T) -> Result[U, E]
+) -> Result[U, E] uses {value, f} {
+  match take value {
+    Ok(item) => f(take item),
+    Error(item) => Error(take item),
+  }
+}
+
+// Recovers from an error with another result.
+pub fn or_else[T, E, F](
+  take value: Result[T, E],
+  take f: once fn(take E) -> Result[T, F]
+) -> Result[T, F] uses {value, f} {
+  match take value {
+    Ok(item) => Ok(take item),
+    Error(item) => f(take item),
+  }
+}
+
+// Removes exactly one level of nesting, retaining either error.
+@preserves_unique(value)
+pub fn flatten[T, E](take value: Result[Result[T, E], E]) -> Result[T, E] uses {value} {
+  match take value {
+    Ok(inner) => take inner,
+    Error(item) => Error(take item),
+  }
+}

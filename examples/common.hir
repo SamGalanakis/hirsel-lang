@@ -24,10 +24,7 @@ pub fn slice(text: String, start: u64, end: u64) -> String {
   for i in start..end {
     list.push(mut builder, data[i])
   }
-  match text.finish(take builder) {
-    Ok(s) => take s,
-    Error(_) => "",
-  }
+  results.unwrap_or(text.finish(take builder), "")
 }
 
 pub fn finish(take builder: List[u8]) -> Result[String, Error] {

@@ -1,0 +1,17 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::result documentation, f6c1107f.
+fn stringify(take code: u32) -> String {
+  f"error code: {code}"
+}
+
+pub fn main() -> Result[(), ()] {
+  let good: Result[u32, u32] = Ok(2)
+  let bad: Result[u32, u32] = Error(13)
+  failure.check(results.map_error(take good, stringify) == Ok(2u32), Bounds())
+  failure.check(
+    results.map_error(take bad, stringify) == Error("error code: 13"),
+    Bounds()
+  )
+  Ok(())
+}

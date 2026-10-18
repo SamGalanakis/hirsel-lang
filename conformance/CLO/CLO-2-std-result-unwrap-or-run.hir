@@ -1,0 +1,10 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::result documentation, f6c1107f.
+pub fn main() -> Result[(), ()] {
+  let good: Result[u32, String] = Ok(9)
+  let bad: Result[u32, String] = Error("error")
+  failure.check(results.unwrap_or(take good, 2u32) == 9, Bounds())
+  failure.check(results.unwrap_or(take bad, 2u32) == 2, Bounds())
+  Ok(())
+}

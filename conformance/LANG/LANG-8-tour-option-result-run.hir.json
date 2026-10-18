@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "option_result_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "LANG-8-tour-option-result-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

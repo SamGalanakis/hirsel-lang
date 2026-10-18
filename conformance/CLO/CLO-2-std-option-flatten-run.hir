@@ -1,0 +1,16 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+pub fn main() -> Result[(), ()] {
+  let a: Option[Option[u32]] = Some(Some(6))
+  let b: Option[Option[u32]] = Some(None)
+  let c: Option[Option[u32]] = None
+  failure.check(option.flatten(take a) == Some(6u32), Bounds())
+  failure.check(option.flatten(take b) == None, Bounds())
+  failure.check(option.flatten(take c) == None, Bounds())
+  let nested: Option[Option[Option[u32]]] = Some(Some(Some(6)))
+  let flattened = option.flatten(take nested)
+  failure.check(flattened == Some(Some(6u32)), Bounds())
+  failure.check(option.flatten(take flattened) == Some(6u32), Bounds())
+  Ok(())
+}

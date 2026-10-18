@@ -1,0 +1,25 @@
+// rule: CLO-2
+// expect: run
+// entry: exercise
+// Rust Result::and_then's filesystem example, using deterministic metadata/size
+// because Test directories intentionally have no modification timestamp.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("root"), b"abc")])
+  let size = results.and_then(
+    file.metadata(d, path.of("root")),
+    fn(take metadata: Metadata) -> Result[u64, FileError] {
+      file.size(d, path.of("root"))
+    }
+  )
+  test.check(t, size == Ok(3u64))
+  let missing = results.and_then(
+    file.metadata(d, path.of("missing")),
+    fn(take metadata: Metadata) -> Result[u64, FileError] {
+      failure.check(false, Bounds())
+      file.size(d, path.of("root"))
+    }
+  )
+  test.check(t, results.is_error(missing))
+  test.check(t, results.error(take missing) == Some(NotFound()))
+  Ok(())
+}

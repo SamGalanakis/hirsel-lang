@@ -89,6 +89,15 @@ Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire
 and the `format_into` and NFC functions below) define their contracts by their declared
 signatures and the rules in this part.
 
+## Option and Result helpers
+
+`option` and `results` adapt Rust core Option/Result helpers. Queries borrow;
+consuming helpers take the carrier and callbacks, and `filter` borrows its payload
+for the predicate. Rust `is_err` / `err` / `map_err` use `is_error` / `error` /
+`map_error`. The module is `results` because `result` is reserved. Panicking
+`unwrap` / `expect` are omitted; Rust `Option::take` (`option.remove`) awaits an
+ownership-transfer operation for `mut` storage.
+
 ## Paths
 
 `path.PathError = Invalid(u64)` reports a byte offset. Components are separated by

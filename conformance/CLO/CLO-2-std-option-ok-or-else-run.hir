@@ -1,0 +1,35 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+pub fn main() -> Result[(), ()] {
+  let none: Option[String] = None
+  failure.check(
+    option.ok_or_else(
+      Some("foo"),
+      fn() -> u32 {
+        0
+      }
+    ) == Ok("foo"),
+    Bounds()
+  )
+  failure.check(
+    option.ok_or_else(
+      take none,
+      fn() -> u32 {
+        0
+      }
+    ) == Error(0u32),
+    Bounds()
+  )
+  failure.check(
+    option.ok_or_else(
+      Some("foo"),
+      fn() -> u32 {
+        failure.check(false, Bounds())
+        0
+      }
+    ) == Ok("foo"),
+    Bounds()
+  )
+  Ok(())
+}

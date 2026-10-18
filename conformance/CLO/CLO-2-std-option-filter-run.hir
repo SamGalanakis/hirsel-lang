@@ -1,0 +1,14 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+fn even(n: i32) -> bool {
+  n % 2 == 0
+}
+
+pub fn main() -> Result[(), ()] {
+  let none: Option[i32] = None
+  failure.check(option.filter(take none, even) == None, Bounds())
+  failure.check(option.filter(Some(3i32), even) == None, Bounds())
+  failure.check(option.filter(Some(4i32), even) == Some(4i32), Bounds())
+  Ok(())
+}

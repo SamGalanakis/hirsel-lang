@@ -1,0 +1,14 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::result documentation, f6c1107f.
+fn length(take s: String) -> u64 {
+  string.byte_len(s)
+}
+
+pub fn main() -> Result[(), ()] {
+  let good: Result[u64, String] = Ok(2)
+  let bad: Result[u64, String] = Error("foo")
+  failure.check(results.unwrap_or_else(take good, length) == 2, Bounds())
+  failure.check(results.unwrap_or_else(take bad, length) == 3, Bounds())
+  Ok(())
+}

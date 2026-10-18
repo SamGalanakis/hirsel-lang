@@ -1,0 +1,23 @@
+// rule: LANG-8
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let present: Option[u64] = Some(21)
+  let doubled = option.map(
+    take present,
+    fn(take n: u64) -> u64 {
+      n * 2
+    }
+  )
+  failure.check(option.unwrap_or(take doubled, 0u64) == 42, Bounds())
+  let missing: Option[u64] = None
+  let value: Result[u64, String] = option.ok_or(take missing, "missing")
+  let recovered = results.unwrap_or_else(
+    take value,
+    fn(take error: String) -> u64 {
+      failure.check(error == "missing", Bounds())
+      7
+    }
+  )
+  failure.check(recovered == 7, Bounds())
+  Ok(())
+}

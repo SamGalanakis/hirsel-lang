@@ -1,0 +1,114 @@
+// Adapted from Rust core::option, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f.
+// Queries borrow; transformations take their input and callbacks.
+// Rust's Option::take (option.remove) is omitted: mut storage cannot be moved out.
+// Panicking unwrap and expect are omitted: Hirsel has no panic.
+// Tests whether a value is present without consuming it.
+@noalloc
+pub fn is_some[T](value: Option[T]) -> bool uses {} {
+  match value {
+    Some(_) => true,
+    None => false,
+  }
+}
+
+// Tests whether a value is absent without consuming it.
+@noalloc
+pub fn is_none[T](value: Option[T]) -> bool uses {} {
+  !is_some(value)
+}
+
+// Returns the payload or the eagerly evaluated fallback.
+@preserves_unique(value)
+pub fn unwrap_or[T](take value: Option[T], take fallback: T) -> T uses {value, fallback} {
+  match take value {
+    Some(item) => take item,
+    None => take fallback,
+  }
+}
+
+// Computes the fallback only when no payload is present.
+pub fn unwrap_or_else[T](take value: Option[T], take fallback: once fn() -> T) -> T uses {value, fallback} {
+  match take value {
+    Some(item) => take item,
+    None => fallback(),
+  }
+}
+
+// Transforms a present payload, consuming it.
+pub fn map[T, U](take value: Option[T], take f: once fn(take T) -> U) -> Option[U] uses {value, f} {
+  match take value {
+    Some(item) => Some(f(take item)),
+    None => None,
+  }
+}
+
+// Chains a transformation that may itself return None.
+pub fn and_then[T, U](take value: Option[T], take f: once fn(take T) -> Option[U]) -> Option[
+  U
+] uses {value, f} {
+  match take value {
+    Some(item) => f(take item),
+    None => None,
+  }
+}
+
+// Computes another option only when no payload is present.
+pub fn or_else[T](take value: Option[T], take fallback: once fn() -> Option[T]) -> Option[
+  T
+] uses {value, fallback} {
+  match take value {
+    Some(item) => Some(take item),
+    None => fallback(),
+  }
+}
+
+// Borrows the payload for the predicate and retains it only on success.
+pub fn filter[T](take value: Option[T], take predicate: once fn(T) -> bool) -> Option[T] uses {value, predicate} {
+  match take value {
+    Some(item) => if predicate(item) {
+      Some(take item)
+    } else {
+      None
+    },
+    None => None,
+  }
+}
+
+// Converts absence to the eagerly evaluated error.
+@preserves_unique(value)
+pub fn ok_or[T, E](take value: Option[T], take error: E) -> Result[T, E] uses {value, error} {
+  match take value {
+    Some(item) => Ok(take item),
+    None => Error(take error),
+  }
+}
+
+// Computes an error only when no payload is present.
+pub fn ok_or_else[T, E](take value: Option[T], take error: once fn() -> E) -> Result[
+  T,
+  E
+] uses {value, error} {
+  match take value {
+    Some(item) => Ok(take item),
+    None => Error(error()),
+  }
+}
+
+// Pairs two present payloads; otherwise discards both inputs.
+pub fn zip[T, U](take left: Option[T], take right: Option[U]) -> Option[(T, U)] uses {left, right} {
+  match take left {
+    Some(a) => match take right {
+      Some(b) => Some((take a, take b)),
+      None => None,
+    },
+    None => None,
+  }
+}
+
+// Removes exactly one level of nesting.
+pub fn flatten[T](take value: Option[Option[T]]) -> Option[T] uses {value} {
+  match take value {
+    Some(inner) => take inner,
+    None => None,
+  }
+}

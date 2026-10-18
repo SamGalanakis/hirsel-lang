@@ -1,0 +1,34 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::result documentation, f6c1107f.
+fn square(take n: u32) -> Result[u32, u32] {
+  Ok(n * n)
+}
+
+fn error(take n: u32) -> Result[u32, u32] {
+  Error(n)
+}
+
+pub fn main() -> Result[(), ()] {
+  let a: Result[u32, u32] = Ok(2)
+  let b: Result[u32, u32] = Ok(2)
+  let c: Result[u32, u32] = Error(3)
+  let d: Result[u32, u32] = Error(3)
+  failure.check(
+    results.or_else(results.or_else(take a, square), square) == Ok(2u32),
+    Bounds()
+  )
+  failure.check(
+    results.or_else(results.or_else(take b, error), square) == Ok(2u32),
+    Bounds()
+  )
+  failure.check(
+    results.or_else(results.or_else(take c, square), error) == Ok(9u32),
+    Bounds()
+  )
+  failure.check(
+    results.or_else(results.or_else(take d, error), error) == Error(3u32),
+    Bounds()
+  )
+  Ok(())
+}

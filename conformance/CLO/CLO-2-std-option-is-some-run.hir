@@ -1,0 +1,10 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+pub fn main() -> Result[(), ()] {
+  let some: Option[u32] = Some(2)
+  let none: Option[u32] = None
+  failure.check(option.is_some(some), Bounds())
+  failure.check(!option.is_some(none), Bounds())
+  Ok(())
+}

@@ -1,0 +1,22 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+fn vikings() -> Option[String] {
+  Some("vikings")
+}
+
+fn nobody() -> Option[String] {
+  None
+}
+
+pub fn main() -> Result[(), ()] {
+  let none: Option[String] = None
+  failure.check(
+    option.or_else(Some("barbarians"), vikings) == Some("barbarians"),
+    Bounds()
+  )
+  failure.check(option.or_else(take none, vikings) == Some("vikings"), Bounds())
+  let empty: Option[String] = None
+  failure.check(option.or_else(take empty, nobody) == None, Bounds())
+  Ok(())
+}

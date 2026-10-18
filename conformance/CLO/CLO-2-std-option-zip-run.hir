@@ -1,0 +1,14 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::option documentation, f6c1107f.
+pub fn main() -> Result[(), ()] {
+  let none: Option[u8] = None
+  failure.check(option.zip(Some(1u32), Some("hi")) == Some((1u32, "hi")), Bounds())
+  failure.check(option.zip(Some(1u32), take none) == None, Bounds())
+  let left: Option[u32] = None
+  failure.check(option.zip(take left, Some("hi")) == None, Bounds())
+  let left_empty: Option[u32] = None
+  let right: Option[String] = None
+  failure.check(option.zip(take left_empty, take right) == None, Bounds())
+  Ok(())
+}

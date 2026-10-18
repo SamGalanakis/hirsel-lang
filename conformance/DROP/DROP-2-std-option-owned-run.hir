@@ -1,0 +1,48 @@
+// rule: DROP-2
+// expect: run
+// stdout: fallback
+// stdout: kept
+// stdout: capture
+// stdout: present
+// stdout: filtered
+resource type Item {
+  output: Stdout,
+  label: String,
+}
+drop(item) {
+  let _ = out.print(item.output, item.label)
+}
+
+fn identity(take item: Item) -> Item {
+  take item
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let mapped = option.map(Some(Item(output: output, label: "kept\n")), identity)
+  failure.check(option.is_some(mapped) && !option.is_none(mapped), Bounds())
+  let value1 = option.unwrap_or(take mapped, Item(output: output, label: "fallback\n"))
+  {
+    let _ = take value1
+  }
+  let captured = Item(output: output, label: "capture\n")
+  let value2 = option.or_else(
+    Some(Item(output: output, label: "present\n")),
+    fn() -> Option[Item] {
+      Some(take captured)
+    }
+  )
+  {
+    let _ = take value2
+  }
+  let value3 = option.filter(
+    Some(Item(output: output, label: "filtered\n")),
+    fn(item: Item) -> bool {
+      item.label == "filtered\n"
+    }
+  )
+  {
+    let _ = take value3
+  }
+  Ok(())
+}

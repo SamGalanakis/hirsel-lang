@@ -1,0 +1,46 @@
+// rule: DROP-2
+// expect: run
+// stdout: fallback
+// stdout: kept
+// stdout: capture
+// stdout: present
+// stdout: error
+resource type Item {
+  output: Stdout,
+  label: String,
+}
+drop(item) {
+  let _ = out.print(item.output, item.label)
+}
+
+fn identity(take item: Item) -> Item {
+  take item
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let source1: Result[Item, ()] = Ok(Item(output: output, label: "kept\n"))
+  let mapped = results.map(take source1, identity)
+  failure.check(results.is_ok(mapped) && !results.is_error(mapped), Bounds())
+  let value1 = results.unwrap_or(take mapped, Item(output: output, label: "fallback\n"))
+  {
+    let _ = take value1
+  }
+  let captured = Item(output: output, label: "capture\n")
+  let source2: Result[Item, ()] = Ok(Item(output: output, label: "present\n"))
+  let value2 = results.or_else(
+    take source2,
+    fn(take error: ()) -> Result[Item, ()] {
+      Ok(take captured)
+    }
+  )
+  {
+    let _ = take value2
+  }
+  let source3: Result[(), Item] = Error(Item(output: output, label: "error\n"))
+  let value3 = results.map_error(take source3, identity)
+  {
+    let _ = take value3
+  }
+  Ok(())
+}

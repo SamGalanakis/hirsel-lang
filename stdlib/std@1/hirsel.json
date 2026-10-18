@@ -450,6 +450,18 @@
         "internal",
         "format"
       ]
+    },
+    {
+      "path": "option.hir",
+      "module": [
+        "option"
+      ]
+    },
+    {
+      "path": "results.hir",
+      "module": [
+        "results"
+      ]
     }
   ],
   "dependencies": []

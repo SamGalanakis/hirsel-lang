@@ -1,0 +1,29 @@
+// rule: CLO-2
+// expect: run
+// Ported from Rust core::result documentation, f6c1107f.
+pub fn main() -> Result[(), ()] {
+  let mut values: List[i32] = []
+  for num in string.lines("1\n2\n3\n4\n") {
+    match results.map(
+      i32.parse(num),
+      fn(take n: i32) -> i32 {
+        n * 2
+      }
+    ) {
+      Ok(n) => list.push(mut values, n),
+      Error(_) => {},
+    }
+  }
+  failure.check(values == [2i32, 4i32, 6i32, 8i32], Bounds())
+  let bad: Result[i32, String] = Error("unchanged")
+  failure.check(
+    results.map(
+      take bad,
+      fn(take n: i32) -> i32 {
+        n * 2
+      }
+    ) == Error("unchanged"),
+    Bounds()
+  )
+  Ok(())
+}
