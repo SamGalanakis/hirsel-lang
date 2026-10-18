@@ -25,7 +25,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>\n",
+            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -2617,11 +2617,11 @@ pub fn main(rt: Io) -> Result[(), LaunchError] {
 }
 
 #[test]
-fn doc_index_prints_the_current_public_signature_page() {
+fn doc_std_manifest_prints_the_current_public_signature_page() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .args(["doc", "--index", "--root"])
-        .arg(root)
+        .arg("doc")
+        .arg(root.join("stdlib/std@1/hirsel.json"))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -2764,4 +2764,91 @@ fn runtime_failure_reports_the_dependency_file_and_identity() {
     for path in [library, manifest, source, sidecar] {
         std::fs::remove_file(path).unwrap();
     }
+}
+
+#[test]
+fn doc_manifest_json_and_output_file_share_public_api() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest = root.join("packages/doc_api@1/hirsel.json");
+    let destination = file("").with_extension("md");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["doc", "--json"])
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["schema"], 1);
+    let entries = json["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 13);
+    let token = entries
+        .iter()
+        .find(|e| e["identity"] == "doc_api@1/api/token")
+        .unwrap();
+    assert_eq!(
+        token["declaration"],
+        "pub fn api.token(value: wire.Token) -> doc_dep@2/model.Token"
+    );
+    assert_eq!(token["anchor"], "def-doc_5fapi_401_2fapi_2ftoken");
+    assert_eq!(token["links"][0]["identity"], "doc_dep@2/model/Token");
+    assert_eq!(
+        token["links"][0]["url"],
+        "../doc_dep@2/api.md#def-doc_5fdep_402_2fmodel_2fToken"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private_function"));
+    let saved_json = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["doc", "--json", "-o"])
+        .arg(&destination)
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert_eq!(saved_json.status.code(), Some(0), "{saved_json:?}");
+    assert!(saved_json.stdout.is_empty());
+    assert!(saved_json.stderr.is_empty());
+    assert_eq!(std::fs::read(&destination).unwrap(), output.stdout);
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("doc")
+        .arg(&manifest)
+        .arg("-o")
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        include_str!("../../../packages/doc_api@1/api.md")
+    );
+    std::fs::remove_file(destination).unwrap();
+}
+
+#[test]
+fn doc_requires_a_valid_explicit_package_manifest() {
+    for args in [
+        vec!["doc"],
+        vec!["doc", "--index"],
+        vec!["doc", "--root", "."],
+        vec!["doc", "--json", "--json", "missing.json"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+    }
+    let manifest = file(
+        r#"{"schema":1,"package":{"name":"probe","version":"1"},"sources":[],"dependencies":[]}"#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("doc")
+        .arg(&manifest)
+        .output()
+        .unwrap();
+    assert_ne!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(!output.stderr.is_empty());
 }

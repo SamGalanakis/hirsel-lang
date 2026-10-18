@@ -1,5 +1,5 @@
 //! Documentation from public declarations, without checking or executing bodies.
-use hirsel_engine::{DefinitionQueries, QueryEngine, ToolError, default_environment, registry};
+use hirsel_engine::{DefinitionQueries, PackageDeclarations, ToolError, registry};
 use hirsel_span::SourceMap;
 use hirsel_syntax::{self as ast, DefPath, FileContext, ItemKind, TokenKind, Visibility};
 use hirsel_types::*;
@@ -12,6 +12,28 @@ pub struct Entry {
     pub name: String,
     pub declaration: String,
     pub description: String,
+    pub links: Vec<Link>,
+}
+
+/// A resolved definition used by a public declaration.
+#[derive(Debug)]
+pub struct Link {
+    pub name: String,
+    pub identity: String,
+    pub url: String,
+}
+
+/// Injective, HTML-safe encoding of the versioned definition path.
+pub fn anchor(identity: &str) -> String {
+    let mut out = String::from("def-");
+    for byte in identity.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'-' {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("_{byte:02x}"));
+        }
+    }
+    out
 }
 
 fn short(path: &DefPath) -> String {
@@ -42,9 +64,39 @@ fn query_error(error: hirsel_engine::QueryError, sources: &SourceMap) -> ToolErr
     }
 }
 
-/// Read exactly the sources selected by std's manifest, using the compiler parser.
-/// The root is a Hirsel repository; it is explicit so installed tools can select a checkout.
-pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
+/// Read a selected package's public declarations. std@1 also publishes core.
+/// No signature is inferred from a body, and no body is checked or evaluated.
+pub fn entries(manifest: &Path) -> Result<Vec<Entry>, ToolError> {
+    let mut package = crate::COMPILER.load_package_declarations(manifest)?;
+    let mut out = Vec::new();
+    let std = package.package.package_is("std", "1");
+    let repo = manifest
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent);
+    let catalogue = |name: &str| {
+        repo.and_then(|p| std::fs::read_to_string(p.join("docs/spec").join(name)).ok())
+            .unwrap_or_default()
+    };
+    let std_docs = if std {
+        catalogue("std-library.md")
+    } else {
+        String::new()
+    };
+    if std {
+        out.extend(core_entries(&catalogue("core-library.md")));
+    }
+    source_entries(&mut package, &std_docs, &mut out)?;
+    out.sort_by(|a, b| {
+        module(&a.identity)
+            .cmp(&module(&b.identity))
+            .then(a.name.cmp(&b.name))
+            .then(a.identity.cmp(&b.identity))
+    });
+    Ok(out)
+}
+
+fn core_entries(core_docs: &str) -> Vec<Entry> {
     let registry = registry::BuiltinRegistry::new();
     let ledger: BTreeMap<_, _> = registry::SECTION22
         .lines()
@@ -57,8 +109,6 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
             Some((name, line.replacen("N fn ", "@noalloc fn ", 1)))
         })
         .collect();
-    let core_docs = std::fs::read_to_string(root.join("docs/spec/core-library.md"))?;
-    let std_docs = std::fs::read_to_string(root.join("docs/spec/std-library.md"))?;
     let mut out = Vec::new();
     for s in registry.signatures().filter(|s| {
         s.metadata.visibility != Visibility::Private
@@ -146,7 +196,8 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
         };
         out.push(Entry {
             identity: s.definition.to_string(),
-            description: catalogue_sentence(&core_docs, &name),
+            description: catalogue_sentence(core_docs, &name),
+            links: Vec::new(),
             name: name.clone(),
             declaration,
         });
@@ -168,38 +219,26 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
                                 printer.generic_arguments()
                             ),
                             description: format!("Variant of {name}."),
+                            links: Vec::new(),
                         });
                     }
                 }
             }
         }
     }
-    let manifest_path = root.join("stdlib/std@1/hirsel.json");
-    let manifest: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)
-            .map_err(|e| ToolError::Runtime(format!("std manifest: {e}")))?;
-    let sources = manifest["sources"]
-        .as_array()
-        .ok_or_else(|| ToolError::Runtime("std manifest requires sources".into()))?;
-    let mut engine = QueryEngine::new(default_environment(), crate::compiler_adapters());
-    for source in sources {
-        let path = source["path"]
-            .as_str()
-            .ok_or_else(|| ToolError::Runtime("std source requires path".into()))?;
-        let modules = serde_json::from_value(source["module"].clone())
-            .map_err(|e| ToolError::Runtime(format!("std module: {e}")))?;
-        let path = manifest_path.parent().unwrap().join(path);
-        let file = engine
-            .sources
-            .add(&path, std::fs::read_to_string(&path)?)
-            .ok_or(ToolError::SourceTooLarge)?;
-        let context = FileContext {
-            package: ast::PackageId {
-                name: "std".into(),
-                version: "1".into(),
-            },
-            modules,
-        };
+    out
+}
+
+fn source_entries(
+    package: &mut PackageDeclarations,
+    catalogue: &str,
+    out: &mut Vec<Entry>,
+) -> Result<(), ToolError> {
+    for (file, context) in package.files.clone() {
+        if context.package != package.package {
+            continue;
+        }
+        let engine = &mut package.engine;
         let parsed = engine
             .parse_file(file, &context)
             .map_err(|e| query_error(e, &engine.sources))?;
@@ -210,9 +249,10 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
             ));
         }
         let syntax = parsed.value;
+        let engine = &package.engine;
         for id in &syntax.roots {
             let item = &syntax.tree.items[id.0 as usize];
-            if item.visibility == Visibility::Private {
+            if !package.is_exported(&item.definition) {
                 continue;
             }
             let name = short(&item.definition);
@@ -277,15 +317,24 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
             let declaration = source_declaration(&syntax, item, end, &engine.sources, &name);
             let comments = source_comments(&syntax, item, &engine.sources);
             let description = if comments.is_empty() {
-                catalogue_sentence(&std_docs, &name)
+                catalogue_sentence(catalogue, &name)
             } else {
-                sentence(&comments)
+                comments
             };
+            let links = source_links(
+                package,
+                &context,
+                &syntax,
+                item,
+                item.origin.span.start,
+                end,
+            );
             out.push(Entry {
                 identity: item.definition.to_string(),
                 name: name.clone(),
                 declaration,
                 description,
+                links,
             });
             if let ItemKind::Type {
                 body: ast::TypeBody::Variants(variants),
@@ -312,7 +361,7 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
                 for (i, variant) in variants.iter().enumerate() {
                     let variant_name = syntax.symbols.resolve(variant.name).unwrap();
                     let start = spans[i].start;
-                    let end = spans.get(i + 1).map_or(item.origin.span.end, |s| s.start);
+                    let end = spans.get(i + 1).map_or(end, |s| s.start);
                     let text = token_text(&syntax, start, end, &engine.sources)
                         .trim_end_matches([' ', '|'])
                         .to_owned();
@@ -321,18 +370,109 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
                         name: format!("{name}.{variant_name}"),
                         declaration: format!("{text} -> {name}{args}"),
                         description: format!("Variant of {name}."),
+                        links: source_links(package, &context, &syntax, item, start, end),
                     });
                 }
             }
         }
     }
-    out.sort_by(|a, b| {
-        module(&a.identity)
-            .cmp(module(&b.identity))
-            .then(a.name.cmp(&b.name))
-            .then(a.identity.cmp(&b.identity))
+    Ok(())
+}
+
+fn source_links(
+    package: &PackageDeclarations,
+    context: &FileContext,
+    syntax: &ast::SyntaxFile,
+    item: &ast::Item,
+    start: u32,
+    end: u32,
+) -> Vec<Link> {
+    // Only AST nodes in the published header are considered. In particular,
+    // neither opaque representations nor types inside function bodies leak links.
+    let paths = syntax.tree.types.iter().filter_map(|ty| {
+        if ty.origin.span.start < start || ty.origin.span.end > end {
+            return None;
+        }
+        match &ty.kind {
+            ast::TypeExprKind::Named { path, .. } => Some(path),
+            _ => None,
+        }
     });
-    Ok(out)
+    let attributes = item
+        .attributes
+        .iter()
+        .filter(|a| a.origin.span.start >= start && a.origin.span.end <= end)
+        .flat_map(|a| &a.arguments)
+        .filter_map(|a| match a {
+            ast::AttributeArgument::Format(f) => Some(&f.function),
+            _ => None,
+        });
+    let uses = match &item.kind {
+        ItemKind::Function { signature, .. } => signature.uses.as_deref().unwrap_or_default(),
+        ItemKind::Type { authority, .. } => authority.as_deref().unwrap_or_default(),
+        _ => &[],
+    };
+    let generics = match &item.kind {
+        ItemKind::Function { signature, .. } => signature.generics.as_slice(),
+        ItemKind::Type { generics, .. } => generics.as_slice(),
+        _ => &[],
+    };
+    let parameters = match &item.kind {
+        ItemKind::Function { signature, .. } => signature.parameters.as_slice(),
+        _ => &[],
+    };
+    let contracts = syntax.tree.expressions.iter().filter_map(|expr| {
+        if expr.origin.span.start < start || expr.origin.span.end > end {
+            return None;
+        }
+        match &expr.kind {
+            ast::ExprKind::Path(path) => Some(path),
+            _ => None,
+        }
+    });
+    let mut links = BTreeMap::new();
+    for path in paths.chain(attributes).chain(uses).chain(contracts) {
+        if path.package.is_none()
+            && path.segments.first().is_some_and(|head| {
+                generics.iter().any(|g| g.name == *head)
+                    || parameters.iter().any(|p| p.name == Some(*head))
+            })
+        {
+            continue;
+        }
+        let Ok(definition) = package.lookup(context, path, &syntax.symbols) else {
+            continue;
+        };
+        if definition == item.definition || !package.is_exported(&definition) {
+            continue;
+        }
+        let identity = definition.to_string();
+        let target = anchor(&identity);
+        let url = if definition.0.package == package.package
+            || (package.package.package_is("std", "1")
+                && definition.0.package.package_is("core", "1"))
+        {
+            format!("#{target}")
+        } else if definition.0.package.package_is("core", "1")
+            || definition.0.package.package_is("std", "1")
+        {
+            format!("https://github.com/SamGalanakis/hirsel-lang/blob/main/docs/api.md#{target}")
+        } else {
+            format!(
+                "../{}@{}/api.md#{target}",
+                definition.0.package.name, definition.0.package.version
+            )
+        };
+        links.insert(
+            identity.clone(),
+            Link {
+                name: short(&definition),
+                identity,
+                url,
+            },
+        );
+    }
+    links.into_values().collect()
 }
 
 fn token_text(syntax: &ast::SyntaxFile, start: u32, end: u32, sources: &SourceMap) -> String {
@@ -384,27 +524,21 @@ fn source_comments(syntax: &ast::SyntaxFile, item: &ast::Item, sources: &SourceM
         if token.span.start >= item.name_span.start {
             break;
         }
-        if matches!(
-            token.kind,
-            TokenKind::Trivia(
-                ast::TriviaKind::DocLine
-                    | ast::TriviaKind::LineComment
-                    | ast::TriviaKind::DocBlock
-                    | ast::TriviaKind::BlockComment
-            )
-        ) {
-            comments.push(
-                sources
-                    .slice(token.span)
-                    .unwrap()
-                    .trim_start_matches('/')
-                    .trim_start_matches('*')
-                    .trim_end_matches("*/")
-                    .trim(),
-            );
+        let raw = sources.slice(token.span).unwrap();
+        match token.kind {
+            TokenKind::Trivia(ast::TriviaKind::DocLine) => {
+                let line = raw.strip_prefix("///").unwrap();
+                comments.push(line.strip_prefix(' ').unwrap_or(line).trim_end());
+            }
+            TokenKind::Trivia(ast::TriviaKind::DocBlock) => {
+                // /**/ shares the prefix's star with the closing delimiter.
+                let inner = &raw[2..raw.len() - 2];
+                comments.push(inner.strip_prefix('*').unwrap_or(inner).trim_matches('\n'));
+            }
+            _ => {}
         }
     }
-    comments.join(" ")
+    comments.join("\n")
 }
 fn catalogue_sentence(docs: &str, name: &str) -> String {
     docs.lines()
@@ -425,37 +559,80 @@ fn bound_name(bound: &Bound) -> String {
     }
 }
 
-fn module(identity: &str) -> &str {
+fn module(identity: &str) -> String {
     identity
         .split_once('/')
-        .and_then(|(_, path)| path.split_once('/'))
-        .map_or("", |(head, _)| head)
+        .and_then(|(_, path)| path.rsplit_once('/'))
+        .map_or_else(String::new, |(modules, _)| modules.replace('/', "."))
 }
 
-/// One line per item, including constructors, with module heads shared by core and std.
+/// One renderer for std and user packages; signatures remain verbatim token text.
 pub fn render(entries: &[Entry]) -> String {
     let definitions = entries.iter().filter(|e| !e.identity.contains('#')).count();
     let mut page = format!(
-        "# Full signature index\n\nGenerated from the core registry and std manifest declarations. Do not edit by hand.\nRegenerate from the repository root: `hirsel doc --index > docs/api.md`.\n\nShort module names are the spellings programs use; core and std share module heads.\nSignatures retain declared modes, brands, attributes and `uses` clauses; whitespace is folded.\nOpaque representations stay hidden. Descriptions quote the first sentence of an attached\ncomment or catalogue row when one exists. Constructor rows also appear in their type.\nCore types show their registry bounds and authority; intrinsic storage is not a recursive alias.\nCore schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.\n\n{definitions} exported definitions; {} variants.\n\n",
+        "# Public API\n\nGenerated from manifest-selected public declarations. Do not edit by hand.\nSignatures retain modes, brands, attributes, relations and `uses` clauses.\nOpaque representations stay hidden; bodies are not checked or evaluated.\n\n{definitions} exported definitions; {} variants.\n",
         entries.len() - definitions
     );
-    let mut head = "";
+    let mut head = String::new();
     for entry in entries {
-        let module = match module(&entry.identity) {
-            "" => "Types and roots",
-            head => head,
+        let module = module(&entry.identity);
+        let module = if module.is_empty() {
+            "Types and roots"
+        } else {
+            &module
         };
         if module != head {
             page += &format!("\n## {module}\n\n");
-            head = module;
+            head = module.into();
         }
-        page += &format!("- `{}`", entry.declaration);
+        page += &format!(
+            "<a id=\"{}\"></a>\n\n- {}\n",
+            anchor(&entry.identity),
+            code_span(&entry.declaration)
+        );
         if !entry.description.is_empty() {
-            page += &format!(" — {}", entry.description.replace('`', "'"));
+            page += &format!("\n{}\n", entry.description);
         }
-        page += &format!(" <!-- {} -->\n", entry.identity);
+        if !entry.links.is_empty() {
+            page += "\nReferences: ";
+            page += &entry
+                .links
+                .iter()
+                .map(|l| format!("[`{}`]({})", l.identity, l.url))
+                .collect::<Vec<_>>()
+                .join(", ");
+            page += "\n";
+        }
+        page += "\n";
     }
+    page.truncate(page.trim_end().len());
+    page.push('\n');
     page
+}
+
+fn code_span(text: &str) -> String {
+    let ticks = text.split(|c| c != '`').map(str::len).max().unwrap_or(0) + 1;
+    let delimiter = "`".repeat(ticks);
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{delimiter}{pad}{text}{pad}{delimiter}")
+}
+
+/// Versioned, deterministic JSON; anchors and links agree with Markdown.
+pub fn render_json(entries: &[Entry]) -> String {
+    let entries: Vec<_> = entries.iter().map(|e| serde_json::json!({
+        "identity": e.identity, "anchor": anchor(&e.identity), "name": e.name,
+        "declaration": e.declaration, "description": e.description,
+        "links": e.links.iter().map(|l| serde_json::json!({"name": l.name, "identity": l.identity, "url": l.url})).collect::<Vec<_>>()
+    })).collect();
+    format!(
+        "{}\n",
+        serde_json::to_string_pretty(&serde_json::json!({"schema": 1, "entries": entries}))
+            .unwrap()
+    )
 }
 
 struct CorePrinter<'a> {

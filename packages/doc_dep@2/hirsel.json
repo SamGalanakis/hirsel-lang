@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "package": {"name": "doc_dep", "version": "2"},
+  "sources": [{"path": "model.hir", "module": ["model"]}],
+  "dependencies": []
+}

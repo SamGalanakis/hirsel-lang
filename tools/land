@@ -85,7 +85,7 @@ def regenerate_index(checked_head):
         say('land: CLI build did not report its executable')
         return False, None
     try:
-        rendered = subprocess.run([str(executable), 'doc', '--index'], cwd=ROOT, capture_output=True)
+        rendered = subprocess.run([str(executable), 'doc', 'stdlib/std@1/hirsel.json'], cwd=ROOT, capture_output=True)
     except OSError as error:
         say(f'land: cannot run the index generator: {error}')
         return False, None

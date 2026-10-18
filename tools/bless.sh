@@ -13,6 +13,7 @@
 #   wire               crates/hirsel-types/tests/wire/golden.tsv        SER-2 vectors
 #   replay             native-tests/replay/column-skew/                 replay fixture
 #   signatures         crates/hirsel-signature/src/golden.txt           encoding vectors
+#   package-docs       packages/doc_api@1/api.md
 #   core-review        crates/hirsel-engine/src/registry/review-table.txt
 #   native-inventory   native-tests/library/operations.tsv
 #   ownership-passing  crates/hirsel-modes/src/ownership/tests/{passing,pending}.txt
@@ -44,6 +45,7 @@ cases() {
     wire) echo "//:hirsel-types-test-wire recursive_canonical_golden_vectors" ;;
     replay) echo "//:hirsel-conformance-test-it native_gate::a_stored_artifact_replays_from_another_path_and_arena_numbering" ;;
     signatures) echo "//:hirsel-signature-unittest tests::golden_vectors" ;;
+    package-docs) echo "//:hirsel-driver-test-it-shard-1 api_index::package_public_api_matches_readable_golden" ;;
     core-review) echo "//:hirsel-engine-unittest registry::tests::every_declared_signature_matches_the_review_table_and_canonical_hash" ;;
     native-inventory) echo "//:hirsel-pipeline-tests-test-front rt_operations::declaration_digests_match_the_reviewed_native_inventory" ;;
     ownership-passing) echo "//:hirsel-modes-unittest ownership::tests::corpus::source_corpus_ratchets_rule_and_primary_line" ;;
@@ -56,7 +58,7 @@ cases() {
     *) return 1 ;;
   esac
 }
-in_test=(heap layout rc-import wire replay signatures core-review native-inventory
+in_test=(package-docs heap layout rc-import wire replay signatures core-review native-inventory
   ownership-passing authority-corpus snapshots)
 
 # Run one target's filtered cases, on this host with `--env` options when

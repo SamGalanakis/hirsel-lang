@@ -146,9 +146,12 @@ polled at scheduling points; the scheduler waits only when no task is runnable. 
 and included in the completed record before admission. An absent override retains
 the template's snapshot; an empty override grants empty Args.
 
-`api_index` enumerates public core registry entries and std manifest declarations
-with the compiler parser, retaining source signatures and constructor payloads.
-`hirsel doc --index` renders the deterministic full signature index in `docs/api.md`.
+`api_index` documents public declarations from an explicit package manifest,
+using the declaration-only loader and compiler resolver for dependency links.
+It retains source signatures, constructor payloads and attached doc comments,
+without checking bodies or exposing opaque representations or internal modules.
+Markdown and JSON share stable versioned definition-path anchors. std's manifest
+also publishes core registry entries through the same renderer in `docs/api.md`.
 
 Host timer waits expose their original absolute deadline to the interpreter's poll
 ordering. Several overdue timers resume by deadline, with suspension order breaking

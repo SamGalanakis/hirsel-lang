@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "package": {"name": "doc_api", "version": "1"},
+  "sources": [
+    {"path": "api.hir", "module": ["api"]},
+    {"path": "internal.hir", "module": ["api", "internal"]},
+    {"path": "detail.hir", "module": ["api", "detail"]}
+  ],
+  "dependencies": [
+    {"manifest": "../doc_dep@2/hirsel.json", "package": {"name": "doc_dep", "version": "2"},
+     "expose": [{"head": "wire", "module": ["model"]}]}
+  ]
+}

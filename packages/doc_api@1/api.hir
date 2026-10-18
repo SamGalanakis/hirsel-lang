@@ -1,0 +1,38 @@
+/// Selects a value, including a dependency payload.
+pub type Choice[T] = Empty | Value(T) | External(wire.Token)
+
+/// A directory and its branded file.
+pub type Handle { dir: Dir, file: File of .dir }
+
+/// The maximum count.
+pub const LIMIT: u64 = 7
+
+/// A label with explicit formatting.
+@format(render)
+pub type Label { text: String }
+fn render(value: Label) -> String { value.text }
+
+/// Keeps its representation private.
+pub opaque type Secret: inert uses {} { secret: u64 }
+
+/// Retains a source brand and all parameter modes.
+/// A second sentence is kept, too.
+///
+/// The callback's authority is explicit.
+///
+///     retain(source, target, value, callback)
+@noalloc
+pub fn retain[T: data](source: Dir, mut target: Bytes, take value: T,
+  callback: fn(T) -> bool uses {}) -> File of source uses {} { unreachable() }
+
+/// Accepts the selected dependency through its local alias and full identity.
+pub fn token(value: wire.Token) -> doc_dep@2/model.Token { value }
+
+/// Returns a view in its source region.
+pub fn view(source: String) -> String in source uses {} { source }
+
+// This ordinary comment is not API documentation.
+@test
+pub fn undocumented() {}
+fn private_function() {}
+type Private { hidden: u64 }

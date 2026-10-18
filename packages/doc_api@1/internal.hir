@@ -1,0 +1,3 @@
+/// Visible only within the parent's ancestry.
+pub fn hidden() {}
+pub type Hidden { secret: u64 }

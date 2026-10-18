@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
 use execution_policy::DEFAULT_RUN_MAX_STEPS;
@@ -25,7 +25,9 @@ enum Command {
         output: OsString,
     },
     Doc {
-        root: OsString,
+        manifest: OsString,
+        output: Option<OsString>,
+        json: bool,
     },
     Build {
         source: OsString,
@@ -236,15 +238,24 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             }
         }
         Some(Value(command)) if command == "doc" => {
-            if !matches!(args.next()?, Some(Long("index"))) {
-                return Err("doc requires --index".into());
+            let (mut manifest, mut output, mut json) = (None, None, false);
+            while let Some(arg) = args.next()? {
+                match arg {
+                    Long("json") if !json => json = true,
+                    Short('o') if output.is_none() => output = Some(args.value()?),
+                    Value(file)
+                        if manifest.is_none() && !file.to_string_lossy().starts_with('-') =>
+                    {
+                        manifest = Some(file)
+                    }
+                    arg => return Err(arg.unexpected()),
+                }
             }
-            let root = match args.next()? {
-                Some(Long("root")) => args.value()?,
-                Some(arg) => return Err(arg.unexpected()),
-                None => OsString::from("."),
-            };
-            Command::Doc { root }
+            Command::Doc {
+                manifest: manifest.ok_or("doc requires a package manifest")?,
+                output,
+                json,
+            }
         }
         Some(Value(command)) if command == "export" => {
             let run = match args.next()? {
@@ -532,15 +543,32 @@ fn execute(mut args: Vec<OsString>) -> u8 {
                 Err(error) => tool_error(error, json),
             };
         }
-        Command::Doc { root } => {
-            return match hirsel_driver::api_index::entries(Path::new(&root)) {
-                Ok(entries) => {
-                    print!("{}", hirsel_driver::api_index::render(&entries));
+        Command::Doc {
+            manifest,
+            output,
+            json,
+        } => {
+            let entries = match hirsel_driver::api_index::entries(Path::new(&manifest)) {
+                Ok(entries) => entries,
+                Err(error) => return tool_error(error, false),
+            };
+            let page = if json {
+                hirsel_driver::api_index::render_json(&entries)
+            } else {
+                hirsel_driver::api_index::render(&entries)
+            };
+            return match output {
+                Some(path) => match std::fs::write(path, page) {
+                    Ok(()) => 0,
+                    Err(error) => tool_error(error.into(), false),
+                },
+                None => {
+                    print!("{page}");
                     0
                 }
-                Err(error) => tool_error(error, false),
             };
         }
+
         Command::Help => {
             println!("{USAGE}");
             return 0;

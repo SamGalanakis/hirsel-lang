@@ -659,7 +659,7 @@ class Scripts(unittest.TestCase):
         self.assertEqual(git(self.root, 'log', '-1', '--format=%s'), 'Regenerate the API index.')
         self.assertEqual(git(self.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'), 'docs/api.md')
         self.assertEqual(gating.green_records(self.root), records)
-        self.assertIn('hirsel doc --index', logged)
+        self.assertIn('hirsel doc stdlib/std@1/hirsel.json', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
 
     def test_land_does_not_push_or_replace_the_page_when_index_generation_fails(self):
@@ -688,7 +688,7 @@ class Scripts(unittest.TestCase):
         self.assertEqual(git(self.origin, 'show', 'main:LICENSE'), 'MIT')
         self.assertEqual(git(self.root, 'log', '--format=%s').splitlines().count('Regenerate the API index.'), 1)
         self.assertEqual(gating.green_records(self.root), records)
-        self.assertEqual(logged.count('hirsel doc --index'), 2)
+        self.assertEqual(logged.count('hirsel doc stdlib/std@1/hirsel.json'), 2)
         self.assertFalse(any(c.startswith('test') for c in logged))
 
     def test_an_expired_clippy_output_is_fetched_again(self):

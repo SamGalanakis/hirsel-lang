@@ -9,7 +9,7 @@ use std::{collections::BTreeSet, path::Path};
 fn published_index_matches_every_core_and_std_export() {
     hirsel_engine::with_compiler_stack(|| {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let entries = api_index::entries(&root).unwrap();
+        let entries = api_index::entries(&root.join("stdlib/std@1/hirsel.json")).unwrap();
         assert_eq!(
             entries
                 .iter()
@@ -58,7 +58,9 @@ fn published_index_matches_every_core_and_std_export() {
         .unwrap();
         let mut engine = program.engine;
         for (file, context) in program.files {
-            if !context.package.package_is("std", "1") {
+            if !context.package.package_is("std", "1")
+                || context.modules.iter().any(|m| m == "internal")
+            {
                 continue;
             }
             let syntax = engine.parse_file(file, &context).unwrap().value;
@@ -110,7 +112,7 @@ fn published_index_matches_every_core_and_std_export() {
         assert_eq!(
             page,
             include_str!("../../../../docs/api.md"),
-            "run hirsel doc --index > docs/api.md"
+            "run hirsel doc stdlib/std@1/hirsel.json -o docs/api.md"
         );
     });
 }
@@ -127,13 +129,13 @@ fn index_retains_source_contracts_comments_and_public_visibility() {
         }
         std::fs::write(
             root.join("stdlib/std@1/hirsel.json"),
-            r#"{"sources":[{"path":"probe.hir","module":["probe"]}]}"#,
+            r#"{"schema":1,"package":{"name":"std","version":"1"},"sources":[{"path":"probe.hir","module":["probe"]}],"dependencies":[]}"#,
         )
         .unwrap();
         std::fs::write(
             root.join("stdlib/std@1/probe.hir"),
             r#"
-/// Retains the source brand. A second sentence is omitted.
+/// Retains the source brand. A second sentence is retained.
 @noalloc
 pub fn retain[T: data](source: Dir, take value: T,
     callback: fn(T) -> bool uses {}) -> File of source uses {} { unreachable() }
@@ -143,13 +145,14 @@ pub type Record { name: String, bytes: Bytes }
 pub type Choice[T] = Empty | Value(T)
 pub opaque type Hidden: inert uses {} { secret: u64 }
 pub const LIMIT: u64 = 7
+/**/
 pub fn literal(text: String) -> bool uses {}
-  requires text == "two  spaces" { true }
+  requires text == "two  spaces and `ticks`" { true }
 pub fn comment(text: String) -> String/* relation */in text uses {} { text }
 "#,
         )
         .unwrap();
-        let entries = api_index::entries(&root).unwrap();
+        let entries = api_index::entries(&root.join("stdlib/std@1/hirsel.json")).unwrap();
         let find = |name: &str| {
             entries
                 .iter()
@@ -160,7 +163,10 @@ pub fn comment(text: String) -> String/* relation */in text uses {} { text }
             find("retain").declaration,
             "@noalloc pub fn probe.retain[T: data](source: Dir, take value: T, callback: fn(T) -> bool uses {}) -> File of source uses {}"
         );
-        assert_eq!(find("retain").description, "Retains the source brand.");
+        assert_eq!(
+            find("retain").description,
+            "Retains the source brand. A second sentence is retained."
+        );
         assert_eq!(
             find("Record").declaration,
             "pub type probe.Record { name: String, bytes: Bytes }"
@@ -172,7 +178,7 @@ pub fn comment(text: String) -> String/* relation */in text uses {} { text }
         assert_eq!(find("LIMIT").declaration, "pub const probe.LIMIT: u64");
         assert_eq!(
             find("literal").declaration,
-            "pub fn probe.literal(text: String) -> bool uses {} requires text == \"two  spaces\""
+            "pub fn probe.literal(text: String) -> bool uses {} requires text == \"two  spaces and `ticks`\""
         );
         assert_eq!(
             find("comment").declaration,
@@ -182,7 +188,57 @@ pub fn comment(text: String) -> String/* relation */in text uses {} { text }
             find("Choice#Value").declaration,
             "Value(T) -> probe.Choice[T]"
         );
+        assert!(api_index::render(&entries).contains("- ``pub fn probe.literal"));
         assert!(!entries.iter().any(|e| e.name.contains("private_function")));
+        std::fs::remove_dir_all(root).unwrap();
+    });
+}
+
+#[test]
+fn package_public_api_matches_readable_golden() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let entries = api_index::entries(&root.join("packages/doc_api@1/hirsel.json")).unwrap();
+        let page = api_index::render(&entries);
+        let expected = root.join("packages/doc_api@1/api.md");
+        if std::env::var_os("HIRSEL_BLESS").is_some() {
+            std::fs::write(expected, page).unwrap();
+            return;
+        }
+        assert_eq!(page, include_str!("../../../../packages/doc_api@1/api.md"));
+        assert_eq!(entries.len(), 13);
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.name == "api.token")
+                .unwrap()
+                .links[0]
+                .identity,
+            "doc_dep@2/model/Token"
+        );
+    });
+}
+
+#[test]
+fn package_documentation_does_not_query_bodies_or_initializers() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root =
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("api-body-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("hirsel.json"), r#"{"schema":1,"package":{"name":"probe","version":"1"},"sources":[{"path":"api.hir","module":[]}],"dependencies":[]}"#).unwrap();
+        let source = root.join("api.hir");
+        std::fs::write(
+            &source,
+            "pub fn value() -> u64 { 1 }\npub const VALUE: u64 = 1\n",
+        )
+        .unwrap();
+        let before =
+            api_index::render_json(&api_index::entries(&root.join("hirsel.json")).unwrap());
+        // Syntactically valid bodies with unavailable names/types and a const
+        // cycle must not enter signature extraction, checking or evaluation.
+        std::fs::write(&source, "pub fn value() -> u64 { let hidden: Missing = unknown(); hidden }\npub const VALUE: u64 = VALUE\n").unwrap();
+        let after = api_index::render_json(&api_index::entries(&root.join("hirsel.json")).unwrap());
+        assert_eq!(before, after);
         std::fs::remove_dir_all(root).unwrap();
     });
 }

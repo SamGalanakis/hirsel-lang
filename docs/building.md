@@ -15,6 +15,34 @@ coding agent. Its fixed goals:
 - reference counting with no lifetime variables;
 - deterministic behaviour outside capabilities.
 
+## Document a package
+
+```sh
+hirsel doc app/manifest.json                 # Markdown on stdout
+hirsel doc app/manifest.json -o app/api.md    # write a page
+hirsel doc app/manifest.json --json          # schema-1 JSON
+hirsel doc stdlib/std@1/hirsel.json -o docs/api.md
+```
+
+`doc` accepts an explicit package manifest, including a library without an entry.
+It lists every definition visible to other packages under PROG-2, including
+transparent constructors, and keeps opaque representations and `internal` modules
+hidden. Signatures retain modes, brands and sibling origins, relations, `uses`,
+contracts and attributes; attached `///` comments keep their full text and
+paragraphs. Bodies and constant initializers are not checked or evaluated.
+Documentation examples are not executed.
+
+Definition anchors encode exact package/version/module/item paths, so moving a
+source file or reordering declarations preserves links. JSON contains `schema: 1`
+and an `entries` array with `identity`, `anchor`, `name`, `declaration`,
+`description` and resolved `links` (`identity`, `name`, `url`). Markdown uses the
+same anchors and references. Core and std references link to the published
+[API page](api.md); other dependency references use
+`../<package>@<version>/api.md#<anchor>`, so publishing package pages in sibling
+versioned directories keeps those links intact. `-o` also accepts JSON output.
+Std's manifest publishes core registry entries and std declarations together
+through this same renderer.
+
 ## Build and launch a program
 
 ```sh
@@ -368,7 +396,7 @@ rebased tree, and push, repeating when main moved. It never runs tests: it
 refuses a change `tools/gate` has not passed, and stops on a rebase conflict
 (resolve it, gate the result, land again).
 
-After those checks, land runs the built `hirsel doc --index` and commits a
+After those checks, land runs the built `hirsel doc stdlib/std@1/hirsel.json` and commits a
 changed `docs/api.md` separately as `Regenerate the API index.` before pushing.
 This generated-only update needs no new gate; a push retry regenerates it
 after the next rebase. The export-count and drift test stays in the gate.

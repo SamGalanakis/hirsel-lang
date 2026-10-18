@@ -51,7 +51,7 @@ python3 tools/buck2/sync.py                       # after metadata or action-siz
 tools/gate                                           # the per-push gate (tools/land lands)
 ```
 
-`tools/land` rebuilds after its rebase, then runs the built `hirsel doc --index`.
+`tools/land` rebuilds after its rebase, then runs the built `hirsel doc stdlib/std@1/hirsel.json`.
 It commits a changed `docs/api.md` separately as `Regenerate the API index.`
 before pushing; this generated-only commit needs no new gate. Push retries
 regenerate after the next rebase. The gate retains the export-count and drift
