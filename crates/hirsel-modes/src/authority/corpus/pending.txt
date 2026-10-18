@@ -106,6 +106,7 @@ CLO/CLO-4-taken-function-needs-global-bad.hir # not done J: missing CLO-4 line 1
 CONC/CONC-4-sequential-atomic-order.hir # dependency-owned H: LANG-2 line 12: literal needs an expected type or numeric suffix
 CONC/CONC-5-channel-in-body-bad.hir # dependency-owned H: LANG-2 line 9: generic call arguments cannot be inferred from its prefix and expected type
 CONC/CONC-5-inert-capture-and-update.hir # dependency-owned H: LANG-2 line 13: literal needs an expected type or numeric suffix
+CONC/CONC-5-payload-unique-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 CONC/CONC-6-all-duplicated-senders-drop.hir # dependency-owned H: LANG-2 line 16: generic call arguments cannot be inferred from its prefix and expected type
 CONC/CONC-6-buffer-drains.hir # dependency-owned H: LANG-2 line 15: generic call arguments cannot be inferred from its prefix and expected type
 CONC/CONC-6-last-receiver-closes-send.hir # dependency-owned H: LANG-2 line 16: generic call arguments cannot be inferred from its prefix and expected type

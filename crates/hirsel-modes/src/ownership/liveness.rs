@@ -157,6 +157,7 @@ impl Liveness<'_> {
                 writes.push(Holder::Temporary(*expression));
                 uses.push(Holder::Temporary(*child));
             }
+            Op::MapError { value, .. } => uses.push(Holder::Temporary(*value)),
             Op::IterationLoan { source, begin } => {
                 uses.push(Holder::Temporary(*source));
                 if *begin {

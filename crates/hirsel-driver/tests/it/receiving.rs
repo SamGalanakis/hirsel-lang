@@ -352,10 +352,18 @@ fn freezing_a_projected_box_requires_global_contents_before_uniqueness() {
         let file = engine.sources.add("freeze.hir", source.into()).unwrap();
         let checked = check_progress(&mut engine, file, &default_context()).unwrap();
         assert_eq!(checked.diagnostics[0].rule.as_str(), "MODE-1");
-        assert_eq!(checked.diagnostics[1].rule.as_str(), "MEM-11");
-        for diagnostic in &checked.diagnostics {
+        // With global contents, the box's aliased contents fail MEM-11.
+        let global = source
+            .replace("take r: R in r", "take r: R")
+            .replace("({r})", "r");
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("global.hir", global.clone()).unwrap();
+        let unique = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert_eq!(unique.diagnostics[0].rule.as_str(), "MEM-11");
+        for (text, checked) in [(source, &checked), (global.as_str(), &unique)] {
+            let diagnostic = &checked.diagnostics[0];
             assert_eq!(
-                &source[diagnostic.primary.start as usize..diagnostic.primary.end as usize],
+                &text[diagnostic.primary.start as usize..diagnostic.primary.end as usize],
                 "shared.freeze(take built)",
             );
         }

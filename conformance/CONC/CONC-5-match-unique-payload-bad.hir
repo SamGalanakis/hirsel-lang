@@ -1,5 +1,5 @@
 // rule: CONC-5
-// expect: reject MODE-2 at line 12
+// expect: reject CONC-5 at line 12
 fn load() -> Result[unique List[u64], ()] {
   Ok([1])
 }

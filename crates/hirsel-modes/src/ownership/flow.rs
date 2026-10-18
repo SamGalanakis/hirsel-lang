@@ -2609,6 +2609,86 @@ impl Checker<'_> {
             })
     }
     /// The declaration a call names directly, if any.
+    /// The rule that owns a core operation's argument requirements, with the
+    /// general rules it specialises there: freezing needs a unique root
+    /// (MEM-11) and a mutex a unique, sendable payload (CONC-5).
+    fn intrinsic_owner(&self, callee: ExprId) -> Option<(RuleId, &'static [&'static str])> {
+        use hirsel_types::core_roles::{Intrinsic, intrinsic_roles};
+        let path = self.callee_definition(callee)?;
+        let (_, role) = intrinsic_roles().into_iter().find(|(p, _)| p == path)?;
+        match role {
+            Intrinsic::SharedFreeze => Some((const { RuleId::of("MEM-11") }, &["MODE-2"])),
+            Intrinsic::MutexCreate => Some((const { RuleId::of("CONC-5") }, &["MODE-2", "MODE-4"])),
+            _ => None,
+        }
+    }
+    /// MODE-2: the failure edge of `value ? mapper` takes the error payload,
+    /// which is unique exactly when the Result currently is. A mapper whose
+    /// parameter is `unique` needs that, unless the payload is Plain or Shared.
+    fn map_error(&mut self, state: &State, expression: ExprId, value: ExprId) {
+        let Some(path) = self
+            .body
+            .resolution
+            .paths
+            .iter()
+            .find_map(|(site, name)| match name {
+                ResolvedName::Definition(path) if *site == NameSite::Expression(expression) => {
+                    Some(path.clone())
+                }
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let Some(signature) = self.signatures.cached(&path) else {
+            return;
+        };
+        let SignatureKind::Function(function) = &signature.kind else {
+            return;
+        };
+        let [parameter] = function.parameters.as_slice() else {
+            return;
+        };
+        if signature
+            .types
+            .get(parameter.ty)
+            .map(|row| row.modes.uniqueness)
+            != Some(Uniqueness::Unique)
+        {
+            return;
+        }
+        let Some(TypeKind::Named { arguments, .. }) = self
+            .ty(value)
+            .and_then(|ty| self.body.types.get(ty))
+            .map(|row| &row.kind)
+        else {
+            return;
+        };
+        let [_, hirsel_types::GenericArgument::Type(error)] = arguments.as_slice() else {
+            return;
+        };
+        if self
+            .properties
+            .get(error.index())
+            .is_some_and(|p| p.plain || p.shared)
+            || self.value(state, value).modes.uniqueness == Uniqueness::Unique
+        {
+            return;
+        }
+        let span = self.span_of(expression);
+        let operand = self.span_of(value);
+        self.report(
+            const { RuleId::of("MODE-2") },
+            span,
+            "the error mapper requires a unique error payload",
+            |_| {
+                Explanation::default()
+                    .provided(Fact::new(Cause::Aliased, operand, &[]))
+                    .required(Fact::new(Requirement::Unique, span, &[]))
+                    .into()
+            },
+        );
+    }
     fn callee_definition(&self, callee: ExprId) -> Option<&hirsel_syntax::DefPath> {
         self.body
             .resolution
@@ -4030,6 +4110,7 @@ impl Checker<'_> {
                 self.record(*expression, &mut value);
                 state.values.insert(*expression, value);
             }
+            Op::MapError { expression, value } => self.map_error(state, *expression, *value),
             Op::Forward { expression, child } => {
                 let mut value = self.value(state, *child);
                 if matches!(
@@ -5669,7 +5750,19 @@ impl Checker<'_> {
                                 );
                             }
                             let argument = self.tree.expressions[arg.value.0 as usize].origin.span;
+                            // A core operation's own rule names its argument's
+                            // failed uniqueness or crossing requirement.
+                            let owner = if self.diagnostics.len() > before {
+                                self.intrinsic_owner(*callee)
+                            } else {
+                                None
+                            };
                             for diagnostic in &mut self.diagnostics[before..] {
+                                if let Some((owner, rules)) = &owner
+                                    && rules.contains(&diagnostic.rule.as_str())
+                                {
+                                    diagnostic.rule = owner.clone();
+                                }
                                 diagnostic.secondary.push(hirsel_diag::Label {
                                     span: argument,
                                     message: "parameter mode requirement".into(),

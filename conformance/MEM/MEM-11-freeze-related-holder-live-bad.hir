@@ -1,0 +1,13 @@
+// rule: MEM-11
+// expect: reject MEM-11 at line 12
+// `kept` still holds a copy of a result related to `xs` when `xs` is frozen.
+// Twin is MEM-11-freeze-after-related-holder-dies-run.
+fn view(x: List[u64]) -> List[u64] in x {
+  x
+}
+
+fn freeze(take xs: unique List[u64]) -> Shared[List[u64]] {
+  let kept = (copy view(xs),)
+  let n = 1u64
+  shared.freeze(take xs)
+}

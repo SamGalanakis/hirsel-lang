@@ -2016,46 +2016,6 @@ impl<'a> Checker<'a> {
                             .required(Fact::new(Requirement::Write, stmt.origin.span, &[&name])),
                     );
                 }
-                if self
-                    .frames
-                    .last()
-                    .is_some_and(|f| f.restriction.as_str() == "CONC-5")
-                {
-                    if let (Some(place_type), Some(value_type)) = (self.ty(place), self.ty(value)) {
-                        if self
-                            .out
-                            .body
-                            .types
-                            .get(place_type)
-                            .unwrap()
-                            .modes
-                            .uniqueness
-                            == Uniqueness::Unique
-                            && !self.property(value_type, Bound::Plain)
-                            && self
-                                .out
-                                .body
-                                .types
-                                .get(value_type)
-                                .unwrap()
-                                .modes
-                                .uniqueness
-                                != Uniqueness::Unique
-                        {
-                            self.explained(
-                                const { RuleId::of("CONC-5") },
-                                stmt.origin.span,
-                                "values stored into a mutex payload must be unique",
-                                self.boundary_explanation(
-                                    Some(value),
-                                    self.span(place),
-                                    Cause::Aliased,
-                                    Requirement::Unique,
-                                ),
-                            );
-                        }
-                    }
-                }
                 let whole_binding = self.source_place(place).projections.is_empty()
                     && matches!(self.source_place(place).root, SourceRoot::Binding { .. });
                 let expected = if whole_binding {

@@ -1,5 +1,5 @@
 // rule: CONC-5
-// expect: reject MODE-2 at line 14
+// expect: reject CONC-5 at line 14
 type Parcel {
   body: unique String,
 }

@@ -696,6 +696,7 @@ fn reads_writes(op: &Op) -> (Vec<ExprId>, Vec<ExprId>) {
             ..
         } => (children.clone(), vec![*expression]),
         Op::Forward { expression, child } => (vec![*child], vec![*expression]),
+        Op::MapError { value, .. } => (vec![*value], vec![]),
         Op::IterationLoan { source, .. } => (vec![*source], vec![]),
         Op::ArgumentLoan { argument, .. } => (vec![*argument], vec![]),
         Op::Bind { value, .. } | Op::Return { value, .. } => (vec![*value], vec![]),

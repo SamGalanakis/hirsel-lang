@@ -94,6 +94,28 @@ pub fn check_ownership_with_clauses(
     let field_loan_places =
         properties::field_loan_places(body, signature, &graphs, &mut signatures, provider, &rows)?;
     let mut properties = properties::classify(body, signature, &mut signatures, provider)?;
+    // MODE-2: an error mapper's parameter mode is checked on the failure edge.
+    for graph in &graphs {
+        for node in &graph.nodes {
+            let cfg::Op::MapError { expression, .. } = node.op else {
+                continue;
+            };
+            let mapper = body
+                .resolution
+                .paths
+                .iter()
+                .find_map(|(site, name)| match name {
+                    ResolvedName::Definition(path) if *site == NameSite::Expression(expression) => {
+                        Some(path.clone())
+                    }
+                    _ => None,
+                });
+            // J reports an unreadable mapper; this read only feeds the check.
+            if let Some(path) = mapper {
+                let _ = signatures.read(&path, body, provider);
+            }
+        }
+    }
     let result_sharing =
         properties::result_sharing(body, signature, &graphs, &mut signatures, provider, &rows)?;
     let mut mutation_sites = Vec::new();

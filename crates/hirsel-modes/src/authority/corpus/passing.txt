@@ -251,7 +251,6 @@ CONC/CONC-5-io-in-body-bad.hir
 CONC/CONC-5-io-in-body-ok.hir
 CONC/CONC-5-nested-lock-in-body-bad.hir
 CONC/CONC-5-nested-lock-in-body-ok.hir
-CONC/CONC-5-payload-unique-bad.hir
 CONC/CONC-5-payload-unique-ok.hir
 CONC/CONC-5-result-sendable-bad.hir
 CONC/CONC-5-result-sendable-ok.hir

@@ -74,8 +74,8 @@ fn case_8_result_of_a_temporary_closure_environment() {
 }
 
 /// Every specialized capture/payload reject has a clean accepted twin. This
-/// checks both explanation sides through production selection without changing
-/// any corpus expectation.
+/// checks both explanation sides through production selection, under the rule
+/// each corpus file expects.
 #[test]
 fn concurrency_boundaries_name_both_causes_and_keep_their_twins() {
     for stem in [
@@ -89,12 +89,16 @@ fn concurrency_boundaries_name_both_causes_and_keep_their_twins() {
         "CONC-6-open-receiver-payload",
     ] {
         let path = Path::new("../../conformance/CONC");
-        let rejected = hirsel_driver::check_path(&path.join(format!("{stem}-bad.hir"))).unwrap();
+        let bad = path.join(format!("{stem}-bad.hir"));
+        let rejected = hirsel_driver::check_path(&bad).unwrap();
         let first = &rejected.diagnostics[0];
-        assert!(
-            first.rule.as_str().starts_with("CONC-"),
-            "{stem}: {first:?}"
-        );
+        let text = std::fs::read_to_string(&bad).unwrap();
+        let expected = text
+            .lines()
+            .find_map(|line| line.strip_prefix("// expect: reject "))
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap();
+        assert_eq!(first.rule.as_str(), expected, "{stem}: {first:?}");
         assert!(
             first
                 .secondary

@@ -61,7 +61,7 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
                 let expected = if action.starts_with("change") {
                     view.starts_with('{').then_some("MODE-2")
                 } else if action.starts_with("let frozen") {
-                    Some("MEM-11")
+                    view.starts_with('{').then_some("MEM-11")
                 } else {
                     Some("MODE-4")
                 };

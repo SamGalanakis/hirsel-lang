@@ -1,0 +1,32 @@
+// rule: MEM-11
+// expect: run
+// stdout: ok
+// `kept` holds a copy of a result related to `xs` only until its block ends,
+// so `xs` is unique again when it is frozen. Twin is
+// MEM-11-freeze-related-holder-live-bad.
+fn view(x: List[u64]) -> List[u64] in x {
+  x
+}
+
+fn freeze(take xs: unique List[u64]) -> Shared[List[u64]] {
+  {
+    let kept = (copy view(xs),)
+  }
+  shared.freeze(take xs)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let ok = match shared.thaw(freeze(unique [1u64, 2u64, 3u64])) {
+    Ok(xs) => list.len(xs) == 3u64,
+    Error(_) => false,
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

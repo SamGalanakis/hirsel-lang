@@ -322,21 +322,6 @@ impl Checker<'_> {
                 self.span(expression),
             )
         });
-        let actual_modes = self.out.body.types.get(error).unwrap().modes.clone();
-        let required_modes = self.out.body.types.get(expected).unwrap().modes.clone();
-        if required_modes.uniqueness == Uniqueness::Unique
-            && actual_modes.uniqueness != Uniqueness::Unique
-            && !self.property(error, Bound::Plain)
-        {
-            self.explained(
-                const { RuleId::of("MODE-2") },
-                span,
-                "the error mapper requires a unique error payload",
-                Explanation::default()
-                    .provided(Fact::new(Cause::Aliased, self.span(value), &[]))
-                    .required(Fact::new(Requirement::Unique, span, &[])),
-            );
-        }
         self.compatible(error, expected, span, None, false);
         self.receiving = saved;
         // H checks ordinary structural bounds; crossing and authority bounds
@@ -1986,19 +1971,6 @@ impl Checker<'_> {
                                 .required(Fact::new(Requirement::NoResources, span, &[])),
                         );
                     }
-                    if !self.property(*t, Bound::Plain)
-                        && self.out.body.types.get(*t).unwrap().modes.uniqueness
-                            != Uniqueness::Unique
-                    {
-                        self.explained(
-                            const { RuleId::of("MEM-11") },
-                            span,
-                            "Shared construction requires a unique root",
-                            Explanation::default()
-                                .provided(Fact::new(Cause::Aliased, span, &[]))
-                                .required(Fact::new(Requirement::Unique, span, &[])),
-                        );
-                    }
                 }
             }
             Some(Intrinsic::ArenaSeal) => {
@@ -2015,29 +1987,17 @@ impl Checker<'_> {
             }
             Some(Intrinsic::MutexCreate) => {
                 if let Some(t) = args.get(1) {
-                    if !self.property(*t, Bound::Plain)
-                        && self.out.body.types.get(*t).unwrap().modes.uniqueness
-                            != Uniqueness::Unique
-                        || !self.sendable(*t)
-                    {
-                        let cause = if !self.property(*t, Bound::Plain)
-                            && self.out.body.types.get(*t).unwrap().modes.uniqueness
-                                != Uniqueness::Unique
-                        {
-                            Cause::Aliased
-                        } else {
-                            Cause::NotSendable
-                        };
-                        let required = if cause == Cause::Aliased {
-                            Requirement::Unique
-                        } else {
-                            Requirement::Sendable
-                        };
+                    if !self.sendable(*t) {
                         self.explained(
                             const { RuleId::of("CONC-5") },
                             span,
                             "mutex payload must be unique and sendable",
-                            self.payload_explanation(e, 1, cause, required),
+                            self.payload_explanation(
+                                e,
+                                1,
+                                Cause::NotSendable,
+                                Requirement::Sendable,
+                            ),
                         );
                     }
                 }

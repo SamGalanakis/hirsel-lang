@@ -188,7 +188,14 @@ Fresh call receipts own their identities even when their types are Plain;
 moving one ends dependent brands instead of detaching a copied alias. An error
 mapper's parameter refinements and crossing/authority bounds are checked against
 the owned error payload at the propagation site, independently of its success
-payload and of the enclosing Result.
+payload and of the enclosing Result. Its uniqueness is I's: the failure edge
+(`Op::MapError`) needs the Result currently unique for a `unique` mapper parameter
+unless the payload is Plain or Shared.
+
+I alone judges current uniqueness. J checks the structural parts of the freeze,
+mutex and channel requirements; I checks every `unique` requirement with flow
+evidence, and a core operation's own rule names its failed argument requirement
+(`intrinsic_owner`): MEM-11 for `shared.freeze`, CONC-5 for `mutex.create`.
 
 `authority::check_file_with_clauses(file, item, signature, body, provider,
 intrinsics, loops, clauses)` consumes the checked body and returns `AuthorityOutput`.

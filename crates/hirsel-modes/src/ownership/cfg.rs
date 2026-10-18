@@ -61,6 +61,12 @@ pub(super) enum Op {
         expression: ExprId,
         child: ExprId,
     },
+    /// The failure edge of `value ? mapper` hands the error payload to
+    /// `mapper` (`expression` is the propagation).
+    MapError {
+        expression: ExprId,
+        value: ExprId,
+    },
     Bind {
         pattern: PatternId,
         value: ExprId,
@@ -999,7 +1005,7 @@ pub(super) fn build(
                             });
                             continue;
                         }
-                        ExprKind::Try { value, .. } => {
+                        ExprKind::Try { value, map_error } => {
                             let finish = node(
                                 &mut nodes,
                                 Op::Forward {
@@ -1015,7 +1021,7 @@ pub(super) fn build(
                                 vec![exit],
                                 expr.origin.span,
                             );
-                            let kill = exit_statements(
+                            let mut kill = exit_statements(
                                 &mut nodes,
                                 &statements,
                                 env.statement,
@@ -1023,6 +1029,17 @@ pub(super) fn build(
                                 kill,
                                 expr.origin.span,
                             );
+                            if map_error.is_some() {
+                                kill = node(
+                                    &mut nodes,
+                                    Op::MapError {
+                                        expression,
+                                        value: *value,
+                                    },
+                                    vec![kill],
+                                    expr.origin.span,
+                                );
+                            }
                             let branch =
                                 node(&mut nodes, Op::Nop, vec![finish, kill], expr.origin.span);
                             jobs.push(Job::Expr {
