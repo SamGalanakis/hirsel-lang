@@ -1,8 +1,6 @@
 // A test runner: run one test program, stream each line it prints as it arrives, and
 // stop it at a deadline. Usage: testrun PROGRAM [MILLISECONDS], default 5000.
-pub type RunError = Grant(GrantError) | Usage(String) | Clock(ClockError) | Wait(
-  WaitError
-)
+pub type RunError = Grant(GrantError) | Usage(String) | Clock(ClockError)
 
 fn grant(e: GrantError) -> RunError uses {} {
   Grant(e)
@@ -10,10 +8,6 @@ fn grant(e: GrantError) -> RunError uses {} {
 
 fn clock_error(e: ClockError) -> RunError uses {} {
   Clock(e)
-}
-
-fn wait_error(e: WaitError) -> RunError uses {} {
-  Wait(e)
 }
 
 pub type Verdict = Passed | Failed(ExitStatus) | TimedOut | NotRun(ProcessError)
@@ -43,8 +37,8 @@ fn print_line(out: Stdout, take line: List[u8]) -> () {
   }
 }
 
-// Spawn the test and print its output line by line until it ends. A cancellation at the
-// deadline ends the read; returning then drops the Child, which kills the test.
+// Spawn the test and print its output line by line until it ends. Past the deadline the
+// read returns Canceled; returning then drops the Child, which kills the test.
 fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
   let mut test = match proc.spawn(p, program, [], None()) {
     Ok(c) => take c,
@@ -69,7 +63,6 @@ fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
           }
         }
       },
-      Error(Canceled(_)) => return TimedOut(),
       Error(e) => return NotRun(e),
     }
   }
@@ -100,37 +93,17 @@ pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
     Some(at) => at,
     None() => return Error(Usage("MILLISECONDS is too large")),
   }
-  let done = atomic.create(tasks, false)
-  let verdict = task.scope(
+  // The deadline cancels the stream's scope: no task watches the clock.
+  let verdict = match task.scope_until(
     tasks,
-    fn(s: Scope) -> Result[Verdict, RunError] {
-      let running = task.async(
-        s,
-        fn() -> Verdict {
-          let verdict = stream(p, out, program)
-          atomic.store(tasks, done, true)
-          verdict
-        }
-      )
-      // The watchdog reads the clock the program holds: at the deadline it cancels the
-      // stream, which kills the test.
-      let mut watching = true
-      while watching && !atomic.load(tasks, done) {
-        let now = clock.monotonic(clock) ? clock_error
-        if instant.ticks(now) >= instant.ticks(deadline) {
-          task.cancel(s, running)
-          watching = false
-        } else {
-          let soon = match instant.checked_add(clock, now, 10000000u64) {
-            Some(at) => at,
-            None() => deadline,
-          }
-          clock.sleep_until(clock, soon) ? wait_error
-        }
-      }
-      Ok(task.await(s, take running))
+    Deadline(clock: clock, at: deadline),
+    fn(s: Scope) -> Verdict {
+      stream(p, out, program)
     }
-  )?
+  ) {
+    Finished(ran) => ran,
+    Expired(_) => TimedOut(),
+  }
   let _ = out.print(
     out,
     match verdict {

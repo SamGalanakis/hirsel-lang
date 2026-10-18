@@ -14,7 +14,8 @@ hirsel run --native examples/testrun/hirsel.json --grants /tmp/testrun-grants.js
 The test is spawned with `proc.spawn` (granted by its exact path, with no environment and
 `/` as its working directory) and its standard output is read with `child.read_stdout`,
 which parks the reading task until bytes arrive, so each line prints as the test writes
-it. The main task is the watchdog: it reads the monotonic clock every 10 ms and at the
-deadline cancels the reading task, whose read returns `Canceled`; returning drops the
-`Child`, which kills the test. A test that ends first is reaped with `child.wait` and its
-exit status decides `PASS` or `FAIL`.
+it. The stream runs in `task.scope_until` with the deadline on the granted monotonic
+clock: nothing polls the clock, and when the deadline passes the scope is canceled, so the
+read returns `Canceled`; returning drops the `Child`, which kills the test, and the scope
+reports `Expired`, which prints `TIMEOUT`. A test that ends first is reaped with
+`child.wait` and its exit status decides `PASS` or `FAIL`.

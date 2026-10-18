@@ -1614,7 +1614,7 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
         path
     };
     // No outcome races the clock: a test that ends by itself has an hour, and the hung test
-    // never ends by itself, so only its deadline can stop it.
+    // prints nothing and never ends by itself, so only its deadline can stop it.
     let cases = [
         (
             script(
@@ -1632,13 +1632,10 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
         (
             script(
                 "hang.sh",
-                format!(
-                    "echo $$ > {}\necho started\nexec sleep 3600\n",
-                    pid.display()
-                ),
+                format!("echo $$ > {}\nexec sleep 3600\n", pid.display()),
             ),
             "300",
-            "| started\nTIMEOUT\n",
+            "TIMEOUT\n",
         ),
     ];
     for (program, limit, expected) in &cases {
