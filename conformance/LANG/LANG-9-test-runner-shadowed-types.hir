@@ -1,0 +1,16 @@
+// rule: LANG-9
+// expect: test
+type Result = Good | Bad
+
+type Test {
+  value: u64,
+}
+
+@test
+fn t(context: core@1/Test) {
+  core@1/test.check(context, true)
+}
+
+fn hirsel_test_entry_0() {}
+
+fn hirsel_test_context_1() {}
