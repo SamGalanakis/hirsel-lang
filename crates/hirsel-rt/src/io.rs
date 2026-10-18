@@ -94,6 +94,11 @@ pub enum Request {
         env: u64,
         name: String,
     },
+    /// `env.narrow`: an Env granting exactly `names`, each granted by `env`.
+    EnvNarrow {
+        env: u64,
+        names: Vec<String>,
+    },
     MonotonicClock {
         io: u64,
     },
@@ -132,6 +137,11 @@ pub enum Request {
         test: u64,
         runs: Vec<hirsel_run_config::ProcessRun>,
         children: Vec<hirsel_run_config::ChildRun>,
+    },
+    /// `proc.narrow`: a Proc of `rules`, each within a rule of `process`, in its world.
+    ProcessNarrow {
+        process: u64,
+        rules: Vec<hirsel_run_config::ProcessRule>,
     },
     /// `proc.run`.
     ProcessRun {
@@ -240,6 +250,10 @@ pub enum Request {
     NarrowDir {
         directory: u64,
         path: String,
+    },
+    /// `dir.read_only`: the directory's own pinned root, with read access.
+    ReadOnlyDir {
+        directory: u64,
     },
     Print {
         stdout: u64,
@@ -892,6 +906,14 @@ impl State {
             Some((selector.as_str(), local, *access))
         })
     }
+    /// Whether Env `env` grants `name`: the root grants every name of the run's Env.
+    pub(crate) fn env_granted(&self, env: u64, name: &str) -> Result<bool, AdapterError> {
+        match self.handles.rows.get(&env) {
+            _ if env == ENV_HANDLE => Ok(self.env.contains_key(name)),
+            Some(Grant::Env { names }) => Ok(names.contains(name)),
+            _ => Err(AdapterError::InvalidHandle(env)),
+        }
+    }
     pub(crate) fn access(&self, id: u64) -> Result<Access, AdapterError> {
         match self.handles.rows.get(&id) {
             Some(Grant::Directory { access, .. }) => Ok(*access),
@@ -920,6 +942,7 @@ impl State {
     fn fake_tree(&self, request: &Request) -> Option<u64> {
         let directory = match request {
             Request::NarrowDir { directory, .. }
+            | Request::ReadOnlyDir { directory }
             | Request::Open { directory, .. }
             | Request::FileRead { directory, .. }
             | Request::FileSeek { directory, .. }
@@ -1052,8 +1075,10 @@ impl State {
             self.fake_files.insert(tree_id, identities);
             self.fake_roots.insert(tree_id, roots);
             self.fake_detached.insert(tree_id, detached);
-            if matches!(request, Request::NarrowDir { .. })
-                && let Ok(Completion::Handle(Ok(id))) = &result
+            if matches!(
+                request,
+                Request::NarrowDir { .. } | Request::ReadOnlyDir { .. }
+            ) && let Ok(Completion::Handle(Ok(id))) = &result
             {
                 self.fake_directories.insert(*id, tree_id);
             }
@@ -1279,13 +1304,21 @@ impl State {
                 Ok(C::Handle(Ok(self.handles.insert(grant))))
             }
             R::ReadStdin { .. } => Err(AdapterError::InvalidCompletion),
-            R::EnvGet { env, name } => {
-                if *env != ENV_HANDLE {
-                    return Err(AdapterError::InvalidHandle(*env));
+            R::EnvGet { env, name } => Ok(C::Env(if self.env_granted(*env, name)? {
+                self.env.get(name).cloned().ok_or(EnvError::NotGranted)
+            } else {
+                Err(EnvError::NotGranted)
+            })),
+            R::EnvNarrow { env, names } => {
+                self.env_granted(*env, "")?;
+                for name in names {
+                    if !self.env_granted(*env, name)? {
+                        return Ok(C::Handle(Err(IoError::NotGranted)));
+                    }
                 }
-                Ok(C::Env(
-                    self.env.get(name).cloned().ok_or(EnvError::NotGranted),
-                ))
+                Ok(C::Handle(Ok(self.handles.insert(Grant::Env {
+                    names: names.iter().cloned().collect(),
+                }))))
             }
             R::Stdout { io } => {
                 self.expect(*io, Grant::Io)?;
@@ -1294,31 +1327,31 @@ impl State {
                 }
                 Ok(C::Handle(Ok(self.handles.insert(Grant::Stdout))))
             }
-            R::Directory { io, path }
-            | R::NarrowDir {
-                directory: io,
-                path,
-            } => {
-                let (root, path, access) = if matches!(request, R::Directory { .. }) {
-                    self.expect(*io, Grant::Io)?;
-                    if !self.projections.contains("dir") {
-                        return Ok(C::Handle(Err(IoError::NotGranted)));
+            R::Directory { .. } | R::NarrowDir { .. } | R::ReadOnlyDir { .. } => {
+                // A read-only Dir reopens its parent's pinned directory, never the path.
+                let (parent, root, path, access) = match request {
+                    R::Directory { io, path } => {
+                        self.expect(*io, Grant::Io)?;
+                        if !self.projections.contains("dir") {
+                            return Ok(C::Handle(Err(IoError::NotGranted)));
+                        }
+                        let Some((selector, local, access)) = self.mount(path) else {
+                            return Ok(C::Handle(Err(IoError::NotGranted)));
+                        };
+                        (0, selector.to_owned(), local, access)
                     }
-                    let Some((selector, local, access)) = self.mount(path) else {
-                        return Ok(C::Handle(Err(IoError::NotGranted)));
-                    };
-                    (selector.to_owned(), local, access)
-                } else {
-                    (self.directory(*io)?, path.as_str(), self.access(*io)?)
+                    R::NarrowDir { directory, path } => (
+                        *directory,
+                        self.directory(*directory)?,
+                        path.as_str(),
+                        self.access(*directory)?,
+                    ),
+                    R::ReadOnlyDir { directory } => {
+                        (*directory, self.directory(*directory)?, "", Access::Read)
+                    }
+                    _ => unreachable!(),
                 };
-                storage.activate(
-                    if matches!(request, R::Directory { .. }) {
-                        0
-                    } else {
-                        *io
-                    },
-                    &root,
-                );
+                storage.activate(parent, &root);
                 let result = if let Some(e) = error {
                     Err(e)
                 } else {
@@ -2093,6 +2126,28 @@ path_export!(
     HandleResult,
     HandleResult::of
 );
+/// Hirsel ABI v2: `dir.read_only`. Expected errors are results; refused authority returns 1.
+/// # Safety
+/// The bound context, borrowed directory address and writable result are live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_dir_read_only(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut HandleResult,
+    directory: *const u64,
+) -> u8 {
+    let request = Request::ReadOnlyDir {
+        directory: unsafe { directory.read() },
+    };
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Handle(value) = completion else {
+        crate::fault("Io completion type mismatch");
+    };
+    unsafe { out.write(HandleResult::of(value)) };
+    crate::STATUS_OK
+}
 path_export!(
     hirsel_rt_v2_file_open,
     Open,
@@ -3292,6 +3347,30 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_get(
         }
     }
     unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+
+/// `env.narrow(e: Env, names: List[String]) -> Result[Env, EnvError]`; each name is a
+/// 24-byte String slice.
+/// # Safety
+/// Context bound; env readable; names a live List[String] block; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_env_narrow(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut GrantResult,
+    env: *const u64,
+    names: *mut crate::Header,
+) -> u8 {
+    let request = Request::EnvNarrow {
+        env: unsafe { env.read() },
+        names: unsafe { crate::process::list(names, 24, |at| crate::process::text(at)) },
+    };
+    let Ok(Completion::Handle(value)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    // EnvError's NotGranted() and GrantError's share ordinal 0.
+    unsafe { out.write(GrantResult::of(value)) };
     crate::STATUS_OK
 }
 

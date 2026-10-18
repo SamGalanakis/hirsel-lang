@@ -61,6 +61,28 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         Request::ReadStdin { stdin, max } => format!("stdin_read {stdin} {max}"),
         Request::PrintStderr { stderr, bytes } => format!("stderr_print {stderr} {}", hex(bytes)),
         Request::EnvGet { env, name } => format!("env_get {env} {}", hex(name.as_bytes())),
+        Request::EnvNarrow { env, names } => {
+            let mut text = format!("env_narrow {env} {}", names.len());
+            for name in names {
+                text.push_str(&format!(" {}", hex(name.as_bytes())));
+            }
+            text
+        }
+        // Each rule is its program and its counted names; the rule count leads.
+        Request::ProcessNarrow { process, rules } => {
+            let mut text = format!("process_narrow {process} {}", rules.len());
+            for rule in rules {
+                text.push_str(&format!(
+                    " {} {}",
+                    hex(rule.program.as_bytes()),
+                    rule.env.len()
+                ));
+                for name in &rule.env {
+                    text.push_str(&format!(" {}", hex(name.as_bytes())));
+                }
+            }
+            text
+        }
         Request::Process { io } => format!("process {io}"),
         Request::Ready { wait, polls } => format!("ready {wait} {polls}"),
         Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
@@ -371,6 +393,31 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             env: number(env)?,
             name: text(name)?,
         },
+        ["env_narrow", env, count, names @ ..] if number::<usize>(count)? == names.len() => {
+            Request::EnvNarrow {
+                env: number(env)?,
+                names: names.iter().map(|n| text(n)).collect::<Result<_, _>>()?,
+            }
+        }
+        ["process_narrow", process, count, rest @ ..] => {
+            let mut words = rest.iter().copied();
+            let mut next = || words.next().ok_or("truncated process tape rule");
+            let mut rules = vec![];
+            for _ in 0..number::<usize>(count)? {
+                let program = text(next()?)?;
+                let env = (0..number::<usize>(next()?)?)
+                    .map(|_| text(next()?))
+                    .collect::<Result<_, _>>()?;
+                rules.push(hirsel_run_config::ProcessRule { program, env });
+            }
+            if words.next().is_some() {
+                return Err("trailing process tape words".into());
+            }
+            Request::ProcessNarrow {
+                process: number(process)?,
+                rules,
+            }
+        }
         ["process", io] => Request::Process { io: number(io)? },
         ["ready", wait, polls] => Request::Ready {
             wait: number(wait)?,

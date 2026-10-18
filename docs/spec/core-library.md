@@ -65,6 +65,7 @@ fn random.bytes(r: Random, count: u64) -> Result[Bytes, RandomError]
 N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
 fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
+fn dir.read_only(d: Dir) -> Result[Dir, FileError]
 N fn arg.len(args: Args) -> u64
 fn arg.text(args: Args, index: u64) -> Result[String, ArgError]
 fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
@@ -73,6 +74,7 @@ fn path.of(text: String) -> Path
 N fn err.print(s: Stderr, text: String) -> Result[(), OutputError]
 N fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
 fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]
+fn env.narrow(e: Env, names: List[String]) -> Result[Env, EnvError]
 N fn test.check(t: Test, condition: bool) -> ()
 N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
@@ -138,6 +140,7 @@ fn udp.recv_from(n: Net, mut s: UdpSocket of n, mut buffer: List[u8], max: u64) 
 N fn udp.close(n: Net, take s: UdpSocket of n) -> ()
 
 // CAP-1/2, PROV-1/3, DROP-2/3, CONC-1/3, DET-1
+fn proc.narrow(p: Proc, rules: List[ProcessRule]) -> Result[Proc, ProcessError]
 fn proc.run(p: Proc, cmd: Command, stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
 fn proc.pipeline(p: Proc, stages: List[Command], stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[PipelineOutput, ProcessError]
 fn proc.spawn(p: Proc, cmd: Command) -> Result[Child of p, ProcessError]
@@ -313,6 +316,13 @@ permission errors. Other file errors retain `FileFault(u32)`; file and output fa
 are capability inputs, not inferred OS error numbers. Every variant is recorded and
 replayed as a run input; injected non-canceled errors can follow partial write effects.
 
+`dir.narrow(d, p)` returns a `Dir` over `p` beneath `d` with `d`'s access.
+`dir.read_only(d)` returns a `Dir` over `d`'s own pinned directory (never the path
+re-resolved) whose access is read only, whatever `d`'s is; its narrowings stay read only. Every operation that creates, writes, appends to, commits, renames,
+removes or changes the permissions of an entry returns `NotGranted()` for a read-only `Dir`
+before cancellation or any host effect, as for a read-only mount. A writable `File` that `file.narrow` moves into a read-only `Dir` keeps its mode,
+and writing it through that `Dir` is still `NotGranted()`.
+
 ## Filesystem lifecycle
 
 ```text
@@ -437,8 +447,11 @@ of the run's `Stdin` share one input cursor. `InputFault` codes are capability
 inputs, like `OutputFault` codes. The runtime byte operation accepts arbitrary bytes;
 `InvalidUtf8()` is available to the source text helpers.
 
-`env.get` reads only an exact name in the run configuration's Env object. An
-absent name returns `NotGranted()`; a name mapped to null returns `Ok(None())`;
+`env.get` reads only an exact name its `Env` grants: the entry's `Env` grants every name in
+the run configuration's Env object, and `env.narrow(e, names)` returns an `Env` granting
+exactly `names` when `e` grants each, and otherwise `NotGranted()`, minting nothing; an
+empty `names` is allowed and grants nothing. A narrowed `Env` reads the same snapshot. An
+ungranted name returns `NotGranted()`; a name mapped to null returns `Ok(None())`;
 a string returns `Ok(Some(value))`. No enumeration or ambient process lookup is
 provided. Invalid UTF-8 from a host provider returns `InvalidUtf8()`; run-description
 admission may reject an invalid snapshot before entry. Io presence alone grants
@@ -861,6 +874,7 @@ Command       = { program: Path, args: List[String], dir: Option[Dir],
 ProcessScript = { program: String, args: List[String],
                   outcome: Result[ProcessOutput, ProcessError] }
 ChildScript   = { program: String, args: List[String], steps: List[ChildStep] }
+ProcessRule   = { program: String, env: List[String] }
 ChildStep     = Print(Bytes) | PrintErr(Bytes) | Expect(Bytes) | Exit(ExitStatus)
 ```
 
@@ -890,6 +904,13 @@ Cancellation follows these program checks as specified by
 [CONC-3](concurrency.md#conc-3-cancellation). After that, for `proc.run` and
 `proc.pipeline` with `Some(d)`, a deadline `d.at` that `d.clock` has already reached is
 `TimedOut()`, and nothing is spawned.
+
+`proc.narrow(p, rules)` returns a `Proc` served by `p`'s provider and world whose rules
+are exactly `rules`, merged per program (the union of a program's names), when each rule
+names the program of a rule of `p` byte for byte and passes through only names that rule
+lists; otherwise it returns `NotGranted()` and mints nothing. An empty `rules` is allowed
+and runs nothing. It spawns nothing, is no cancellation point, and its children and their
+operations take the narrowed `Proc`.
 
 The child's argument vector is `program` followed by `args`. With `env` `None()` its
 environment holds exactly the variables its rule lists that are set in the launcher's

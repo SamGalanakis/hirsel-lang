@@ -643,7 +643,7 @@ impl NetProvider for ScriptNet {
     }
 }
 
-/// Cloneable, socket-free network and process capability model for driver-owned
+/// Cloneable, socket-free network, process and Env capability model for driver-owned
 /// execution oracles. Policy, brands, peer transitions and scripted runs are the same
 /// State path used by native execution; no runtime allocation helper is involved, and
 /// no host program runs.
@@ -681,6 +681,10 @@ impl ScriptIo {
     pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
         self.state.set_process_grant(grant);
     }
+    /// A Main launch's Env snapshot; absent, the root Env grants no name.
+    pub fn set_env(&mut self, env: std::collections::BTreeMap<String, Option<String>>) {
+        self.state.env = env;
+    }
     /// A monotonic clock handle for a `proc.run` deadline to name. Its caller owns the
     /// clock's reading and reports it with [`Self::observe_monotonic`] before each request.
     pub fn monotonic_clock(&mut self) -> u64 {
@@ -699,7 +703,13 @@ impl ScriptIo {
         use crate::io::{Request, Tree};
         if !crate::net::is_net_request(&request)
             && !crate::process::is_process_request(&request)
-            && !matches!(request, Request::Net { .. } | Request::Close { .. })
+            && !matches!(
+                request,
+                Request::Net { .. }
+                    | Request::Close { .. }
+                    | Request::EnvGet { .. }
+                    | Request::EnvNarrow { .. }
+            )
         {
             return Err(AdapterError::Unsupported("network model request".into()));
         }

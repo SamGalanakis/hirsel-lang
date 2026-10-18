@@ -1,0 +1,23 @@
+// rule: CAP-3
+// expect: run
+// env: {"HOME":"/home/agent","TOKEN":"secret","UNSET":null}
+// A narrowed Env reads only its names, from the same snapshot, and cannot be narrowed to a
+// name its parent lacks.
+fn denied(r: Result[Env, EnvError]) -> bool {
+  match r {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+}
+
+pub fn main(e: Env) -> Result[(), EnvError] {
+  let home = env.narrow(e, ["HOME", "UNSET"])?
+  failure.check(env.get(home, "HOME") == Ok(Some("/home/agent")), Bounds())
+  failure.check(env.get(home, "UNSET") == Ok(None()), Bounds())
+  failure.check(env.get(home, "TOKEN") == Error(NotGranted()), Bounds())
+  failure.check(denied(env.narrow(home, ["TOKEN"])), Bounds())
+  failure.check(denied(env.narrow(e, ["MISSING"])), Bounds())
+  let none = env.narrow(e, [])?
+  failure.check(env.get(none, "HOME") == Error(NotGranted()), Bounds())
+  Ok(())
+}

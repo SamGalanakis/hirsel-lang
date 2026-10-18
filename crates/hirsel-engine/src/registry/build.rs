@@ -351,6 +351,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "program: String,args: List[String],outcome: Result[ProcessOutput,ProcessError]",
         ),
+        ("ProcessRule", "", "program: String,env: List[String]"),
         (
             "ChildScript",
             "",

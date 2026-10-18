@@ -13,6 +13,7 @@ use hirsel_run_config::Access;
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod env;
 mod filesystem;
 mod net;
 mod process;
@@ -90,6 +91,9 @@ impl Io {
         }
         if let Some(grant) = &world.process {
             io.network.set_process_grant(grant);
+        }
+        if let Some(env) = &world.env {
+            io.network.set_env(env.clone());
         }
         match kind {
             super::link::LaunchKind::Zero => io.grants.clear(),
@@ -626,20 +630,7 @@ impl Io {
                 }
                 io_ok(OpValue::Unit)
             }
-            (
-                Some("env"),
-                "get",
-                [
-                    OpValue::Handle(hirsel_rt::io::ENV_HANDLE),
-                    OpValue::Bytes(_),
-                ],
-            ) => OpValue::Variant {
-                tag: 1,
-                value: Box::new(OpValue::Variant {
-                    tag: 0,
-                    value: Box::new(OpValue::Unit),
-                }),
-            },
+            (Some("env"), name, _) => return self.env(name, args),
             (Some("arg"), "len", [OpValue::Handle(ARGS_HANDLE)]) => OpValue::Bits {
                 scalar: ScalarKind::U64,
                 bits: 0,
@@ -705,6 +696,24 @@ impl Io {
                         value: Box::new(OpValue::Unit),
                     },
                 }
+            }
+            // The directory itself, read only: its pinned resolution and detachment carry over.
+            (Some("dir"), "read_only", [OpValue::Handle(parent)]) => {
+                let Some(IoGrant::Dir { tree, root, .. }) = self.grants.get(parent).cloned() else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                let id = self.grant(IoGrant::Dir {
+                    tree,
+                    root,
+                    access: Access::Read,
+                });
+                if let Some(resolved) = self.resolved_directories.get(parent).cloned() {
+                    self.resolved_directories.insert(id, resolved);
+                }
+                if self.detached_directories.contains(parent) {
+                    self.detached_directories.insert(id);
+                }
+                io_ok(OpValue::Handle(id))
             }
             (
                 Some("io" | "dir"),
@@ -1600,6 +1609,8 @@ pub struct HeapWorld {
     pub process: Option<hirsel_run_config::ProcessGrant>,
     /// A Main launch's `io.net` grant; only a scripted one (net.script@2, with peers) runs.
     pub net: Option<hirsel_run_config::NetGrant>,
+    /// A Main launch's Env snapshot; absent, the root Env grants no name.
+    pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
 }
 
 /// Run `entry` once and audit it.

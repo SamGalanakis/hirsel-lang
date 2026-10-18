@@ -429,10 +429,45 @@ impl HostLibrary {
             }
             return Ok(result);
         }
+        // The root Env has no host row; a narrowed one maps to its host Env.
+        let env = match &a[0] {
+            Value::Handle { id, .. } => self.handles.get(id).copied().unwrap_or(ENV_HANDLE),
+            _ => ENV_HANDLE,
+        };
+        if name == "env.narrow" {
+            let result = self.library.call(call, cx)?;
+            let names = fields(&a[1])?
+                .into_iter()
+                .map(text)
+                .collect::<Result<_, _>>()?;
+            match (&result, self.host(R::EnvNarrow { env, names })?) {
+                (
+                    Some(OperationResult::Complete {
+                        value: Value::Variant { variant: 0, fields },
+                        ..
+                    }),
+                    C::Handle(Ok(host)),
+                ) => {
+                    let Some(Some(Value::Handle { id, .. })) = fields.first() else {
+                        return Err(invalid());
+                    };
+                    self.handles.insert(*id, host);
+                }
+                (
+                    Some(OperationResult::Complete {
+                        value: Value::Variant { variant: 1, .. },
+                        ..
+                    }),
+                    C::Handle(Err(IoError::NotGranted)),
+                ) => {}
+                _ => return Err(invalid()),
+            }
+            return Ok(result);
+        }
         if name == "env.get" {
             let result = self.library.call(call, cx)?;
             let completion = self.host(R::EnvGet {
-                env: ENV_HANDLE,
+                env,
                 name: text(&a[1])?,
             })?;
             let C::Env(value) = completion else {
@@ -682,6 +717,31 @@ impl HostLibrary {
                 match self.host(R::Process { io: 1 })? {
                     C::Handle(Ok(id)) => ok(self.handle(id, "Proc")),
                     C::Handle(Err(hirsel_rt::io::IoError::NotGranted)) => error(variant(0, vec![])),
+                    _ => return Err(invalid()),
+                },
+            ));
+        }
+        if name == "proc.narrow" {
+            let rules = fields(&a[1])?
+                .into_iter()
+                .map(|rule| {
+                    let [program, env] = fields(rule)?[..] else {
+                        return Err(invalid());
+                    };
+                    Ok(hirsel_run_config::ProcessRule {
+                        program: text(program)?,
+                        env: fields(env)?
+                            .into_iter()
+                            .map(text)
+                            .collect::<Result<_, _>>()?,
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            let process = self.id(&a[0])?;
+            return Ok(OperationResult::returned(
+                match self.host(R::ProcessNarrow { process, rules })? {
+                    C::Spawned(Ok(id)) => ok(self.handle(id, "Proc")),
+                    C::Spawned(Err(f)) => error(hirsel_interp::library::process::failure_value(f)),
                     _ => return Err(invalid()),
                 },
             ));
@@ -1017,6 +1077,9 @@ impl HostLibrary {
             "dir.narrow" => R::NarrowDir {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
+            },
+            "dir.read_only" => R::ReadOnlyDir {
+                directory: self.id(&a[0])?,
             },
             "file.open" => R::Open {
                 directory: self.id(&a[0])?,
@@ -1826,6 +1889,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                     | "err.print"
                     | "out.print"
                     | "env.get"
+                    | "env.narrow"
             ) {
                 let result = self.host_input(&name, call, cx);
                 self.echo(cx.stdout)?;
@@ -1847,6 +1911,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             }
             if (name.starts_with("file.")
                 || name == "dir.narrow"
+                || name == "dir.read_only"
                 || name == "dir.remove_all"
                 || name.starts_with("clock."))
                 && call.arguments.first().is_some_and(|v| self.id(v).is_ok())

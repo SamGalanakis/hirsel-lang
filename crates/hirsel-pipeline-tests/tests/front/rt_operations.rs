@@ -103,6 +103,7 @@ fn inventory_set_equality_and_digest_control() {
         "out.print",
         "io.dir",
         "dir.narrow",
+        "dir.read_only",
         "file.open",
         "file.narrow",
         "file.create_atomic",

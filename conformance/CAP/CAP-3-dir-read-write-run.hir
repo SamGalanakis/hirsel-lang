@@ -1,0 +1,37 @@
+// rule: CAP-3
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("value"), b"abc"), (path.of("sub/inner"), b"x")])
+  let rw = dir.narrow(d, path.of(""))?
+  file.write_bytes(rw, path.of("value"), b"new")?
+  let mut atomic = file.create_atomic(rw, path.of("atomic"))?
+  file.write_all(rw, mut atomic, b"saved")?
+  file.commit(rw, take atomic)?
+  file.mkdir(rw, path.of("made"))?
+  file.rename(rw, path.of("value"), path.of("moved"))?
+  file.set_permissions(rw, path.of("moved"), 384)?
+  file.remove(rw, path.of("moved"))?
+  let sub = dir.narrow(rw, path.of("sub"))?
+  file.remove(sub, path.of("inner"))?
+  file.remove_dir(rw, path.of("sub"))?
+  dir.remove_all(rw, path.of("made"))?
+  let created = file.create(d, path.of("created"))?
+  match file.narrow(rw, take created) {
+    Some(f) => {
+      let mut g = take f
+      test.check(t, file.write(rw, mut g, b"x")? == 1)
+    },
+    None() => test.check(t, false),
+  }
+  test.check(t, file.read_bytes(d, path.of("atomic"))? == b"saved")
+  test.check(t, file.read_bytes(d, path.of("created"))? == b"x")
+  test.check(
+    t,
+    match file.size(d, path.of("moved")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

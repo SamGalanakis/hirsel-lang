@@ -49,6 +49,11 @@ pub enum Grant {
         stdin_open: bool,
         group: Option<(usize, u64)>,
     },
+    /// An `env.narrow` result: exactly these names of the run's Env. The root Env is
+    /// `io::ENV_HANDLE`, which has no row.
+    Env {
+        names: std::collections::BTreeSet<String>,
+    },
     Directory {
         root: String,
         access: hirsel_run_config::Access,

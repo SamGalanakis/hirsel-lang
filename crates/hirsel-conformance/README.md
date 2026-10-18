@@ -60,6 +60,11 @@ providers, malformed grants, duplicates and directives after source code are err
 These headers select test inputs, not production launch authority. A corpus file
 can combine either script with `// grant: clock` to exercise deadline cancellation.
 
+`// env: <JSON>` selects the root Env's snapshot, a RunConfig `env` object of granted
+names to a string or null (granted but unset); without it the root Env grants no name.
+Interpretation, checked execution and native launches (`HIRSEL_RT_ENV`) see the same
+snapshot.
+
 ## Front end and IR checker agreement
 
 `agree` looks for programs the front end accepts but whose lowering the IR

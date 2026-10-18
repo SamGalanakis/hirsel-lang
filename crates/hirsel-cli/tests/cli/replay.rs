@@ -893,3 +893,109 @@ fn a_streaming_group_round_trips_and_replays_without_spawning() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Each narrowing on a host: a read-only Dir over the granted root, an Env of one name and
+/// a Proc of one rule, each refusing what it narrowed away.
+const NARROWING_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
+fn file(take e: FileError) -> () {}
+fn env_error(take e: EnvError) -> () {}
+fn process(take e: ProcessError) -> () {}
+fn argument(take e: ArgError) -> () {}
+
+pub fn main(rt: Io, e: Env, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let d = io.dir(rt, path.of("")) ? file
+  let ro = dir.read_only(d) ? file
+  file.write_bytes(d, path.of("note"), b"rw") ? file
+  failure.check(file.write_bytes(ro, path.of("note"), b"ro") == Error(NotGranted()), Bounds())
+  let note = file.read_bytes(ro, path.of("note")) ? file
+  failure.check(note == b"rw", Bounds())
+  let home = env.narrow(e, ["HOME"]) ? env_error
+  failure.check(env.get(home, "HOME") == Ok(Some("/h")), Bounds())
+  failure.check(env.get(home, "TOKEN") == Error(NotGranted()), Bounds())
+  let program = arg.text(args, 0u64) ? argument
+  let p = io.process(rt) ? grant
+  let one = proc.narrow(p, [ProcessRule(program: copy program, env: [])]) ? process
+  let echo = Command(program: path.of(program), args: ["narrowed"], dir: None(), env: None())
+  let ran = proc.run(one, echo, b"", 64u64, None()) ? process
+  failure.check(ran.stdout == b"narrowed\n", Bounds())
+  let wider = proc.narrow(one, [ProcessRule(program: copy program, env: ["HOME"])])
+  failure.check(
+    match wider {
+      Error(NotGranted()) => true,
+      _ => false,
+    },
+    Bounds()
+  )
+  let _ = out.print(out, "narrowed\n")
+  Ok(())
+}
+"#;
+
+#[test]
+fn narrowed_handles_record_and_replay_across_backends() {
+    let fixture = Fixture::new("narrowing");
+    std::fs::write(fixture.source(), NARROWING_PROGRAM).unwrap();
+    let root = fixture.0.canonicalize().unwrap();
+    let echo = root.join("echo");
+    std::fs::copy("/bin/echo", &echo).unwrap();
+    let grants = root.join("narrowing-grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::json!({
+            "io": {
+                "stdout": "stdout.bytes@1",
+                "dirs": [{"path": "", "host": root.join("data"), "access": "read_write"}],
+                "process": {"provider": "process.spawn@1", "rules": [{"program": echo}]}
+            },
+            "env": {"HOME": "/h", "TOKEN": "t"},
+            "args": [echo]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut tapes = vec![];
+    for backend in [None, Some("llvm"), Some("cranelift")] {
+        let tape = fixture.tape(&format!("narrowing-{}.tape", backend.unwrap_or("interp")));
+        let mut command = hirsel(
+            backend.is_some(),
+            &fixture.source(),
+            &[
+                "--grants".as_ref(),
+                grants.as_os_str(),
+                "--record".as_ref(),
+                tape.as_os_str(),
+            ],
+        );
+        if let Some(backend) = backend {
+            command.args(["--backend", backend]);
+        }
+        let output = replay(command);
+        assert_replayed(&output, b"narrowed\n", &format!("{backend:?} recorded"));
+        assert_eq!(std::fs::read(root.join("data/note")).unwrap(), b"rw");
+        let text = std::fs::read_to_string(&tape).unwrap();
+        for request in ["read_only_dir ", "env_narrow ", "process_narrow "] {
+            assert!(text.contains(request), "{backend:?} tape lacks {request}");
+        }
+        std::fs::remove_file(root.join("data/note")).unwrap();
+        tapes.push(tape);
+    }
+    std::fs::remove_file(&echo).unwrap();
+    for tape in tapes {
+        for backend in [None, Some("llvm"), Some("cranelift")] {
+            let mut command = hirsel(
+                backend.is_some(),
+                &fixture.source(),
+                &["--replay".as_ref(), tape.as_os_str()],
+            );
+            if let Some(backend) = backend {
+                command.args(["--backend", backend]);
+            }
+            assert_replayed(
+                &replay(command),
+                b"narrowed\n",
+                &format!("{} replayed {backend:?}", tape.display()),
+            );
+        }
+    }
+}

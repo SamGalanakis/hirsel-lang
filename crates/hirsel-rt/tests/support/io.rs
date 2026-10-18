@@ -154,11 +154,13 @@ pub fn replay_interpreter_with_fixture(
                 | Request::Stderr { .. }
                 | Request::ReadStdin { .. }
                 | Request::PrintStderr { .. }
-                | Request::EnvGet { .. } => {
+                | Request::EnvGet { .. }
+                | Request::EnvNarrow { .. } => {
                     panic!("host input tapes require the explicit stream and Env replay fixture")
                 }
                 Request::Process { .. }
                 | Request::TestProcess { .. }
+                | Request::ProcessNarrow { .. }
                 | Request::ProcessRun { .. }
                 | Request::ProcessPipeline { .. }
                 | Request::ProcessSpawn { .. }
@@ -242,6 +244,9 @@ pub fn replay_interpreter_with_fixture(
                     "dir.narrow",
                     vec![handle("Dir", *directory), reference::path(path)],
                 ),
+                Request::ReadOnlyDir { directory } => {
+                    ("dir.read_only", vec![handle("Dir", *directory)])
+                }
                 Request::Print { stdout, bytes } => (
                     "out.print",
                     vec![
@@ -634,6 +639,9 @@ pub fn replay_interpreter_with_fixture(
                         hirsel_rt::handles::Grant::Stdin => ObservedGrant::Root("Stdin".into()),
                         hirsel_rt::handles::Grant::Stderr => ObservedGrant::Root("Stderr".into()),
                         hirsel_rt::handles::Grant::Stdout => ObservedGrant::Root("Stdout".into()),
+                        hirsel_rt::handles::Grant::Env { names } => ObservedGrant::Env {
+                            names: names.clone(),
+                        },
                         hirsel_rt::handles::Grant::Directory { root, access } => {
                             ObservedGrant::Directory {
                                 tree: 0,

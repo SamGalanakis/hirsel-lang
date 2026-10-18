@@ -23,8 +23,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
 }
 ```
 
-**Directories.** `Dir` is a directory capability: paths are relative, cannot escape it, and
-it can only be narrowed.
+**Directories.** `Dir` is a directory capability with an access, read or read-write: paths
+are relative, cannot escape it, and it can only be narrowed, to a subdirectory
+(`dir.narrow`) or to read-only access (`dir.read_only`).
 
 **Network.** `Net` is a network capability over a finite set of rules, each a triple
 `(address, port, operation)`, the operation being `Connect()`, `ConnectTls()`, `Listen()`,
@@ -71,7 +72,9 @@ same socket. TCP, UDP and Unix rules never imply one another.
 **Processes.** `Proc` is a process capability over a finite set of rules, each naming one
 canonical absolute executable path and the exact environment variable names passed through
 to it. There is no `PATH` search, no wildcard and no directory rule, and an empty rule set
-is a `Proc` that runs nothing. `proc.run`, `proc.pipeline`, `proc.spawn` and `proc.spawn_pipeline` check each
+is a `Proc` that runs nothing. A `Proc` can only be narrowed (`proc.narrow`), to rules each
+naming one of its programs with a subset of that rule's environment names. `proc.run`,
+`proc.pipeline`, `proc.spawn` and `proc.spawn_pipeline` check each
 program against the rules of the `Proc` they are given before any host effect; a failed
 check returns `NotGranted()` without spawning, and a pipeline checks every stage first. A child's environment holds only variables its rule
 names: those the launcher has set, or exactly the program's own values for them, never
@@ -131,14 +134,22 @@ fn probe(d: Dir, p: Path) -> u64 {
 }
 ```
 
+**Narrowing.** A narrowing operation mints a new capability of its argument's type whose
+authority is within its argument's, served by the same provider: `dir.narrow` to a
+subdirectory, `dir.read_only` to read-only access, `net.narrow` and `proc.narrow` to rules
+within their argument's, and `env.narrow` to a subset of names. A request outside the
+argument's authority mints nothing: it returns `NotGranted()`, or `FileFault` for a path
+that escapes a `Dir`. Each use checks the narrowed capability's own authority before any
+host effect, so code holding only it cannot reach its parent's. Narrowings are run inputs,
+recorded and replayed like the operations that use them.
+
 **Grant subset.** One run configuration's grants are *within* another's when they hold no
 authority the other lacks: `Unsafe` only if the other grants it; each Io projection (stdin,
 stderr, stdout, tasks, each clock, random) only under the other's exact provider contract;
 each mount only beneath one of the other's, its virtual path and its host root extending
 that mount's by the same components, its access no wider (`read` is within `read_write`);
 a network or process grant only under the same provider, each of its rules within one of
-the other's rules by `net.narrow` coverage, or, for a process rule, naming the same program
-and passing through a subset of its environment names; and each Env name only when the
+the other's rules by `net.narrow` or `proc.narrow` coverage; and each Env name only when the
 other grants it with the same snapshot, set or unset. Absent Io or Env is within any
 grants, and a present one only within a present one. The relation is total and lexical over
 validated records and reads no host state; program, entry, inputs, Args, admission and
@@ -184,7 +195,7 @@ facets](std-library.md#capability-facets), not in `std@1`, are sealed capabiliti
 `io.stdin` and `io.stderr` project `Stdin` and `Stderr` only when their exact
 run grants are present. `Env` grants a set of exact names: `env.get` returns
 `EnvError.NotGranted()` for every other name, independently of whether that name
-exists on the host. Granted but unset names return `None`; the Env object
+exists on the host. An `Env` can only be narrowed (`env.narrow`), to a subset of its names. Granted but unset names return `None`; the Env object
 in the run configuration records both the name grants and their snapshots.
 
 ### CAP-6: Safe code

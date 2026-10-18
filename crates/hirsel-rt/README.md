@@ -251,7 +251,10 @@ blocked on the calling thread for the loop and a raised one is
 discarded, so a child that ignores its stdin cannot end the program. `SimIo` replays
 the recorded completion in place of the host and rejects one that contradicts the
 re-derived checks. A launch without a run record reads the root Proc's `io.process`
-grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. Tape forms are `process`, `test_process` (runs and
+grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. `proc.narrow`
+(`ProcessNarrow`, tape `process_narrow`: a rule count, then each program and its counted
+names) mints a Proc of the merged requested rules in its parent's world when
+`hirsel_run_config::process_rule_within` covers each. Tape forms are `process`, `test_process` (runs and
 children), `process_run` (with its deadline as `clock:ticks` or `none`, then its
 command: program, directory, counted arguments, and `inherit` or counted variables) and
 `process_pipeline` (a stage count, then each stage's command) requests and `process`
@@ -667,8 +670,10 @@ an empty iterator acquires no directory. `mount_pins` borrows every retained pin
 and `prepare_recording_with_files` checks all of them before recorder effects.
 Directory acquisition matches only a configured selector or its descendants;
 missing mounts return FileError::NotGranted even when another mount grants Dir.
-Narrowed directories retain their parent's read/read_write rights. Write, remove,
-atomic creation, append and commit refuse read grants before storage calls.
+Narrowed directories retain their parent's read/read_write rights; `dir.read_only`
+(`ReadOnlyDir`, tape `read_only_dir`) reopens its parent's pinned directory through that
+descriptor with read rights. Write, remove, atomic creation, append and commit refuse
+read grants before storage calls.
 `SimIo::set_mounts` configures the same independently enforced replay policy.
 Snapshots use virtual selectors and retain same-resource/contained mount aliases,
 so their publications share storage while each issued grant remains confined.
@@ -914,7 +919,10 @@ Stdin and stderr are independent Io projections. RealIo pins explicitly supplied
 Read/Write providers, retries interrupted reads, captures accepted stderr prefixes
 and records every typed stdin completion. SimIo replays those completions without
 a reader and rechecks their handle and maximum. Env reads use the exact admitted
-name-to-optional-value snapshot: missing keys are denied, null keys are unset.
+name-to-optional-value snapshot: missing keys are denied, null keys are unset. The root
+Env is `ENV_HANDLE`, with no row; `env.narrow` (`EnvNarrow`, tape `env_narrow`) mints a
+`Grant::Env` row of names its parent grants, and reads through it see the same snapshot.
+A launch without a run record reads the root snapshot from `HIRSEL_RT_ENV`.
 Host input tape forms live in host_io_tape.rs; fixed ABI thunks share ordinary
 byte-list COW growth with network reads.
 

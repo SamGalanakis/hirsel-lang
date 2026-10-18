@@ -218,8 +218,13 @@ impl Library {
                     )),
                 }
             }
-            "io.dir" | "dir.narrow" => {
-                let requested = path_text(arg(a, 1)?)?;
+            "io.dir" | "dir.narrow" | "dir.read_only" => {
+                // A read-only Dir is the directory itself, its access lowered to Read.
+                let requested = if name == "dir.read_only" {
+                    ""
+                } else {
+                    path_text(arg(a, 1)?)?
+                };
                 let selected = if name == "io.dir" {
                     self.simulation.id(arg(a, 0)?, "Io")?;
                     if self.simulation.config.projections.contains("dir") {
@@ -246,7 +251,12 @@ impl Library {
                     else {
                         unreachable!()
                     };
-                    Some((tree, root, directory, *access, requested.to_owned()))
+                    let access = if name == "dir.read_only" {
+                        Access::Read
+                    } else {
+                        *access
+                    };
+                    Some((tree, root, directory, access, requested.to_owned()))
                 };
                 if let Some((tree, root, directory, access, local)) = selected {
                     match self.simulation.fault(name) {
@@ -325,11 +335,29 @@ impl Library {
                     .unwrap_or_else(|| error(variant(0, vec![])))
             }
             "env.get" => {
-                self.simulation.id(arg(a, 0)?, "Env")?;
-                match self.simulation.config.env.get(text(arg(a, 1)?)?) {
+                let env = self.simulation.id(arg(a, 0)?, "Env")?;
+                let name = text(arg(a, 1)?)?;
+                match self
+                    .simulation
+                    .env_granted(env, name)
+                    .then(|| self.simulation.config.env.get(name))
+                    .flatten()
+                {
                     None => error(variant(0, vec![])),
                     Some(None) => ok(none()),
                     Some(Some(value)) => ok(some(Value::String(value.clone()))),
+                }
+            }
+            "env.narrow" => {
+                let env = self.simulation.id(arg(a, 0)?, "Env")?;
+                let names = collection::elements(arg(a, 1)?, BuiltinType::List)?
+                    .iter()
+                    .map(|v| text(v).map(str::to_owned))
+                    .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+                if names.iter().all(|n| self.simulation.env_granted(env, n)) {
+                    ok(self.simulation.handle("Env", Grant::Env(names)))
+                } else {
+                    error(variant(0, vec![]))
                 }
             }
             "stdin.read" => return self.read_stdin(a, context).map(Some),
@@ -487,7 +515,7 @@ impl Library {
             "Args"
         } else if name.starts_with("test.") {
             "Test"
-        } else if name == "env.get" {
+        } else if name.starts_with("env.") {
             "Env"
         } else if name == "err.print" {
             "Stderr"
@@ -1348,7 +1376,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();
@@ -1379,7 +1407,7 @@ primary_operations! { self, call, context, name, a, value;
     },
     // A rejected replay never publishes effects or consumes script entries; a scripted
     // child's read parks as a scripted peer's does.
-    Capability: "io.process" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" | "proc.spawn_pipeline" | "group.write" | "group.close_stdin" | "group.read_stdout" | "proc.wait_group" | "group.kill" => {
+    Capability: "io.process" | "proc.narrow" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" | "proc.spawn_pipeline" | "group.write" | "group.close_stdin" | "group.read_stdout" | "proc.wait_group" | "group.kill" => {
         return self.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },

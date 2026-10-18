@@ -455,21 +455,17 @@ pub fn permits(
         })
 }
 
-/// `net.narrow` coverage: equality, or a narrower rule under its wider one:
-/// `(a, p, ConnectTls)` under `(a, p, Connect)`, `(a, p, ListenTls)` under `(a, p, Listen)`
-/// and `(a, p, UnixListen)` under `(a, p, UnixListenRemoveStale)`.
+/// `net.narrow` coverage: a rule of the same address and port whose operation is the
+/// requested one or its wider one (`hirsel_run_config::net_operation_within`).
 pub fn covers(rules: &BTreeSet<NetRule>, requested: &NetRule) -> bool {
-    let wider = match requested.operation {
-        NetOperation::ConnectTls => NetOperation::Connect,
-        NetOperation::ListenTls => NetOperation::Listen,
-        NetOperation::UnixListen => NetOperation::UnixListenRemoveStale,
-        _ => return rules.contains(requested),
-    };
-    rules.contains(requested)
-        || rules.contains(&NetRule {
-            operation: wider,
-            ..requested.clone()
-        })
+    rules.iter().any(|rule| {
+        rule.address == requested.address
+            && rule.port == requested.port
+            && hirsel_run_config::net_operation_within(
+                requested.operation.name(),
+                rule.operation.name(),
+            )
+    })
 }
 
 pub(crate) fn is_net_request(request: &crate::io::Request) -> bool {

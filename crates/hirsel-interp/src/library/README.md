@@ -18,7 +18,10 @@ separate outcome; no frame-charge constants are invented.
 The fake tree retains relative links and rejects absolute paths, NUL/backslash paths
 and traversal above each granted root. `SimulationConfig.mounts` selects named
 virtual roots and their read/read_write rights. Missing mounts and writes outside
-those rights return FileError::NotGranted before faults or filesystem effects. Narrowing never enlarges a grant. Walk order is
+those rights return FileError::NotGranted before faults or filesystem effects. Narrowing never enlarges a grant:
+`dir.read_only` lowers a Dir's access to read, `env.narrow` grants a subset of the
+configured Env names (`Grant::Env`; the root grants them all) and `proc.narrow` a Proc of
+rules within its parent's, in the same world. Walk order is
 UTF-8 byte order. Fault scripts use explicit codes, never OS errno; canceled
 operations produce no effect, other output/write faults can commit a prefix.
 Bytes are preserved exactly, including UTF-8 stdout without a newline.

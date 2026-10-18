@@ -390,6 +390,20 @@ impl State {
                 };
                 Ok(Completion::Handle(Ok(self.handles.insert(grant))))
             }
+            Request::ProcessNarrow { process, rules } => {
+                let (parent, world) = self.process_grant(*process)?;
+                let rules = narrowed_rules(rules);
+                if !rules.iter().all(|r| {
+                    parent
+                        .iter()
+                        .any(|p| hirsel_run_config::process_rule_within(r, p))
+                }) {
+                    return Ok(Completion::Spawned(Err(ProcessFailure::NotGranted)));
+                }
+                Ok(Completion::Spawned(Ok(self
+                    .handles
+                    .insert(Grant::Process { rules, world }))))
+            }
             Request::TestProcess {
                 test,
                 runs,
@@ -880,11 +894,35 @@ impl State {
     }
 }
 
+/// Requested `proc.narrow` rules as a Proc holds them: by program, one rule per program
+/// passing through the union of its sorted names.
+fn narrowed_rules(rules: &[ProcessRule]) -> Vec<ProcessRule> {
+    let mut merged = std::collections::BTreeMap::<&str, Vec<String>>::new();
+    for rule in rules {
+        merged
+            .entry(&rule.program)
+            .or_default()
+            .extend(rule.env.iter().cloned());
+    }
+    merged
+        .into_iter()
+        .map(|(program, mut env)| {
+            env.sort();
+            env.dedup();
+            ProcessRule {
+                program: program.into(),
+                env,
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn is_process_request(request: &Request) -> bool {
     matches!(
         request,
         Request::Process { .. }
             | Request::TestProcess { .. }
+            | Request::ProcessNarrow { .. }
             | Request::ProcessRun { .. }
             | Request::ProcessPipeline { .. }
             | Request::ProcessSpawn { .. }
@@ -1494,7 +1532,7 @@ pub struct ProcessResult {
     pub stderr: crate::views::Slice,
 }
 
-unsafe fn list<T>(
+pub(crate) unsafe fn list<T>(
     owner: *mut crate::Header,
     stride: usize,
     mut item: impl FnMut(*const u8) -> T,
@@ -1518,7 +1556,7 @@ unsafe fn slice(at: *const u8) -> Vec<u8> {
     let slice = unsafe { at.cast::<crate::views::Slice>().read() };
     unsafe { crate::io::slice_bytes(slice.owner, slice.start, slice.length) }.to_vec()
 }
-unsafe fn text(at: *const u8) -> String {
+pub(crate) unsafe fn text(at: *const u8) -> String {
     String::from_utf8(unsafe { slice(at) })
         .unwrap_or_else(|_| crate::fault("process String is not UTF-8"))
 }
@@ -1847,6 +1885,36 @@ impl ChildPairResult {
     }
 }
 
+/// `proc.narrow(p: Proc, rules: List[ProcessRule]) -> Result[Proc, ProcessError]`. Each
+/// `ProcessRule` is 32 bytes: the program String at 0 and its env List[String] at 24.
+/// # Safety
+/// Context is bound; the Proc is readable, rules a live List block; out is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_narrow(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ChildWordResult,
+    process: *const u64,
+    rules: *mut crate::Header,
+) -> u8 {
+    let request = Request::ProcessNarrow {
+        process: unsafe { process.read() },
+        rules: unsafe {
+            list(rules, 32, |at| ProcessRule {
+                program: text(at),
+                env: list(at.add(24).cast::<*mut crate::Header>().read(), 24, |name| {
+                    text(name)
+                }),
+            })
+        },
+    };
+    let Ok(Completion::Spawned(value)) = (unsafe { crate::io::capability_call(ctx, request) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(ChildWordResult::of(value)) };
+    crate::STATUS_OK
+}
 /// `proc.spawn(p, cmd) -> Result[Child of p, ProcessError]`.
 /// # Safety
 /// Context is bound; Proc and the Command are borrowed live values; out is writable.

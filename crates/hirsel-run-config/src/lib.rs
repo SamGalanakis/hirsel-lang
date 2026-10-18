@@ -511,11 +511,7 @@ impl RunConfig {
             }
         }
         if let Some(env) = &record.env {
-            for key in env.keys() {
-                if key.is_empty() || key.contains(['=', '\0']) {
-                    return Err(invalid("env", "invalid environment key"));
-                }
-            }
+            env_keys(env)?;
         }
         if let Some(admission) = &mut record.admission {
             // A policy equal to its default is absent from canonical bytes.
@@ -1065,6 +1061,30 @@ fn integer_tokens(bytes: &[u8]) -> Result<(), RunRefusal> {
     }
     Ok(())
 }
+fn env_keys(env: &BTreeMap<String, Option<String>>) -> Result<(), RunRefusal> {
+    if env
+        .keys()
+        .any(|key| key.is_empty() || key.contains(['=', '\0']))
+    {
+        return Err(invalid("env", "invalid environment key"));
+    }
+    Ok(())
+}
+
+/// A standalone Env snapshot object, validated as a record's `env`: unique keys, each
+/// nonempty without `=` or NUL, mapping to a string or null (granted but unset).
+pub fn validate_env(bytes: &[u8]) -> Result<BTreeMap<String, Option<String>>, RunRefusal> {
+    #[derive(Deserialize)]
+    struct Snapshot(
+        #[serde(deserialize_with = "unique_env")] Option<BTreeMap<String, Option<String>>>,
+    );
+    let Snapshot(env) =
+        serde_json::from_slice(bytes).map_err(|error| invalid("env", &error.to_string()))?;
+    let env = env.ok_or_else(|| invalid("env", "expected an Env snapshot object"))?;
+    env_keys(&env)?;
+    Ok(env)
+}
+
 fn unique_env<'de, D: serde::Deserializer<'de>>(
     de: D,
 ) -> Result<Option<BTreeMap<String, Option<String>>>, D::Error> {

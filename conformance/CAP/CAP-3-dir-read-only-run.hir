@@ -1,0 +1,58 @@
+// rule: CAP-3
+// expect: run
+// entry: exercise
+fn denied(r: Result[(), FileError]) -> bool {
+  match r {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("value"), b"abc"), (path.of("sub/inner"), b"x")])
+  let ro = dir.read_only(d)?
+  test.check(t, file.read_bytes(ro, path.of("value"))? == b"abc")
+  test.check(t, file.size(ro, path.of("sub/inner"))? == 1)
+  test.check(t, denied(file.write_bytes(ro, path.of("value"), b"new")))
+  test.check(
+    t,
+    match file.create(ro, path.of("fresh")) {
+      Error(NotGranted()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.create_atomic(ro, path.of("fresh")) {
+      Error(NotGranted()) => true,
+      _ => false,
+    }
+  )
+  test.check(t, denied(file.mkdir(ro, path.of("made"))))
+  test.check(t, denied(file.rename(ro, path.of("value"), path.of("moved"))))
+  test.check(t, denied(file.remove(ro, path.of("value"))))
+  test.check(t, denied(file.remove_dir(ro, path.of("sub"))))
+  test.check(t, denied(file.set_permissions(ro, path.of("value"), 384)))
+  test.check(t, denied(dir.remove_all(ro, path.of("sub"))))
+  let sub = dir.narrow(ro, path.of("sub"))?
+  test.check(t, file.read_bytes(sub, path.of("inner"))? == b"x")
+  test.check(t, denied(file.remove(sub, path.of("inner"))))
+  let created = file.create(d, path.of("created"))?
+  match file.narrow(ro, take created) {
+    Some(f) => {
+      let mut g = take f
+      test.check(
+        t,
+        match file.write(ro, mut g, b"x") {
+          Error(NotGranted()) => true,
+          _ => false,
+        }
+      )
+    },
+    None() => test.check(t, false),
+  }
+  test.check(t, file.read_bytes(d, path.of("value"))? == b"abc")
+  test.check(t, file.read_bytes(d, path.of("created"))? == b"")
+  test.check(t, file.read_bytes(d, path.of("sub/inner"))? == b"x")
+  Ok(())
+}

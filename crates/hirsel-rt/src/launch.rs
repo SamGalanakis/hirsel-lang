@@ -255,6 +255,7 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Request::NarrowDir { directory, path } => {
                 format!("narrow_dir {directory} {}", hex(path.as_bytes()))
             }
+            Request::ReadOnlyDir { directory } => format!("read_only_dir {directory}"),
             Request::Print { stdout, bytes } => format!("print {stdout} {}", hex(bytes)),
             Request::Open { directory, path } => {
                 format!("open {directory} {}", hex(path.as_bytes()))
@@ -529,6 +530,9 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["narrow_dir", d, p] => Request::NarrowDir {
                     directory: number(d)?,
                     path: string(p)?,
+                },
+                ["read_only_dir", d] => Request::ReadOnlyDir {
+                    directory: number(d)?,
                 },
                 ["print", s, b] => Request::Print {
                     stdout: number(s)?,
@@ -1420,6 +1424,21 @@ unsafe fn execute(
             }
         }
     };
+    // The launcher's root Env snapshot (`HIRSEL_RT_ENV`), like `HIRSEL_RT_NET`.
+    let env = if requested.is_some() {
+        None
+    } else {
+        match std::env::var("HIRSEL_RT_ENV") {
+            Ok(text) => match hirsel_run_config::validate_env(text.as_bytes()) {
+                Ok(env) => Some(env),
+                Err(error) => return refuse(&format!("the Env snapshot: {error}")),
+            },
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return refuse("the Env snapshot is not UTF-8");
+            }
+        }
+    };
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
     let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
@@ -1468,6 +1487,9 @@ unsafe fn execute(
                 arguments = tape.arguments;
                 let mut io = SimIo::new(tape.tree, tape.events);
                 io.set_net_rules(net_rules.clone());
+                if let Some(env) = &env {
+                    io.set_env(env.clone());
+                }
                 io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
                 if let Some(grant) = &process {
                     io.set_process_grant(grant);
@@ -1530,6 +1552,9 @@ unsafe fn execute(
                         io.virtual_clock(ticks);
                     }
                     io.set_net_rules(net_rules.clone());
+                    if let Some(env) = &env {
+                        io.set_env(env.clone());
+                    }
                     io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
                     // The harness launch draws the reference's seeded simulation.
                     io.set_random(

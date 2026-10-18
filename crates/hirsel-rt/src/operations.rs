@@ -146,6 +146,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "out.print"
         | "io.dir"
         | "dir.narrow"
+        | "dir.read_only"
         | "path.of"
         | "arg.path"
         | "arg.len"
@@ -193,10 +194,12 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "stdin.read"
         | "err.print"
         | "env.get"
+        | "env.narrow"
         | "io.process"
         | "proc.run"
         | "proc.pipeline"
         | "proc.spawn"
+        | "proc.narrow"
         | "child.write"
         | "child.close_stdin"
         | "child.read_stdout"
@@ -291,6 +294,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         name.as_str(),
         "io.dir"
             | "dir.narrow"
+            | "dir.read_only"
             | "path.of"
             | "arg.path"
             | "arg.len"
@@ -306,6 +310,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "io.stderr"
             | "stdin.read"
             | "env.get"
+            | "env.narrow"
             | "io.stdout"
             | "io.tasks"
             | "io.net"
@@ -315,6 +320,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "proc.run"
             | "proc.pipeline"
             | "proc.spawn"
+            | "proc.narrow"
             | "child.write"
             | "child.close_stdin"
             | "child.read_stdout"
@@ -1207,6 +1213,20 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_proc_narrow",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_env_narrow",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_proc_spawn",
         destination: true,
         result: Some((16, 8)),
@@ -1373,6 +1393,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((16, 8)),
         parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_dir_read_only",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer],
     },
     AbiExport {
         caller_site: false,
@@ -1822,6 +1849,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "channel.send",
     "copy_to",
     "dir.narrow",
+    "dir.read_only",
     "file.append",
     "file.commit",
     "file.create",
@@ -1885,6 +1913,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "stdin.read",
     "err.print",
     "env.get",
+    "env.narrow",
     "io.stdout",
     "io.tasks",
     "io.process",
@@ -1895,6 +1924,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "instant.checked_add",
     "test.process",
     "proc.spawn",
+    "proc.narrow",
     "child.write",
     "child.close_stdin",
     "child.read_stdout",

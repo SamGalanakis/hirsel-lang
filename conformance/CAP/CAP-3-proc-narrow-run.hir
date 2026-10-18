@@ -1,0 +1,58 @@
+// rule: CAP-3
+// expect: run
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/a","env":["HOME","LANG"]},{"program":"/bin/b"}],"runs":[{"program":"/bin/a","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[97],"stderr":[]}}},{"program":"/bin/b","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[98],"stderr":[]}}}]}
+// A narrowed Proc runs only its own rules: another program, or a name its rule no longer
+// passes through, is not granted, and it cannot be narrowed back to its parent's rules.
+fn command(program: String, take env: Option[List[(String, String)]]) -> Command {
+  Command(program: path.of(program), args: [], dir: None(), env: env)
+}
+
+fn denied(r: Result[Proc, ProcessError]) -> bool {
+  match r {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ProcessError] {
+  let p = match io.process(rt) {
+    Ok(p) => p,
+    Error(_) => return Error(NotGranted()),
+  }
+  let lang = proc.narrow(p, [ProcessRule(program: "/bin/a", env: ["LANG"])])?
+  failure.check(
+    proc.run(lang, command("/bin/b", None()), b"", 64u64, None()) == Error(NotGranted()),
+    Bounds()
+  )
+  failure.check(
+    proc.run(lang, command("/bin/a", Some([("HOME", "/h")])), b"", 64u64, None()) == Error(
+      NotGranted()
+    ),
+    Bounds()
+  )
+  let spawned = match proc.spawn(lang, command("/bin/b", None())) {
+    Error(e) => e == NotGranted(),
+    Ok(_) => false,
+  }
+  failure.check(spawned, Bounds())
+  failure.check(
+    denied(proc.narrow(lang, [ProcessRule(program: "/bin/a", env: ["HOME"])])),
+    Bounds()
+  )
+  failure.check(
+    denied(proc.narrow(lang, [ProcessRule(program: "/bin/b", env: [])])),
+    Bounds()
+  )
+  failure.check(
+    denied(proc.narrow(p, [ProcessRule(program: "/bin/c", env: [])])),
+    Bounds()
+  )
+  let none = proc.narrow(p, [])?
+  failure.check(
+    proc.run(none, command("/bin/a", None()), b"", 64u64, None()) == Error(NotGranted()),
+    Bounds()
+  )
+  let ran = proc.run(lang, command("/bin/a", Some([("LANG", "C")])), b"", 64u64, None())?
+  failure.check(ran.stdout == b"a", Bounds())
+  Ok(())
+}

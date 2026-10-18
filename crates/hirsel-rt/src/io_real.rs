@@ -518,6 +518,7 @@ impl RealIo {
                     | Request::Stderr { .. }
                     | Request::ReadStdin { max: 0, .. }
                     | Request::EnvGet { .. }
+                    | Request::EnvNarrow { .. }
             ) {
             None
         } else {

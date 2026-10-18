@@ -1,0 +1,13 @@
+// rule: CAP-3
+// expect: run
+// env: {"HOME":"/home/agent","TOKEN":"secret","UNSET":null}
+// The twin of CAP-3-env-narrow-run: the entry's Env, and a narrowing to all of its names,
+// read every granted name.
+pub fn main(e: Env) -> Result[(), EnvError] {
+  failure.check(env.get(e, "TOKEN") == Ok(Some("secret")), Bounds())
+  let all = env.narrow(e, ["HOME", "TOKEN", "UNSET", "HOME"])?
+  failure.check(env.get(all, "TOKEN") == Ok(Some("secret")), Bounds())
+  failure.check(env.get(all, "HOME") == Ok(Some("/home/agent")), Bounds())
+  failure.check(env.get(all, "UNSET") == Ok(None()), Bounds())
+  Ok(())
+}

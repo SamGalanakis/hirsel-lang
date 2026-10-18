@@ -22,6 +22,7 @@ uint8_t hirsel_rt_v2_io_stdout(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*)
 uint8_t hirsel_rt_v2_out_print(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_io_dir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_dir_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_dir_read_only(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_open(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_create(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_read(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);
@@ -81,6 +82,7 @@ uint8_t hirsel_rt_v2_io_stderr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_res
 uint8_t hirsel_rt_v2_stdin_read(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, hirsel_rt_v2_header**, uint64_t);
 uint8_t hirsel_rt_v2_err_print(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_env_get(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_env_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_env_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_arg_len(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_arg_text(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_string_result*, const uint64_t*, uint64_t);
 uint8_t hirsel_rt_v2_string_from_bytes(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_string_result*, hirsel_rt_v2_header*, uint64_t, uint64_t);
@@ -233,6 +235,7 @@ typedef struct { uint32_t tag, padding; uint64_t value; } hirsel_rt_v2_child_wor
 /* Result[() or ExitStatus, ProcessError]: the ExitStatus or ProcessError at 4. */
 typedef struct { uint32_t tag, kind, code; } hirsel_rt_v2_child_pair_result;
 uint8_t hirsel_rt_v2_proc_spawn(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, const void*);
+uint8_t hirsel_rt_v2_proc_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_child_write(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_pair_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_child_close_stdin(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
 uint8_t hirsel_rt_v2_child_read_stdout(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);

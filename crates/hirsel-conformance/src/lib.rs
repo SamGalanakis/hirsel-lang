@@ -145,6 +145,15 @@ pub fn fixture(source: &str) -> Result<hirsel_driver::native::Fixture, String> {
                     return Err("duplicate grant directive".into());
                 }
             }
+            "env" => {
+                if fixture.env.is_some() {
+                    return Err("duplicate env directive".into());
+                }
+                fixture.env = Some(
+                    hirsel_run_config::validate_env(value.trim().as_bytes())
+                        .map_err(|e| e.to_string())?,
+                );
+            }
             "net" => {
                 if fixture.net.is_some() {
                     return Err("duplicate net directive".into());
@@ -178,6 +187,7 @@ pub(crate) fn simulation(source: &str) -> Result<hirsel_engine::SimulationConfig
     let mut simulation = hirsel_engine::SimulationConfig {
         net: fixture.net,
         process: fixture.process,
+        env: fixture.env.unwrap_or_default(),
         ..Default::default()
     };
     if let Some(ticks) = fixture.monotonic {
@@ -212,7 +222,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
             let Some((key, value)) = comment.split_once(':') else {
                 if in_header
                     && [
-                        "rule", "expect", "stdout", "exit", "entry", "spec", "grant", "net",
+                        "rule", "expect", "stdout", "exit", "entry", "spec", "grant", "env", "net",
                         "process",
                     ]
                     .iter()
@@ -234,6 +244,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                     | "entry"
                     | "spec"
                     | "grant"
+                    | "env"
                     | "net"
                     | "process"
             );
@@ -334,7 +345,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                             .map_err(|_| "exit must be an integer")?,
                     );
                 }
-                "grant" | "net" | "process" => {}
+                "grant" | "env" | "net" | "process" => {}
                 "spec"
                     if value_trimmed.strip_prefix('#').is_some_and(|n| {
                         !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())

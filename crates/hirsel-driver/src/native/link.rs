@@ -1358,6 +1358,9 @@ fn launch_impl(
     if let Some(process) = &fixture.process {
         command.env("HIRSEL_RT_PROCESS", serde_json::to_string(process).unwrap());
     }
+    if let Some(env) = &fixture.env {
+        command.env("HIRSEL_RT_ENV", serde_json::to_string(env).unwrap());
+    }
     // A live launch selects record and replay by flag; harness launches by environment.
     match tape {
         Tape::Replay(path) => {

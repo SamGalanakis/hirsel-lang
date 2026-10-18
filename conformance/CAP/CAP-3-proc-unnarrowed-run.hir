@@ -1,0 +1,34 @@
+// rule: CAP-3
+// expect: run
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/a","env":["HOME","LANG"]},{"program":"/bin/b"}],"runs":[{"program":"/bin/a","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[97],"stderr":[]}}},{"program":"/bin/b","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[98],"stderr":[]}}}]}
+// The twin of CAP-3-proc-narrow-run: the unnarrowed Proc, and a narrowing to all of its
+// rules, run each program with each name its rules pass through.
+fn command(program: String, take env: Option[List[(String, String)]]) -> Command {
+  Command(program: path.of(program), args: [], dir: None(), env: env)
+}
+
+pub fn main(rt: Io) -> Result[(), ProcessError] {
+  let p = match io.process(rt) {
+    Ok(p) => p,
+    Error(_) => return Error(NotGranted()),
+  }
+  let same = proc.narrow(
+    p,
+    [
+      ProcessRule(program: "/bin/a", env: ["HOME"]),
+      ProcessRule(program: "/bin/a", env: ["LANG"]),
+      ProcessRule(program: "/bin/b", env: [])
+    ]
+  )?
+  let b = proc.run(p, command("/bin/b", None()), b"", 64u64, None())?
+  failure.check(b.stdout == b"b", Bounds())
+  let a = proc.run(
+    same,
+    command("/bin/a", Some([("HOME", "/h"), ("LANG", "C")])),
+    b"",
+    64u64,
+    None()
+  )?
+  failure.check(a.stdout == b"a", Bounds())
+  Ok(())
+}

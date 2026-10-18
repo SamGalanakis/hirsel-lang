@@ -311,6 +311,8 @@ pub struct Fixture {
     pub monotonic: Option<u64>,
     pub net: Option<hirsel_run_config::NetGrant>,
     pub process: Option<hirsel_run_config::ProcessGrant>,
+    /// The root Env's snapshot: each granted name and its value, null when unset.
+    pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
 }
 
 /// Run `entry` under each configuration and compare with `reference`.
@@ -349,6 +351,7 @@ pub fn differential_in(
         monotonic: fixture.monotonic,
         process: fixture.process.clone(),
         net: fixture.net.clone(),
+        env: fixture.env.clone(),
     };
     let sites = Sites::new(validated.snapshot());
     let mut built: Vec<(&Options, Result<ReadyProgram, NativeError>)> = Vec::new();

@@ -106,6 +106,8 @@ ProcessError tag such as `"not_found"`, `"timed_out"` or `{"fault":7}`, never
 child entries whose steps are `{"print":[..]}`, `{"print_err":[..]}`, `{"expect":[..]}` or
 `{"exit":status}`. Runs and children grant nothing beyond the rules.
 
+`validate_env` validates a standalone Env snapshot object exactly as a record's `env`.
+
 `grants_within(a, b)` is the CAP-3 grant subset relation over two validated records:
 Unsafe, Io projections with exact providers, mounts (virtual path and host root extended
 by the same components, access no wider), Net and process rules under the same provider

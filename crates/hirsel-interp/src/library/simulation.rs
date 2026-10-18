@@ -127,6 +127,8 @@ pub(crate) enum Grant {
         net: u64,
     },
     Root(String),
+    /// An `env.narrow` result: exactly these names of the run's Env.
+    Env(BTreeSet<String>),
     Dir {
         tree: u64,
         root: String,
@@ -211,6 +213,9 @@ pub enum ObservedGrant {
         net: u64,
     },
     Root(String),
+    Env {
+        names: BTreeSet<String>,
+    },
     Directory {
         tree: u64,
         root: String,
@@ -258,6 +263,9 @@ impl Simulation {
                         Grant::UdpSocket { net } => ObservedGrant::UdpSocket { net: *net },
                         Grant::Listener { net } => ObservedGrant::Listener { net: *net },
                         Grant::Root(kind) => ObservedGrant::Root(kind.clone()),
+                        Grant::Env(names) => ObservedGrant::Env {
+                            names: names.clone(),
+                        },
                         Grant::Dir { tree, root, access } => ObservedGrant::Directory {
                             tree: *tree,
                             root: root.clone(),
@@ -722,6 +730,7 @@ impl Simulation {
                 Some(Grant::UdpSocket { .. }) => kind == "UdpSocket",
                 Some(Grant::Listener { .. }) => kind == "Listener",
                 Some(Grant::Root(name)) => name == kind,
+                Some(Grant::Env(_)) => kind == "Env",
                 Some(Grant::Dir { .. }) => kind == "Dir",
                 Some(Grant::File { .. }) => kind == "File",
                 Some(Grant::Atomic { .. }) => kind == "AtomicFile",
@@ -731,6 +740,13 @@ impl Simulation {
             Ok(*id)
         } else {
             Err(invalid(format!("invalid {kind} grant")))
+        }
+    }
+    /// Whether Env `env` grants `name`: the root grants every configured name.
+    pub(crate) fn env_granted(&self, env: u64, name: &str) -> bool {
+        match self.grants.get(&env) {
+            Some(Grant::Env(names)) => names.contains(name),
+            _ => self.config.env.contains_key(name),
         }
     }
     pub(crate) fn writable(&self, directory: u64) -> bool {

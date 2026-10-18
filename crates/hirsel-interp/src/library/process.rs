@@ -333,6 +333,26 @@ fn strings(v: &Value) -> Result<Vec<String>, Error> {
         .map(|v| text(v).map(str::to_owned))
         .collect()
 }
+/// `ProcessRule` values, normalized: sorted by program, one rule per program with the
+/// union of its sorted names.
+fn process_rules(v: &Value) -> Result<Vec<ProcessRule>, Error> {
+    let mut rules = BTreeMap::<String, Vec<String>>::new();
+    for rule in &collection::elements(v, BuiltinType::List)? {
+        let f = record_fields(rule, "ProcessRule", 2)?;
+        rules
+            .entry(text(f[0])?.to_owned())
+            .or_default()
+            .extend(strings(f[1])?);
+    }
+    Ok(rules
+        .into_iter()
+        .map(|(program, mut env)| {
+            env.sort();
+            env.dedup();
+            ProcessRule { program, env }
+        })
+        .collect())
+}
 fn int32(v: &Value) -> Result<i32, Error> {
     match v {
         Value::Integer(n) if n.kind() == Primitive::I32 => Ok(n.bits() as u32 as i32),
@@ -492,6 +512,21 @@ impl Simulation {
                     error(variant(0, vec![]))
                 };
                 self.record("Io", name, encode_arguments(a), encode_value(&value), cx)?;
+                value
+            }
+            "proc.narrow" => {
+                let (world, parent) = self.process_grant(arg(a, 0)?)?;
+                let rules = process_rules(arg(a, 1)?)?;
+                let value = if !rules.iter().all(|r| {
+                    parent
+                        .iter()
+                        .any(|p| p.program == r.program && r.env.iter().all(|n| p.env.contains(n)))
+                }) {
+                    error(failure_value(ProcessFailure::NotGranted))
+                } else {
+                    ok(self.handle("Proc", Grant::Proc { world, rules }))
+                };
+                self.record("Proc", name, encode_arguments(a), encode_value(&value), cx)?;
                 value
             }
             "test.process" => {

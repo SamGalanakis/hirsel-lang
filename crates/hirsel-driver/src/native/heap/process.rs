@@ -239,6 +239,33 @@ impl Io {
                 }
             }
             (Some("io"), "process", [OpValue::Handle(1)]) => R::Process { io: 1 },
+            // A narrowing is no cancellation point; its Proc is a plain capability.
+            (Some("proc"), "narrow", [p, OpValue::Sequence(rules)]) => {
+                let request = R::ProcessNarrow {
+                    process: self.network_id(p)?,
+                    rules: rules
+                        .iter()
+                        .map(|rule| match rule {
+                            OpValue::Aggregate(fields) => match fields.as_slice() {
+                                [program, env] => Some(hirsel_rt::process::ProcessRule {
+                                    program: text(program)?,
+                                    env: strings(env)?,
+                                }),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                        .collect::<Option<_>>()?,
+                };
+                return Some(match self.script(request, None) {
+                    Ok(C::Spawned(Ok(id))) => {
+                        OpOutcome::Value(io_ok(self.network_handle(id, false)))
+                    }
+                    Ok(C::Spawned(Err(f))) => OpOutcome::Value(v(1, failure(f))),
+                    Ok(_) => OpOutcome::Unsupported,
+                    Err(outcome) => outcome,
+                });
+            }
             (Some("proc"), name @ ("run" | "pipeline"), [p, cmd, stdin, max, deadline]) => {
                 // The runtime's policy checks a deadline against the clock's reading, which
                 // H owns; a run that starts before it is reached races it.
