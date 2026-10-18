@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-949 exported definitions; 286 variants.
+952 exported definitions; 287 variants.
 
 ## Types and roots
 
@@ -600,7 +600,7 @@ Variant of IpAddr.
 
 <a id="def-core_401_2fNetClient"></a>
 
-- `type NetClient uses {} = { from: SocketAddr, steps: List[NetStep] }`
+- `type NetClient uses {} = { from: SocketAddr, tls: PeerTls, steps: List[NetStep] }`
 
 <a id="def-core_401_2fNetConnection"></a>
 
@@ -742,7 +742,7 @@ Variant of NetError.
 
 <a id="def-core_401_2fNetOperation"></a>
 
-- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer()`
+- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer() | ListenTls()`
 
 <a id="def-core_401_2fNetOperation_23Connect"></a>
 
@@ -759,6 +759,12 @@ Variant of NetOperation.
 <a id="def-core_401_2fNetOperation_23Listen"></a>
 
 - `Listen() -> NetOperation`
+
+Variant of NetOperation.
+
+<a id="def-core_401_2fNetOperation_23ListenTls"></a>
+
+- `ListenTls() -> NetOperation`
 
 Variant of NetOperation.
 
@@ -1263,6 +1269,10 @@ Variant of TlsFailure.
 - `UnknownIssuer() -> TlsFailure`
 
 Variant of TlsFailure.
+
+<a id="def-core_401_2fTlsIdentity"></a>
+
+- `type TlsIdentity uses {} = { chain: Bytes, key: Bytes }`
 
 <a id="def-core_401_2fTlsRoots"></a>
 
@@ -3634,6 +3644,12 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest)
 
+<a id="def-std_401_2fhttp_2fserve_5ftls"></a>
+
+- `pub fn http.serve_tls(n: Net, take stream: Stream of n, identity: TlsIdentity, config: Config) -> Result[ ServerConnection, HttpError ]`
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/TlsIdentity`](#def-core_401_2fTlsIdentity), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+
 <a id="def-std_401_2fhttp_2fserver_5fconnection"></a>
 
 - `pub fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection`
@@ -4913,7 +4929,7 @@ References: [`core@1/IpAddr`](#def-core_401_2fIpAddr), [`core@1/String`](#def-co
 
 - `fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]`
 
-`(literal, port, Listen())` for `addr`; port 0 grants an ephemeral port
+`(literal, port, Listen())` or `(literal, port, ListenTls())` for `addr`; port 0 grants an ephemeral port
 
 <a id="def-core_401_2fnet_2flocal_5faddr"></a>
 
@@ -6271,6 +6287,12 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/TimeOfDay`](
 
 
 ## tls
+
+<a id="def-core_401_2ftls_2faccept"></a>
+
+- `fn tls.accept(n: Net, take s: Stream of n, identity: TlsIdentity) -> Result[Stream of n, NetError]`
+
+on a stream accepted on a listener of `n`
 
 <a id="def-core_401_2ftls_2fclose"></a>
 
