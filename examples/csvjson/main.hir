@@ -1,41 +1,269 @@
-pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let text = common.input(
-    rt,
-    args,
-    "name,note\nAda,\"hello, sheep\"\nLin,\"a \"\"quote\"\"\"\n"
-  )?
-  let records = match std@1/csv.parse(take text, std@1/csv.default_config()) {
-    Ok(records) => take records,
-    Error(_) => return Error(Invalid()),
+pub type Error = Arguments(ArgError) | Flags(std@1/cli.ParseError) | Csv(
+  std@1/csv.CsvError
+) | Input(bufio.ReadError[InputError]) | Files(bufio.ReadError[FileError]) | Open(
+  FileError
+) | Grant(GrantError) | Output(OutputError) | Encoding(std@1/base64.DecodeError, String) | Invalid
+
+type FileSource {
+  dir: Dir,
+  file: File of .dir,
+  buffer: bufio.Reader,
+}
+
+type InputSource {
+  input: Stdin,
+  buffer: bufio.Reader,
+}
+
+type MemorySource {
+  data: Bytes,
+  offset: u64,
+}
+
+fn file_refill(mut source: FileSource, mut out: List[u8], max: u64) -> Result[
+  u64,
+  Error
+] {
+  Ok(
+    bufio.file_read(source.dir, mut source.file, mut source.buffer, mut out, max) ? Files
+  )
+}
+
+fn stdin_bytes(mut input: Stdin, mut out: List[u8], max: u64) -> Result[u64, InputError] {
+  stdin.read(input, mut out, max)
+}
+
+fn input_refill(mut source: InputSource, mut out: List[u8], max: u64) -> Result[
+  u64,
+  Error
+] {
+  Ok(bufio.read(mut source.buffer, mut source.input, stdin_bytes, mut out, max) ? Input)
+}
+
+fn memory_refill(mut source: MemorySource, mut out: List[u8], max: u64) -> Result[
+  u64,
+  Error
+] {
+  let left = bytes.len(source.data) - source.offset
+  let count = if left < max {
+    left
+  } else {
+    max
   }
-  if list.len(records) == 0 {
-    return common.print(rt, "[]\n")
+  for i in 0u64..count {
+    list.push(mut out, source.data[source.offset + i])
   }
-  let headers = records[0]
-  let mut names: Map[String, bool] = map.empty()
-  for name in headers {
-    match map.get(names, name) {
-      Some(_) => return Error(Invalid()),
-      None() => (),
-    }
-    map.insert(mut names, copy name, true)
+  source.offset += count
+  Ok(count)
+}
+
+fn digest_hex(data: Bytes) -> String {
+  let digest = std@1/sha256.digest(data)
+  let mut out: List[u8] = []
+  for byte in digest {
+    list.push(mut out, byte)
   }
+  std@1/hex.encode(bytes.from_list(take out))
+}
+
+fn convert[S](
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, Error],
+  encoded_column: Option[String]
+) -> Result[String, Error] {
+  let mut reader = std@1/csv.reader(std@1/csv.default_config()) ? Csv
+  let mut headers: List[String] = []
+  let mut first = true
+  let mut encoded_index: Option[u64] = None()
+  let mut hash_name = ""
   let mut converted: List[box json.Value] = []
-  for i in 1u64..list.len(records) {
-    let row = records[i]
+  while true {
+    let row = match std@1/csv.read_record(mut reader, mut source, refill) {
+      Ok(Some(row)) => take row,
+      Ok(None()) => break,
+      Error(Source(error)) => return Error(take error),
+      Error(Csv(error)) => return Error(Csv(error)),
+      Error(InvalidRead()) => return Error(Invalid()),
+    }
+    if first {
+      first = false
+      headers = copy row
+      let mut names: Map[String, bool] = map.empty()
+      for i in 0u64..list.len(headers) {
+        let name = headers[i]
+        match map.get(names, name) {
+          Some(_) => return Error(Invalid()),
+          None() => (),
+        }
+        map.insert(mut names, copy name, true)
+        match encoded_column {
+          Some(column) => {
+            if column == name {
+              encoded_index = Some(i)
+            }
+          },
+          None() => (),
+        }
+      }
+      match encoded_column {
+        Some(column) => {
+          if encoded_index == None() {
+            return Error(Invalid())
+          }
+          hash_name = string.concat(column, "_sha256")
+          match map.get(names, hash_name) {
+            Some(_) => return Error(Invalid()),
+            None() => (),
+          }
+        },
+        None() => (),
+      }
+      continue
+    }
     if list.len(row) != list.len(headers) {
       return Error(Invalid())
     }
     let mut object: Map[String, box json.Value] = map.empty()
+    let mut digest = ""
     for j in 0u64..list.len(headers) {
-      map.insert(mut object, copy headers[j], box Text(copy row[j]))
+      if encoded_index == Some(j) {
+        let data = match std@1/base64.decode(row[j], Standard(), Required()) {
+          Ok(data) => take data,
+          Error(error) => return Error(Encoding(error, copy row[j])),
+        }
+        let canonical = std@1/base64.encode(data, Standard(), Required())
+        digest = digest_hex(data)
+        map.insert(mut object, copy headers[j], box Text(take canonical))
+      } else {
+        map.insert(mut object, copy headers[j], box Text(copy row[j]))
+      }
+    }
+    if encoded_index != None() {
+      map.insert(mut object, copy hash_name, box Text(take digest))
     }
     list.push(mut converted, box Object(take object))
   }
   let value: json.Value = Array(take converted)
   let output = match json.stringify(value) {
-    Ok(s) => take s,
+    Ok(output) => take output,
     Error(_) => return Error(Invalid()),
   }
-  common.print(rt, string.concat(output, "\n"))
+  Ok(string.concat(output, "\n"))
+}
+
+fn specs() -> List[std@1/cli.Flag] {
+  [
+    std@1/cli.Flag(
+      name: "help",
+      short: Some(core@1/int.narrow('h')),
+      kind: Switch(),
+      help: "show usage"
+    ),
+    std@1/cli.Flag(
+      name: "base64-field",
+      short: Some(core@1/int.narrow('b')),
+      kind: Value(),
+      help: "decode/re-encode this field and add its _sha256 digest"
+    )
+  ]
+}
+
+fn emit(rt: Io, text: String) -> Result[(), Error] {
+  out.print(io.stdout(rt) ? Grant, text) ? Output
+  Ok(())
+}
+
+fn run(rt: Io, args: Args) -> Result[(), Error] {
+  let mut snapshot: List[String] = []
+  let count = arg.count(args)
+  for i in 0u64..count {
+    list.push(mut snapshot, arg.text(args, i) ? Arguments)
+  }
+  let parsed = std@1/cli.parse(take snapshot, specs()) ? Flags
+  match map.get(parsed.flags, "help") {
+    Some(_) => return emit(rt, std@1/cli.usage("csvjson", specs())),
+    None() => (),
+  }
+  if list.len(parsed.positional) > 1 {
+    return Error(Invalid())
+  }
+  let column: Option[String] = match map.get(parsed.flags, "base64-field") {
+    Some(values) => Some(copy values[list.len(values) - 1]),
+    None() => None(),
+  }
+  let output = if list.len(parsed.positional) == 0 {
+    let mut source = MemorySource(
+      data: b"name,note\nAda,\"hello, sheep\"\nLin,\"a \"\"quote\"\"\"\n",
+      offset: 0
+    )
+    convert(mut source, memory_refill, column)?
+  } else if parsed.positional[0] == "-" {
+    let mut source = InputSource(input: io.stdin(rt) ? Grant, buffer: bufio.new(4096))
+    convert(mut source, input_refill, column)?
+  } else {
+    let dir = io.dir(rt, path.of("")) ? Open
+    let file = file.open(dir, path.of(parsed.positional[0])) ? Open
+    let mut source = FileSource(dir: dir, file: take file, buffer: bufio.new(4096))
+    convert(mut source, file_refill, column)?
+  }
+  emit(rt, output)
+}
+
+fn describe(error: Error) -> String {
+  match error {
+    Flags(UnknownFlag(index)) => string.concat(
+      "unknown flag at argument ",
+      u64.to_string(index)
+    ),
+    Flags(MissingValue(index)) => string.concat(
+      "missing flag value at argument ",
+      u64.to_string(index)
+    ),
+    Flags(UnexpectedValue(index)) => string.concat(
+      "unexpected flag value at argument ",
+      u64.to_string(index)
+    ),
+    Flags(InvalidSpec()) => "invalid flag specification",
+    Csv(Syntax(offset)) => string.concat(
+      "malformed CSV at byte ",
+      u64.to_string(offset)
+    ),
+    Csv(UnequalFields(offset)) => string.concat(
+      "unequal CSV width at byte ",
+      u64.to_string(offset)
+    ),
+    Csv(RecordTooLarge()) => "CSV record limit exceeded",
+    Csv(InvalidUtf8()) => "CSV field contains invalid UTF-8",
+    Csv(InvalidDelimiter()) => "invalid CSV delimiter",
+    Encoding(_, value) => string.concat("invalid base64 field: ", value),
+    Arguments(_) => "argument is unavailable",
+    Input(_) => "input read failed",
+    Files(_) => "file read failed",
+    Open(_) => "file could not be opened",
+    Grant(_) => "required I/O grant is unavailable",
+    Output(_) => "output failed",
+    Invalid() => "invalid CSV headers, row width, or arguments",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), Error] {
+  match run(rt, args) {
+    Ok(()) => Ok(()),
+    Error(error) => {
+      let entry = std@1/log.Entry(
+        level: Error(),
+        message: "csvjson failed",
+        fields: [std@1/log.Field(name: "reason", value: describe(error))],
+        timestamp: None()
+      )
+      match io.stderr(rt) {
+        Ok(sink) => {
+          // The launcher also reports the returned error after program stderr.
+          std@1/log.write(sink, Debug(), entry) ? Output
+        },
+        Error(_) => (),
+      }
+      Error(Invalid())
+    },
+  }
 }

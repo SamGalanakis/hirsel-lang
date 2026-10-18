@@ -75,7 +75,11 @@ impl Fixture {
                 serde_json::json!({"schema":1,"package":{"name":name,"version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"main.hir","module":[]},{"path":"common.hir","module":["common"]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}]})
             }
         };
-        manifest["sources"][1]["path"] = serde_json::json!("common.hir");
+        for source in manifest["sources"].as_array_mut().unwrap() {
+            if source["module"] == serde_json::json!(["common"]) {
+                source["path"] = serde_json::json!("common.hir");
+            }
+        }
         manifest["dependencies"][0]["manifest"] = serde_json::json!(stdlib);
         std::fs::write(dir.join("hirsel.json"), manifest.to_string()).unwrap();
         Self(dir)
@@ -1531,4 +1535,61 @@ fn kvstore_session(native: bool) {
     drop(server);
     let server = TodoServer::launch(&manifest, &grants, native);
     assert_eq!(kv(&server, "GET", "/kv/caf%C3%A9", None).2, "βeta");
+}
+
+#[test]
+fn csvjson_streams_multiline_base64_and_hashes_decoded_bytes() {
+    let fixture = Fixture::new(
+        "csvjson",
+        include_str!("../../../examples/csvjson/main.hir"),
+    );
+    fixture.run(false, Some(serde_json::json!({
+        "grants":["Io","Args"], "projections":["stdout"], "args":["--help"]
+    })), "Usage: csvjson [options] [--] [arguments]\n  -h, --help\tshow usage\n  -b, --base64-field <value>\tdecode/re-encode this field and add its _sha256 digest\n", 0);
+    fixture.run(false, Some(serde_json::json!({
+        "grants":["Io","Args"], "projections":["stdin","stdout","stderr"],
+        "args":["--base64-field","body","-"],
+        "stdin":"id,body,note\n1,YWJj,\"a\nb\"\n"
+    })), "[{\"id\":\"1\",\"body\":\"YWJj\",\"note\":\"a\\nb\",\"body_sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}]\n", 0);
+}
+
+#[test]
+fn csvjson_errors_are_one_escaped_structured_record() {
+    let fixture = Fixture::new(
+        "csvjson",
+        include_str!("../../../examples/csvjson/main.hir"),
+    );
+    let config = serde_json::json!({"grants":["Io","Args"],"projections":["stdin","stdout","stderr"],"args":["-b","body","-"],"stdin":"id,body\n1,\"bad\"\"\nx\"\n"});
+    let path = fixture.0.join("error.json");
+    std::fs::write(&path, config.to_string()).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--simulation"])
+        .arg(path)
+        .arg(fixture.0.join("hirsel.json"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr.iter().filter(|byte| **byte == b'\n').count(),
+        2
+    );
+    let split = output
+        .stderr
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap();
+    assert_eq!(&output.stderr[split + 1..], b"error: Invalid\n");
+    let record: serde_json::Value = serde_json::from_slice(&output.stderr[..split]).unwrap();
+    assert_eq!(record["level"], "error");
+    assert_eq!(record["message"], "csvjson failed");
+    assert_eq!(
+        record["fields"][0]["value"],
+        "invalid base64 field: bad\"\nx"
+    );
 }

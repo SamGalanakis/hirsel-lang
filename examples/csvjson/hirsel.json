@@ -12,12 +12,6 @@
     {
       "path": "main.hir",
       "module": []
-    },
-    {
-      "path": "../common.hir",
-      "module": [
-        "common"
-      ]
     }
   ],
   "dependencies": [

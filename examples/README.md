@@ -49,7 +49,7 @@ selects an explicit bound.
 | Program | Job and optional second argument |
 | --- | --- |
 | [wordscan](wordscan/main.hir) | Count newline characters, ASCII-whitespace words and UTF-8 bytes; print lines containing a substring (default `red`). |
-| [csvjson](csvjson/main.hir) | Header-based CSV to JSON objects; quoted commas/newlines, doubled quotes, CRLF and empty fields. Reject unequal row widths and duplicate headers. |
+| [csvjson](csvjson/main.hir) | Bounded std CSV reader to JSON objects, with `--help`, optional file/`-` stdin, and `--base64-field NAME` to decode/re-encode a field and append its SHA-256 digest. Reject unequal widths and duplicate headers; explicit stderr grants enable escaped JSON error records. |
 | [jsonquery](jsonquery/main.hir) | Extract a top-level JSON object member (default `flock`) and emit compact JSON. |
 | [logsummary](logsummary/main.hir) | Count the first whitespace-delimited severity token, case-insensitively, in first-seen order. |
 | [calculator](calculator/main.hir) | Evaluate one whitespace-separated integer expression per line, left to right; report malformed expressions and continue. Checked arithmetic retains language overflow failures. |
@@ -71,3 +71,21 @@ through both CLI backends and additional supplied-file cases, including a
 fixtures, including an actual local TCP server. File-input native tests also use
 that explicit fixture boundary; wordscan also checks both production CLI engines
 with real host file grants. The commands above exercise bound run records.
+
+The CSV tool uses `std@1/csv.read_record` over buffered files/stdin. Its
+`examples/csvjson/stdin-grants.json` template grants stdin, stdout and stderr and
+supplies `--base64-field body -` as the argument snapshot:
+
+```sh
+printf 'id,body\n1,YWJj\n' | hirsel run examples/csvjson/hirsel.json --grants examples/csvjson/stdin-grants.json
+```
+
+It validates canonical standard padded base64 in `body`, emits that field in
+canonical base64 and adds `body_sha256` as lowercase hex. An optional file path
+uses a granted directory instead. No arguments retains the built-in demo;
+`--help` prints the declared options. Records are bounded at 1 MiB; quoted CRLF is
+preserved, field counts must match headers, and a generated digest key may not
+collide with a header. Output is one JSON array, so the converted output itself
+remains proportional to the input row count. Errors return exit 1 after an
+explicit escaped JSON-lines log record when stderr is granted. The launcher
+then reports the returned `Invalid` error, as specified by PROG-3.
