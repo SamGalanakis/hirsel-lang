@@ -1,0 +1,111 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml resolves plain scalars by the YAML 1.2 core schema only. Cases port
+// saphyr saphyr/tests/basic.rs test_plain_datatype at b8205d5f60ea.
+fn same(take input: String, expected: yaml.Value) -> bool {
+  match yaml.parse(take input) {
+    Ok(value) => value == expected,
+    Error(_) => false,
+  }
+}
+
+fn text(take input: String, expected: String) -> bool {
+  let value: yaml.Value = Text(unique expected)
+  same(take input, value)
+}
+
+fn integer(take input: String, expected: i64) -> bool {
+  let value: yaml.Value = Integer(expected)
+  same(take input, value)
+}
+
+fn float(take input: String, expected: f64) -> bool {
+  let value: yaml.Value = Float(expected)
+  same(take input, value)
+}
+
+fn boolean(take input: String, expected: bool) -> bool {
+  let value: yaml.Value = Bool(expected)
+  same(take input, value)
+}
+
+fn null(take input: String) -> bool {
+  let value: yaml.Value = Null()
+  same(take input, value)
+}
+
+fn tag_error(take input: String) -> bool {
+  match yaml.parse(take input) {
+    Error(Tag(_)) => true,
+    _ => false,
+  }
+}
+
+fn syntax_error(take input: String) -> bool {
+  match yaml.parse(take input) {
+    Error(Syntax(_)) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // test_plain_datatype.
+  failure.check(text("'string'", "string"), TextInvariant())
+  failure.check(text("\"string\"", "string"), TextInvariant())
+  failure.check(text("string", "string"), TextInvariant())
+  failure.check(integer("123", 123), TextInvariant())
+  failure.check(integer("-321", -321), TextInvariant())
+  failure.check(float("1.23", 1.23), TextInvariant())
+  failure.check(float("-1e4", -10000.0), TextInvariant())
+  failure.check(null("~"), TextInvariant())
+  failure.check(null("null"), TextInvariant())
+  failure.check(boolean("true", true), TextInvariant())
+  failure.check(boolean("false", false), TextInvariant())
+  failure.check(text("!!str 0", "0"), TextInvariant())
+  failure.check(integer("!!int 100", 100), TextInvariant())
+  failure.check(float("!!float 2", 2.0), TextInvariant())
+  failure.check(null("!!null ~"), TextInvariant())
+  failure.check(boolean("!!bool true", true), TextInvariant())
+  failure.check(boolean("!!bool false", false), TextInvariant())
+  failure.check(integer("0xFF", 255), TextInvariant())
+  failure.check(tag_error("!!int string"), TextInvariant())
+  failure.check(tag_error("!!float string"), TextInvariant())
+  failure.check(tag_error("!!bool null"), TextInvariant())
+  failure.check(tag_error("!!null val"), TextInvariant())
+  failure.check(integer("0o77", 63), TextInvariant())
+  failure.check(integer("+12345", 12345), TextInvariant())
+  failure.check(float("-.INF", -1.0 / 0.0), TextInvariant())
+  failure.check(float("!!float .INF", 1.0 / 0.0), TextInvariant())
+  failure.check(
+    match yaml.parse(".NAN") {
+      Ok(Float(f)) => f != f,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // Core spellings at the edges of their patterns.
+  failure.check(integer("012", 12), TextInvariant())
+  failure.check(integer("-0", 0), TextInvariant())
+  failure.check(integer("9223372036854775807", 9223372036854775807), TextInvariant())
+  failure.check(
+    integer("-9223372036854775808", -9223372036854775807 - 1),
+    TextInvariant()
+  )
+  failure.check(integer("0x7fffffffffffffff", 9223372036854775807), TextInvariant())
+  failure.check(float(".5", 0.5), TextInvariant())
+  failure.check(float("+1.", 1.0), TextInvariant())
+  failure.check(float("1e3", 1000.0), TextInvariant())
+  failure.check(float("6.02E+23", 602000000000000000000000.0), TextInvariant())
+  failure.check(float("+.inf", 1.0 / 0.0), TextInvariant())
+  failure.check(boolean("True", true), TextInvariant())
+  failure.check(boolean("FALSE", false), TextInvariant())
+  failure.check(null("NULL"), TextInvariant())
+  failure.check(null(""), TextInvariant())
+  failure.check(null("# only a comment\n"), TextInvariant())
+  // An integer outside i64 is an error, not a rounded float or a string.
+  failure.check(syntax_error("9223372036854775808"), TextInvariant())
+  failure.check(syntax_error("-9223372036854775809"), TextInvariant())
+  failure.check(syntax_error("0x10000000000000000"), TextInvariant())
+  failure.check(syntax_error("!!int 0o1000000000000000000000"), TextInvariant())
+  Ok(())
+}

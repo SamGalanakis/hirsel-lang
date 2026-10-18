@@ -1,0 +1,62 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml: one node past MAX_ALIAS_NODES is Aliases at the alias that adds it.
+fn at(take input: String, kind: String, line: u64, column: u64) -> bool {
+  let Error(e) = yaml.parse_all(take input) else {
+    return false
+  }
+  let (name, p): (String, yaml.Position) = match e {
+    Syntax(p) => ("Syntax", p),
+    DuplicateKey(p) => ("DuplicateKey", p),
+    Nesting(p) => ("Nesting", p),
+    Aliases(p) => ("Aliases", p),
+    Tag(p) => ("Tag", p),
+    ComplexKey(p) => ("ComplexKey", p),
+    Documents(p) => ("Documents", p),
+    _ => return false,
+  }
+  name == kind && p.line == line && p.column == column
+}
+
+fn parses(take input: String) -> bool {
+  match yaml.parse_all(take input) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}
+
+fn repeat(mut out: List[u8], piece: String, count: u64) -> () {
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+}
+
+// Alias expansion adding exactly MAX_ALIAS_NODES nodes, plus `extra` scalar aliases.
+// a holds 10 nodes, b 101, c 1011 and d 10111; aliases add 100 + 1010 + 10110 for
+// b, c and d, 8 * 10111 for e, 7 * 1011 for f, 8 * 101 for g and 7 scalar aliases.
+fn expansion(extra: u64) -> String {
+  let mut out: List[u8] = []
+  text.append(mut out, "s: &s x\na: &a [1, 2, 3, 4, 5, 6, 7, 8, 9]\nb: &b [")
+  repeat(mut out, "*a, ", 10)
+  text.append(mut out, "]\nc: &c [")
+  repeat(mut out, "*b, ", 10)
+  text.append(mut out, "]\nd: &d [")
+  repeat(mut out, "*c, ", 10)
+  text.append(mut out, "]\ne: [")
+  repeat(mut out, "*d, ", 8)
+  text.append(mut out, "]\nf: [")
+  repeat(mut out, "*c, ", 7)
+  text.append(mut out, "]\ng: [")
+  repeat(mut out, "*b, ", 8)
+  text.append(mut out, "]\nh: [")
+  repeat(mut out, "*s, ", 7 + extra)
+  text.append(mut out, "]\n")
+  text.finish_valid(take out)
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  failure.check(at(expansion(1), "Aliases", 9, 33), TextInvariant())
+  Ok(())
+}

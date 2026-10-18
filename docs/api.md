@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1181 exported definitions; 320 variants.
+1189 exported definitions; 335 variants.
 
 ## Types and roots
 
@@ -8891,3 +8891,170 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/xxhash64/State`](#def-s
 - `@noalloc pub fn xxhash64.update(mut state: State, data: Bytes) -> () uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/xxhash64/State`](#def-std_401_2fxxhash64_2fState)
+
+
+## yaml
+
+<a id="def-std_401_2fyaml_2fMAX_5fALIAS_5fNODES"></a>
+
+- `pub const yaml.MAX_ALIAS_NODES: u64`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fyaml_2fMAX_5fNESTING"></a>
+
+- `pub const yaml.MAX_NESTING: u64`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fyaml_2fPosition"></a>
+
+- `pub type yaml.Position { line: u64, column: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fyaml_2fValue"></a>
+
+- `pub type yaml.Value = Null | Bool(bool) | Integer(i64) | Float(f64) | Text(String) | Array( List[Value] ) | Object(Map[String, Value])`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/f64`](#def-core_401_2ff64), [`core@1/i64`](#def-core_401_2fi64)
+
+<a id="def-std_401_2fyaml_2fValue_23Array"></a>
+
+- `Array( List[Value] ) -> yaml.Value`
+
+Variant of yaml.Value.
+
+References: [`core@1/List`](#def-core_401_2fList)
+
+<a id="def-std_401_2fyaml_2fValue_23Bool"></a>
+
+- `Bool(bool) -> yaml.Value`
+
+Variant of yaml.Value.
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fyaml_2fValue_23Float"></a>
+
+- `Float(f64) -> yaml.Value`
+
+Variant of yaml.Value.
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2fyaml_2fValue_23Integer"></a>
+
+- `Integer(i64) -> yaml.Value`
+
+Variant of yaml.Value.
+
+References: [`core@1/i64`](#def-core_401_2fi64)
+
+<a id="def-std_401_2fyaml_2fValue_23Null"></a>
+
+- `Null -> yaml.Value`
+
+Variant of yaml.Value.
+
+<a id="def-std_401_2fyaml_2fValue_23Object"></a>
+
+- `Object(Map[String, Value]) -> yaml.Value`
+
+Variant of yaml.Value.
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fyaml_2fValue_23Text"></a>
+
+- `Text(String) -> yaml.Value`
+
+Variant of yaml.Value.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fyaml_2fYamlError"></a>
+
+- `pub type yaml.YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases( Position ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue`
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fYamlError_23Aliases"></a>
+
+- `Aliases( Position ) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fYamlError_23ComplexKey"></a>
+
+- `ComplexKey(Position) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fYamlError_23Documents"></a>
+
+- `Documents(Position) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fYamlError_23DuplicateKey"></a>
+
+- `DuplicateKey(Position) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fYamlError_23InvalidValue"></a>
+
+- `InvalidValue -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+<a id="def-std_401_2fyaml_2fYamlError_23Nesting"></a>
+
+- `Nesting(Position) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fYamlError_23Syntax"></a>
+
+- `Syntax(Position) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fYamlError_23Tag"></a>
+
+- `Tag(Position) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
+<a id="def-std_401_2fyaml_2fparse"></a>
+
+- `pub fn yaml.parse(take text: String) -> Result[Value, YamlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2fparse_5fall"></a>
+
+- `pub fn yaml.parse_all(take text: String) -> Result[List[Value], YamlError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2fstringify"></a>
+
+- `pub fn yaml.stringify(value: Value) -> Result[unique String, YamlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)

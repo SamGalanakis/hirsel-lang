@@ -1,0 +1,66 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml reads a docker-compose file whose services share an anchored mapping
+// and a folded command.
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+fn item(v: yaml.Value, index: u64) -> yaml.Value {
+  match v {
+    Array(items) => if index < list.len(items) {
+      unique items[index]
+    } else {
+      Null()
+    },
+    _ => Null(),
+  }
+}
+
+fn is_text(v: yaml.Value, expected: String) -> bool {
+  match v {
+    Text(s) => s == expected,
+    _ => false,
+  }
+}
+
+fn is_integer(v: yaml.Value, expected: i64) -> bool {
+  match v {
+    Integer(n) => n == expected,
+    _ => false,
+  }
+}
+
+fn compose() -> () {
+  let text = "x-env: &env\n  RUST_LOG: info\n  PORT: \"8080\"\nservices:\n  api:\n    image: api:latest\n    environment: *env\n    ports:\n      - \"8080:80\"\n  worker:\n    environment: *env\n    command: >\n      run --queue\n      default\n"
+  let Ok(value) = yaml.parse(take text) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let services = field(value, "services")
+  let api = field(services, "api")
+  let worker = field(services, "worker")
+  failure.check(field(api, "environment") == field(value, "x-env"), TextInvariant())
+  failure.check(field(worker, "environment") == field(value, "x-env"), TextInvariant())
+  failure.check(
+    is_text(field(field(api, "environment"), "PORT"), "8080"),
+    TextInvariant()
+  )
+  failure.check(is_text(field(api, "image"), "api:latest"), TextInvariant())
+  failure.check(is_text(item(field(api, "ports"), 0), "8080:80"), TextInvariant())
+  failure.check(
+    is_text(field(worker, "command"), "run --queue default\n"),
+    TextInvariant()
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  compose()
+  Ok(())
+}

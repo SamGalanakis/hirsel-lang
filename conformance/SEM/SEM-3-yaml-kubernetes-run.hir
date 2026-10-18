@@ -1,0 +1,75 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml reads a Kubernetes manifest stream of two documents.
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+fn item(v: yaml.Value, index: u64) -> yaml.Value {
+  match v {
+    Array(items) => if index < list.len(items) {
+      unique items[index]
+    } else {
+      Null()
+    },
+    _ => Null(),
+  }
+}
+
+fn is_text(v: yaml.Value, expected: String) -> bool {
+  match v {
+    Text(s) => s == expected,
+    _ => false,
+  }
+}
+
+fn is_integer(v: yaml.Value, expected: i64) -> bool {
+  match v {
+    Integer(n) => n == expected,
+    _ => false,
+  }
+}
+
+fn kubernetes() -> () {
+  let text = "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\n  labels: {app: web, tier: \"frontend\"}\nspec:\n  ports:\n  - port: 80\n    targetPort: 8080\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: 3\n  template:\n    spec:\n      containers:\n        - name: web\n          image: \"nginx:1.27\"\n          args: [\"--port\", \"8080\"]\n          env:\n            - {name: DEBUG, value: \"false\"}\n"
+  let Ok(documents) = yaml.parse_all(copy text) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(list.len(documents) == 2, TextInvariant())
+  let service = documents[0]
+  failure.check(is_text(field(service, "kind"), "Service"), TextInvariant())
+  failure.check(
+    is_text(field(field(field(service, "metadata"), "labels"), "tier"), "frontend"),
+    TextInvariant()
+  )
+  let port = item(field(field(service, "spec"), "ports"), 0)
+  failure.check(is_integer(field(port, "port"), 80), TextInvariant())
+  failure.check(is_integer(field(port, "targetPort"), 8080), TextInvariant())
+  let deployment = documents[1]
+  failure.check(
+    is_integer(field(field(deployment, "spec"), "replicas"), 3),
+    TextInvariant()
+  )
+  let container = item(
+    field(field(field(field(deployment, "spec"), "template"), "spec"), "containers"),
+    0
+  )
+  failure.check(is_text(field(container, "image"), "nginx:1.27"), TextInvariant())
+  failure.check(is_text(item(field(container, "args"), 1), "8080"), TextInvariant())
+  failure.check(
+    is_text(field(item(field(container, "env"), 0), "value"), "false"),
+    TextInvariant()
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  kubernetes()
+  Ok(())
+}

@@ -1,0 +1,108 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml: quoted, block and `!` scalars are strings, core tags must match their
+// content and other tags are Tag; keys are their text. Cases port saphyr
+// saphyr/tests/basic.rs test_empty_node_is_null and test_integer_key at b8205d5f60ea.
+fn same(take input: String, expected: yaml.Value) -> bool {
+  match yaml.parse(take input) {
+    Ok(value) => value == expected,
+    Error(_) => false,
+  }
+}
+
+fn text(take input: String, expected: String) -> bool {
+  let value: yaml.Value = Text(unique expected)
+  same(take input, value)
+}
+
+fn integer(take input: String, expected: i64) -> bool {
+  let value: yaml.Value = Integer(expected)
+  same(take input, value)
+}
+
+fn float(take input: String, expected: f64) -> bool {
+  let value: yaml.Value = Float(expected)
+  same(take input, value)
+}
+
+fn boolean(take input: String, expected: bool) -> bool {
+  let value: yaml.Value = Bool(expected)
+  same(take input, value)
+}
+
+fn null(take input: String) -> bool {
+  let value: yaml.Value = Null()
+  same(take input, value)
+}
+
+fn tag_error(take input: String) -> bool {
+  match yaml.parse(take input) {
+    Error(Tag(_)) => true,
+    _ => false,
+  }
+}
+
+fn syntax_error(take input: String) -> bool {
+  match yaml.parse(take input) {
+    Error(Syntax(_)) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // Quoted, block and `!` scalars are strings whatever their content.
+  failure.check(text("'123'", "123"), TextInvariant())
+  failure.check(text("\"true\"", "true"), TextInvariant())
+  failure.check(text("! 12", "12"), TextInvariant())
+  failure.check(text("|-\n  null\n", "null"), TextInvariant())
+  failure.check(text("!<tag:yaml.org,2002:str> 1.5", "1.5"), TextInvariant())
+  // A %TAG handle resolves before the core check.
+  failure.check(
+    integer("%TAG !e! tag:yaml.org,2002:\n---\n!e!int 7\n", 7),
+    TextInvariant()
+  )
+  failure.check(tag_error("!local 1"), TextInvariant())
+  failure.check(tag_error("!!binary aGVsbG8="), TextInvariant())
+  failure.check(tag_error("!!map [1]"), TextInvariant())
+  failure.check(tag_error("!!str [1]"), TextInvariant())
+  failure.check(
+    match yaml.parse("!!seq [1]") {
+      Ok(Array(items)) => list.len(items) == 1,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // test_empty_node_is_null and test_integer_key: keys are their text.
+  let Ok(Object(entries)) = yaml.parse(
+    "email:\n-\n? \n: v\nempty: ''\n0:\n  important: true\n"
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let empty_items: yaml.Value = Null()
+  failure.check(
+    match map.get(entries, "email") {
+      Some(Array(items)) => list.len(items) == 1 && items[0] == empty_items,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(map.get(entries, "") == Some(Text("v")), TextInvariant())
+  failure.check(map.get(entries, "empty") == Some(Text("")), TextInvariant())
+  failure.check(map.contains(entries, "0"), TextInvariant())
+  failure.check(
+    match yaml.parse("1: a\n'1': b\n") {
+      Error(DuplicateKey(p)) => p.line == 2 && p.column == 1,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match yaml.parse("1: a\n'01': b\n") {
+      Ok(Object(both)) => map.len(both) == 2,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

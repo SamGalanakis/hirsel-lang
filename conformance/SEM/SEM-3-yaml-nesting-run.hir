@@ -1,0 +1,48 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml parses MAX_NESTING (128) levels of flow sequences.
+fn at(take input: String, kind: String, line: u64, column: u64) -> bool {
+  let Error(e) = yaml.parse_all(take input) else {
+    return false
+  }
+  let (name, p): (String, yaml.Position) = match e {
+    Syntax(p) => ("Syntax", p),
+    DuplicateKey(p) => ("DuplicateKey", p),
+    Nesting(p) => ("Nesting", p),
+    Aliases(p) => ("Aliases", p),
+    Tag(p) => ("Tag", p),
+    ComplexKey(p) => ("ComplexKey", p),
+    Documents(p) => ("Documents", p),
+    _ => return false,
+  }
+  name == kind && p.line == line && p.column == column
+}
+
+fn parses(take input: String) -> bool {
+  match yaml.parse_all(take input) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}
+
+fn repeat(mut out: List[u8], piece: String, count: u64) -> () {
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+}
+
+// `levels` nested collections: `open` before one scalar and `close` after it.
+fn nest(open: String, close: String, levels: u64) -> String {
+  let mut out: List[u8] = []
+  repeat(mut out, open, levels)
+  text.append(mut out, "x")
+  repeat(mut out, close, levels)
+  text.finish_valid(take out)
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  failure.check(parses(nest("[", "]", 128)), TextInvariant())
+  Ok(())
+}

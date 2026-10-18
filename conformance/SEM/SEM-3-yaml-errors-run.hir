@@ -1,0 +1,62 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml syntax errors carry a line and a Unicode scalar column; every rejected
+// input sits beside an accepted twin.
+fn at(take input: String, kind: String, line: u64, column: u64) -> bool {
+  let Error(e) = yaml.parse_all(take input) else {
+    return false
+  }
+  let (name, p): (String, yaml.Position) = match e {
+    Syntax(p) => ("Syntax", p),
+    DuplicateKey(p) => ("DuplicateKey", p),
+    Nesting(p) => ("Nesting", p),
+    Aliases(p) => ("Aliases", p),
+    Tag(p) => ("Tag", p),
+    ComplexKey(p) => ("ComplexKey", p),
+    Documents(p) => ("Documents", p),
+    _ => return false,
+  }
+  name == kind && p.line == line && p.column == column
+}
+
+fn parses(take input: String) -> bool {
+  match yaml.parse_all(take input) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // Syntax.
+  failure.check(at("a: [1, 2\n", "Syntax", 2, 1), TextInvariant())
+  failure.check(parses("a: [1, 2]\n"), TextInvariant())
+  failure.check(at("a: b: c\n", "Syntax", 1, 5), TextInvariant())
+  failure.check(parses("a: 'b: c'\n"), TextInvariant())
+  failure.check(at("- a\nb: c\n", "Syntax", 2, 1), TextInvariant())
+  failure.check(parses("- a\n- b: c\n"), TextInvariant())
+  failure.check(at("a:\n\tb: c\n", "Syntax", 2, 2), TextInvariant())
+  failure.check(parses("a:\n  b: c\n"), TextInvariant())
+  failure.check(at("'abc", "Syntax", 1, 1), TextInvariant())
+  failure.check(parses("'abc'"), TextInvariant())
+  failure.check(at("\"a\\qb\"", "Syntax", 1, 1), TextInvariant())
+  failure.check(parses("\"a\\tb\""), TextInvariant())
+  failure.check(at("a: \u{1}\n", "Syntax", 1, 4), TextInvariant())
+  failure.check(parses("a: \"\\x01\"\n"), TextInvariant())
+  failure.check(at("x: *missing\n", "Syntax", 1, 4), TextInvariant())
+  failure.check(parses("y: &missing 1\nx: *missing\n"), TextInvariant())
+  failure.check(at("%YAML 1.2\n%YAML 1.2\n---\na\n", "Syntax", 2, 1), TextInvariant())
+  failure.check(parses("%YAML 1.2\n---\na\n"), TextInvariant())
+  failure.check(at("key: 'a'b\n", "Syntax", 1, 9), TextInvariant())
+  failure.check(at("a:\n  - b\n  c: d\n", "Syntax", 3, 3), TextInvariant())
+  failure.check(parses("a:\n  - b\nc: d\n"), TextInvariant())
+  failure.check(at("[a, b]]\n", "Syntax", 1, 7), TextInvariant())
+  failure.check(at("a: 1\n# comment\n  b: 2\n", "Syntax", 3, 3), TextInvariant())
+  failure.check(parses("a: 1\n# comment\nb: 2\n"), TextInvariant())
+  // Columns count Unicode scalars; CR and CRLF break lines.
+  failure.check(at("é: [1, x\n", "Syntax", 2, 1), TextInvariant())
+  failure.check(at("é: ü: x\n", "Syntax", 1, 5), TextInvariant())
+  failure.check(at("a\r\nb: [\r\n", "Syntax", 2, 2), TextInvariant())
+  failure.check(at("a: 1\rb: c: d\r", "Syntax", 2, 5), TextInvariant())
+  failure.check(parses("a: 1\rb: c\r"), TextInvariant())
+  Ok(())
+}

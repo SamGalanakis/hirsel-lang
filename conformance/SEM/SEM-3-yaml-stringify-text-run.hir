@@ -1,0 +1,68 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.stringify writes strings plain only where they read back unchanged
+// (YAML 1.1 lookalikes quoted), multi-line text as literal blocks, and everything
+// else double-quoted with escapes; each output reads back to its value.
+fn writes(take input: String, expected: String) -> bool {
+  let Ok(value) = yaml.parse(take input) else {
+    return false
+  }
+  let Ok(written) = yaml.stringify(value) else {
+    return false
+  }
+  if written != expected {
+    return false
+  }
+  yaml.parse(take written) == Ok(value)
+}
+
+fn repeat(mut out: List[u8], piece: String, count: u64) -> () {
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+}
+
+fn nested(levels: u64) -> yaml.Value {
+  let mut value: yaml.Value = Null()
+  let mut i: u64 = 0
+  while i < levels {
+    value = Array([take value])
+    i += 1
+  }
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // Strings that would read back as something else, or not at all, are quoted.
+  failure.check(
+    writes(
+      "['yes', '1.5', ' lead', 'a: b', '#x', 'x #y', 'trail ', '-x', 'null', '', 'on', '1:30', 'é', 'x:y', 'a#b', '...']",
+      "- \"yes\"\n- \"1.5\"\n- \" lead\"\n- \"a: b\"\n- \"#x\"\n- \"x #y\"\n- \"trail \"\n- \"-x\"\n- \"null\"\n- \"\"\n- \"on\"\n- \"1:30\"\n- é\n- x:y\n- a#b\n- \"...\"\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    writes(
+      "\"tab\\there\\x01\\N\\L\\P\\uFEFF\\x7F\\x9B\\\"q\\\"\\\\\\0\\e\"",
+      "\"tab\\there\\x01\\N\\L\\P\\uFEFF\\x7F\\x9B\\\"q\\\"\\\\\\0\\e\"\n"
+    ),
+    TextInvariant()
+  )
+  // Multi-line text is a literal block whose chomping keeps its final line breaks.
+  failure.check(
+    writes(
+      "{run: \"a\\n  b\\nc\\n\", keep: \"x\\n\\n\", strip: \"x\\ny\"}",
+      "run: |\n  a\n    b\n  c\nkeep: |+\n  x\n\nstrip: |-\n  x\n  y\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(writes("\"line1\\nline2\"", "|-\n  line1\n  line2\n"), TextInvariant())
+  failure.check(writes("[\"a\\nb\"]", "- |-\n  a\n  b\n"), TextInvariant())
+  failure.check(writes("\"a\\n  \\nb\"", "\"a\\n  \\nb\"\n"), TextInvariant())
+  failure.check(writes("\" a\\nb\"", "\" a\\nb\"\n"), TextInvariant())
+  failure.check(writes("\"\\na\"", "\"\\na\"\n"), TextInvariant())
+  failure.check(writes("\"a\\r\\nb\"", "\"a\\r\\nb\"\n"), TextInvariant())
+  Ok(())
+}

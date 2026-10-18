@@ -1,0 +1,69 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml key, tag and document errors carry a line and a Unicode scalar
+// column, each beside an accepted twin. Duplicate-key cases port saphyr
+// saphyr/tests/basic.rs test_mapping_duplicate_keys* at b8205d5f60ea.
+fn at(take input: String, kind: String, line: u64, column: u64) -> bool {
+  let Error(e) = yaml.parse_all(take input) else {
+    return false
+  }
+  let (name, p): (String, yaml.Position) = match e {
+    Syntax(p) => ("Syntax", p),
+    DuplicateKey(p) => ("DuplicateKey", p),
+    Nesting(p) => ("Nesting", p),
+    Aliases(p) => ("Aliases", p),
+    Tag(p) => ("Tag", p),
+    ComplexKey(p) => ("ComplexKey", p),
+    Documents(p) => ("Documents", p),
+    _ => return false,
+  }
+  name == kind && p.line == line && p.column == column
+}
+
+fn parses(take input: String) -> bool {
+  match yaml.parse_all(take input) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // Keys.
+  failure.check(at("? [a]\n: b\n", "ComplexKey", 1, 3), TextInvariant())
+  failure.check(at("&x [a]: b\n", "ComplexKey", 1, 1), TextInvariant())
+  failure.check(at("a: &x [1]\n*x : 2\n", "ComplexKey", 2, 1), TextInvariant())
+  failure.check(parses("a: &x k\n*x : 2\n"), TextInvariant())
+  failure.check(at("a: 1\nb: 2\na: 3\n", "DuplicateKey", 3, 1), TextInvariant())
+  failure.check(at("a: 1\nb:\n  c: 2\n  c: 3\n", "DuplicateKey", 4, 3), TextInvariant())
+  failure.check(parses("a: 1\nb:\n  c: 2\n  d: 3\n"), TextInvariant())
+  failure.check(at("{a: 1, a: 2}", "DuplicateKey", 1, 8), TextInvariant())
+  failure.check(parses("{a: 1, b: 2}"), TextInvariant())
+  failure.check(at("a: 1\n? a\n: 2\n", "DuplicateKey", 2, 3), TextInvariant())
+  // Tags and documents.
+  failure.check(at("!foo bar", "Tag", 1, 1), TextInvariant())
+  failure.check(at("x: !!int 1.5\n", "Tag", 1, 4), TextInvariant())
+  failure.check(parses("x: !!float 1.5\n"), TextInvariant())
+  failure.check(at("!e!x 1", "Syntax", 1, 1), TextInvariant())
+  failure.check(
+    match yaml.parse("--- a\n--- b\n") {
+      Error(Documents(p)) => p.line == 2 && p.column == 1,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match yaml.parse_all("--- a\n--- b\n") {
+      Ok(documents) => list.len(documents) == 2,
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match yaml.parse("--- a\n...\n") {
+      Ok(Text(s)) => s == "a",
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,85 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml reads a GitHub workflow, whose `on` key stays a string, and writes it
+// back in canonical block style that reads back to the same value.
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+fn item(v: yaml.Value, index: u64) -> yaml.Value {
+  match v {
+    Array(items) => if index < list.len(items) {
+      unique items[index]
+    } else {
+      Null()
+    },
+    _ => Null(),
+  }
+}
+
+fn is_text(v: yaml.Value, expected: String) -> bool {
+  match v {
+    Text(s) => s == expected,
+    _ => false,
+  }
+}
+
+fn is_integer(v: yaml.Value, expected: i64) -> bool {
+  match v {
+    Integer(n) => n == expected,
+    _ => false,
+  }
+}
+
+fn workflow() -> () {
+  let text = "name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Run\n        run: |\n          cargo test\n          cargo clippy\n"
+  let Ok(value) = yaml.parse(take text) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  // YAML 1.2 has no `on` boolean: the key is the string.
+  let on = field(value, "on")
+  failure.check(
+    is_text(item(field(field(on, "push"), "branches"), 0), "main"),
+    TextInvariant()
+  )
+  let Object(triggers) = on else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(map.get(triggers, "pull_request") == Some(Null()), TextInvariant())
+  let steps = field(field(field(value, "jobs"), "test"), "steps")
+  failure.check(
+    is_text(field(item(steps, 0), "uses"), "actions/checkout@v4"),
+    TextInvariant()
+  )
+  failure.check(
+    is_text(field(item(steps, 1), "run"), "cargo test\ncargo clippy\n"),
+    TextInvariant()
+  )
+  let expected = "name: CI\n\"on\":\n  push:\n    branches:\n      - main\n  pull_request: null\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Run\n        run: |\n          cargo test\n          cargo clippy\n"
+  let Ok(written) = yaml.stringify(value) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(written == expected, TextInvariant())
+  failure.check(yaml.parse(take written) == Ok(value), TextInvariant())
+  failure.check(
+    match yaml.parse_all("on: push\n---\non: [push, pull_request]\n") {
+      Ok(documents) => list.len(documents) == 2,
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  workflow()
+  Ok(())
+}

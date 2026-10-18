@@ -78,6 +78,9 @@ N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 @preserves_unique(out) fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}
+fn yaml.parse(take text: String) -> Result[yaml.Value, yaml.YamlError] uses {}
+fn yaml.parse_all(take text: String) -> Result[List[yaml.Value], yaml.YamlError] uses {}
+fn yaml.stringify(value: yaml.Value) -> Result[unique String, yaml.YamlError] uses {}
 @track_caller N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 @track_caller N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
 @track_caller fn test.assert_eq[T: data](t: Test, actual: T, expected: T, show: fn(T) -> String) -> ()
@@ -352,6 +355,88 @@ controls, quotes and backslashes, and leave other scalars unescaped. Writing use
 nesting bound, returning `Nesting(128)` at the attempted container depth. This is library
 policy, independent of the depth limits of [MEM-3](memory.md#mem-3-freeing), with no
 reflection, automatic record conversion or authority.
+
+## YAML
+
+```text
+Value     = Null() | Bool(bool) | Integer(i64) | Float(f64) | Text(String)
+          | Array(List[Value]) | Object(Map[String, Value])
+Position  = { line: u64, column: u64 }
+YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position)
+          | Aliases(Position) | Tag(Position) | ComplexKey(Position)
+          | Documents(Position) | InvalidValue()
+```
+
+`yaml.parse_all` takes a UTF-8 `String` holding a YAML 1.2.2 stream and returns its
+documents in order; `yaml.parse` returns the only document, `Null` for a stream with
+none, and `Documents` at the start of a second one. Both accept the whole syntax: block
+and flow collections, plain, single-quoted, double-quoted, literal and folded scalars
+with every chomping and indentation indicator, explicit and implicit keys, anchors and
+aliases, `%YAML` and `%TAG` directives, explicit document markers and a leading byte
+order mark. Line breaks are LF, CR or CRLF and decode as LF. Text outside the printable
+set (YAML 1.2.2 5.1: a control other than tab, line feed and carriage return, DEL, a C1
+control other than NEL, U+FFFE or U+FFFF) is `Syntax`.
+
+Scalars resolve by the core schema (YAML 1.2.2 10.3) and nothing else. An untagged plain
+scalar is `Null` when it is empty, `~`, `null`, `Null` or `NULL`; `Bool` for `true`,
+`True`, `TRUE`, `false`, `False`, `FALSE`; `Integer` for `[-+]?[0-9]+`, `0o[0-7]+` or
+`0x[0-9a-fA-F]+`; `Float` for `[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?`,
+`[-+]?(\.inf|\.Inf|\.INF)` or `.nan`, `.NaN`, `.NAN`, rounded correctly to binary64;
+and `Text` otherwise. YAML 1.1 spellings are text: `yes`, `no`, `on`, `off`, `y`, `n`,
+`0b101`, `1_000`, `012` (the decimal 12), `1:30` and dates stay as written, so a GitHub
+workflow's `on:` key is the string `on`. An integer outside `i64` is `Syntax` at the
+scalar. A quoted or block scalar is `Text`. Tags are limited to the core schema: `!` and
+`!!str` make a scalar `Text`; `!!null`, `!!bool`, `!!int` and `!!float` require a
+scalar of that type's spelling above; `!!seq` and `!!map` (or `!`) may tag a sequence
+or mapping; `%TAG` handles resolve before this check. Any other tag, or a core tag on
+content it does not match, is `Tag` at the node. Merge keys (`<<`, a YAML 1.1 type) are
+ordinary keys.
+
+A mapping becomes an `Object` in document order. A key is a scalar, or an alias of one,
+and is its content text whatever its style or type, so `1`, `'1'` and `"1"` are the same
+key and a repeat of any key is `DuplicateKey` at the repeated key. A sequence or mapping
+key (or an alias of one) is `ComplexKey`. Anchors are scoped to their document; a later
+anchor of the same name replaces the earlier one, and an alias with no anchor before it
+is `Syntax`. An alias copies its anchored node. The constant `MAX_ALIAS_NODES: u64 =
+100000` bounds the nodes that aliases add to one document (each scalar, sequence,
+mapping and key counts one), against exponential expansion; the alias that would exceed
+it is `Aliases`. The constant `MAX_NESTING: u64 = 128` counts open sequences and
+mappings, flow or block, scalars using no level; the collection that would be level 129
+is `Nesting` at its first byte, and so is an alias whose anchored tree would reach that
+level.
+
+Every error that has a `Position` carries the one-based line and the one-based Unicode
+scalar column (a tab counts one column) where the scanner, parser or composer detected
+it; end of input is past the last scalar. A node's position is that of its first
+property (anchor or tag) or, without one, of its content. These positions and the
+grammar follow saphyr's port of libyaml as checked by yaml-test-suite: every case of
+its 2022-01-17 data release runs in `conformance/SEM/SEM-3-yaml-test-*-run.hir`, and each
+case that a `Value` cannot hold (a tag outside the core schema, a complex key, or two
+empty keys) is held to the error above.
+
+`yaml.stringify` borrows a `Value` and writes one document in canonical block style,
+ending in a line break. Mapping entries are `key: value` and sequence entries `- value`;
+a nested non-empty collection starts on the next line, indented two spaces from its key
+or dash, except that a collection inside a sequence entry starts on the dash's line
+(`- a: 1`, `- - x`). Empty collections are `[]` and `{}`. `Null` is `null`, booleans
+`true` and `false`, integers decimal, floats the shortest round-trip digits of the `f64`
+module with `.0` appended to whole numbers, and `.inf`, `-.inf` and `.nan`. A string, key
+or value, is plain when it reads back as the same string: non-empty, not starting with
+an indicator (`-?:,[]{}#&*!|>'"%@` or backquote), a blank or `...`, not ending with a
+blank or `:`, without `: ` or ` #`, without the characters double quotes escape below,
+not a core-schema null, bool, int or float spelling, and not a YAML 1.1 boolean (`y`,
+`n`, `yes`, `no`, `on`, `off` in lower, capitalized or upper case) or sexagesimal number
+(a digit, after an optional sign, then digits, `_`, `.` and at least one `:`), so YAML 1.1
+readers keep it a string. A non-key string with a line
+break whose first line is non-empty and starts with no blank, with no line of blanks
+only and no escaped character other than tab, is a literal block scalar (`|`, or `|-`
+without a final line break, or `|+` with more than one). Every other string is
+double-quoted, escaping `"`, `\`, `\0 \a \b \t \n \v \f \r \e`, other C0 controls and
+DEL as `\xXX`, C1 controls as `\xXX` (NEL as `\N`), U+2028 and U+2029 as `\L` and
+`\P`, and U+FEFF, U+FFFE and U+FFFF as `\uXXXX`. A key longer than 1024 bytes as
+written (plain or quoted) becomes an explicit `? key` entry, with its `:` on the next
+line. A collection that would be level 129 is
+`InvalidValue`; nothing else fails. The output parses to an equal value, NaN to NaN.
 
 ## The formatting protocol
 

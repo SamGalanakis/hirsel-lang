@@ -1,0 +1,171 @@
+// yaml-test-suite checks: a valid case parses to the suite's JSON documents, each
+// of which survives a stringify/parse round trip; one without JSON parses to its
+// number of documents; an error case is rejected; and a case outside the Value
+// model fails with the error the generator names.
+fn report(s: Stdout, kind: String, name: String) -> u64 {
+  let line = string.concat(string.concat(kind, name), "\n")
+  match out.print(s, line) {
+    _ => 1,
+  }
+}
+
+// Python's json module spells every float with a point or an exponent.
+fn float_lexeme(lexeme: String) -> bool {
+  let data = string.as_bytes(lexeme)
+  let mut i: u64 = 0
+  while i < bytes.len(data) {
+    let c = data[i]
+    if c == b'.' || c == b'e' || c == b'E' {
+      return true
+    }
+    i += 1
+  }
+  false
+}
+
+fn matches(actual: yaml.Value, expected: json.Value) -> bool {
+  match (actual, expected) {
+    (Null(), Null()) => true,
+    (Bool(a), Bool(b)) => a == b,
+    (Integer(n), Number(lexeme)) => !float_lexeme(lexeme) && i64.parse(lexeme) == Ok(n),
+    (Float(f), Number(lexeme)) => float_lexeme(lexeme) && f64.parse(lexeme) == Ok(f),
+    (Text(a), Text(b)) => a == b,
+    (Array(xs), Array(ys)) => {
+      if list.len(xs) != list.len(ys) {
+        return false
+      }
+      let mut i: u64 = 0
+      while i < list.len(xs) {
+        if !matches(xs[i], ys[i]) {
+          return false
+        }
+        i += 1
+      }
+      true
+    },
+    (Object(xs), Object(ys)) => {
+      if map.len(xs) != map.len(ys) {
+        return false
+      }
+      for (key, x) in xs {
+        let Some(y) = map.get(ys, key) else {
+          return false
+        }
+        if !matches(x, y) {
+          return false
+        }
+      }
+      true
+    },
+    _ => false,
+  }
+}
+
+// The case's documents and whether they match the suite's JSON, reported once.
+fn decoded(s: Stdout, name: String, take text: String, take expected: List[String]) -> Option[
+  List[yaml.Value]
+] {
+  let Ok(documents) = yaml.parse_all(take text) else {
+    let _ = report(s, "rejected valid case ", name)
+    return None()
+  }
+  if list.len(documents) != list.len(expected) {
+    let _ = report(s, "wrong document count ", name)
+    return None()
+  }
+  let mut i: u64 = 0
+  while i < list.len(documents) {
+    let Ok(want) = json.parse(copy expected[i]) else {
+      let _ = report(s, "bad expectation ", name)
+      return None()
+    }
+    if !matches(documents[i], want) {
+      let _ = report(s, "wrong value ", name)
+      return None()
+    }
+    i += 1
+  }
+  Some(documents)
+}
+
+fn round_trip(s: Stdout, name: String, document: yaml.Value) -> u64 {
+  let Ok(written) = yaml.stringify(document) else {
+    return report(s, "unwritable value ", name)
+  }
+  match yaml.parse(take written) {
+    Ok(back) => if back == document {
+      0
+    } else {
+      report(s, "round trip changed ", name)
+    },
+    Error(_) => report(s, "round trip rejected ", name),
+  }
+}
+
+pub fn valid(s: Stdout, name: String, take text: String, take expected: List[String]) -> u64 {
+  let Some(documents) = decoded(s, name, take text, take expected) else {
+    return 1
+  }
+  let mut failed: u64 = 0
+  for document in documents {
+    failed += round_trip(s, name, document)
+  }
+  failed
+}
+
+pub fn decodes(s: Stdout, name: String, take text: String, take expected: List[String]) -> u64 {
+  match decoded(s, name, take text, take expected) {
+    Some(_) => 0,
+    None() => 1,
+  }
+}
+
+// The round trip of one document, for a case too large to check in one program.
+pub fn round_trips(s: Stdout, name: String, take text: String, index: u64) -> u64 {
+  match yaml.parse_all(take text) {
+    Ok(documents) => round_trip(s, name, documents[index]),
+    Error(_) => report(s, "rejected valid case ", name),
+  }
+}
+
+pub fn parses(s: Stdout, name: String, take text: String, count: u64) -> u64 {
+  match yaml.parse_all(take text) {
+    Ok(documents) => if list.len(documents) == count {
+      0
+    } else {
+      report(s, "wrong document count ", name)
+    },
+    Error(_) => report(s, "rejected valid case ", name),
+  }
+}
+
+pub fn invalid(s: Stdout, name: String, take text: String) -> u64 {
+  match yaml.parse_all(take text) {
+    Ok(_) => report(s, "accepted error case ", name),
+    Error(_) => 0,
+  }
+}
+
+// A valid case whose tree holds a tag outside the core schema.
+pub fn tagged(s: Stdout, name: String, take text: String) -> u64 {
+  match yaml.parse_all(take text) {
+    Error(Tag(_)) => 0,
+    _ => report(s, "expected Tag ", name),
+  }
+}
+
+// A valid case with a collection or alias of a collection as a mapping key.
+pub fn complex_key(s: Stdout, name: String, take text: String) -> u64 {
+  match yaml.parse_all(take text) {
+    Error(ComplexKey(_)) => 0,
+    _ => report(s, "expected ComplexKey ", name),
+  }
+}
+
+// A valid case whose mapping repeats a key's text, such as two empty keys.
+pub fn duplicate_key(s: Stdout, name: String, take text: String) -> u64 {
+  match yaml.parse_all(take text) {
+    Error(DuplicateKey(_)) => 0,
+    _ => report(s, "expected DuplicateKey ", name),
+  }
+}

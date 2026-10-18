@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.stringify writes a plain key longer than 1024 bytes as an explicit
+// `? key` entry; the suite's explicit-key cases cover reading that form.
+// `piece` repeated 2^times, by doubling.
+fn doubled(piece: String, times: u64) -> String {
+  let mut out = unique piece
+  let mut i: u64 = 0
+  while i < times {
+    out = string.concat(out, out)
+    i += 1
+  }
+  out
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // 1025 bytes.
+  let key = string.concat(doubled("k ", 9), "k")
+  let mut entries: Map[String, yaml.Value] = map.empty()
+  map.insert(mut entries, copy key, Text("v"))
+  let value: yaml.Value = Object(take entries)
+  let expected = string.concat(string.concat("? ", key), "\n: v\n")
+  failure.check(yaml.stringify(value) == Ok(expected), TextInvariant())
+  Ok(())
+}

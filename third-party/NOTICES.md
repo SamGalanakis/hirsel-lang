@@ -110,6 +110,8 @@ the license named in its row; the license texts follow once each.
 | Unicode Character Database 16.0.0 | data files and generated tables | `stdlib/unicode16/`, `stdlib/std@1/{unicode_tables,unicode_compatibility_tables,string_case_tables,grapheme_tables,unicode_property_tables,display_width_tables}.hir` | Unicode 16.0.0 | Unicode, `stdlib/unicode16/LICENSE.txt` |
 | serde_json | `src/{de,read,ser}.rs`, `tests/test.rs` | std@1 JSON parsing, escaping and writing | serde-rs/json `20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8` | MIT |
 | JSONTestSuite | `test_parsing/` | std@1 JSON corpus vectors | nst/JSONTestSuite `1ef36fa01286573e846ac449e8683f8833c5b26a` | MIT |
+| saphyr | `parser/src/{scanner,parser,char_traits}.rs` (scanner, simple keys, indentation, block and flow scalars, event state machine); `saphyr/tests/basic.rs`, `parser/tests/{issues,basic}.rs` vectors | `stdlib/std@1/yaml.hir`, `conformance/SEM/SEM-3-yaml-*-run.hir` | saphyr-rs/saphyr `b8205d5f60ea44f757f7d075fe4f3704bbe5dccc` (v0.2.2) | MIT |
+| yaml-test-suite | every case of the data branch (`in.yaml`, `in.json`, `test.event`, `error`) | `tools/generate-yaml-test.py`, `conformance/SEM/SEM-3-yaml-test-*-run.hir`, `packages/fixtures/yaml_test@1/harness.hir` | yaml/yaml-test-suite `6e6c296ae9c9d2d5c4134b4b64d01b29ac19ff6f` (data-2022-01-17) | MIT |
 | mimalloc | `src/{alloc,free,page}.c`, `include/mimalloc/types.h`, `test/test-stress.c` | `crates/hirsel-rt/src/alloc.rs` | microsoft/mimalloc `31d034d94cdb8e22f7d7ed55967f581a2d6e831d` | MIT |
 | httparse | `src/lib.rs` (request, response, headers, chunk parser and test vectors) | `stdlib/std@1/http_wire.hir`, `crates/hirsel-driver/tests/it-stdlib/stdlib_http_wire.rs` | seanmonstar/httparse `a0fa552e4e0fa9a5914a736ef3a556748fef709b` | MIT |
 | rustls | `tests/api.rs` vectors (client and server close_notify, server ALPN), `test-ca/rsa-2048/{ca.cert,end.fullchain,end.key}` | `crates/hirsel-rt/tests/it/tls.rs`, `crates/hirsel-rt/tests/it/tls_server.rs`, `crates/hirsel-rt/tests/it/tls-data/` | rustls/rustls `f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb` (v/0.23.46) | MIT |
@@ -147,6 +149,8 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - unicode-segmentation: Copyright (c) 2015 The Rust Project Developers
 - serde_json: Copyright (c) Serde project contributors
 - JSONTestSuite: Copyright (c) 2016 Nicolas Seriot
+- saphyr: Copyright (c) 2015 Chen Yuheng; Copyright (c) 2023 Ethiraric
+- yaml-test-suite: Copyright (c) 2016-2020 Ingy döt Net
 - mimalloc: Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen
 - httparse: Copyright (c) 2015-2026 Sean McArthur
 - rustls: Copyright (c) 2016 Joseph Birr-Pixton

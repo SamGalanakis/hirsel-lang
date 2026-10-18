@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.stringify writes floats with a point, an exponent or .inf, -.inf and
+// .nan, reading back to the same value.
+fn writes(take input: String, expected: String) -> bool {
+  let Ok(value) = yaml.parse(take input) else {
+    return false
+  }
+  let Ok(written) = yaml.stringify(value) else {
+    return false
+  }
+  if written != expected {
+    return false
+  }
+  yaml.parse(take written) == Ok(value)
+}
+
+fn repeat(mut out: List[u8], piece: String, count: u64) -> () {
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+}
+
+fn nested(levels: u64) -> yaml.Value {
+  let mut value: yaml.Value = Null()
+  let mut i: u64 = 0
+  while i < levels {
+    value = Array([take value])
+    i += 1
+  }
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // Floats keep a point, an exponent or a special spelling.
+  failure.check(
+    writes(
+      "[1.0, 0.5, -.inf, .inf, 100.0, 2.5e-8]",
+      "- 1.0\n- 0.5\n- -.inf\n- .inf\n- 100.0\n- 2.5e-8\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    match yaml.stringify(Float(0.0 / 0.0)) {
+      Ok(written) => written == ".nan\n",
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,3122 @@
+// YAML 1.2 contracts: STD-OP-yaml.* and TYPE-ROW-Value/Position/YamlError.
+// The scanner and parser port saphyr-rs/saphyr parser/src/{scanner,parser}.rs at
+// b8205d5f60ea44f757f7d075fe4f3704bbe5dccc (MIT/Apache-2.0), itself a port of libyaml,
+// as exercised by yaml/yaml-test-suite data-2022-01-17. Scalars resolve by the YAML
+// 1.2.2 core schema (section 10.3) only.
+pub type Value = Null | Bool(bool) | Integer(i64) | Float(f64) | Text(String) | Array(
+  List[Value]
+) | Object(Map[String, Value])
+
+pub type Position {
+  line: u64,
+  column: u64,
+}
+
+pub type YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases(
+  Position
+) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue
+
+// Policy counts open sequences and mappings; scalars do not consume a level.
+pub const MAX_NESTING: u64 = 128
+
+// Nodes that alias expansion may add to one document's tree, against billion laughs.
+pub const MAX_ALIAS_NODES: u64 = 100000
+
+const NONE: u64 = 18446744073709551615
+
+const CORE: String = "tag:yaml.org,2002:"
+
+// Token kinds.
+const T_STREAM_START: u8 = 0
+
+const T_STREAM_END: u8 = 1
+
+const T_VERSION: u8 = 2
+
+const T_TAG_DIRECTIVE: u8 = 3
+
+const T_RESERVED: u8 = 4
+
+const T_DOCUMENT_START: u8 = 5
+
+const T_DOCUMENT_END: u8 = 6
+
+const T_BLOCK_SEQUENCE_START: u8 = 7
+
+const T_BLOCK_MAPPING_START: u8 = 8
+
+const T_BLOCK_END: u8 = 9
+
+const T_FLOW_SEQUENCE_START: u8 = 10
+
+const T_FLOW_SEQUENCE_END: u8 = 11
+
+const T_FLOW_MAPPING_START: u8 = 12
+
+const T_FLOW_MAPPING_END: u8 = 13
+
+const T_BLOCK_ENTRY: u8 = 14
+
+const T_FLOW_ENTRY: u8 = 15
+
+const T_KEY: u8 = 16
+
+const T_VALUE: u8 = 17
+
+const T_ALIAS: u8 = 18
+
+const T_ANCHOR: u8 = 19
+
+const T_TAG: u8 = 20
+
+const T_SCALAR: u8 = 21
+
+// Scalar styles; collections use FLOW and BLOCK.
+const PLAIN: u8 = 0
+
+const SINGLE: u8 = 1
+
+const DOUBLE: u8 = 2
+
+const LITERAL: u8 = 3
+
+const FOLDED: u8 = 4
+
+const BLOCK: u8 = 5
+
+const FLOW: u8 = 6
+
+// Block scalar chomping.
+const CLIP: u8 = 0
+
+const KEEP: u8 = 1
+
+const STRIP: u8 = 2
+
+// A scanner token: `text` is a scalar's value, an anchor or alias name, a tag or
+// directive handle; `suffix` is a tag's suffix or a directive's prefix.
+type Token {
+  kind: u8,
+  style: u8,
+  start: u64,
+  end: u64,
+  text: String,
+  suffix: String,
+}
+
+// A token that may still turn out to be a simple key (saphyr SimpleKey).
+type SimpleKey {
+  possible: bool,
+  required: bool,
+  token: u64,
+  pos: u64,
+  line: u64,
+  col: u64,
+  chars: u64,
+}
+
+type Indent {
+  indent: i64,
+  block_end: bool,
+}
+
+// pos is a byte offset; col counts Unicode scalars from the line start and chars
+// from the stream start (saphyr Marker).
+type Scanner {
+  pos: u64,
+  line: u64,
+  col: u64,
+  chars: u64,
+  tokens: unique List[Token],
+  key_allowed: bool,
+  keys: unique List[SimpleKey],
+  indent: i64,
+  indents: unique List[Indent],
+  flow: u64,
+  leading: bool,
+  flow_mapping: bool,
+  implicit: unique List[bool],
+  interrupted: u64,
+  interrupted_line: u64,
+  adjacent: u64,
+  done: bool,
+}
+
+@noalloc
+fn peek(data: Bytes, pos: u64) -> u8 uses {} {
+  if pos < core@1/bytes.len(data) {
+    data[pos]
+  } else {
+    0
+  }
+}
+
+// One-based line and Unicode scalar column of a byte offset.
+fn position_of(data: Bytes, offset: u64) -> Position uses {} {
+  let mut line: u64 = 1
+  let mut column: u64 = 1
+  let mut i: u64 = 0
+  while i < offset && i < core@1/bytes.len(data) {
+    let c = data[i]
+    if c == b'\n' || c == b'\r' && peek(data, i + 1) != b'\n' {
+      line += 1
+      column = 1
+    } else if c & 192 != 128 && c != b'\r' {
+      column += 1
+    }
+    i += 1
+  }
+  Position(line: line, column: column)
+}
+
+fn syntax(data: Bytes, offset: u64) -> YamlError uses {} {
+  Syntax(position_of(data, offset))
+}
+
+// saphyr char_traits.rs.
+@noalloc
+fn is_blank(c: u8) -> bool uses {} {
+  c == b' ' || c == b'\t'
+}
+
+@noalloc
+fn is_break(c: u8) -> bool uses {} {
+  c == b'\n' || c == b'\r'
+}
+
+// The zero byte is end of input: the stream check rejects a literal NUL.
+@noalloc
+fn is_breakz(c: u8) -> bool uses {} {
+  c == b'\n' || c == b'\r' || c == 0
+}
+
+@noalloc
+fn is_blankz(c: u8) -> bool uses {} {
+  is_blank(c) || is_breakz(c)
+}
+
+@noalloc
+fn is_flow(c: u8) -> bool uses {} {
+  c == b',' || c == b'[' || c == b']' || c == b'{' || c == b'}'
+}
+
+@noalloc
+fn is_alpha(c: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(c) || c == b'_' || c == b'-'
+}
+
+@noalloc
+fn is_uri_char(c: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(c) || c == b'-' || c == b'#' || c == b';' || c == b'/' || c == b'?' || c == b':' || c == b'@' || c == b'&' || c == b'=' || c == b'+' || c == b'$' || c == b',' || c == b'_' || c == b'.' || c == b'!' || c == b'~' || c == b'*' || c == b'\'' || c == b'(' || c == b')' || c == b'[' || c == b']' || c == b'%'
+}
+
+@noalloc
+fn is_tag_char(c: u8) -> bool uses {} {
+  is_uri_char(c) && !is_flow(c) && c != b'!'
+}
+
+@noalloc
+fn is_anchor_char(c: u8) -> bool uses {} {
+  !is_blankz(c) && !is_flow(c)
+}
+
+@noalloc
+fn document_start_at(data: Bytes, pos: u64) -> bool uses {} {
+  peek(data, pos) == b'-' && peek(data, pos + 1) == b'-' && peek(data, pos + 2) == b'-' && is_blankz(
+    peek(data, pos + 3)
+  )
+}
+
+@noalloc
+fn document_end_at(data: Bytes, pos: u64) -> bool uses {} {
+  peek(data, pos) == b'.' && peek(data, pos + 1) == b'.' && peek(data, pos + 2) == b'.' && is_blankz(
+    peek(data, pos + 3)
+  )
+}
+
+@noalloc
+fn document_indicator_at(data: Bytes, pos: u64) -> bool uses {} {
+  document_start_at(data, pos) || document_end_at(data, pos)
+}
+
+// saphyr Input::next_can_be_plain_scalar.
+@noalloc
+fn can_be_plain(data: Bytes, pos: u64, in_flow: bool) -> bool uses {} {
+  let c = peek(data, pos)
+  let nc = peek(data, pos + 1)
+  if c == b':' && (is_blankz(nc) || in_flow && is_flow(nc)) {
+    return false
+  }
+  !(in_flow && is_flow(c))
+}
+
+// YAML 1.2.2 c-printable over the whole stream (5.1): tab, line feed, carriage
+// return and printable scalars, excluding C1 controls other than NEL, U+FFFE and
+// U+FFFF. A violation is Syntax at its first byte.
+fn check_printable(data: Bytes) -> Result[(), YamlError] uses {} {
+  let n = core@1/bytes.len(data)
+  let mut i: u64 = 0
+  while i < n {
+    let c = data[i]
+    if c < 32 && c != 9 && c != 10 && c != 13 || c == 127 {
+      return Error(syntax(data, i))
+    }
+    if c == 194 && i + 1 < n && data[i + 1] >= 128 && data[i + 1] <= 159 && data[i + 1] != 133 {
+      return Error(syntax(data, i))
+    }
+    if c == 239 && i + 2 < n && data[i + 1] == 191 && (data[i + 2] == 190 || data[i + 2] == 191) {
+      return Error(syntax(data, i))
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+fn owned_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+  let mut output: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut output, data[i])
+    i += 1
+  }
+  text.finish_valid(take output)
+}
+
+fn signed(value: u64) -> i64 uses {} {
+  core@1/int.narrow(value)
+}
+
+@preserves_unique(out)
+fn push_breaks(mut out: List[u8], count: u64) -> () uses {} {
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, b'\n')
+    i += 1
+  }
+}
+
+@preserves_unique(out)
+fn push_bytes(mut out: List[u8], add: List[u8]) -> () uses {} {
+  for c in add {
+    core@1/list.push(mut out, c)
+  }
+}
+
+fn token(kind: u8, start: u64, end: u64) -> unique Token uses {} {
+  Token(kind: kind, style: 0, start: start, end: end, text: "", suffix: "")
+}
+
+// Scanner cursor moves (saphyr Scanner::skip_*). `advance` steps one byte without
+// touching `leading`; a column is one Unicode scalar.
+fn advance(mut s: unique Scanner, data: Bytes) -> () uses {} {
+  if data[s.pos] & 192 != 128 {
+    s.col += 1
+    s.chars += 1
+  }
+  s.pos += 1
+}
+
+fn skip(mut s: unique Scanner, data: Bytes) -> () uses {} {
+  advance(mut s, data)
+  s.leading = false
+}
+
+fn skip_blank(mut s: unique Scanner) -> () uses {} {
+  s.pos += 1
+  s.col += 1
+  s.chars += 1
+}
+
+fn skip_nl(mut s: unique Scanner) -> () uses {} {
+  s.pos += 1
+  s.chars += 1
+  s.col = 0
+  s.line += 1
+  s.leading = true
+}
+
+// Consumes one CR, LF or CRLF line break.
+fn skip_break(mut s: unique Scanner, data: Bytes) -> () uses {} {
+  if peek(data, s.pos) == b'\r' && peek(data, s.pos + 1) == b'\n' {
+    skip_blank(mut s)
+  }
+  skip_nl(mut s)
+}
+
+fn skip_linebreak(mut s: unique Scanner, data: Bytes) -> () uses {} {
+  if is_break(peek(data, s.pos)) {
+    skip_break(mut s, data)
+  }
+}
+
+fn push_token(mut s: unique Scanner, take t: unique Token) -> () uses {} {
+  core@1/list.push(mut s.tokens, take t)
+}
+
+// Inserts at an absolute token index; the index is recent, so the shift is short.
+fn insert_token(mut s: unique Scanner, index: u64, take t: unique Token) -> () uses {} {
+  core@1/list.push(mut s.tokens, take t)
+  let mut i = core@1/list.len(s.tokens) - 1
+  while i > index {
+    core@1/list.swap(mut s.tokens, i, i - 1)
+    i -= 1
+  }
+}
+
+// Bit 1: tabs were skipped; bit 2: a space was skipped (saphyr SkipTabs).
+fn skip_ws_to_eol(mut s: unique Scanner, data: Bytes, tabs: bool) -> Result[u8, YamlError] uses {} {
+  let mut found: u8 = 0
+  while true {
+    let c = peek(data, s.pos)
+    if c == b' ' {
+      found = found | 2
+      skip_blank(mut s)
+    } else if c == b'\t' && tabs {
+      found = found | 1
+      skip_blank(mut s)
+    } else if c == b'#' {
+      if found == 0 {
+        return Error(syntax(data, s.pos))
+      }
+      while !is_breakz(peek(data, s.pos)) {
+        advance(mut s, data)
+      }
+    } else {
+      break
+    }
+  }
+  Ok(found)
+}
+
+fn within_block(s: Scanner) -> bool uses {} {
+  core@1/list.len(s.indents) > 0
+}
+
+fn skip_to_next_token(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  while true {
+    let c = peek(data, s.pos)
+    if c == b'\t' && within_block(s) && s.leading && signed(s.col) < s.indent {
+      skip_ws_to_eol(mut s, data, true)?
+      if !is_breakz(peek(data, s.pos)) {
+        return Error(syntax(data, s.pos))
+      }
+    } else if c == b'\t' || c == b' ' {
+      skip_blank(mut s)
+    } else if is_break(c) {
+      skip_linebreak(mut s, data)
+      if s.flow == 0 {
+        s.key_allowed = true
+      }
+    } else if c == b'#' {
+      while !is_breakz(peek(data, s.pos)) {
+        advance(mut s, data)
+      }
+    } else {
+      break
+    }
+  }
+  // A plain scalar cut by a comment may not continue on the next line (BS4K).
+  if s.interrupted != NONE {
+    let at = s.interrupted
+    let at_line = s.interrupted_line
+    s.interrupted = NONE
+    if s.flow == 0 && s.line == at_line + 1 && signed(s.col) > s.indent && s.pos < core@1/bytes.len(
+      data
+    ) && !document_indicator_at(data, s.pos) && can_be_plain(data, s.pos, false) {
+      return Error(syntax(data, at))
+    }
+  }
+  Ok(())
+}
+
+// Skips spaces, line breaks and comments; at least one is required.
+fn skip_yaml_whitespace(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  let mut need = true
+  while true {
+    let c = peek(data, s.pos)
+    if c == b' ' {
+      skip_blank(mut s)
+      need = false
+    } else if is_break(c) {
+      skip_linebreak(mut s, data)
+      if s.flow == 0 {
+        s.key_allowed = true
+      }
+      need = false
+    } else if c == b'#' {
+      while !is_breakz(peek(data, s.pos)) {
+        advance(mut s, data)
+      }
+    } else {
+      break
+    }
+  }
+  if need {
+    return Error(syntax(data, s.pos))
+  }
+  Ok(())
+}
+
+// A simple key goes stale at a line break or after 1024 scalars; only block context
+// checks, and there the stream's own key is the only one.
+fn stale_simple_keys(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  if s.flow > 0 {
+    return Ok(())
+  }
+  let sk = s.keys[0]
+  if sk.possible && (sk.line < s.line || sk.chars + 1024 < s.chars) {
+    if sk.required {
+      return Error(syntax(data, s.pos))
+    }
+    s.keys[0].possible = false
+  }
+  Ok(())
+}
+
+fn new_key() -> SimpleKey uses {} {
+  SimpleKey(possible: false, required: false, token: 0, pos: 0, line: 0, col: 0, chars: 0)
+}
+
+fn save_simple_key(mut s: unique Scanner) -> () uses {} {
+  if s.key_allowed {
+    let n = core@1/list.len(s.indents)
+    let required = s.flow == 0 && s.indent == signed(s.col) && s.indents[n - 1].block_end
+    let last = core@1/list.len(s.keys) - 1
+    s.keys[last] = SimpleKey(
+      possible: true,
+      required: required,
+      token: core@1/list.len(s.tokens),
+      pos: s.pos,
+      line: s.line,
+      col: s.col,
+      chars: s.chars
+    )
+  }
+}
+
+fn remove_simple_key(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  let last = core@1/list.len(s.keys) - 1
+  if s.keys[last].possible && s.keys[last].required {
+    return Error(syntax(data, s.pos))
+  }
+  s.keys[last].possible = false
+  Ok(())
+}
+
+// Adds an indentation level, emitting the block start token at `number` (NONE: at the end).
+fn roll_indent(mut s: unique Scanner, col: u64, number: u64, kind: u8, pos: u64) -> () uses {} {
+  if s.flow > 0 {
+    return
+  }
+  let n = core@1/list.len(s.indents)
+  if s.indent <= signed(col) && n > 0 && !s.indents[n - 1].block_end {
+    s.indent = s.indents[n - 1].indent
+    let _ = core@1/list.pop(mut s.indents)
+  }
+  if s.indent < signed(col) {
+    core@1/list.push(mut s.indents, Indent(indent: s.indent, block_end: true))
+    s.indent = signed(col)
+    if number == NONE {
+      push_token(mut s, token(kind, pos, pos))
+    } else {
+      insert_token(mut s, number, token(kind, pos, pos))
+    }
+  }
+}
+
+fn unroll_indent(mut s: unique Scanner, col: i64) -> () uses {} {
+  if s.flow > 0 {
+    return
+  }
+  while s.indent > col {
+    let Some(last) = core@1/list.pop(mut s.indents) else {
+      return
+    }
+    s.indent = last.indent
+    if last.block_end {
+      push_token(mut s, token(T_BLOCK_END, s.pos, s.pos))
+    }
+  }
+}
+
+fn roll_one_col_indent(mut s: unique Scanner) -> () uses {} {
+  let n = core@1/list.len(s.indents)
+  if s.flow == 0 && n > 0 && s.indents[n - 1].block_end {
+    core@1/list.push(mut s.indents, Indent(indent: s.indent, block_end: false))
+    s.indent += 1
+  }
+}
+
+fn unroll_non_block_indents(mut s: unique Scanner) -> () uses {} {
+  while core@1/list.len(s.indents) > 0 {
+    let n = core@1/list.len(s.indents)
+    if s.indents[n - 1].block_end {
+      break
+    }
+    s.indent = s.indents[n - 1].indent
+    let _ = core@1/list.pop(mut s.indents)
+  }
+}
+
+fn end_implicit_mapping(mut s: unique Scanner, pos: u64) -> () uses {} {
+  let n = core@1/list.len(s.implicit)
+  if n > 0 && s.implicit[n - 1] {
+    s.flow_mapping = false
+    s.implicit[n - 1] = false
+    push_token(mut s, token(T_FLOW_MAPPING_END, pos, pos))
+  }
+}
+
+fn fetch_stream_end(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  if s.col != 0 {
+    s.col = 0
+    s.line += 1
+  }
+  let mut i: u64 = 0
+  while i < core@1/list.len(s.keys) {
+    if s.keys[i].required && s.keys[i].possible {
+      return Error(syntax(data, s.pos))
+    }
+    s.keys[i].possible = false
+    i += 1
+  }
+  unroll_indent(mut s, -1)
+  remove_simple_key(mut s, data)?
+  s.key_allowed = false
+  push_token(mut s, token(T_STREAM_END, s.pos, s.pos))
+  s.done = true
+  Ok(())
+}
+
+// Version digits: one to nine.
+fn version_number(mut s: unique Scanner, data: Bytes, mark: u64) -> Result[(), YamlError] uses {} {
+  let mut length: u64 = 0
+  while std@1/ascii.is_digit(peek(data, s.pos)) {
+    if length == 9 {
+      return Error(syntax(data, mark))
+    }
+    length += 1
+    skip(mut s, data)
+  }
+  if length == 0 {
+    return Error(syntax(data, mark))
+  }
+  Ok(())
+}
+
+fn skip_blanks(mut s: unique Scanner, data: Bytes) -> () uses {} {
+  while is_blank(peek(data, s.pos)) {
+    skip_blank(mut s)
+  }
+}
+
+// %XX escapes of one UTF-8 sequence inside a tag or tag prefix.
+@preserves_unique(out)
+fn uri_escapes(mut s: unique Scanner, data: Bytes, mark: u64, mut out: List[u8]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let mut width: u64 = 0
+  while true {
+    let hi = std@1/ascii.digit_value_radix(peek(data, s.pos + 1), 16)
+    let lo = std@1/ascii.digit_value_radix(peek(data, s.pos + 2), 16)
+    let byte: u8 = match (peek(data, s.pos), hi, lo) {
+      (37, Some(h), Some(l)) => h * 16 + l,
+      _ => return Error(syntax(data, mark)),
+    }
+    if width == 0 {
+      width = if byte & 128 == 0 {
+        1
+      } else if byte & 224 == 192 {
+        2
+      } else if byte & 240 == 224 {
+        3
+      } else if byte & 248 == 240 {
+        4
+      } else {
+        return Error(syntax(data, mark))
+      }
+    } else if byte & 192 != 128 {
+      return Error(syntax(data, mark))
+    }
+    core@1/list.push(mut out, byte)
+    skip(mut s, data)
+    skip(mut s, data)
+    skip(mut s, data)
+    width -= 1
+    if width == 0 {
+      break
+    }
+  }
+  Ok(())
+}
+
+fn finish_tag_text(data: Bytes, mark: u64, take out: unique List[u8]) -> Result[
+  unique String,
+  YamlError
+] uses {} {
+  match text.finish(take out) {
+    Ok(t) => Ok(take t),
+    Error(_) => Error(syntax(data, mark)),
+  }
+}
+
+// `!`, `!!` or `!name!`; inside %TAG a named handle must close with `!`.
+fn tag_handle(mut s: unique Scanner, data: Bytes, directive: bool, mark: u64) -> Result[
+  unique String,
+  YamlError
+] uses {} {
+  if peek(data, s.pos) != b'!' {
+    return Error(syntax(data, mark))
+  }
+  let start = s.pos
+  skip(mut s, data)
+  while is_alpha(peek(data, s.pos)) {
+    skip(mut s, data)
+  }
+  if peek(data, s.pos) == b'!' {
+    skip(mut s, data)
+  } else if directive && s.pos - start != 1 {
+    return Error(syntax(data, mark))
+  }
+  Ok(owned_text(data, start, s.pos))
+}
+
+// saphyr scan_tag_prefix (6.8.2.2): a local `!...` or global prefix of URI characters.
+fn tag_prefix(mut s: unique Scanner, data: Bytes, mark: u64) -> Result[
+  unique String,
+  YamlError
+] uses {} {
+  let mut out: List[u8] = []
+  let c = peek(data, s.pos)
+  if c == b'!' {
+    core@1/list.push(mut out, c)
+    skip(mut s, data)
+  } else if !is_tag_char(c) {
+    return Error(syntax(data, mark))
+  } else if c == b'%' {
+    uri_escapes(mut s, data, mark, mut out)?
+  } else {
+    core@1/list.push(mut out, c)
+    skip(mut s, data)
+  }
+  while is_uri_char(peek(data, s.pos)) {
+    if peek(data, s.pos) == b'%' {
+      uri_escapes(mut s, data, mark, mut out)?
+    } else {
+      core@1/list.push(mut out, data[s.pos])
+      skip(mut s, data)
+    }
+  }
+  finish_tag_text(data, mark, take out)
+}
+
+fn fetch_directive(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  unroll_indent(mut s, -1)
+  remove_simple_key(mut s, data)?
+  s.key_allowed = false
+  let start = s.pos
+  skip(mut s, data)
+  let name_start = s.pos
+  while !is_blankz(peek(data, s.pos)) {
+    skip(mut s, data)
+  }
+  if s.pos == name_start {
+    return Error(syntax(data, start))
+  }
+  let name = owned_text(data, name_start, s.pos)
+  let mut t = if name == "YAML" {
+    skip_blanks(mut s, data)
+    let number_start = s.pos
+    version_number(mut s, data, start)?
+    if peek(data, s.pos) != b'.' {
+      return Error(syntax(data, start))
+    }
+    skip(mut s, data)
+    version_number(mut s, data, start)?
+    let mut v = token(T_VERSION, start, s.pos)
+    v.text = owned_text(data, number_start, s.pos)
+    v
+  } else if name == "TAG" {
+    skip_blanks(mut s, data)
+    let handle = tag_handle(mut s, data, true, start)?
+    skip_blanks(mut s, data)
+    let prefix = tag_prefix(mut s, data, start)?
+    if !is_blankz(peek(data, s.pos)) {
+      return Error(syntax(data, start))
+    }
+    let mut v = token(T_TAG_DIRECTIVE, start, s.pos)
+    v.text = handle
+    v.suffix = prefix
+    v
+  } else {
+    while is_blank(peek(data, s.pos)) {
+      skip_blanks(mut s, data)
+      while !is_blankz(peek(data, s.pos)) {
+        skip(mut s, data)
+      }
+    }
+    token(T_RESERVED, start, s.pos)
+  }
+  t.end = s.pos
+  skip_ws_to_eol(mut s, data, true)?
+  if !is_breakz(peek(data, s.pos)) {
+    return Error(syntax(data, start))
+  }
+  skip_linebreak(mut s, data)
+  push_token(mut s, take t)
+  Ok(())
+}
+
+fn tag_suffix(mut s: unique Scanner, data: Bytes, head: String, mark: u64) -> Result[
+  unique String,
+  YamlError
+] uses {} {
+  let head_bytes = core@1/string.as_bytes(head)
+  let mut length = core@1/bytes.len(head_bytes)
+  let mut out: List[u8] = []
+  let mut i: u64 = 1
+  while i < length {
+    core@1/list.push(mut out, head_bytes[i])
+    i += 1
+  }
+  while is_tag_char(peek(data, s.pos)) {
+    if peek(data, s.pos) == b'%' {
+      uri_escapes(mut s, data, mark, mut out)?
+    } else {
+      core@1/list.push(mut out, data[s.pos])
+      skip(mut s, data)
+    }
+    length += 1
+  }
+  if length == 0 {
+    return Error(syntax(data, mark))
+  }
+  finish_tag_text(data, mark, take out)
+}
+
+fn fetch_tag(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  save_simple_key(mut s)
+  s.key_allowed = false
+  let start = s.pos
+  let mut handle: String = ""
+  let mut suffix: String = ""
+  if peek(data, s.pos + 1) == b'<' {
+    skip(mut s, data)
+    skip(mut s, data)
+    let mut out: List[u8] = []
+    while is_uri_char(peek(data, s.pos)) {
+      if peek(data, s.pos) == b'%' {
+        uri_escapes(mut s, data, start, mut out)?
+      } else {
+        core@1/list.push(mut out, data[s.pos])
+        skip(mut s, data)
+      }
+    }
+    if peek(data, s.pos) != b'>' {
+      return Error(syntax(data, start))
+    }
+    skip(mut s, data)
+    suffix = finish_tag_text(data, start, take out)?
+  } else {
+    let scanned = tag_handle(mut s, data, false, start)?
+    let named = core@1/string.byte_len(scanned) >= 2 && std@1/string.ends_with(scanned, "!")
+    if named {
+      suffix = tag_suffix(mut s, data, "", start)?
+      handle = scanned
+    } else {
+      suffix = tag_suffix(mut s, data, scanned, start)?
+      handle = "!"
+      if core@1/string.byte_len(suffix) == 0 {
+        handle = ""
+        suffix = "!"
+      }
+    }
+  }
+  let c = peek(data, s.pos)
+  if !(is_blankz(c) || s.flow > 0 && is_flow(c)) {
+    return Error(syntax(data, start))
+  }
+  let mut t = token(T_TAG, start, s.pos)
+  t.text = handle
+  t.suffix = suffix
+  push_token(mut s, take t)
+  Ok(())
+}
+
+fn fetch_anchor(mut s: unique Scanner, data: Bytes, alias: bool) -> Result[(), YamlError] uses {} {
+  save_simple_key(mut s)
+  s.key_allowed = false
+  let start = s.pos
+  skip(mut s, data)
+  while is_anchor_char(peek(data, s.pos)) {
+    skip(mut s, data)
+  }
+  if s.pos == start + 1 {
+    return Error(syntax(data, start))
+  }
+  let kind = if alias {
+    T_ALIAS
+  } else {
+    T_ANCHOR
+  }
+  let mut t = token(kind, start, s.pos)
+  t.text = owned_text(data, start + 1, s.pos)
+  push_token(mut s, take t)
+  Ok(())
+}
+
+fn fetch_flow_collection_start(mut s: unique Scanner, data: Bytes, kind: u8) -> Result[
+  (),
+  YamlError
+] uses {} {
+  save_simple_key(mut s)
+  roll_one_col_indent(mut s)
+  core@1/list.push(mut s.keys, new_key())
+  s.flow += 1
+  s.key_allowed = true
+  let start = s.pos
+  skip(mut s, data)
+  if kind == T_FLOW_MAPPING_START {
+    s.flow_mapping = true
+  } else {
+    core@1/list.push(mut s.implicit, false)
+  }
+  skip_ws_to_eol(mut s, data, true)?
+  push_token(mut s, token(kind, start, start + 1))
+  Ok(())
+}
+
+fn fetch_flow_collection_end(mut s: unique Scanner, data: Bytes, kind: u8) -> Result[
+  (),
+  YamlError
+] uses {} {
+  if s.flow == 0 {
+    return Error(syntax(data, s.pos))
+  }
+  remove_simple_key(mut s, data)?
+  s.flow -= 1
+  let _ = core@1/list.pop(mut s.keys)
+  s.key_allowed = false
+  if kind == T_FLOW_SEQUENCE_END {
+    let at = s.pos
+    end_implicit_mapping(mut s, at)
+    let _ = core@1/list.pop(mut s.implicit)
+  }
+  let start = s.pos
+  skip(mut s, data)
+  skip_ws_to_eol(mut s, data, true)?
+  if s.flow > 0 {
+    s.adjacent = s.pos
+  }
+  push_token(mut s, token(kind, start, start + 1))
+  Ok(())
+}
+
+fn fetch_flow_entry(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  remove_simple_key(mut s, data)?
+  s.key_allowed = true
+  let at = s.pos
+  end_implicit_mapping(mut s, at)
+  let start = s.pos
+  skip(mut s, data)
+  skip_ws_to_eol(mut s, data, true)?
+  push_token(mut s, token(T_FLOW_ENTRY, start, start + 1))
+  Ok(())
+}
+
+@noalloc
+fn line_start(data: Bytes, pos: u64) -> bool uses {} {
+  pos == 0 || is_break(data[pos - 1])
+}
+
+fn fetch_block_entry(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  if s.flow > 0 || !s.key_allowed {
+    return Error(syntax(data, s.pos))
+  }
+  // An anchor or tag at column 0 cannot own a sequence there (G9HC).
+  let n = core@1/list.len(s.tokens)
+  let last_kind = s.tokens[n - 1].kind
+  let last_start = s.tokens[n - 1].start
+  if (last_kind == T_ANCHOR || last_kind == T_TAG) && s.col == 0 && line_start(data, last_start) && s.indent > -1 {
+    return Error(syntax(data, last_start))
+  }
+  let mark = s.pos
+  let mark_col = s.col
+  skip(mut s, data)
+  roll_indent(mut s, mark_col, NONE, T_BLOCK_SEQUENCE_START, mark)
+  let found = skip_ws_to_eol(mut s, data, true)?
+  if found & 1 != 0 && peek(data, s.pos) == b'-' && is_blankz(peek(data, s.pos + 1)) {
+    return Error(syntax(data, s.pos))
+  }
+  skip_ws_to_eol(mut s, data, false)?
+  let c = peek(data, s.pos)
+  if is_break(c) || is_flow(c) {
+    roll_one_col_indent(mut s)
+  }
+  remove_simple_key(mut s, data)?
+  s.key_allowed = true
+  push_token(mut s, token(T_BLOCK_ENTRY, mark, mark + 1))
+  Ok(())
+}
+
+fn fetch_document_indicator(mut s: unique Scanner, data: Bytes, kind: u8) -> Result[
+  (),
+  YamlError
+] uses {} {
+  unroll_indent(mut s, -1)
+  remove_simple_key(mut s, data)?
+  s.key_allowed = false
+  let start = s.pos
+  skip(mut s, data)
+  skip(mut s, data)
+  skip(mut s, data)
+  push_token(mut s, token(kind, start, s.pos))
+  Ok(())
+}
+
+// Skips block scalar indentation and empty lines, counting the breaks.
+fn block_scalar_indent(mut s: unique Scanner, data: Bytes, indent: u64, mut breaks: u64) -> () uses {} {
+  while true {
+    while s.col < indent && peek(data, s.pos) == b' ' {
+      skip_blank(mut s)
+    }
+    if is_break(peek(data, s.pos)) {
+      skip_break(mut s, data)
+      breaks += 1
+    } else {
+      break
+    }
+  }
+}
+
+// The indentation of a block scalar without an indicator: the longest leading
+// space run of its leading empty lines and first content line.
+fn block_scalar_first_indent(mut s: unique Scanner, data: Bytes, mut indent: u64, mut breaks: u64) -> () uses {} {
+  let mut longest: u64 = 0
+  while true {
+    while peek(data, s.pos) == b' ' {
+      skip_blank(mut s)
+    }
+    if s.col > longest {
+      longest = s.col
+    }
+    if is_break(peek(data, s.pos)) {
+      skip_break(mut s, data)
+      breaks += 1
+    } else {
+      break
+    }
+  }
+  let floor: u64 = core@1/int.narrow(s.indent + 1)
+  indent = if longest > floor {
+    longest
+  } else {
+    floor
+  }
+  if s.indent > 0 && indent < 1 {
+    indent = 1
+  }
+}
+
+fn fetch_block_scalar(mut s: unique Scanner, data: Bytes, literal: bool) -> Result[(), YamlError] uses {} {
+  save_simple_key(mut s)
+  s.key_allowed = true
+  let start = s.pos
+  let start_line = s.line
+  let mut chomp: u8 = CLIP
+  let mut increment: u64 = 0
+  let mut indent: u64 = 0
+  let mut leading_blank = false
+  let mut out: List[u8] = []
+  let mut leading_break: u64 = 0
+  let mut trailing: u64 = 0
+  let mut chomping_break: u64 = 0
+  skip(mut s, data)
+  unroll_non_block_indents(mut s)
+  let c = peek(data, s.pos)
+  if c == b'+' || c == b'-' {
+    chomp = if c == b'+' {
+      KEEP
+    } else {
+      STRIP
+    }
+    skip(mut s, data)
+    let d = peek(data, s.pos)
+    if std@1/ascii.is_digit(d) {
+      if d == b'0' {
+        return Error(syntax(data, start))
+      }
+      increment = core@1/int.widen(d - b'0')
+      skip(mut s, data)
+    }
+  } else if std@1/ascii.is_digit(c) {
+    if c == b'0' {
+      return Error(syntax(data, start))
+    }
+    increment = core@1/int.widen(c - b'0')
+    skip(mut s, data)
+    let d = peek(data, s.pos)
+    if d == b'+' || d == b'-' {
+      chomp = if d == b'+' {
+        KEEP
+      } else {
+        STRIP
+      }
+      skip(mut s, data)
+    }
+  }
+  skip_ws_to_eol(mut s, data, true)?
+  if !is_breakz(peek(data, s.pos)) {
+    return Error(syntax(data, start))
+  }
+  let header_end = s.pos
+  if is_break(peek(data, s.pos)) {
+    skip_break(mut s, data)
+    chomping_break = 1
+  }
+  if peek(data, s.pos) == b'\t' {
+    return Error(syntax(data, start))
+  }
+  if increment > 0 {
+    indent = if s.indent >= 0 {
+      let base: u64 = core@1/int.narrow(s.indent)
+      base + increment
+    } else {
+      increment
+    }
+  }
+  if indent == 0 {
+    block_scalar_first_indent(mut s, data, mut indent, mut trailing)
+  } else {
+    block_scalar_indent(mut s, data, indent, mut trailing)
+  }
+  let style = if literal {
+    LITERAL
+  } else {
+    FOLDED
+  }
+  let n = core@1/bytes.len(data)
+  if s.pos >= n {
+    let count: u64 = if chomp == STRIP || s.line == start_line {
+      0
+    } else if chomp == CLIP || trailing == 0 {
+      chomping_break
+    } else {
+      trailing
+    }
+    push_breaks(mut out, count)
+    let mut t = token(T_SCALAR, start, header_end)
+    t.style = style
+    t.text = text.finish_valid(take out)
+    push_token(mut s, take t)
+    return Ok(())
+  }
+  if s.col < indent && signed(s.col) > s.indent {
+    return Error(syntax(data, s.pos))
+  }
+  let mut end = header_end
+  while s.col == indent && s.pos < n {
+    if indent == 0 && document_indicator_at(data, s.pos) {
+      break
+    }
+    let trailing_blank = is_blank(peek(data, s.pos))
+    if !literal && leading_break > 0 && !leading_blank && !trailing_blank {
+      push_breaks(mut out, trailing)
+      if trailing == 0 {
+        core@1/list.push(mut out, b' ')
+      }
+    } else {
+      push_breaks(mut out, leading_break + trailing)
+    }
+    leading_break = 0
+    trailing = 0
+    leading_blank = is_blank(peek(data, s.pos))
+    while !is_breakz(peek(data, s.pos)) {
+      core@1/list.push(mut out, data[s.pos])
+      advance(mut s, data)
+    }
+    end = s.pos
+    if s.pos >= n {
+      break
+    }
+    skip_break(mut s, data)
+    leading_break = 1
+    block_scalar_indent(mut s, data, indent, mut trailing)
+  }
+  if chomp != STRIP {
+    push_breaks(mut out, leading_break)
+    let least = if indent > 1 {
+      indent
+    } else {
+      1
+    }
+    if s.pos >= n && s.col >= least {
+      core@1/list.push(mut out, b'\n')
+    }
+  }
+  if chomp == KEEP {
+    push_breaks(mut out, trailing)
+  }
+  let mut t = token(T_SCALAR, start, end)
+  t.style = style
+  t.text = text.finish_valid(take out)
+  push_token(mut s, take t)
+  Ok(())
+}
+
+// Double-quoted escapes (5.7); pos is at the backslash.
+@preserves_unique(out)
+fn escape(mut s: unique Scanner, data: Bytes, mut out: List[u8], mark: u64) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let e = peek(data, s.pos + 1)
+  let mut width: u64 = 0
+  if e == b'0' {
+    core@1/list.push(mut out, 0)
+  } else if e == b'a' {
+    core@1/list.push(mut out, 7)
+  } else if e == b'b' {
+    core@1/list.push(mut out, 8)
+  } else if e == b't' || e == b'\t' {
+    core@1/list.push(mut out, 9)
+  } else if e == b'n' {
+    core@1/list.push(mut out, 10)
+  } else if e == b'v' {
+    core@1/list.push(mut out, 11)
+  } else if e == b'f' {
+    core@1/list.push(mut out, 12)
+  } else if e == b'r' {
+    core@1/list.push(mut out, 13)
+  } else if e == b'e' {
+    core@1/list.push(mut out, 27)
+  } else if e == b' ' || e == b'"' || e == b'/' || e == b'\\' {
+    core@1/list.push(mut out, e)
+  } else if e == b'N' {
+    text.append(mut out, "\u{85}")
+  } else if e == b'_' {
+    text.append(mut out, "\u{a0}")
+  } else if e == b'L' {
+    text.append(mut out, "\u{2028}")
+  } else if e == b'P' {
+    text.append(mut out, "\u{2029}")
+  } else if e == b'x' {
+    width = 2
+  } else if e == b'u' {
+    width = 4
+  } else if e == b'U' {
+    width = 8
+  } else {
+    return Error(syntax(data, mark))
+  }
+  skip(mut s, data)
+  skip(mut s, data)
+  if width > 0 {
+    let mut code: u64 = 0
+    let mut i: u64 = 0
+    while i < width {
+      let Some(digit) = std@1/ascii.digit_value_radix(peek(data, s.pos + i), 16) else {
+        return Error(syntax(data, mark))
+      }
+      let d: u64 = core@1/int.widen(digit)
+      code = code * 16 + d
+      i += 1
+    }
+    let narrowed: Option[u32] = core@1/int.try_narrow(code)
+    let Some(narrow) = narrowed else {
+      return Error(syntax(data, mark))
+    }
+    let Some(scalar) = core@1/char.from_u32(narrow) else {
+      return Error(syntax(data, mark))
+    }
+    char.format_into(scalar, mut out)
+    i = 0
+    while i < width {
+      skip(mut s, data)
+      i += 1
+    }
+  }
+  Ok(())
+}
+
+fn fetch_flow_scalar(mut s: unique Scanner, data: Bytes, single: bool) -> Result[(), YamlError] uses {} {
+  save_simple_key(mut s)
+  s.key_allowed = false
+  let start = s.pos
+  let start_line = s.line
+  let quote = if single {
+    b'\''
+  } else {
+    b'"'
+  }
+  let mut out: List[u8] = []
+  let mut leading_break: u64 = 0
+  let mut trailing: u64 = 0
+  let mut whitespace: List[u8] = []
+  skip(mut s, data)
+  let n = core@1/bytes.len(data)
+  while true {
+    if s.col == 0 && document_indicator_at(data, s.pos) || s.pos >= n || signed(s.col) < s.indent {
+      return Error(syntax(data, start))
+    }
+    let mut leading_blanks = false
+    while !is_blankz(peek(data, s.pos)) {
+      let c = data[s.pos]
+      if single && c == b'\'' && peek(data, s.pos + 1) == b'\'' {
+        core@1/list.push(mut out, b'\'')
+        skip(mut s, data)
+        skip(mut s, data)
+      } else if c == quote {
+        break
+      } else if !single && c == b'\\' && is_break(peek(data, s.pos + 1)) {
+        skip(mut s, data)
+        skip_linebreak(mut s, data)
+        leading_blanks = true
+        break
+      } else if !single && c == b'\\' {
+        escape(mut s, data, mut out, start)?
+      } else {
+        core@1/list.push(mut out, c)
+        skip(mut s, data)
+      }
+    }
+    if peek(data, s.pos) == quote {
+      break
+    }
+    while is_blank(peek(data, s.pos)) || is_break(peek(data, s.pos)) {
+      let c = data[s.pos]
+      if is_blank(c) {
+        if leading_blanks {
+          if c == b'\t' && signed(s.col) < s.indent {
+            return Error(syntax(data, s.pos))
+          }
+        } else {
+          core@1/list.push(mut whitespace, c)
+        }
+        skip_blank(mut s)
+      } else if leading_blanks {
+        skip_break(mut s, data)
+        trailing += 1
+      } else {
+        whitespace = []
+        skip_break(mut s, data)
+        leading_break = 1
+        leading_blanks = true
+      }
+    }
+    if leading_blanks {
+      if leading_break == 0 {
+        push_breaks(mut out, trailing)
+      } else if trailing == 0 {
+        core@1/list.push(mut out, b' ')
+      } else {
+        push_breaks(mut out, trailing)
+      }
+      trailing = 0
+      leading_break = 0
+    } else {
+      push_bytes(mut out, whitespace)
+      whitespace = []
+    }
+  }
+  skip(mut s, data)
+  let end = s.pos
+  skip_ws_to_eol(mut s, data, true)?
+  let c = peek(data, s.pos)
+  let fine = s.flow > 0 && (c == b',' || c == b'}' || c == b']' || c == b':') || is_breakz(
+    c
+  ) || c == b':' && start_line == s.line
+  if !fine {
+    return Error(syntax(data, s.pos))
+  }
+  let mut t = token(T_SCALAR, start, end)
+  t.style = if single {
+    SINGLE
+  } else {
+    DOUBLE
+  }
+  t.text = text.finish_valid(take out)
+  // JSON-like keys allow an adjacent `:` in flow context (7.4.1).
+  skip_to_next_token(mut s, data)?
+  s.adjacent = s.pos
+  push_token(mut s, take t)
+  Ok(())
+}
+
+fn fetch_plain_scalar(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  save_simple_key(mut s)
+  s.key_allowed = false
+  unroll_non_block_indents(mut s)
+  let indent = s.indent + 1
+  let start = s.pos
+  let in_flow = s.flow > 0
+  if in_flow && signed(s.col) < indent {
+    return Error(syntax(data, start))
+  }
+  let mut out: List[u8] = []
+  let mut whitespace: List[u8] = []
+  let mut leading_break: u64 = 0
+  let mut trailing: u64 = 0
+  let mut end = s.pos
+  while true {
+    let c = peek(data, s.pos)
+    if s.col == 0 && document_indicator_at(data, s.pos) || c == b'#' {
+      if c == b'#' && core@1/list.len(out) > 0 && core@1/list.len(whitespace) > 0 && !in_flow {
+        s.interrupted = s.pos
+        s.interrupted_line = s.line
+      }
+      break
+    }
+    if in_flow && c == b'-' && is_flow(peek(data, s.pos + 1)) {
+      return Error(syntax(data, s.pos))
+    }
+    if !is_blankz(c) && can_be_plain(data, s.pos, in_flow) {
+      if s.leading {
+        if leading_break == 0 {
+          push_breaks(mut out, trailing)
+        } else if trailing == 0 {
+          core@1/list.push(mut out, b' ')
+        } else {
+          push_breaks(mut out, trailing)
+        }
+        trailing = 0
+        leading_break = 0
+        s.leading = false
+      } else if core@1/list.len(whitespace) > 0 {
+        push_bytes(mut out, whitespace)
+        whitespace = []
+      }
+      core@1/list.push(mut out, c)
+      skip(mut s, data)
+      while !is_blankz(peek(data, s.pos)) && can_be_plain(data, s.pos, in_flow) {
+        core@1/list.push(mut out, data[s.pos])
+        skip(mut s, data)
+      }
+      end = s.pos
+    }
+    let next = peek(data, s.pos)
+    if !(is_blank(next) || is_break(next)) {
+      break
+    }
+    while is_blank(peek(data, s.pos)) || is_break(peek(data, s.pos)) {
+      let b = data[s.pos]
+      if is_blank(b) {
+        if !s.leading {
+          core@1/list.push(mut whitespace, b)
+          skip_blank(mut s)
+        } else if signed(s.col) < indent && b == b'\t' {
+          skip_ws_to_eol(mut s, data, true)?
+          if !is_breakz(peek(data, s.pos)) {
+            return Error(syntax(data, start))
+          }
+        } else {
+          skip_blank(mut s)
+        }
+      } else if s.leading {
+        skip_break(mut s, data)
+        trailing += 1
+      } else {
+        whitespace = []
+        skip_break(mut s, data)
+        leading_break = 1
+        s.leading = true
+      }
+    }
+    if !in_flow && signed(s.col) < indent {
+      break
+    }
+  }
+  if s.leading {
+    s.key_allowed = true
+  }
+  if core@1/list.len(out) == 0 {
+    return Error(syntax(data, start))
+  }
+  let mut t = token(T_SCALAR, start, end)
+  t.text = text.finish_valid(take out)
+  push_token(mut s, take t)
+  Ok(())
+}
+
+fn fetch_key(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  let start = s.pos
+  if s.flow == 0 {
+    if !s.key_allowed {
+      return Error(syntax(data, s.pos))
+    }
+    let col = s.col
+    roll_indent(mut s, col, NONE, T_BLOCK_MAPPING_START, start)
+  } else {
+    s.flow_mapping = true
+  }
+  remove_simple_key(mut s, data)?
+  s.key_allowed = s.flow == 0
+  skip(mut s, data)
+  skip_yaml_whitespace(mut s, data)?
+  if peek(data, s.pos) == b'\t' {
+    return Error(syntax(data, s.pos))
+  }
+  push_token(mut s, token(T_KEY, start, start + 1))
+  Ok(())
+}
+
+fn fetch_value(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  let sk = s.keys[core@1/list.len(s.keys) - 1]
+  let start = s.pos
+  let start_col = s.col
+  let start_line = s.line
+  let levels = core@1/list.len(s.implicit)
+  let implicit_flow = levels > 0 && !s.flow_mapping
+  if implicit_flow {
+    s.implicit[levels - 1] = true
+  }
+  skip(mut s, data)
+  if peek(data, s.pos) == b'\t' {
+    let found = skip_ws_to_eol(mut s, data, true)?
+    let c = peek(data, s.pos)
+    if found & 2 == 0 && (c == b'-' || is_alpha(c)) {
+      return Error(syntax(data, s.pos))
+    }
+  }
+  if sk.possible {
+    insert_token(mut s, sk.token, token(T_KEY, sk.pos, sk.pos))
+    if implicit_flow {
+      if sk.line < start_line {
+        return Error(syntax(data, start))
+      }
+      insert_token(mut s, sk.token, token(T_FLOW_MAPPING_START, sk.pos, sk.pos))
+    }
+    roll_indent(mut s, sk.col, sk.token, T_BLOCK_MAPPING_START, sk.pos)
+    roll_one_col_indent(mut s)
+    let last = core@1/list.len(s.keys) - 1
+    s.keys[last].possible = false
+    s.key_allowed = false
+  } else {
+    if implicit_flow {
+      push_token(mut s, token(T_FLOW_MAPPING_START, start, start))
+    }
+    if s.flow == 0 {
+      if !s.key_allowed {
+        return Error(syntax(data, start))
+      }
+      roll_indent(mut s, start_col, NONE, T_BLOCK_MAPPING_START, start)
+    }
+    roll_one_col_indent(mut s)
+    s.key_allowed = s.flow == 0
+  }
+  push_token(mut s, token(T_VALUE, start, start + 1))
+  Ok(())
+}
+
+// saphyr Scanner::fetch_next_token: one step of the token stream.
+fn fetch_next_token(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] uses {} {
+  skip_to_next_token(mut s, data)?
+  stale_simple_keys(mut s, data)?
+  unroll_indent(mut s, signed(s.col))
+  if s.pos >= core@1/bytes.len(data) {
+    return fetch_stream_end(mut s, data)
+  }
+  let c = data[s.pos]
+  if s.col == 0 {
+    if c == b'%' {
+      return fetch_directive(mut s, data)
+    }
+    if document_start_at(data, s.pos) {
+      return fetch_document_indicator(mut s, data, T_DOCUMENT_START)
+    }
+    if document_end_at(data, s.pos) {
+      fetch_document_indicator(mut s, data, T_DOCUMENT_END)?
+      skip_ws_to_eol(mut s, data, true)?
+      if !is_breakz(peek(data, s.pos)) {
+        return Error(syntax(data, s.pos))
+      }
+      return Ok(())
+    }
+  }
+  if signed(s.col) < s.indent {
+    return Error(syntax(data, s.pos))
+  }
+  let nc = peek(data, s.pos + 1)
+  if c == b'[' {
+    fetch_flow_collection_start(mut s, data, T_FLOW_SEQUENCE_START)
+  } else if c == b'{' {
+    fetch_flow_collection_start(mut s, data, T_FLOW_MAPPING_START)
+  } else if c == b']' {
+    fetch_flow_collection_end(mut s, data, T_FLOW_SEQUENCE_END)
+  } else if c == b'}' {
+    fetch_flow_collection_end(mut s, data, T_FLOW_MAPPING_END)
+  } else if c == b',' {
+    fetch_flow_entry(mut s, data)
+  } else if c == b'-' && is_blankz(nc) {
+    fetch_block_entry(mut s, data)
+  } else if c == b'?' && is_blankz(nc) {
+    fetch_key(mut s, data)
+  } else if c == b':' && is_blankz(nc) {
+    fetch_value(mut s, data)
+  } else if c == b':' && s.flow > 0 && (is_flow(nc) || s.pos == s.adjacent) {
+    if s.pos != s.adjacent && (nc == b'[' || nc == b'{') {
+      return Error(syntax(data, s.pos))
+    }
+    fetch_value(mut s, data)
+  } else if c == b'*' {
+    fetch_anchor(mut s, data, true)
+  } else if c == b'&' {
+    fetch_anchor(mut s, data, false)
+  } else if c == b'!' {
+    fetch_tag(mut s, data)
+  } else if c == b'|' && s.flow == 0 {
+    fetch_block_scalar(mut s, data, true)
+  } else if c == b'>' && s.flow == 0 {
+    fetch_block_scalar(mut s, data, false)
+  } else if c == b'\'' {
+    fetch_flow_scalar(mut s, data, true)
+  } else if c == b'"' {
+    fetch_flow_scalar(mut s, data, false)
+  } else if c == b'%' || c == b'@' || c == b'`' {
+    Error(syntax(data, s.pos))
+  } else {
+    fetch_plain_scalar(mut s, data)
+  }
+}
+
+// The whole token stream, from STREAM-START to STREAM-END.
+fn scan(data: Bytes) -> Result[List[Token], YamlError] uses {} {
+  check_printable(data)?
+  let mut s = Scanner(
+    pos: 0,
+    line: 1,
+    col: 0,
+    chars: 0,
+    tokens: [],
+    key_allowed: true,
+    keys: [new_key()],
+    indent: -1,
+    indents: [],
+    flow: 0,
+    leading: true,
+    flow_mapping: false,
+    implicit: [],
+    interrupted: NONE,
+    interrupted_line: 0,
+    adjacent: 0,
+    done: false
+  )
+  // A byte order mark may open the stream (5.2).
+  if peek(data, 0) == 239 && peek(data, 1) == 187 && peek(data, 2) == 191 {
+    s.pos = 3
+  }
+  push_token(mut s, token(T_STREAM_START, 0, 0))
+  while !s.done {
+    fetch_next_token(mut s, data)?
+  }
+  let Scanner(tokens: tokens, ..) = take s
+  Ok(take tokens)
+}
+
+// Parser states (saphyr parser.rs State).
+const S_STREAM_START: u8 = 0
+
+const S_IMPLICIT_DOCUMENT_START: u8 = 1
+
+const S_DOCUMENT_START: u8 = 2
+
+const S_DOCUMENT_CONTENT: u8 = 3
+
+const S_DOCUMENT_END: u8 = 4
+
+const S_BLOCK_NODE: u8 = 5
+
+const S_BLOCK_SEQUENCE_FIRST_ENTRY: u8 = 6
+
+const S_BLOCK_SEQUENCE_ENTRY: u8 = 7
+
+const S_INDENTLESS_SEQUENCE_ENTRY: u8 = 8
+
+const S_BLOCK_MAPPING_FIRST_KEY: u8 = 9
+
+const S_BLOCK_MAPPING_KEY: u8 = 10
+
+const S_BLOCK_MAPPING_VALUE: u8 = 11
+
+const S_FLOW_SEQUENCE_FIRST_ENTRY: u8 = 12
+
+const S_FLOW_SEQUENCE_ENTRY: u8 = 13
+
+const S_FLOW_SEQUENCE_ENTRY_MAPPING_KEY: u8 = 14
+
+const S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE: u8 = 15
+
+const S_FLOW_SEQUENCE_ENTRY_MAPPING_END: u8 = 16
+
+const S_FLOW_MAPPING_FIRST_KEY: u8 = 17
+
+const S_FLOW_MAPPING_KEY: u8 = 18
+
+const S_FLOW_MAPPING_VALUE: u8 = 19
+
+const S_FLOW_MAPPING_EMPTY_VALUE: u8 = 20
+
+const S_END: u8 = 21
+
+// Event kinds.
+const E_STREAM_END: u8 = 0
+
+const E_DOCUMENT_START: u8 = 1
+
+const E_DOCUMENT_END: u8 = 2
+
+const E_ALIAS: u8 = 3
+
+const E_SCALAR: u8 = 4
+
+const E_SEQUENCE_START: u8 = 5
+
+const E_SEQUENCE_END: u8 = 6
+
+const E_MAPPING_START: u8 = 7
+
+const E_MAPPING_END: u8 = 8
+
+// A parse event: `text` is a scalar value or alias name; `tag` is the resolved tag
+// with `tagged` telling an empty verbatim tag from none. A node's span starts at
+// its first property.
+type Event {
+  kind: u8,
+  style: u8,
+  text: String,
+  anchor: String,
+  tag: String,
+  tagged: bool,
+  start: u64,
+  end: u64,
+}
+
+type Parser {
+  at: u64,
+  state: u8,
+  states: unique List[u8],
+  tags: Map[String, String],
+  events: List[Event],
+}
+
+fn event(kind: u8, start: u64, end: u64) -> unique Event uses {} {
+  Event(
+    kind: kind,
+    style: 0,
+    text: "",
+    anchor: "",
+    tag: "",
+    tagged: false,
+    start: start,
+    end: end
+  )
+}
+
+fn emit(mut p: unique Parser, take e: unique Event) -> () uses {} {
+  core@1/list.push(mut p.events, take e)
+}
+
+fn empty_scalar(mut p: unique Parser, pos: u64) -> () uses {} {
+  emit(mut p, event(E_SCALAR, pos, pos))
+}
+
+fn push_state(mut p: unique Parser, state: u8) -> () uses {} {
+  core@1/list.push(mut p.states, state)
+}
+
+fn pop_state(mut p: unique Parser) -> () uses {} {
+  if let Some(state) = core@1/list.pop(mut p.states) {
+    p.state = state
+  }
+}
+
+fn kind_at(tokens: List[Token], at: u64) -> u8 uses {} {
+  tokens[at].kind
+}
+
+fn is_directive(kind: u8) -> bool uses {} {
+  kind == T_VERSION || kind == T_TAG_DIRECTIVE || kind == T_RESERVED
+}
+
+// %YAML at most once, %TAG at most once per handle; reserved directives are ignored.
+fn process_directives(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let mut version = false
+  let mut tags: Map[String, String] = core@1/map.empty()
+  while true {
+    let t = tokens[p.at]
+    if t.kind == T_VERSION {
+      if version {
+        return Error(syntax(data, t.start))
+      }
+      version = true
+    } else if t.kind == T_TAG_DIRECTIVE {
+      if core@1/map.contains(tags, t.text) {
+        return Error(syntax(data, t.start))
+      }
+      core@1/map.insert(mut tags, unique t.text, unique t.suffix)
+    } else if t.kind != T_RESERVED {
+      break
+    }
+    p.at += 1
+  }
+  p.tags = take tags
+  Ok(())
+}
+
+fn explicit_document_start(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  process_directives(mut p, data, tokens)?
+  let t = tokens[p.at]
+  if t.kind != T_DOCUMENT_START {
+    return Error(syntax(data, t.start))
+  }
+  push_state(mut p, S_DOCUMENT_END)
+  p.state = S_DOCUMENT_CONTENT
+  p.at += 1
+  let mut e = event(E_DOCUMENT_START, t.start, t.end)
+  e.style = 1
+  emit(mut p, take e)
+  Ok(())
+}
+
+fn document_start(mut p: unique Parser, data: Bytes, tokens: List[Token], implicit: bool) -> Result[
+  (),
+  YamlError
+] uses {} {
+  while kind_at(tokens, p.at) == T_DOCUMENT_END {
+    p.at += 1
+  }
+  let t = tokens[p.at]
+  if t.kind == T_STREAM_END {
+    p.state = S_END
+    emit(mut p, event(E_STREAM_END, t.start, t.end))
+    return Ok(())
+  }
+  if is_directive(t.kind) || t.kind == T_DOCUMENT_START || !implicit {
+    return explicit_document_start(mut p, data, tokens)
+  }
+  p.tags = core@1/map.empty()
+  push_state(mut p, S_DOCUMENT_END)
+  p.state = S_BLOCK_NODE
+  emit(mut p, event(E_DOCUMENT_START, t.start, t.start))
+  Ok(())
+}
+
+fn document_content(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let t = tokens[p.at]
+  let k = t.kind
+  if is_directive(k) || k == T_DOCUMENT_START || k == T_DOCUMENT_END || k == T_STREAM_END {
+    pop_state(mut p)
+    empty_scalar(mut p, t.start)
+    return Ok(())
+  }
+  parse_node(mut p, data, tokens, true, false)
+}
+
+fn document_end(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[(), YamlError] uses {} {
+  let t = tokens[p.at]
+  let explicit = t.kind == T_DOCUMENT_END
+  if explicit {
+    p.at += 1
+    p.state = S_IMPLICIT_DOCUMENT_START
+  } else {
+    if is_directive(t.kind) {
+      return Error(syntax(data, t.start))
+    }
+    p.state = S_DOCUMENT_START
+  }
+  p.tags = core@1/map.empty()
+  let mut e = if explicit {
+    event(E_DOCUMENT_END, t.start, t.end)
+  } else {
+    event(E_DOCUMENT_END, t.start, t.start)
+  }
+  e.style = if explicit {
+    1
+  } else {
+    0
+  }
+  emit(mut p, take e)
+  Ok(())
+}
+
+// saphyr Parser::resolve_tag: `!!` names the core prefix unless %TAG overrides it;
+// a named handle must have been declared.
+fn resolve_tag(p: Parser, data: Bytes, t: Token) -> Result[unique String, YamlError] uses {} {
+  let handle = t.text
+  if let Some(prefix) = core@1/map.get(p.tags, handle) {
+    return Ok(string.concat(prefix, t.suffix))
+  }
+  if handle == "!!" {
+    return Ok(string.concat(CORE, t.suffix))
+  }
+  if core@1/string.byte_len(handle) >= 2 {
+    return Error(syntax(data, t.start))
+  }
+  Ok(string.concat(handle, t.suffix))
+}
+
+fn parse_node(mut p: unique Parser, data: Bytes, tokens: List[Token], block: bool, indentless: bool) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let first = tokens[p.at]
+  if first.kind == T_ALIAS {
+    pop_state(mut p)
+    p.at += 1
+    let mut e = event(E_ALIAS, first.start, first.end)
+    e.text = unique first.text
+    emit(mut p, take e)
+    return Ok(())
+  }
+  let mut anchor: String = ""
+  let mut tag: String = ""
+  let mut anchored = false
+  let mut tagged = false
+  let start = first.start
+  if first.kind == T_ANCHOR {
+    anchor = unique first.text
+    anchored = true
+    p.at += 1
+    if kind_at(tokens, p.at) == T_TAG {
+      tag = resolve_tag(p, data, tokens[p.at])?
+      tagged = true
+      p.at += 1
+    }
+  } else if first.kind == T_TAG {
+    tag = resolve_tag(p, data, first)?
+    tagged = true
+    p.at += 1
+    if kind_at(tokens, p.at) == T_ANCHOR {
+      anchor = unique tokens[p.at].text
+      anchored = true
+      p.at += 1
+    }
+  }
+  let t = tokens[p.at]
+  let k = t.kind
+  let mut e = event(E_SCALAR, start, t.end)
+  e.anchor = take anchor
+  e.tag = take tag
+  e.tagged = tagged
+  if k == T_BLOCK_ENTRY && indentless {
+    p.state = S_INDENTLESS_SEQUENCE_ENTRY
+    e.kind = E_SEQUENCE_START
+    e.style = BLOCK
+  } else if k == T_SCALAR {
+    pop_state(mut p)
+    p.at += 1
+    e.style = t.style
+    e.text = unique t.text
+  } else if k == T_FLOW_SEQUENCE_START {
+    p.state = S_FLOW_SEQUENCE_FIRST_ENTRY
+    e.kind = E_SEQUENCE_START
+    e.style = FLOW
+  } else if k == T_FLOW_MAPPING_START {
+    p.state = S_FLOW_MAPPING_FIRST_KEY
+    e.kind = E_MAPPING_START
+    e.style = FLOW
+  } else if k == T_BLOCK_SEQUENCE_START && block {
+    p.state = S_BLOCK_SEQUENCE_FIRST_ENTRY
+    e.kind = E_SEQUENCE_START
+    e.style = BLOCK
+  } else if k == T_BLOCK_MAPPING_START && block {
+    p.state = S_BLOCK_MAPPING_FIRST_KEY
+    e.kind = E_MAPPING_START
+    e.style = BLOCK
+  } else if anchored || tagged {
+    // An empty scalar can follow node properties (example 7.2).
+    pop_state(mut p)
+    e.end = tokens[p.at - 1].end
+  } else {
+    return Error(syntax(data, t.start))
+  }
+  if e.kind != E_SCALAR {
+    e.end = t.end
+  }
+  emit(mut p, take e)
+  Ok(())
+}
+
+fn block_mapping_key(mut p: unique Parser, data: Bytes, tokens: List[Token], first: bool) -> Result[
+  (),
+  YamlError
+] uses {} {
+  if first {
+    p.at += 1
+  }
+  let t = tokens[p.at]
+  if t.kind == T_KEY {
+    p.at += 1
+    let k = kind_at(tokens, p.at)
+    if k == T_KEY || k == T_VALUE || k == T_BLOCK_END {
+      p.state = S_BLOCK_MAPPING_VALUE
+      empty_scalar(mut p, t.end)
+      return Ok(())
+    }
+    push_state(mut p, S_BLOCK_MAPPING_VALUE)
+    return parse_node(mut p, data, tokens, true, true)
+  }
+  if t.kind == T_VALUE {
+    p.state = S_BLOCK_MAPPING_VALUE
+    empty_scalar(mut p, t.start)
+    return Ok(())
+  }
+  if t.kind == T_BLOCK_END {
+    pop_state(mut p)
+    p.at += 1
+    emit(mut p, event(E_MAPPING_END, t.start, t.start))
+    return Ok(())
+  }
+  Error(syntax(data, t.start))
+}
+
+fn block_mapping_value(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let t = tokens[p.at]
+  if t.kind == T_VALUE {
+    p.at += 1
+    let k = kind_at(tokens, p.at)
+    if k == T_KEY || k == T_VALUE || k == T_BLOCK_END {
+      p.state = S_BLOCK_MAPPING_KEY
+      empty_scalar(mut p, t.end)
+      return Ok(())
+    }
+    push_state(mut p, S_BLOCK_MAPPING_KEY)
+    return parse_node(mut p, data, tokens, true, true)
+  }
+  p.state = S_BLOCK_MAPPING_KEY
+  empty_scalar(mut p, t.start)
+  Ok(())
+}
+
+fn flow_mapping_key(mut p: unique Parser, data: Bytes, tokens: List[Token], first: bool) -> Result[
+  (),
+  YamlError
+] uses {} {
+  if first {
+    p.at += 1
+  }
+  if kind_at(tokens, p.at) != T_FLOW_MAPPING_END {
+    if !first {
+      if kind_at(tokens, p.at) != T_FLOW_ENTRY {
+        return Error(syntax(data, tokens[p.at].start))
+      }
+      p.at += 1
+    }
+    let t = tokens[p.at]
+    if t.kind == T_KEY {
+      p.at += 1
+      let k = kind_at(tokens, p.at)
+      if k == T_VALUE || k == T_FLOW_ENTRY || k == T_FLOW_MAPPING_END {
+        p.state = S_FLOW_MAPPING_VALUE
+        empty_scalar(mut p, tokens[p.at].start)
+        return Ok(())
+      }
+      push_state(mut p, S_FLOW_MAPPING_VALUE)
+      return parse_node(mut p, data, tokens, false, false)
+    }
+    if t.kind == T_VALUE {
+      p.state = S_FLOW_MAPPING_VALUE
+      empty_scalar(mut p, t.start)
+      return Ok(())
+    }
+    if t.kind != T_FLOW_MAPPING_END {
+      push_state(mut p, S_FLOW_MAPPING_EMPTY_VALUE)
+      return parse_node(mut p, data, tokens, false, false)
+    }
+  }
+  pop_state(mut p)
+  let t = tokens[p.at]
+  p.at += 1
+  emit(mut p, event(E_MAPPING_END, t.start, t.end))
+  Ok(())
+}
+
+fn flow_mapping_value(mut p: unique Parser, data: Bytes, tokens: List[Token], empty: bool) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let t = tokens[p.at]
+  if !empty && t.kind == T_VALUE {
+    p.at += 1
+    let k = kind_at(tokens, p.at)
+    if k != T_FLOW_ENTRY && k != T_FLOW_MAPPING_END {
+      push_state(mut p, S_FLOW_MAPPING_KEY)
+      return parse_node(mut p, data, tokens, false, false)
+    }
+    p.state = S_FLOW_MAPPING_KEY
+    empty_scalar(mut p, t.end)
+    return Ok(())
+  }
+  p.state = S_FLOW_MAPPING_KEY
+  empty_scalar(mut p, t.start)
+  Ok(())
+}
+
+fn flow_sequence_entry(mut p: unique Parser, data: Bytes, tokens: List[Token], first: bool) -> Result[
+  (),
+  YamlError
+] uses {} {
+  if first {
+    p.at += 1
+  }
+  let mut t = tokens[p.at]
+  if t.kind != T_FLOW_SEQUENCE_END && !first {
+    if t.kind != T_FLOW_ENTRY {
+      return Error(syntax(data, t.start))
+    }
+    p.at += 1
+    t = tokens[p.at]
+  }
+  if t.kind == T_FLOW_SEQUENCE_END {
+    pop_state(mut p)
+    p.at += 1
+    emit(mut p, event(E_SEQUENCE_END, t.start, t.end))
+    return Ok(())
+  }
+  if t.kind == T_KEY {
+    p.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_KEY
+    p.at += 1
+    let mut e = event(E_MAPPING_START, t.start, t.end)
+    e.style = FLOW
+    emit(mut p, take e)
+    return Ok(())
+  }
+  push_state(mut p, S_FLOW_SEQUENCE_ENTRY)
+  parse_node(mut p, data, tokens, false, false)
+}
+
+fn indentless_sequence_entry(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let t = tokens[p.at]
+  if t.kind != T_BLOCK_ENTRY {
+    pop_state(mut p)
+    emit(mut p, event(E_SEQUENCE_END, t.start, t.start))
+    return Ok(())
+  }
+  p.at += 1
+  let k = kind_at(tokens, p.at)
+  if k == T_BLOCK_ENTRY || k == T_KEY || k == T_VALUE || k == T_BLOCK_END {
+    p.state = S_INDENTLESS_SEQUENCE_ENTRY
+    empty_scalar(mut p, t.end)
+    return Ok(())
+  }
+  push_state(mut p, S_INDENTLESS_SEQUENCE_ENTRY)
+  parse_node(mut p, data, tokens, true, false)
+}
+
+fn block_sequence_entry(mut p: unique Parser, data: Bytes, tokens: List[Token], first: bool) -> Result[
+  (),
+  YamlError
+] uses {} {
+  if first {
+    p.at += 1
+  }
+  let t = tokens[p.at]
+  if t.kind == T_BLOCK_END {
+    pop_state(mut p)
+    p.at += 1
+    emit(mut p, event(E_SEQUENCE_END, t.start, t.start))
+    return Ok(())
+  }
+  if t.kind != T_BLOCK_ENTRY {
+    return Error(syntax(data, t.start))
+  }
+  p.at += 1
+  let k = kind_at(tokens, p.at)
+  if k == T_BLOCK_ENTRY || k == T_BLOCK_END {
+    p.state = S_BLOCK_SEQUENCE_ENTRY
+    empty_scalar(mut p, t.end)
+    return Ok(())
+  }
+  push_state(mut p, S_BLOCK_SEQUENCE_ENTRY)
+  parse_node(mut p, data, tokens, true, false)
+}
+
+// The key of a single-pair mapping inside a flow sequence (`[a: b]`, `[? a : b]`).
+fn flow_sequence_entry_mapping_key(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let t = tokens[p.at]
+  let k = t.kind
+  if k == T_VALUE || k == T_FLOW_ENTRY || k == T_FLOW_SEQUENCE_END {
+    p.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE
+    empty_scalar(mut p, t.start)
+    return Ok(())
+  }
+  push_state(mut p, S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE)
+  parse_node(mut p, data, tokens, false, false)
+}
+
+fn flow_sequence_entry_mapping_value(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let t = tokens[p.at]
+  if t.kind == T_VALUE {
+    p.at += 1
+    let k = kind_at(tokens, p.at)
+    if k == T_FLOW_ENTRY || k == T_FLOW_SEQUENCE_END {
+      p.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_END
+      empty_scalar(mut p, t.end)
+      return Ok(())
+    }
+    push_state(mut p, S_FLOW_SEQUENCE_ENTRY_MAPPING_END)
+    return parse_node(mut p, data, tokens, false, false)
+  }
+  p.state = S_FLOW_SEQUENCE_ENTRY_MAPPING_END
+  empty_scalar(mut p, t.start)
+  Ok(())
+}
+
+fn step(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Result[(), YamlError] uses {} {
+  let state = p.state
+  if state == S_STREAM_START {
+    p.at += 1
+    p.state = S_IMPLICIT_DOCUMENT_START
+    Ok(())
+  } else if state == S_IMPLICIT_DOCUMENT_START {
+    document_start(mut p, data, tokens, true)
+  } else if state == S_DOCUMENT_START {
+    document_start(mut p, data, tokens, false)
+  } else if state == S_DOCUMENT_CONTENT {
+    document_content(mut p, data, tokens)
+  } else if state == S_DOCUMENT_END {
+    document_end(mut p, data, tokens)
+  } else if state == S_BLOCK_NODE {
+    parse_node(mut p, data, tokens, true, false)
+  } else if state == S_BLOCK_MAPPING_FIRST_KEY {
+    block_mapping_key(mut p, data, tokens, true)
+  } else if state == S_BLOCK_MAPPING_KEY {
+    block_mapping_key(mut p, data, tokens, false)
+  } else if state == S_BLOCK_MAPPING_VALUE {
+    block_mapping_value(mut p, data, tokens)
+  } else if state == S_BLOCK_SEQUENCE_FIRST_ENTRY {
+    block_sequence_entry(mut p, data, tokens, true)
+  } else if state == S_BLOCK_SEQUENCE_ENTRY {
+    block_sequence_entry(mut p, data, tokens, false)
+  } else if state == S_FLOW_SEQUENCE_FIRST_ENTRY {
+    flow_sequence_entry(mut p, data, tokens, true)
+  } else if state == S_FLOW_SEQUENCE_ENTRY {
+    flow_sequence_entry(mut p, data, tokens, false)
+  } else if state == S_FLOW_MAPPING_FIRST_KEY {
+    flow_mapping_key(mut p, data, tokens, true)
+  } else if state == S_FLOW_MAPPING_KEY {
+    flow_mapping_key(mut p, data, tokens, false)
+  } else if state == S_FLOW_MAPPING_VALUE {
+    flow_mapping_value(mut p, data, tokens, false)
+  } else if state == S_FLOW_MAPPING_EMPTY_VALUE {
+    flow_mapping_value(mut p, data, tokens, true)
+  } else if state == S_INDENTLESS_SEQUENCE_ENTRY {
+    indentless_sequence_entry(mut p, data, tokens)
+  } else if state == S_FLOW_SEQUENCE_ENTRY_MAPPING_KEY {
+    flow_sequence_entry_mapping_key(mut p, data, tokens)
+  } else if state == S_FLOW_SEQUENCE_ENTRY_MAPPING_VALUE {
+    flow_sequence_entry_mapping_value(mut p, data, tokens)
+  } else {
+    let t = tokens[p.at]
+    p.state = S_FLOW_SEQUENCE_ENTRY
+    emit(mut p, event(E_MAPPING_END, t.start, t.start))
+    Ok(())
+  }
+}
+
+// The event stream after STREAM-START, ending with STREAM-END.
+fn parse_events(data: Bytes) -> Result[List[Event], YamlError] uses {} {
+  let tokens = scan(data)?
+  let mut p = Parser(
+    at: 0,
+    state: S_STREAM_START,
+    states: [],
+    tags: core@1/map.empty(),
+    events: []
+  )
+  while p.state != S_END {
+    step(mut p, data, tokens)?
+  }
+  let Parser(events: events, ..) = take p
+  Ok(take events)
+}
+
+// Core schema resolution (YAML 1.2.2 section 10.3.2).
+@noalloc
+fn all_digits(data: Bytes, from: u64, radix: u8) -> bool uses {} {
+  let n = core@1/bytes.len(data)
+  if from >= n {
+    return false
+  }
+  let mut i = from
+  while i < n {
+    if let None() = std@1/ascii.digit_value_radix(data[i], radix) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+fn is_null_text(s: String) -> bool uses {} {
+  s == "" || s == "~" || s == "null" || s == "Null" || s == "NULL"
+}
+
+fn bool_text(s: String) -> Option[bool] uses {} {
+  if s == "true" || s == "True" || s == "TRUE" {
+    return Some(true)
+  }
+  if s == "false" || s == "False" || s == "FALSE" {
+    return Some(false)
+  }
+  None()
+}
+
+// [-+]?[0-9]+, 0o[0-7]+ or 0x[0-9a-fA-F]+: the radix and where the digits start.
+fn int_shape(s: String) -> Option[(u8, u64)] uses {} {
+  let data = core@1/string.as_bytes(s)
+  if core@1/bytes.len(data) > 2 && data[0] == b'0' && data[1] == b'o' && all_digits(data, 2, 8) {
+    return Some((8, 2))
+  }
+  if core@1/bytes.len(data) > 2 && data[0] == b'0' && data[1] == b'x' && all_digits(data, 2, 16) {
+    return Some((16, 2))
+  }
+  let from: u64 = if peek(data, 0) == b'-' || peek(data, 0) == b'+' {
+    1
+  } else {
+    0
+  }
+  if all_digits(data, from, 10) {
+    return Some((10, from))
+  }
+  None()
+}
+
+// The integer's value when it fits i64.
+fn int_value(s: String, radix: u8, from: u64) -> Option[i64] uses {} {
+  let data = core@1/string.as_bytes(s)
+  let negative = data[0] == b'-'
+  let base: u64 = core@1/int.widen(radix)
+  // The magnitude bound: 2^63 for a negative value, 2^63 - 1 otherwise.
+  let limit: u64 = if negative {
+    9223372036854775808
+  } else {
+    9223372036854775807
+  }
+  let mut magnitude: u64 = 0
+  let mut i = from
+  while i < core@1/bytes.len(data) {
+    let Some(digit) = std@1/ascii.digit_value_radix(data[i], radix) else {
+      return None()
+    }
+    let d: u64 = core@1/int.widen(digit)
+    if magnitude > (limit - d) / base {
+      return None()
+    }
+    magnitude = magnitude * base + d
+    i += 1
+  }
+  if !negative {
+    return Some(core@1/int.narrow(magnitude))
+  }
+  if magnitude == 9223372036854775808 {
+    return Some(-9223372036854775807i64 - 1)
+  }
+  let positive: i64 = core@1/int.narrow(magnitude)
+  Some(-positive)
+}
+
+// [-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?, respelled for f64.parse:
+// no plus sign and digits on both sides of a point.
+fn float_spelling(s: String) -> Option[unique String] uses {} {
+  let data = core@1/string.as_bytes(s)
+  let n = core@1/bytes.len(data)
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  if peek(data, 0) == b'-' {
+    core@1/list.push(mut out, b'-')
+    i = 1
+  } else if peek(data, 0) == b'+' {
+    i = 1
+  }
+  let mut whole: u64 = 0
+  while i < n && std@1/ascii.is_digit(data[i]) {
+    core@1/list.push(mut out, data[i])
+    whole += 1
+    i += 1
+  }
+  if peek(data, i) == b'.' {
+    if whole == 0 {
+      core@1/list.push(mut out, b'0')
+    }
+    core@1/list.push(mut out, b'.')
+    i += 1
+    let mut fraction: u64 = 0
+    while i < n && std@1/ascii.is_digit(data[i]) {
+      core@1/list.push(mut out, data[i])
+      fraction += 1
+      i += 1
+    }
+    if whole == 0 && fraction == 0 {
+      return None()
+    }
+    if fraction == 0 {
+      core@1/list.push(mut out, b'0')
+    }
+  } else if whole == 0 {
+    return None()
+  }
+  if peek(data, i) == b'e' || peek(data, i) == b'E' {
+    core@1/list.push(mut out, b'e')
+    i += 1
+    if peek(data, i) == b'-' || peek(data, i) == b'+' {
+      core@1/list.push(mut out, data[i])
+      i += 1
+    }
+    if !all_digits(data, i, 10) {
+      return None()
+    }
+    while i < n {
+      core@1/list.push(mut out, data[i])
+      i += 1
+    }
+  }
+  if i != n {
+    return None()
+  }
+  Some(text.finish_valid(take out))
+}
+
+fn special_float(s: String) -> Option[f64] uses {} {
+  if s == ".inf" || s == ".Inf" || s == ".INF" || s == "+.inf" || s == "+.Inf" || s == "+.INF" {
+    return Some(1.0 / 0.0)
+  }
+  if s == "-.inf" || s == "-.Inf" || s == "-.INF" {
+    return Some(-1.0 / 0.0)
+  }
+  if s == ".nan" || s == ".NaN" || s == ".NAN" {
+    return Some(0.0 / 0.0)
+  }
+  None()
+}
+
+fn float_value(s: String) -> Option[f64] uses {} {
+  if let Some(f) = special_float(s) {
+    return Some(f)
+  }
+  let Some(spelling) = float_spelling(s) else {
+    return None()
+  }
+  match std@1/f64.parse(spelling) {
+    Ok(f) => Some(f),
+    Error(_) => None(),
+  }
+}
+
+// An untagged plain scalar; None for an integer outside i64.
+fn resolve_plain(s: String) -> Option[Value] uses {} {
+  if is_null_text(s) {
+    return Some(Null())
+  }
+  if let Some(b) = bool_text(s) {
+    return Some(Bool(b))
+  }
+  if let Some((radix, from)) = int_shape(s) {
+    return match int_value(s, radix, from) {
+      Some(n) => Some(Integer(n)),
+      None() => None(),
+    }
+  }
+  match float_value(s) {
+    Some(f) => Some(Float(f)),
+    None() => Some(Text(unique s)),
+  }
+}
+
+// A scalar event's value: plain and untagged by the core schema, `!` or quoted as a
+// string, and a core tag must match its content. An integer outside i64 is Syntax.
+fn resolve_scalar(data: Bytes, e: Event) -> Result[Value, YamlError] uses {} {
+  let s = e.text
+  if !e.tagged {
+    if e.style != PLAIN {
+      return Ok(Text(unique s))
+    }
+    return match resolve_plain(s) {
+      Some(value) => Ok(take value),
+      None() => Error(syntax(data, e.start)),
+    }
+  }
+  let tag = e.tag
+  if tag == "!" || tag == "tag:yaml.org,2002:str" {
+    return Ok(Text(unique s))
+  }
+  if tag == "tag:yaml.org,2002:null" && is_null_text(s) {
+    return Ok(Null())
+  }
+  if tag == "tag:yaml.org,2002:bool" {
+    if let Some(b) = bool_text(s) {
+      return Ok(Bool(b))
+    }
+  }
+  if tag == "tag:yaml.org,2002:int" {
+    if let Some((radix, from)) = int_shape(s) {
+      return match int_value(s, radix, from) {
+        Some(n) => Ok(Integer(n)),
+        None() => Error(syntax(data, e.start)),
+      }
+    }
+  }
+  if tag == "tag:yaml.org,2002:float" {
+    if let Some(f) = float_value(s) {
+      return Ok(Float(f))
+    }
+  }
+  Error(Tag(position_of(data, e.start)))
+}
+
+// An anchored node: its value, its node count, its height in collection levels
+// and, for a scalar, its key text.
+type Anchored {
+  value: Value,
+  nodes: u64,
+  height: u64,
+  scalar: bool,
+  key: String,
+}
+
+// A composed node: its value, its node count and its height in collection levels.
+type Composed {
+  value: Value,
+  nodes: u64,
+  height: u64,
+}
+
+type Composer {
+  at: u64,
+  anchors: Map[String, Anchored],
+  expanded: u64,
+}
+
+fn collection_tag_ok(e: Event, core: String) -> bool uses {} {
+  !e.tagged || e.tag == "!" || e.tag == core
+}
+
+fn anchor_node(mut c: Composer, e: Event, take value: Value, nodes: u64, height: u64) -> () uses {} {
+  if e.anchor != "" {
+    core@1/map.insert(
+      mut c.anchors,
+      unique e.anchor,
+      Anchored(
+        value: take value,
+        nodes: nodes,
+        height: height,
+        scalar: e.kind == E_SCALAR,
+        key: unique e.text
+      )
+    )
+  }
+}
+
+// A mapping key: a scalar's text or an alias of a scalar.
+fn compose_key(mut c: Composer, data: Bytes, events: List[Event]) -> Result[String, YamlError] uses {} {
+  let e = events[c.at]
+  if e.kind == E_SCALAR {
+    c.at += 1
+    let value = resolve_scalar(data, e)?
+    anchor_node(mut c, e, take value, 1, 0)
+    return Ok(unique e.text)
+  }
+  if e.kind == E_ALIAS {
+    c.at += 1
+    let Some(found) = core@1/map.get(c.anchors, e.text) else {
+      return Error(syntax(data, e.start))
+    }
+    if !found.scalar {
+      return Error(ComplexKey(position_of(data, e.start)))
+    }
+    c.expanded += 1
+    if c.expanded > MAX_ALIAS_NODES {
+      return Error(Aliases(position_of(data, e.start)))
+    }
+    return Ok(unique found.key)
+  }
+  Error(ComplexKey(position_of(data, e.start)))
+}
+
+// One node. An alias counts its anchored nodes against MAX_ALIAS_NODES, and its
+// anchored tree must fit below `depth`.
+fn compose_node(mut c: Composer, data: Bytes, events: List[Event], depth: u64) -> Result[
+  Composed,
+  YamlError
+] uses {} {
+  let e = events[c.at]
+  c.at += 1
+  if e.kind == E_ALIAS {
+    let Some(found) = core@1/map.get(c.anchors, e.text) else {
+      return Error(syntax(data, e.start))
+    }
+    if depth + found.height > MAX_NESTING {
+      return Error(Nesting(position_of(data, e.start)))
+    }
+    c.expanded += found.nodes
+    if c.expanded > MAX_ALIAS_NODES {
+      return Error(Aliases(position_of(data, e.start)))
+    }
+    return Ok(Composed(value: unique found.value, nodes: found.nodes, height: found.height))
+  }
+  if e.kind == E_SCALAR {
+    let value = resolve_scalar(data, e)?
+    anchor_node(mut c, e, copy value, 1, 0)
+    return Ok(Composed(value: take value, nodes: 1, height: 0))
+  }
+  if depth == MAX_NESTING {
+    return Error(Nesting(position_of(data, e.start)))
+  }
+  let mut nodes: u64 = 1
+  let mut height: u64 = 1
+  if e.kind == E_SEQUENCE_START {
+    if !collection_tag_ok(e, "tag:yaml.org,2002:seq") {
+      return Error(Tag(position_of(data, e.start)))
+    }
+    let mut items: List[Value] = []
+    while events[c.at].kind != E_SEQUENCE_END {
+      let Composed(value: item, nodes: count, height: below) = compose_node(
+        mut c,
+        data,
+        events,
+        depth + 1
+      )?
+      nodes += count
+      if below + 1 > height {
+        height = below + 1
+      }
+      core@1/list.push(mut items, take item)
+    }
+    c.at += 1
+    let value: Value = Array(take items)
+    anchor_node(mut c, e, copy value, nodes, height)
+    return Ok(Composed(value: take value, nodes: nodes, height: height))
+  }
+  if !collection_tag_ok(e, "tag:yaml.org,2002:map") {
+    return Error(Tag(position_of(data, e.start)))
+  }
+  let mut entries: Map[String, Value] = core@1/map.empty()
+  while events[c.at].kind != E_MAPPING_END {
+    let key_start = events[c.at].start
+    let key = compose_key(mut c, data, events)?
+    if core@1/map.contains(entries, key) {
+      return Error(DuplicateKey(position_of(data, key_start)))
+    }
+    let Composed(value: item, nodes: count, height: below) = compose_node(
+      mut c,
+      data,
+      events,
+      depth + 1
+    )?
+    nodes += count + 1
+    if below + 1 > height {
+      height = below + 1
+    }
+    core@1/map.insert(mut entries, take key, take item)
+  }
+  c.at += 1
+  let value: Value = Object(take entries)
+  anchor_node(mut c, e, copy value, nodes, height)
+  Ok(Composed(value: take value, nodes: nodes, height: height))
+}
+
+// Every document of a stream, with each one's start; anchors are per document.
+fn compose_stream(data: Bytes, mut starts: List[u64]) -> Result[List[Value], YamlError] uses {} {
+  let events = parse_events(data)?
+  let mut documents: List[Value] = []
+  let mut at: u64 = 0
+  while events[at].kind == E_DOCUMENT_START {
+    core@1/list.push(mut starts, events[at].start)
+    let mut c = Composer(at: at + 1, anchors: core@1/map.empty(), expanded: 0)
+    let Composed(value: value, ..) = compose_node(mut c, data, events, 0)?
+    core@1/list.push(mut documents, take value)
+    at = c.at + 1
+  }
+  Ok(take documents)
+}
+
+// Parses a YAML stream holding at most one document; an empty stream is Null.
+pub fn parse(take text: String) -> Result[Value, YamlError] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let mut starts: List[u64] = []
+  let documents = compose_stream(data, mut starts)?
+  if core@1/list.len(documents) > 1 {
+    return Error(Documents(position_of(data, starts[1])))
+  }
+  for value in take documents {
+    return Ok(take value)
+  }
+  Ok(Null())
+}
+
+// Parses every document of a YAML stream, in order.
+pub fn parse_all(take text: String) -> Result[List[Value], YamlError] uses {} {
+  let mut starts: List[u64] = []
+  compose_stream(core@1/string.as_bytes(text), mut starts)
+}
+
+// Emitter: canonical block style, two-space indentation.
+const ROOT: u8 = 0
+
+const MAP_VALUE: u8 = 1
+
+const SEQ_ITEM: u8 = 2
+
+// The longest key written as an implicit key (7.4: at most 1024 scalars).
+const IMPLICIT_KEY_BYTES: u64 = 1024
+
+@preserves_unique(out)
+fn push_spaces(mut out: List[u8], count: u64) -> () uses {} {
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut out, b' ')
+    i += 1
+  }
+}
+
+// The byte width of the scalar at `i` that a writer must escape or avoid: C0 and
+// DEL, C1 controls (NEL included), U+2028, U+2029, the byte order mark and U+FFFE
+// and U+FFFF; 0 for any other byte.
+@noalloc
+fn special_width(data: Bytes, i: u64) -> u64 uses {} {
+  let c = data[i]
+  if c < 32 || c == 127 {
+    return 1
+  }
+  let c1 = peek(data, i + 1)
+  let c2 = peek(data, i + 2)
+  if c == 194 && c1 >= 128 && c1 <= 159 {
+    return 2
+  }
+  if c == 226 && c1 == 128 && (c2 == 168 || c2 == 169) {
+    return 3
+  }
+  if c == 239 && (c1 == 187 && c2 == 191 || c1 == 191 && (c2 == 190 || c2 == 191)) {
+    return 3
+  }
+  0
+}
+
+// YAML 1.1 booleans and sexagesimal numbers, quoted on output so that YAML 1.1
+// readers keep them strings (as go-yaml v3 encode.go does).
+fn yaml11_scalar(s: String) -> bool uses {} {
+  if s == "y" || s == "Y" || s == "yes" || s == "Yes" || s == "YES" || s == "n" || s == "N" || s == "no" || s == "No" || s == "NO" || s == "on" || s == "On" || s == "ON" || s == "off" || s == "Off" || s == "OFF" {
+    return true
+  }
+  // [-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\.[0-9_]*)?, loosely: a digit first and only
+  // digits, `_`, `:` and `.` with at least one `:`.
+  let data = core@1/string.as_bytes(s)
+  let n = core@1/bytes.len(data)
+  let mut i: u64 = 0
+  if peek(data, 0) == b'-' || peek(data, 0) == b'+' {
+    i = 1
+  }
+  if !std@1/ascii.is_digit(peek(data, i)) {
+    return false
+  }
+  let mut colon = false
+  while i < n {
+    let c = data[i]
+    if c == b':' {
+      colon = true
+    } else if !(std@1/ascii.is_digit(c) || c == b'_' || c == b'.') {
+      return false
+    }
+    i += 1
+  }
+  colon
+}
+
+// A string written plain reads back as the same string in block context: no
+// indicator first, no leading or trailing blank, no `: ` or ` #`, no special
+// scalar, no core-schema null, bool, int or float spelling and no YAML 1.1
+// boolean or sexagesimal.
+fn plain_safe(s: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(s)
+  let n = core@1/bytes.len(data)
+  if n == 0 {
+    return false
+  }
+  let first = data[0]
+  if first == b'-' || first == b'?' || first == b':' || first == b',' || first == b'[' || first == b']' || first == b'{' || first == b'}' || first == b'#' || first == b'&' || first == b'*' || first == b'!' || first == b'|' || first == b'>' || first == b'\'' || first == b'"' || first == b'%' || first == b'@' || first == b'`' || is_blank(
+    first
+  ) || document_end_at(data, 0) {
+    return false
+  }
+  let last = data[n - 1]
+  if is_blank(last) || last == b':' {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < n {
+    let c = data[i]
+    if special_width(data, i) > 0 {
+      return false
+    }
+    if c == b':' && is_blank(peek(data, i + 1)) || c == b'#' && is_blank(data[i - 1]) {
+      return false
+    }
+    i += 1
+  }
+  match resolve_plain(s) {
+    Some(Text(_)) => !yaml11_scalar(s),
+    _ => false,
+  }
+}
+
+// Multi-line text that a literal block keeps exactly: its first line is not empty
+// and does not start with a blank, no line is blanks only, and it holds no special
+// scalar other than line feed and tab.
+fn literal_safe(s: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(s)
+  let n = core@1/bytes.len(data)
+  if n == 0 || data[0] == b'\n' || is_blank(data[0]) {
+    return false
+  }
+  let mut breaks: u64 = 0
+  let mut only_blanks = true
+  let mut line_length: u64 = 0
+  let mut i: u64 = 0
+  while i < n {
+    let c = data[i]
+    if c == b'\n' {
+      if line_length > 0 && only_blanks {
+        return false
+      }
+      breaks += 1
+      only_blanks = true
+      line_length = 0
+    } else {
+      if c != b'\t' && special_width(data, i) > 0 {
+        return false
+      }
+      if !is_blank(c) {
+        only_blanks = false
+      }
+      line_length += 1
+    }
+    i += 1
+  }
+  if line_length > 0 && only_blanks {
+    return false
+  }
+  breaks > 0
+}
+
+@preserves_unique(out)
+fn push_hex_escape(mut out: List[u8], prefix: u8, code: u64, digits: u64) -> () uses {} {
+  core@1/list.push(mut out, b'\\')
+  core@1/list.push(mut out, prefix)
+  let mut shift = digits * 4
+  while shift > 0 {
+    shift -= 4
+    let nibble: u8 = core@1/int.narrow(code >> shift & 15)
+    if nibble < 10 {
+      core@1/list.push(mut out, b'0' + nibble)
+    } else {
+      core@1/list.push(mut out, b'A' + nibble - 10)
+    }
+  }
+}
+
+// A double-quoted scalar (7.3.1) escaping `"`, `\`, controls, DEL, C1 controls,
+// U+2028, U+2029, the byte order mark, U+FFFE and U+FFFF.
+@preserves_unique(out)
+fn write_quoted(s: String, mut out: List[u8]) -> () uses {} {
+  let data = core@1/string.as_bytes(s)
+  let n = core@1/bytes.len(data)
+  core@1/list.push(mut out, b'"')
+  let mut i: u64 = 0
+  while i < n {
+    let c = data[i]
+    let width = special_width(data, i)
+    if c == b'"' || c == b'\\' {
+      core@1/list.push(mut out, b'\\')
+      core@1/list.push(mut out, c)
+    } else if width == 0 {
+      core@1/list.push(mut out, c)
+    } else if c == 0 {
+      text.append(mut out, "\\0")
+    } else if c == 7 {
+      text.append(mut out, "\\a")
+    } else if c == 8 {
+      text.append(mut out, "\\b")
+    } else if c == 9 {
+      text.append(mut out, "\\t")
+    } else if c == 10 {
+      text.append(mut out, "\\n")
+    } else if c == 11 {
+      text.append(mut out, "\\v")
+    } else if c == 12 {
+      text.append(mut out, "\\f")
+    } else if c == 13 {
+      text.append(mut out, "\\r")
+    } else if c == 27 {
+      text.append(mut out, "\\e")
+    } else if width == 1 {
+      push_hex_escape(mut out, b'x', core@1/int.widen(c), 2)
+    } else if width == 2 && data[i + 1] == 133 {
+      text.append(mut out, "\\N")
+    } else if width == 2 {
+      push_hex_escape(mut out, b'x', core@1/int.widen(data[i + 1]), 2)
+    } else if c == 226 && data[i + 2] == 168 {
+      text.append(mut out, "\\L")
+    } else if c == 226 {
+      text.append(mut out, "\\P")
+    } else {
+      let low: u64 = core@1/int.widen(data[i + 2] & 63)
+      let mid: u64 = core@1/int.widen(data[i + 1] & 63)
+      push_hex_escape(mut out, b'u', 61440 + mid * 64 + low, 4)
+    }
+    if width > 1 {
+      i += width
+    } else {
+      i += 1
+    }
+  }
+  core@1/list.push(mut out, b'"')
+}
+
+// A literal block scalar (8.1.2) whose lines are indented to `indent`; the
+// chomping indicator keeps the trailing line breaks.
+@preserves_unique(out)
+fn write_literal(s: String, indent: u64, mut out: List[u8]) -> () uses {} {
+  let data = core@1/string.as_bytes(s)
+  let n = core@1/bytes.len(data)
+  let mut trailing: u64 = 0
+  while trailing < n && data[n - 1 - trailing] == b'\n' {
+    trailing += 1
+  }
+  if trailing == 0 {
+    text.append(mut out, "|-\n")
+  } else if trailing == 1 {
+    text.append(mut out, "|\n")
+  } else {
+    text.append(mut out, "|+\n")
+  }
+  let mut line_open = false
+  let mut i: u64 = 0
+  while i < n {
+    let c = data[i]
+    if c == b'\n' {
+      core@1/list.push(mut out, b'\n')
+      line_open = false
+    } else {
+      if !line_open {
+        push_spaces(mut out, indent)
+        line_open = true
+      }
+      core@1/list.push(mut out, c)
+    }
+    i += 1
+  }
+  if line_open {
+    core@1/list.push(mut out, b'\n')
+  }
+}
+
+@preserves_unique(out)
+fn write_float(f: f64, mut out: List[u8]) -> () uses {} {
+  if f != f {
+    text.append(mut out, ".nan")
+    return
+  }
+  if f == 1.0 / 0.0 {
+    text.append(mut out, ".inf")
+    return
+  }
+  if f == -1.0 / 0.0 {
+    text.append(mut out, "-.inf")
+    return
+  }
+  let start = core@1/list.len(out)
+  std@1/f64.format_into(f, mut out)
+  let mut i = start
+  while i < core@1/list.len(out) {
+    if out[i] == b'.' || out[i] == b'e' || out[i] == b'E' {
+      return
+    }
+    i += 1
+  }
+  text.append(mut out, ".0")
+}
+
+// The length of `s` written by write_quoted.
+fn quoted_len(s: String) -> u64 uses {} {
+  let data = core@1/string.as_bytes(s)
+  let n = core@1/bytes.len(data)
+  let mut length: u64 = 2
+  let mut i: u64 = 0
+  while i < n {
+    let c = data[i]
+    let width = special_width(data, i)
+    if c == b'"' || c == b'\\' || c == 0 || c >= 7 && c <= 13 || c == 27 {
+      length += 2
+      i += 1
+    } else if width == 0 {
+      length += 1
+      i += 1
+    } else if width == 1 {
+      length += 4
+      i += 1
+    } else if width == 2 && data[i + 1] == 133 {
+      length += 2
+      i += 2
+    } else if width == 2 {
+      length += 4
+      i += 2
+    } else if c == 226 {
+      length += 2
+      i += 3
+    } else {
+      length += 6
+      i += 3
+    }
+  }
+  length
+}
+
+// A key is implicit (`key:`) when it is at most 1024 bytes as written, and
+// otherwise explicit (`? key` with `:` on the next line, 8.2.2), which has no
+// length limit.
+@preserves_unique(out)
+fn write_key(key: String, indent: u64, mut out: List[u8]) -> () uses {} {
+  let plain = plain_safe(key)
+  let length = if plain {
+    core@1/string.byte_len(key)
+  } else {
+    quoted_len(key)
+  }
+  let explicit = length > IMPLICIT_KEY_BYTES
+  if explicit {
+    text.append(mut out, "? ")
+  }
+  if plain {
+    text.append(mut out, key)
+  } else {
+    write_quoted(key, mut out)
+  }
+  if explicit {
+    core@1/list.push(mut out, b'\n')
+    push_spaces(mut out, indent)
+  }
+  core@1/list.push(mut out, b':')
+}
+
+// Writes `value` where `context` leaves the cursor: at the start of the document,
+// after a key's `:` or after a sequence entry's `- `. `indent` is the column of
+// that key or dash (0 at the root); every write ends with a line break.
+@preserves_unique(out)
+fn write_node(value: Value, indent: u64, context: u8, mut out: List[u8], depth: u64) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let collection = match value {
+    Array(_) => true,
+    Object(_) => true,
+    _ => false,
+  }
+  if collection && depth == MAX_NESTING {
+    return Error(InvalidValue())
+  }
+  let empty = match value {
+    Array(items) => core@1/list.len(items) == 0,
+    Object(entries) => core@1/map.len(entries) == 0,
+    _ => true,
+  }
+  if empty && context == MAP_VALUE {
+    core@1/list.push(mut out, b' ')
+  }
+  let child: u64 = if context == ROOT {
+    0
+  } else {
+    indent + 2
+  }
+  match value {
+    Null() => text.append(mut out, "null"),
+    Bool(b) => text.append(mut out, if b {
+      "true"
+    } else {
+      "false"
+    }),
+    Integer(n) => std@1/i64.format_into(n, mut out),
+    Float(f) => write_float(f, mut out),
+    Text(s) => if plain_safe(s) {
+      text.append(mut out, s)
+    } else if literal_safe(s) {
+      write_literal(s, child + if context == ROOT {
+        2
+      } else {
+        0
+      }, mut out)
+      return Ok(())
+    } else {
+      write_quoted(s, mut out)
+    },
+    Array(items) => {
+      if core@1/list.len(items) == 0 {
+        text.append(mut out, "[]")
+      } else {
+        if context == MAP_VALUE {
+          core@1/list.push(mut out, b'\n')
+        }
+        let mut first = true
+        for item in items {
+          if !(first && context == SEQ_ITEM) {
+            push_spaces(mut out, child)
+          }
+          first = false
+          text.append(mut out, "- ")
+          write_node(item, child, SEQ_ITEM, mut out, depth + 1)?
+        }
+        return Ok(())
+      }
+    },
+    Object(entries) => {
+      if core@1/map.len(entries) == 0 {
+        text.append(mut out, "{}")
+      } else {
+        if context == MAP_VALUE {
+          core@1/list.push(mut out, b'\n')
+        }
+        let mut first = true
+        for (key, item) in entries {
+          if !(first && context == SEQ_ITEM) {
+            push_spaces(mut out, child)
+          }
+          first = false
+          write_key(key, child, mut out)
+          write_node(item, child, MAP_VALUE, mut out, depth + 1)?
+        }
+        return Ok(())
+      }
+    },
+  }
+  core@1/list.push(mut out, b'\n')
+  Ok(())
+}
+
+// One document in canonical block style; parse reads it back to an equal value
+// (NaN to NaN).
+pub fn stringify(value: Value) -> Result[unique String, YamlError] uses {} {
+  let mut out: List[u8] = []
+  write_node(value, 0, ROOT, mut out, 0)?
+  Ok(text.finish_valid(take out))
+}

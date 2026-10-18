@@ -1,0 +1,56 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.stringify writes canonical block style with two-space indentation;
+// each output reads back to the value it came from.
+fn writes(take input: String, expected: String) -> bool {
+  let Ok(value) = yaml.parse(take input) else {
+    return false
+  }
+  let Ok(written) = yaml.stringify(value) else {
+    return false
+  }
+  if written != expected {
+    return false
+  }
+  yaml.parse(take written) == Ok(value)
+}
+
+fn repeat(mut out: List[u8], piece: String, count: u64) -> () {
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+}
+
+fn nested(levels: u64) -> yaml.Value {
+  let mut value: yaml.Value = Null()
+  let mut i: u64 = 0
+  while i < levels {
+    value = Array([take value])
+    i += 1
+  }
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  failure.check(
+    writes(
+      "{a: [1, {b: ~}], c: {}, d: [], e: ''}",
+      "a:\n  - 1\n  - b: null\nc: {}\nd: []\ne: \"\"\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    writes("[[1, 2], [], {x: [a]}]", "- - 1\n  - 2\n- []\n- x:\n    - a\n"),
+    TextInvariant()
+  )
+  failure.check(writes("x", "x\n"), TextInvariant())
+  failure.check(writes("", "null\n"), TextInvariant())
+  failure.check(writes("{}", "{}\n"), TextInvariant())
+  failure.check(
+    writes("[0, -5, 9223372036854775807]", "- 0\n- -5\n- 9223372036854775807\n"),
+    TextInvariant()
+  )
+  Ok(())
+}

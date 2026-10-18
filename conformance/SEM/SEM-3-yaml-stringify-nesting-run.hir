@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.stringify writes 128 nested collections; level 129 is InvalidValue.
+fn writes(take input: String, expected: String) -> bool {
+  let Ok(value) = yaml.parse(take input) else {
+    return false
+  }
+  let Ok(written) = yaml.stringify(value) else {
+    return false
+  }
+  if written != expected {
+    return false
+  }
+  yaml.parse(take written) == Ok(value)
+}
+
+fn repeat(mut out: List[u8], piece: String, count: u64) -> () {
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+}
+
+fn nested(levels: u64) -> yaml.Value {
+  let mut value: yaml.Value = Null()
+  let mut i: u64 = 0
+  while i < levels {
+    value = Array([take value])
+    i += 1
+  }
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // 128 levels write; level 129 is InvalidValue.
+  failure.check(
+    match yaml.stringify(nested(128)) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+  failure.check(yaml.stringify(nested(129)) == Error(InvalidValue()), TextInvariant())
+  Ok(())
+}

@@ -1,0 +1,92 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml keeps YAML 1.1 spellings (yes, on, 0b101, 1_000, sexagesimals, dates)
+// and Rust float spellings as strings. The float cases port saphyr
+// saphyr/tests/basic.rs test_nominal_float_parse at b8205d5f60ea.
+fn same(take input: String, expected: yaml.Value) -> bool {
+  match yaml.parse(take input) {
+    Ok(value) => value == expected,
+    Error(_) => false,
+  }
+}
+
+fn text(take input: String, expected: String) -> bool {
+  let value: yaml.Value = Text(unique expected)
+  same(take input, value)
+}
+
+fn integer(take input: String, expected: i64) -> bool {
+  let value: yaml.Value = Integer(expected)
+  same(take input, value)
+}
+
+fn float(take input: String, expected: f64) -> bool {
+  let value: yaml.Value = Float(expected)
+  same(take input, value)
+}
+
+fn boolean(take input: String, expected: bool) -> bool {
+  let value: yaml.Value = Bool(expected)
+  same(take input, value)
+}
+
+fn null(take input: String) -> bool {
+  let value: yaml.Value = Null()
+  same(take input, value)
+}
+
+fn tag_error(take input: String) -> bool {
+  match yaml.parse(take input) {
+    Error(Tag(_)) => true,
+    _ => false,
+  }
+}
+
+fn syntax_error(take input: String) -> bool {
+  match yaml.parse(take input) {
+    Error(Syntax(_)) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  // test_nominal_float_parse: Rust's float spellings are strings in YAML.
+  let spellings: List[String] = ["nan", "NAN", "NaN", "inf", "infinity", "Infinity"]
+  for base in spellings {
+    failure.check(
+      text(string.concat("+", base), string.concat("+", base)),
+      TextInvariant()
+    )
+    failure.check(
+      text(string.concat("-", base), string.concat("-", base)),
+      TextInvariant()
+    )
+    failure.check(text(copy base, base), TextInvariant())
+  }
+  // YAML 1.1 types are not in the core schema.
+  let strings: List[String] = [
+    "yes",
+    "No",
+    "on",
+    "OFF",
+    "y",
+    "n",
+    "0b101",
+    "1_000",
+    "1:30",
+    "2001-12-14",
+    "tRUE",
+    "nULL",
+    ".Nan",
+    "0X1F",
+    "0O17",
+    "0x",
+    "1e",
+    ".",
+    "+."
+  ]
+  for s in strings {
+    failure.check(text(copy s, s), TextInvariant())
+  }
+  Ok(())
+}

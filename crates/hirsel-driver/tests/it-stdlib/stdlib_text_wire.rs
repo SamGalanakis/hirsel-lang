@@ -303,3 +303,8 @@ fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
         }
     });
 }
+
+#[test]
+fn yaml_is_ordinary_source() {
+    source_codec("yaml", "yaml", &["parse", "parse_all", "stringify"]);
+}
