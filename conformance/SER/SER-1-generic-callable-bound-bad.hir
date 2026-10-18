@@ -1,0 +1,7 @@
+// rule: SER-1
+// expect: reject SER-1 at line 6
+fn discard[T: serializable](take value: T) {}
+
+fn example() {
+  let f: fn(take fn() uses {}) uses {} = discard
+}

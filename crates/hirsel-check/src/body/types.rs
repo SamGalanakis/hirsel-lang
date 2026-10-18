@@ -832,6 +832,112 @@ impl Checker<'_, '_> {
             _ => None,
         }
     }
+    /// Written callable headers have their own parameter names, even though
+    /// those names have no runtime binding row. Preserve their selectors in
+    /// the receiving contract instead of the body's Environment placeholder.
+    fn callable_header_relation(
+        &mut self,
+        mut syntax: ast::TypeExprId,
+        ty: TypeId,
+        owner: NameSite,
+        parameters: &[Parameter],
+        current: Option<usize>,
+    ) -> Result<TypeId, QueryError> {
+        while let ast::TypeExprKind::Qualified {
+            base,
+            relation,
+            brand,
+            ..
+        } = self.input.tree.types[syntax.0 as usize].kind.clone()
+        {
+            if let Some(relation) = relation {
+                let site = NameSite::Type(syntax);
+                let references: Vec<_> = self
+                    .input
+                    .resolution
+                    .paths
+                    .iter()
+                    .filter(|(at, _)| *at == site)
+                    .map(|(_, name)| name.clone())
+                    .collect();
+                let scopes: Vec<_> = self
+                    .input
+                    .resolution
+                    .reference_scopes
+                    .iter()
+                    .filter(|(at, _)| *at == site)
+                    .map(|(_, scope)| *scope)
+                    .collect();
+                let mut index = usize::from(brand.as_ref().is_some_and(|brand| !brand.sibling));
+                let mut declared = Relation::global();
+                let mut own = false;
+                for place in relation.places {
+                    match place {
+                        ast::RelationPlace::Heap => (),
+                        ast::RelationPlace::Environment => {
+                            declared = declared.union(&Relation::environment());
+                        }
+                        ast::RelationPlace::Path(path) => {
+                            let reference = references.get(index);
+                            let scope = scopes.get(index);
+                            index += 1;
+                            let Some(ResolvedName::Parameter(parameter)) =
+                                reference.filter(|_| scope == Some(&owner))
+                            else {
+                                declared = declared.union(&Relation::environment());
+                                continue;
+                            };
+                            let ordinal = parameter.0 as usize;
+                            let Some(source) = parameters.get(ordinal) else {
+                                continue;
+                            };
+                            own = true;
+                            if current == Some(ordinal) && path.segments.len() == 1 {
+                                if source.passing == ast::PassingMode::Take {
+                                    declared = declared.union(&Relation::environment());
+                                }
+                                continue;
+                            }
+                            let mut part = source.ty;
+                            let mut fields = vec![];
+                            for name in path.segments.iter().skip(1) {
+                                let (_, representation) = self.representation(part)?;
+                                let TypeKind::Record(parts) = self.kind(representation) else {
+                                    return Ok(ty);
+                                };
+                                let Some((ordinal, field)) = parts
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, field)| field.name == self.name(*name))
+                                else {
+                                    return Ok(ty);
+                                };
+                                fields.push(FieldId(ordinal as u32));
+                                part = field.ty;
+                            }
+                            declared = declared.union(&Relation::place(Origin {
+                                root: OriginRoot::Parameter(ParameterRef::bound(*parameter)),
+                                fields: fields.into(),
+                            }));
+                        }
+                    }
+                }
+                if own {
+                    if current.is_some_and(|ordinal| {
+                        parameters[ordinal].passing != ast::PassingMode::Take
+                    }) {
+                        declared = declared.union(&Relation::environment());
+                    }
+                    let mut row = self.body.types.get(ty).unwrap().clone();
+                    row.modes.relation = declared;
+                    let ty = self.body.types.push(row);
+                    return Ok(self.normalize_properties(ty));
+                }
+            }
+            syntax = base;
+        }
+        Ok(ty)
+    }
     pub(super) fn function_syntax(
         &mut self,
         s: &ast::FunctionSyntax,
@@ -863,6 +969,22 @@ impl Checker<'_, '_> {
             .map(|t| self.syntax_type(t, frame))
             .transpose()?
             .unwrap_or_else(|| self.ty(TypeKind::Tuple(vec![].into())));
+        if matches!(owner, NameSite::Type(_)) {
+            for (ordinal, syntax) in s.parameters.iter().enumerate() {
+                parameters[ordinal].ty = self.callable_header_relation(
+                    syntax.ty,
+                    parameters[ordinal].ty,
+                    owner,
+                    &parameters,
+                    Some(ordinal),
+                )?;
+            }
+        }
+        let result = if let Some(syntax) = s.result.filter(|_| matches!(owner, NameSite::Type(_))) {
+            self.callable_header_relation(syntax, result, owner, &parameters, None)?
+        } else {
+            result
+        };
         // MODE-1: a local function is named and its local result names its
         // sources (spec #70). Body rows do
         // not record named sources, so a written relation decides.

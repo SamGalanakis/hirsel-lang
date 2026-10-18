@@ -1,0 +1,7 @@
+// rule: CAP-2
+// expect: accept
+fn discard[T: inert](take value: T) {}
+
+fn example() {
+  let f: fn(take u64) uses {} = discard
+}

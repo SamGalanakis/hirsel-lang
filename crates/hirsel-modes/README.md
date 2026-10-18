@@ -921,3 +921,9 @@ Failed proofs report MODE-2 at f with a note naming the association; an explicit
 promise is redundant and runs the same proof once.
 
 Ownership CFG environments retain all active lexical loop targets. Labelled edges end statements and scoped bindings up to their selected loop. Authority task obligations follow that same target, and header convergence includes labelled continues from nested loops.
+
+Contextually instantiated named function references rebuild their declared callable
+with actual generic authority before receipt. J proves sendable/inert bounds at
+creation and substitutes authority/uses throughout parameters and results. Indirect
+calls retain the declared modes, allocation and relations; preserves_unique stays
+direct-call only.

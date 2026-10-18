@@ -1,0 +1,11 @@
+// rule: LANG-2
+// expect: run
+fn identity[T: plain](value: T) -> T {
+  value
+}
+
+pub fn main() -> Result[(), String] {
+  let f: fn(u64) -> u64 uses {} = identity
+  failure.check(f(31) == 31, Bounds())
+  Ok(())
+}

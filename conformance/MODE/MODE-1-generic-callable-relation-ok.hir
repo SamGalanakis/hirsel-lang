@@ -1,0 +1,21 @@
+// rule: MODE-1
+// expect: accept
+fn view[T: copyable](value: T) -> T in value {
+  copy value
+}
+
+fn example() {
+  let f: fn(value: String) -> String in value uses {} = view
+}
+
+type Holder[T] {
+  item: T,
+}
+
+fn field[T: copyable](record: Holder[T]) -> T in record.item {
+  copy record.item
+}
+
+fn projected() {
+  let f: fn(record: Holder[String]) -> String in record.item uses {} = field
+}

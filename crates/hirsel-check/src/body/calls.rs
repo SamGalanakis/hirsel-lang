@@ -16,6 +16,97 @@ pub(super) struct PendingCall {
     checked: usize,
 }
 impl Checker<'_, '_> {
+    /// A function value has no inference variables of its own. Its complete
+    /// receiving callable supplies every actual, using only the declaration.
+    pub(super) fn instantiate_function_value(
+        &mut self,
+        id: ast::ExprId,
+        mut function: FunctionType,
+        expected: Option<TypeId>,
+    ) -> Result<TypeId, QueryError> {
+        if !matches!(self.input_name(id), Some((_, ResolvedName::Definition(_)))) {
+            self.report(
+                const { RuleId::of("LANG-2") },
+                self.span(id),
+                "a local generic function can only be used as a direct callee",
+            );
+            return Ok(self.error());
+        }
+        let mut inferred = vec![None; function.generics.len()];
+        if let Some(TypeKind::Function(wanted)) = expected.map(|ty| self.kind(ty))
+            && wanted.generics.is_empty()
+            && !wanted.incomplete
+            && wanted.parameters.len() == function.parameters.len()
+        {
+            // Modes and effects remain the declaration's promises. Ordinary
+            // callable receipt checks them after substitution.
+            for (declared, wanted) in function.parameters.iter().zip(&wanted.parameters) {
+                self.infer(declared.ty, wanted.ty, &mut inferred)?;
+            }
+            self.infer(function.result, wanted.result, &mut inferred)?;
+        }
+        for (parameter, actual) in function.generics.iter().zip(&inferred) {
+            if actual.is_none()
+                || matches!(actual, Some(GenericArgument::Type(ty)) if self.partial_result(*ty).is_some())
+            {
+                let name = match parameter {
+                    GenericParameter::Type { name, .. } | GenericParameter::Size { name } => name,
+                };
+                self.report(
+                    const { RuleId::of("LANG-2") },
+                    self.span(id),
+                    &format!("generic function value cannot determine parameter `{name}` from its immediate complete expected callable type"),
+                );
+                return Ok(self.error());
+            }
+        }
+        let arguments: Vec<_> = inferred.into_iter().flatten().collect();
+        // As for direct calls, a borrowed local result may require Copyable
+        // even when the declaration did not spell that bound explicitly.
+        for (parameter, actual) in local_result_generics(&self.body.types, &function)
+            .iter()
+            .zip(&arguments)
+        {
+            if let (GenericParameter::Type { bounds, .. }, GenericArgument::Type(actual)) =
+                (parameter, actual)
+            {
+                for bound in bounds {
+                    if !matches!(bound, ast::Bound::Sendable | ast::Bound::Inert)
+                        && !self.bound(*actual, *bound)?
+                    {
+                        self.report(
+                            if *bound == ast::Bound::Serializable {
+                                const { RuleId::of("SER-1") }
+                            } else {
+                                const { RuleId::of("GEN-1") }
+                            },
+                            self.span(id),
+                            "function value actual lacks its required structural bound",
+                        );
+                        return Ok(self.error());
+                    }
+                }
+            }
+        }
+        for parameter in &mut function.parameters {
+            parameter.ty = self.substitute(parameter.ty, &arguments)?;
+        }
+        function.result = self.substitute(function.result, &arguments)?;
+        function.error = result_error(
+            &self.body.types,
+            function.result,
+            &self.input.signature.metadata.roles,
+        );
+        function.generics = vec![].into();
+        if let Some((_, ResolvedName::Definition(callee))) = self.input_name(id) {
+            self.body.instantiations.push(Instantiation {
+                expression: id,
+                callee: callee.clone(),
+                arguments,
+            });
+        }
+        Ok(self.named_function(function))
+    }
     /// A borrowed callable parameter's Environment is its access view,
     /// not part of the concrete type argument shared with another occurrence.
     /// Keep the occurrence's receiving refinements and explicit placements.

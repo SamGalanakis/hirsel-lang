@@ -1,0 +1,9 @@
+// rule: LANG-7
+// expect: accept
+fn identity[T](take value: T) -> T {
+  value
+}
+
+fn example() {
+  let f: fn(take bool) -> bool uses {} = identity
+}

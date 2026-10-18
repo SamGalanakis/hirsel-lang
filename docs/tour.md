@@ -288,6 +288,61 @@ input error
 ```
 <!-- /tour -->
 
+## Generic functions as callbacks
+
+An annotated callable type can specialize a top-level generic function name. The same
+works for arguments, record fields and returns when the complete expected callable type
+determines every type and size parameter. The declared modes and effects still apply;
+missing context or an undetermined parameter is LANG-2.
+
+<!-- tour: conformance/LANG/LANG-2-generic-callable-context-run.hir -->
+[Runnable source](../conformance/LANG/LANG-2-generic-callable-context-run.hir)
+
+```hirsel
+fn identity[T](take value: T) -> T {
+  value
+}
+
+fn apply(f: fn(take u64) -> u64 uses {}, value: u64) -> u64 {
+  f(value)
+}
+
+type Callback {
+  call: fn(take u64) -> u64 uses {},
+}
+
+fn callback() -> fn(take u64) -> u64 uses {} {
+  identity
+}
+
+fn returned(early: bool) -> fn(take u64) -> u64 uses {} {
+  if early {
+    return identity
+  }
+  identity
+}
+
+pub fn main() -> Result[(), String] {
+  let f: fn(take u64) -> u64 uses {} = identity
+  let record = Callback(call: identity)
+  failure.check(f(3) == 3, Bounds())
+  failure.check(apply(identity, 5) == 5, Bounds())
+  failure.check(record.call(7) == 7, Bounds())
+  let length: fn(List[u64]) -> u64 uses {} = list.len
+  let values: List[u64] = [17u64, 19u64]
+  failure.check(length(values) == 2, Bounds())
+  let g = callback()
+  let h = returned(true)
+  failure.check(g(11) == 11 && h(13) == 13, Bounds())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 ## Option and Result helpers
 
 Use `option.remove(mut value)` to move out the current option and leave `None`.

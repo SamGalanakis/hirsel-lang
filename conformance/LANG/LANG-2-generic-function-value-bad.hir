@@ -1,8 +1,8 @@
 // rule: LANG-2
 // expect: reject LANG-2 at line 11
 // "Type arguments are never written in expressions."
-// A generic function has no function-value type, so only a direct call can
-// choose its type arguments.
+// Without an immediate expected callable type, this name cannot choose
+// its type arguments from the later use.
 fn identity[T](take x: T) -> T {
   x
 }

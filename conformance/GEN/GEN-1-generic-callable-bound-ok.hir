@@ -1,0 +1,9 @@
+// rule: GEN-1
+// expect: accept
+fn same[T: data](left: T, right: T) -> bool {
+  left == right
+}
+
+fn example() {
+  let f: fn(u64, u64) -> bool uses {} = same
+}

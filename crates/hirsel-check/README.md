@@ -370,3 +370,12 @@ call checking checks every option, including a `name$` width's path (LANG-7 for
 a non-u64).
 
 Each function frame retains its active loop statements. Labelled exits require a matching enclosing label and active labels cannot shadow; nested callable frames start empty (LANG-7).
+
+Generic named function values infer every type/size actual from the immediate complete
+monomorphic callable expectation. H checks structural bounds and records the
+instantiation at the name for GEN-5 and existing FunctionReference lowering. It
+substitutes the declared callable contract rather than copying receiving promises.
+Missing context or an undetermined parameter reports LANG-2 naming the parameter.
+Callable binding annotations keep the declared parameter/result header, including
+omitted mode defaults, separately from the initializer's actual callable. Receipt
+checks cannot silently inherit stronger uniqueness or locality promises.

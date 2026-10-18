@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: accept
+fn identity[T, Other](take value: T, take other: Other) -> T {
+  value
+}
+
+fn example() {
+  let f: fn(take u64, take bool) -> u64 uses {} = identity
+}

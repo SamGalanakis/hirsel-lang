@@ -876,3 +876,65 @@ fn range_patterns_are_ordered_typed_and_cover_by_interval() {
     range_match(Primitive::U8, &[(n(0), n(126)), (n(128), n(255))])
         .broken(vec![ViolationKind::MatchCoverage]);
 }
+
+/// A generic result instantiated as Result derives its error channel. The
+/// forged reference omits that channel while keeping the same result type.
+#[test]
+fn a_function_reference_derives_its_instantiated_error_channel() {
+    let build = |channel: bool| {
+        let mut f = Fixture::unit();
+        let mut result_declaration = capability_signature("Result");
+        let SignatureKind::Type(result) = &mut result_declaration.kind else {
+            unreachable!()
+        };
+        result.capability = None;
+        result.authority = AuthoritySummary::inert();
+        result.generics = ["T", "E"]
+            .into_iter()
+            .map(|name| GenericParameter::Type {
+                name: name.into(),
+                bounds: vec![].into(),
+            })
+            .collect();
+        f.signatures.insert(path("Result"), result_declaration);
+        let byte = f
+            .definition
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::U8)));
+        let result = f.definition.types.push(ty(TypeKind::Named {
+            definition: path("Result"),
+            arguments: vec![GenericArgument::Type(byte), GenericArgument::Type(byte)].into(),
+        }));
+        let mut signature = function_signature(
+            "generic",
+            vec![],
+            TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
+        );
+        signature.metadata.roles.result_type = Some(path("Result"));
+        let SignatureKind::Function(function) = &mut signature.kind else {
+            unreachable!()
+        };
+        function.generics = vec![GenericParameter::Type {
+            name: "T".into(),
+            bounds: vec![].into(),
+        }]
+        .into();
+        f.signatures.insert(path("generic"), signature);
+        let mut function = fn_type(vec![], result);
+        function.error = channel.then_some(byte);
+        let g = f.slot(TypeKind::Function(function), Storage::Local);
+        f.assign(
+            g,
+            Rvalue::FunctionReference {
+                definition: path("generic"),
+                arguments: vec![GenericArgument::Type(result)],
+            },
+            0,
+        );
+        let exit = f.cleanup(vec![drop(g)]);
+        f.body().blocks[0].terminator = ret(0, exit);
+        f
+    };
+    build(false).broken(mismatch("function reference"));
+    build(true).valid();
+}

@@ -110,6 +110,8 @@ conformance/CAP/CAP-2-filesystem-pinned-directory-run.hir
 conformance/CAP/CAP-2-filesystem-replacement-run.hir
 conformance/CAP/CAP-2-flat-inert-bad.hir
 conformance/CAP/CAP-2-flat-inert-ok.hir
+conformance/CAP/CAP-2-generic-callable-inert-bad.hir
+conformance/CAP/CAP-2-generic-callable-inert-ok.hir
 conformance/CAP/CAP-2-inert-data.hir
 conformance/CAP/CAP-2-key-inert-bad.hir
 conformance/CAP/CAP-2-key-inert-ok.hir
@@ -407,6 +409,8 @@ conformance/CLO/CLO-4-contract6-preserves_captures-plain-ok.hir
 conformance/CLO/CLO-4-contract6-sendable-adapter-ok.hir
 conformance/CLO/CLO-4-contract6-sendable-adapter-relation-ok.hir
 conformance/CLO/CLO-4-contract6-sendable-adapter-sendable-slot-ok.hir
+conformance/CLO/CLO-4-generic-callable-uses-bad.hir
+conformance/CLO/CLO-4-generic-callable-uses-ok.hir
 conformance/CLO/CLO-4-global-function-share-ok.hir
 conformance/CLO/CLO-4-iter-called-closure-part-run.hir
 conformance/CLO/CLO-4-kept-heap-capture-run.hir
@@ -544,6 +548,10 @@ conformance/CT/CT-2-explicit-closure-comptime-bad.hir
 conformance/CT/CT-2-explicit-closure-comptime-ok.hir
 conformance/CT/CT-2-explicit-resource-comptime-bad.hir
 conformance/CT/CT-2-explicit-resource-comptime-ok.hir
+conformance/CT/CT-2-generic-callable-comptime-bad.hir
+conformance/CT/CT-2-generic-callable-comptime-ok.hir
+conformance/CT/CT-2-generic-callable-materialize-bad.hir
+conformance/CT/CT-2-generic-callable-materialize-ok.hir
 conformance/CT/CT-2-heap-constant-two-reads.hir
 conformance/CT/CT-2-keyed-materialization-aggregate.hir
 conformance/CT/CT-2-keyed-materialization-counted-value.hir
@@ -857,6 +865,8 @@ conformance/GEN/GEN-1-flat-string-root-bad.hir
 conformance/GEN/GEN-1-flat-wrapper-record-bad.hir
 conformance/GEN/GEN-1-flat-wrapper-record-ok.hir
 conformance/GEN/GEN-1-float-data.hir
+conformance/GEN/GEN-1-generic-callable-bound-bad.hir
+conformance/GEN/GEN-1-generic-callable-bound-ok.hir
 conformance/GEN/GEN-1-generic-float-ieee.hir
 conformance/GEN/GEN-1-inert-capability-bad.hir
 conformance/GEN/GEN-1-inert-capability-ok.hir
@@ -984,6 +994,8 @@ conformance/GEN/GEN-4-noalloc-generic-record.hir
 conformance/GEN/GEN-4-noalloc-generic-tuple.hir
 conformance/GEN/GEN-4-noalloc-unbounded-identity.hir
 conformance/GEN/GEN-5-acyclic-growth.hir
+conformance/GEN/GEN-5-generic-callable-growing-bad.hir
+conformance/GEN/GEN-5-generic-callable-growing-ok.hir
 conformance/GEN/GEN-5-mutual-growth-bad.hir
 conformance/GEN/GEN-5-mutual-growth-ok.hir
 conformance/GEN/GEN-5-self-growth-bad.hir
@@ -1255,6 +1267,17 @@ conformance/LANG/LANG-2-expression-type-arguments-bad.hir
 conformance/LANG/LANG-2-expression-type-arguments-ok.hir
 conformance/LANG/LANG-2-float-context-bad.hir
 conformance/LANG/LANG-2-float-context-ok.hir
+conformance/LANG/LANG-2-generic-callable-ambiguous-bad.hir
+conformance/LANG/LANG-2-generic-callable-ambiguous-ok.hir
+conformance/LANG/LANG-2-generic-callable-borrow-run.hir
+conformance/LANG/LANG-2-generic-callable-context-run.hir
+conformance/LANG/LANG-2-generic-callable-lexical-bad.hir
+conformance/LANG/LANG-2-generic-callable-lexical-ok.hir
+conformance/LANG/LANG-2-generic-callable-owned-run.hir
+conformance/LANG/LANG-2-generic-callable-result-error-run.hir
+conformance/LANG/LANG-2-generic-callable-result-nested-run.hir
+conformance/LANG/LANG-2-generic-callable-size-bad.hir
+conformance/LANG/LANG-2-generic-callable-size-run.hir
 conformance/LANG/LANG-2-generic-function-value-bad.hir
 conformance/LANG/LANG-2-generic-function-value-ok.hir
 conformance/LANG/LANG-2-generic-inference-sources.hir
@@ -1418,6 +1441,10 @@ conformance/LANG/LANG-7-exhaustive-product-options-run.hir
 conformance/LANG/LANG-7-exhaustive-product-record-run.hir
 conformance/LANG/LANG-7-field-locality-bad.hir
 conformance/LANG/LANG-7-field-locality-ok.hir
+conformance/LANG/LANG-7-generic-callable-conflict-bad.hir
+conformance/LANG/LANG-7-generic-callable-conflict-ok.hir
+conformance/LANG/LANG-7-generic-callable-passing-bad.hir
+conformance/LANG/LANG-7-generic-callable-passing-ok.hir
 conformance/LANG/LANG-7-generic-size-context-conflict.hir
 conformance/LANG/LANG-7-generic-type-context-conflict.hir
 conformance/LANG/LANG-7-graphemes-string-bad.hir
@@ -1857,6 +1884,8 @@ conformance/MEM/MEM-5-function-field-call-bad.hir
 conformance/MEM/MEM-5-function-field-call-ok.hir
 conformance/MEM/MEM-5-function-value-noalloc-parameter-bad.hir
 conformance/MEM/MEM-5-function-value-noalloc-parameter-ok.hir
+conformance/MEM/MEM-5-generic-callable-allocation-bad.hir
+conformance/MEM/MEM-5-generic-callable-allocation-ok.hir
 conformance/MEM/MEM-5-generic-cleanup-bad.hir
 conformance/MEM/MEM-5-generic-cleanup-ok.hir
 conformance/MEM/MEM-5-graphemes-cleanup-bad.hir
@@ -2173,6 +2202,8 @@ conformance/MODE/MODE-1-fresh-local-receiver-ok.hir
 conformance/MODE/MODE-1-fresh-local-receiver-run.hir
 conformance/MODE/MODE-1-function-value-local-result-bad.hir
 conformance/MODE/MODE-1-function-value-local-result-ok.hir
+conformance/MODE/MODE-1-generic-callable-relation-bad.hir
+conformance/MODE/MODE-1-generic-callable-relation-ok.hir
 conformance/MODE/MODE-1-generic-flat-tuple-through-block-local-bad.hir
 conformance/MODE/MODE-1-global-acquired-borrow-global-bad.hir
 conformance/MODE/MODE-1-global-acquired-borrow-local-ok.hir
@@ -2415,6 +2446,8 @@ conformance/MODE/MODE-2-borrowed-part-argument-keeps-unique-ok.hir
 conformance/MODE/MODE-2-box-inferred-copy-ok.hir
 conformance/MODE/MODE-2-box-payload-unique-bad.hir
 conformance/MODE/MODE-2-box-payload-unique-ok.hir
+conformance/MODE/MODE-2-callable-annotation-header-bad.hir
+conformance/MODE/MODE-2-callable-annotation-header-ok.hir
 conformance/MODE/MODE-2-callable-parameter-unique-bad.hir
 conformance/MODE/MODE-2-callable-parameter-unique-ok.hir
 conformance/MODE/MODE-2-called-closure-copy-ok.hir
@@ -2467,6 +2500,10 @@ conformance/MODE/MODE-2-flat-copy-preserves-unique-ok.hir
 conformance/MODE/MODE-2-fresh-aggregate-run.hir
 conformance/MODE/MODE-2-fresh-counted-element-write-unique-ok.hir
 conformance/MODE/MODE-2-fresh-counted-record-field-write-unique-ok.hir
+conformance/MODE/MODE-2-generic-callable-preserves-unique-bad.hir
+conformance/MODE/MODE-2-generic-callable-preserves-unique-ok.hir
+conformance/MODE/MODE-2-generic-callable-unique-bad.hir
+conformance/MODE/MODE-2-generic-callable-unique-ok.hir
 conformance/MODE/MODE-2-inferred-box-block-ok.hir
 conformance/MODE/MODE-2-inferred-box-branch-ok.hir
 conformance/MODE/MODE-2-inferred-box-call-part-ok.hir
@@ -2667,6 +2704,8 @@ conformance/MODE/MODE-4-error-mapper-occurrence-ok.hir
 conformance/MODE/MODE-4-external-opaque-sendable-bad.hir
 conformance/MODE/MODE-4-external-opaque-sendable-ok.hir
 conformance/MODE/MODE-4-flat-copy.hir
+conformance/MODE/MODE-4-generic-callable-sendable-bad.hir
+conformance/MODE/MODE-4-generic-callable-sendable-ok.hir
 conformance/MODE/MODE-4-global-capability.hir
 conformance/MODE/MODE-4-header-parameter-callable-bad.hir
 conformance/MODE/MODE-4-header-parameter-callable-run.hir
@@ -4316,6 +4355,8 @@ conformance/SER/SER-1-external-opaque-serializable-bad.hir
 conformance/SER/SER-1-external-opaque-serializable-ok.hir
 conformance/SER/SER-1-flat-opt-in-bad.hir
 conformance/SER/SER-1-flat-opt-in-ok.hir
+conformance/SER/SER-1-generic-callable-bound-bad.hir
+conformance/SER/SER-1-generic-callable-bound-ok.hir
 conformance/SER/SER-1-generic-schema-bad.hir
 conformance/SER/SER-1-generic-schema-ok.hir
 conformance/SER/SER-1-instant-bad.hir

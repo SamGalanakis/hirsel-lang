@@ -152,7 +152,10 @@ impl QueryEngine {
                     }
                     if matches!(
                         (&value, &root.kind),
-                        (Value::Closure { .. }, TypeKind::Function(_))
+                        (
+                            Value::Closure { .. } | Value::FunctionReference(_),
+                            TypeKind::Function(_)
+                        )
                     ) {
                         return Err(non_data(site));
                     }

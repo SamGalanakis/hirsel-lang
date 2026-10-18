@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+@preserves_unique(xs)
+fn keep[T: plain](mut xs: List[T], value: T) {
+  list.push(mut xs, value)
+}
+
+fn need(mut xs: unique List[u64]) {}
+
+fn example(mut xs: unique List[u64]) {
+  let f: fn(mut List[u64], u64) uses {} = keep
+  f(mut xs, 1)
+  need(mut xs)
+}

@@ -1,0 +1,27 @@
+// rule: LANG-2
+// expect: run
+fn empty[T]() -> List[T] {
+  []
+}
+
+fn apply[T](f: fn(take T) -> T uses {}, take value: T) -> T uses {} {
+  f(take value)
+}
+
+fn identity[T](take value: T) -> T {
+  value
+}
+
+fn specialize[T]() -> fn(take T) -> T uses {} {
+  identity
+}
+
+pub fn main() -> Result[(), String] {
+  let make: fn() -> List[u8] uses {} = empty
+  failure.check(list.len(make()) == 0, Bounds())
+  let nested: fn(fn(take u64) -> u64 uses {}, take u64) -> u64 uses {} = apply
+  failure.check(nested(identity, 23) == 23, Bounds())
+  let f: fn(take u64) -> u64 uses {} = specialize()
+  failure.check(f(29) == 29, Bounds())
+  Ok(())
+}

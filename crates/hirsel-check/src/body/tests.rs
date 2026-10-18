@@ -280,3 +280,20 @@ fn shape_mismatches_print_both_source_types() {
         );
     }
 }
+
+#[test]
+fn generic_function_value_ambiguity_names_the_missing_parameter() {
+    for (declaration, missing) in [
+        ("fn id[T, Missing](take x: T) -> T { x }", "Missing"),
+        ("fn id[T, count: size](take x: T) -> T { x }", "count"),
+    ] {
+        let source =
+            format!("{declaration}\nfn main() {{ let f: fn(take u64) -> u64 uses {{}} = id }}");
+        let (diagnostics, _, map) = support::check_source(&source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.rule.as_str(), "LANG-2");
+        assert_eq!(map.slice(diagnostic.primary), Some("id"));
+        assert!(diagnostic.message.contains(missing), "{diagnostic:?}");
+    }
+}

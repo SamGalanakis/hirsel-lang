@@ -1,0 +1,6 @@
+// rule: GEN-5
+// expect: reject GEN-5 at line 4
+fn grow[T: plain](value: T) {
+  let f: fn((T, T)) uses {} = grow
+  f((value, value))
+}

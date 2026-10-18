@@ -757,3 +757,7 @@ whose module and name duplicate core, including unused and private declarations;
 versioned DefPaths and signature identities remain unchanged.
 
 RuntimeTypes retains the checked nominal signature snapshots needed to specialize SER-2 schemas. These declarations come from the registry and source program, independently of incoming bytes.
+
+Callable materialization reports CT-2 for named function references as well as
+closures. Compile-time computations may invoke a contextually instantiated generic
+reference and publish its ordinary data result; callable constants remain excluded.

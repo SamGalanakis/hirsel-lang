@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: accept
+fn discard[T: sendable](take value: T) {}
+
+fn example() {
+  let f: fn(take u64) uses {} = discard
+}

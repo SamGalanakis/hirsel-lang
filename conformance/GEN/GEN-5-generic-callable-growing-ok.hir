@@ -1,0 +1,6 @@
+// rule: GEN-5
+// expect: accept
+fn repeat[T: plain](value: T) {
+  let f: fn(T) uses {} = repeat
+  f(value)
+}

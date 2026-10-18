@@ -65,11 +65,109 @@ impl Checker<'_> {
             .expect("checked result authority");
         instantiate_parameter_captures(types, result, captures).expect("checked result captures")
     }
+    /// H inferred these actuals from the complete receiving header. Rebuild
+    /// the declaration with J's authority evidence before checking receipt.
+    fn instantiate_function_reference(&mut self, e: ExprId) {
+        let Some(instance) = self
+            .out
+            .body
+            .instantiations
+            .iter()
+            .find(|row| row.expression == e)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(signature) = self.read(&instance.callee) else {
+            return;
+        };
+        let SignatureKind::Function(declared) = &signature.kind else {
+            return;
+        };
+        let Some(ty) = self.ty(e) else { return };
+        let authorities: Vec<_> = instance
+            .arguments
+            .iter()
+            .map(|argument| match argument {
+                GenericArgument::Type(ty) => self.authority(*ty),
+                GenericArgument::Size(_) => AuthoritySummary::inert(),
+            })
+            .collect();
+        for (parameter, argument) in declared.generics.iter().zip(&instance.arguments) {
+            if let (GenericParameter::Type { bounds, .. }, GenericArgument::Type(actual)) =
+                (parameter, argument)
+            {
+                for bound in bounds {
+                    let (valid, rule) = match bound {
+                        Bound::Sendable => (
+                            self.receives_sendability(*actual, &Sendability::Sendable),
+                            const { RuleId::of("MODE-4") },
+                        ),
+                        Bound::Inert => (
+                            subset(&self.authority(*actual), &AuthoritySummary::inert()),
+                            const { RuleId::of("CAP-2") },
+                        ),
+                        _ => continue,
+                    };
+                    if !valid {
+                        self.error(
+                            rule,
+                            self.span(e),
+                            "function value actual lacks its declared bound",
+                        );
+                    }
+                }
+            }
+        }
+        let mut function = declared.clone();
+        for parameter in &mut function.parameters {
+            parameter.ty = import_type(&signature.types, parameter.ty, &mut self.out.body.types)
+                .expect("checked function reference parameter");
+            parameter.ty = self
+                .substitute(parameter.ty, &instance.arguments, &authorities)
+                .expect("checked function reference instantiation");
+        }
+        let result = import_type(&signature.types, function.result, &mut self.out.body.types)
+            .expect("checked function reference result");
+        function.result = self
+            .substitute(result, &instance.arguments, &authorities)
+            .expect("checked function reference result instantiation");
+        function.error = result_error(
+            &self.out.body.types,
+            function.result,
+            &signature.metadata.roles,
+        );
+        let parameters: Vec<_> = (0..function.parameters.len())
+            .map(|ordinal| {
+                AuthoritySummary::Known(
+                    vec![AuthorityTerm::Parameter(ParameterRef::bound(ParamId(
+                        ordinal as u32,
+                    )))]
+                    .into(),
+                )
+            })
+            .collect();
+        function.authority = substitute_authority(&function.authority, &parameters, &authorities);
+        match &function.uses {
+            Uses::Unrestricted => function.uses = Uses::Only(function.authority.clone()),
+            Uses::Only(allowed) => {
+                let allowed = substitute_authority(allowed, &parameters, &authorities);
+                function.authority = allowed.clone();
+                function.uses = Uses::Only(allowed);
+            }
+        }
+        function.generics = vec![].into();
+        let mut row = self.out.body.types.get(ty).unwrap().clone();
+        row.kind = TypeKind::Function(function);
+        let ty = self.out.body.types.push(row);
+        self.set_ty(e, ty);
+    }
     /// A named function used as a value is the capture-free closure that
     /// forwards its parameters to the definition. No source expression
     /// states that call, so its result is typed here, at the value's own
     /// parameters, and published as the closure's body result.
     pub(super) fn forwarding_closure(&mut self, e: ExprId) {
+        self.instantiate_function_reference(e);
         let Some(ty) = self.ty(e) else { return };
         let TypeKind::Function(f) = self.out.body.types.get(ty).unwrap().kind.clone() else {
             return;

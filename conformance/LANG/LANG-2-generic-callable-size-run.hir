@@ -1,0 +1,12 @@
+// rule: LANG-2
+// expect: run
+fn measure[T: plain, n: size](value: Inline[T, n]) -> u64 {
+  n
+}
+
+pub fn main() -> Result[(), String] {
+  let f: fn(Inline[u8, 3]) -> u64 uses {} = measure
+  let xs: Inline[u8, 3] = [1u8, 2u8, 3u8]
+  failure.check(f(xs) == 3, Bounds())
+  Ok(())
+}

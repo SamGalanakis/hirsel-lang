@@ -560,24 +560,12 @@ impl Checker<'_, '_> {
         let kind = match (row.kind.clone(), self.kind(written)) {
             (TypeKind::Function(mut held), TypeKind::Function(promised)) => {
                 held.state_promises = promised.state_promises.clone();
-                let mut parameters = held.parameters.to_vec();
-                for (parameter, promised) in parameters.iter_mut().zip(promised.parameters.iter()) {
-                    parameter.ty = self.written_promises(parameter.ty, promised.ty);
-                }
-                held.parameters = parameters.into();
-                let mut result = self.body.types.get(held.result).unwrap().clone();
-                if let Some(selection @ ErasedCaptures::FromArguments(_)) = self
-                    .body
-                    .types
-                    .get(promised.result)
-                    .unwrap()
-                    .erased_captures
-                    .clone()
-                {
-                    result.erased_captures = Some(selection);
-                    held.result = self.body.types.push(result);
-                }
-                held.result = self.written_promises(held.result, promised.result);
+                // A callable header is the binding's declared contract. The
+                // initializer keeps its actual header for I/J's receipt check;
+                // omitted modes in this header cannot inherit its promises.
+                held.parameters = promised.parameters;
+                held.result = promised.result;
+                held.error = promised.error;
                 TypeKind::Function(held)
             }
             (TypeKind::Tuple(parts), TypeKind::Tuple(promised)) => TypeKind::Tuple(
@@ -1236,16 +1224,10 @@ impl Checker<'_, '_> {
         let ty = match kind {
             E::Path(path) => {
                 let ty = self.path_type(id, &path, expected, frame, false, true)?;
-                // Function types have no generic binders and expressions take no
-                // type arguments (LANG-2), so only a direct call instantiates.
-                // Spec #42 asks whether an expected function type may as well.
-                if matches!(self.kind(ty), TypeKind::Function(f) if !f.generics.is_empty()) {
-                    self.report(
-                        const { RuleId::of("LANG-2") },
-                        self.span(id),
-                        "a generic function takes its type arguments only from a direct call",
-                    );
-                    self.error()
+                if let TypeKind::Function(f) = self.kind(ty)
+                    && !f.generics.is_empty()
+                {
+                    self.instantiate_function_value(id, f, expected)?
                 } else {
                     ty
                 }

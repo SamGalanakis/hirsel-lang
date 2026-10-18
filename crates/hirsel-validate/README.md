@@ -812,3 +812,7 @@ SEM-3 format associations independently imply the same uniqueness promise for
 the formatting function's second parameter. V reconstructs the association from
 the receiver and nominal signature snapshots, both at direct calls and when
 re-proving the function body; no source attribute or producer fact is trusted.
+
+FunctionReference derives its error channel from the substituted result, including
+an abstract generic result instantiated as Result. Its callable contract is still
+replayed independently from the declaration and actual arguments.

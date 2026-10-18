@@ -1,0 +1,7 @@
+// rule: CT-2
+// expect: reject CT-2 at line 7
+fn identity[T: plain](value: T) -> T {
+  value
+}
+
+const CALLBACK: fn(u64) -> u64 uses {} = identity

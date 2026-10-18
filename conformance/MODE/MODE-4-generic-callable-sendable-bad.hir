@@ -1,0 +1,7 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 6
+fn discard[T: sendable](take value: T) {}
+
+fn example() {
+  let f: fn(take List[String]) uses {} = discard
+}

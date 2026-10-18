@@ -1,0 +1,17 @@
+// rule: LANG-2
+// expect: run
+fn identity[T](take value: T) -> T {
+  value
+}
+
+pub fn main() -> Result[(), String] {
+  let f: fn(take String) -> String uses {} = identity
+  let input = "hello"
+  let returned = f(take input)
+  failure.check(returned == "hello", Bounds())
+  let numbers: List[u64] = [37u64, 41u64]
+  let g: fn(take List[u64]) -> List[u64] uses {} = identity
+  let kept_numbers = g(take numbers)
+  failure.check(list.len(kept_numbers) == 2, Bounds())
+  Ok(())
+}

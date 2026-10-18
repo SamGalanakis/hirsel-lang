@@ -1,0 +1,14 @@
+// rule: LANG-2
+// expect: run
+fn identity[T](take value: T) -> T {
+  value
+}
+
+pub fn main() -> Result[(), String] {
+  let f: fn(take Result[u64, String]) -> Result[u64, String] uses {} = identity
+  let number = f(Ok(43u64))?
+  failure.check(number == 43, Bounds())
+  let failed = f(Error("kept"))
+  failure.check(failed == Error("kept"), Bounds())
+  Ok(())
+}

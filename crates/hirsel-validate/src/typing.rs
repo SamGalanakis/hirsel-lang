@@ -2667,9 +2667,8 @@ impl<'a> Checker<'a> {
                     return;
                 };
                 function.result = result;
-                if let Some(error) = function.error {
-                    function.error = self.imported(&signature.types, error, &mut store, arguments);
-                }
+                function.error =
+                    hirsel_types::result_error(&store, function.result, &signature.metadata.roles);
                 if !arguments.is_empty() {
                     let type_authorities: Vec<_> = arguments
                         .iter()
