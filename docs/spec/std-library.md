@@ -72,6 +72,7 @@ N fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of cloc
 N fn time.deadline(clock: MonotonicClock, interval: time.Duration) -> Result[Instant of clock, time.SleepError]
 N fn time.sleep(clock: MonotonicClock, interval: time.Duration) -> Result[(), time.SleepError]
 fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src
+fn bytes.from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {}
 N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
 N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
@@ -484,7 +485,9 @@ Scalar simple-case helpers and ASCII-only string helpers retain their meanings.
 ## Bytes, maps, lists and strings
 
 `bytes.replace(src, old, new)` scans left to right, replaces nonoverlapping matches, and
-fails SEM-3 for an empty pattern. `map.same_entries` compares two maps as sets of entries.
+fails SEM-3 for an empty pattern. `bytes.from_inline(xs)` copies a fixed-size
+`Inline[u8, n]`, such as a digest, into a fresh `Bytes`; an `Inline` never converts
+implicitly. `map.same_entries` compares two maps as sets of entries.
 
 `std@1/list` provides `reverse`, `rotate` (left rotation by `amount`), `sort` (in place,
 unstable, `O(n log n)`, by a noalloc comparator), `binary_search` (the first equal element
@@ -556,22 +559,22 @@ fn bufio.read_more[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List
 @preserves_unique(out) fn bufio.read[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,ReadError[E]]
 @preserves_unique(out) fn bufio.read_exact[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], count: u64) -> Result[(),ReadError[E]]
 @preserves_unique(out) fn bufio.read_until[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[E]]
-fn bufio.read_line[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[unique String,ReadError[E]]
+fn bufio.read_line[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[Option[unique String],ReadError[E]]
 fn bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[u64,ReadError[NetError]]
 @preserves_unique(out) fn bufio.stream_read(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[NetError]]
 @preserves_unique(out) fn bufio.stream_read_exact(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[NetError]]
 @preserves_unique(out) fn bufio.stream_read_until(n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[NetError]]
-fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[unique String,ReadError[NetError]]
+fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[Option[unique String],ReadError[NetError]]
 fn bufio.file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Result[u64,ReadError[FileError]]
 @preserves_unique(out) fn bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[FileError]]
 @preserves_unique(out) fn bufio.file_read_exact(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[FileError]]
 @preserves_unique(out) fn bufio.file_read_until(d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[FileError]]
-fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[unique String,ReadError[FileError]]
+fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[Option[unique String],ReadError[FileError]]
 fn bufio.stdin_read_more(s: Stdin, mut r: Reader, max: u64) -> Result[u64,ReadError[InputError]]
 @preserves_unique(out) fn bufio.stdin_read(s: Stdin, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[InputError]]
 @preserves_unique(out) fn bufio.stdin_read_exact(s: Stdin, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[InputError]]
 @preserves_unique(out) fn bufio.stdin_read_until(s: Stdin, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[InputError]]
-fn bufio.stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[unique String,ReadError[InputError]]
+fn bufio.stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[Option[unique String],ReadError[InputError]]
 ```
 
 `new(0)` uses capacity one. Capacity bounds each refill, not accumulated unread data.
@@ -586,7 +589,8 @@ output. Zero `max` or `count` succeeds without calling the source. `read_until` 
 through the delimiter, including it, or through EOF, and returns the appended count.
 Its limit bounds newly appended bytes; `Limit` preserves partial output and leaves the
 next byte unread. A zero limit returns `Limit` without reading. `read_line` applies that
-loop to LF and decodes owned UTF-8, preserving the LF; EOF before any bytes yields `""`.
+loop to LF and decodes owned UTF-8, preserving the LF; EOF before any bytes yields
+`None()`, as `input.read_line` does, so `while let Some(line) = ..?` reads every line.
 Invalid UTF-8 returns `InvalidUtf8` after consuming those bytes. All reads propagate source
 errors as `Source`; operations taking an output list retain already appended bytes. The Stream adapters use
 `core@1/net.read` with the same rules and preserve the stream's Net brand.
@@ -600,7 +604,7 @@ Discard buffered state before seeking or otherwise reading the underlying File d
 A line read over an existing branded Stream needs only persistent buffer state:
 
 ```hirsel
-fn line(n: Net, mut stream: Stream of n) -> Result[String, bufio.ReadError[NetError]] {
+fn line(n: Net, mut stream: Stream of n) -> Result[Option[String], bufio.ReadError[NetError]] {
   let mut reader = bufio.new(4096)
   bufio.stream_read_line(n, mut stream, mut reader, 8192)
 }
@@ -1053,6 +1057,7 @@ fn sha256.new() -> State uses {}
 fn sha256.update(mut state: State, data: Bytes) -> () uses {}
 fn sha256.finish(take state: State) -> Inline[u8, 32] uses {}
 fn sha256.digest(data: Bytes) -> Inline[u8, 32] uses {}
+fn sha256.digest_hex(data: Bytes) -> unique String uses {}
 ```
 
 Update borrows bytes and accepts an empty chunk. Before changing state it checks
@@ -1060,7 +1065,8 @@ that total input remains at most 2^61-1 bytes, the maximum whole-byte message
 whose bit length fits SHA-256's 64-bit length field; exceeding it fails SEM-1.
 Finish consumes state, pads once, and emits exactly 32 bytes in big-endian word
 order. Round additions wrap deliberately at 32 bits. `digest` is the one-shot
-form over the same kernel. Hexadecimal rendering is a separate codec. This is a
+form over the same kernel. Hexadecimal rendering is a separate codec;
+`digest_hex` is `hex.encode(bytes.from_inline(digest(data)))`. This is a
 digest, without password-hashing or signature operations.
 
 ## ASCII radix digits

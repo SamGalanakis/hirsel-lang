@@ -1,6 +1,6 @@
 // rule: CAP-1
 // expect: run
-// stdout: line []
+// stdout: line eof
 // stdout: until 0 []
 // stdout: exact eof
 // stdout: more 0
@@ -29,7 +29,8 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let s = io.stdin(rt) ? Grant
   let mut r = bufio.new(4)
   let line = match bufio.stdin_read_line(s, mut r, 64) {
-    Ok(line) => f"[{line}]",
+    Ok(Some(line)) => f"[{line}]",
+    Ok(None()) => "eof",
     Error(_) => "error",
   }
   out.print(output, f"line {line}\n") ? Output

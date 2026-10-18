@@ -17,10 +17,10 @@ pub fn main(t: Test) -> Result[(), ReadFailure] {
     "last"
   ]
   for line in expected {
-    test.check(t, bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == line)
+    test.check(t, bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == Some(line))
   }
-  test.check(t, bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == "")
-  test.check(t, bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == "")
+  test.check(t, bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == None())
+  test.check(t, bufio.file_read_line(d, mut f, mut r, 64) ? Buffered == None())
   file.seek(d, mut f, 0) ? Storage
   r = bufio.new(3)
   test.check(t, bufio.file_read_more(d, mut f, mut r, 99) ? Buffered == 3)
@@ -38,6 +38,6 @@ pub fn main(t: Test) -> Result[(), ReadFailure] {
   r = bufio.new(3)
   test.check(t, bufio.file_read_line(d, mut f, mut r, 2) == Error(Limit()))
   test.check(t, bufio.contents(r) == b"r")
-  test.check(t, bufio.file_read_line(d, mut f, mut r, 16) ? Buffered == "rst\n")
+  test.check(t, bufio.file_read_line(d, mut f, mut r, 16) ? Buffered == Some("rst\n"))
   Ok(())
 }

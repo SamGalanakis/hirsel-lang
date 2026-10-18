@@ -53,15 +53,6 @@ fn memory_refill(mut source: MemorySource, mut out: List[u8], max: u64) -> Resul
   Ok(count)
 }
 
-fn digest_hex(data: Bytes) -> String {
-  let digest = std@1/sha256.digest(data)
-  let mut out: List[u8] = []
-  for byte in digest {
-    list.push(mut out, byte)
-  }
-  std@1/hex.encode(bytes.from_list(take out))
-}
-
 fn convert[S](
   mut source: S,
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, Error],
@@ -120,7 +111,7 @@ fn convert[S](
           Error(error) => return Error(Encoding(error, copy row[j])),
         }
         let canonical = std@1/base64.encode(data, Standard(), Required())
-        digest = digest_hex(data)
+        digest = std@1/sha256.digest_hex(data)
         map.insert(mut object, copy headers[j], Text(take canonical))
       } else {
         map.insert(mut object, copy headers[j], Text(copy row[j]))

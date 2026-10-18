@@ -1,7 +1,7 @@
 // rule: PROV-1
 // expect: reject PROV-1 at line 8
 fn line(d: Dir, other: Dir, mut f: File of d) -> Result[
-  String,
+  Option[String],
   bufio.ReadError[FileError]
 ] {
   let mut r = bufio.new(3)

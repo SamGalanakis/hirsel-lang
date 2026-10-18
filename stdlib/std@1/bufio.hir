@@ -183,11 +183,13 @@ pub fn read_line[S, E](
   mut source: S,
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
   limit: u64
-) -> Result[unique String, ReadError[E]] uses {refill} {
+) -> Result[Option[unique String], ReadError[E]] uses {refill} {
   let mut out: List[u8] = []
-  let _ = read_until(mut r, mut source, refill, 10u8, mut out, limit)?
+  if read_until(mut r, mut source, refill, 10u8, mut out, limit)? == 0 {
+    return Ok(None())
+  }
   match core@1/string.from_bytes(core@1/bytes.from_list(take out)) {
-    Ok(text) => Ok(take text),
+    Ok(text) => Ok(Some(take text)),
     Error(_) => Error(InvalidUtf8()),
   }
 }
@@ -256,7 +258,7 @@ pub fn stream_read_exact(
 }
 
 pub fn stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[
-  unique String,
+  Option[unique String],
   ReadError[NetError]
 ] {
   read_line(
@@ -358,7 +360,7 @@ pub fn file_read_exact(
 }
 
 pub fn file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[
-  unique String,
+  Option[unique String],
   ReadError[FileError]
 ] {
   read_line(
@@ -458,7 +460,7 @@ pub fn stdin_read_exact(s: Stdin, mut r: Reader, mut out: List[u8], count: u64) 
 }
 
 pub fn stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[
-  unique String,
+  Option[unique String],
   ReadError[InputError]
 ] {
   let mut source = s

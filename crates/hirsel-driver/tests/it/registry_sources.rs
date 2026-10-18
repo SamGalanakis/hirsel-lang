@@ -154,6 +154,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "time.deadline",
                 "time.sleep",
                 "bytes.replace",
+                "bytes.from_inline",
                 "map.same_entries",
                 "unicode.graphemes",
                 "json.parse",

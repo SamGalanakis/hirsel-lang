@@ -210,6 +210,21 @@ fn report(query: Query, levels: Map[String, u64], messages: Map[String, u64]) ->
   }
 }
 
+fn read_line(
+  d: Dir,
+  mut f: File of d,
+  mut reader: bufio.Reader,
+  file: String,
+  number: u64
+) -> Result[Option[String], String] {
+  match bufio.file_read_line(d, mut f, mut reader, MAX_LINE) {
+    Ok(line) => Ok(take line),
+    Error(Limit()) => Error(f"line {number + 1}: too long"),
+    Error(InvalidUtf8()) => Error(f"line {number + 1}: invalid UTF-8"),
+    Error(_) => Error(f"cannot read {file}"),
+  }
+}
+
 fn run(rt: Io, args: Args) -> Result[String, String] {
   let query = parse_args(args)?
   let Ok(dir) = io.dir(rt, path.of("")) else {
@@ -224,16 +239,7 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
   let mut levels: Map[String, u64] = map.empty()
   let mut messages: Map[String, u64] = map.empty()
   let mut number = 0u64
-  while true {
-    let line = match bufio.file_read_line(dir, mut f, mut reader, MAX_LINE) {
-      Ok(l) => take l,
-      Error(Limit()) => return Error(f"line {number + 1}: too long"),
-      Error(InvalidUtf8()) => return Error(f"line {number + 1}: invalid UTF-8"),
-      Error(_) => return Error(f"cannot read {query.file}"),
-    }
-    if string.byte_len(line) == 0 {
-      break
-    }
+  while let Some(line) = read_line(dir, mut f, mut reader, query.file, number)? {
     number += 1
     let Some(entry) = parse_line(number, line)? else {
       continue

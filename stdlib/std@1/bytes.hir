@@ -28,3 +28,15 @@ pub fn replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src {
   }
   core@1/bytes.from_list(take builder)
 }
+
+// A copy, so a fixed-size result such as a digest reaches every Bytes consumer.
+pub fn from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, n)
+  let mut i: u64 = 0
+  while i < n {
+    core@1/list.push(mut out, xs[i])
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}

@@ -1,21 +1,13 @@
 // rule: SEM-3
 // expect: run
 // Zig SHA-256 reference vectors and padding boundaries.
-fn digest_hex(data: Inline[u8, 32]) -> String {
-  let mut out: List[u8] = []
-  for byte in data {
-    list.push(mut out, byte)
-  }
-  std@1/hex.encode(bytes.from_list(take out))
-}
-
 pub fn main() -> Result[(), ()] {
   failure.check(
-    digest_hex(std@1/sha256.digest(string.as_bytes(""))) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    std@1/sha256.digest_hex(string.as_bytes("")) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     TextInvariant()
   )
   failure.check(
-    digest_hex(std@1/sha256.digest(string.as_bytes("abc"))) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    std@1/hex.encode(bytes.from_inline(std@1/sha256.digest(string.as_bytes("abc")))) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     TextInvariant()
   )
   let mut state = std@1/sha256.new()
@@ -24,7 +16,7 @@ pub fn main() -> Result[(), ()] {
   std@1/sha256.update(mut state, b"")
   std@1/sha256.update(mut state, b"c")
   failure.check(
-    digest_hex(std@1/sha256.finish(take state)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    std@1/hex.encode(bytes.from_inline(std@1/sha256.finish(take state))) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     TextInvariant()
   )
   Ok(())

@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-830 exported definitions; 266 variants.
+832 exported definitions; 266 variants.
 
 ## Types and roots
 
@@ -1700,9 +1700,9 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2
 
 <a id="def-std_401_2fbufio_2ffile_5fread_5fline"></a>
 
-- `pub fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[ unique String, ReadError[FileError] ]`
+- `pub fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[ Option[unique String], ReadError[FileError] ]`
 
-References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
 <a id="def-std_401_2fbufio_2ffile_5fread_5fmore"></a>
 
@@ -1736,9 +1736,9 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 
 <a id="def-std_401_2fbufio_2fread_5fline"></a>
 
-- `pub fn bufio.read_line[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], limit: u64 ) -> Result[unique String, ReadError[E]] uses {refill}`
+- `pub fn bufio.read_line[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], limit: u64 ) -> Result[Option[unique String], ReadError[E]] uses {refill}`
 
-References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
 <a id="def-std_401_2fbufio_2fread_5fmore"></a>
 
@@ -1766,9 +1766,9 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/List`](#
 
 <a id="def-std_401_2fbufio_2fstdin_5fread_5fline"></a>
 
-- `pub fn bufio.stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[ unique String, ReadError[InputError] ]`
+- `pub fn bufio.stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[ Option[unique String], ReadError[InputError] ]`
 
-References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
 <a id="def-std_401_2fbufio_2fstdin_5fread_5fmore"></a>
 
@@ -1796,9 +1796,9 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_
 
 <a id="def-std_401_2fbufio_2fstream_5fread_5fline"></a>
 
-- `pub fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[ unique String, ReadError[NetError] ]`
+- `pub fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[ Option[unique String], ReadError[NetError] ]`
 
-References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
 <a id="def-std_401_2fbufio_2fstream_5fread_5fmore"></a>
 
@@ -1814,6 +1814,12 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_
 
 
 ## bytes
+
+<a id="def-std_401_2fbytes_2ffrom_5finline"></a>
+
+- `pub fn bytes.from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
 
 <a id="def-core_401_2fbytes_2ffrom_5flist"></a>
 
@@ -4877,6 +4883,12 @@ Variant of scalar.ParseError.
 - `@noalloc pub fn sha256.digest(data: Bytes) -> Inline[u8, 32] uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha256_2fdigest_5fhex"></a>
+
+- `pub fn sha256.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fsha256_2ffinish"></a>
 

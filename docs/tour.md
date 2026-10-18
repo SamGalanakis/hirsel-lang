@@ -1064,7 +1064,7 @@ No stdout; exit 0 (all checks pass).
 File operations need both the `Dir` and its branded `File of dir`.
 `file.open` reads; `file.create` creates/truncates an append-only output.
 Keep one `bufio.Reader` per source while unread bytes remain. Reads may be short;
-line helpers keep their newline. Bound accumulated input separately from buffer
+line helpers keep their newline and return `None` at EOF, so `while let` reads every line. Bound accumulated input separately from buffer
 capacity. Discard buffer state before seeking or reading the file directly.
 
 The fake directory below confines effects to the test. `file.create_atomic`
@@ -1082,12 +1082,13 @@ pub fn main(t: Test) -> Result[(), AppError] {
   let dir = test.dir(t, [(path.of("input.txt"), b"one\ntwo\n")])
   let mut f = file.open(dir, path.of("input.txt")) ? Files
   let mut reader = bufio.new(4)
-  let first = bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
-  let second = bufio.file_read_line(dir, mut f, mut reader, 32) ? Read
-  test.check(t, first == "one\n")
-  test.check(t, second == "two\n")
+  let mut lines: List[String] = []
+  while let Some(line) = bufio.file_read_line(dir, mut f, mut reader, 32) ? Read {
+    list.push(mut lines, take line)
+  }
+  test.check(t, lines == ["one\n", "two\n"])
   let mut output = file.create_atomic(dir, path.of("output.txt")) ? Files
-  file.write_all(dir, mut output, string.as_bytes(first)) ? Files
+  file.write_all(dir, mut output, string.as_bytes(lines[0])) ? Files
   file.commit(dir, take output) ? Files
   test.check(t, file.read_bytes(dir, path.of("output.txt")) == Ok(b"one\n"))
   Ok(())
@@ -1108,7 +1109,7 @@ granted unset key (`Ok(None())`). Io alone grants neither stdin nor stdout.
 `input.read_line` returns `Some` for a final unterminated line and `None` at EOF,
 so `while let Some(line) = ..` reads every line. For lines with a length bound, keep
 one `bufio.Reader` and call `bufio.stdin_read_line(stdin, mut reader, limit)`, which
-returns `""` at EOF; `stdin_read_until`, `stdin_read_exact` and `stdin_read` follow
+also returns `None` at EOF; `stdin_read_until`, `stdin_read_exact` and `stdin_read` follow
 the file adapters. `Ok(None()) | Error(NotGranted())` below handles both kinds of
 absence in one arm.
 
@@ -1504,14 +1505,9 @@ pub fn trial(t: Test) -> Result[(), ()] {
     std@1/base64.decode(rows[1][0], Standard(), Required())
   )
   test.check(t, std@1/base64.encode(data, Standard(), Required()) == "YWJj")
-  let digest = std@1/sha256.digest(data)
-  let mut digest_bytes: List[u8] = []
-  for byte in digest {
-    list.push(mut digest_bytes, byte)
-  }
   test.check(
     t,
-    std@1/hex.encode(core@1/bytes.from_list(take digest_bytes)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    std@1/sha256.digest_hex(data) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
   )
   Ok(())
 }

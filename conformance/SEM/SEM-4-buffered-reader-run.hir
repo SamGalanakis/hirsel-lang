@@ -51,15 +51,15 @@ fn delimiters(t: Test) {
 fn lines(t: Test) {
   let mut source = input(b"a\nb\nc")
   let mut r = bufio.new(2)
-  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok("a\n"))
-  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok("b\n"))
-  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok("c"))
-  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok(""))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok(Some("a\n")))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok(Some("b\n")))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok(Some("c")))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok(None()))
   source = input(b"\xc3\xa9\n\xff\nok\n")
   r = bufio.new(1)
-  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok("é\n"))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok(Some("é\n")))
   test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Error(InvalidUtf8()))
-  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok("ok\n"))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 10) == Ok(Some("ok\n")))
 }
 
 fn exact_and_limits(t: Test) {
@@ -85,7 +85,7 @@ fn exact_and_limits(t: Test) {
   )
   test.check(t, out == [97, 98])
   test.check(t, bufio.contents(r) == b"c\n")
-  test.check(t, bufio.read_line(mut r, mut source, refill, 2) == Ok("c\n"))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 2) == Ok(Some("c\n")))
   test.check(t, bufio.read_exact(mut r, mut source, refill, mut out, 0) == Ok(()))
   test.check(t, bufio.read(mut r, mut source, refill, mut out, 0) == Ok(0))
 }
@@ -170,7 +170,7 @@ fn buffer_controls(t: Test) {
   test.check(t, snapshot == b"bcd" && bufio.buffered(r) == 3)
   bufio.consume(mut r, 18446744073709551615)
   test.check(t, snapshot == b"bcd" && bufio.buffered(r) == 0)
-  test.check(t, bufio.read_line(mut r, mut source, refill, 1) == Ok("e"))
+  test.check(t, bufio.read_line(mut r, mut source, refill, 1) == Ok(Some("e")))
   source = input(b"a")
   r = bufio.new(0)
   test.check(t, bufio.read_more(mut r, mut source, refill, 99) == Ok(1))

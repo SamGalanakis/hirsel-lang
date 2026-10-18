@@ -11,7 +11,7 @@ fn line(s: Stdin) -> Result[Option[unique String], InputError] {
 }
 
 fn net_line(n: Net, mut s: Stream of n, mut r: bufio.Reader) -> Result[
-  unique String,
+  Option[unique String],
   bufio.ReadError[NetError]
 ] {
   bufio.stream_read_line(n, mut s, mut r, 8192)

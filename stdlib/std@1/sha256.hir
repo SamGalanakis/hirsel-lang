@@ -383,3 +383,7 @@ pub fn digest(data: Bytes) -> Inline[u8, 32] uses {} {
   update(mut state, data)
   finish(take state)
 }
+
+pub fn digest_hex(data: Bytes) -> unique String uses {} {
+  std@1/hex.encode(std@1/bytes.from_inline(digest(data)))
+}
