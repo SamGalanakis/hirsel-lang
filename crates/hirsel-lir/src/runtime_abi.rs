@@ -272,6 +272,7 @@ pub enum CName {
     Audit,
     Failure,
     Codec,
+    ReportNode,
 }
 
 impl CName {
@@ -292,6 +293,7 @@ impl CName {
             Self::Audit => "hirsel_rt_v2_audit",
             Self::Failure => "hirsel_rt_v2_failure",
             Self::Codec => "hirsel_rt_v2_codec",
+            Self::ReportNode => "hirsel_rt_v2_report_node",
         }
     }
 }
@@ -389,6 +391,7 @@ pub enum RuntimeEntry {
     CallbackContext,
     /// A callback failed: the process ends (PROG-4).
     CallbackFailed,
+    ExitReport,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -459,7 +462,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 58] = [
+    pub const ALL: [RuntimeEntry; 59] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -518,6 +521,7 @@ impl RuntimeEntry {
         Self::ForeignEnter,
         Self::CallbackContext,
         Self::CallbackFailed,
+        Self::ExitReport,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -846,6 +850,19 @@ impl RuntimeEntry {
                 const { &[] },
             ),
             Self::CallbackFailed => ("hirsel_rt_v2_callback_failed", VOID, const { &[CTX] }),
+            Self::ExitReport => (
+                "hirsel_rt_v2_exit_report",
+                VOID,
+                const {
+                    &[
+                        CTX,
+                        p("value", ptr(N::U8, 1)),
+                        p("layout", U32),
+                        p("payload_offset", U64),
+                        p("node", cptr(N::ReportNode)),
+                    ]
+                },
+            ),
         };
         RuntimeDeclaration {
             entry: self,
@@ -954,4 +971,5 @@ snapshot_enum!(RuntimeEntry {
     ForeignEnter,
     CallbackContext,
     CallbackFailed,
+    ExitReport,
 });

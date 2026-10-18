@@ -76,7 +76,8 @@ Invariants:
   round-trip format and the digest input. It contains no TypeIds, addresses or
   host sizes, and re-encoding a decoded value is byte-identical.
 - `runtime_abi` transcribes `hirsel-rt/include/hirsel_rt_v2.h`; a test requires
-  every declaration, typedef and constant verbatim in that header. It holds
+  every declaration, typedef and constant verbatim in that header, including
+  the host exit-report registration and its typed report-node pointer. It holds
   the count word contract of compiled drop glue (`COUNT_OFFSET`,
   `COUNT_UNIQUE`, `COUNT_IMMORTAL`, `LAYOUT_OFFSET`), which the same test ties
   to the header's defines and offset assertions.
