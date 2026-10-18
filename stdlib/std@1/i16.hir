@@ -42,7 +42,7 @@ pub fn parse(text: String) -> Result[i16, scalar.ParseError] uses {} {
 @preserves_unique(out)
 pub fn format_into_spec(
   value: i16,
-  fill: u64,
+  fill: char,
   align: u64,
   width: u64,
   precision: u64,

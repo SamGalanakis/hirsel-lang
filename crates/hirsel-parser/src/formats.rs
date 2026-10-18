@@ -252,7 +252,7 @@ impl Parser<'_> {
                     segments: vec![mark],
                 }),
             );
-            let fill = self.constant(origin, fill);
+            let fill = self.fill(origin, fill);
             let align = self.constant(origin, align);
             let width = count(self, written.width, width)?;
             let pad = self.format_step(
@@ -271,11 +271,7 @@ impl Parser<'_> {
             );
             return Ok(self.synthetic_stmt(origin, StmtKind::Expr(block)));
         }
-        let mut values = vec![
-            hole,
-            self.constant(origin, fill),
-            self.constant(origin, align),
-        ];
+        let mut values = vec![hole, self.fill(origin, fill), self.constant(origin, align)];
         values.push(count(self, written.width, width)?);
         values.push(count(self, written.precision, precision)?);
         values.push(self.constant(origin, flags));
@@ -287,6 +283,13 @@ impl Parser<'_> {
             values,
         );
         Ok(self.synthetic_stmt(origin, StmtKind::Expr(call)))
+    }
+    /// The fill scalar as a `char` literal.
+    fn fill(&mut self, origin: Origin, scalar: u64) -> ExprId {
+        self.synthetic_expr(
+            origin,
+            ExprKind::Literal(Literal::Character(format!("'\\u{{{scalar:x}}}'"))),
+        )
     }
     fn constant(&mut self, origin: Origin, value: u64) -> ExprId {
         self.synthetic_expr(

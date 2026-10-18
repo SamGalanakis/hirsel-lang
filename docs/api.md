@@ -326,7 +326,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `@noalloc pub fn bool.format[n: size](value: bool, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` <!-- std@1/bool/format -->
 - `@preserves_unique(out) pub fn bool.format_into(value: bool, mut out: List[u8]) -> () uses {}` — Appends 'true' or 'false' to 'out'; to_string is that text. <!-- std@1/bool/format_into -->
-- `@preserves_unique(out) pub fn bool.format_into_spec( value: bool, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/bool/format_into_spec -->
+- `@preserves_unique(out) pub fn bool.format_into_spec( value: bool, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/bool/format_into_spec -->
 - `@noalloc pub fn bool.parse(text: String) -> Result[bool, scalar.ParseError] uses {}` <!-- std@1/bool/parse -->
 - `pub fn bool.to_string(value: bool) -> unique String uses {}` <!-- std@1/bool/to_string -->
 
@@ -472,7 +472,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn f32.floor(value: f32) -> f32 uses {}` <!-- std@1/f32/floor -->
 - `@noalloc pub fn f32.format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Floating text is an ordinary source algorithm over the four IEEE primitives. <!-- std@1/f32/format -->
 - `@preserves_unique(out) pub fn f32.format_into(value: f32, mut out: List[u8]) -> () uses {}` — Appends the shortest round-trip text of 'value' to 'out'; to_string is that text. <!-- std@1/f32/format_into -->
-- `@preserves_unique(out) pub fn f32.format_into_spec( value: f32, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/f32/format_into_spec -->
+- `@preserves_unique(out) pub fn f32.format_into_spec( value: f32, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/f32/format_into_spec -->
 - `@noalloc fn f32.from_bits(value: u32) -> f32` <!-- core@1/f32/from_bits -->
 - `@noalloc pub fn f32.parse(text: String) -> Result[f32, scalar.ParseError] uses {}` <!-- std@1/f32/parse -->
 - `@noalloc pub fn f32.round(value: f32) -> f32 uses {}` <!-- std@1/f32/round -->
@@ -488,7 +488,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn f64.floor(value: f64) -> f64 uses {}` <!-- std@1/f64/floor -->
 - `@noalloc pub fn f64.format[n: size](value: f64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Floating text is an ordinary source algorithm over the four IEEE primitives. <!-- std@1/f64/format -->
 - `@preserves_unique(out) pub fn f64.format_into(value: f64, mut out: List[u8]) -> () uses {}` — Appends the shortest round-trip text of 'value' to 'out'; to_string is that text. <!-- std@1/f64/format_into -->
-- `@preserves_unique(out) pub fn f64.format_into_spec( value: f64, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/f64/format_into_spec -->
+- `@preserves_unique(out) pub fn f64.format_into_spec( value: f64, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/f64/format_into_spec -->
 - `@noalloc fn f64.from_bits(value: u64) -> f64` <!-- core@1/f64/from_bits -->
 - `@noalloc pub fn f64.parse(text: String) -> Result[f64, scalar.ParseError] uses {}` <!-- std@1/f64/parse -->
 - `@noalloc pub fn f64.round(value: f64) -> f64 uses {}` <!-- std@1/f64/round -->
@@ -653,7 +653,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i128.checked_sub(a: i128, b: i128) -> Option[i128] uses {}` <!-- std@1/i128/checked_sub -->
 - `@noalloc pub fn i128.format[n: size](value: i128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i128/format -->
 - `@preserves_unique(out) pub fn i128.format_into(value: i128, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i128/format_into -->
-- `@preserves_unique(out) pub fn i128.format_into_spec( value: i128, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i128/format_into_spec -->
+- `@preserves_unique(out) pub fn i128.format_into_spec( value: i128, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i128/format_into_spec -->
 - `pub fn i128.format_radix(value: i128, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/i128/format_radix -->
 - `const i128.order: Order[i128]` <!-- core@1/i128/order -->
 - `@noalloc pub fn i128.parse(text: String) -> Result[i128, scalar.ParseError] uses {}` <!-- std@1/i128/parse -->
@@ -673,7 +673,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i16.checked_sub(a: i16, b: i16) -> Option[i16] uses {}` <!-- std@1/i16/checked_sub -->
 - `@noalloc pub fn i16.format[n: size](value: i16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i16/format -->
 - `@preserves_unique(out) pub fn i16.format_into(value: i16, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i16/format_into -->
-- `@preserves_unique(out) pub fn i16.format_into_spec( value: i16, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i16/format_into_spec -->
+- `@preserves_unique(out) pub fn i16.format_into_spec( value: i16, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i16/format_into_spec -->
 - `pub fn i16.format_radix(value: i16, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/i16/format_radix -->
 - `const i16.order: Order[i16]` <!-- core@1/i16/order -->
 - `@noalloc pub fn i16.parse(text: String) -> Result[i16, scalar.ParseError] uses {}` <!-- std@1/i16/parse -->
@@ -693,7 +693,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i32.checked_sub(a: i32, b: i32) -> Option[i32] uses {}` <!-- std@1/i32/checked_sub -->
 - `@noalloc pub fn i32.format[n: size](value: i32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i32/format -->
 - `@preserves_unique(out) pub fn i32.format_into(value: i32, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i32/format_into -->
-- `@preserves_unique(out) pub fn i32.format_into_spec( value: i32, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i32/format_into_spec -->
+- `@preserves_unique(out) pub fn i32.format_into_spec( value: i32, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i32/format_into_spec -->
 - `pub fn i32.format_radix(value: i32, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/i32/format_radix -->
 - `const i32.order: Order[i32]` <!-- core@1/i32/order -->
 - `@noalloc pub fn i32.parse(text: String) -> Result[i32, scalar.ParseError] uses {}` <!-- std@1/i32/parse -->
@@ -713,7 +713,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i64.checked_sub(a: i64, b: i64) -> Option[i64] uses {}` <!-- std@1/i64/checked_sub -->
 - `@noalloc pub fn i64.format[n: size](value: i64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i64/format -->
 - `@preserves_unique(out) pub fn i64.format_into(value: i64, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i64/format_into -->
-- `@preserves_unique(out) pub fn i64.format_into_spec( value: i64, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i64/format_into_spec -->
+- `@preserves_unique(out) pub fn i64.format_into_spec( value: i64, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i64/format_into_spec -->
 - `pub fn i64.format_radix(value: i64, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/i64/format_radix -->
 - `const i64.order: Order[i64]` <!-- core@1/i64/order -->
 - `@noalloc pub fn i64.parse(text: String) -> Result[i64, scalar.ParseError] uses {}` <!-- std@1/i64/parse -->
@@ -733,7 +733,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i8.checked_sub(a: i8, b: i8) -> Option[i8] uses {}` <!-- std@1/i8/checked_sub -->
 - `@noalloc pub fn i8.format[n: size](value: i8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/i8/format -->
 - `@preserves_unique(out) pub fn i8.format_into(value: i8, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/i8/format_into -->
-- `@preserves_unique(out) pub fn i8.format_into_spec( value: i8, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i8/format_into_spec -->
+- `@preserves_unique(out) pub fn i8.format_into_spec( value: i8, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/i8/format_into_spec -->
 - `pub fn i8.format_radix(value: i8, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/i8/format_radix -->
 - `const i8.order: Order[i8]` <!-- core@1/i8/order -->
 - `@noalloc pub fn i8.parse(text: String) -> Result[i8, scalar.ParseError] uses {}` <!-- std@1/i8/parse -->
@@ -791,12 +791,12 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn internal.float_decimal.render[n: size]( significand: u64, scale: i32, negative: bool, mut buffer: Inline[u8, n] ) -> Result[u64, scalar.FormatError] uses {}` — Number::toString fixed/scientific thresholds: https://tc39.es/ecma262/#sec-numeric-types-number-tostring <!-- std@1/internal/float_decimal/render -->
 - `@noalloc pub fn internal.float_decimal.shortest(m: u64, e: i32, asymmetric: bool) -> (u64, i32) uses {}` <!-- std@1/internal/float_decimal/shortest -->
 - `@noalloc pub fn internal.float_decimal.special[n: size](text: String, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` <!-- std@1/internal/float_decimal/special -->
-- `@preserves_unique(out) pub fn internal.format.begin( length: u64, negative: bool, prefix: String, fill: u64, align: u64, width: u64, flags: u64, mut out: List[u8] ) -> u64 uses {}` — Emits left padding, then the sign and radix prefix. <!-- std@1/internal/format/begin -->
-- `@preserves_unique(out) pub fn internal.format.fixed( mantissa: u64, exponent: i32, negative: bool, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` — Exact dyadic-to-decimal conversion reuses the same fixed bigint as shortest. <!-- std@1/internal/format/fixed -->
-- `@preserves_unique(out) pub fn internal.format.integer( value: u128, negative: bool, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/internal/format/integer -->
-- `@preserves_unique(out) pub fn internal.format.pad_from( start: u64, fill: u64, align: u64, width: u64, numeric: bool, mut out: List[u8] ) -> () uses {}` — Pads the text appended since byte 'start' to 'width' scalars. <!-- std@1/internal/format/pad_from -->
+- `@preserves_unique(out) pub fn internal.format.begin( length: u64, negative: bool, prefix: String, fill: char, align: u64, width: u64, flags: u64, mut out: List[u8] ) -> u64 uses {}` — Emits left padding, then the sign and radix prefix. <!-- std@1/internal/format/begin -->
+- `@preserves_unique(out) pub fn internal.format.fixed( mantissa: u64, exponent: i32, negative: bool, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` — Exact dyadic-to-decimal conversion reuses the same fixed bigint as shortest. <!-- std@1/internal/format/fixed -->
+- `@preserves_unique(out) pub fn internal.format.integer( value: u128, negative: bool, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/internal/format/integer -->
+- `@preserves_unique(out) pub fn internal.format.pad_from( start: u64, fill: char, align: u64, width: u64, numeric: bool, mut out: List[u8] ) -> () uses {}` — Pads the text appended since byte 'start' to 'width' scalars. <!-- std@1/internal/format/pad_from -->
 - `@noalloc pub fn internal.format.padding(width: u64, length: u64, align: u64, numeric: bool) -> (u64, u64) uses {}` <!-- std@1/internal/format/padding -->
-- `@preserves_unique(out) pub fn internal.format.repeat(mut out: List[u8], fill: u64, count: u64) -> () uses {}` — Padding and sign/prefix placement follow Rust core::fmt::Formatter. <!-- std@1/internal/format/repeat -->
+- `@preserves_unique(out) pub fn internal.format.repeat(mut out: List[u8], fill: char, count: u64) -> () uses {}` — Padding and sign/prefix placement follow Rust core::fmt::Formatter. <!-- std@1/internal/format/repeat -->
 - `@noalloc pub fn internal.heap_ops.sift[T]( mut xs: unique List[T], begin: u64, end: u64, by: @noalloc fn(T, T) -> i32 uses {} ) -> () uses {}` — Shared sift kernels adapted from Rust/Zig heap algorithms. <!-- std@1/internal/heap_ops/sift -->
 - `@noalloc pub fn internal.heap_ops.sift_up[T]( mut xs: unique List[T], begin: u64, by: @noalloc fn(T, T) -> i32 uses {} ) -> () uses {}` <!-- std@1/internal/heap_ops/sift_up -->
 - `pub fn internal.integer.format_radix(value: u128, negative: bool, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/internal/integer/format_radix -->
@@ -1158,9 +1158,9 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@preserves_unique(builder) pub fn text.append(mut builder: List[u8], text: String) -> () uses {}` — An ordinary List[u8] is the UTF-8 builder. <!-- std@1/text/append -->
 - `@preserves_unique(builder) pub fn text.finish(take builder: List[u8]) -> Result[String, Bytes] uses {}` <!-- std@1/text/finish -->
 - `@preserves_unique(builder) pub fn text.finish_valid(take builder: List[u8]) -> String uses {}` — The text that appends through the formatting protocol left in an empty builder: 'format_into' and 'append' only add valid UTF-8, so every 'to_string' and every f-string finishes here; invalid bytes fail TextInvariant. <!-- std@1/text/finish_valid -->
-- `@preserves_unique(out) pub fn text.format_into_spec( value: String, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` — Width and precision count Unicode scalars, following Rust Formatter::pad. <!-- std@1/text/format_into_spec -->
-- `@preserves_unique(out) pub fn text.pad_from(start: u64, fill: u64, align: u64, width: u64, mut out: List[u8]) -> () uses {}` — Pads the text appended to 'out' since byte 'start' to 'width' Unicode scalars, left-aligned by default: an f-string hole of String, bool or a type with @format whose only options are fill, alignment and width. <!-- std@1/text/pad_from -->
-- `@preserves_unique(out) pub fn text.pad_number_from( start: u64, fill: u64, align: u64, width: u64, mut out: List[u8] ) -> () uses {}` — The same, right-aligned by default: an integer or float hole. <!-- std@1/text/pad_number_from -->
+- `@preserves_unique(out) pub fn text.format_into_spec( value: String, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` — Width and precision count Unicode scalars, following Rust Formatter::pad. <!-- std@1/text/format_into_spec -->
+- `@preserves_unique(out) pub fn text.pad_from(start: u64, fill: char, align: u64, width: u64, mut out: List[u8]) -> () uses {}` — Pads the text appended to 'out' since byte 'start' to 'width' Unicode scalars, left-aligned by default: an f-string hole of String, bool or a type with @format whose only options are fill, alignment and width. <!-- std@1/text/pad_from -->
+- `@preserves_unique(out) pub fn text.pad_number_from( start: u64, fill: char, align: u64, width: u64, mut out: List[u8] ) -> () uses {}` — The same, right-aligned by default: an integer or float hole. <!-- std@1/text/pad_number_from -->
 
 ## time
 
@@ -1192,7 +1192,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u128.checked_sub(a: u128, b: u128) -> Option[u128] uses {}` <!-- std@1/u128/checked_sub -->
 - `@noalloc pub fn u128.format[n: size](value: u128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u128/format -->
 - `@preserves_unique(out) pub fn u128.format_into(value: u128, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u128/format_into -->
-- `@preserves_unique(out) pub fn u128.format_into_spec( value: u128, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u128/format_into_spec -->
+- `@preserves_unique(out) pub fn u128.format_into_spec( value: u128, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u128/format_into_spec -->
 - `pub fn u128.format_radix(value: u128, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/u128/format_radix -->
 - `const u128.order: Order[u128]` <!-- core@1/u128/order -->
 - `@noalloc pub fn u128.parse(text: String) -> Result[u128, scalar.ParseError] uses {}` <!-- std@1/u128/parse -->
@@ -1212,7 +1212,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u16.checked_sub(a: u16, b: u16) -> Option[u16] uses {}` <!-- std@1/u16/checked_sub -->
 - `@noalloc pub fn u16.format[n: size](value: u16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u16/format -->
 - `@preserves_unique(out) pub fn u16.format_into(value: u16, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u16/format_into -->
-- `@preserves_unique(out) pub fn u16.format_into_spec( value: u16, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u16/format_into_spec -->
+- `@preserves_unique(out) pub fn u16.format_into_spec( value: u16, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u16/format_into_spec -->
 - `pub fn u16.format_radix(value: u16, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/u16/format_radix -->
 - `const u16.order: Order[u16]` <!-- core@1/u16/order -->
 - `@noalloc pub fn u16.parse(text: String) -> Result[u16, scalar.ParseError] uses {}` <!-- std@1/u16/parse -->
@@ -1232,7 +1232,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u32.checked_sub(a: u32, b: u32) -> Option[u32] uses {}` <!-- std@1/u32/checked_sub -->
 - `@noalloc pub fn u32.format[n: size](value: u32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u32/format -->
 - `@preserves_unique(out) pub fn u32.format_into(value: u32, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u32/format_into -->
-- `@preserves_unique(out) pub fn u32.format_into_spec( value: u32, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u32/format_into_spec -->
+- `@preserves_unique(out) pub fn u32.format_into_spec( value: u32, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u32/format_into_spec -->
 - `pub fn u32.format_radix(value: u32, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/u32/format_radix -->
 - `const u32.order: Order[u32]` <!-- core@1/u32/order -->
 - `@noalloc pub fn u32.parse(text: String) -> Result[u32, scalar.ParseError] uses {}` <!-- std@1/u32/parse -->
@@ -1252,7 +1252,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u64.checked_sub(a: u64, b: u64) -> Option[u64] uses {}` <!-- std@1/u64/checked_sub -->
 - `@noalloc pub fn u64.format[n: size](value: u64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u64/format -->
 - `@preserves_unique(out) pub fn u64.format_into(value: u64, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u64/format_into -->
-- `@preserves_unique(out) pub fn u64.format_into_spec( value: u64, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u64/format_into_spec -->
+- `@preserves_unique(out) pub fn u64.format_into_spec( value: u64, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u64/format_into_spec -->
 - `pub fn u64.format_radix(value: u64, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/u64/format_radix -->
 - `const u64.order: Order[u64]` <!-- core@1/u64/order -->
 - `@noalloc pub fn u64.parse(text: String) -> Result[u64, scalar.ParseError] uses {}` <!-- std@1/u64/parse -->
@@ -1272,7 +1272,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u8.checked_sub(a: u8, b: u8) -> Option[u8] uses {}` <!-- std@1/u8/checked_sub -->
 - `@noalloc pub fn u8.format[n: size](value: u8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Decimal conversion is ordinary source; no numeric schema or hidden allocator. <!-- std@1/u8/format -->
 - `@preserves_unique(out) pub fn u8.format_into(value: u8, mut out: List[u8]) -> () uses {}` — Appends the decimal text of 'value' to 'out'; to_string is that text, built from the same digits in a list reserved to its exact length. <!-- std@1/u8/format_into -->
-- `@preserves_unique(out) pub fn u8.format_into_spec( value: u8, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u8/format_into_spec -->
+- `@preserves_unique(out) pub fn u8.format_into_spec( value: u8, fill: char, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/u8/format_into_spec -->
 - `pub fn u8.format_radix(value: u8, radix: u8) -> Result[unique String, scalar.ParseError] uses {}` <!-- std@1/u8/format_radix -->
 - `const u8.order: Order[u8]` <!-- core@1/u8/order -->
 - `@noalloc pub fn u8.parse(text: String) -> Result[u8, scalar.ParseError] uses {}` <!-- std@1/u8/parse -->

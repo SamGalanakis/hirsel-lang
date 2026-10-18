@@ -27,7 +27,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   let owned = string.concat("hi", "rsel")
   test.check(t, f"{owned:.3}" == "hir" && owned == "hirsel")
   let mut out: List[u8] = [65u8]
-  u8.format_into_spec(15u8, 32, 0, 6, 0, 6, 120, mut out)
+  u8.format_into_spec(15u8, ' ', 0, 6, 0, 6, 120, mut out)
   text.append(mut out, "!")
   test.check(t, text.finish_valid(take out) == "A0x000f!")
   Ok(())

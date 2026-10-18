@@ -193,15 +193,15 @@ A scalar's `to_string` is its `format_into` applied to an empty builder, then
 `text.finish_valid`; an f-string is the same with one append per piece and hole
 ([SEM-3](semantics.md#sem-3-strings)). A hole whose options are only fill, alignment
 and width is its plain append followed by
-`text.pad_from(start: u64, fill: u64, align: u64, width: u64, mut out: List[u8]) -> () uses {}`,
+`text.pad_from(start: u64, fill: char, align: u64, width: u64, mut out: List[u8]) -> () uses {}`,
 or `text.pad_number_from` with the same parameters for an integer or float, where
 `start` is the builder's byte length before the append: they pad the text appended since
 `start` to `width` Unicode scalars, left-aligned and right-aligned by default
 respectively. Any other specified hole calls the value's module's
-`format_into_spec(value, fill: u64, align: u64, width: u64, precision: u64,
+`format_into_spec(value, fill: char, align: u64, width: u64, precision: u64,
 flags: u64, kind: u64, mut out: List[u8]) -> () uses {}`; `String` uses
 `text.format_into_spec`. These operations preserve the builder's uniqueness.
-The parser supplies the options: fill is a Unicode scalar (default space), alignment
+The parser supplies the options: fill is a `char` (default `' '`), alignment
 is 0 default, 1 left, 2 right or 3 center; flags are bit 1 plus, bit 2 alternate,
 bit 4 sign-aware zero padding and bit 8 precision present; kind is 0 display or
 the ASCII code of `x`, `X`, `b` or `o`. Width and precision are decimal u64 constants
@@ -244,7 +244,7 @@ options, overflowing constants and positional (`1$`) or `*` counts are SEM-3.
 - `to_string(value) -> unique String`;
 - `format_into(value, mut out: List[u8]) -> ()`, which appends exactly the text `to_string`
   returns and fails only by allocation exhaustion;
-- `format_into_spec(value, fill: u64, align: u64, width: u64, precision: u64,
+- `format_into_spec(value, fill: char, align: u64, width: u64, precision: u64,
   flags: u64, kind: u64, mut out: List[u8]) -> ()`, using the constant option
   encoding above;
 - `@noalloc format[n: size](value, mut buffer: Inline[u8, n]) -> Result[u64, scalar.FormatError]`,

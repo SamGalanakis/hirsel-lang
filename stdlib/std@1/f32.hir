@@ -214,7 +214,7 @@ pub fn sum_exact(xs: Array[f32]) -> f32 uses {} {
 @preserves_unique(out)
 pub fn format_into_spec(
   value: f32,
-  fill: u64,
+  fill: char,
   align: u64,
   width: u64,
   precision: u64,

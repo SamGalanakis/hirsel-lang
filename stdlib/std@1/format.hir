@@ -1,16 +1,9 @@
 // Padding and sign/prefix placement follow Rust core::fmt::Formatter.
 @preserves_unique(out)
-pub fn repeat(mut out: List[u8], fill: u64, count: u64) -> () uses {} {
-  let scalar = match core@1/char.from_u32(core@1/int.narrow(fill)) {
-    Some(c) => c,
-    None() => {
-      core@1/failure.check(false, TextInvariant())
-      ' '
-    },
-  }
+pub fn repeat(mut out: List[u8], fill: char, count: u64) -> () uses {} {
   let mut at: u64 = 0
   while at < count {
-    char.format_into(scalar, mut out)
+    char.format_into(fill, mut out)
     at += 1
   }
 }
@@ -37,7 +30,7 @@ pub fn padding(width: u64, length: u64, align: u64, numeric: bool) -> (u64, u64)
 @preserves_unique(out)
 pub fn pad_from(
   start: u64,
-  fill: u64,
+  fill: char,
   align: u64,
   width: u64,
   numeric: bool,
@@ -82,7 +75,7 @@ pub fn begin(
   length: u64,
   negative: bool,
   prefix: String,
-  fill: u64,
+  fill: char,
   align: u64,
   width: u64,
   flags: u64,
@@ -106,7 +99,7 @@ pub fn begin(
   }
   text.append(mut out, prefix)
   if zero {
-    repeat(mut out, 48, left + right)
+    repeat(mut out, '0', left + right)
     0
   } else {
     right
@@ -117,7 +110,7 @@ pub fn begin(
 pub fn integer(
   value: u128,
   negative: bool,
-  fill: u64,
+  fill: char,
   align: u64,
   width: u64,
   precision: u64,
@@ -305,7 +298,7 @@ pub fn fixed(
   mantissa: u64,
   exponent: i32,
   negative: bool,
-  fill: u64,
+  fill: char,
   align: u64,
   width: u64,
   precision: u64,
