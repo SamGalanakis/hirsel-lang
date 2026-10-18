@@ -1931,6 +1931,7 @@ conformance/MEM/MEM-6-list-push-exhausted-run.hir
 conformance/MEM/MEM-6-list-push-fits-run.hir
 conformance/MEM/MEM-6-list-shared-copy-charge-run.hir
 conformance/MEM/MEM-6-map-copy-charges-entries-run.hir
+conformance/MEM/MEM-6-map-empty-in-arena-run.hir
 conformance/MEM/MEM-6-map-insert-charges-entry-run.hir
 conformance/MEM/MEM-6-map-nested-insert-copies-run.hir
 conformance/MEM/MEM-6-map-shared-copy-charge-run.hir
@@ -3584,6 +3585,8 @@ conformance/PROV/PROV-4-local-result-placement-ok.hir
 conformance/PROV/PROV-4-local-result-source-placement-bad.hir
 conformance/PROV/PROV-4-local-result-source-placement-ok.hir
 conformance/PROV/PROV-4-local-result-unnamed-taken-bad.hir
+conformance/PROV/PROV-4-map-empty-placement-bad.hir
+conformance/PROV/PROV-4-map-empty-placement-ok.hir
 conformance/PROV/PROV-4-mixed-join-part-capture-bad.hir
 conformance/PROV/PROV-4-mixed-join-part-capture-ok.hir
 conformance/PROV/PROV-4-mixed-join-part-result-bad.hir

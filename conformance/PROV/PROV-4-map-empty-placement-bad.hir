@@ -1,0 +1,8 @@
+// rule: PROV-4
+// expect: reject PROV-4 at line 7
+// A Map that map.empty() placed in an arena cannot be kept where no placement is
+// declared.
+fn keep(a: Arena) -> Map[u64, u64] {
+  let m: Map[u64, u64] in a = map.empty()
+  m
+}

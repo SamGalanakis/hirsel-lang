@@ -1166,6 +1166,7 @@ pub struct ConstructSite {
     /// C proves every nontrivial child belongs to the same stable arena token
     /// or local region.
     /// No child-credit walk or payload drop is scheduled for this construction.
+    /// Never set on a tracked one, which stays writable (MEM-6).
     pub arena_no_drop: bool,
     /// The construction builds a List or Array (MEM-6, LIR schema revision
     /// 32), or a Map's or Set's block or entries List (revision 33): placed in

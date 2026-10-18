@@ -134,20 +134,22 @@ Set's hash index and abandoned storage are not charged, so the charge is the sam
 engine. The logical size table is in the Bounded arenas section of
 [the runtime README](../../crates/hirsel-rt/README.md).
 
-A List, Array, Map or Set built in an arena (a literal, `copy_to` or a copy made by this
-rule) is **unshared**. It becomes **shared** for good when it or a value holding it is
-copied (`copy`, a capture by copy, an owned read of a part, a counted local result such as
-`map.get`'s), and when it is written or lent `mut` through another block (a box payload, a
-sequence element, a map entry), since that block's holders are not tracked. The first
+A List, Array, Map or Set built in an arena (a literal, `map.empty()` or `set.empty()`
+placed there as [PROV-4](brands.md#prov-4-arena-placement) says, `copy_to` or a copy made
+by this rule) is **unshared**. It becomes **shared** for good when it or a value holding it
+is copied (`copy`, a capture by copy, an owned read of a part, a counted local result such
+as `map.get`'s), and when it is written or lent `mut` through another block (a box payload,
+a sequence element, a map entry), since that block's holders are not tracked. The first
 write to a shared arena List or Array (a push, an element store, `pop`, `remove` or `swap`
-that moves an element), or Map or Set (an insert of a new key, or a `map.insert` that
-replaces a value), copies it into the same arena as a new unshared one, charged its copied
-length or entry count, whose elements or entries are then held twice and so shared, then
-the write proceeds; a write that fails its bounds check, and a `set.insert` of a member the
-Set holds, copies nothing, and `list.reserve` is only a hint there. A List of `Packed`
-values ([MEM-13](#mem-13-packed-variants)), whose storage is sequential, is not tracked: a
-write to one is not charged. An unshared List grows in place, relocating within its arena
-by doubling from four elements when full, so its storage is at most four times its charged
+that moves an element), or Map or Set (an insert of a new key, a `map.insert` that replaces
+a value, or a `remove` of a held key), copies it into the same arena as a new unshared one,
+charged its copied length or entry count, whose elements or entries are then held twice and
+so shared, then the write proceeds; a write that fails its bounds check, and a `set.insert`
+of a member the Set holds, copies nothing, and `list.reserve` is only a hint there. A
+remove charges nothing and returns nothing to the budget. A List of `Packed` values
+([MEM-13](#mem-13-packed-variants)), whose storage is sequential, is not tracked: a write
+to one is not charged. An unshared List grows in place, relocating within its arena by
+doubling from four elements when full, so its storage is at most four times its charged
 bytes plus four elements; an unshared Map or Set keeps its entries the same way.
 Consequently a push or insert through a nested place (`list.push(mut adj[i], x)` in an
 arena) copies the inner List, Map or Set each time, charged; one held by a binding or an

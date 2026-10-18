@@ -894,6 +894,11 @@ impl Checker<'_, '_> {
                 }
             }
         }
+        // `map.empty()` and `set.empty()` are the Map and Set constructors:
+        // their result is placed by its expected relation (PROV-4).
+        let placed = !bad
+            && matches!(&target, CallTarget::Definition(path)
+                if hirsel_types::keyed_constructor(path).is_some());
         let mut arguments = vec![];
         for (argument, ordinal) in source_arguments.iter().zip(ordinals) {
             let parameter = if let Some(ordinal) = ordinal {
@@ -924,6 +929,10 @@ impl Checker<'_, '_> {
                 CallState::Complete
             },
         });
+        let ty = match expected {
+            Some(expected) if placed => self.construction_type(ty, expected),
+            _ => ty,
+        };
         self.put(id, ty, expected, UseKind::Borrow)?;
         self.body
             .expressions

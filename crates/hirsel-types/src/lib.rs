@@ -1041,7 +1041,7 @@ pub use local_results::{
 mod relation;
 pub use relation::{
     Destination, Reach, Relation, adopt_local, arena_parameter, destination, is_arena_type,
-    structurally_global,
+    keyed_constructor, structurally_global,
 };
 
 mod nominal;

@@ -290,7 +290,8 @@ its block (`LAYOUT_KEYED`, a fixed layout tracked like a List, its 32-byte prefi
 extent words unused) charges nothing itself, its entries List at payload offset 0 is
 tracked and charged as any List, so an insert of a new key charges one entry through the
 entries' push and the first write after a copy-on-write copy of the shared block charges the
-entry count, and its index is neither tracked nor charged. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
+entry count, and its index is neither tracked nor charged. `map.empty()` and `set.empty()` construct
+that block where their relation places them (PROV-4), as a literal does. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
 cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
 reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
 `hirsel_types::logical`; H and native execution charge from layouts

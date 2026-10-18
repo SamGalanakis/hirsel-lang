@@ -707,6 +707,24 @@ impl<'a> Checker<'a> {
             );
         }
     }
+    /// A construction with no placement of its own takes its expected
+    /// row's: `[]` and `map.empty()` in arena `a` are allocated in `a`.
+    fn place_construction(&mut self, e: ExprId, expected: TypeId) -> bool {
+        let placement = self.placement(&self.out.body.types.get(expected).unwrap().modes.relation);
+        let Some(actual) = self.ty(e) else {
+            return false;
+        };
+        let mut ty = self.out.body.types.get(actual).unwrap().clone();
+        if placement.is_global() {
+            return false;
+        }
+        if self.placement(&ty.modes.relation).is_global() {
+            ty.modes.relation = ty.modes.relation.union(&placement);
+            let ty = self.out.body.types.push(ty);
+            self.set_ty(e, ty);
+        }
+        true
+    }
     fn falls_through(&self, e: ExprId) -> bool {
         match &self.tree.expressions[e.0 as usize].kind {
             ExprKind::Return(_) | ExprKind::Break | ExprKind::Continue => false,
@@ -860,12 +878,32 @@ impl<'a> Checker<'a> {
             return;
         }
         if let ExprKind::Call { callee, arguments } = kind {
-            self.call(
-                e,
-                callee,
-                &arguments,
-                context.and_then(|(_, expected, _)| expected),
-            );
+            let expected = context.and_then(|(_, expected, _)| expected);
+            self.call(e, callee, &arguments, expected);
+            // PROV-4: `map.empty()` and `set.empty()` construct where their
+            // relation places them, as a literal does.
+            if let (
+                Some(expected),
+                Some(CheckedCall {
+                    target: CallTarget::Definition(path),
+                    ..
+                }),
+            ) = (expected, self.call_row(e))
+                && hirsel_types::keyed_constructor(path).is_some()
+                && self.place_construction(e, expected)
+            {
+                // The signature's result is sendable; a placed one is not.
+                let mut row = self
+                    .out
+                    .body
+                    .types
+                    .get(self.ty(e).unwrap())
+                    .unwrap()
+                    .clone();
+                row.modes.sendability = Sendability::NotSendable;
+                let ty = self.out.body.types.push(row);
+                self.set_ty(e, ty);
+            }
             return;
         }
         let mut used = AuthoritySummary::inert();
@@ -874,20 +912,7 @@ impl<'a> Checker<'a> {
             ExprKind::Literal(_) | ExprKind::Sequence(_) | ExprKind::Tuple(_)
         ) {
             if let Some((_, Some(expected), _)) = &context {
-                let placement =
-                    self.placement(&self.out.body.types.get(*expected).unwrap().modes.relation);
-                let mut ty = self
-                    .out
-                    .body
-                    .types
-                    .get(self.ty(e).unwrap())
-                    .unwrap()
-                    .clone();
-                if !placement.is_global() && self.placement(&ty.modes.relation).is_global() {
-                    ty.modes.relation = ty.modes.relation.union(&placement);
-                    let ty = self.out.body.types.push(ty);
-                    self.set_ty(e, ty);
-                }
+                let _ = self.place_construction(e, *expected);
                 // PROV-1: a sequence's element brands state who each element
                 // belongs to. The expected element type supplies them, and
                 // every element is then kept against it, so `[p]` transports

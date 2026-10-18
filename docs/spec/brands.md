@@ -74,15 +74,16 @@ outlive `a`. An explicit arena is a conservative signature restriction, legal ev
 read-only, nonallocating functions; no body inspection decides whether it is necessary. A
 typical use is `push[T](a: Arena, mut xs: unique List[T] in a, take x: T in a)`.
 
-A relation names at most one arena directly. Constructors building a value whose relation
-names an arena place fresh blocks there; otherwise they are placed by the expected type,
-else as [MEM-10](memory.md#mem-10-regions) chooses. A relation that names parameters
-places fresh blocks where they agree: one arena reached by every named source is the
-destination, global sources add no bound, and distinct arenas or local sources without an
-arena leave the destination to MEM-10. A branch or match join holds the union of its arms'
-loan sets at every payload depth, so joining arena content with global content stays
-bounded by the arena. A constructed value carries its parts' arena placement. An argument
-holding only arena content bounds a call result by its arena alone.
+A relation names at most one arena directly. Constructors, among them `map.empty()` and
+`set.empty()`, building a value whose relation names an arena place fresh blocks there;
+otherwise they are placed by the expected type, else as [MEM-10](memory.md#mem-10-regions)
+chooses. A relation that names parameters places fresh blocks where they agree: one arena
+reached by every named source is the destination, global sources add no bound, and distinct
+arenas or local sources without an arena leave the destination to MEM-10. A branch or match
+join holds the union of its arms' loan sets at every payload depth, so joining arena
+content with global content stays bounded by the arena. A constructed value carries its
+parts' arena placement. An argument holding only arena content bounds a call result by its
+arena alone.
 
 ```hirsel
 type Tree = Leaf | Node(left: box Tree, key: u64, right: box Tree)

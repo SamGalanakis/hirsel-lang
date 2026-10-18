@@ -231,6 +231,19 @@ pub fn arena_parameter(
     }
 }
 
+/// The Map or Set a call of `path` constructs empty: `map.empty()` and
+/// `set.empty()` are those collections' constructors, placed by the expected
+/// relation like a literal (PROV-4).
+pub fn keyed_constructor(path: &hirsel_syntax::DefPath) -> Option<crate::BuiltinType> {
+    if *path == hirsel_syntax::DefPath::core("map.empty") {
+        Some(crate::BuiltinType::Map)
+    } else if *path == hirsel_syntax::DefPath::core("set.empty") {
+        Some(crate::BuiltinType::Set)
+    } else {
+        None
+    }
+}
+
 /// Where a construction places fresh blocks (PROV-4, MEM-10). It is derived from
 /// the expected relation, never stored on a type edge.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]

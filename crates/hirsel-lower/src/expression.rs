@@ -856,6 +856,25 @@ impl Builder<'_, '_> {
         let pending = self.evaluation_holders.len();
         let mut retain_callee_access = false;
         let (callee, constructor) = match plan.target {
+            // `map.empty()` and `set.empty()` construct an empty Map or Set
+            // in the arena their relation names, as a literal does (PROV-4).
+            // Elsewhere the call builds the same empty Map or Set, whose
+            // values need not be literal data.
+            CallTarget::Definition(path)
+                if hirsel_types::keyed_constructor(&path).is_some()
+                    && matches!(
+                        self.row_destination(ty),
+                        hirsel_types::Destination::Arena(_)
+                    ) =>
+            {
+                (
+                    None,
+                    Some(match hirsel_types::keyed_constructor(&path) {
+                        Some(hirsel_types::BuiltinType::Map) => Constructor::Map,
+                        _ => Constructor::Set,
+                    }),
+                )
+            }
             CallTarget::Definition(path) => (
                 Some(Callee::Definition {
                     path,

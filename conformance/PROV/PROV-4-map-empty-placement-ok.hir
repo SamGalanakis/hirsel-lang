@@ -1,0 +1,18 @@
+// rule: PROV-4
+// expect: accept
+// "Constructors, including map.empty() and set.empty(), building a value whose relation
+// names an arena place fresh blocks there." An empty Map or Set is placed by its result's
+// or its binding's relation, as a literal is.
+fn map_in(a: Arena) -> Map[u64, u64] in a {
+  map.empty()
+}
+
+fn set_in(a: Arena) -> Set[u64] in a {
+  let s: Set[u64] in a = set.empty()
+  s
+}
+
+fn on_heap() -> Map[u64, u64] {
+  let m: Map[u64, u64] = map.empty()
+  m
+}

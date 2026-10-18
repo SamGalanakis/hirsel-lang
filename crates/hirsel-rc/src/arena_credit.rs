@@ -472,9 +472,12 @@ pub fn elide(unit: &mut LirUnit<Placed>, table: &LayoutTable) {
                 && d.stable[slot.index()]
             {
                 let proof = &proofs[&slot];
-                flags[construct.index()] = table
-                    .layout(site.layout)
-                    .is_some_and(|r| r.finalizer.is_none())
+                // A tracked block stays writable (MEM-6): a later write, such
+                // as a Map's rebuilt index, stores a child no proof covers.
+                flags[construct.index()] = !site.tracked
+                    && table
+                        .layout(site.layout)
+                        .is_some_and(|r| r.finalizer.is_none())
                     && site
                         .fields
                         .get(&unit.pools.fields)
