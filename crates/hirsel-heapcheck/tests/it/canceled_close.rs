@@ -61,7 +61,13 @@ impl Operations for Streams {
     fn advance_monotonic(&mut self, ticks: u64) {
         self.now = self.now.max(ticks);
     }
-    fn canceled(&mut self, id: &OperationId, args: &[OpValue], _: u32) -> Option<OpOutcome> {
+    fn canceled(
+        &mut self,
+        id: &OperationId,
+        args: &[OpValue],
+        _: u32,
+        _: &mut Vec<u8>,
+    ) -> Option<OpOutcome> {
         if id == &op("stall") {
             return Some(OpOutcome::Value(flag(false)));
         }

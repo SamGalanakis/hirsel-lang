@@ -1,0 +1,41 @@
+// rule: CONC-3
+// expect: fail LANG-9 at line 26
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"steps":[{"expect":[120]}]}]}]}
+// stdout: test failure: net client 0 of 127.0.0.1:8080 expected b"x" but the program closed after writing b""
+fn home() -> SocketAddr {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let now = clock.monotonic(c) ? Clock
+  let at = match instant.checked_add(c, now, 1u64) {
+    Some(at) => at,
+    None() => now,
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(scope: Scope) -> Result[(), NetError] {
+      let mut listener = net.listen(n, home())?
+      let mut (accepted, _) = net.accept(n, mut listener)?
+      let _ = clock.sleep_until(c, at)
+      let canceled: bool = match tls.connect(n, take accepted, "example.com", Pem(b"")) {
+        Error(InvalidInput()) => true,
+        _ => false,
+      }
+      failure.check(canceled, Arithmetic())
+      Ok(())
+    }
+  )
+  match bounded {
+    Expired(Ok(())) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Network(NetError) | Clock(ClockError)

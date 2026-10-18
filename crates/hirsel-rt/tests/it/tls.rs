@@ -98,6 +98,7 @@ fn connect(
             Ok(Completion::NetUnit(Ok(())))
         );
     }
+    io.tls_roots(stream, PEM);
     let done = io
         .call(Request::TlsConnect {
             net,
@@ -109,7 +110,6 @@ fn connect(
     (net, stream, done)
 }
 fn exchange(io: &mut impl Adapter, port: u16, truncated: bool) {
-    io.tls_roots(PEM);
     let (net, stream, done) = connect(io, port, "localhost", pem_digest(PEM));
     assert_eq!(done, Completion::NetUnit(Ok(())));
     assert_eq!(
@@ -195,7 +195,6 @@ fn webpki_unknown_issuer_and_pem_name_mismatch_consume_the_stream() {
         let (port, thread) = server(false, false);
         let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
         io.set_net_rules(rules(port));
-        io.tls_roots(PEM);
         let (net, stream, done) = connect(&mut io, port, name, roots);
         assert_eq!(done, Completion::NetUnit(Err(NetError::Tls(failure))));
         assert_eq!(
@@ -445,8 +444,8 @@ fn cooperative_tls_retains_handshake_and_plaintext_across_readiness() {
         fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
             self.io.preflight(request)
         }
-        fn tls_roots(&mut self, pem: &[u8]) {
-            self.io.tls_roots(pem);
+        fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
+            self.io.tls_roots(stream, pem);
         }
         fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
             self.next += 1;

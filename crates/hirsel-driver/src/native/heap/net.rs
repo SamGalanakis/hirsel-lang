@@ -394,7 +394,10 @@ impl Io {
                     (0, _) => RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     (1, b) => {
                         use sha2::Digest;
-                        RootsDigest::Pem(sha2::Sha256::digest(bytes(b)?).into())
+                        let pem = bytes(b)?;
+                        let stream = self.network_id(s)?;
+                        hirsel_rt::io::Adapter::tls_roots(&mut self.network, stream, &pem);
+                        RootsDigest::Pem(sha2::Sha256::digest(&pem).into())
                     }
                     _ => return None,
                 },
@@ -451,7 +454,7 @@ impl Io {
             }),
             C::Unit(Ok(())) => OpValue::Unit,
             // A scripted client's unmet Expect (docs/spec/core-library.md).
-            C::Checked(false) if name == "close" => {
+            C::Checked(false) if name == "close" || module == Some("tls") && name == "connect" => {
                 if let OpValue::Handle(h) = args[1] {
                     self.network_handles.remove(&h);
                 }

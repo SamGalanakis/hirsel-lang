@@ -187,7 +187,13 @@ impl Operations for Io {
     /// The runtime's cancellation points (`hirsel-rt/src/host_waits.rs`): a canceled stdin
     /// read, print, file or waiting network/process request checks program validity before
     /// completing `Canceled(cause)` with no effect, and is still a capability operation.
-    fn canceled(&mut self, op: &OperationId, args: &[OpValue], cause: u32) -> Option<OpOutcome> {
+    fn canceled(
+        &mut self,
+        op: &OperationId,
+        args: &[OpValue],
+        cause: u32,
+        output: &mut Vec<u8>,
+    ) -> Option<OpOutcome> {
         let path = &op.definition.0;
         if !path.package.name_is("core") {
             return None;
@@ -235,11 +241,15 @@ impl Operations for Io {
             },
             (Some("net" | "tls" | "$intrinsic"), _, _) => {
                 self.yielded = true;
-                return self.net(module, &path.name, args, Some(cause));
+                let outcome = self.net(module, &path.name, args, Some(cause));
+                output.extend(self.network.take_report());
+                return outcome;
             }
             (Some("proc" | "child"), _, _) => {
                 self.yielded = true;
-                return self.process(module, &path.name, args, Some(cause));
+                let outcome = self.process(module, &path.name, args, Some(cause));
+                output.extend(self.network.take_report());
+                return outcome;
             }
             (Some("file"), _, _) => {
                 self.yielded = true;

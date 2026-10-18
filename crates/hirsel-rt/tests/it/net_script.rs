@@ -233,7 +233,7 @@ fn repeated_tls_upgrade_is_invalid_and_consumes_the_script_stream() {
         net: 2,
         stream: 3,
         server_name: "example.com".into(),
-        roots: RootsDigest::Pem([0; 32]),
+        roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
     };
     assert_eq!(io.call(upgrade.clone()), Ok(C::NetUnit(Ok(()))));
     let mut repeated = upgrade;
@@ -298,7 +298,7 @@ fn tls_only_script_can_set_timeouts_before_a_stalled_handshake() {
             net: 2,
             stream: 3,
             server_name: "example.com".into(),
-            roots: RootsDigest::WebPki("test".into())
+            roots: RootsDigest::WebPki("webpki-roots@1.0.9".into())
         }),
         Ok(C::NetUnit(Err(NetError::TimedOut)))
     );

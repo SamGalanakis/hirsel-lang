@@ -43,7 +43,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
             // Read only the active Pem payload.
             let pem = unsafe { &(*roots).pem };
             let bytes = unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) };
-            unsafe { Binding::get(ctx) }.tls_roots(bytes);
+            unsafe { Binding::get(ctx) }.tls_roots(stream, bytes);
             crate::net_tls::pem_digest(bytes)
         }
         _ => crate::fault("TlsRoots tag out of range"),
@@ -54,10 +54,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
         server_name,
         roots,
     };
-    let done = match unsafe { crate::io::capability_call(ctx, request) } {
-        Ok(Completion::NetUnit(done)) => done.map(|()| stream),
-        Ok(_) => crate::fault("TLS completion type mismatch"),
-        Err(()) => return STATUS_FAILURE,
+    let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
+        Some(Completion::NetUnit(done)) => done.map(|()| stream),
+        Some(_) => crate::fault("TLS completion type mismatch"),
+        None => return STATUS_FAILURE,
     };
     unsafe { out.write(NetWordResult::of(done)) };
     STATUS_OK

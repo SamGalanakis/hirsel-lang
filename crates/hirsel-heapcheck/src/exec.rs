@@ -7640,7 +7640,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                 self.timer_choice()?;
                 let shielded = self.shielded(f);
                 let cause = self.tasks.as_deref().and_then(|s| s.canceled(shielded));
-                let outcome = match cause.and_then(|cause| self.ops.canceled(&id, &args, cause)) {
+                let outcome = match cause
+                    .and_then(|cause| self.ops.canceled(&id, &args, cause, &mut self.output))
+                {
                     Some(outcome) => outcome,
                     None => self.ops.call(&id, &args, &mut self.output),
                 };

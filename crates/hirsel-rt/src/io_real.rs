@@ -422,7 +422,8 @@ impl Adapter for RealIo {
         self.state.preflight(request)
     }
 
-    fn tls_roots(&mut self, pem: &[u8]) {
+    fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
+        self.state.remember_tls_roots(stream, pem);
         self.net.tls_roots(pem);
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {

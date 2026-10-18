@@ -288,10 +288,16 @@ pub trait Operations {
 
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome;
     /// The outcome of `op` in a task canceled with `cause` and not shielded (CONC-3), when
-    /// `op` is a cancellation point: it completes `Canceled` with no effect, as the runtime's
-    /// blocking requests do (`hirsel-rt/src/host_waits.rs`), and `call` is not made. None
-    /// performs `op` with `call`.
-    fn canceled(&mut self, _op: &OperationId, _args: &[OpValue], _cause: u32) -> Option<OpOutcome> {
+    /// `op` is a cancellation point: effect-free program errors win, otherwise it completes
+    /// `Canceled` without the requested effect, as the runtime's blocking requests do (`hirsel-rt/src/host_waits.rs`), and `call` is not made. None
+    /// performs `op` with `call`. Consumed-resource cleanup may append a report to `output`.
+    fn canceled(
+        &mut self,
+        _op: &OperationId,
+        _args: &[OpValue],
+        _cause: u32,
+        _output: &mut Vec<u8>,
+    ) -> Option<OpOutcome> {
         None
     }
     /// Whether the last `call` was a capability operation, after which the running task

@@ -740,7 +740,7 @@ impl Simulation {
 
 /// The LANG-9 failure of a scripted child's contradicted or unmet Expect at the current
 /// operation, whose Test report was already written.
-pub fn child_failure(cx: &OperationContext<'_>) -> Result<OperationResult, Error> {
+pub fn script_failure(cx: &OperationContext<'_>, kind: &str) -> Result<OperationResult, Error> {
     let site = cx
         .anchor()
         .ok_or_else(|| invalid("operation has no execution anchor"))?
@@ -749,7 +749,7 @@ pub fn child_failure(cx: &OperationContext<'_>) -> Result<OperationResult, Error
         rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
         line: cx.sources.location(site).map_or(0, |p| p.line),
         site,
-        kind: "scripted child unmet".into(),
+        kind: kind.into(),
     }))
 }
 

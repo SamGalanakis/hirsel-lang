@@ -542,7 +542,8 @@ half-close semantics. `net.close` and dropping a stream are the same effect.
 `tls.connect` performs a TLS 1.2 or 1.3 client handshake on the stream, with `server_name`
 as both SNI and verification name, verifying the peer's chain against `roots`: `WebPki()` is
 the root set compiled into the provider, and `Pem(b)` trusts only the certificates in `b`,
-where an empty or malformed bundle is `InvalidInput()`. Verification uses the provider's
+where an empty or malformed bundle is `InvalidInput()`. An invalid verification name is
+also `InvalidInput()`. Verification uses the provider's
 time and cannot be disabled. On success it returns the same stream, after which every `net`
 stream operation moves plaintext; on failure the stream is closed. A second `tls.connect` on
 an upgraded stream is `InvalidInput()` and consumes and closes it. Reading a TLS stream whose
@@ -560,7 +561,9 @@ The blocking network operations are `resolve`, `connect`, `connect_addr`, `read`
 `read_into`, `write`, `write_all`, `accept`, `tls.connect` and `tls.close`. Each is a
 cancellation point only before it has an effect: a read before any byte is received, a
 write before any byte is accepted, a connect or handshake before any packet is sent. The
-others never return `Canceled`.
+others never return `Canceled`. A canceled `tls.connect` or `tls.close` still consumes its
+stream and performs the same cleanup as dropping it in that world, including scripted-client
+`Expect` checks and their failure report.
 
 **Scripted peers.** `test.net` returns a fake `Net` served by its peers, whose rules are
 `(address, port, ConnectTls())` for a `Certificate` or `Fails` peer and

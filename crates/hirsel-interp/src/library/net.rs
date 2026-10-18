@@ -806,7 +806,20 @@ impl Simulation {
                     }
                     let access = {
                         let s = &self.net_streams[&id];
-                        if name == "tls.connect" && s.tls {
+                        let invalid_tls = if name == "tls.connect" {
+                            let invalid_roots = match variant_fields(arg(a, 3)?)? {
+                                (0, []) => false,
+                                (1, [Some(pem)]) => {
+                                    hirsel_run_config::tls::pem_roots(bytes(pem)?).is_none()
+                                }
+                                _ => return Err(invalid("TlsRoots representation")),
+                            };
+                            invalid_roots
+                                || hirsel_run_config::tls::server_name(text(arg(a, 2)?)?).is_none()
+                        } else {
+                            false
+                        };
+                        if name == "tls.connect" && (s.tls || invalid_tls) {
                             Err(NetFault::InvalidInput)
                         } else if name == "tls.connect"
                             && s.requires_tls
@@ -837,16 +850,18 @@ impl Simulation {
                             | "tls.close"
                     );
                     if let Err(e) = access {
-                        if matches!(name, "tls.connect" | "tls.close") {
-                            self.net_streams.remove(&id);
-                            self.grants.remove(&id);
+                        if matches!(name, "tls.connect" | "tls.close")
+                            && let Some(report) = self.close_net(id)
+                        {
+                            break 'operation Err(NetFault::Unmet(report));
                         }
                         break 'operation Err(e);
                     }
                     if let Some(cause) = cancellation.filter(|_| blocking) {
-                        if matches!(name, "tls.connect" | "tls.close") {
-                            self.net_streams.remove(&id);
-                            self.grants.remove(&id);
+                        if matches!(name, "tls.connect" | "tls.close")
+                            && let Some(report) = self.close_net(id)
+                        {
+                            break 'operation Err(NetFault::Unmet(report));
                         }
                         break 'operation Err(NetFault::Canceled(cause));
                     }
@@ -859,9 +874,10 @@ impl Simulation {
                     let s = self.net_streams.get_mut(&id).unwrap();
                     s.advance();
                     if matches!(s.steps.front(), Some(NetStep::Reset)) {
-                        if matches!(name, "tls.connect" | "tls.close") {
-                            self.net_streams.remove(&id);
-                            self.grants.remove(&id);
+                        if matches!(name, "tls.connect" | "tls.close")
+                            && let Some(report) = self.close_net(id)
+                        {
+                            break 'operation Err(NetFault::Unmet(report));
                         }
                         break 'operation Err(NetFault::ConnectionReset);
                     }
@@ -884,9 +900,10 @@ impl Simulation {
                                 }
                             }
                         }
-                        if matches!(name, "tls.connect" | "tls.close") {
-                            self.net_streams.remove(&id);
-                            self.grants.remove(&id);
+                        if matches!(name, "tls.connect" | "tls.close")
+                            && let Some(report) = self.close_net(id)
+                        {
+                            break 'operation Err(NetFault::Unmet(report));
                         }
                         break 'operation Err(injected(fault)?);
                     }
@@ -917,9 +934,10 @@ impl Simulation {
                                     PeerTls::Fails(failure) => Err(NetFault::Tls(*failure)),
                                 }
                             };
-                            if outcome.as_ref().is_err_and(|e| *e != NetFault::Blocked) {
-                                self.net_streams.remove(&id);
-                                self.grants.remove(&id);
+                            if outcome.as_ref().is_err_and(|e| *e != NetFault::Blocked)
+                                && let Some(report) = self.close_net(id)
+                            {
+                                break 'operation Err(NetFault::Unmet(report));
                             }
                             outcome
                         }

@@ -1,0 +1,67 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"example.com","service":"443","operation":"connect"}],"peers":[{"address":"example.com","port":443,"resolves_to":[],"tls":{"certificate":["example.com"]},"connections":[{"open":[]},{"open":[]},{"open":[]},{"open":[]},{"open":[]},{"open":[]},{"open":[]}]}]}
+fn invalid(n: Net, take stream: Stream of n, name: String, roots: TlsRoots) -> bool {
+  match tls.connect(n, take stream, name, roots) {
+    Error(InvalidInput()) => true,
+    _ => false,
+  }
+}
+
+fn canceled(n: Net, take stream: Stream of n, roots: TlsRoots) -> bool {
+  match tls.connect(n, take stream, "example.com", roots) {
+    Error(Canceled(DeadlineExceeded())) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let raw_empty = net.connect(n, "example.com", 443u16, Unbounded()) ? Network
+  let raw_junk = net.connect(n, "example.com", 443u16, Unbounded()) ? Network
+  let raw_der = net.connect(n, "example.com", 443u16, Unbounded()) ? Network
+  let raw_name = net.connect(n, "example.com", 443u16, Unbounded()) ? Network
+  let raw_pem = net.connect(n, "example.com", 443u16, Unbounded()) ? Network
+  let raw_web = net.connect(n, "example.com", 443u16, Unbounded()) ? Network
+  let raw_live = net.connect(n, "example.com", 443u16, Unbounded()) ? Network
+  let now = clock.monotonic(c) ? Clock
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(scope: Scope) {
+      failure.check(invalid(n, take raw_empty, "example.com", Pem(b"")), Arithmetic())
+      failure.check(
+        invalid(n, take raw_junk, "example.com", Pem(b"not PEM")),
+        Arithmetic()
+      )
+      failure.check(
+        invalid(
+          n,
+          take raw_der,
+          "example.com",
+          Pem(b"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n")
+        ),
+        Arithmetic()
+      )
+      failure.check(invalid(n, take raw_name, "bad name", WebPki()), Arithmetic())
+      failure.check(
+        canceled(
+          n,
+          take raw_pem,
+          Pem(
+            b"-----BEGIN CERTIFICATE-----\nMIIDPzCCAiegAwIBAgIBATANBgkqhkiG9w0BAQsFADAfMR0wGwYDVQQDDBRwb255\ndG93biBSU0EgMjA0OCBDQTAgFw03NTAxMDEwMDAwMDBaGA80MDk2MDEwMTAwMDAw\nMFowHzEdMBsGA1UEAwwUcG9ueXRvd24gUlNBIDIwNDggQ0EwggEiMA0GCSqGSIb3\nDQEBAQUAA4IBDwAwggEKAoIBAQCy4ZPzrQwfu3tz3ll0xHzlHtAQEHUyXzSo3VIn\nULFPC9D84LWe9zpQBYGxOtl8OVcMdmEbzoIOHO6afNSnzbcQdZymJ4+FMpmusWdV\nCcWQ7Knu4Ok0mWlw7HXgtnhunjX0BRMy5M6WXWk6MH44G7n3DCQDINAJvGAwirIT\nkUfekbnwDCIEmIZNQQKyGdndn6mQGHt+oWdmgiWxI0dPjU/vsyFQDFomX2IF/fn4\nj/lKvhGPEccO/2zQThUrbVck1t7kRilCDZbShGav3+87h42mISriK5yqVOwPzPL4\nHWjIL+G2sMDY7RdFKQHBCY4Gis5rrLtOOhKtoDmos7oCCs1BAgMBAAGjgYMwgYAw\nHwYDVR0jBBgwFoAUZ8fKnr69bZrvOOQ1Jii60vG9ELYwDgYDVR0PAQH/BAQDAgH+\nMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAdBgNVHQ4EFgQUZ8fKnr69\nbZrvOOQ1Jii60vG9ELYwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOC\nAQEAhTU7Iv/HBuSOaIAOTrgqbvwKUoZsGG0vb1DVOYINasnDDVx+celU9jvzSHRy\n+5kZUgflytZIy1TmE/RvQi8/vd2s6BL4DGF39VyFO49g746EcBUEmNGZFS0J/hVa\niZj3yNO/tO5V3nzrGzTrrx9cRnFykLKE/qDnrIOfCiRk5KYui1M5JYBM61r3MDLA\nlrRCZh4u04jdNVHPF14km5VcgJvhpGkX2mpe3J9ZtOwBdc96e5zJ0PPKofAuVhuD\nJ8t+QNnjXKSyf1Ud/5WAOKinqGK902mRAwEFISQko0OajUkUzjZabr6xnf4fYWId\nJPT9si0E6DxRUmBTQ0Dy4zU1AQ==\n-----END CERTIFICATE-----\n"
+          )
+        ),
+        Arithmetic()
+      )
+      failure.check(canceled(n, take raw_web, WebPki()), Arithmetic())
+    }
+  )
+  failure.check(invalid(n, take raw_live, "example.com", Pem(b"")), Arithmetic())
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Network(NetError) | Clock(ClockError)

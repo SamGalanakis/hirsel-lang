@@ -421,7 +421,8 @@ single-threaded, with the reference interpreter's schedule:
 
 Host requests park too (`host_waits.rs`). Every capability request goes through
 `host_waits::issue`. `io_checks` first checks arguments and authority through
-`Adapter::preflight`, then completes cancellation without a provider request.
+`Adapter::preflight`, then completes cancellation without the requested effect. A consumed
+stream still closes through the adapter, including scripted Expect checks and reports.
 The same checks serve RealIo, SimIo and ScriptIo (the H model). After valid arguments,
 a canceled task's blocking request (including file, process and timer calls) completes
 `Canceled` without reaching the provider (CONC-3), as the interpreter's HostLibrary does.
@@ -940,3 +941,7 @@ reset, inline finalization, region exit and both cleanup thunk types. Existing
 anchored failures remain intact while later field failures retain their own pair.
 TaskSpawn alone takes the hidden pair among runtime primitives; a child starts
 its callable with the actual spawn invocation as both codes.
+
+TLS argument validation uses `hirsel-run-config::tls` in every world. Adapters bind
+PEM validity and its digest to the stream until its handshake completes or closes;
+replay rederives it and keeps the existing tape identity. The host constructs its trust store with the same parser.

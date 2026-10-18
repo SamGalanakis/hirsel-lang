@@ -537,6 +537,9 @@ impl ScriptIo {
 }
 
 impl crate::io::Adapter for ScriptIo {
+    fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
+        self.state.remember_tls_roots(stream, pem);
+    }
     fn preflight(
         &self,
         request: &crate::io::Request,

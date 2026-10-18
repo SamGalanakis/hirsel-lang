@@ -242,7 +242,7 @@ impl<S: Stage> Machine<'_, S> {
         let completion = match self.scheduler().canceled_task(task, shielded)? {
             Some(cause) => self
                 .ops
-                .canceled(&wait.op, &wait.args, cause)
+                .canceled(&wait.op, &wait.args, cause, &mut self.output)
                 .ok_or_else(|| err(V::Malformed, "a wait that is no cancellation point"))?,
             None => match wait.deadline {
                 Some((clock, until)) if self.reading(clock)? < until => return Ok(false),

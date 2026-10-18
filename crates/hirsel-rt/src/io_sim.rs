@@ -138,6 +138,9 @@ impl SimIo {
     }
 }
 impl Adapter for SimIo {
+    fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
+        self.state.remember_tls_roots(stream, pem);
+    }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.state.preflight(request)
     }

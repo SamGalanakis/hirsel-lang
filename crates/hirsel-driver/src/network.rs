@@ -197,10 +197,16 @@ impl HostIo {
             Self::Replay(io) => io.call(request),
         }
     }
-    fn tls_roots(&mut self, pem: &[u8]) {
+    fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         match self {
-            Self::Live(io) => io.tls_roots(pem),
-            Self::Replay(io) => io.tls_roots(pem),
+            Self::Live(io) => io.tls_roots(stream, pem),
+            Self::Replay(io) => io.tls_roots(stream, pem),
+        }
+    }
+    fn stdout(&self) -> &[u8] {
+        match self {
+            Self::Live(io) => io.stdout(),
+            Self::Replay(io) => io.stdout(),
         }
     }
     /// The adapter's cooperative waits (`Adapter::enter` and the rest): live readiness
@@ -733,7 +739,7 @@ impl HostLibrary {
         token: Option<u64>,
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        use hirsel_interp::library::process::{child_failure, failure_value, status_value};
+        use hirsel_interp::library::process::{failure_value, script_failure, status_value};
         let process = self.id(&a[0])?;
         let request = match name {
             "proc.spawn" => R::ProcessSpawn {
@@ -828,7 +834,7 @@ impl HostLibrary {
             | C::ChildUnit(Err(f))
             | C::ChildBytes(Err(f))
             | C::ChildExit(Err(f)) => error(failure_value(f)),
-            C::Checked(false) => return child_failure(cx),
+            C::Checked(false) => return script_failure(cx, "scripted child unmet"),
             _ => return Err(invalid()),
         };
         Ok(OperationResult::Complete {
@@ -1125,12 +1131,12 @@ impl HostLibrary {
         &mut self,
         name: &str,
         a: &[Value],
-        cx: &OperationContext<'_>,
+        cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         self.yield_now = true;
         let token = self.next_wait;
         self.next_wait += 1;
-        match self.try_network(name, a, token) {
+        match self.try_network(name, a, token, cx) {
             Err(Error::Blocked(_)) => {
                 self.waits.insert(
                     token,
@@ -1157,15 +1163,22 @@ impl HostLibrary {
         name: &str,
         a: &[Value],
         token: u64,
+        cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         self.io.adapter().enter(token);
-        let result = self.network(name, a, token);
+        let result = self.network(name, a, token, cx);
         if !matches!(result, Err(Error::Blocked(_))) {
             self.io.adapter().finish(token);
         }
         result
     }
-    fn network(&mut self, name: &str, a: &[Value], token: u64) -> Result<OperationResult, Error> {
+    fn network(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        token: u64,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
         let request = match name {
             "io.net" => R::Net { io: 1 },
             "net.narrow" => R::NetNarrow {
@@ -1271,7 +1284,8 @@ impl HostLibrary {
                     1 => {
                         use sha2::Digest;
                         let pem = bytes(fields(&a[3])?[0])?;
-                        self.io.tls_roots(&pem);
+                        let stream = self.id(&a[1])?;
+                        self.io.tls_roots(stream, &pem);
                         RootsDigest::Pem(sha2::Sha256::digest(pem).into())
                     }
                     _ => return Err(invalid()),
@@ -1289,6 +1303,7 @@ impl HostLibrary {
             .library
             .cancellation()
             .filter(|_| self.io.cancellable(token));
+        let printed = self.io.stdout().len();
         let completion = self.host_cancelable(request, cancellation)?;
         let mut updates = vec![];
         let value = match completion {
@@ -1344,6 +1359,18 @@ impl HostLibrary {
                 }
             },
             C::Unit(Ok(())) => Value::Unit,
+            C::Checked(false) => {
+                cx.stdout.extend_from_slice(&self.io.stdout()[printed..]);
+                if matches!(name, "net.close" | "tls.close" | "tls.connect")
+                    && let Value::Handle { id, .. } = a[1]
+                {
+                    self.handles.remove(&id);
+                }
+                return hirsel_interp::library::process::script_failure(
+                    cx,
+                    "scripted net client unmet",
+                );
+            }
             _ => return Err(invalid()),
         };
         if (name == "net.close"
@@ -1535,7 +1562,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             self.waits.remove(&token);
             return self.library.read_stdin(&arguments, cx).map(Some);
         }
-        match self.try_network(&name, &arguments, token) {
+        match self.try_network(&name, &arguments, token, cx) {
             Err(Error::Blocked(_)) => Ok(None),
             result => {
                 self.waits.remove(&token);

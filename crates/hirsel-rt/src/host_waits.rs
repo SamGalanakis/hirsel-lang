@@ -3,7 +3,8 @@
 //!
 //! Every capability request goes through [`issue`]. Under a cancellation (CONC-3) a blocking
 //! request first checks program validity and authority through `io_checks`, then completes
-//! `Canceled` with no provider request and no tape event. Otherwise it runs under a fresh token
+//! `Canceled` without the requested effect. Consumed-resource cleanup may issue Close and
+//! report a scripted failure. Otherwise it runs under a fresh token
 //! ([`Adapter::enter`](crate::io::Adapter::enter)). An adapter that cannot complete it yet
 //! answers `AdapterError::Blocked`: under cooperative admission a host provider recorded its
 //! descriptor interest or deadline under the token, and in replay the tape recorded the park.
@@ -35,7 +36,7 @@ struct Parked {
     completion: Option<Result<Completion, AdapterError>>,
 }
 
-/// The completion a canceled `request` returns without reaching the host, or `None` when it
+/// The completion a canceled `request` returns without its requested effect, or `None` when it
 /// is not a cancellation point. A canceled `tls.connect` or `tls.close` still closes its
 /// stream, which the call consumes.
 ///

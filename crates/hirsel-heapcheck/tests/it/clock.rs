@@ -59,7 +59,13 @@ impl Operations for Clocked {
     fn advance_monotonic(&mut self, ticks: u64) {
         self.now = self.now.max(ticks);
     }
-    fn canceled(&mut self, op: &OperationId, _: &[OpValue], _: u32) -> Option<OpOutcome> {
+    fn canceled(
+        &mut self,
+        op: &OperationId,
+        _: &[OpValue],
+        _: u32,
+        _: &mut Vec<u8>,
+    ) -> Option<OpOutcome> {
         (op == &self::op("sleep") || op == &self::op("stall"))
             .then(|| OpOutcome::Value(done(false)))
     }

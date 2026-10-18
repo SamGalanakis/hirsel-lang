@@ -80,7 +80,8 @@ program checks in their specified order, then checks cancellation before any hos
 and only then observes deadlines and provider outcomes (including resets, I/O errors and data):
 
 - Argument validity (`InvalidInput`, including zero read limits and timeouts, repeated TLS
-  upgrades, canonical process paths and NUL-free arguments).
+  upgrades, TLS verification names and trust bundles, canonical process paths and NUL-free
+  arguments).
 - Authority (`NotGranted`, including network rule/name checks and file access rights).
 - Other effect-free program checks, including lexical path confinement, file modes and
   seek bounds, and a child's explicitly closed stdin.

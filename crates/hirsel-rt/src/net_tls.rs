@@ -3,7 +3,6 @@
 //! Socket ownership and grants stay in HostNet/State; this module never records
 //! TLS records, keys, random bytes or time.
 use crate::net::{NetError, RootsDigest, TlsFailure};
-use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
@@ -16,7 +15,8 @@ pub fn pem_digest(pem: &[u8]) -> RootsDigest {
     RootsDigest::Pem(Sha256::digest(pem).into())
 }
 
-/// Only the host provider consults the trust material. No cached config enables
+/// The host provider verifies with the trust anchors parsed by the shared argument checks.
+/// No cached config enables
 /// resumption, client auth or ALPN.
 pub(crate) fn client(
     name: &str,
@@ -32,20 +32,13 @@ pub(crate) fn client(
             if pem_digest(&pem) != *roots {
                 return Err(NetError::InvalidInput);
             }
-            let mut store = RootCertStore::empty();
-            for cert in CertificateDer::pem_slice_iter(&pem) {
-                store
-                    .add(cert.map_err(|_| NetError::InvalidInput)?)
-                    .map_err(|_| NetError::InvalidInput)?;
+            RootCertStore {
+                roots: hirsel_run_config::tls::pem_roots(&pem).ok_or(NetError::InvalidInput)?,
             }
-            if store.is_empty() {
-                return Err(NetError::InvalidInput);
-            }
-            store
         }
         _ => return Err(NetError::InvalidInput),
     };
-    let name = ServerName::try_from(name.to_owned()).map_err(|_| NetError::InvalidInput)?;
+    let name = hirsel_run_config::tls::server_name(name).ok_or(NetError::InvalidInput)?;
     let mut config =
         ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()

@@ -330,6 +330,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "net.write"
             | "net.write_all"
             | "net.close"
+            | "tls.connect"
             | "tls.close"
             | "child.write"
             | "child.close_stdin"

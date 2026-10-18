@@ -697,6 +697,7 @@ pub(crate) struct State {
     pub net_rules: BTreeSet<NetRule>,
     pub net_world: NetWorld,
     pub net_scripts: BTreeMap<u64, crate::io_net_script::ScriptNet>,
+    pub(crate) pem_validity: BTreeMap<u64, ([u8; 32], bool)>,
     /// The admitted rules of the root Proc and the world serving it.
     pub process_rules: Vec<hirsel_run_config::ProcessRule>,
     pub process_world: crate::process::ProcessWorld,
@@ -727,6 +728,7 @@ impl Default for State {
             net_rules: BTreeSet::new(),
             net_world: NetWorld::Host,
             net_scripts: BTreeMap::new(),
+            pem_validity: BTreeMap::new(),
             process_rules: vec![],
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
@@ -1566,7 +1568,7 @@ pub trait Adapter {
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError>;
     /// Supply the next handshake's PEM material without adding it to the tape.
     /// Replay and scripted worlds use only the digest in TlsConnect.
-    fn tls_roots(&mut self, _pem: &[u8]) {}
+    fn tls_roots(&mut self, _stream: u64, _pem: &[u8]) {}
     /// Confirmed replay output, used only when reporting a tool refusal.
     fn replay_stdout(&self) -> Vec<u8> {
         vec![]
@@ -1605,8 +1607,8 @@ pub struct Binding {
     pub(crate) waits: crate::host_waits::Waits,
 }
 impl Binding {
-    pub(crate) fn tls_roots(&mut self, pem: &[u8]) {
-        self.adapter.tls_roots(pem);
+    pub(crate) fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
+        self.adapter.tls_roots(stream, pem);
     }
     pub fn new(adapter: impl Adapter + 'static) -> Self {
         Self {

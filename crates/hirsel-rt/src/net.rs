@@ -338,6 +338,16 @@ struct StreamGrant {
 }
 
 impl crate::io::State {
+    pub(crate) fn remember_tls_roots(&mut self, stream: u64, pem: &[u8]) {
+        let RootsDigest::Pem(digest) = crate::net_tls::pem_digest(pem) else {
+            unreachable!()
+        };
+        self.pem_validity.insert(
+            stream,
+            (digest, hirsel_run_config::tls::pem_roots(pem).is_some()),
+        );
+    }
+
     pub(crate) fn set_net_script(
         &mut self,
         peers: Vec<hirsel_run_config::NetPeer>,
@@ -471,7 +481,24 @@ impl crate::io::State {
             | R::TlsConnect { net, stream, .. }
             | R::TlsClose { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
-                if matches!(request, R::NetRead { max: 0, .. })
+                let invalid_tls = match request {
+                    R::TlsConnect {
+                        server_name, roots, ..
+                    } => {
+                        hirsel_run_config::tls::server_name(server_name).is_none()
+                            || match roots {
+                                RootsDigest::WebPki(version) => {
+                                    version != crate::net_tls::WEBPKI_VERSION
+                                }
+                                RootsDigest::Pem(digest) => {
+                                    self.pem_validity.get(stream) != Some(&(*digest, true))
+                                }
+                            }
+                    }
+                    _ => false,
+                };
+                if invalid_tls
+                    || matches!(request, R::NetRead { max: 0, .. })
                     || matches!(request, R::SetTimeout { timeout, .. } if zero(timeout))
                     || matches!(request, R::TlsConnect { .. } if grant.tls)
                 {
@@ -510,7 +537,10 @@ impl crate::io::State {
         use crate::io::{Completion as C, Request as R};
         if let Some(error) = self.net_error(request)? {
             if let R::TlsConnect { stream, .. } = request {
-                self.execute_net(host, &R::Close { handle: *stream })?;
+                let closed = self.execute_net(host, &R::Close { handle: *stream })?;
+                if matches!(closed, C::Checked(false)) {
+                    return Ok(closed);
+                }
             }
             return Ok(crate::io_checks::net_completion(request, error));
         }
@@ -670,21 +700,26 @@ impl crate::io::State {
                     server_name,
                     roots,
                 ))?;
+                self.pem_validity.remove(stream);
                 if value.is_ok() {
                     self.mark_tls(*stream);
                 } else {
-                    self.handles.rows.remove(stream);
-                    self.world(grant.world, host)?.close(*stream);
+                    let closed = self.execute_net(host, &R::Close { handle: *stream })?;
+                    if matches!(closed, C::Checked(false)) {
+                        return Ok(closed);
+                    }
                 }
                 Ok(C::NetUnit(value))
             }
             R::TlsClose { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
                 let value = provided(self.world(grant.world, host)?.tls_close(*stream))?;
-                self.handles.rows.remove(stream);
-                let unmet = self.unmet(grant.world, *stream);
-                self.world(grant.world, host)?.close(*stream);
-                Ok(unmet.unwrap_or(C::NetUnit(value)))
+                let closed = self.execute_net(host, &R::Close { handle: *stream })?;
+                Ok(if matches!(closed, C::Checked(false)) {
+                    closed
+                } else {
+                    C::NetUnit(value)
+                })
             }
             R::Listen { net, addr } => {
                 let (rules, world) = self.net_grant(*net)?;
@@ -730,6 +765,7 @@ impl crate::io::State {
                 )?))
             }
             R::Close { handle } => {
+                self.pem_validity.remove(handle);
                 let world = match self.handles.rows.remove(handle) {
                     Some(Grant::Stream { net, .. } | Grant::Listener { net }) => {
                         self.net_grant(net)?.1

@@ -502,7 +502,7 @@ fn denied_and_invalid_operations_issue_no_provider_call() {
         net: n,
         stream: s,
         server_name: "localhost".into(),
-        roots: RootsDigest::Pem([0; 32]),
+        roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
     });
     assert_eq!(denied(c), NetError::NotGranted);
     assert_eq!(calls.get(), 4, "a refused handshake sends no TLS byte");

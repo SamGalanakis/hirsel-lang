@@ -5,9 +5,13 @@ use hirsel_run_config::{NetConnection, NetPeer, NetStep, PeerTls};
 use std::collections::BTreeMap;
 
 fn tls_record(peer_tls: PeerTls) -> RealIo {
-    tls_record_with_roots(peer_tls, RootsDigest::WebPki("webpki-roots@1.0.9".into()))
+    tls_record_with_roots(
+        peer_tls,
+        RootsDigest::WebPki("webpki-roots@1.0.9".into()),
+        None,
+    )
 }
-fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest) -> RealIo {
+fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest, pem: Option<&[u8]>) -> RealIo {
     let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
     io.set_net_rules(
         [NetRule {
@@ -45,6 +49,9 @@ fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest) -> RealIo {
     else {
         panic!()
     };
+    if let Some(pem) = pem {
+        io.tls_roots(stream, pem);
+    }
     let completion = io
         .call(Request::TlsConnect {
             net,
@@ -229,12 +236,13 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
 fn pem_roots_require_the_original_bundle_matching_the_recorded_digest() {
     use crate::support::io::{ReplayFixture, replay_interpreter_with_fixture};
     use sha2::{Digest, Sha256};
-    // Script peers validate identity and record the roots digest, without an
-    // X.509 parser. The same raw bundle must be supplied on both executions.
+    // Both engines parse the original trust bundle before the handshake. The tape
+    // records its digest; the same raw bundle must be supplied on both executions.
     let pem = include_bytes!("tls-data/ca.cert");
     let io = tls_record_with_roots(
         PeerTls::Certificate(vec!["localhost".into()]),
         RootsDigest::Pem(Sha256::digest(pem).into()),
+        Some(pem),
     );
     let tree = Tree::new(BTreeMap::new()).unwrap();
     let replay = |pem: &[u8]| {

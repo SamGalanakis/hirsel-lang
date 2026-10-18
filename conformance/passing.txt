@@ -471,7 +471,14 @@ conformance/CONC/CONC-3-cancel-order-child-run.hir
 conformance/CONC/CONC-3-cancel-order-file-run.hir
 conformance/CONC/CONC-3-cancel-order-net-run.hir
 conformance/CONC/CONC-3-cancel-order-stdin-timer-channel-run.hir
+conformance/CONC/CONC-3-cancel-order-tls-inputs-run.hir
 conformance/CONC/CONC-3-cancel-order-tls-run.hir
+conformance/CONC/CONC-3-cancel-tls-close-cleanup-fail.hir
+conformance/CONC/CONC-3-cancel-tls-close-cleanup-run.hir
+conformance/CONC/CONC-3-cancel-tls-invalid-upgrade-cleanup-fail.hir
+conformance/CONC/CONC-3-cancel-tls-invalid-upgrade-cleanup-run.hir
+conformance/CONC/CONC-3-cancel-tls-upgrade-cleanup-fail.hir
+conformance/CONC/CONC-3-cancel-tls-upgrade-cleanup-run.hir
 conformance/CONC/CONC-3-canceled-pure-child.hir
 conformance/CONC/CONC-3-cancellation-shields-drop-run.hir
 conformance/CONC/CONC-3-check-canceled-run.hir

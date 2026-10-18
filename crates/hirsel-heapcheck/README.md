@@ -344,9 +344,10 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
 - A capability operation (`Operations::yielded`) is a scheduling point.
 - A canceled, unshielded task's cancellation point (`Operations::canceled`: a stdin read, a print
   or a network request that can wait, as `hirsel-rt/src/host_waits.rs` lists them) completes
-  `Canceled` with no effect instead of being called. A canceled `child.wait`, `tls.connect` or
+  program checks first, then `Canceled` without the requested effect instead of being called. A canceled `child.wait`, `tls.connect` or
   `tls.close` still closes the Child or stream it takes, so the model completes it with that
-  operand consumed. `tests/it/canceled_close.rs` holds two hand-built controls on such a
+  operand consumed. The cancellation callback receives the same output sink as `call`,
+  so a scripted cleanup's report accompanies its LANG-9 failure. `tests/it/canceled_close.rs` holds two hand-built controls on such a
   close, canceled by its scope deadline: a leak only on that path, and a use of the stream
   after the close took it, each with a passing twin.
 - A task running destruction (a drain, a finalizer frame, or an inline drop body between
