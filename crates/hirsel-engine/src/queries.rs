@@ -124,6 +124,8 @@ pub struct QueryEngine {
     pub comptime_limits: hirsel_interp::Limits,
     pub last_comptime_limit: Option<hirsel_tir::ToolingLimit>,
     pub(crate) comptime_stack: Vec<(DefPath, hirsel_span::Span)>,
+    pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
+    pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     pub sources: SourceMap,
     pub symbols: Interner,
     pub environment: QueryEnvironment,
@@ -210,6 +212,7 @@ impl QueryEngine {
                 || state.materialization_limits != Some(self.comptime_limits)
             {
                 state.constant_values.clear();
+                self.staged_values.clear();
                 self.lowered.clear();
                 state.materialization_environment = Some(self.environment.clone());
                 state.materialization_limits = Some(self.comptime_limits);
@@ -243,6 +246,8 @@ impl QueryEngine {
             comptime_limits: hirsel_interp::Limits::default(),
             last_comptime_limit: None,
             comptime_stack: vec![],
+            staged_constants: BTreeMap::new(),
+            staged_values: BTreeMap::new(),
             sources: SourceMap::default(),
             symbols: Interner::default(),
             environment,
@@ -351,6 +356,9 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<hirsel_types::SignatureRef>>, QueryError> {
+        if let Some(constant) = self.staged_constants.get(definition) {
+            return Ok(Arc::new(output(constant.signature.clone())));
+        }
         if !self.items.contains_key(definition) {
             if let Some(signature) = self.registry.get(definition) {
                 return Ok(Arc::new(output(signature)));
@@ -737,6 +745,8 @@ impl QueryEngine {
         retire!(checked, body_hashes);
         retire!(modes, body_hashes);
         retire!(lowered, body_hashes);
+        self.staged_constants.retain(|_, constant| !affected.contains(&constant.owner) || self.modes.contains_key(&constant.owner));
+        self.staged_values.retain(|(path, _), _| self.staged_constants.contains_key(path));
         if let Some(state) = &self.adapters.compiler_state {
             let mut state = state.borrow_mut();
             state.constant_values.retain(|_, value| {
@@ -1340,9 +1350,11 @@ impl DefinitionQueries for QueryEngine {
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         self.prepare_materialization_environment();
         if let Some(prechecked) = self.prechecked_lowering(definition)? {
+            self.prepare_staged_owner(definition)?;
             return Ok(prechecked);
         }
         let modes = self.mode_query(definition)?;
+        self.register_staged(&modes.value)?;
         let signature = self.signature_output(definition)?;
         let key = self.key(definition, QueryKind::Lower)?;
         self.read_execution_signatures(&modes.dependencies);
@@ -1447,6 +1459,10 @@ impl TirProvider for QueryEngine {
     fn constant(&mut self, path: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
         self.materialize_value(path).map(std::sync::Arc::new)
     }
+    fn constant_instance(&mut self, path: &DefPath, arguments: &[u64]) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+        if arguments.is_empty() { return self.constant(path); }
+        self.materialize_staged(path, arguments).map(|value| Arc::new(value.value))
+    }
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
         // #63: dependency-first; ties use source file path and declaration position.
         let mut declarations: Vec<_> = self
@@ -1472,7 +1488,7 @@ impl TirProvider for QueryEngine {
         let mut paths: Vec<_> = self
             .registry
             .signatures()
-            .filter(|s| matches!(s.kind, hirsel_types::SignatureKind::Const(_)))
+            .filter(|s| matches!(s.kind, hirsel_types::SignatureKind::Const { ty: _, .. }))
             .map(|s| s.definition.clone())
             .collect();
         paths.extend(declarations.into_iter().map(|(_, _, path)| path));

@@ -2394,7 +2394,7 @@ fn constant_initializer_requires_no_parameters_and_its_declared_result() {
     let mut signature = Signature {
         definition: f.definition.path.clone(),
         types,
-        kind: SignatureKind::Const(unit),
+        kind: SignatureKind::Const { ty: unit, generics: Default::default() },
         metadata: SignatureMetadata::default(),
         fingerprint: ContentHash::default(),
     };
@@ -2404,13 +2404,13 @@ fn constant_initializer_requires_no_parameters_and_its_declared_result() {
     let wrong = signature
         .types
         .push(ty(TypeKind::Primitive(Primitive::Bool)));
-    signature.kind = SignatureKind::Const(wrong);
+    signature.kind = SignatureKind::Const { ty: wrong, generics: Default::default() };
     f.signatures.insert(signature.definition.clone(), signature);
     f.broken(vec![ViolationKind::TypeMismatch {
         entity: "constant result",
     }]);
     let signature = f.signatures.get_mut(&f.definition.path).unwrap();
-    signature.kind = SignatureKind::Const(unit);
+    signature.kind = SignatureKind::Const { ty: unit, generics: Default::default() };
     let p = f.slot(TypeKind::Tuple(vec![].into()), Storage::Parameter);
     f.body().parameters.push(LocalId(p));
     // Return still uses the ordinary initialized unit slot; the parameter is unused.

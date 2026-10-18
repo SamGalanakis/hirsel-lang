@@ -193,7 +193,7 @@ impl SignaturePhase for Fake {
             metadata: Default::default(),
             definition: item.definition.clone(),
             types,
-            kind: SignatureKind::Const(unit),
+            kind: SignatureKind::Const { ty: unit, generics: Default::default() },
             fingerprint,
         }))
     }
@@ -210,7 +210,7 @@ impl CheckerPhase for Fake {
         self.fail("check", file.tree.items[item.0 as usize].origin.span)?;
         let mut types = _signature.types.clone();
         let unit = match _signature.kind {
-            SignatureKind::Const(unit) => unit,
+            SignatureKind::Const { ty: unit, .. } => unit,
             SignatureKind::Function(ref f) => f.result,
             _ => unreachable!(),
         };
@@ -257,6 +257,7 @@ impl ModesPhase for Fake {
             results: vec![],
             call_allocations: vec![],
             materialized: vec![],
+            staged: vec![],
         }))
     }
 }
@@ -305,7 +306,7 @@ impl LoweringPhase for Fake {
 fn unit_body(signature: &Signature, item: ItemId, span: Span) -> hirsel_tir::Body {
     use hirsel_tir::*;
     let unit = match &signature.kind {
-        SignatureKind::Const(unit) => *unit,
+        SignatureKind::Const { ty: unit, .. } => *unit,
         SignatureKind::Function(function) => {
             assert!(function.parameters.is_empty());
             function.result

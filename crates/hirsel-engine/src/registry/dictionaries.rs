@@ -34,7 +34,7 @@ impl BuiltinRegistry {
             return Ok(None);
         };
         let signature = self.get(path).expect("declared dictionary");
-        let SignatureKind::Const(root) = &signature.kind else {
+        let SignatureKind::Const { ty: root, .. } = &signature.kind else {
             unreachable!()
         };
         let TypeKind::Named {

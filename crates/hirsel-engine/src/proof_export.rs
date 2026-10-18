@@ -78,7 +78,7 @@ impl QueryEngine {
                     owner_view: (owner_view != signature.value).then(|| (*owner_view).clone()),
                 },
             );
-            if matches!(signature.value.kind, SignatureKind::Const(_)) {
+            if matches!(signature.value.kind, SignatureKind::Const { ty: _, .. }) {
                 match self.materialize_value(path) {
                     Ok(value) => {
                         constants.insert(path.clone(), value);

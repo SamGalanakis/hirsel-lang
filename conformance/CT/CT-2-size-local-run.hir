@@ -1,0 +1,23 @@
+// rule: CT-2
+// expect: run
+fn outer[n: size](xs: Inline[u8, n]) -> u64 {
+  fn inner[m: size](ys: Inline[u8, m]) -> u64 {
+    let _ = ys
+    comptime (n * m)
+  }
+  inner(xs)
+}
+
+fn unused[n: size](xs: Inline[u8, n]) -> u64 {
+  let _ = xs
+  comptime (1u64 / n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs: Inline[u8, 2] = [1, 2]
+  let callback: fn(Inline[u8, 2]) -> u64 uses {} = outer
+  test.check(t, callback(xs) == 4u64)
+  let ys: Inline[u8, 3] = [1, 2, 3]
+  test.check(t, outer(ys) == 9u64)
+  Ok(())
+}

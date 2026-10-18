@@ -404,7 +404,7 @@ pub(super) fn build(
             .or_else(|| {
                 let root = match &own.kind {
                     SignatureKind::Function(f) if owner == NameSite::Item(item) => f.result,
-                    SignatureKind::Const(root) if owner == NameSite::Item(item) => *root,
+                    SignatureKind::Const { ty: root, .. } if owner == NameSite::Item(item) => *root,
                     _ => return None,
                 };
                 import_type(&own.types, root, &mut body.types)

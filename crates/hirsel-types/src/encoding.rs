@@ -49,7 +49,7 @@ pub fn canonical_encoding(
         heap,
     } = roles;
     let mut e = Encoder::default();
-    e.atom(b"hirsel.signature.encoding.v14");
+    e.atom(b"hirsel.signature.encoding.v15");
     e.path(definition);
     e.tag(match visibility {
         hirsel_syntax::Visibility::Private => "private",
@@ -216,8 +216,9 @@ pub fn canonical_encoding(
             e.option(drop.as_ref(), |e, p| e.path(p));
             e.option(fact.as_ref(), |e, c| e.contract(c));
         }
-        SignatureKind::Const(t) => {
+        SignatureKind::Const { ty: t, generics } => {
             e.tag("const");
+            e.generics(generics);
             e.ty(*t, types)?;
         }
     }
@@ -249,7 +250,7 @@ pub fn fingerprint(
 ) -> Result<ContentHash, EncodingError> {
     let bytes = canonical_encoding(signature, dependencies)?;
     Ok(ContentHash::of_parts(
-        "hirsel.signature.sha256.v11",
+        "hirsel.signature.sha256.v12",
         [bytes.as_slice()],
     ))
 }

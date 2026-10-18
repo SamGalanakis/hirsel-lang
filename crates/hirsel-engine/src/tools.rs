@@ -293,6 +293,7 @@ pub(crate) fn check_file_lowering(
                     diagnostics.extend(engine.lower_to_tir(&source.definition)?.diagnostics);
                 }
             }
+            engine.prepare_staged_instances()?;
         }
         Ok(())
     })();

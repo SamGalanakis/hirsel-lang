@@ -315,7 +315,7 @@ impl QueryEngine {
             };
             let constant = if matches!(
                 self.item_signature(&path)?.value.kind,
-                hirsel_types::SignatureKind::Const(_)
+                hirsel_types::SignatureKind::Const { ty: _, .. }
             ) {
                 Some(self.evaluate_constant(&path)?)
             } else {

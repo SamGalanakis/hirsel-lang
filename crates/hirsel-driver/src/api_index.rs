@@ -192,7 +192,7 @@ fn core_entries(core_docs: &str) -> Vec<Entry> {
                         .unwrap_or_default()
                 )
             }
-            SignatureKind::Const(id) => format!("const {name}: {}", printer.ty(*id)),
+            SignatureKind::Const { ty: id, .. } => format!("const {name}: {}", printer.ty(*id)),
         };
         out.push(Entry {
             identity: s.definition.to_string(),

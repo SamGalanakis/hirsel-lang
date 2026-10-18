@@ -1,0 +1,19 @@
+// rule: CT-2
+// expect: run
+fn square(n: u64) -> u64 {
+  n * n
+}
+
+fn scaled[n: size](xs: Inline[u8, n]) -> u64 {
+  let _ = xs
+  comptime square(n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let small: Inline[u8, 2] = [1, 2]
+  let large: Inline[u8, 4] = [1, 2, 3, 4]
+  test.check(t, scaled(small) == 4u64)
+  test.check(t, scaled(large) == 16u64)
+  test.check(t, scaled(small) == 4u64)
+  Ok(())
+}

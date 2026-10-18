@@ -1869,7 +1869,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                 )),
                             };
                         }
-                        ty::SignatureKind::Const(ty) => {
+                        ty::SignatureKind::Const { ty: ty, .. } => {
                             return semantic_expected(&signature.types, *ty, &[], 0, 0);
                         }
                         _ => {}

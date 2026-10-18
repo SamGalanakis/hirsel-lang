@@ -285,6 +285,7 @@ impl ModesPhase for ModeAdapter {
                 results: output.result_types,
                 call_allocations: output.call_allocations,
                 materialized: vec![],
+                staged: vec![],
             },
             diagnostics: select_diagnostics(output.diagnostics, None),
             dependencies: output.dependencies,
@@ -370,6 +371,7 @@ fn lower_expression(
     }
     let mut plans = lower::Plans::from_body(&file.tree, &checked, &typed.plans, expression)
         .map_err(|e| invariant(e.to_string()))?;
+    plans.staged = analyzed.staged.clone();
     let owner_span = |owner| match owner {
         NameSite::Item(id) => Some(file.tree.items[id.0 as usize].origin.span),
         NameSite::Statement(id) => Some(file.tree.statements[id.0 as usize].origin.span),
@@ -419,7 +421,7 @@ fn lower_expression(
         }
     }
     lower::lower(lower::Input {
-        track_caller: signature.metadata.track_caller,
+        track_caller: evaluation_result.is_none() && signature.metadata.track_caller,
         tree: &file.tree,
         checked: &checked,
         plans: &plans,

@@ -275,8 +275,9 @@ Inline comptime eligibility is checked against resolved lexical bindings before
 lowering (CT-2, spec #65). Its private evaluation entry has no enclosing runtime
 parameters or contracts; nested callable frames retain their normal inputs.
 The check walks sorted source intervals rather than rescanning the expression
-arena for each wrapper. Abstract generic mentions are rejected at definition
-time; closed expressions inside generic definitions remain valid.
+arena for each wrapper. Abstract type mentions are rejected at definition time;
+size parameters are staged per selected instantiation. Closed expressions inside
+generic definitions remain valid.
 
 H publishes source places through a primary expression-keyed map during checking.
 Projection, access, contract and tail queries use that same map; CheckedBody's

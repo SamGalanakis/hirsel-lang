@@ -826,3 +826,8 @@ The independent callable-provenance analysis also checks `forward_caller`: all
 possible producers must be generated contract bodies. Ordinary closure and named
 function values establish invocation boundaries, and contract calls retain their
 owner's attribution.
+
+Constant reads independently check complete size actuals, their lexical declarations
+and the substituted constant result. Constant declarations admit size parameters
+only. The hand-built constant-size controls include a valid read, missing actuals,
+an undeclared size and a wrong instantiated Inline length.

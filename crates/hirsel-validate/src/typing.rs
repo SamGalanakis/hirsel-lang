@@ -72,6 +72,11 @@ pub(super) fn operands(r: &Rvalue) -> Vec<&Operand> {
 }
 
 pub(super) fn signature_valid(s: &Signature) -> bool {
+    if let SignatureKind::Const { generics, .. } = &s.kind {
+        if generics.iter().any(|parameter| !matches!(parameter, GenericParameter::Size { .. })) {
+            return false;
+        }
+    }
     if !graph_valid(&s.types)
         || s.types
             .iter()
@@ -126,7 +131,7 @@ pub(super) fn signature_valid(s: &Signature) -> bool {
             .chain(f.error)
             .collect(),
         SignatureKind::Type(t) => t.representation.into_iter().collect::<Vec<_>>(),
-        SignatureKind::Const(t) => vec![*t],
+        SignatureKind::Const { ty: t, .. } => vec![*t],
     };
     roots
         .into_iter()
@@ -719,7 +724,7 @@ impl<'a> Checker<'a> {
             }
             return;
         }
-        if let SignatureKind::Const(result) = &signature.kind {
+        if let SignatureKind::Const { ty: result, .. } = &signature.kind {
             if !self.body.parameters.is_empty() {
                 self.error(ViolationKind::Arity {
                     entity: "constant parameters",
@@ -2780,17 +2785,28 @@ impl<'a> Checker<'a> {
                     });
                 }
             }
-            Rvalue::ReadConstant { definition } => {
+            Rvalue::ReadConstant { definition, arguments } => {
                 let Some(signature) = self.signatures.get(definition) else {
                     self.error(ViolationKind::InvalidOrigin(destination));
                     return;
                 };
-                let SignatureKind::Const(root) = signature.kind else {
+                let SignatureKind::Const { ty: root, generics } = &signature.kind else {
                     self.error(ViolationKind::InvalidOrigin(destination));
                     return;
                 };
+                if generics.len() != arguments.len() {
+                    self.error(ViolationKind::Arity {
+                        entity: "constant size arguments",
+                        expected: generics.len(), actual: arguments.len(),
+                    });
+                    return;
+                }
+                for argument in arguments {
+                    if let Size::Parameter(parameter) = argument { self.size_parameter(*parameter); }
+                }
+                let actuals: Vec<_> = arguments.iter().cloned().map(GenericArgument::Size).collect();
                 let mut store = self.working_store();
-                let Some(mut expected) = self.imported(&signature.types, root, &mut store, &[])
+                let Some(mut expected) = self.imported(&signature.types, *root, &mut store, &actuals)
                 else {
                     self.error(ViolationKind::InvalidTypeGraph);
                     return;

@@ -141,7 +141,7 @@ impl Signature {
         match &self.kind {
             SignatureKind::Function(f) => &f.generics,
             SignatureKind::Type(t) => &t.generics,
-            SignatureKind::Const(_) => &[],
+            SignatureKind::Const { generics, .. } => generics,
         }
     }
 }

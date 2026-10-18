@@ -72,6 +72,7 @@ impl QueryEngine {
     /// stages are operational/unavailable outcomes, never source acceptance.
     pub fn export_native_input(&mut self) -> Result<NativeInput, QueryError> {
         let paths = self.native_paths()?;
+        self.prepare_staged_instances()?;
         let mut signatures = self.native_builtin_signatures();
         let mut signature_dependencies = BTreeMap::new();
         let mut representations: BTreeMap<_, _> = signatures
@@ -131,7 +132,7 @@ impl QueryEngine {
                     return Err(QueryError::Diagnostics(analyzed.diagnostics));
                 }
             }
-            if matches!(signature.value.kind, SignatureKind::Const(_)) {
+            if matches!(signature.value.kind, SignatureKind::Const { ty: _, .. }) {
                 constants.insert(path.clone(), self.materialize_value(&path)?);
             }
             if matches!(
@@ -171,6 +172,16 @@ impl QueryEngine {
         for path in &constant_definitions {
             if !constants.contains_key(path) {
                 constants.insert(path.clone(), self.materialize_value(path)?);
+            }
+        }
+        for (path, constant) in &self.staged_constants {
+            if paths.contains(&constant.owner) {
+                signatures.insert(path.clone(), constant.signature.clone());
+            }
+        }
+        for ((path, arguments), value) in &self.staged_values {
+            if self.staged_constants.get(path).is_some_and(|c| paths.contains(&c.owner)) {
+                constants.insert(hirsel_tir::constant_instance_path(path, arguments), value.value.clone());
             }
         }
         let mut input = NativeInput {

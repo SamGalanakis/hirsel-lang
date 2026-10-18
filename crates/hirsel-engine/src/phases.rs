@@ -27,6 +27,8 @@ pub struct AnalyzedBody {
     pub call_allocations: Vec<(hirsel_syntax::ExprId, hirsel_types::Allocation)>,
     /// Evaluator-owned graphs stay separate until lowering checks and imports them.
     pub materialized: Vec<(hirsel_syntax::ExprId, hirsel_tir::Materialized)>,
+    /// Shared reception types of hidden size-generic constants.
+    pub staged: Vec<(hirsel_syntax::ExprId, TypeId)>,
 }
 
 /// The compiler's front phases. [`PhaseAdapters::compiler`] installs them beside

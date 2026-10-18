@@ -479,3 +479,8 @@ hirsel-codec; the codec itself never depends on semantic types.
 
 Signature encoding v14 retains caller-attribution metadata as a declaration
 property. Function value types do not carry that property.
+
+Signature encoding v15 (hash domain v12) includes size parameters on constant
+signatures. Written constants remain monomorphic; inline generic comptime staging
+publishes private size-generic declarations after the enclosing signature. Type
+parameters are excluded from constant signatures.

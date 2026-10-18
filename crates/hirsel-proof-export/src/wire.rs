@@ -555,7 +555,7 @@ snapshot_struct!(TypeDefinition {
 snapshot_enum!(SignatureKind {
     Function(f),
     Type(t),
-    Const(c)
+    Const { ty, generics }
 } in Cx);
 snapshot_struct!(HeapRole { arena, operation } in Cx);
 snapshot_struct!(NominalRoles {
@@ -651,7 +651,7 @@ snapshot_struct!(ConstructField { field, value } in Cx);
 snapshot_struct!(CallArgument { parameter, value } in Cx);
 snapshot_enum!(Rvalue {
     Constant(c),
-    ReadConstant { definition },
+    ReadConstant { definition, arguments },
     FunctionReference { definition, arguments },
     Size(s),
     Use(o),

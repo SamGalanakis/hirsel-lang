@@ -130,6 +130,7 @@ impl QueryEngine {
         &mut self,
         roots: impl IntoIterator<Item = DefPath>,
     ) -> Result<(), QueryError> {
-        self.semantic_program(roots).map(drop)
+        self.semantic_program(roots)?;
+        self.prepare_staged_instances()
     }
 }

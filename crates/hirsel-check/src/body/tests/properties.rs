@@ -21,7 +21,7 @@ pub(super) fn transport(s: &Signature, noise: u8) -> Signature {
             };
             *f = imported;
         }
-        SignatureKind::Const(root) => *root = import_type(&source, *root, &mut dest).unwrap(),
+        SignatureKind::Const { ty: root, .. } => *root = import_type(&source, *root, &mut dest).unwrap(),
         SignatureKind::Type(td) => {
             if let Some(root) = td.representation {
                 td.representation = Some(import_type(&source, root, &mut dest).unwrap());

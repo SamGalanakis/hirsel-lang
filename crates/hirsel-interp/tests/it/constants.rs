@@ -182,6 +182,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
             b.assign(
                 destination,
                 Rvalue::ReadConstant {
+                    arguments: vec![],
                     definition: path("DATA"),
                 },
                 1,

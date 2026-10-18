@@ -7,8 +7,9 @@ use hirsel_types::{Destination, GenericArgument, TypeId, TypeStore, UseKind};
 
 /// Borrowed-association receipts revised the formerly implicit v1 TIR schema;
 /// v3 adds diverging calls; v4 retains named-entry caller attribution;
-/// v5 adds the order-bearing SortedMap constructor.
-pub const TIR_VERSION: u32 = 5;
+/// v5 adds the order-bearing SortedMap constructor;
+/// v6 adds size actuals to constant reads.
+pub const TIR_VERSION: u32 = 6;
 
 pub mod representation;
 
@@ -126,6 +127,7 @@ pub enum Rvalue {
     /// Its signature supplies the type and declaration identity.
     ReadConstant {
         definition: DefPath,
+        arguments: Vec<hirsel_types::Size>,
     },
     /// Named callable without an environment; its signature proves its value type.
     FunctionReference {
@@ -633,6 +635,10 @@ pub trait TirProvider {
     fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError>;
     /// Compiled immutable data; this never executes initializer code.
     fn constant(&mut self, path: &DefPath) -> Result<MaterializedRef, QueryError>;
+    /// Data of a selected size-generic constant. Ordinary constants have no actuals.
+    fn constant_instance(&mut self, path: &DefPath, arguments: &[u64]) -> Result<MaterializedRef, QueryError> {
+        if arguments.is_empty() { self.constant(path) } else { Err(QueryError::NotImplemented) }
+    }
     /// Program constants in dependency order, with source-order ties (#63).
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError>;
 }
@@ -664,4 +670,15 @@ pub struct ToolingLimit {
     pub kind: ToolingLimitKind,
     pub limit: u64,
     pub site: Option<Span>,
+}
+
+/// Link identity of one immutable constant instance; no actuals preserves the
+/// ordinary constant identity. Decimal components are unambiguous and ordered.
+pub fn constant_instance_path(definition: &DefPath, arguments: &[u64]) -> DefPath {
+    let mut path = definition.clone();
+    if !arguments.is_empty() {
+        path.0.name = format!("$constant:{}:{}", definition.0.name,
+            arguments.iter().map(u64::to_string).collect::<Vec<_>>().join(":"));
+    }
+    path
 }

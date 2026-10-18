@@ -193,3 +193,10 @@ pub fn comptime_inputs(
     }
     inputs.into_iter().collect()
 }
+
+/// Private constant declaration owned by an inline staged expression.
+pub fn comptime_path(owner: &ast::DefPath, expression: ast::ExprId) -> ast::DefPath {
+    let mut path = owner.clone();
+    path.0.name = format!("$comptime:{}:{}", owner.0.name, expression.0);
+    path
+}

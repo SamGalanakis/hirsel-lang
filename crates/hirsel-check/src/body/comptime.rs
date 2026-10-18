@@ -122,10 +122,7 @@ impl Checker<'_, '_> {
                     GenericBinder::Body(owner) => Some(span(owner)),
                     _ => None,
                 },
-                ResolvedName::Size(parameter) => match parameter.binder() {
-                    GenericBinder::Body(owner) => Some(span(owner)),
-                    _ => None,
-                },
+                ResolvedName::Size(_) => continue,
                 _ => continue,
             };
             if declaration.is_some_and(|declaration| {
@@ -198,16 +195,6 @@ impl Checker<'_, '_> {
                 parameter = match &row.kind {
                     TypeKind::Parameter(parameter) if unknown(parameter.binder()) => {
                         Some(ResolvedName::TypeParameter(*parameter))
-                    }
-                    TypeKind::Builtin { arguments, .. } | TypeKind::Named { arguments, .. } => {
-                        arguments.iter().find_map(|argument| match argument {
-                            GenericArgument::Size(Size::Parameter(parameter))
-                                if unknown(parameter.binder()) =>
-                            {
-                                Some(ResolvedName::Size(*parameter))
-                            }
-                            _ => None,
-                        })
                     }
                     _ => None,
                 };

@@ -21,7 +21,7 @@ fn every_declared_signature_matches_the_review_table_and_canonical_hash() {
         let path=format!("core@1/{}{}",if s.definition.0.modules.is_empty(){String::new()}else{format!("{}.",s.definition.0.modules.join("."))},s.definition.0.name);
         let declaration=match &s.kind{
             SignatureKind::Function(f)=>format!("{:?} {}",f.generics,describe_function(s,f)),
-            SignatureKind::Const(id)=>format!("const {}",describe_type(s,*id)),
+            SignatureKind::Const { ty: id, .. }=>format!("const {}",describe_type(s,*id)),
             SignatureKind::Type(t)=>format!("type {:?} {} ; bounds={:?} ; authority={:?} ; capability={:?} ; resource={} ; drop={:?}",t.generics,t.representation.map(|id|describe_type(s,id)).unwrap_or_else(||"opaque".into()),t.bounds,t.authority,t.capability,t.resource,t.destructor_allocation),
         };
         let hash=s.fingerprint.0.iter().map(|b|format!("{b:02x}")).collect::<String>();format!("{path} | {declaration} | {hash}\n")

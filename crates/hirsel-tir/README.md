@@ -75,3 +75,10 @@ TIR revision 5 adds `Constructor::SortedMap { by }`: the Order operand selects i
 its stored fields are empty,
 and the ordinary Construct destination places its hidden empty entries storage.
 V independently checks the dictionary type and result brand against its value identity.
+
+TIR v6 adds size actuals to ReadConstant; it introduces no new instruction kind.
+A constant signature can declare size parameters. ReadConstant has no runtime
+operands: its size actuals are constants or lexical size references. The provider
+materializes each selected instance, and native import emits the existing static
+read using that instance's data.
+

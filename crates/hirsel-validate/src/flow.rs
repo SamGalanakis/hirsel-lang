@@ -4867,7 +4867,7 @@ impl Checker<'_> {
                     };
                     let origin_identity = match rvalue {
                         Rvalue::Use(o) => self.origin_identity(model, state, o.place),
-                        Rvalue::ReadConstant { definition }
+                        Rvalue::ReadConstant { definition, .. }
                         | Rvalue::FunctionReference { definition, .. } => {
                             BTreeSet::from([Origin {
                                 root: OriginRoot::Definition(definition.clone()),

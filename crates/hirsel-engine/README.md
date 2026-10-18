@@ -770,3 +770,11 @@ policy; test discovery selects ordinary functions after checking the package.
 signature tools, including libraries without an entry. It parses/indexes source
 and resolves header paths through the selected dependency aliases and PROG-2
 access rules, without checking, lowering or evaluating bodies or loading prechecks.
+
+Size-dependent inline comptime expressions publish hidden size-generic constant
+signatures. Generic TIR reads those constants with lexical size actuals; each
+selected instance materializes through the existing evaluator and data boundary.
+The cache retains its size actuals and executed implementation/signature reads,
+and budget changes retire it. Program checking selects instances after complete
+signatures and GEN-5; failures cite both the expression and its selecting call.
+Native snapshots retain the selected immutable values for ordinary static reads.

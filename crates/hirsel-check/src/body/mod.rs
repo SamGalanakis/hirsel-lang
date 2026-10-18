@@ -120,7 +120,7 @@ fn check_inner(
                     .push(Work::Enter(*body, c.frames[frame].result, frame));
             }
         }
-        (ast::ItemKind::Const { value, .. }, SignatureKind::Const(ty)) => {
+        (ast::ItemKind::Const { value, .. }, SignatureKind::Const { ty: ty, .. }) => {
             let ty = c.import(*ty, &c.input.signature.types)?;
             let frame = c.empty_frame(owner, None, Some(ty), None, false);
             c.work.push(Work::Enter(*value, Some(ty), frame));

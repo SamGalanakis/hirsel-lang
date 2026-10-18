@@ -81,6 +81,7 @@ pub(super) struct ProgramInput {
     validated: Arc<SignatureInput>,
 }
 impl QueryEngine {
+    pub(crate) fn invalidate_signature_input(&mut self) { self.signature_input.clear(); }
     /// The package's independently checked signature input; owner bodies of
     /// `package` see their private representations through it.
     pub fn validated_signature_input(
@@ -127,6 +128,9 @@ impl QueryEngine {
                 }
             }
         });
+        for (path, constant) in &self.staged_constants {
+            signatures.insert(path.clone(), (*constant.signature).clone());
+        }
         let parts: Vec<_> = signatures
             .iter()
             .flat_map(|(path, signature)| {

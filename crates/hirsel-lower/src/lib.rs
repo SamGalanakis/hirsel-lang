@@ -32,6 +32,7 @@ pub struct Plans {
     /// O evaluates a closed zero-input entry, retaining ordinary nested frames.
     pub evaluation_frame: bool,
     pub materialized: Vec<(ExprId, Materialized)>,
+    pub staged: Vec<(ExprId, TypeId)>,
     /// Nominal variant cardinalities proved by H for constructor patterns.
     pub pattern_literals: Vec<(hirsel_syntax::PatternId, hirsel_syntax::Literal)>,
     pub entry_checks: Vec<(NameSite, ExprId, hirsel_diag::RuleId)>,

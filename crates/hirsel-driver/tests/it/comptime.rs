@@ -342,3 +342,43 @@ fn source_comptime_values_have_no_data_nesting_cutoff() {
         }
     });
 }
+
+#[test]
+fn size_constant_instances_cache_separately_and_refresh_executed_dependencies() {
+    with_compiler_stack(|| {
+        use hirsel_tir::{Rvalue, TirProvider, ValueKind};
+        let source = |factor| format!("fn square(n:u64)->u64{{n*n*{factor}u64}}\nfn scaled[n:size](xs:Inline[u8,n])->u64{{let _=xs;comptime square(n)}}\n");
+        let mut engine = engine(&source(1));
+        let definition = engine.lower_to_tir(&path("scaled")).unwrap().value;
+        let constant = definition.bodies[0].rvalues.iter().find_map(|value| match value {
+            Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()),
+            _ => None,
+        }).unwrap();
+        for (size, expected) in [(2, 4), (4, 16), (2, 4)] {
+            let value = engine.constant_instance(&constant, &[size]).unwrap();
+            assert_eq!(value.root.kind, ValueKind::Constant(Constant::Integer(expected)));
+        }
+        let file = engine.sources.add("comptime.hir", source(2)).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        assert_eq!(engine.constant_instance(&constant, &[2]).unwrap().root.kind, ValueKind::Constant(Constant::Integer(8)));
+        assert_eq!(engine.constant_instance(&constant, &[4]).unwrap().root.kind, ValueKind::Constant(Constant::Integer(32)));
+        engine.comptime_limits.steps = Some(1);
+        let Err(QueryError::Diagnostics(ds)) = engine.constant_instance(&constant, &[2]) else { panic!("expected CT-1 after budget change") };
+        assert_eq!(ds[0].rule.as_str(), "CT-1");
+        engine.comptime_limits.steps = Some(1000);
+        assert_eq!(engine.constant_instance(&constant, &[2]).unwrap().root.kind, ValueKind::Constant(Constant::Integer(8)));
+    });
+}
+
+#[test]
+fn a_failed_size_instantiation_retains_its_selecting_site() {
+    with_compiler_stack(|| {
+        let source = include_str!("../../../../conformance/CT/CT-1-size-instantiation-bad.hir");
+        let mut engine = engine(source);
+        let file = engine.sources.add("comptime.hir", source.into()).unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        let diagnostic = output.diagnostics.iter().find(|d| d.rule.as_str() == "CT-1").unwrap();
+        assert!(engine.sources.slice(diagnostic.primary).unwrap().starts_with("comptime"));
+        assert!(diagnostic.secondary.iter().any(|label| engine.sources.slice(label.span) == Some("inverse(second)") && label.message.contains("[0]")), "{diagnostic:?}");
+    });
+}

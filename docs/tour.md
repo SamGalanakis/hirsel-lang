@@ -883,6 +883,41 @@ notes/tour.txt
 ```
 <!-- /tour -->
 
+## Compile-time data with generic sizes
+
+`comptime` can compute data from a selected function instantiation's size parameters.
+Each selected size is evaluated while compiling and cached with the implementations
+it executes. Runtime arguments and abstract type parameters cannot be comptime inputs;
+size arithmetic in type arguments remains forbidden.
+
+<!-- tour: conformance/CT/CT-2-closed-frame-size-run.hir -->
+[Runnable source](../conformance/CT/CT-2-closed-frame-size-run.hir)
+
+```hirsel
+fn square(n: u64) -> u64 {
+  n * n
+}
+
+fn scaled[n: size](xs: Inline[u8, n]) -> u64 {
+  let _ = xs
+  comptime square(n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let small: Inline[u8, 2] = [1, 2]
+  let large: Inline[u8, 4] = [1, 2, 3, 4]
+  test.check(t, scaled(small) == 4u64)
+  test.check(t, scaled(large) == 16u64)
+  test.check(t, scaled(small) == 4u64)
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 ## Standard library: HTTP
 
 `http.fetch` needs a `Net`, a config, a method, a URL, headers and an optional

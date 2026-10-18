@@ -981,7 +981,7 @@ impl Checker<'_> {
     pub(super) fn rvalue_unique(&self, state: &State, value: &Rvalue) -> bool {
         match value {
             Rvalue::Constant(_) | Rvalue::Size(_) | Rvalue::Shape(_) | Rvalue::FunctionReference { .. } => true,
-            Rvalue::ReadConstant { definition } => self.signatures.get(definition).is_some_and(|s| matches!(s.kind, SignatureKind::Const(ty) if self.bound(&s.types, ty, hirsel_types::Bound::Plain, &hirsel_types::GenericDeclarations::default()) || self.bound(&s.types, ty, hirsel_types::Bound::Flat, &hirsel_types::GenericDeclarations::default()) || matches!(s.types.get(ty).unwrap().kind, TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. }))),
+            Rvalue::ReadConstant { definition, .. } => self.signatures.get(definition).is_some_and(|s| matches!(s.kind, SignatureKind::Const { ty: ty, .. } if self.bound(&s.types, ty, hirsel_types::Bound::Plain, &hirsel_types::GenericDeclarations::default()) || self.bound(&s.types, ty, hirsel_types::Bound::Flat, &hirsel_types::GenericDeclarations::default()) || matches!(s.types.get(ty).unwrap().kind, TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. }))),
             Rvalue::Use(value) => {
                 self.operand_unique(state, value)
             }

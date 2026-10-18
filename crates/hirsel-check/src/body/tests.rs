@@ -214,7 +214,6 @@ fn comptime_runtime_dependencies_are_reported_at_the_name() {
         ("fn probe(x:u8)->u8{comptime (x+1u8)}", "x"),
         ("fn probe()->u8{let x=1u8;comptime x}", "x"),
         ("fn probe(x:u8){let f:fn()->u8=fn()->u8{comptime x}}", "x"),
-        ("fn probe[n:size]()->u64{comptime n}", "n"),
     ] {
         let (diagnostics, _, sources) = support::check_source(source);
         assert_eq!(
@@ -234,6 +233,7 @@ fn comptime_runtime_dependencies_are_reported_at_the_name() {
         "fn probe(x:u8)->u8{comptime 1u8}",
         "fn probe(x:u8)->u8 requires false {comptime 1u8}",
         "fn probe[T]()->u8{comptime 1u8}",
+        "fn probe[n:size]()->u64{comptime n}",
         "fn probe(x:u8)->u8{comptime {let y=1u8;y}}",
         "fn probe(x:u8)->u8{comptime (fn(z:u8)->u8{z})(1u8)}",
         "const VALUE:u8=1u8\nfn probe(x:u8)->u8{comptime VALUE}",

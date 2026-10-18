@@ -39,11 +39,21 @@ into immutable storage that lives for the whole program, before entry. Reads sha
 value and construct nothing in a noalloc reading frame; startup runs no initializer code.
 Finite evaluated data trees have no materialization depth cutoff.
 
-An inline `comptime` expression is evaluated in a closed definition-time frame: constants,
-literals, internal `let`s and their ordinary calls are allowed; outer runtime bindings,
-captures and abstract type or size names fail CT-2 at the name, with the comptime
-expression as a secondary site. Closed expressions inside generic declarations are legal.
-Enclosing contracts are not inherited, but called helpers' contracts apply.
+An inline `comptime` expression admits constants, literals, internal `let`s, ordinary
+calls and the enclosing instantiation's size parameters. A size-dependent expression
+is staged as a private size-generic constant: its signature is published before
+selection, and evaluation occurs for each selected size instantiation. Materialized
+results are cached by the constant's size actuals and executed dependencies; changing
+an executed implementation or the CT-1 budget invalidates the result. Unselected
+instantiations do not evaluate. The evaluator, interpreter and native programs use
+the same materialized data.
+
+Outer runtime bindings, captures and abstract type names still fail CT-2 at the name,
+with the comptime expression as a secondary site. A selected instantiation's failure
+keeps CT-1 at the comptime expression and cites the selecting site and size actuals.
+Closed expressions inside generic declarations remain legal. Enclosing contracts
+are not inherited, but called helpers' contracts apply. Size arithmetic in type
+positions remains forbidden; type/shape inspection remains reserved by CT-3.
 
 ### CT-3: Shapes
 
@@ -77,8 +87,8 @@ opacity, ownership and staging contracts are for a future revision of this speci
   compile-time forms. The `file` and `item` productions govern written source, not the kinds
   of checked declaration a future generator may publish.
 - **Evaluation and publication.** CT-2's closed frame is the eligibility rule for inline
-  expressions only; it does not rule out explicit compile-time type, shape or callable
-  inputs, or evaluation per instantiation. The data-only boundary restricts values
+  expressions only; size inputs are admitted as above. It does not rule out future
+  explicit compile-time type, shape or callable inputs. The data-only boundary restricts values
   materialized into a program, not internal callable evaluation or a future typed body or
   declaration artifact. Any future generation publishes declared signatures before
   dependent checking ([LANG-6](language.md#lang-6-signatures),

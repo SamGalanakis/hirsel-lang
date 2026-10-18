@@ -487,7 +487,7 @@ pub(super) fn projection_lifetimes(
                 SourceRoot::Definition(path) => {
                     let signature =
                         signatures.read_with_reads(path, &mut body.resolution.reads, provider)?;
-                    let SignatureKind::Const(root) = signature.kind else {
+                    let SignatureKind::Const { ty: root, .. } = signature.kind else {
                         continue;
                     };
                     let Ok(root) = import_type(&signature.types, root, &mut store) else {

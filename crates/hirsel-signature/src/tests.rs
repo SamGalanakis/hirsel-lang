@@ -585,7 +585,7 @@ fn reorder(mut s: Signature) -> Signature {
                     remap(r);
                 }
             }
-            SignatureKind::Const(t) => remap(t),
+            SignatureKind::Const { ty: t, .. } => remap(t),
         }
         rows.reverse();
         rows
@@ -812,7 +812,7 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
     let mut s = Fixture::new().sig();
     let absent = s.types.id(0).unwrap();
     s.types = TypeStore::default();
-    s.kind = SignatureKind::Const(absent);
+    s.kind = SignatureKind::Const { ty: absent, generics: Default::default() };
     assert_eq!(
         fingerprint(&s, &[]),
         Err(EncodingError::MissingType(absent))
@@ -826,7 +826,7 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
         }]
     });
     let cycle = s.types.id(0).unwrap();
-    s.kind = SignatureKind::Const(cycle);
+    s.kind = SignatureKind::Const { ty: cycle, generics: Default::default() };
     assert_eq!(
         fingerprint(&s, &[]),
         Err(EncodingError::StructuralCycle(cycle))
@@ -835,7 +835,7 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
         kind: TypeKind::Error,
         ..template
     });
-    s.kind = SignatureKind::Const(recovery);
+    s.kind = SignatureKind::Const { ty: recovery, generics: Default::default() };
     assert_eq!(
         fingerprint(&s, &[]),
         Err(EncodingError::RecoveryType(recovery))
@@ -1191,7 +1191,7 @@ fn hash_changes_with_noalloc_drop_bound() {
         canonical_encoding(&signature, &[])
             .unwrap()
             .windows(29)
-            .any(|w| w == b"hirsel.signature.encoding.v14")
+            .any(|w| w == b"hirsel.signature.encoding.v15")
     );
 }
 

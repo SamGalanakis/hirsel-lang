@@ -1,0 +1,21 @@
+// rule: CT-2
+// expect: run
+fn table[T, n: size](sample: T, xs: Inline[u8, n]) -> List[u64] {
+  let _ = sample
+  let _ = xs
+  comptime {
+    let mut values: List[u64] = []
+    for i in 0u64..n {
+      list.push(mut values, i * i)
+    }
+    values
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs: Inline[u8, 3] = [1, 2, 3]
+  let values = table(true, xs)
+  test.check(t, list.len(values) == 3u64)
+  test.check(t, values[2] == 4u64)
+  Ok(())
+}

@@ -562,6 +562,8 @@ conformance/CT/CT-1-fact-failure-ok.hir
 conformance/CT/CT-1-overflow-bad.hir
 conformance/CT/CT-1-overflow-ok.hir
 conformance/CT/CT-1-scalar-constant.hir
+conformance/CT/CT-1-size-instantiation-bad.hir
+conformance/CT/CT-1-size-instantiation-ok.hir
 conformance/CT/CT-1-step-exhaustion-bad.hir
 conformance/CT/CT-1-step-exhaustion-ok.hir
 conformance/CT/CT-2-closed-frame-capture-bad.hir
@@ -576,7 +578,7 @@ conformance/CT/CT-2-closed-frame-outer-contract-ok.hir
 conformance/CT/CT-2-closed-frame-outer-let-bad.hir
 conformance/CT/CT-2-closed-frame-parameter-bad.hir
 conformance/CT/CT-2-closed-frame-run.hir
-conformance/CT/CT-2-closed-frame-size-bad.hir
+conformance/CT/CT-2-closed-frame-size-run.hir
 conformance/CT/CT-2-closed-frame-type-bad.hir
 conformance/CT/CT-2-closure-constant-bad.hir
 conformance/CT/CT-2-closure-constant-ok.hir
@@ -610,6 +612,7 @@ conformance/CT/CT-2-resource-constant-bad.hir
 conformance/CT/CT-2-resource-constant-ok.hir
 conformance/CT/CT-2-resource-map-constant-bad.hir
 conformance/CT/CT-2-resource-map-constant-ok.hir
+conformance/CT/CT-2-size-data-run.hir
 conformance/CT/CT-2-sortedmap-constant-bad.hir
 conformance/CT/CT-2-sortedmap-constant-ok.hir
 conformance/CT/CT-2-wrapper-block-bad.hir

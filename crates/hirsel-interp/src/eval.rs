@@ -2240,8 +2240,12 @@ fn rvalue(
                 ty: frame.place(destination)?.ty,
             })
         }
-        Rvalue::ReadConstant { definition } => {
-            let value = constants.read(provider, &definition, runtime)?;
+        Rvalue::ReadConstant { definition, arguments } => {
+            let arguments = arguments.iter().map(|size| match size {
+                hirsel_types::Size::Constant(n) => Ok(*n),
+                hirsel_types::Size::Parameter(parameter) => frame.size(*parameter),
+            }).collect::<Result<Vec<_>, Error>>()?;
+            let value = constants.read_instance(provider, &definition, &arguments, runtime)?;
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, false);
             }

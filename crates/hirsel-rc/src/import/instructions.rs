@@ -534,7 +534,14 @@ impl Importer<'_, '_> {
                 self.push(Inst::Const { result, constant });
                 result
             }
-            V::ReadConstant { definition } => {
+            V::ReadConstant { definition, arguments } => {
+                let values = arguments.iter().map(|size| match size {
+                    hirsel_types::Size::Constant(n) => Some(*n),
+                    hirsel_types::Size::Parameter(p) => self.instances.view(self.id).substitution.sizes.iter().find(|(parameter, _)| parameter == p).map(|(_, n)| *n),
+                }).collect::<Option<Vec<_>>>();
+                let Some(values) = values else { return malformed("constant size without an actual"); };
+                let instance = hirsel_tir::constant_instance_path(definition, &values);
+                let definition = &instance;
                 if let Some(value) = self.program.constants.get(definition)
                     && let tir::ValueKind::Construct {
                         constructor: tir::Constructor::Record(record),

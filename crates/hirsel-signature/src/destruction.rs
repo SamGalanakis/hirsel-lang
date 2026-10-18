@@ -69,7 +69,7 @@ impl Normalizer<'_, '_> {
         self.generics = match kind {
             SignatureKind::Function(f) => f.generics.to_vec(),
             SignatureKind::Type(t) => t.generics.clone(),
-            SignatureKind::Const(_) => vec![],
+            SignatureKind::Const { ty: _, .. } => vec![],
         };
         let rows: Vec<_> = self
             .types
@@ -120,7 +120,7 @@ impl Normalizer<'_, '_> {
                         map(r);
                     }
                 }
-                SignatureKind::Const(t) => map(t),
+                SignatureKind::Const { ty: t, .. } => map(t),
             }
             rows
         });

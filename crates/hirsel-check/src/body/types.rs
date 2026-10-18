@@ -529,7 +529,7 @@ impl Checker<'_, '_> {
                         }
                         Ok(named)
                     }
-                    SignatureKind::Const(t) => {
+                    SignatureKind::Const { ty: t, .. } => {
                         let root = self.import(*t, &s.types)?;
                         // A counted named constant read shares program-lifetime
                         // storage, just as Copy does; it cannot acquire exclusivity.

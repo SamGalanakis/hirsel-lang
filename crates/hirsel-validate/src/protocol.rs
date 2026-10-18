@@ -548,7 +548,7 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
     let mut pending = Vec::new();
     match &signature.kind {
         SignatureKind::Type(t) => pending.extend(t.representation.map(|ty| (ty, vec![]))),
-        SignatureKind::Const(ty) => pending.push((*ty, vec![])),
+        SignatureKind::Const { ty: ty, .. } => pending.push((*ty, vec![])),
         SignatureKind::Function(_) => (),
     }
     if let SignatureKind::Function(f) = &signature.kind {

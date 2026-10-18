@@ -17,7 +17,7 @@ fn named_integer_dictionaries_materialize_declared_typed_records_on_compiler_thr
     ] {
         let path = hirsel_syntax::DefPath::core(&format!("{name}.order"));
         let declared = registry.get(&path).unwrap();
-        let SignatureKind::Const(root) = declared.kind else {
+        let SignatureKind::Const { ty: root, .. } = declared.kind else {
             panic!()
         };
         let value = engine.materialize_value(&path).unwrap();
