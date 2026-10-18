@@ -1412,7 +1412,8 @@ each socket wait of the server handshake, performs `tls.accept` with `server`, a
 `server_connection` over the secured stream; every later receive sets its own read
 timeout as above. A handshake or timeout failure is `Net(error)` and closes the stream.
 The connection then behaves exactly as a plaintext one; the handshake offers ALPN
-`http/1.1` only.
+`http/1.1` only. A server that reads the client's certificate chain performs
+`tls.accept` and `tls.peer` itself and passes the secured stream to `server_connection`.
 
 ## Unicode scalar properties and simple case
 
@@ -2229,6 +2230,41 @@ FIFO and other entries are `Unsupported(name)`; `Global` entries are skipped.
 past `limit` is `TooLarge` before any of its data is written. This is the expansion
 limit for decompression bombs. Permissions, owners and times are not applied. The
 first refusal stops extraction with the entries before it in place.
+
+## X.509 certificate fields
+
+```text
+x509.X509Error   = Malformed(u64)
+x509.Certificate = { subject: String, names: List[String], uris: List[String] }
+fn x509.certificates(chain: Bytes) -> Result[List[Bytes], x509.X509Error] uses {}
+fn x509.parse(der: Bytes) -> Result[x509.Certificate, x509.X509Error] uses {}
+```
+
+`std@1/x509` reads the identity fields of DER X.509 certificates (RFC 5280 section 4.1),
+such as the client chain [`tls.peer`](core-library.md#network) returns. It verifies
+nothing: signatures, validity periods and extensions other than the subject alternative
+names are not checked, so a program trusts only fields of a chain a handshake verified.
+
+`certificates` splits a chain into its certificates, in order: the input is DER
+certificates concatenated, each a SEQUENCE that delimits itself, and the empty chain has
+none. `parse` reads exactly one certificate, the whole input. `subject` is the subject
+Name as an RFC 4514 string: the relative distinguished names last to first, separated by
+`,`, and the attributes of a multivalued one in their DER order, separated by `+`. The
+types `CN`, `L`, `ST`, `O`, `OU`, `C`, `STREET`, `DC` and `UID` use those names and every
+other type its dotted-decimal OID. A UTF8String, PrintableString or IA5String value of a
+named type is its text with `"`, `+`, `,`, `;`, `<`, `>` and `\` escaped by a backslash, as
+are a leading space or `#` and a trailing space, and NUL written `\00`; any other value, a
+value that is not UTF-8 and every value of a dotted-decimal type is `#` and the lowercase
+hex of its whole DER element. `names` holds the subjectAltName extension's DNS names and IP
+addresses in certificate order, an address written as `std@1/net.ip_to_string` writes it,
+and `uris` its URIs, such as SPIFFE IDs; other name forms are skipped, and a certificate
+without the extension has neither.
+
+DER elements use definite lengths of at most four octets. An element that overruns its
+enclosing one, a tag other than the one RFC 5280 places there, bytes after a certificate
+in `parse`, a DNS name or URI that is not ASCII, an address of neither 4 nor 16 octets and
+a malformed OID are `Malformed(at)`, with `at` the byte offset of the element that fails.
+Both functions are pure ordinary source; outputs are owned.
 
 ## Cookies
 

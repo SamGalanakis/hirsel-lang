@@ -1,0 +1,360 @@
+// The identity fields of X.509 certificates (RFC 5280 section 4.1) and their RFC 4514
+// subject strings, read from the DER chains core tls.peer returns.
+pub type X509Error = Malformed(u64)
+
+pub type Certificate {
+  subject: String,
+  names: List[String],
+  uris: List[String],
+}
+
+// One DER element: its tag, its contents [body, end) and the offset after it.
+type Element {
+  tag: u8,
+  body: u64,
+  end: u64,
+}
+
+// Definite DER lengths of at most four octets, inside [at, limit).
+fn element(der: Bytes, at: u64, limit: u64) -> Result[Element, X509Error] uses {} {
+  if at + 2 > limit {
+    return Error(Malformed(at))
+  }
+  let tag = der[at]
+  let first: u64 = core@1/int.widen(der[at + 1])
+  let mut body = at + 2
+  let mut len: u64 = first
+  if first >= 128 {
+    let count = first - 128
+    if count == 0 || count > 4 || body + count > limit {
+      return Error(Malformed(at))
+    }
+    len = 0
+    let mut i: u64 = 0
+    while i < count {
+      let octet: u64 = core@1/int.widen(der[body + i])
+      len = len * 256 + octet
+      i += 1
+    }
+    body += count
+  }
+  if len > limit - body {
+    return Error(Malformed(at))
+  }
+  Ok(Element(tag: tag, body: body, end: body + len))
+}
+
+fn expect(der: Bytes, at: u64, limit: u64, tag: u8) -> Result[Element, X509Error] uses {} {
+  let e = element(der, at, limit)?
+  if e.tag != tag {
+    return Error(Malformed(at))
+  }
+  Ok(e)
+}
+
+// Bytes [start, end) of `data` in fresh storage.
+fn owned(data: Bytes, start: u64, end: u64) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// The DER certificates of a chain, in order: tls.peer concatenates them, each a SEQUENCE
+// that delimits itself.
+pub fn certificates(chain: Bytes) -> Result[List[Bytes], X509Error] uses {} {
+  let len = core@1/bytes.len(chain)
+  let mut out: List[Bytes] = []
+  let mut at: u64 = 0
+  while at < len {
+    let e = expect(chain, at, len, 48u8)?
+    core@1/list.push(mut out, owned(chain, at, e.end))
+    at = e.end
+  }
+  Ok(out)
+}
+
+// A certificate's subject as an RFC 4514 string, and its subject alternative names: DNS and
+// IP names in certificate order (IP addresses canonical, as std@1/net prints them), and URIs.
+pub fn parse(der: Bytes) -> Result[Certificate, X509Error] uses {} {
+  let len = core@1/bytes.len(der)
+  let certificate = expect(der, 0, len, 48u8)?
+  if certificate.end != len {
+    return Error(Malformed(certificate.end))
+  }
+  let tbs = expect(der, certificate.body, certificate.end, 48u8)?
+  let mut field = element(der, tbs.body, tbs.end)?
+  if field.tag == 160u8 {
+    field = element(der, field.end, tbs.end)?
+  }
+  // serialNumber, then signature, issuer and validity.
+  if field.tag != 2u8 {
+    return Error(Malformed(tbs.body))
+  }
+  let signature = expect(der, field.end, tbs.end, 48u8)?
+  let issuer = expect(der, signature.end, tbs.end, 48u8)?
+  let validity = expect(der, issuer.end, tbs.end, 48u8)?
+  let subject = expect(der, validity.end, tbs.end, 48u8)?
+  let spki = expect(der, subject.end, tbs.end, 48u8)?
+  let mut names: List[String] = []
+  let mut uris: List[String] = []
+  let mut at = spki.end
+  while at < tbs.end {
+    let e = element(der, at, tbs.end)?
+    if e.tag == 163u8 {
+      alternative_names(der, e, mut names, mut uris)?
+    }
+    at = e.end
+  }
+  Ok(Certificate(subject: rfc4514(der, subject)?, names: names, uris: uris))
+}
+
+// The subjectAltName extension (2.5.29.17) of the [3] extensions element.
+fn alternative_names(
+  der: Bytes,
+  explicit: Element,
+  mut names: List[String],
+  mut uris: List[String]
+) -> Result[(), X509Error] uses {} {
+  let extensions = expect(der, explicit.body, explicit.end, 48u8)?
+  let mut at = extensions.body
+  while at < extensions.end {
+    let extension = expect(der, at, extensions.end, 48u8)?
+    let id = expect(der, extension.body, extension.end, 6u8)?
+    let mut value = element(der, id.end, extension.end)?
+    if value.tag == 1u8 {
+      value = element(der, value.end, extension.end)?
+    }
+    if value.tag != 4u8 {
+      return Error(Malformed(id.end))
+    }
+    if id.end - id.body == 3 && der[id.body] == 85u8 && der[id.body + 1] == 29u8 && der[id.body + 2] == 17u8 {
+      let general = expect(der, value.body, value.end, 48u8)?
+      let mut g = general.body
+      while g < general.end {
+        let name = element(der, g, general.end)?
+        let contents = core@1/bytes.slice(der, name.body, name.end)
+        // dNSName [2], uniformResourceIdentifier [6] and iPAddress [7]; IA5String text.
+        if name.tag == 130u8 || name.tag == 134u8 {
+          let Some(text) = ia5(contents) else {
+            return Error(Malformed(g))
+          }
+          if name.tag == 130u8 {
+            core@1/list.push(mut names, take text)
+          } else {
+            core@1/list.push(mut uris, take text)
+          }
+        } else if name.tag == 135u8 {
+          let ip: IpAddr = if core@1/bytes.len(contents) == 4 {
+            V4([contents[0], contents[1], contents[2], contents[3]])
+          } else if core@1/bytes.len(contents) == 16 {
+            V6(
+              [
+                contents[0],
+                contents[1],
+                contents[2],
+                contents[3],
+                contents[4],
+                contents[5],
+                contents[6],
+                contents[7],
+                contents[8],
+                contents[9],
+                contents[10],
+                contents[11],
+                contents[12],
+                contents[13],
+                contents[14],
+                contents[15]
+              ]
+            )
+          } else {
+            return Error(Malformed(g))
+          }
+          core@1/list.push(mut names, std@1/net.ip_to_string(ip))
+        }
+        g = name.end
+      }
+    }
+    at = extension.end
+  }
+  Ok(())
+}
+
+// IA5String contents: ASCII.
+fn ia5(contents: Bytes) -> Option[String] uses {} {
+  let mut out: List[u8] = []
+  for b in contents {
+    if b >= 128u8 {
+      return None()
+    }
+    core@1/list.push(mut out, b)
+  }
+  Some(text.finish_valid(take out))
+}
+
+// RFC 4514 section 2: the RDNs last to first, separated by commas; the attributes of a
+// multivalued RDN in DER order, separated by plus signs.
+fn rfc4514(der: Bytes, name: Element) -> Result[String, X509Error] uses {} {
+  let mut rdns: List[List[u8]] = []
+  let mut at = name.body
+  while at < name.end {
+    let rdn = expect(der, at, name.end, 49u8)?
+    let mut out: List[u8] = []
+    let mut a = rdn.body
+    while a < rdn.end {
+      let attribute = expect(der, a, rdn.end, 48u8)?
+      let kind = expect(der, attribute.body, attribute.end, 6u8)?
+      let value = element(der, kind.end, attribute.end)?
+      if a != rdn.body {
+        core@1/list.push(mut out, 43u8)
+      }
+      let short = attribute_type(der, kind, mut out)?
+      core@1/list.push(mut out, 61u8)
+      attribute_value(der, kind.end, value, short, mut out)
+      a = attribute.end
+    }
+    core@1/list.push(mut rdns, take out)
+    at = rdn.end
+  }
+  let mut out: List[u8] = []
+  let mut i = core@1/list.len(rdns)
+  while i > 0 {
+    i -= 1
+    for b in rdns[i] {
+      core@1/list.push(mut out, b)
+    }
+    if i > 0 {
+      core@1/list.push(mut out, 44u8)
+    }
+  }
+  Ok(text.finish_valid(take out))
+}
+
+// RFC 4514 section 3's short names, and the dotted-decimal OID of any other type; whether
+// the name is short.
+fn attribute_type(der: Bytes, kind: Element, mut out: List[u8]) -> Result[
+  bool,
+  X509Error
+] uses {} {
+  let oid = core@1/bytes.slice(der, kind.body, kind.end)
+  let n = core@1/bytes.len(oid)
+  if n == 3 && oid[0] == 85u8 && oid[1] == 4u8 {
+    let short = if oid[2] == 3u8 {
+      "CN"
+    } else if oid[2] == 7u8 {
+      "L"
+    } else if oid[2] == 8u8 {
+      "ST"
+    } else if oid[2] == 10u8 {
+      "O"
+    } else if oid[2] == 11u8 {
+      "OU"
+    } else if oid[2] == 6u8 {
+      "C"
+    } else if oid[2] == 9u8 {
+      "STREET"
+    } else {
+      ""
+    }
+    if short != "" {
+      text.append(mut out, short)
+      return Ok(true)
+    }
+  }
+  // 0.9.2342.19200300.100.1.25 (DC) and .1 (UID).
+  if n == 10 && oid[0] == 9u8 && oid[1] == 146u8 && oid[2] == 38u8 && oid[3] == 137u8 && oid[4] == 147u8 && oid[5] == 242u8 && oid[6] == 44u8 && oid[7] == 100u8 && oid[8] == 1u8 {
+    if oid[9] == 25u8 {
+      text.append(mut out, "DC")
+      return Ok(true)
+    }
+    if oid[9] == 1u8 {
+      text.append(mut out, "UID")
+      return Ok(true)
+    }
+  }
+  // Base-128 arcs, the first octet's arc holding the first two components (X.690 8.19).
+  let mut arc: u64 = 0
+  let mut first = true
+  let mut i: u64 = 0
+  while i < n {
+    let octet: u64 = core@1/int.widen(oid[i])
+    if arc > 72057594037927935u64 || arc == 0 && octet == 128 {
+      return Error(Malformed(kind.body + i))
+    }
+    arc = arc * 128 + octet % 128
+    if octet < 128 {
+      if first {
+        let top = if arc < 80 {
+          arc / 40
+        } else {
+          2
+        }
+        std@1/u64.format_into(top, mut out)
+        core@1/list.push(mut out, 46u8)
+        std@1/u64.format_into(arc - top * 40, mut out)
+        first = false
+      } else {
+        core@1/list.push(mut out, 46u8)
+        std@1/u64.format_into(arc, mut out)
+      }
+      arc = 0
+    }
+    i += 1
+  }
+  if first || oid[n - 1] >= 128u8 {
+    return Error(Malformed(kind.body))
+  }
+  Ok(false)
+}
+
+// RFC 4514 section 2.4: a UTF8String, PrintableString or IA5String value of a short-named
+// type as escaped text; any other value, one that is not UTF-8, and every value of a
+// dotted-decimal type as '#' and the hex of its whole DER element.
+fn attribute_value(
+  der: Bytes,
+  start: u64,
+  value: Element,
+  short: bool,
+  mut out: List[u8]
+) -> () uses {} {
+  if short && (value.tag == 12u8 || value.tag == 19u8 || value.tag == 22u8) {
+    let mut raw: List[u8] = []
+    let mut i = value.body
+    while i < value.end {
+      core@1/list.push(mut raw, der[i])
+      i += 1
+    }
+    match text.finish(take raw) {
+      Ok(s) => {
+        escape(core@1/string.as_bytes(s), mut out)
+        return
+      },
+      Error(_) => (),
+    }
+  }
+  core@1/list.push(mut out, 35u8)
+  text.append(mut out, std@1/hex.encode(core@1/bytes.slice(der, start, value.end)))
+}
+
+fn escape(value: Bytes, mut out: List[u8]) -> () uses {} {
+  let n = core@1/bytes.len(value)
+  let mut i: u64 = 0
+  while i < n {
+    let b = value[i]
+    if b == 0u8 {
+      text.append(mut out, "\\00")
+    } else {
+      let special = b == 34u8 || b == 43u8 || b == 44u8 || b == 59u8 || b == 60u8 || b == 62u8 || b == 92u8
+      let edge = i == 0 && (b == 32u8 || b == 35u8) || i == n - 1 && b == 32u8
+      if special || edge {
+        core@1/list.push(mut out, 92u8)
+      }
+      core@1/list.push(mut out, b)
+    }
+    i += 1
+  }
+}

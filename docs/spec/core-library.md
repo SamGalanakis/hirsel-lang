@@ -667,7 +667,8 @@ streams.
 `tls.peer` returns the client certificate chain a successful `tls.accept` verified on the
 stream, as the DER certificates the client sent, leaf first, concatenated (each DER
 certificate delimits itself), so a program reads the peer's identity as data, and the
-chain's SHA-256 identifies it. It returns `None()` on every other stream: plain
+chain's SHA-256 identifies it; [`std@1/x509`](std-library.md#x509-certificate-fields) reads its subject and
+alternative names. It returns `None()` on every other stream: plain
 streams, streams upgraded by `tls.connect`, and `tls.accept` streams whose client sent no
 certificate. It reads handshake state only: it never blocks, is never a cancellation point,
 and answers the same after the stream's peer closes or resets.

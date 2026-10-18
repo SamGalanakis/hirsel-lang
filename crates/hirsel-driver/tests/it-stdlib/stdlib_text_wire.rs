@@ -134,6 +134,11 @@ fn cookie_is_ordinary_source() {
 }
 
 #[test]
+fn x509_is_ordinary_source() {
+    source_codec("x509", "x509", &["certificates", "parse"]);
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",
