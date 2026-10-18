@@ -128,19 +128,65 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
     let symbol = match name.as_str() {
         // Fixed declaration signatures: every entry has its exact physical ABI
         // in HIRSEL_ABI_EXPORTS; generic callbacks remain compiled bodies.
-        "string.from_bytes" | "string.slice" | "io.stdout" | "string.as_bytes"
-        | "string.position" | "string.byte_offset" | "bytes.slice" | "path.text" | "out.print"
-        | "io.dir" | "dir.narrow" | "path.of" | "arg.path" | "arg.count" | "arg.text"
-        | "file.open" | "file.read" | "file.seek" | "file.create" | "file.write"
-        | "file.append" | "file.narrow" | "file.create_atomic" | "file.commit" | "file.size"
-        | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir"
-        | "file.remove" | "file.write_bytes" | "file.write_all" | "io.monotonic_clock"
-        | "io.wall_clock" | "clock.monotonic" | "clock.wall" | "instant.ticks" | "io.random"
-        | "io.tasks" | "io.net" | "test.check" | "test.check_case" | "test.fail" | "test.dir"
-        | "test.net" | "file.read_bytes" | "file.walk" | "io.stdin" | "io.stderr"
-        | "stdin.read" | "err.print" | "env.get" | "io.process" | "proc.run" | "test.process" => {
-            Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
-        }
+        "string.from_bytes"
+        | "string.slice"
+        | "io.stdout"
+        | "string.as_bytes"
+        | "string.position"
+        | "string.byte_offset"
+        | "bytes.slice"
+        | "path.text"
+        | "out.print"
+        | "io.dir"
+        | "dir.narrow"
+        | "path.of"
+        | "arg.path"
+        | "arg.count"
+        | "arg.text"
+        | "file.open"
+        | "file.read"
+        | "file.seek"
+        | "file.create"
+        | "file.write"
+        | "file.append"
+        | "file.narrow"
+        | "file.create_atomic"
+        | "file.commit"
+        | "file.size"
+        | "file.read_dir"
+        | "file.metadata"
+        | "file.mkdir"
+        | "file.rename"
+        | "file.remove_dir"
+        | "file.remove"
+        | "file.write_bytes"
+        | "file.write_all"
+        | "io.monotonic_clock"
+        | "io.wall_clock"
+        | "clock.monotonic"
+        | "clock.wall"
+        | "instant.ticks"
+        | "io.random"
+        | "io.tasks"
+        | "io.net"
+        | "test.check"
+        | "test.check_case"
+        | "test.fail"
+        | "test.dir"
+        | "test.net"
+        | "file.read_bytes"
+        | "file.walk"
+        | "io.stdin"
+        | "io.stderr"
+        | "stdin.read"
+        | "err.print"
+        | "env.get"
+        | "io.process"
+        | "proc.run"
+        | "test.process"
+        | "random.bytes"
+        | "clock.sleep_until"
+        | "instant.checked_add" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // Streams and listeners use the same explicit Net policy.
         "net.listen"
         | "net.accept"
@@ -200,7 +246,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "io.wall_clock"
             | "clock.monotonic"
             | "clock.wall"
+            | "clock.sleep_until"
             | "io.random"
+            | "random.bytes"
             | "io.stdin"
             | "io.stderr"
             | "stdin.read"
@@ -713,6 +761,24 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((16, 8)),
         parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_clock_sleep_until",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_instant_checked_add",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_random_bytes",
+        destination: true,
+        result: Some((32, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_instant_ticks",

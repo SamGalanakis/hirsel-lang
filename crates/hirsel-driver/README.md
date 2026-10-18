@@ -129,7 +129,11 @@ from the same inventory as Operations. Scheduler and cleanup hooks therefore can
 silently inherit no-op defaults. Host sockets use CooperativeNet: parked operations
 retain typed snapshots while the evaluator retains owners and mutable loans. A
 `stdin.read` with no available byte parks its task under its token and resumes
-through `Library::read_stdin`. Socket and stdin readiness and relative timeouts are
+through `Library::read_stdin`. A `clock.sleep_until` not yet due parks on a deadline-only
+Readiness timer and is reissued when due; cancelling it finishes the token, removing the
+timer, and returns `Canceled` without a host request. `random.bytes` draws from the
+runtime's admitted provider and supplies the bytes to the library's semantic event. Socket
+and stdin readiness, timers and relative timeouts are
 polled at scheduling points; the scheduler waits only when no task is runnable. Effect-free waits observe level-triggered cancellation.
 
 `LaunchConfig::Grants` can supply an explicit Args snapshot override, validated

@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 
 use crate::RunCtx;
-use crate::io::{AdapterError, Binding, Completion, InputError, IoError, Request};
+use crate::io::{AdapterError, Binding, Completion, InputError, IoError, Request, WaitError};
 use crate::net::NetError;
 
 /// The parked requests of one run.
@@ -48,6 +48,7 @@ unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Option<Co
         Request::Print { .. } | Request::PrintStderr { .. } => {
             Completion::Unit(Err(IoError::Canceled(cause)))
         }
+        Request::SleepUntil { .. } => Completion::Wait(Err(WaitError::Canceled(cause))),
         Request::Resolve { .. } => Completion::Addresses(Err(e)),
         Request::Connect { .. } | Request::ConnectAddr { .. } => Completion::NetHandle(Err(e)),
         Request::Accept { .. } => Completion::Accepted(Err(e)),
@@ -68,10 +69,13 @@ unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Option<Co
     })
 }
 
-/// Whether `request` can wait for the host and so park its task: a stdin read or a network
-/// request.
+/// Whether `request` can wait for the host and so park its task: a stdin read, a timer
+/// wait or a network request.
 pub(crate) fn may_park(request: &Request) -> bool {
-    matches!(request, Request::ReadStdin { .. }) || crate::net::is_net_request(request)
+    matches!(
+        request,
+        Request::ReadStdin { .. } | Request::SleepUntil { .. }
+    ) || crate::net::is_net_request(request)
 }
 
 /// Perform `request` for the running task: canceled, completed, or parked until a poll

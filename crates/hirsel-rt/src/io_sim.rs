@@ -249,7 +249,11 @@ impl Adapter for SimIo {
             )
         } else if matches!(
             request,
-            Request::Monotonic { .. } | Request::Wall { .. } | Request::ReadStdin { .. }
+            Request::Monotonic { .. }
+                | Request::Wall { .. }
+                | Request::ReadStdin { .. }
+                | Request::RandomBytes { .. }
+                | Request::SleepUntil { .. }
         ) {
             if event.fault.is_some() {
                 return Err(AdapterError::InvalidCompletion);

@@ -53,7 +53,7 @@ artifact/compiler/position/instance details never belong in those fields.
 `ValidatedRun::check_revision` checks its digest, entry and launch kind.
 
 Known provider contracts have one closed enumeration, `ProviderContract`:
-`tasks.cooperative@1`, `stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1` and
+`tasks.cooperative@1`, `stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1` and
 `clock.wall.unix_ns@1`, `net.stream@1`, `net.script@2`, `process.spawn@1` and
 `process.script@1`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin

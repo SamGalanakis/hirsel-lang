@@ -25,3 +25,4 @@ mod test_reporting;
 mod text;
 mod tls;
 mod views;
+mod waits;

@@ -1,7 +1,8 @@
 //! Host readiness for the interpreter's cooperative scheduler. A host operation that
 //! would block (a socket, a resolver wakeup, stdin) records its descriptor interest under
 //! the scheduler's opaque wait token; the scheduler polls one token at suspension points
-//! and, with no runnable task, waits on every recorded interest at once.
+//! and, with no runnable task, waits on every recorded interest at once. A timer wait
+//! is a deadline with no descriptor interest.
 use crate::io::AdapterError;
 use crate::net::{NetError, SocketAddr};
 use std::cell::RefCell;
@@ -64,7 +65,8 @@ impl Readiness {
             return Ok(true);
         }
         let Some((fd, events)) = pending.interest else {
-            return Ok(true);
+            // A timer is ready only at its deadline.
+            return Ok(pending.deadline.is_none());
         };
         let mut row = libc::pollfd {
             fd,
@@ -82,6 +84,28 @@ impl Readiness {
             }
         }
     }
+    /// A timer wait for CLOCK_MONOTONIC `deadline` nanoseconds under the entered token:
+    /// true once it has passed (the token's interest is then finished), otherwise the
+    /// deadline is recorded as the token's interest and the caller parks.
+    pub(crate) fn timer(&self, deadline: u64) -> Result<bool, AdapterError> {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: now is writable; CLOCK_MONOTONIC is the clock std::time::Instant reads.
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
+            return Err(AdapterError::Unsupported("host monotonic clock".into()));
+        }
+        let ticks = (now.tv_sec as u64) * 1_000_000_000 + now.tv_nsec as u64;
+        let token = self.0.borrow().current;
+        if ticks >= deadline {
+            self.finish(token);
+            return Ok(true);
+        }
+        let left = std::time::Duration::from_nanos(deadline - ticks);
+        self.pending().deadline = Some(Instant::now() + left);
+        Ok(false)
+    }
     /// Called only with no runnable task. A false result means this provider has
     /// no external readiness source (e.g. the remaining waits are scripted).
     pub fn wait(&self) -> Result<bool, AdapterError> {
@@ -97,7 +121,9 @@ impl Readiness {
                 })
             })
             .collect();
-        if rows.is_empty() {
+        // No descriptor and no timer: nothing external can make progress. With only
+        // timers left, the poll below sleeps until the earliest is due.
+        if rows.is_empty() && state.pending.values().all(|p| p.deadline.is_none()) {
             return Ok(false);
         }
         loop {

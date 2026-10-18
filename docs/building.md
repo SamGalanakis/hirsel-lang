@@ -131,8 +131,8 @@ entry or root set, so editing a function body invalidates its recordings; while 
 runs, a request that differs from the next recorded one, a missing event or an unconsumed
 event refuses it after the output it confirmed. A tape cut short (no `complete` trailer)
 never replays. The tape path must lie outside every granted directory. Tapes hold the run
-record, including granted Env values, and every byte read or written: treat them as
-secrets.
+record, including granted Env values, every byte read or written and every
+`random.system@1` draw: treat them as secrets.
 
 ## Layout
 

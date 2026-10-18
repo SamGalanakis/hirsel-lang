@@ -78,6 +78,7 @@ pub enum ProviderContract {
     StderrBytes,
     StdoutBytes,
     RandomSplitMix64,
+    RandomSystem,
     MonotonicNanoseconds,
     WallUnixNanoseconds,
     NetStream,
@@ -86,12 +87,13 @@ pub enum ProviderContract {
     ProcessScript,
 }
 impl ProviderContract {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::TasksCooperative,
         Self::StdinBytes,
         Self::StderrBytes,
         Self::StdoutBytes,
         Self::RandomSplitMix64,
+        Self::RandomSystem,
         Self::MonotonicNanoseconds,
         Self::WallUnixNanoseconds,
         Self::NetStream,
@@ -106,6 +108,7 @@ impl ProviderContract {
             Self::StderrBytes => "stderr.bytes@1",
             Self::StdoutBytes => "stdout.bytes@1",
             Self::RandomSplitMix64 => "random.splitmix64@1",
+            Self::RandomSystem => "random.system@1",
             Self::MonotonicNanoseconds => "clock.monotonic.ns@1",
             Self::WallUnixNanoseconds => "clock.wall.unix_ns@1",
             Self::NetStream => "net.stream@1",
@@ -508,6 +511,10 @@ impl ValidatedRun {
             (io.monotonic_clock.is_some(), io.wall_clock.is_some())
         })
     }
+    /// The granted Random provider, if any.
+    pub fn random_provider(&self) -> Option<ProviderContract> {
+        ProviderContract::parse(self.record.io.as_ref()?.random.as_ref()?)
+    }
     /// Exact validated Net policy; peers supply data and never widen its rules.
     pub fn net_grant(&self) -> Option<&NetGrant> {
         self.record.io.as_ref()?.net.as_ref()
@@ -828,17 +835,20 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
                 &io.wall_clock,
                 Some(ProviderContract::WallUnixNanoseconds),
             ),
-            (
-                "io.random",
-                &io.random,
-                Some(ProviderContract::RandomSplitMix64),
-            ),
         ] {
             if let Some(name) = value
                 && (expected.is_none() || ProviderContract::parse(name) != expected)
             {
                 return Err(unsupported(field));
             }
+        }
+        if let Some(random) = &io.random
+            && !matches!(
+                ProviderContract::parse(random),
+                Some(ProviderContract::RandomSplitMix64 | ProviderContract::RandomSystem)
+            )
+        {
+            return Err(unsupported("io.random"));
         }
         if let Some(net) = &io.net
             && !matches!(

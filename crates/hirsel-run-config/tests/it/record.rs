@@ -501,6 +501,7 @@ fn unknown_versions_and_wrong_projection_contracts_refuse_with_supported_twins()
         ("io.stderr", ProviderContract::StderrBytes),
         ("io.stdout", ProviderContract::StdoutBytes),
         ("io.random", ProviderContract::RandomSplitMix64),
+        ("io.random", ProviderContract::RandomSystem),
         ("io.monotonic_clock", ProviderContract::MonotonicNanoseconds),
         ("io.wall_clock", ProviderContract::WallUnixNanoseconds),
     ] {

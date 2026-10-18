@@ -231,6 +231,23 @@ re-derived checks. A launch without a run record reads the root Proc's `io.proce
 grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. Tape forms are `process`, `test_process` and `process_run`
 requests and a `process` completion (`host_io_tape.rs`).
 
+## Random draws and timer waits
+
+`RandomSource` is the admitted Random provider: `random.splitmix64@1` keeps the SplitMix64
+state of the run's Random seed and `random.system@1` fills the draw with `getrandom(2)`,
+retrying EINTR and short reads; a draw is all-or-`Unavailable`. `hirsel_rt_v2_random_bytes`
+issues no request for a zero count. `clock.sleep_until` is `Request::SleepUntil` with the
+deadline's nanosecond ticks. Without a cooperative scheduler `RealIo` blocks the thread in
+`clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME)`, restarted on EINTR. Under one (the
+interpreter, and native runs admitted with `io.tasks`) a wait not yet due records a
+deadline-only interest under the entered token in the cooperative Readiness
+(`Readiness::timer`) and returns `Blocked`; `host_waits::may_park` includes it, so the task
+parks, the same request is reissued when `ready`, and a cancellation finishes the token,
+which removes the timer, and completes `WaitError::Canceled(cause)` with no host request. `Readiness::wait` with only timers left sleeps until the
+earliest. `State::sample` validates replayed draws and waits and, after a completed wait,
+refuses a later monotonic sample below its deadline. `instant.checked_add` is pure. Tape
+forms are `random_bytes` and `sleep_until` requests and `random` and `wait` completions.
+
 ## Bounded arenas
 
 `arena.bounded(cap, body)` (MEM-6) charges every block placed in its arena a logical size

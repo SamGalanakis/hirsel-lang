@@ -109,6 +109,16 @@ pub enum Request {
     Random {
         io: u64,
     },
+    /// `random.bytes` with a positive count; a zero count issues no request.
+    RandomBytes {
+        random: u64,
+        count: u64,
+    },
+    /// `clock.sleep_until`; the deadline is the Instant's nanosecond ticks.
+    SleepUntil {
+        clock: u64,
+        deadline: u64,
+    },
     Tasks {
         io: u64,
     },
@@ -344,6 +354,68 @@ pub enum ClockError {
     Unavailable,
     OutOfRange,
 }
+/// A timer wait's failure: its clock's, or a cancellation (CONC-3) with its cause.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WaitError {
+    Clock(ClockError),
+    Canceled(u32),
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RandomError {
+    Unavailable,
+}
+/// The admitted Random provider. Only the system provider reads the host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RandomSource {
+    /// `random.splitmix64@1`: the next SplitMix64 state.
+    SplitMix64(u64),
+    /// `random.system@1`: the host's cryptographically secure generator.
+    System,
+}
+impl RandomSource {
+    /// Successive SplitMix64 words, little-endian, the last cut short; or `count`
+    /// bytes from getrandom(2), retried on EINTR and short reads. The fill loop is
+    /// adapted from Rust library/std/src/sys/random/linux.rs (third-party/NOTICES.md).
+    pub fn draw(&mut self, count: u64) -> Result<Vec<u8>, RandomError> {
+        let count = usize::try_from(count).map_err(|_| RandomError::Unavailable)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(count)
+            .map_err(|_| RandomError::Unavailable)?;
+        match self {
+            Self::SplitMix64(state) => {
+                while bytes.len() < count {
+                    *state = state.wrapping_add(0x9e3779b97f4a7c15);
+                    let mut z = *state;
+                    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+                    let word = (z ^ (z >> 31)).to_le_bytes();
+                    let take = (count - bytes.len()).min(8);
+                    bytes.extend_from_slice(&word[..take]);
+                }
+            }
+            Self::System => {
+                bytes.resize(count, 0);
+                let mut filled = 0;
+                while filled < count {
+                    // SAFETY: the unfilled tail of `bytes` is writable for its length.
+                    let n = unsafe {
+                        libc::getrandom(bytes[filled..].as_mut_ptr().cast(), count - filled, 0)
+                    };
+                    if n < 0 {
+                        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                        {
+                            continue;
+                        }
+                        return Err(RandomError::Unavailable);
+                    }
+                    filled += n as usize;
+                }
+            }
+        }
+        Ok(bytes)
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Completion {
     Input(Result<Vec<u8>, InputError>),
@@ -351,6 +423,9 @@ pub enum Completion {
     ClockGrant(Result<u64, ()>),
     Monotonic(Result<u64, ClockError>),
     Wall(Result<i64, ClockError>),
+    Random(Result<Vec<u8>, RandomError>),
+    /// A completed timer wait.
+    Wait(Result<(), WaitError>),
     /// Deterministic capability refusal; the operation issued no host effect.
     Refused(u64),
     Checked(bool),
@@ -567,6 +642,7 @@ pub(crate) struct State {
     pub(crate) monotonic_granted: bool,
     pub(crate) wall_granted: bool,
     last_monotonic: Option<u64>,
+    pub(crate) random: RandomSource,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub env: BTreeMap<String, Option<String>>,
@@ -594,6 +670,7 @@ impl Default for State {
             monotonic_granted: false,
             wall_granted: false,
             last_monotonic: None,
+            random: RandomSource::SplitMix64(0),
             stdout: vec![],
             stderr: Vec::new(),
             env: BTreeMap::new(),
@@ -883,6 +960,20 @@ impl State {
             (Request::Wall { clock }, Completion::Wall(_)) => {
                 self.expect(*clock, Grant::WallClock)?
             }
+            (Request::RandomBytes { random, count }, Completion::Random(value)) => {
+                self.expect(*random, Grant::Random)?;
+                if *count == 0 || value.as_ref().is_ok_and(|b| b.len() as u64 != *count) {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+            }
+            // A completed wait proves the clock reached its deadline: a later
+            // recorded sample below it is not a monotonic reading.
+            (Request::SleepUntil { clock, deadline }, Completion::Wait(value)) => {
+                self.expect(*clock, Grant::MonotonicClock)?;
+                if value.is_ok() {
+                    self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(*deadline));
+                }
+            }
             _ => return Err(AdapterError::InvalidCompletion),
         }
         Ok(input)
@@ -925,7 +1016,9 @@ impl State {
                     Ok(C::ClockGrant(Err(())))
                 }
             }
-            R::Monotonic { .. } | R::Wall { .. } => Err(AdapterError::InvalidCompletion),
+            R::Monotonic { .. } | R::Wall { .. } | R::RandomBytes { .. } | R::SleepUntil { .. } => {
+                Err(AdapterError::InvalidCompletion)
+            }
             R::Random { io } | R::Tasks { io } | R::Net { io } => {
                 self.expect(*io, Grant::Io)?;
                 let (name, grant) = match request {
@@ -2349,6 +2442,123 @@ clock_export!(hirsel_rt_v2_clock_wall, Wall, clock, Wall, |v: Result<
     ClockError,
 >| v
     .map(|n| n as u64));
+/// `Option[Instant]`: tag 1 carries the advanced ticks.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstantOption {
+    pub tag: u32,
+    pub padding: u32,
+    pub ticks: u64,
+}
+/// # Safety
+/// The clock and Instant words are readable and the result writable. Pure: no request.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_instant_checked_add(
+    _ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut InstantOption,
+    _clock: *const u64,
+    start: *const u64,
+    nanoseconds: u64,
+) -> u8 {
+    let value = match unsafe { start.read() }.checked_add(nanoseconds) {
+        Some(ticks) => InstantOption {
+            tag: 1,
+            padding: 0,
+            ticks,
+        },
+        None => InstantOption {
+            tag: 0,
+            padding: 0,
+            ticks: 0,
+        },
+    };
+    unsafe { out.write(value) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context is exclusively bound, the clock and Instant words readable and the result
+/// writable. Without a cooperative scheduler the thread blocks until the deadline.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_clock_sleep_until(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    clock: *const u64,
+    deadline: *const u64,
+) -> u8 {
+    let request = Request::SleepUntil {
+        clock: unsafe { clock.read() },
+        deadline: unsafe { deadline.read() },
+    };
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Wait(value) = completion else {
+        crate::fault("clock wait completion mismatch");
+    };
+    // WaitError::Clock(e) is error 0 with the ClockError ordinal as its payload;
+    // WaitError::Canceled(cause) is error 1 with the cause.
+    let result = match value {
+        Ok(()) => UnitResult {
+            tag: 0,
+            error: 0,
+            code: 0,
+        },
+        Err(WaitError::Clock(e)) => UnitResult {
+            tag: 1,
+            error: 0,
+            code: match e {
+                ClockError::Unavailable => 0,
+                ClockError::OutOfRange => 1,
+            },
+        },
+        Err(WaitError::Canceled(cause)) => UnitResult {
+            tag: 1,
+            error: 1,
+            code: cause,
+        },
+    };
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context is bound, the Random word readable and the result writable. A zero count
+/// returns empty Bytes without a request, as the reference does.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_random_bytes(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut BytesResult,
+    random: *const u64,
+    count: u64,
+) -> u8 {
+    let value = if count == 0 {
+        Ok(vec![])
+    } else {
+        let request = Request::RandomBytes {
+            random: unsafe { random.read() },
+            count,
+        };
+        let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+            return crate::STATUS_FAILURE;
+        };
+        let Completion::Random(value) = completion else {
+            crate::fault("random completion mismatch");
+        };
+        value
+    };
+    // Initialize padding and inactive bytes; RandomError has no payload.
+    unsafe {
+        out.cast::<u8>()
+            .write_bytes(0, std::mem::size_of::<BytesResult>())
+    };
+    match value {
+        Ok(bytes) => unsafe { (*out).value = crate::text::allocate_bytes(ctx, &bytes) },
+        Err(RandomError::Unavailable) => unsafe { (*out).tag = 1 },
+    }
+    crate::STATUS_OK
+}
 /// # Safety
 /// The sampled Instant word is readable and the scalar result writable.
 #[unsafe(no_mangle)]

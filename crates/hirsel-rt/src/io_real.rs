@@ -170,6 +170,13 @@ impl RealIo {
         self.state.monotonic_granted = monotonic;
         self.state.wall_granted = wall;
     }
+    /// The admitted Random provider and the run's Random seed (used only by splitmix64).
+    pub fn set_random(&mut self, provider: hirsel_run_config::ProviderContract, seed: u64) {
+        self.state.random = match provider {
+            hirsel_run_config::ProviderContract::RandomSystem => RandomSource::System,
+            _ => RandomSource::SplitMix64(seed),
+        };
+    }
     /// A Test grant is a typed launch input; no kernel reads ambient entropy.
     pub fn test_context(&mut self, seed: u64) {
         self.state.handles = Handles::test(seed);
@@ -544,6 +551,35 @@ impl RealIo {
                 let input = clock_input(&request, fault.as_ref());
                 self.state.sample(&request, input)
             }
+            Request::RandomBytes { random, count } => {
+                self.state.expect(*random, crate::handles::Grant::Random)?;
+                let input = if fault.is_some() {
+                    Err(RandomError::Unavailable)
+                } else {
+                    self.state.random.draw(*count)
+                };
+                self.state.sample(&request, Completion::Random(input))
+            }
+            Request::SleepUntil { clock, deadline } => {
+                self.state
+                    .expect(*clock, crate::handles::Grant::MonotonicClock)?;
+                let input = match &fault {
+                    Some(fault) => Err(WaitError::Clock(match fault.error {
+                        IoError::Fault(1) => ClockError::OutOfRange,
+                        _ => ClockError::Unavailable,
+                    })),
+                    // Under cooperative admission a wait not yet due is a deadline-only
+                    // interest under the entered token; the request is reissued when due.
+                    None => match &self.cooperative {
+                        Some((readiness, _)) => match readiness.timer(*deadline)? {
+                            true => Ok(()),
+                            false => return Err(AdapterError::Blocked),
+                        },
+                        None => sleep_until(*deadline).map_err(WaitError::Clock),
+                    },
+                };
+                self.state.sample(&request, Completion::Wait(input))
+            }
             Request::ProcessRun { .. } => {
                 let directories = &self.disk.directories;
                 self.state.execute_process(
@@ -568,7 +604,13 @@ impl RealIo {
                 .state
                 .execute(&mut self.disk, &mut *self.net, &request, fault.as_ref()),
         };
-        if matches!(request, Request::Monotonic { .. } | Request::Wall { .. }) {
+        if matches!(
+            request,
+            Request::Monotonic { .. }
+                | Request::Wall { .. }
+                | Request::RandomBytes { .. }
+                | Request::SleepUntil { .. }
+        ) {
             fault = None;
         }
         let mut completion = match result {
@@ -1338,6 +1380,30 @@ fn open_component(fd: RawFd, name: &str, flags: i32, mode: u64) -> Result<File, 
     }
 }
 
+/// Block the thread until CLOCK_MONOTONIC reaches `deadline` nanoseconds; an
+/// absolute wait cannot drift when a signal restarts it. Adapted from Zig
+/// lib/std/Io/Threaded.zig sleepPosix (third-party/NOTICES.md).
+fn sleep_until(deadline: u64) -> Result<(), ClockError> {
+    let time = libc::timespec {
+        tv_sec: (deadline / 1_000_000_000) as libc::time_t,
+        tv_nsec: (deadline % 1_000_000_000) as libc::c_long,
+    };
+    loop {
+        // SAFETY: time is a valid timespec; no remainder is requested for TIMER_ABSTIME.
+        match unsafe {
+            libc::clock_nanosleep(
+                libc::CLOCK_MONOTONIC,
+                libc::TIMER_ABSTIME,
+                &time,
+                std::ptr::null_mut(),
+            )
+        } {
+            0 => return Ok(()),
+            libc::EINTR => continue,
+            _ => return Err(ClockError::Unavailable),
+        }
+    }
+}
 fn clock_input(request: &Request, fault: Option<&Fault>) -> Completion {
     let monotonic = matches!(request, Request::Monotonic { .. });
     let value = if let Some(fault) = fault {

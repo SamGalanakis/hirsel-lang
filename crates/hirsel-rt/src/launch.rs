@@ -1414,6 +1414,11 @@ unsafe fn execute(
             ) {
                 Ok(mut io) => {
                     io.set_net_rules(net_rules.clone());
+                    // The harness launch draws the reference's seeded simulation.
+                    io.set_random(
+                        hirsel_run_config::ProviderContract::RandomSplitMix64,
+                        launch_config.random_seed,
+                    );
                     if let Some(grant) = &process {
                         io.set_process_grant(grant);
                     }

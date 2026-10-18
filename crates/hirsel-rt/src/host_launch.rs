@@ -167,6 +167,9 @@ impl HostAuthority for HostGrants {
             io.set_cooperative(readiness.clone());
             io.set_net_provider(CooperativeNet::new(readiness.clone()));
         }
+        if let Some(provider) = run.random_provider() {
+            io.set_random(provider, run.config().random_seed());
+        }
         if record
             .io
             .as_ref()

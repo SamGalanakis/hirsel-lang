@@ -226,6 +226,10 @@ impl HostIo {
     }
 }
 
+/// `WaitError::Canceled(cause)`.
+fn wait_canceled(cause: u32) -> Value {
+    error(variant(1, vec![variant(cause, vec![])]))
+}
 pub(crate) struct HostLibrary {
     pub library: Library,
     pub io: HostIo,
@@ -443,6 +447,97 @@ impl HostLibrary {
         let completion = self.host(request)?;
         self.supply(name, completion)?;
         self.library.call(call, cx)
+    }
+    /// The provider draws (splitmix64 or the host's secure generator) and the library
+    /// records the supplied bytes as the semantic event. A zero count reaches no provider.
+    fn host_random(
+        &mut self,
+        call: OperationCall<'_>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let count = word(&call.arguments[1])?;
+        if count > 0 {
+            let completion = self.host(R::RandomBytes {
+                random: self.id(&call.arguments[0])?,
+                count,
+            })?;
+            let C::Random(draw) = completion else {
+                return Err(invalid());
+            };
+            self.library
+                .simulation
+                .supply_random(draw.map_err(|hirsel_rt::io::RandomError::Unavailable| ()));
+        }
+        self.library.call(call, cx)
+    }
+    /// A due or elapsed deadline completes at once; otherwise the task parks on the
+    /// timer's Readiness token until it is due or cancelled (CONC-3).
+    fn host_sleep(
+        &mut self,
+        a: &[Value],
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        if let Some(cause) = self.library.cancellation() {
+            return Ok(OperationResult::returned(wait_canceled(cause)));
+        }
+        self.yield_now = true;
+        let token = self.next_wait;
+        self.next_wait += 1;
+        match self.sleep_request(a, token) {
+            Err(Error::Blocked(_)) => {}
+            result => return result,
+        }
+        self.waits.insert(
+            token,
+            HostWait {
+                name: "clock.sleep_until".into(),
+                arguments: a.to_vec(),
+            },
+        );
+        Ok(OperationResult::Park {
+            token,
+            wait: hirsel_interp::BlockedWait {
+                spawn_path: self.library.task_path(),
+                anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                kind: "clock.sleep_until".into(),
+                targets: vec![],
+            },
+        })
+    }
+    fn sleep_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
+        let Value::Handle { kind, id: deadline } = &a[1] else {
+            return Err(invalid());
+        };
+        if kind != "Instant" {
+            return Err(invalid());
+        }
+        let clock = self.id(&a[0])?;
+        self.io.adapter().enter(token);
+        let completion = self.host(R::SleepUntil {
+            clock,
+            deadline: *deadline,
+        });
+        if !matches!(completion, Err(Error::Blocked(_))) {
+            self.io.adapter().finish(token);
+        }
+        let completion = completion?;
+        let C::Wait(outcome) = completion else {
+            return Err(invalid());
+        };
+        Ok(OperationResult::returned(match outcome {
+            Ok(()) => ok(Value::Unit),
+            Err(hirsel_rt::io::WaitError::Clock(e)) => error(variant(
+                0,
+                vec![variant(
+                    match e {
+                        hirsel_rt::io::ClockError::Unavailable => 0,
+                        hirsel_rt::io::ClockError::OutOfRange => 1,
+                    },
+                    vec![],
+                )],
+            )),
+            Err(hirsel_rt::io::WaitError::Canceled(cause)) => wait_canceled(cause),
+        }))
     }
     /// Read host stdin into the simulation the library then consumes. False when no
     /// byte is available yet: the token keeps the descriptor's readiness interest.
@@ -1121,6 +1216,23 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         }
         let name = wait.name.clone();
         let arguments = wait.arguments.clone();
+        if name == "clock.sleep_until" {
+            // Cancelling a pending wait removes its timer; nothing reaches the host.
+            if canceled {
+                self.io.adapter().finish(token);
+                self.waits.remove(&token);
+                return Ok(Some(OperationResult::returned(wait_canceled(
+                    self.library.cancellation().unwrap(),
+                ))));
+            }
+            return match self.sleep_request(&arguments, token) {
+                Err(Error::Blocked(_)) => Ok(None),
+                result => {
+                    self.waits.remove(&token);
+                    result.map(Some)
+                }
+            };
+        }
         if name == "stdin.read" {
             // A canceled read consumes nothing; the library reports Canceled.
             if canceled {
@@ -1169,6 +1281,14 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 let result = self.host_input(&name, call, cx);
                 self.echo(cx.stdout)?;
                 return result;
+            }
+            if name == "random.bytes" {
+                return self.host_random(call, cx);
+            }
+            if name == "clock.sleep_until"
+                && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
+            {
+                return self.host_sleep(call.arguments, cx).map(Some);
             }
             if name == "io.dir" || name == "io.monotonic_clock" || name == "io.wall_clock" {
                 if !matches!(call.arguments.first(),Some(Value::Handle {kind,..}) if kind=="Io") {

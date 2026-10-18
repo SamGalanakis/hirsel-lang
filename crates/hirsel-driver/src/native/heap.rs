@@ -31,6 +31,8 @@ struct Io {
     files: BTreeMap<(u64, String), std::sync::Arc<()>>,
     network: hirsel_rt::io_net_script::ScriptIo,
     network_handles: BTreeMap<u64, u64>,
+    /// `random.splitmix64@1` from the launch's Random seed, as the reference draws.
+    random: hirsel_rt::io::RandomSource,
     /// The last call was a capability operation (a scheduling point).
     yielded: bool,
     detached_directories: BTreeSet<u64>,
@@ -38,9 +40,10 @@ struct Io {
 }
 
 impl Io {
-    fn for_launch(kind: &super::link::LaunchKind, test_seed: u64) -> Self {
+    fn for_launch(kind: &super::link::LaunchKind, test_seed: u64, random_seed: u64) -> Self {
         let mut io = Self::new();
         io.test_seed = test_seed;
+        io.random = hirsel_rt::io::RandomSource::SplitMix64(random_seed);
         io.network = hirsel_rt::io_net_script::ScriptIo::new(
             matches!(kind, super::link::LaunchKind::Test).then_some(test_seed),
         );
@@ -65,6 +68,7 @@ impl Io {
             files: BTreeMap::new(),
             network: Default::default(),
             network_handles: BTreeMap::new(),
+            random: hirsel_rt::io::RandomSource::SplitMix64(0),
             yielded: false,
             detached_directories: BTreeSet::new(),
             resolved_directories: BTreeMap::new(),
@@ -424,6 +428,49 @@ impl Io {
                 scalar: ScalarKind::U64,
                 bits: u128::from(*ticks),
             },
+            (
+                Some("instant"),
+                "checked_add",
+                [
+                    OpValue::Handle(_),
+                    OpValue::Handle(ticks),
+                    OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits,
+                    },
+                ],
+            ) => match ticks.checked_add(*bits as u64) {
+                Some(ticks) => OpValue::Variant {
+                    tag: 1,
+                    value: Box::new(OpValue::Handle(ticks)),
+                },
+                None => OpValue::Variant {
+                    tag: 0,
+                    value: Box::new(OpValue::Unit),
+                },
+            },
+            (
+                Some("random"),
+                "bytes",
+                [
+                    OpValue::Handle(random),
+                    OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: count,
+                    },
+                ],
+            ) => {
+                if !matches!(self.grants.get(random), Some(IoGrant::Random)) {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                match self.random.draw(*count as u64) {
+                    Ok(bytes) => io_ok(OpValue::ByteSequence(bytes)),
+                    Err(_) => OpValue::Variant {
+                        tag: 1,
+                        value: Box::new(OpValue::Unit),
+                    },
+                }
+            }
             (
                 Some("io" | "dir"),
                 kind @ ("dir" | "narrow"),
@@ -1308,7 +1355,7 @@ pub fn run_heap(
         &heap,
         entry,
         &args,
-        &mut Io::for_launch(kind, program.launch.test_seed),
+        &mut Io::for_launch(kind, program.launch.test_seed, program.launch.random_seed),
         &config(None, kind),
     );
     let audit = run.result.as_ref().map_err(|v| violation(entry, v, None))?;
@@ -1343,7 +1390,13 @@ pub fn heap_campaign(
         &heap,
         entry,
         &args,
-        &mut || Box::new(Io::for_launch(kind, program.launch.test_seed)),
+        &mut || {
+            Box::new(Io::for_launch(
+                kind,
+                program.launch.test_seed,
+                program.launch.random_seed,
+            ))
+        },
         &config(None, kind),
     );
     if let Some((site, v)) = campaign.first_violation() {

@@ -372,7 +372,8 @@ empty `Bytes` without consulting the provider. A draw is nonblocking, like clock
 so it is not a cancellation point ([CONC-3](concurrency.md#conc-3-cancellation)), and each
 draw is a recorded capability input. The provider is chosen at launch
 ([providers](determinism.md#run-configuration)): `random.splitmix64@1` is a deterministic
-simulation, predictable from the run's Random seed, and never protects a secret.
+simulation, predictable from the run's Random seed, and never protects a secret;
+`random.system@1` reads the host's cryptographically secure generator.
 `std@1/random` builds integer and bounded draws on this one operation.
 
 `err.print` and `out.print` write exactly the supplied UTF-8 bytes, with no newline. `Canceled` means no

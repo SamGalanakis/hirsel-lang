@@ -1,5 +1,6 @@
-//! Additional typed tape forms for host streams, exact environment reads and processes.
-use crate::io::{Completion, EnvError, InputError, Request};
+//! Additional typed tape forms for host streams, exact environment reads, processes,
+//! random draws and timer waits.
+use crate::io::{ClockError, Completion, EnvError, InputError, RandomError, Request, WaitError};
 use hirsel_run_config::{ExitStatus, ProcessFailure, ProcessOutcome, hex};
 
 fn failure_word(failure: ProcessFailure) -> String {
@@ -22,6 +23,8 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         Request::EnvGet { env, name } => format!("env_get {env} {}", hex(name.as_bytes())),
         Request::Process { io } => format!("process {io}"),
         Request::Ready { wait, polls } => format!("ready {wait} {polls}"),
+        Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
+        Request::SleepUntil { clock, deadline } => format!("sleep_until {clock} {deadline}"),
         Request::TestProcess { test, runs } => format!(
             "test_process {test} {}",
             hex(&hirsel_run_config::encode_process_runs(runs))
@@ -64,6 +67,16 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         Completion::Ready => "ready".into(),
         Completion::Env(Err(EnvError::NotGranted)) => "env not_granted".into(),
         Completion::Env(Err(EnvError::InvalidUtf8)) => "env invalid_utf8".into(),
+        Completion::Random(Ok(bytes)) => format!("random ok {}", hex(bytes)),
+        Completion::Random(Err(RandomError::Unavailable)) => "random unavailable".into(),
+        Completion::Wait(Ok(())) => "wait ok".into(),
+        Completion::Wait(Err(WaitError::Clock(ClockError::Unavailable))) => {
+            "wait unavailable".into()
+        }
+        Completion::Wait(Err(WaitError::Clock(ClockError::OutOfRange))) => {
+            "wait out_of_range".into()
+        }
+        Completion::Wait(Err(WaitError::Canceled(cause))) => format!("wait canceled {cause}"),
         Completion::Process(ProcessOutcome::Output {
             status,
             stdout,
@@ -127,6 +140,14 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             wait: number(wait)?,
             polls: number(polls)?,
         },
+        ["random_bytes", random, count] => Request::RandomBytes {
+            random: number(random)?,
+            count: number(count)?,
+        },
+        ["sleep_until", clock, deadline] => Request::SleepUntil {
+            clock: number(clock)?,
+            deadline: number(deadline)?,
+        },
         ["test_process", test, runs] => Request::TestProcess {
             test: number(test)?,
             runs: hirsel_run_config::decode_process_runs(&bytes(runs)?)
@@ -174,6 +195,12 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["ready"] => Completion::Ready,
         ["env", "not_granted"] => Completion::Env(Err(EnvError::NotGranted)),
         ["env", "invalid_utf8"] => Completion::Env(Err(EnvError::InvalidUtf8)),
+        ["random", "ok", b] => Completion::Random(Ok(bytes(b)?)),
+        ["random", "unavailable"] => Completion::Random(Err(RandomError::Unavailable)),
+        ["wait", "ok"] => Completion::Wait(Ok(())),
+        ["wait", "unavailable"] => Completion::Wait(Err(WaitError::Clock(ClockError::Unavailable))),
+        ["wait", "out_of_range"] => Completion::Wait(Err(WaitError::Clock(ClockError::OutOfRange))),
+        ["wait", "canceled", cause] => Completion::Wait(Err(WaitError::Canceled(number(cause)?))),
         [
             "process",
             kind @ ("exited" | "signaled"),

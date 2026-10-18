@@ -161,6 +161,9 @@ pub fn replay_interpreter_with_fixture(
                 Request::Ready { .. } => {
                     panic!("the interpreter oracle runs no cooperative host scheduler")
                 }
+                Request::RandomBytes { .. } | Request::SleepUntil { .. } => {
+                    panic!("random and wait tapes replay through tests/it/waits.rs")
+                }
                 Request::MonotonicClock { io } => ("io.monotonic_clock", vec![handle("Io", *io)]),
                 Request::WallClock { io } => ("io.wall_clock", vec![handle("Io", *io)]),
                 Request::Monotonic { clock } => {

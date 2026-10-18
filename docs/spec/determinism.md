@@ -97,7 +97,7 @@ passed through from the launcher's environment; `env` may be omitted for none. F
 `{"provider": "process.spawn@1", "rules": [{"program": "/usr/bin/git", "env": ["HOME"]}]}`.
 
 **Providers** name versioned observable contracts, identical for real hosts, simulation and
-replay: `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1`,
+replay: `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1`,
 `clock.wall.unix_ns@1`, `tasks.cooperative@1`, `net.stream@1`, `net.script@2`,
 `process.spawn@1` and `process.script@1`.
 `tasks.cooperative@1` supplies structured tasks with cooperative scheduling at the
@@ -108,7 +108,11 @@ wait resumes, with destruction shielded as required by CONC-3. `random.splitmix6
 on every host: a draw of `n` bytes takes successive SplitMix64 outputs (state starting at
 `inputs.random_seed`, advanced by `0x9e3779b97f4a7c15` per output), each little-endian,
 concatenated and cut to `n`, consuming one output per started eight bytes. It is
-predictable from the seed and is never cryptographically secure. `net.stream@1` is the host
+predictable from the seed and is never cryptographically secure. `random.system@1` reads the host's
+cryptographically secure generator (on Linux, `getrandom(2)` without flags, which waits
+only once, for the boot-time pool, and is retried on interruption and short reads); any
+other failure is `Unavailable()` with no bytes. A deterministic simulation never supplies
+it, and its draws are never derived from a seed. `net.stream@1` is the host
 network with the [network semantics of the core library](core-library.md#network).
 `net.script@2` additionally takes `peers`, an array of scripted peer records in schema
 order, and serves the program from them exactly as `test.net` does; `peers` is invalid under
@@ -277,6 +281,16 @@ recorded. Replay returns the recorded completion without spawning anything, and 
 the program check from the bound run configuration: a recorded completion that contradicts
 it is a replay refusal, like any other mismatch. Recordings hold whatever the child wrote,
 so they are as secret-bearing as the child's output.
+
+### Random and timer recording
+
+A draw is recorded at the call: the request (the `Random` handle and the count) and the
+completion (exactly the drawn bytes, or `Unavailable()`). Replay returns the recorded bytes
+without consulting any generator. A `random.system@1` draw is secret material: a tape that
+holds one is as secret-bearing as its granted `Env` values, and no tool prints a tape's
+drawn bytes. A completed `clock.sleep_until` is recorded with its deadline ticks and its
+outcome; replay returns that outcome at once, never waits, and refuses a later recorded
+monotonic sample below a completed deadline. A cancelled wait issues no provider request.
 
 ## The Blocked observation
 

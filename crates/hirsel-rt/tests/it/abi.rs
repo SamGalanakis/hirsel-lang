@@ -397,8 +397,11 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
         "_f64_bits",
         "_from_bits",
     ] {
+        // `instant.checked_add` advances a branded Instant, not an integer.
         assert!(
-            !exported.iter().any(|s| s.ends_with(family)),
+            !exported
+                .iter()
+                .any(|s| s.ends_with(family) && s != "hirsel_rt_v2_instant_checked_add"),
             "a scalar runtime entry `*{family}` outlived its instruction"
         );
     }
