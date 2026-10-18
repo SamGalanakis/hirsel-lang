@@ -471,7 +471,12 @@ pub fn real_io_replay_with_config(
                 printed.extend_from_slice(bytes);
             }
         }
-        if printed != reference.output {
+        // A Test report (a failed check, a scripted peer's or child's Expect) is no Print:
+        // replay re-derives it, and the replayed observation must still be the reference.
+        let reported = events
+            .iter()
+            .any(|e| e.completion == hirsel_rt::io::Completion::Checked(false));
+        if printed != reference.output && !(reported && reference.output.starts_with(&printed)) {
             return Err(NativeError::new(
                 StageName::Launch,
                 "the recorded prints are not the reference output",

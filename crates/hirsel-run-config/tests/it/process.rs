@@ -136,7 +136,7 @@ fn unknown_process_providers_refuse_instead_of_widening() {
 fn scripted_children_belong_only_to_the_script_provider() {
     let children = json!([
         {"program": "/bin/cat", "args": [], "steps": [
-            {"expect": [104, 105]}, {"stdout": [104, 105]}, {"stderr": []}, {"exit": {"exited": 0}}
+            {"expect": [104, 105]}, {"print": [104, 105]}, {"print_err": []}, {"exit": {"exited": 0}}
         ]}
     ]);
     let run = validate(
