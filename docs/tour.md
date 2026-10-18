@@ -742,8 +742,14 @@ f-string. The association promises that the function keeps the builder unique;
 the compiler proves its body, so no ownership annotation is needed. A hole of
 that type calls it, so records, variants and generic types (with a function generic
 over the same parameters) format like scalars; nothing formats without the
-attribute. Fill, alignment and width pad the produced text as they pad strings. A width or precision
-can come from a `u64` in scope: `{name:width$}`, `{hours:.places$}`.
+attribute. Fill, alignment and width pad the produced text as they pad strings.
+A width or precision can come from a `u64` in scope: `{name:width$}`, `{hours:.places$}`.
+Text width measures estimated display cells over whole Unicode16 grapheme clusters:
+`text.display_width("界")` is 2 and `text.display_width("e\u{301}")` is 1.
+Thus `f"|{"界":>4}|"` produces `"|  界|"`, and precision 1 keeps all of
+`"e\u{301}"`, including its accent. String precision keeps the longest whole-cluster
+prefix that fits. A wide fill repeats only while it fits each side's padding,
+then spaces fill the remaining cell: `f"|{"x":界>4}|"` is `"|界 x|"`.
 
 <!-- tour: conformance/SEM/SEM-3-tour-15-format-run.hir -->
 [Runnable source](../conformance/SEM/SEM-3-tour-15-format-run.hir)

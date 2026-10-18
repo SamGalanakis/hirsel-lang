@@ -14,7 +14,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, f"{1i16:>3}" == "  1")
   test.check(t, f"{1i32:^3}" == " 1 ")
   test.check(t, f"{12345u64:2}" == "12345")
-  test.check(t, f"{"🐑é":4}" == "🐑é  ")
+  test.check(t, f"{"🐑é":4}" == "🐑é ")
   test.check(t, f"{false:>7}" == "  false")
   Ok(())
 }

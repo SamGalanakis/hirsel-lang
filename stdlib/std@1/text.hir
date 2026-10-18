@@ -28,7 +28,7 @@ pub fn finish_valid(take builder: List[u8]) -> String uses {} {
   }
 }
 
-// Pads the text appended to `out` since byte `start` to `width` Unicode scalars,
+// Pads the text appended to `out` since byte `start` to `width` display cells,
 // left-aligned by default: an f-string hole of String, bool or a type with
 // @format whose only options are fill, alignment and width.
 @preserves_unique(out)
@@ -48,7 +48,7 @@ pub fn pad_number_from(
   internal.format.pad_from(start, fill, align, width, true, mut out)
 }
 
-// Width and precision count Unicode scalars, following Rust Formatter::pad.
+// Precision retains the longest prefix of whole clusters that fits in cells.
 @preserves_unique(out)
 pub fn format_into_spec(
   value: String,
@@ -61,21 +61,22 @@ pub fn format_into_spec(
   mut out: List[u8]
 ) -> () uses {} {
   let mut count: u64 = 0
-  for scalar in core@1/string.scalars(value) {
-    if flags & 8 != 0 && count == precision {
+  for cluster in unicode.graphemes(value) {
+    let cells = cluster_width(cluster)
+    if flags & 8 != 0 && cells > precision - count {
       break
     }
-    count += 1
+    count += cells
   }
   let (left, right) = internal.format.padding(width, count, align, false)
   internal.format.repeat(mut out, fill, left)
   let mut at: u64 = 0
-  for scalar in core@1/string.scalars(value) {
+  for cluster in unicode.graphemes(value) {
     if at == count {
       break
     }
-    char.format_into(scalar, mut out)
-    at += 1
+    append(mut out, cluster)
+    at += cluster_width(cluster)
   }
   internal.format.repeat(mut out, fill, right)
 }

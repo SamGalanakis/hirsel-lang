@@ -19,7 +19,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, f"{1e21f64:.1}" == "1000000000000000000000.0")
   test.check(t, f"{1e-7f64:.8}" == "0.00000010")
   test.check(t, f"{0.1f32:.10}" == "0.1000000015")
-  test.check(t, f"{"🐑éabc":.2}" == "🐑é")
+  test.check(t, f"{"🐑éabc":.2}" == "🐑")
   test.check(t, f"{"abc":.0}" == "")
   test.check(t, f"{"abc":>5.2}" == "   ab")
   test.check(t, f"{1u64:.3}" == "1")

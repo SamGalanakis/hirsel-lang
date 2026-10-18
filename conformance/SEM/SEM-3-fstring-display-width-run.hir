@@ -1,0 +1,59 @@
+// rule: SEM-3
+// expect: run
+// P1868R2 column/precision examples, Unicode16 clusters and cell fills.
+@format(label_text)
+type Label {
+  value: String,
+}
+
+fn label_text(label: Label, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, label.value)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, text.display_width("") == 0)
+  test.check(t, text.display_width("hello") == 5)
+  test.check(t, text.display_width("界") == 2)
+  test.check(t, text.display_width("ｅ") == 2)
+  test.check(t, text.display_width("e\u{301}") == 1)
+  test.check(t, text.display_width("👩‍👩‍👧‍👦") == 2)
+  test.check(t, text.display_width("👍🏽") == 2)
+  test.check(t, text.display_width("🇩🇪") == 1)
+  test.check(t, text.display_width("\u{301}") == 1)
+  test.check(t, text.display_width("\r\n") == 1)
+  test.check(t, text.display_width("\t") == 1)
+  test.check(t, text.display_width("éΩ·") == 3)
+  test.check(t, text.display_width("『世界人権宣言』") == 16)
+  test.check(t, text.display_width("世界人权宣言") == 12)
+  test.check(t, text.display_width("Всеобщая декларация прав человека") == 33)
+  test.check(t, text.display_width("\u{1f680}") == 2)
+  test.check(t, text.display_width("\u{1fae8}") == 2)
+  test.check(t, text.display_width("\u{1f321}") == 2)
+  test.check(t, text.display_width("\u{20000}") == 2)
+  test.check(t, f"|{"界":>4}|" == "|  界|")
+  test.check(t, f"|{"e\u{301}":^4}|" == "| e\u{301}  |")
+  test.check(t, f"|{"👩‍👩‍👧‍👦":4}|" == "|👩‍👩‍👧‍👦  |")
+  test.check(t, f"|{"界":.1}|" == "||")
+  test.check(t, f"|{"e\u{301}x":.1}|" == "|e\u{301}|")
+  test.check(t, f"|{"👩‍👩‍👧‍👦x":.2}|" == "|👩‍👩‍👧‍👦|")
+  test.check(t, f"|{"a界b":.2}|" == "|a|")
+  test.check(t, f"|{"界":>4.1}|" == "|    |")
+  test.check(t, f"|{"e\u{301}":.0}|" == "||")
+  test.check(t, f"|{"x":界>4}|" == "|界 x|")
+  test.check(t, f"|{"x":界<4}|" == "|x界 |")
+  test.check(t, f"|{"x":界^4}|" == "| x界|")
+  test.check(t, f"|{"":界^3}|" == "| 界|")
+  test.check(t, f"|{7u64:界>4}|" == "|界 7|")
+  test.check(t, f"|{7.0f64:界>6.1}|" == "|界 7.0|")
+  test.check(t, f"|{"x":́>3}|" == "|\u{301}\u{301}x|")
+  let w: u64 = 4
+  let p: u64 = 1
+  test.check(t, f"|{"e\u{301}x":>w$.p$}|" == "|   e\u{301}|")
+  let label = Label(value: "界e\u{301}")
+  test.check(t, f"before|{label:>w$}|after" == "before| 界e\u{301}|after")
+  test.check(t, f"|{label:界<w$}|" == "|界e\u{301} |")
+  test.check(t, f"|{label:^6}|" == "| 界e\u{301}  |")
+  let line = Label(value: "\r\n")
+  test.check(t, f"|{line:>3}|" == "|  \r\n|")
+  Ok(())
+}

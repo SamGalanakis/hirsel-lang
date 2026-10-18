@@ -196,7 +196,7 @@ and width is its plain append followed by
 `text.pad_from(start: u64, fill: char, align: u64, width: u64, mut out: List[u8]) -> () uses {}`,
 or `text.pad_number_from` with the same parameters for an integer or float, where
 `start` is the builder's byte length before the append: they pad the text appended since
-`start` to `width` Unicode scalars, left-aligned and right-aligned by default
+`start` to `width` estimated display cells, left-aligned and right-aligned by default
 respectively. Any other specified hole calls the value's module's
 `format_into_spec(value, fill: char, align: u64, width: u64, precision: u64,
 flags: u64, kind: u64, mut out: List[u8]) -> () uses {}`; `String` uses
@@ -210,8 +210,13 @@ Ordinary callers must supply these same valid option encodings.
 
 - `{x:9}` sets a minimum width, right-aligned for numbers and left-aligned for
   strings and bool. `<`, `>` and `^` choose left, right and center alignment;
-  odd center padding puts the extra scalar on the right. `*^9` chooses `*` as fill.
-  Width and string precision count Unicode scalars, not UTF-8 bytes or graphemes.
+  odd center padding puts the extra cell on the right. `*^9` chooses `*` as fill.
+  Width and string precision count estimated display cells over whole extended
+  grapheme clusters, using the same calculation as `text.display_width` below.
+  On each padding side, repeat as many whole fill characters as fit its cell
+  deficit, then append spaces for any remainder. A wide fill never overshoots.
+  Fill characters are measured independently, even when adjacent fills or text
+  would join them into a cluster (for example, a combining fill counts 1).
 - `{x:09}` pads numbers with zeros after their sign and radix prefix, overriding
   alignment and fill. `{x:+}` adds a plus for nonnegative numbers; a minus remains
   on negative values, including negative zero. `-` is the default sign policy.
@@ -220,7 +225,8 @@ Ordinary callers must supply these same valid option encodings.
   part. Default float formatting retains its shortest round-trip representation
   and existing fixed/scientific thresholds. Both paths use exact decimal rounding.
   NaN and infinities keep their ordinary spelling; NaN has no sign. Strings and bool are truncated
-  to at most the precision's scalar count before padding; integer precision is ignored.
+  to the longest prefix of whole clusters whose estimated width fits the precision
+  before padding; integer precision is ignored.
 - `{x:x}`, `{x:X}`, `{x:b}` and `{x:o}` format integers in lowercase hex,
   uppercase hex, binary and octal. Signed radix output uses the scalar's two's
   complement bit width. `#` adds `0x`, `0b` or `0o` (also `0x` for uppercase hex).
@@ -230,8 +236,23 @@ Ordinary callers must supply these same valid option encodings.
 - `{x:w$}`, `{x:.p$}` and `{x:>w$.p$}` take the width or precision from the `u64` named
   `w` or `p`, exactly as the same constant would.
 - A `@format` type's text takes fill, alignment and width as a string's does, counting
-  Unicode scalars and left-aligned by default; precision, sign, `#`, `0` and radix
+  estimated display cells and left-aligned by default; precision, sign, `#`, `0` and radix
   formats on it are SEM-3.
+
+`@noalloc text.display_width(s: String) -> u64 uses {}` returns the sum of the
+estimated widths of the first scalar in each Unicode16 default extended grapheme
+cluster (`unicode.graphemes`). Following P1868R2's estimate, a first scalar counts
+2 when its pinned Unicode 16.0.0 East_Asian_Width is W or F, or it is in one of
+these inclusive ranges: U+1100–115F, U+2329–232A, U+2E80–303E, U+3040–A4CF,
+U+AC00–D7A3, U+F900–FAFF, U+FE10–FE19, U+FE30–FE6F, U+FF00–FF60,
+U+FFE0–FFE6, U+1F300–1F64F, U+1F900–1F9FF, U+20000–2FFFD or U+30000–3FFFD.
+Every other first scalar counts 1, including isolated combining marks and controls;
+the empty string counts 0. The estimate is locale-independent and does not expand
+tabs, interpret terminal escapes or promise a particular font's rendering.
+For example, `text.display_width("界")` is 2, `text.display_width("e\u{301}")`
+is 1, and a family ZWJ emoji beginning with U+1F469 is 2. Precision 1 keeps the
+accented cluster whole and omits the CJK cluster entirely. Dynamic `name$` counts
+and padded `@format` text use this same estimate.
 
 An empty specification is default formatting. Unknown type characters, malformed
 options, overflowing constants and positional (`1$`) or `*` counts are SEM-3.

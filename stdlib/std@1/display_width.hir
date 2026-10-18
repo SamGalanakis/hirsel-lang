@@ -1,0 +1,42 @@
+// Range search adapted from the Go unicode search used by unicode_properties.hir.
+// Width follows P1868R2: only the first scalar of each extended cluster counts.
+@noalloc
+fn width_scalar_at(at: u64) -> u32 uses {} {
+  let a: u32 = core@1/int.widen(DISPLAY_WIDE[at])
+  let b: u32 = core@1/int.widen(DISPLAY_WIDE[at + 1])
+  let c: u32 = core@1/int.widen(DISPLAY_WIDE[at + 2])
+  a << 16 | b << 8 | c
+}
+
+@noalloc
+fn cluster_width(cluster: String) -> u64 uses {} {
+  for scalar in core@1/string.scalars(cluster) {
+    let cp = core@1/char.to_u32(scalar)
+    let mut low: u64 = 0
+    let mut high = core@1/bytes.len(DISPLAY_WIDE) / 6
+    while low < high {
+      let middle = low + (high - low) / 2
+      if cp < width_scalar_at(middle * 6) {
+        high = middle
+      } else if cp > width_scalar_at(middle * 6 + 3) {
+        low = middle + 1
+      } else {
+        return 2
+      }
+    }
+    return 1
+  }
+  0
+}
+
+/// Estimated display cells over Unicode16 extended grapheme clusters.
+/// Each cluster's first scalar counts 2 for EAW W/F or a P1868R2 wide range,
+/// otherwise 1, including isolated combining marks and controls. Empty is 0.
+@noalloc
+pub fn display_width(s: String) -> u64 uses {} {
+  let mut width: u64 = 0
+  for cluster in unicode.graphemes(s) {
+    width += cluster_width(cluster)
+  }
+  width
+}

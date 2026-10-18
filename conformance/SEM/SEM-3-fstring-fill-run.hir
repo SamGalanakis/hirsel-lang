@@ -4,7 +4,7 @@
 pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, f"{"1234567890":/^10.8}" == "/12345678/")
   test.check(t, f"{"a":*^9}" == "****a****")
-  test.check(t, f"{"é":🐑^4}" == "🐑é🐑🐑")
+  test.check(t, f"{"é":🐑^4}" == " é🐑")
   test.check(t, f"{1u8:*>4}" == "***1")
   test.check(t, f"{-1i8:*<5}" == "-1***")
   test.check(t, f"{"":*^3}" == "***")

@@ -1,10 +1,27 @@
-// Padding and sign/prefix placement follow Rust core::fmt::Formatter.
+// Sign/prefix placement follows Rust core::fmt::Formatter. Padding uses cells.
+// Each side emits whole fills, then a space when a wide fill cannot fit.
 @preserves_unique(out)
 pub fn repeat(mut out: List[u8], fill: char, count: u64) -> () uses {} {
-  let mut at: u64 = 0
-  while at < count {
-    char.format_into(fill, mut out)
-    at += 1
+  if count == 0 {
+    return
+  }
+  if core@1/char.to_u32(fill) < 128 {
+    let mut at: u64 = 0
+    while at < count {
+      char.format_into(fill, mut out)
+      at += 1
+    }
+    return
+  }
+  let rendered = char.to_string(fill)
+  let cells = text.display_width(rendered)
+  let mut remaining = count
+  while remaining >= cells {
+    text.append(mut out, rendered)
+    remaining -= cells
+  }
+  if remaining != 0 {
+    char.format_into(' ', mut out)
   }
 }
 
@@ -25,7 +42,7 @@ pub fn padding(width: u64, length: u64, align: u64, numeric: bool) -> (u64, u64)
   (left, count - left)
 }
 
-// Pads the text appended since byte `start` to `width` scalars. Right padding
+// Pads the text appended since byte `start` to `width` display cells. Right padding
 // is appended; left padding is appended, then rotated in front of the text.
 @preserves_unique(out)
 pub fn pad_from(
@@ -36,14 +53,33 @@ pub fn pad_from(
   numeric: bool,
   mut out: List[u8]
 ) -> () uses {} {
+  if width == 0 {
+    return
+  }
   let end = core@1/list.len(out)
+  // ASCII singleton clusters need no temporary String. CR/LF is one cluster.
   let mut count: u64 = 0
+  let mut ascii = true
   let mut at = start
   while at < end {
-    if out[at] & 192u8 != 128u8 {
-      count += 1
+    if out[at] >= 128u8 {
+      ascii = false
+      break
+    }
+    count += 1
+    if out[at] == 13u8 && at + 1 < end && out[at + 1] == 10u8 {
+      at += 1
     }
     at += 1
+  }
+  if !ascii {
+    let mut suffix: List[u8] = []
+    at = start
+    while at < end {
+      core@1/list.push(mut suffix, out[at])
+      at += 1
+    }
+    count = text.display_width(text.finish_valid(take suffix))
   }
   let (left, right) = padding(width, count, align, numeric)
   if left > 0 {

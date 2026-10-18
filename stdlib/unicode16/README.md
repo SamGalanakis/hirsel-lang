@@ -86,3 +86,19 @@ Six-byte rows encode three-byte inclusive range endpoints or source/destination
 scalars. The generator merges adjacent property ranges; no foreign-version
 property or case tables are imported. Existing NFC and grapheme data and
 regeneration checks are preserved. Invalid scalars match no property or case row.
+
+`../std@1/display_width.hir` implements `text.display_width` and the formatting
+cluster-width estimate using the existing Unicode16 segmentation. The first
+scalar of each cluster counts 2 for East_Asian_Width W/F or P1868R2 section 15's
+listed wide ranges, otherwise 1. The union preserves P1868's deliberately broad
+ranges while including newer Unicode16 wide emoji. Isolated marks and controls
+count 1. Fill scalars are measured independently; each side uses whole fills
+followed by spaces for leftover cells.
+
+`EastAsianWidth.txt` is the unmodified Unicode 16.0.0 UCD input from
+https://www.unicode.org/Public/16.0.0/ucd/EastAsianWidth.txt (Unicode license).
+`python3 stdlib/unicode16/generate_display_width.py --check` verifies the
+six-byte sorted range table and pins the input SHA-256 in its generated header.
+The table shares the `text` module with its algorithm. Conformance covers the
+P1868 multilingual column examples, CJK, combining accents, ZWJ families, emoji
+modifiers, independent fills, dynamic counts and custom text padding.

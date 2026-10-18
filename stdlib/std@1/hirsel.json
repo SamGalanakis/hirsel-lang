@@ -55,6 +55,18 @@
       ]
     },
     {
+      "path": "display_width.hir",
+      "module": [
+        "text"
+      ]
+    },
+    {
+      "path": "display_width_tables.hir",
+      "module": [
+        "text"
+      ]
+    },
+    {
       "path": "string.hir",
       "module": [
         "string"

@@ -4111,6 +4111,7 @@ conformance/SEM/SEM-3-fstring-char-precision-bad.hir
 conformance/SEM/SEM-3-fstring-char-precision-ok.hir
 conformance/SEM/SEM-3-fstring-control-fill-bad.hir
 conformance/SEM/SEM-3-fstring-control-fill-ok.hir
+conformance/SEM/SEM-3-fstring-display-width-run.hir
 conformance/SEM/SEM-3-fstring-dynamic-run.hir
 conformance/SEM/SEM-3-fstring-fill-run.hir
 conformance/SEM/SEM-3-fstring-float-boundaries-run.hir

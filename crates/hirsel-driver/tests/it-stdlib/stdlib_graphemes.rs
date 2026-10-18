@@ -188,3 +188,16 @@ fn segmentation_tables_regenerate_identically_from_pinned_inputs() {
             .success()
     );
 }
+
+#[test]
+fn display_width_tables_regenerate_identically_from_pinned_inputs() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert!(
+        std::process::Command::new("python3")
+            .current_dir(root)
+            .args(["stdlib/unicode16/generate_display_width.py", "--check"])
+            .status()
+            .unwrap()
+            .success()
+    );
+}
