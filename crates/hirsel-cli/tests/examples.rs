@@ -983,3 +983,271 @@ fn filesystem_cli_records_host_lifecycle_and_replays_after_the_mount_disappears(
     assert_eq!(replay.stdout, recorded.stdout);
     assert!(replay.stderr.is_empty());
 }
+
+/// A copied example directory: its sources, its manifest with std at this checkout,
+/// and a `data/` directory the executables' grants mount. Interpreted runs use the
+/// same files through the simulation, in this process, so std is checked once.
+struct Example {
+    dir: PathBuf,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+/// An exit code, stdout and stderr.
+type Outcome = (i32, String, String);
+
+impl Example {
+    fn new(name: &str, sources: &[(&str, &str)], manifest: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "hirsel-example-{}-{}-{name}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        for (path, source) in sources {
+            std::fs::write(dir.join(path), source).unwrap();
+        }
+        let mut manifest: serde_json::Value = serde_json::from_str(manifest).unwrap();
+        manifest["dependencies"][0]["manifest"] = serde_json::json!(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../stdlib/std@1/hirsel.json")
+                .canonicalize()
+                .unwrap()
+        );
+        std::fs::write(dir.join("hirsel.json"), manifest.to_string()).unwrap();
+        Self {
+            dir,
+            files: Vec::new(),
+        }
+    }
+
+    fn data(&mut self, path: &str, contents: impl AsRef<[u8]>) {
+        std::fs::write(self.dir.join("data").join(path), contents.as_ref()).unwrap();
+        self.files.push((path.into(), contents.as_ref().to_vec()));
+    }
+
+    /// A grants template: stdout, stderr and `access` to `data/`.
+    fn grants(&self, access: &str) -> PathBuf {
+        let path = self.dir.join("grants.json");
+        let grants = serde_json::json!({"io": {
+            "stdout": "stdout.bytes@1",
+            "stderr": "stderr.bytes@1",
+            "dirs": [{"path": "", "host": self.dir.join("data"), "access": access}],
+        }});
+        std::fs::write(&path, grants.to_string()).unwrap();
+        path
+    }
+
+    /// `hirsel build` for `target`, in this process.
+    fn build(&self, target: hirsel_driver::native::TargetSpec) -> PathBuf {
+        let exe = self.dir.join(format!("program-{}", target.triple));
+        hirsel_engine::with_compiler_stack(|| {
+            hirsel_driver::native::build_path_native(
+                &self.dir.join("hirsel.json"),
+                &exe,
+                target,
+                Default::default(),
+                None,
+            )
+        })
+        .unwrap()
+        .unwrap();
+        exe
+    }
+
+    fn interpret(&self, args: &[&str]) -> Outcome {
+        let mut simulation = hirsel_engine::SimulationConfig::default();
+        simulation.grants = ["Io", "Args"].map(String::from).into();
+        simulation.projections = ["stdout", "stderr", "dir"].map(String::from).into();
+        simulation.args = args.iter().map(|a| a.to_string()).collect();
+        simulation.files = self.files.iter().cloned().collect();
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let result = hirsel_engine::with_compiler_stack(|| {
+            hirsel_driver::run_path_with_simulation(
+                &self.dir.join("hirsel.json"),
+                simulation,
+                &mut stdout,
+                &mut stderr,
+            )
+        })
+        .unwrap();
+        let hirsel_engine::RunOutcome::Exit(code) = result else {
+            panic!("{args:?}: {result:?}");
+        };
+        (
+            code,
+            String::from_utf8_lossy(&stdout).into(),
+            String::from_utf8_lossy(&stderr).into(),
+        )
+    }
+
+    /// Launch an executable with the grants template; AArch64 runs under the pinned qemu.
+    fn launch(&self, exe: &std::path::Path, grants: &std::path::Path, args: &[&str]) -> Outcome {
+        let mut command = if exe.to_string_lossy().contains("aarch64") {
+            let mut qemu = Command::new(std::env::var_os("HIRSEL_QEMU_AARCH64").unwrap());
+            qemu.arg("-L")
+                .arg(std::env::var_os("HIRSEL_AARCH64_SYSROOT").unwrap())
+                .arg(exe);
+            qemu
+        } else {
+            Command::new(exe)
+        };
+        let output = command
+            .arg("--hirsel-grants")
+            .arg(grants)
+            .args(args)
+            .env_clear()
+            .output()
+            .unwrap();
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into(),
+            String::from_utf8_lossy(&output.stderr).into(),
+        )
+    }
+}
+
+impl Drop for Example {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Each case runs interpreted and as the built x86-64 executable (`aarch64`: as the
+/// AArch64 executable under qemu instead), with one expectation.
+fn check_cases(example: &Example, access: &str, aarch64: bool, cases: &[Case]) {
+    use hirsel_driver::native::TargetSpec;
+    let grants = example.grants(access);
+    let exe = example.build(if aarch64 {
+        TargetSpec::aarch64_unknown_linux_gnu()
+    } else {
+        TargetSpec::x86_64_unknown_linux_gnu()
+    });
+    for &(args, (code, stdout, stderr)) in cases {
+        let expected = (code, stdout.to_string(), stderr.to_string());
+        if !aarch64 {
+            assert_eq!(example.interpret(args), expected, "interpreted {args:?}");
+        }
+        assert_eq!(
+            example.launch(&exe, &grants, args),
+            expected,
+            "{} {args:?}",
+            exe.display()
+        );
+    }
+}
+
+/// Arguments, then the expected exit code, stdout and stderr.
+type Case<'a> = (&'a [&'a str], (i32, &'a str, &'a str));
+
+fn logq(aarch64: bool) {
+    let mut example = Example::new(
+        "logq",
+        &[("main.hir", include_str!("../../../examples/logq/main.hir"))],
+        include_str!("../../../examples/logq/hirsel.json"),
+    );
+    example.data(
+        "app.log",
+        concat!(
+            "{\"level\":\"info\",\"msg\":\"server started\",\"port\":8080}\n",
+            "{\"level\":\"warn\",\"msg\":\"disk almost full\",\"disk\":\"sda\"}\n",
+            "INFO request served\n",
+            "ERROR disk write failed\n",
+            "{\"level\":\"error\",\"msg\":\"disk write failed\",\"disk\":\"sdb\"}\n",
+            "{\"level\":\"info\",\"message\":\"request served\",\"path\":\"/kv\"}\n",
+            "\n",
+            "warn  disk almost full\n",
+            "info request served\n",
+            "{\"level\":\"debug\",\"msg\":\"ünïcode ✓\",\"ok\":true}",
+        ),
+    );
+    example.data("bad.log", "INFO fine\n{\"level\":\"info\"\n");
+    example.data("controls.log", "INFO \u{0}ok\nWARN \u{7f}\n");
+    example.data("latin1.log", b"INFO caf\xe9\n");
+    let usage =
+        "error: usage: logq [--level LEVEL] [--match TEXT] [--field KEY=VALUE] [--top N] FILE\n";
+    check_cases(
+        &example,
+        "read",
+        aarch64,
+        &[
+            (
+                &["app.log"],
+                (
+                    0,
+                    "matched 9\nDEBUG 1\nERROR 2\nINFO 4\nWARN 2\ntop messages:\n  3 request served\n  2 disk almost full\n  2 disk write failed\n  1 server started\n  1 ünïcode ✓\n",
+                    "",
+                ),
+            ),
+            (
+                &["--level", "Warn", "--top", "1", "app.log"],
+                (
+                    0,
+                    "matched 2\nWARN 2\ntop messages:\n  2 disk almost full\n",
+                    "",
+                ),
+            ),
+            (
+                &["app.log", "--match", "disk", "--field", "disk=sdb"],
+                (
+                    0,
+                    "matched 1\nERROR 1\ntop messages:\n  1 disk write failed\n",
+                    "",
+                ),
+            ),
+            (
+                &["--field", "ok=true", "app.log"],
+                (0, "matched 1\nDEBUG 1\ntop messages:\n  1 ünïcode ✓\n", ""),
+            ),
+            (
+                &["--match", "nothing", "app.log"],
+                (0, "matched 0\ntop messages:\n", ""),
+            ),
+            (
+                &["controls.log"],
+                (
+                    0,
+                    "matched 2\nINFO 1\nWARN 1\ntop messages:\n  1 \u{0}ok\n  1 \u{7f}\n",
+                    "",
+                ),
+            ),
+            (
+                &["bad.log"],
+                (1, "", "error: line 2: invalid JSON object\n"),
+            ),
+            (&["latin1.log"], (1, "", "error: line 1: invalid UTF-8\n")),
+            (
+                &["missing.log"],
+                (1, "", "error: no such file: missing.log\n"),
+            ),
+            (
+                &["--top", "x", "app.log"],
+                (1, "", "error: --top needs a number\n"),
+            ),
+            (
+                &["--field", "disk", "app.log"],
+                (1, "", "error: --field needs KEY=VALUE\n"),
+            ),
+            (
+                &["--bogus", "app.log"],
+                (1, "", "error: unknown flag --bogus\n"),
+            ),
+            (
+                &["app.log", "--level"],
+                (1, "", "error: --level needs a value\n"),
+            ),
+            (&[], (1, "", usage)),
+            (&["a.log", "b.log"], (1, "", usage)),
+        ],
+    );
+}
+
+#[test]
+fn logq_filters_counts_and_ranks_mixed_logs() {
+    logq(false);
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_logq_aarch64() {
+    logq(true);
+}

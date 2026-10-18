@@ -59,6 +59,7 @@ selects an explicit bound.
 | [httpget](httpget/main.hir) | Fetch a UTF-8 HTTP response from an explicitly granted endpoint; `demo.json` supplies a scripted local peer. |
 | [filesystem](filesystem/README.md) | Create nested directories, list typed entries and metadata, rename within a grant and remove files and empty directories. |
 | [sortuniq](sortuniq/main.hir) | Sort distinct UTF-8 lines by byte order; empty fields, including the final field after a newline, are retained. |
+| [logq](logq/main.hir) | Query a JSON-lines or plain log: `[--level L] [--match TEXT] [--field KEY=VALUE] [--top N] FILE` prints matches per level and the most frequent messages; bad input exits 1 with `error: ...` on stderr. Takes flags and the file, with no demo. |
 
 The E2E tests are in `crates/hirsel-cli/tests/examples.rs`. They check exact output
 through both CLI backends and additional supplied-file cases, including a
