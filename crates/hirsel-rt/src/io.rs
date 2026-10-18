@@ -185,6 +185,20 @@ pub enum Request {
     TestFail {
         test: u64,
     },
+    TestSeed {
+        test: u64,
+    },
+    /// `test.log`: one escaped Test report record.
+    TestLog {
+        test: u64,
+        text: String,
+    },
+    /// `test.expect_snapshot`: an invalid name fails LANG-9 without a record.
+    TestSnapshot {
+        test: u64,
+        name: String,
+        text: String,
+    },
     TestNet {
         test: u64,
         peers: Vec<hirsel_run_config::NetPeer>,
@@ -1167,6 +1181,31 @@ impl State {
                     return Err(AdapterError::InvalidHandle(*test));
                 }
                 Ok(C::Checked(false))
+            }
+            R::TestSeed { test } => {
+                let Some(Grant::Test { seed }) = self.handles.rows.get(test) else {
+                    return Err(AdapterError::InvalidHandle(*test));
+                };
+                Ok(C::Size(Ok(*seed)))
+            }
+            R::TestLog { test, text } => {
+                if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
+                    return Err(AdapterError::InvalidHandle(*test));
+                }
+                self.stdout
+                    .extend_from_slice(&hirsel_kernels::report::log(text));
+                Ok(C::Checked(true))
+            }
+            R::TestSnapshot { test, name, text } => {
+                if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
+                    return Err(AdapterError::InvalidHandle(*test));
+                }
+                if !hirsel_kernels::report::snapshot_name(name) {
+                    return Ok(C::Checked(false));
+                }
+                self.stdout
+                    .extend_from_slice(&hirsel_kernels::report::snapshot(name, text));
+                Ok(C::Checked(true))
             }
             R::TestDir { test, entries } => {
                 if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
@@ -2727,6 +2766,100 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_fail(ctx: *mut crate::RunCtx, test: *
         crate::fault("Test completion mismatch");
     };
     crate::STATUS_FAILURE
+}
+
+/// # Safety
+/// A live Test grant is borrowed and out is writable scalar storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_seed(
+    ctx: *mut crate::RunCtx,
+    out: *mut u64,
+    test: *const u64,
+) -> u8 {
+    let Ok(completion) = (unsafe { capability_call(ctx, Request::TestSeed { test: test.read() }) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Size(Ok(seed)) = completion else {
+        crate::fault("Test completion mismatch");
+    };
+    unsafe { out.write(seed) };
+    crate::STATUS_OK
+}
+
+/// The borrowed String's text: its owner block, byte start and length.
+unsafe fn borrowed_text(owner: *mut crate::Header, start: u64, len: u64) -> String {
+    let start =
+        usize::try_from(start).unwrap_or_else(|_| crate::fault("Test start exceeds target usize"));
+    let data = crate::alloc::payload(owner)
+        .wrapping_add(8)
+        .wrapping_add(start);
+    unsafe { native_text(data, len) }.to_owned()
+}
+
+/// # Safety
+/// A live Test grant and String are borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_log(
+    ctx: *mut crate::RunCtx,
+    test: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    let text = unsafe { borrowed_text(owner, start, len) };
+    let Ok(completion) = (unsafe {
+        capability_call(
+            ctx,
+            Request::TestLog {
+                test: test.read(),
+                text,
+            },
+        )
+    }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Checked(true) = completion else {
+        crate::fault("Test completion mismatch");
+    };
+    crate::STATUS_OK
+}
+
+/// # Safety
+/// A live Test grant and both Strings are borrowed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_expect_snapshot(
+    ctx: *mut crate::RunCtx,
+    test: *const u64,
+    name_owner: *mut crate::Header,
+    name_start: u64,
+    name_len: u64,
+    text_owner: *mut crate::Header,
+    text_start: u64,
+    text_len: u64,
+) -> u8 {
+    let name = unsafe { borrowed_text(name_owner, name_start, name_len) };
+    let text = unsafe { borrowed_text(text_owner, text_start, text_len) };
+    let Ok(completion) = (unsafe {
+        capability_call(
+            ctx,
+            Request::TestSnapshot {
+                test: test.read(),
+                name,
+                text,
+            },
+        )
+    }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Checked(recorded) = completion else {
+        crate::fault("Test completion mismatch");
+    };
+    if recorded {
+        crate::STATUS_OK
+    } else {
+        crate::STATUS_FAILURE
+    }
 }
 
 /// # Safety

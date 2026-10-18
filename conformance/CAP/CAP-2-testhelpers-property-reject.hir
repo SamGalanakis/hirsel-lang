@@ -1,0 +1,16 @@
+// rule: CAP-2
+// expect: reject CLO-2 at line 11
+// entry: trial
+fn trial(t: Test) {
+  test.property(
+    t,
+    fn(mut s: test.Source) -> u64 {
+      test.choice(mut s, 7)
+    },
+    fn(value: u64) -> bool {
+      core@1/test.check(t, true)
+      true
+    },
+    u64.to_string
+  )
+}

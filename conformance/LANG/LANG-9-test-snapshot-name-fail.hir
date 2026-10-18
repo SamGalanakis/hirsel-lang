@@ -1,0 +1,10 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 8
+// stdout: test snapshot good: kept
+// entry: trial
+// A snapshot name is a portable file name component; anything else fails LANG-9.
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.expect_snapshot(t, "good", "kept")
+  test.expect_snapshot(t, "bad name", "never recorded")
+  Ok(())
+}

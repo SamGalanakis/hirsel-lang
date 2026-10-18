@@ -1,0 +1,19 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+fn gen(mut s: test.Source) -> String {
+  u64.to_string(test.range_u64(mut s, 7, 9))
+}
+
+fn law(s: String) -> bool uses {} {
+  s == "7" || s == "8" || s == "9"
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property(t, gen, law, test.quoted)
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

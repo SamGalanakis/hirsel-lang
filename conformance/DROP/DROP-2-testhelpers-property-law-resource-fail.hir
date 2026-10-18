@@ -1,0 +1,27 @@
+// rule: DROP-2
+// expect: fail SEM-1 at line 16
+// entry: trial
+resource type Watch {
+  n: u8,
+}
+@noalloc drop(w) {
+  core@1/failure.check(w.n == 7, Arithmetic())
+}
+
+fn generate(mut s: test.Source) -> Watch {
+  Watch(n: 7)
+}
+
+fn law(value: Watch) -> bool uses {} {
+  core@1/failure.check(false, Arithmetic())
+  true
+}
+
+fn show(value: Watch) -> String {
+  u8.to_string(value.n)
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property(t, generate, law, show)
+  Ok(())
+}

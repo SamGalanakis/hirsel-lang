@@ -23,17 +23,18 @@ fn landed_test_helpers_are_source_units_and_resource_cases_finalize_once() {
         let text = r#"
 resource type Watch { n: u8 }
 @noalloc drop(w) { core@1/failure.check(w.n == 7, Arithmetic()) }
-fn generate(t: Test) -> Watch { Watch(n: 7) }
+fn generate(mut s: test.Source) -> Watch { Watch(n: core@1/int.narrow(test.range_u64(mut s, 7, 7))) }
 fn law(value: Watch) -> bool uses {} { value.n == 7 }
+fn show(value: Watch) -> String { u8.to_string(value.n) }
 pub fn trial(t: Test) -> Result[(), ()] {
   let counted: String = "counted"
   std@1/test.equal(t, counted, counted)
   std@1/test.approx(t, 12.06, 12.0, 0.1, 0.0)
-  std@1/test.for_all(t, generate, law)
+  std@1/test.property(t, generate, law, show)
   Ok(())
 }
 "#;
-        let mut loaded = load_program_source(&source("for-all-run"), Some(text))
+        let mut loaded = load_program_source(&source("property-run"), Some(text))
             .unwrap_or_else(|e| panic!("{}", details(&e)));
         loaded
             .check_for_execution()
@@ -74,7 +75,14 @@ pub fn trial(t: Test) -> Result[(), ()] {
                 }
             })
             .collect();
-        for name in ["equal", "approx", "for_all"] {
+        for name in [
+            "equal",
+            "approx",
+            "property",
+            "property_cases",
+            "range_u64",
+            "choice",
+        ] {
             assert!(found.contains(name), "missing {name}: {found:?}");
             assert!(
                 registry::BuiltinRegistry::new()
@@ -95,7 +103,7 @@ pub fn trial(t: Test) -> Result[(), ()] {
 /// Each test seed is its own case, so the native builds run in parallel shards.
 fn property_reports_use_the_recorded_test_seed_and_first_failing_case(seed: u64) {
     with_compiler_stack(|| {
-        let mut loaded = load_program(&source("for-all-case-fail"))
+        let mut loaded = load_program(&source("property-case-fail"))
             .unwrap_or_else(|e| panic!("{}", details(&e)));
         loaded
             .check_for_execution()
@@ -119,7 +127,7 @@ fn property_reports_use_the_recorded_test_seed_and_first_failing_case(seed: u64)
         let expected = native::Observation::of_reference(reference.observation.as_ref().unwrap());
         assert_eq!(
             expected.output,
-            format!("test failure: seed={seed} case=0\n").as_bytes()
+            format!("test log: counterexample: 0\ntest failure: seed={seed} case=0\n").as_bytes()
         );
         assert_eq!(expected.failures.len(), 1);
         assert_eq!(expected.failures[0].rule, "LANG-9");
@@ -129,7 +137,7 @@ fn property_reports_use_the_recorded_test_seed_and_first_failing_case(seed: u64)
         );
         let operation = expected.failures[0].operation.as_ref().unwrap();
         assert_eq!(operation.definition.0.package.name, "std");
-        assert_eq!(operation.definition.0.name, "for_all_cases");
+        assert_eq!(operation.definition.0.name, "property_cases");
         let mut options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
         options.launch.test_seed = seed;
         options.launch.random_seed = 17;
@@ -182,10 +190,14 @@ fn failed_resource_laws_release_the_current_case_before_reporting(name: &str) {
         .unwrap();
         let observation = reference.observation.as_ref().unwrap();
         let finalizers: Vec<_> = observation.effects.iter().enumerate().filter_map(|(index, effect)| matches!(&effect.effect, Effect::Finalizer { definition } if definition.0.name == "Watch").then_some(index)).collect();
-        assert_eq!(finalizers.len(), 1, "{name}");
-        if name == "for-all-resource-fail" {
+        if name == "property-resource-fail" {
+            // The failing case, each shrinking replay and the counterexample's
+            // rendering replay each release their value before the report.
             let report = observation.effects.iter().position(|effect| matches!(&effect.effect, Effect::CapabilityConsumed(event) if event.operation == "test.check_case")).unwrap();
-            assert!(finalizers[0] < report);
+            assert!(finalizers.len() >= 2, "{name}");
+            assert!(finalizers.iter().all(|&finalizer| finalizer < report));
+        } else {
+            assert_eq!(finalizers.len(), 1, "{name}");
         }
         assert_eq!(observation.failures.len(), 1);
         let expected = native::Observation::of_reference(observation);
@@ -207,11 +219,11 @@ fn failed_resource_laws_release_the_current_case_before_reporting(name: &str) {
 }
 
 #[test]
-fn a_failed_for_all_resource_case_is_released_before_its_report() {
-    failed_resource_laws_release_the_current_case_before_reporting("for-all-resource-fail");
+fn a_failed_property_resource_case_is_released_before_its_report() {
+    failed_resource_laws_release_the_current_case_before_reporting("property-resource-fail");
 }
 
 #[test]
 fn a_failed_resource_law_releases_its_case_once() {
-    failed_resource_laws_release_the_current_case_before_reporting("for-all-law-resource-fail");
+    failed_resource_laws_release_the_current_case_before_reporting("property-law-resource-fail");
 }

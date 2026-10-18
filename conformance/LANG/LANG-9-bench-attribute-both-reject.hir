@@ -1,0 +1,5 @@
+// rule: LANG-9
+// expect: reject LANG-9 at line 3
+@test
+@bench
+fn example() {}

@@ -1,0 +1,15 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+fn generate(mut s: test.Source) -> u64 {
+  test.choice(mut s, 7)
+}
+
+fn law(value: u64) -> bool uses {} {
+  value <= 7
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property(t, generate, law, u64.to_string)
+  Ok(())
+}

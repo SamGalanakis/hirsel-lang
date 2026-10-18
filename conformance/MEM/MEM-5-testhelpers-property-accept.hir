@@ -1,0 +1,15 @@
+// rule: MEM-5
+// expect: accept
+// entry: trial
+fn trial(t: Test) {
+  test.property(
+    t,
+    fn(mut s: test.Source) -> u8 {
+      7
+    },
+    fn(value: u8) -> bool uses {} {
+      true
+    },
+    u8.to_string
+  )
+}

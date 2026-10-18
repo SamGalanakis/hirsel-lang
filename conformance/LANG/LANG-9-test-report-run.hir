@@ -1,0 +1,15 @@
+// rule: LANG-9
+// expect: run
+// stdout: test log: plain
+// stdout: test log: two\nlines \\ tab\t bell\u{07} é
+// stdout: test snapshot greeting: hello\n
+// stdout: test snapshot empty-1_A: \t
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.check(t, test.seed(t) == 0)
+  test.log(t, "plain")
+  test.log(t, "two\nlines \\ tab\t bell\u{7} é")
+  test.expect_snapshot(t, "greeting", "hello\n")
+  test.expect_snapshot(t, "empty-1_A", "\t")
+  Ok(())
+}

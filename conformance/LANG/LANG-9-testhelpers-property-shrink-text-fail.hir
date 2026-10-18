@@ -1,0 +1,29 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 27
+// stdout: test log: counterexample: "z" -10
+// stdout: test failure: seed=0 case=17
+// entry: trial
+type Sample {
+  word: String,
+  n: i64,
+}
+
+// Text shrinks to its one required byte and the integer toward zero to the boundary.
+fn sample(mut s: test.Source) -> Sample {
+  let word = test.ascii_string(mut s, 20)
+  let n = test.range_i64(mut s, -1000, 1000)
+  Sample(word: word, n: n)
+}
+
+fn law(x: Sample) -> bool uses {} {
+  !string.contains(x.word, "z") || x.n > -10
+}
+
+fn show(x: Sample) -> String {
+  string.concat(string.concat(test.quoted(x.word), " "), i64.to_string(x.n))
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property_cases(t, 1000, sample, law, show)
+  Ok(())
+}

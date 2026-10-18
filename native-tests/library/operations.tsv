@@ -243,9 +243,12 @@ task.set	ad75d5df1e06d29042fed53b0205cec33b4cbb06106d4b5440da087cf1e252d4	0:b:n-
 test.check	e018d5aa18ef1e13cde863a0d0d0269a03e6e2920765dec59f296fc15e962b9e	0:b:n;1:b:n->n
 test.check_case	9be1ff429c99fecda725999f5ba741ca3ab225badd3237ecaa12ff647b0ef4d9	0:b:n;1:b:n;2:b:n->n
 test.dir	c9b080d958e72c8c2b5b1fd90b69c6c921ce756da50987b9ffc568e9ae330328	0:b:n;1:b:n->n
+test.expect_snapshot	47fc3930b4f70f0cb70467fb209dcd138b77a651516375a3c5e097bfe2c92895	0:b:n;1:b:n;2:b:n->n
 test.fail	845423d7b2ac1918189c228ba99472f98d317f35562d537d6e295b904afad903	0:b:n->n
+test.log	6a6eb479eda17b07d1981b9a1f4ae39c1bb8e38bc366d4ee9e2016793471195a	0:b:n;1:b:n->n
 test.net	b4ee0388ef748f15ae38468a3a69128a16c0e3f078d5f47d44ea06628af71dfb	0:b:n;1:b:n;2:b:n->n
 test.process	64c9273a4b8dcdfd9403d53cd48319c035c9540871bc3ae1428152a68f96d39f	0:b:n;1:b:n;2:b:n->n
+test.seed	496829bdb8ea444ef9d1dec2819feb398a895d950c5121c963dcdd6ae6a15c84	0:b:n->n
 tls.accept	7fb3e2e3e81c55b7248a41e7745f3bf75e5ab673662cb03323118e11f0881eb7	0:b:n;1:t:n;2:b:n->n
 tls.close	b91bec9b151f21cb6179ac696e180d61bd0f6bf56384ba2d2de2c26e9d87c549	0:b:n;1:t:n->n
 tls.connect	8925f1c7b909525196fed1ec27d35c086688cbb9d3fba43b9c4d1d66f521d5d1	0:b:n;1:t:n;2:b:n;3:b:n->n

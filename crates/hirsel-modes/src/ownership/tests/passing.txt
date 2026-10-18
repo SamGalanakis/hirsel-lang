@@ -209,9 +209,9 @@ DROP/DROP-2-std-map-remove-run.hir
 DROP/DROP-2-std-map-string-remove-run.hir
 DROP/DROP-2-std-sorted-map-key-remove-run.hir
 DROP/DROP-2-std-sorted-map-remove-run.hir
-DROP/DROP-2-testhelpers-for-all-law-resource-fail.hir
-DROP/DROP-2-testhelpers-for-all-resource-fail.hir
-DROP/DROP-2-testhelpers-for-all-resource-run.hir
+DROP/DROP-2-testhelpers-property-law-resource-fail.hir
+DROP/DROP-2-testhelpers-property-resource-fail.hir
+DROP/DROP-2-testhelpers-property-resource-run.hir
 DROP/DROP-2-variant-payloads-joined-cleanup-run.hir
 DROP/DROP-2-wave2-bytes-replace-fail.hir
 DROP/DROP-2-wave2-bytes-replace-run.hir

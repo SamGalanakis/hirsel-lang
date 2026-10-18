@@ -80,7 +80,8 @@ fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 @preserves_unique(out) fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}
 @track_caller N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 @track_caller N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
-@track_caller fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
+@track_caller fn test.assert_eq[T: data](t: Test, actual: T, expected: T, show: fn(T) -> String) -> ()
+@track_caller fn test.property[T](t: Test, gen: fn(mut test.Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> ()
 @track_caller fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
 fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]
 fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]
@@ -624,10 +625,59 @@ A fresh empty heap is unique. This surface provides no peek or indexed update.
 `test.equal` checks structural equality of `data` values. `test.approx` requires
 nonnegative tolerances, accepts exactly equal values, rejects unequal nonfinite values, and
 otherwise passes when the difference is within the absolute tolerance or within the
-relative tolerance of the larger magnitude. `test.for_all` runs exactly 100 sequential
-generator and law calls using the run's Test grant, reporting each through
-`test.check_case`, without shrinking. `test.expect_error` returns the error of an `Error`,
+relative tolerance of the larger magnitude. `test.assert_eq` passes on structural equality;
+otherwise it reports `assertion failed: actual == expected`, then `  actual: A` and
+`expected: E` through `test.log`, rendering each value with `show`, and fails through
+`test.fail`. Hirsel has no generic formatting, so the caller names the renderer:
+`u64.to_string`, a `@format` type's function, `test.quoted` for strings or
+`test.show_list(xs, show)` for lists. `test.expect_error` returns the error of an `Error`,
 and destroys an unexpected `Ok` value before failing the test with `test.fail`.
+
+## Property tests
+
+`test.property(t, gen, law, show)` runs 100 cases and `test.property_cases` an explicit
+count (zero calls neither callback). A generator `fn(mut test.Source) -> T` draws all of
+its randomness from the opaque `Source`, which records every choice; `law` must hold for
+every generated value. Case `c` draws fresh choices from a `prng` generator seeded with
+`test.seed(t) + c * 0x9e3779b97f4a7c15` (wrapping), so `hirsel test --seed S` replays a
+reported run exactly. The first case whose law returns false is shrunk, then its value is
+regenerated, reported as `counterexample: V` through `test.log` (rendered by `show`) and
+the test fails through `test.check_case` with that case's index, which reports the seed.
+A language failure inside `gen` or `law` is not shrunk: it fails the test where it
+happens. Every generated value is destroyed before the next case or report.
+
+Shrinking is integrated, after Hypothesis's choice-sequence design and its reference model
+minithesis: it edits
+the failing case's choice sequence and replays the generator on each candidate, so a
+shrunk value is always one the generator can produce and no type needs its own shrinker.
+Replay reads the candidate's choices in order, clamping each to the draw's bound; a replay
+that draws past the candidate's end, or any case that makes more than 8192 choices, is
+discarded. A candidate is accepted when the law still fails and the choices the replay
+actually made are simpler: fewer, or as many and lexicographically smaller. The
+simplifying passes delete chunks of 8 down to 1 choices (also retrying with the choice
+before the chunk lowered by one, which is often a length), zero chunks of 8 down to 2, and
+lower each choice to 0 or, unless one less already passes, by binary search. When they no
+longer improve, the rearranging passes sort windows of 8 down to 2 choices, swap
+out-of-order choices one or two apart and move value from the earlier of such a pair to
+the later (all of it, else by binary search unless moving one unit passes). Any
+improvement starts another round; shrinking ends when a round improves nothing or 10000
+replays are spent. Passes walk from the last choice backwards.
+
+Each draw shrinks toward a documented simplest value:
+
+- `test.choice(mut s, max)` draws from 0 to `max` inclusive, uniformly when fresh, and
+  shrinks toward 0; `test.any_u64` is `choice` over every `u64`; `test.bool` is a choice
+  of 1 and shrinks toward false.
+- `test.range_u64(mut s, low, high)` shrinks toward `low`. `test.range_i64(mut s, low,
+  high)` shrinks toward the bound nearest zero, or toward 0 itself when the range contains
+  it (a sign choice, then a magnitude). Both fail `Arithmetic` when `low > high`.
+- `test.list_of(mut s, max_len, element)` precedes each element with a continue choice
+  that is 1 with probability 90% when fresh, so it shrinks toward shorter lists, and
+  deleting an element's choices deletes the element. `test.ascii_string(mut s, max_len)`
+  builds printable ASCII the same way, each byte shrinking toward `a`.
+
+`test.show_list(xs, show)` renders `[a, b]`; `test.quoted(s)` renders a double-quoted
+literal escaping `"`, `\`, line feed and tab, and other C0 controls and DEL as `\u{XX}`.
 
 ## Random draws
 
@@ -1284,13 +1334,8 @@ ordering serialize through their explicit task/channel facilities.
 `test.expect_ok[T,E](t: Test, take value: Result[T,E]) -> T` returns an owned
 Ok payload. An unexpected Error payload is destroyed before test.fail, matching
 expect_error's cleanup rule. A failing payload finalizer therefore precedes the
-assertion failure. `test.for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T,
-law: fn(T) -> bool uses {}) -> ()` runs exactly the requested sequential count,
-reporting deterministic zero-based case indices through check_case. Zero calls
-neither callback. Existing for_all selects 100 over the same kernel. Each generated
-value is destroyed before reporting its case, including a failing case. These are
-ordinary source operations using the existing Test capability, without shrinking
-or a new runtime assertion. The resource-valued conformance example is
+assertion failure. These are ordinary source operations using the existing Test
+capability. The resource-valued conformance example is
 `conformance/SEM/SEM-3-test-extra-run.hir`.
 
 ## SHA-256

@@ -1461,16 +1461,20 @@ Tests are ordinary functions marked `@test`, optionally taking an explicit `Test
 Run this suite with `hirsel test conformance/LANG/LANG-9-tour-13-testing-run.hir.json`.
 Each selected function runs independently, so a failed check does not skip later tests.
 Core `test.check`, `test.dir` and `test.net` provide assertions and confined
-fakes. `std@1/test` adds structural equality, approximate floats, error extraction
-and property checks. `for_all` runs exactly 100 cases from the explicit generator
-and reports the Test seed and case index on failure. A false check fails LANG-9.
+fakes. `std@1/test` adds structural equality, `assert_eq` (which reports both values,
+rendered by the function you pass), approximate floats, error extraction and property
+tests. `test.property` runs 100 cases of a generator that draws from a `test.Source`;
+a failing case shrinks to its simplest counterexample, reported with the seed that
+`hirsel test --seed` replays. `test.expect_snapshot(t, name, text)` compares text with
+a committed file under `snapshots/`, and `hirsel test --bless` rewrites it. A false
+check fails LANG-9.
 
 <!-- tour: conformance/LANG/LANG-9-tour-13-testing-run.hir -->
 [Runnable source](../conformance/LANG/LANG-9-tour-13-testing-run.hir)
 
 ```hirsel
-fn generate(t: Test) -> u64 {
-  7
+fn small(mut s: test.Source) -> u64 {
+  test.range_u64(mut s, 0, 1000)
 }
 
 fn law(n: u64) -> bool uses {} {
@@ -1482,8 +1486,9 @@ fn assertions(t: Test) {
   test.check(t, 2u64 + 2 == 4)
   let xs: List[u64] = [1, 2]
   test.equal(t, xs, [1, 2])
+  test.assert_eq(t, 2u64 + 2, 4, u64.to_string)
   test.approx(t, 0.1f64 + 0.2, 0.3, 0.000001, 0.0)
-  test.for_all(t, generate, law)
+  test.property(t, small, law, u64.to_string)
   let rejected: Result[u64, String] = Error("bad input")
   let error = test.expect_error(t, take rejected)
   test.check(t, error == "bad input")

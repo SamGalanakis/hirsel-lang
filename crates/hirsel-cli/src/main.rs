@@ -2,10 +2,10 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
-use execution_policy::DEFAULT_RUN_MAX_STEPS;
+use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
 
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))
@@ -18,6 +18,10 @@ enum Command {
         seed: Option<u64>,
         json: bool,
         native: bool,
+        bless: bool,
+        max_steps: Option<u64>,
+        /// `--bench` and its target time per bench.
+        bench: Option<std::time::Duration>,
         backend: hirsel_driver::native::Backend,
     },
     Precheck {
@@ -140,6 +144,19 @@ impl Proofs {
     }
 }
 
+/// `--max-steps <n|unbounded>`: a tooling step budget, None when unbounded.
+fn step_budget(value: Option<OsString>) -> Result<Option<u64>, lexopt::Error> {
+    const USAGE: &str = "--max-steps requires an unsigned integer or unbounded";
+    match value.as_deref().and_then(|v| v.to_str()) {
+        Some("unbounded") => Ok(None),
+        Some(value) => value
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| lexopt::Error::from(USAGE)),
+        None => Err(USAGE.into()),
+    }
+}
+
 fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
     let mut args = Parser::from_args(args);
     let command = match args.next()? {
@@ -148,9 +165,24 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
         Some(Value(command)) if command == "test" => {
             let (mut manifest, mut filters, mut seed, mut json, mut native, mut selected) =
                 (None, Vec::new(), None, false, false, None);
+            let (mut bless, mut max_steps, mut bench, mut bench_time) = (false, None, false, None);
             while let Some(arg) = args.next()? {
                 match arg {
                     Long("json") if !json => json = true,
+                    Long("bless") if !bless => bless = true,
+                    Long("bench") if !bench => bench = true,
+                    Long("bench-time") if bench_time.is_none() => {
+                        bench_time = Some(
+                            args.value()?
+                                .to_str()
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .filter(|&ms| ms > 0)
+                                .ok_or("--bench-time requires a positive number of milliseconds")?,
+                        );
+                    }
+                    Long("max-steps") if max_steps.is_none() => {
+                        max_steps = Some(step_budget(args.value().ok())?);
+                    }
                     Long("native") if !native => native = true,
                     Long("backend") if selected.is_none() => {
                         selected = Some(backend(args.value()?)?)
@@ -175,12 +207,28 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             if selected.is_some() && !native {
                 return Err("--backend requires --native".into());
             }
+            if native && max_steps.is_some() {
+                return Err("--max-steps applies only to interpreted tests".into());
+            }
+            if bench && (bless || max_steps.is_some()) {
+                return Err("--bench takes neither --bless nor --max-steps".into());
+            }
+            if bench_time.is_some() && !bench {
+                return Err("--bench-time requires --bench".into());
+            }
             Command::Test {
+                max_steps: max_steps.unwrap_or(Some(DEFAULT_RUN_MAX_STEPS)),
+                bench: bench.then(|| {
+                    std::time::Duration::from_millis(
+                        bench_time.unwrap_or(DEFAULT_BENCH_MILLISECONDS),
+                    )
+                }),
                 manifest: manifest.ok_or("test requires a package manifest")?,
                 filters,
                 seed,
                 json,
                 native,
+                bless,
                 backend: selected.unwrap_or_default(),
             }
         }
@@ -326,21 +374,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         }
                         Long("replay") if replay.is_none() => replay = Some(args.value()?),
                         Long("max-steps") if max_steps.is_none() => {
-                            let value = args.value().ok();
-                            max_steps = Some(match value.as_deref().and_then(|v| v.to_str()) {
-                                Some("unbounded") => None,
-                                Some(value) => Some(value.parse::<u64>().map_err(|_| {
-                                    lexopt::Error::from(
-                                        "--max-steps requires an unsigned integer or unbounded",
-                                    )
-                                })?),
-                                None => {
-                                    return Err(
-                                        "--max-steps requires an unsigned integer or unbounded"
-                                            .into(),
-                                    );
-                                }
-                            });
+                            max_steps = Some(step_budget(args.value().ok())?);
                         }
                         Long("simulation") if simulation.is_none() => {
                             simulation = Some(args.value()?)
@@ -499,19 +533,97 @@ fn execute(mut args: Vec<OsString>) -> u8 {
             seed,
             json,
             native,
+            bless: _,
+            max_steps: _,
+            bench: Some(target),
             backend,
         } => {
             let results = if native {
-                hirsel_driver::native::test_path(Path::new(&manifest), &filters, seed, backend)
+                hirsel_driver::native::bench_path(
+                    Path::new(&manifest),
+                    &filters,
+                    seed,
+                    backend,
+                    target,
+                )
             } else {
-                hirsel_driver::testing::run_path(Path::new(&manifest), &filters, seed)
+                hirsel_driver::testing::bench_path(Path::new(&manifest), &filters, seed, target)
+            };
+            return match results {
+                Ok(results) => {
+                    let failed = results.iter().filter(|r| r.failure.is_some()).count();
+                    if json {
+                        let benches: Vec<_> = results.iter().map(|r| serde_json::json!({
+                            "name": r.name, "seed": r.seed, "status": if r.failure.is_some() { "failed" } else { "measured" }, "failure": r.failure, "iterations": r.iterations, "nanoseconds": r.nanoseconds
+                        })).collect();
+                        println!(
+                            "{}",
+                            serde_json::json!({"schema":1,"benches":benches,"summary":{"measured":results.len()-failed,"failed":failed,"total":results.len()}})
+                        );
+                    } else {
+                        for result in &results {
+                            match &result.failure {
+                                Some(failure) => {
+                                    println!(
+                                        "bench {} ... FAILED (seed={}): {failure}",
+                                        result.name, result.seed
+                                    )
+                                }
+                                None => println!(
+                                    "bench {} ... {} iterations, {:.1} ns/iter",
+                                    result.name,
+                                    result.iterations,
+                                    result.per_iteration()
+                                ),
+                            }
+                        }
+                        println!(
+                            "bench result: {}. {} measured; {} failed; {} total",
+                            if failed == 0 { "ok" } else { "FAILED" },
+                            results.len() - failed,
+                            failed,
+                            results.len()
+                        );
+                    }
+                    u8::from(failed != 0)
+                }
+                Err(error) => tool_error(error, json),
+            };
+        }
+        Command::Test {
+            manifest,
+            filters,
+            seed,
+            json,
+            native,
+            bless,
+            max_steps,
+            bench: None,
+            backend,
+        } => {
+            let results = if native {
+                hirsel_driver::native::test_path(
+                    Path::new(&manifest),
+                    &filters,
+                    seed,
+                    backend,
+                    bless,
+                )
+            } else {
+                hirsel_driver::testing::run_path(
+                    Path::new(&manifest),
+                    &filters,
+                    seed,
+                    bless,
+                    max_steps,
+                )
             };
             return match results {
                 Ok(results) => {
                     let failed = results.iter().filter(|r| r.failure.is_some()).count();
                     if json {
                         let tests: Vec<_> = results.iter().map(|r| serde_json::json!({
-                            "name": r.name, "seed": r.seed, "status": if r.failure.is_some() { "failed" } else { "passed" }, "failure": r.failure
+                            "name": r.name, "seed": r.seed, "status": if r.failure.is_some() { "failed" } else { "passed" }, "failure": r.failure, "report": r.report
                         })).collect();
                         println!(
                             "{}",
@@ -534,6 +646,12 @@ fn execute(mut args: Vec<OsString>) -> u8 {
                                     .map(|f| format!(": {f}"))
                                     .unwrap_or_default()
                             );
+                            // A failed test's report follows it, indented.
+                            if result.failure.is_some() {
+                                for line in result.report.lines() {
+                                    println!("    {line}");
+                                }
+                            }
                         }
                         println!(
                             "test result: {}. {} passed; {} failed; {} total",

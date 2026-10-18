@@ -1,0 +1,17 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 8
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property(
+    t,
+    fn(mut s: test.Source) -> u8 {
+      core@1/test.check(t, false)
+      7
+    },
+    fn(value: u8) -> bool uses {} {
+      true
+    },
+    u8.to_string
+  )
+  Ok(())
+}

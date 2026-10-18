@@ -1,5 +1,5 @@
 //! Typed leaf adapters. Every scalar instantiation has a fixed native signature.
-pub use hirsel_kernels::{integer, siphash, unicode};
+pub use hirsel_kernels::{integer, report, siphash, unicode};
 pub fn string_from_bytes(bytes: Vec<u8>) -> Result<String, Vec<u8>> {
     String::from_utf8(bytes).map_err(|e| e.into_bytes())
 }

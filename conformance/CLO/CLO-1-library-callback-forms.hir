@@ -8,7 +8,7 @@ fn map_value(n: u64) -> u64 {
   n
 }
 
-fn generate(t: Test) -> u64 {
+fn generate(mut s: test.Source) -> u64 {
   0
 }
 
@@ -53,30 +53,43 @@ fn probe_iter_map_literal(take it: Iter[u64]) {
   )
 }
 
-fn probe_test_for_all_named(t: Test) {
-  test.for_all(t, generate, law)
+fn probe_test_property_named(t: Test) {
+  test.property(t, generate, law, u64.to_string)
 }
 
-fn probe_test_for_all_literal(t: Test) {
-  test.for_all(
+fn probe_test_property_literal(t: Test) {
+  test.property(
     t,
-    fn(seed: Test) -> u64 {
+    fn(mut s: test.Source) -> u64 {
       0
     },
-    law
+    law,
+    u64.to_string
   )
 }
 
-fn probe_test_for_all_law_named(t: Test) {
-  test.for_all(t, generate, law)
+fn probe_test_property_law_named(t: Test) {
+  test.property(t, generate, law, u64.to_string)
 }
 
-fn probe_test_for_all_law_literal(t: Test) {
-  test.for_all(
+fn probe_test_property_law_literal(t: Test) {
+  test.property(
     t,
     generate,
     fn(n: u64) -> bool uses {} {
       true
+    },
+    u64.to_string
+  )
+}
+
+fn probe_test_property_show_literal(t: Test) {
+  test.property(
+    t,
+    generate,
+    law,
+    fn(n: u64) -> String {
+      u64.to_string(n)
     }
   )
 }

@@ -296,9 +296,12 @@ Each selected test runs in isolation with only Test authority: checks, an Error 
 and runtime failures fail that test while ordinary cleanup runs and later tests continue.
 The default seed is the first eight SHA-256 bytes of the UTF-8 stable definition path,
 interpreted little endian; an explicit runner seed overrides it. Assertions are explicit
-(`test.check(t, cond)`); property tests are a library call over an explicit generator (`test.for_all(t, gen, law)`) whose seed comes
-from `Test`. Fakes, such as a confined directory or a scripted network, are created from
-`Test`. A false check fails LANG-9.
+(`test.check(t, cond)`); property tests are a library call over an explicit generator
+(`test.property(t, gen, law, show)`) whose seed comes from `Test` and whose failures shrink
+to a minimal counterexample. Fakes, such as a confined directory or a scripted network, are
+created from `Test`. A false check fails LANG-9. The zero-argument `@bench` attribute
+selects a benchmark under the same signature rules; the runner calls it only when asked for
+benches, and a function carrying both `@test` and `@bench` is LANG-9.
 
 ```hirsel
 @test

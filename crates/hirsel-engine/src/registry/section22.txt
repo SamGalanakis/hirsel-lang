@@ -38,6 +38,9 @@ fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]
 N fn test.check(t: Test, condition: bool) -> ()
 N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
+N fn test.seed(t: Test) -> u64
+N fn test.log(t: Test, text: String) -> ()
+N fn test.expect_snapshot(t: Test, name: String, text: String) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc

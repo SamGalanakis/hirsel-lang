@@ -65,7 +65,7 @@ CAP/CAP-2-sender-operation-bad.hir
 CAP/CAP-2-sender-operation-ok.hir
 CAP/CAP-2-task-operation-bad.hir
 CAP/CAP-2-task-operation-ok.hir
-CAP/CAP-2-testhelpers-for-all-reject.hir
+CAP/CAP-2-testhelpers-property-reject.hir
 CAP/CAP-2-typed-heap-inert-bad.hir
 CAP/CAP-2-typed-heap-inert-ok.hir
 CAP/CAP-3-dir-capture-under-dir-ok.hir

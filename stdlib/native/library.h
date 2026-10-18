@@ -59,6 +59,9 @@ uint8_t hirsel_rt_v2_io_random(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*)
 uint8_t hirsel_rt_v2_test_check(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t);
 uint8_t hirsel_rt_v2_test_check_case(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t, uint64_t);
 uint8_t hirsel_rt_v2_test_fail(hirsel_rt_v2_ctx*, const uint64_t*);
+uint8_t hirsel_rt_v2_test_seed(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_test_log(hirsel_rt_v2_ctx*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_test_expect_snapshot(hirsel_rt_v2_ctx*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_test_dir(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_test_net(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_test_process(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, hirsel_rt_v2_header*, hirsel_rt_v2_header*);

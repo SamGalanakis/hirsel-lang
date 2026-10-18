@@ -226,7 +226,11 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         registry.signatures.insert(path(name), Arc::new(signature));
     }
     // Ordinary std fixture declarations; no core alias or privileged cursor protocol.
-    for name in ["std@1/unicode.GraphemeView", "std@1/unicode.GraphemeCursor"] {
+    for name in [
+        "std@1/unicode.GraphemeView",
+        "std@1/unicode.GraphemeCursor",
+        "std@1/test.Source",
+    ] {
         let mut signature = type_signature(
             name,
             vec![

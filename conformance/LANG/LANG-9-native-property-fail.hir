@@ -1,0 +1,22 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 16
+// stdout: test log: counterexample: "7"
+// stdout: test failure: seed=0 case=0
+// entry: trial
+fn gen(mut s: test.Source) -> String {
+  u64.to_string(test.range_u64(mut s, 7, 9))
+}
+
+fn law(s: String) -> bool uses {} {
+  false
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.check(t, true)
+  test.property(t, gen, law, test.quoted)
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  Ok(())
+}

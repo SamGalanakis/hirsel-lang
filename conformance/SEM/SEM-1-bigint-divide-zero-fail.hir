@@ -2,7 +2,7 @@
 // expect: fail SEM-1 at line 876
 // A zero BigInt divisor fails SEM-1 in std's div_rem, as integer division by zero does.
 pub fn main(args: Args) -> Result[(), ()] {
-  let divisor = bigint.from_u64(arg.count(args))
+  let divisor = bigint.from_u64(arg.len(args))
   let (q, r) = bigint.div_rem(bigint.from_u64(7), divisor)
   failure.check(bigint.is_zero(q) && bigint.is_zero(r), Arithmetic())
   Ok(())

@@ -328,6 +328,13 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 format!("check_case {test} {} {case}", u8::from(*condition))
             }
             Request::TestFail { test } => format!("fail {test}"),
+            Request::TestSeed { test } => format!("test_seed {test}"),
+            Request::TestLog { test, text } => format!("test_log {test} {}", hex(text.as_bytes())),
+            Request::TestSnapshot { test, name, text } => format!(
+                "test_snapshot {test} {} {}",
+                hex(name.as_bytes()),
+                hex(text.as_bytes())
+            ),
             Request::TestDir { test, entries } => format!(
                 "test_dir {test} {}",
                 entries
@@ -608,6 +615,16 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                     case: number(index)?,
                 },
                 ["fail", t] => Request::TestFail { test: number(t)? },
+                ["test_seed", t] => Request::TestSeed { test: number(t)? },
+                ["test_log", t, text] => Request::TestLog {
+                    test: number(t)?,
+                    text: string(text)?,
+                },
+                ["test_snapshot", t, name, text] => Request::TestSnapshot {
+                    test: number(t)?,
+                    name: string(name)?,
+                    text: string(text)?,
+                },
                 ["test_dir", t, entries] => Request::TestDir {
                     test: number(t)?,
                     entries: if entries.is_empty() {

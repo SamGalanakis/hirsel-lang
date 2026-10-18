@@ -196,3 +196,252 @@ fn tracked_test_entries_have_no_synthetic_caller() {
     assert_eq!(run(Some("llvm")), expected);
     assert_eq!(run(Some("cranelift")), expected);
 }
+
+/// A suite with std in its own directory, so its `snapshots/` directory is private.
+fn std_suite(name: &str, source: &str) -> std::path::PathBuf {
+    let directory = std::env::temp_dir().join(format!(
+        "hirsel-cli-{}-{}-{name}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("suite.hir");
+    std::fs::write(&path, source).unwrap();
+    let manifest = directory.join("suite.json");
+    let std = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap();
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "schema":1,"package":{"name":"suite","version":"1"},
+            "sources":[{"path":path,"module":[]}],
+            "dependencies":[{"manifest":std,"package":{"name":"std","version":"1"},"expose":[]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    manifest
+}
+
+fn hirsel_test(manifest: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("test")
+        .arg(manifest)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+// As with golden files and an -update flag: a missing or different snapshot fails its
+// test after it finishes, with a deterministic unified diff; --bless writes the files instead.
+#[test]
+fn snapshots_compare_with_committed_files_and_bless_rewrites_them() {
+    let manifest = std_suite(
+        "snapshots",
+        "@test\nfn render(t: Test) {\n  test.expect_snapshot(t, \"greeting\", \"hello\\nworld\\n\")\n  test.expect_snapshot(t, \"tail\", \"no newline\")\n  test.log(t, \"after the snapshots\")\n}\n\n@test\nfn twice(t: Test) {\n  test.expect_snapshot(t, \"same\", \"a\")\n  test.expect_snapshot(t, \"same\", \"b\")\n}\n",
+    );
+    let directory = manifest.parent().unwrap();
+    let greeting = directory.join("snapshots/suite.render.greeting.snap");
+    let missing = hirsel_test(&manifest, &["render", "--seed", "9"]);
+    assert_eq!(missing.status.code(), Some(1), "{missing:?}");
+    assert_eq!(
+        String::from_utf8(missing.stdout).unwrap(),
+        concat!(
+            "test suite@1/render ... FAILED (seed=9): snapshot greeting has no committed snapshots/suite.render.greeting.snap; snapshot tail has no committed snapshots/suite.render.tail.snap\n    after the snapshots\n    diff snapshots/suite.render.greeting.snap actual\n    --- snapshots/suite.render.greeting.snap\n    +++ actual\n    @@ -0,0 +1,2 @@\n    +hello\n    +world\n    diff snapshots/suite.render.tail.snap actual\n    --- snapshots/suite.render.tail.snap\n    +++ actual\n    @@ -0,0 +1,1 @@\n    +no newline\n    \\ No newline at end of file\n    run `hirsel test --bless` to accept the actual snapshots\ntest result: FAILED. 0 passed; 1 failed; 1 total\n"
+        )
+    );
+    assert!(!greeting.exists());
+    let blessed = hirsel_test(&manifest, &["render", "--bless"]);
+    assert_eq!(blessed.status.code(), Some(0), "{blessed:?}");
+    assert_eq!(
+        std::fs::read_to_string(&greeting).unwrap(),
+        "hello\nworld\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.join("snapshots/suite.render.tail.snap")).unwrap(),
+        "no newline"
+    );
+    assert_eq!(hirsel_test(&manifest, &["render"]).status.code(), Some(0));
+    std::fs::write(&greeting, "hello\nthere\n").unwrap();
+    let changed = hirsel_test(&manifest, &["render", "--json"]);
+    assert_eq!(changed.status.code(), Some(1), "{changed:?}");
+    let json: serde_json::Value = serde_json::from_slice(&changed.stdout).unwrap();
+    assert_eq!(
+        json["tests"][0]["failure"],
+        "snapshot greeting differs from snapshots/suite.render.greeting.snap"
+    );
+    assert_eq!(
+        json["tests"][0]["report"],
+        "after the snapshots\ndiff snapshots/suite.render.greeting.snap actual\n--- snapshots/suite.render.greeting.snap\n+++ actual\n@@ -1,2 +1,2 @@\n hello\n-there\n+world\nrun `hirsel test --bless` to accept the actual snapshots\n"
+    );
+    let twice = hirsel_test(&manifest, &["twice", "--bless", "--json"]);
+    let json: serde_json::Value = serde_json::from_slice(&twice.stdout).unwrap();
+    assert_eq!(json["tests"][0]["failure"], "snapshot same recorded twice");
+}
+
+// Hypothesis and minithesis report the shrunk counterexample; the reported seed replays it.
+#[test]
+fn property_failures_report_the_shrunk_counterexample_and_the_seed_replays_it() {
+    let manifest = std_suite(
+        "property",
+        "fn small(mut s: test.Source) -> u64 {\n  test.range_u64(mut s, 0, 1000)\n}\n\nfn below(n: u64) -> bool uses {} {\n  n < 500\n}\n\n@test\nfn bounded(t: Test) {\n  test.property(t, small, below, u64.to_string)\n}\n\n@test\nfn equal(t: Test) {\n  test.assert_eq(t, 2u64 + 2, 5, u64.to_string)\n}\n",
+    );
+    let output = hirsel_test(&manifest, &["--json"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let property = &json["tests"][0];
+    let seed = property["seed"].as_u64().unwrap();
+    let report = property["report"].as_str().unwrap();
+    assert!(
+        report.starts_with("counterexample: 500\ntest failure: seed="),
+        "{report}"
+    );
+    assert!(report.contains(&format!("seed={seed} case=")), "{report}");
+    assert_eq!(
+        json["tests"][1]["report"],
+        "assertion failed: actual == expected\n  actual: 4\nexpected: 5\n"
+    );
+    let replay = hirsel_test(
+        &manifest,
+        &["bounded", "--json", "--seed", &seed.to_string()],
+    );
+    let replayed: serde_json::Value = serde_json::from_slice(&replay.stdout).unwrap();
+    assert_eq!(replayed["tests"][0], *property);
+    // A different seed fails at a case of its own, still shrinking to the boundary.
+    let other = hirsel_test(&manifest, &["bounded", "--json", "--seed", "7"]);
+    let other: serde_json::Value = serde_json::from_slice(&other.stdout).unwrap();
+    assert!(
+        other["tests"][0]["report"]
+            .as_str()
+            .unwrap()
+            .starts_with("counterexample: 500\ntest failure: seed=7 case=")
+    );
+}
+
+#[test]
+fn test_step_budgets_are_explicit_and_interpreted_only() {
+    let manifest = std_suite(
+        "steps",
+        "@test\nfn spin() {\n  let mut i: u64 = 0\n  while i < 100000 {\n    i += 1\n  }\n}\n",
+    );
+    let limited = hirsel_test(&manifest, &["--json", "--max-steps", "1000"]);
+    assert_eq!(limited.status.code(), Some(1), "{limited:?}");
+    let json: serde_json::Value = serde_json::from_slice(&limited.stdout).unwrap();
+    assert!(
+        json["tests"][0]["failure"]
+            .as_str()
+            .unwrap()
+            .contains("ToolingLimit"),
+        "{json}"
+    );
+    assert_eq!(hirsel_test(&manifest, &[]).status.code(), Some(0));
+    let native = hirsel_test(&manifest, &["--native", "--max-steps", "1"]);
+    assert_eq!(native.status.code(), Some(2), "{native:?}");
+}
+
+// Go testing.B, adapted: benches run only under --bench, calibrated by powers of ten.
+#[test]
+fn benches_run_only_under_bench_with_a_stable_report() {
+    let manifest = std_suite(
+        "bench",
+        "@bench\nfn add() {\n  let x: u64 = 2\n  let _ = x + 2\n}\n\n@bench\nfn broken(t: Test) {\n  test.check(t, false)\n}\n\n@test\nfn ordinary() {}\n",
+    );
+    let tests = hirsel_test(&manifest, &["--json"]);
+    let json: serde_json::Value = serde_json::from_slice(&tests.stdout).unwrap();
+    assert_eq!(json["summary"]["total"], 1, "{json}");
+    let benches = hirsel_test(&manifest, &["--bench", "--bench-time", "20"]);
+    assert_eq!(benches.status.code(), Some(1), "{benches:?}");
+    let text = String::from_utf8(benches.stdout).unwrap();
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "{text}");
+    let measured = lines[0]
+        .strip_prefix("bench suite@1/add ... ")
+        .and_then(|rest| rest.strip_suffix(" ns/iter"))
+        .and_then(|rest| rest.split_once(" iterations, "))
+        .unwrap_or_else(|| panic!("{text}"));
+    let iterations: u64 = measured.0.parse().unwrap();
+    assert!(
+        iterations
+            .to_string()
+            .trim_start_matches('1')
+            .bytes()
+            .all(|b| b == b'0'),
+        "{text}"
+    );
+    assert!(measured.1.parse::<f64>().unwrap() >= 0.0, "{text}");
+    assert!(
+        lines[1].starts_with("bench suite@1/broken ... FAILED (seed="),
+        "{text}"
+    );
+    assert_eq!(
+        lines[2],
+        "bench result: FAILED. 1 measured; 1 failed; 2 total"
+    );
+    let json = hirsel_test(
+        &manifest,
+        &["--bench", "--bench-time", "20", "--json", "add"],
+    );
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["benches"][0]["status"], "measured");
+    assert!(json["benches"][0]["iterations"].as_u64().unwrap() >= 1);
+    for invalid in [
+        &["--bench", "--bless"][..],
+        &["--bench-time", "5"],
+        &["--bench", "--bench-time", "0"],
+    ] {
+        assert_eq!(
+            hirsel_test(&manifest, invalid).status.code(),
+            Some(2),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn native_reports_snapshots_properties_and_benches_match_interpreted() {
+    let manifest = std_suite(
+        "native",
+        "fn small(mut s: test.Source) -> u64 {\n  test.range_u64(mut s, 0, 1000)\n}\n\nfn below(n: u64) -> bool uses {} {\n  n < 500\n}\n\n@test\nfn a_property(t: Test) {\n  test.property(t, small, below, u64.to_string)\n}\n\n@test\nfn b_report(t: Test) {\n  test.log(t, \"line\\none\")\n  test.check(t, test.seed(t) == 731)\n  test.expect_snapshot(t, \"text\", \"snap\\n\")\n  test.assert_eq(t, \"a\", \"b\", test.quoted)\n}\n\n@test\nfn c_bad_name(t: Test) {\n  test.expect_snapshot(t, \"a b\", \"x\")\n}\n\n@bench\nfn d_bench() {}\n",
+    );
+    let run = |args: &[&str]| {
+        let mut all = vec!["--json", "--seed", "731"];
+        all.extend_from_slice(args);
+        let output = hirsel_test(&manifest, &all);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let expected = run(&[]);
+    assert_eq!(expected["summary"]["failed"], 3, "{expected}");
+    assert!(
+        expected["tests"][1]["report"]
+            .as_str()
+            .unwrap()
+            .starts_with("line\none\nassertion failed: actual == expected\n  actual: \"a\"\nexpected: \"b\"\n"),
+        "{expected}"
+    );
+    for backend in ["llvm", "cranelift"] {
+        assert_eq!(
+            run(&["--native", "--backend", backend]),
+            expected,
+            "{backend}"
+        );
+        let bench = hirsel_test(
+            &manifest,
+            &[
+                "--bench",
+                "--bench-time",
+                "5",
+                "--native",
+                "--backend",
+                backend,
+                "--json",
+            ],
+        );
+        assert_eq!(bench.status.code(), Some(0), "{bench:?}");
+        let bench: serde_json::Value = serde_json::from_slice(&bench.stdout).unwrap();
+        assert_eq!(bench["benches"][0]["status"], "measured", "{bench}");
+    }
+}

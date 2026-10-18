@@ -8,8 +8,8 @@ impl Parser<'_> {
         let name = self.name()?;
         let mut arguments = vec![];
         match spelling.as_str() {
-            "test" | "track_caller" | "noalloc" | "soa" | "packed" | "blocking" | "incomplete"
-            | "serializable" => {}
+            "test" | "bench" | "track_caller" | "noalloc" | "soa" | "packed" | "blocking"
+            | "incomplete" | "serializable" => {}
             "format" => {
                 self.expect("(", const { RuleId::of("LANG-1") })?;
                 let function = self.path(false)?;
@@ -402,7 +402,7 @@ impl Parser<'_> {
         }
         for attr in attrs {
             let valid = match self.symbols.resolve(attr.name).unwrap_or("") {
-                "test" | "track_caller" | "noalloc" | "incomplete" | "advance_only"
+                "test" | "bench" | "track_caller" | "noalloc" | "incomplete" | "advance_only"
                 | "preserves_captures" | "preserves_unique" | "captures" => {
                     matches!(kind, ItemKind::Function { .. })
                 }

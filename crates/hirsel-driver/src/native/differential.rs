@@ -534,8 +534,19 @@ pub fn real_io_replay_in(
             .map_err(|e| NativeError::new(StageName::Launch, format!("the Io tape: {e}")))?;
         let mut printed = Vec::new();
         for event in &events {
-            if let hirsel_rt::io::Request::Print { bytes, .. } = &event.request {
-                printed.extend_from_slice(bytes);
+            // Test log and snapshot records reach stdout through Test reporting, not Print;
+            // their bytes are re-rendered in order. An invalid snapshot name records nothing.
+            match &event.request {
+                hirsel_rt::io::Request::Print { bytes, .. } => printed.extend_from_slice(bytes),
+                hirsel_rt::io::Request::TestLog { text, .. } => {
+                    printed.extend(hirsel_rt::kernels::report::log(text))
+                }
+                hirsel_rt::io::Request::TestSnapshot { name, text, .. }
+                    if event.completion == hirsel_rt::io::Completion::Checked(true) =>
+                {
+                    printed.extend(hirsel_rt::kernels::report::snapshot(name, text))
+                }
+                _ => {}
             }
         }
         // A Test report (a failed check, a scripted peer's or child's Expect) is no Print:

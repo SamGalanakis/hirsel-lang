@@ -1,6 +1,6 @@
 # hirsel-kernels
 
-Pure leaf kernels extracted without changing semantics: integer conversion, SipHash-1-3 and Unicode tables. Both the
+Pure leaf kernels extracted without changing semantics: integer conversion, SipHash-1-3, Unicode tables and the Test report line encoding (`report`: escaped `test log:` and `test snapshot` records and the snapshot name rule). Both the
 runtime and interpreter adapters may call them; independent mathematical vectors
 remain the oracle, because a shared kernel introduces common-mode errors.
 

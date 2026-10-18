@@ -20,7 +20,8 @@ fn std@1/u64.to_string(value: u64) -> String uses {}
 @noalloc
 fn test.check(t: Test, condition: bool) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
-fn std@1/test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
+fn std@1/test.property[T](t: Test, gen: fn(mut std@1/test.Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> ()
+fn std@1/test.choice(mut s: std@1/test.Source, max: u64) -> u64 uses {}
 
 // CAP-1/2, PROV-1/2, DROP-2/4
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]

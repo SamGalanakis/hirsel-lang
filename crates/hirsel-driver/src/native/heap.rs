@@ -323,6 +323,42 @@ impl Operations for Io {
                     OpOutcome::Value(OpValue::Unit)
                 }
             }
+            (Some("test"), "seed", [OpValue::Handle(test)])
+                if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
+            {
+                OpOutcome::Value(OpValue::Bits {
+                    scalar: ScalarKind::U64,
+                    bits: self.test_seed.into(),
+                })
+            }
+            (Some("test"), "log", [OpValue::Handle(test), OpValue::Bytes(text)])
+                if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
+            {
+                let Ok(text) = std::str::from_utf8(text) else {
+                    return OpOutcome::Unsupported;
+                };
+                output.extend_from_slice(&hirsel_rt::kernels::report::log(text));
+                OpOutcome::Value(OpValue::Unit)
+            }
+            (
+                Some("test"),
+                "expect_snapshot",
+                [
+                    OpValue::Handle(test),
+                    OpValue::Bytes(name),
+                    OpValue::Bytes(text),
+                ],
+            ) if matches!(self.grants.get(test), Some(IoGrant::Test)) => {
+                let (Ok(name), Ok(text)) = (std::str::from_utf8(name), std::str::from_utf8(text))
+                else {
+                    return OpOutcome::Unsupported;
+                };
+                if !hirsel_rt::kernels::report::snapshot_name(name) {
+                    return OpOutcome::Fail("LANG-9".into());
+                }
+                output.extend_from_slice(&hirsel_rt::kernels::report::snapshot(name, text));
+                OpOutcome::Value(OpValue::Unit)
+            }
             (Some("io"), "stdout", [OpValue::Handle(IO_HANDLE)]) => {
                 let handle = self.next;
                 self.next += 1;

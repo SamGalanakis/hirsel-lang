@@ -66,7 +66,12 @@ fn evaluate_on_compiler_thread(
             phase: "test execution".into(),
             ..Default::default()
         };
-        let tests = match hirsel_driver::testing::discover(&mut program, &[], None) {
+        let tests = match hirsel_driver::testing::discover(
+            &mut program,
+            &[],
+            None,
+            hirsel_driver::testing::Selection::Tests,
+        ) {
             Ok(tests) if !tests.is_empty() => tests,
             Ok(_) => {
                 return (

@@ -128,11 +128,20 @@ fn normalize_inner(
                 ));
             }
             let mut f = n.function(signature, &attrs, false)?;
-            if item
+            let selected: Vec<_> = item
                 .attributes
                 .iter()
-                .any(|a| input.symbols.resolve(a.name) == Some("test"))
-            {
+                .filter_map(|a| input.symbols.resolve(a.name))
+                .filter(|name| matches!(*name, "test" | "bench"))
+                .collect();
+            if selected.len() > 1 {
+                return Err(diagnostic(
+                    const { RuleId::of("LANG-9") },
+                    item.origin.span,
+                    "a function is either a @test or a @bench, not both",
+                ));
+            }
+            if let [attribute] = selected.as_slice() {
                 let unit = |id| matches!(n.types.get(id).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty());
                 let result = unit(f.result)
                     || matches!(n.types.get(f.result).map(|t| &t.kind), Some(TypeKind::Named { definition, arguments }) if definition.is_core("Result") && matches!(arguments.as_slice(), [GenericArgument::Type(ok), GenericArgument::Type(_)] if unit(*ok)));
@@ -148,7 +157,9 @@ fn normalize_inner(
                     return Err(diagnostic(
                         const { RuleId::of("LANG-9") },
                         item.origin.span,
-                        "@test requires a complete monomorphic Hirsel function with no parameters or one borrowed Test, returning () or Result[(), E]",
+                        &format!(
+                            "@{attribute} requires a complete monomorphic Hirsel function with no parameters or one borrowed Test, returning () or Result[(), E]"
+                        ),
                     ));
                 }
             }
@@ -683,8 +694,8 @@ impl Normalizer<'_, '_> {
             let function = matches!(kind, ast::ItemKind::Function { .. });
             let type_ = matches!(kind, ast::ItemKind::Type { .. });
             let valid = match name.as_str() {
-                "test" | "noalloc" | "incomplete" | "advance_only" | "preserves_captures"
-                | "preserves_unique" | "captures" => function,
+                "test" | "bench" | "noalloc" | "incomplete" | "advance_only"
+                | "preserves_captures" | "preserves_unique" | "captures" => function,
                 "track_caller" => matches!(kind, ast::ItemKind::Function { abi: None, .. }),
                 "blocking" => matches!(kind, ast::ItemKind::Function { abi: Some(_), .. }),
                 "layout" | "packed" | "align" | "soa" | "capability" | "loop_source" | "format"
@@ -730,8 +741,8 @@ impl Normalizer<'_, '_> {
                         ));
                     }
                 }
-                "test" | "track_caller" | "noalloc" | "incomplete" | "blocking" | "packed"
-                | "soa" | "serializable" => {
+                "test" | "bench" | "track_caller" | "noalloc" | "incomplete" | "blocking"
+                | "packed" | "soa" | "serializable" => {
                     if !a.arguments.is_empty() {
                         return Err(diagnostic(
                             const { RuleId::of("LANG-6") },
@@ -740,7 +751,7 @@ impl Normalizer<'_, '_> {
                         ));
                     }
                     match name.as_str() {
-                        "test" => (),
+                        "test" | "bench" => (),
                         "track_caller" => result.track_caller = true,
                         "noalloc" => result.noalloc = true,
                         "incomplete" => result.incomplete = true,
@@ -946,14 +957,16 @@ impl Normalizer<'_, '_> {
             abi: None,
         };
         if closure
-            && s.attributes
+            && let Some(name) = s
+                .attributes
                 .iter()
-                .any(|a| self.input.symbols.resolve(a.name) == Some("test"))
+                .filter_map(|a| self.input.symbols.resolve(a.name))
+                .find(|name| matches!(*name, "test" | "bench"))
         {
             return Err(diagnostic(
                 const { RuleId::of("LANG-9") },
                 self.span,
-                "@test selects only an ordinary function definition",
+                &format!("@{name} selects only an ordinary function definition"),
             ));
         }
         if closure

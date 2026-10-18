@@ -200,6 +200,19 @@ pub fn replay_interpreter_with_fixture(
                     ],
                 ),
                 Request::TestFail { test } => ("test.fail", vec![handle("Test", *test)]),
+                Request::TestSeed { test } => ("test.seed", vec![handle("Test", *test)]),
+                Request::TestLog { test, text } => (
+                    "test.log",
+                    vec![handle("Test", *test), Value::String(text.clone())],
+                ),
+                Request::TestSnapshot { test, name, text } => (
+                    "test.expect_snapshot",
+                    vec![
+                        handle("Test", *test),
+                        Value::String(name.clone()),
+                        Value::String(text.clone()),
+                    ],
+                ),
                 Request::TestDir { test, entries } => (
                     "test.dir",
                     vec![

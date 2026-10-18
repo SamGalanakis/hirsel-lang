@@ -26,7 +26,7 @@ CAP/CAP-2-opaque-package-effect-ok.hir # dependency-owned D/fixture M: LANG-4 li
 CAP/CAP-2-opaque-package-pure-ok.hir # dependency-owned D/fixture M: LANG-4 line 8
 CAP/CAP-2-opaque-stdout-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("CAP-2"), severity: Error, message: "opaque authority summary omits representation authority", primary: Span { file: FileId(0), start: 49, end: 119 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
 CAP/CAP-2-opaque-stdout-ok.hir # dependency-owned H: LANG-7 line 14: opaque type cannot be constructed here
-CAP/CAP-2-testhelpers-for-all-accept.hir # dependency-owned D/fixture M: LANG-4 line 11
+CAP/CAP-2-testhelpers-property-accept.hir # dependency-owned D/fixture M: LANG-4 line 11
 CAP/CAP-3-net-restricted-body-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
 CAP/CAP-3-transaction-example.hir # dependency-owned E/v20 follow-up: NotImplemented
 CAP/CAP-4-atomic-create-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix

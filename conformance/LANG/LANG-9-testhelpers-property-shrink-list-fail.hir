@@ -1,0 +1,30 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 28
+// stdout: test log: counterexample: [1001]
+// stdout: test failure: seed=0 case=0
+// entry: trial
+fn element(mut s: test.Source) -> u64 {
+  test.range_u64(mut s, 0, 10000)
+}
+
+// minithesis test_finds_small_list: a list whose sum exceeds 1000 shrinks to [1001].
+fn numbers(mut s: test.Source) -> List[u64] {
+  test.list_of(mut s, 50, element)
+}
+
+fn small_sum(xs: List[u64]) -> bool uses {} {
+  let mut total: u64 = 0
+  for x in xs {
+    total += x
+  }
+  total <= 1000
+}
+
+fn show(xs: List[u64]) -> String {
+  test.show_list(xs, u64.to_string)
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property(t, numbers, small_sum, show)
+  Ok(())
+}

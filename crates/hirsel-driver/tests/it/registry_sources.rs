@@ -162,7 +162,8 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "json.stringify_into",
                 "test.equal",
                 "test.approx",
-                "test.for_all",
+                "test.assert_eq",
+                "test.property",
                 "test.expect_error",
                 "input.read_all",
                 "input.read_line",
@@ -337,7 +338,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         assert_eq!(normalized.metadata.visibility, Visibility::Public);
         checked += 1;
     }
-    assert_eq!(checked, 169);
+    assert_eq!(checked, 172);
 }
 
 #[test]

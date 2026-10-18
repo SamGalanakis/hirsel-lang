@@ -571,8 +571,10 @@ A `RuntimePrimitive` manifest row names a symbol exported at the Hirsel ABI v2
 (`(ctx, [caller site, operation site], [caller destination], [result pointer], parameters...) -> status`).
 `operations::HIRSEL_ABI_EXPORTS` lists each such export with its physical
 signature, and the driver checks every call against it before linking. These include stdout/print, all directory and file leaves, Path/Args, MonotonicClock/WallClock/Random,
-Test check/check_case/fail/dir, IEEE bit primitives, Unicode cursors and text entries.
-`test.for_all`, `test.equal` and `test.approx` are ordinary std@1 source;
+Test check/check_case/fail/seed/log/expect_snapshot/dir, IEEE bit primitives, Unicode
+cursors and text entries. `test.log` and `test.expect_snapshot` append one escaped report
+line (`hirsel_kernels::report`) to the Test report on stdout. `test.property`, `test.equal`
+and `test.approx` are ordinary std@1 source;
 expect_error awaits the approved general divergence contract. `Path` is an
 inert u64 into the context's intern table; file and atomic handles close on drop.
 Taken bytes and handles are consumed on every outcome, including status 1.

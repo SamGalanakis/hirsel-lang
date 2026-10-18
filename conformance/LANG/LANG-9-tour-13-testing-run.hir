@@ -1,7 +1,7 @@
 // rule: LANG-9
 // expect: test
-fn generate(t: Test) -> u64 {
-  7
+fn small(mut s: test.Source) -> u64 {
+  test.range_u64(mut s, 0, 1000)
 }
 
 fn law(n: u64) -> bool uses {} {
@@ -13,8 +13,9 @@ fn assertions(t: Test) {
   test.check(t, 2u64 + 2 == 4)
   let xs: List[u64] = [1, 2]
   test.equal(t, xs, [1, 2])
+  test.assert_eq(t, 2u64 + 2, 4, u64.to_string)
   test.approx(t, 0.1f64 + 0.2, 0.3, 0.000001, 0.0)
-  test.for_all(t, generate, law)
+  test.property(t, small, law, u64.to_string)
   let rejected: Result[u64, String] = Error("bad input")
   let error = test.expect_error(t, take rejected)
   test.check(t, error == "bad input")

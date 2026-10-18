@@ -1,0 +1,26 @@
+// rule: DROP-2
+// expect: run
+// entry: trial
+resource type Watch {
+  n: u8,
+}
+@noalloc drop(w) {
+  core@1/failure.check(w.n == 7, Arithmetic())
+}
+
+fn generate(mut s: test.Source) -> Watch {
+  Watch(n: core@1/int.narrow(test.range_u64(mut s, 7, 7)))
+}
+
+fn law(value: Watch) -> bool uses {} {
+  value.n == 7
+}
+
+fn show(value: Watch) -> String {
+  u8.to_string(value.n)
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  test.property(t, generate, law, show)
+  Ok(())
+}

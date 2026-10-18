@@ -76,6 +76,9 @@ fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]
 N fn test.check(t: Test, condition: bool) -> ()
 N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
+N fn test.seed(t: Test) -> u64
+N fn test.log(t: Test, text: String) -> ()
+N fn test.expect_snapshot(t: Test, name: String, text: String) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
@@ -493,8 +496,8 @@ the buffer and position unchanged; non-canceled write errors may follow a prefix
 Narrowing preserves a File's mode and position. An opened handle continues to refer
 to its file after unlink or replacement; it does not reopen the stored path.
 
-The ordinary `std@1/test` assertion helpers (`equal`, `approx`, `for_all_cases`,
-`expect_error`, `for_all` and `expect_ok`) and `std@1/text.finish_valid` are
+The ordinary `std@1/test` assertion helpers (`equal`, `approx`, `assert_eq`,
+`expect_error`, `expect_ok`, `property` and `property_cases`) and `std@1/text.finish_valid` are
 `@track_caller`: a failing check identifies their application call, while reports retain
 the helper's original operation as secondary context.
 
@@ -502,7 +505,17 @@ the helper's original operation as secondary context.
 it first reports `test failure: seed=S case=C` and a newline through Test reporting, using
 the run's Test seed and the supplied zero-based case index. `test.fail` records a LANG-9
 failure through Test reporting, then ends the test along its failure edge after ordinary
-failure cleanup; it never returns. `test.dir` creates a confined fake file system from its
+failure cleanup; it never returns. `test.seed` returns the run's Test seed, the same value
+`test.check_case` reports, so a generator seeded from it is replayed by the runner's
+`--seed`. Test reporting is written one record per line, with each user text escaped:
+`\` as `\\`, line feed, carriage return and tab as `\n`, `\r` and `\t`, and every other
+C0 control and DEL as `\u{XX}` in two lowercase hex digits; other scalars are unchanged.
+`test.log` reports `test log: T` and a newline, where `T` is the escaped text.
+`test.expect_snapshot` reports `test snapshot N: T` and a newline. Its name `N` is 1 to 64
+ASCII letters, digits, `_` or `-`; any other name fails LANG-9 without a report. The
+snapshot is only recorded here: the test runner compares it with the committed file and
+decides the test's outcome (`hirsel test` in the building guide).
+`test.dir` creates a confined fake file system from its
 entries; `test.net` creates a fake `Net` served by scripted peers ([below](#network));
 `test.process` creates a fake `Proc` served by scripted runs and children
 ([below](#processes)).

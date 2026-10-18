@@ -238,7 +238,7 @@ fn extra_test_helpers_are_ordinary_source() {
     source_codec(
         "test-extra",
         "test",
-        &["expect_ok", "expect_error", "for_all_cases"],
+        &["expect_ok", "expect_error", "property_cases"],
     );
 }
 
@@ -247,9 +247,9 @@ fn extra_test_helpers_are_ordinary_source() {
 fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
     with_compiler_stack(|| {
         use hirsel_interp::observation::Effect;
-        for (relative, finalizers, cases) in [
-            ("SEM/SEM-3-test-extra-run.hir", 5, 3),
-            ("DROP/DROP-2-expect-ok-error-fail.hir", 1, 0),
+        for (relative, finalizers, passes) in [
+            ("SEM/SEM-3-test-extra-run.hir", 5, true),
+            ("DROP/DROP-2-expect-ok-error-fail.hir", 1, false),
         ] {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../conformance")
@@ -266,7 +266,7 @@ fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
                 SimulationConfig::default(),
             )
             .unwrap();
-            if cases > 0 {
+            if passes {
                 assert!(matches!(observed.outcome, Ok(RunOutcome::Exit(0))));
             } else {
                 assert!(
@@ -275,18 +275,12 @@ fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
             }
             let observation = observed.observation.unwrap();
             let drops: Vec<_> = observation.effects.iter().enumerate().filter_map(|(index, effect)| matches!(&effect.effect, Effect::Finalizer { definition } if definition.0.name == "Watch").then_some(index)).collect();
-            let reports: Vec<_> = observation.effects.iter().enumerate().filter_map(|(index, effect)| matches!(&effect.effect, Effect::CapabilityConsumed(event) if event.operation == "test.check_case").then_some(index)).collect();
+            // Passing property cases report nothing; each value is released in order.
             assert_eq!(drops.len(), finalizers);
-            assert_eq!(reports.len(), cases);
-            if cases == 0 {
+            assert!(observation.output.is_empty());
+            if !passes {
                 let failure = observation.effects.iter().position(|effect| matches!(&effect.effect, Effect::CapabilityConsumed(event) if event.operation == "test.fail")).unwrap();
                 assert!(drops[0] < failure);
-            }
-            for (index, report) in reports.iter().enumerate() {
-                assert!(drops[index + 2] < *report);
-                if index + 1 < reports.len() {
-                    assert!(*report < drops[index + 3]);
-                }
             }
         }
     });

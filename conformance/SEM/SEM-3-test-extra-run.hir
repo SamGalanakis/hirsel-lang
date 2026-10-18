@@ -8,7 +8,7 @@ resource type Watch {
   failure.check(w.n == 7, Arithmetic())
 }
 
-fn generate(t: Test) -> Watch {
+fn generate(mut s: test.Source) -> Watch {
   Watch(n: 7)
 }
 
@@ -16,7 +16,11 @@ fn law(value: Watch) -> bool uses {} {
   value.n == 7
 }
 
-fn never_generate(t: Test) -> u64 {
+fn show(value: Watch) -> String {
+  u8.to_string(value.n)
+}
+
+fn never_generate(mut s: test.Source) -> u64 {
   failure.check(false, Arithmetic())
   0
 }
@@ -38,7 +42,7 @@ pub fn trial(t: Test) -> Result[(), ()] {
   {
     let _ = take recovered
   }
-  std@1/test.for_all_cases(t, 3, generate, law)
-  std@1/test.for_all_cases(t, 0, never_generate, never_law)
+  std@1/test.property_cases(t, 3, generate, law, show)
+  std@1/test.property_cases(t, 0, never_generate, never_law, u64.to_string)
   Ok(())
 }

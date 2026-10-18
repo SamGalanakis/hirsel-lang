@@ -411,6 +411,34 @@ impl Library {
                 )?;
                 return Ok(Some(OperationResult::Failed(failure)));
             }
+            "test.seed" => {
+                self.simulation.id(arg(a, 0)?, "Test")?;
+                u64_value(self.simulation.config.test_seed)
+            }
+            // Test report records (hirsel_kernels::report); an invalid snapshot name
+            // fails LANG-9 before anything is reported.
+            "test.log" | "test.expect_snapshot" => {
+                self.simulation.id(arg(a, 0)?, "Test")?;
+                let record = if name == "test.log" {
+                    hirsel_kernels::report::log(text(arg(a, 1)?)?)
+                } else {
+                    let snapshot = text(arg(a, 1)?)?;
+                    if !hirsel_kernels::report::snapshot_name(snapshot) {
+                        let failure = fail(call, context, "LANG-9", "test.expect_snapshot name");
+                        self.simulation.record(
+                            "Test",
+                            name,
+                            encode_arguments(a),
+                            b"failure:LANG-9".to_vec(),
+                            context,
+                        )?;
+                        return Ok(Some(OperationResult::Failed(failure)));
+                    }
+                    hirsel_kernels::report::snapshot(snapshot, text(arg(a, 2)?)?)
+                };
+                context.stdout.extend_from_slice(&record);
+                Value::Unit
+            }
             "test.dir" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
                 let entries = collection::elements(arg(a, 1)?, BuiltinType::List)?;
@@ -1315,7 +1343,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();

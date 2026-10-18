@@ -67,8 +67,8 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
             "LANG-9-native-test-check-run",
             "LANG-9-native-test-check-fail",
             "LANG-9-native-test-dir-run",
-            "LANG-9-native-for-all-run",
-            "LANG-9-native-for-all-fail",
+            "LANG-9-native-property-run",
+            "LANG-9-native-property-fail",
         ] {
             cases.push((
                 name,
@@ -165,20 +165,12 @@ fn campaign_in(include: fn(&str, bool) -> bool, matrix: Vec<Configuration>, scra
                     hirsel_rt::launch::parse_recording(&std::fs::read_to_string(&tape).unwrap())
                         .unwrap();
                 assert_eq!(recording.test_seed, 0);
-                if name == "LANG-9-native-for-all-run" {
-                    assert_eq!(
-                        recording
-                            .events
-                            .iter()
-                            .filter(|event| matches!(
-                                event.request,
-                                hirsel_rt::io::Request::TestCheck {
-                                    condition: true,
-                                    ..
-                                }
-                            ))
-                            .count(),
-                        100
+                if name == "LANG-9-native-property-run" {
+                    // 100 passing cases read the seed once and report nothing.
+                    let requests: Vec<_> = recording.events.iter().map(|e| &e.request).collect();
+                    assert!(
+                        matches!(requests[..], [hirsel_rt::io::Request::TestSeed { .. }]),
+                        "{requests:?}"
                     );
                 }
                 let mut sim = SimIo::new(recording.tree.clone(), recording.events.clone());
@@ -233,7 +225,7 @@ fn full_gate_test_launches_and_callbacks_agree_and_replay_on_both_targets() {
 fn test_launches_and_callback_failure_agree_and_replay_in_smoke() {
     let matrix = smoke_matrix();
     assert_eq!(matrix.len(), 3);
-    // The failing law stops after one callback. The 100-callback success and
+    // The failing property shrinks and reports once. The 100-case success and
     // its complete injected-failure campaign remain in the full test above.
     campaign_in(
         |name, _| {
@@ -241,7 +233,7 @@ fn test_launches_and_callback_failure_agree_and_replay_in_smoke() {
                 name,
                 "LANG-9-native-test-check-run"
                     | "LANG-9-native-test-check-fail"
-                    | "LANG-9-native-for-all-fail"
+                    | "LANG-9-native-property-fail"
             )
         },
         matrix,

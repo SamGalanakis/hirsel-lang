@@ -521,8 +521,13 @@ fn visit_test_suite(
         let mut program =
             hirsel_driver::load_program_source(path.unwrap_or(&fallback), Some(source))
                 .map_err(|e| e.to_string())?;
-        let tests =
-            hirsel_driver::testing::discover(&mut program, &[], None).map_err(|e| e.to_string())?;
+        let tests = hirsel_driver::testing::discover(
+            &mut program,
+            &[],
+            None,
+            hirsel_driver::testing::Selection::Tests,
+        )
+        .map_err(|e| e.to_string())?;
         if tests.is_empty() {
             return Err("expect: test selected no @test functions".into());
         }
