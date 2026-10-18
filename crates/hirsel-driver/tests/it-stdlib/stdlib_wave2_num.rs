@@ -175,7 +175,7 @@ fn every_numeric_catalogue_function_compiles_as_an_ordinary_source_unit() {
             };
             let text = if family == "bool" { "true" } else { "1" };
             source += &format!(
-                "std@1/{family}.to_string({literal});\nstd@1/{family}.format({literal}, mut buffer);\nstd@1/{family}.parse(\"{text}\");\n"
+                "std@1/{family}.to_string({literal});\nstd@1/{family}.format_inline({literal}, mut buffer);\nstd@1/{family}.parse(\"{text}\");\n"
             );
         }
         for family in ["f32", "f64"] {
@@ -205,7 +205,7 @@ fn every_numeric_catalogue_function_compiles_as_an_ordinary_source_unit() {
             }
         }
         for family in families {
-            for name in ["to_string", "format", "parse"] {
+            for name in ["to_string", "format_inline", "parse"] {
                 assert!(
                     found.contains(&(family.into(), name.into())),
                     "{family}.{name}"

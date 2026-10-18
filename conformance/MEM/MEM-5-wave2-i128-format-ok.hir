@@ -3,5 +3,5 @@
 @noalloc
 fn main() -> () {
   let mut buffer: Inline[u8, 2] = [0, 0]
-  i128.format(12, mut buffer);
+  i128.format_inline(12, mut buffer);
 }

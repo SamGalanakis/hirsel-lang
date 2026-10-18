@@ -4,11 +4,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), net.AddrParseError] {
   let v4 = net.parse_ipv4("192.168.0.1")?
   failure.check(v4 == [192, 168, 0, 1], TextInvariant())
   let v6 = net.parse_ipv6("2001:db8::192.168.0.1")?
-  failure.check(net.format_ip(V6(v6)) == "2001:db8::c0a8:1", TextInvariant())
+  failure.check(net.ip_to_string(V6(v6)) == "2001:db8::c0a8:1", TextInvariant())
   let ip = net.parse_ip("::ffff:192.0.2.128")?
-  failure.check(net.format_ip(ip) == "::ffff:192.0.2.128", TextInvariant())
+  failure.check(net.ip_to_string(ip) == "::ffff:192.0.2.128", TextInvariant())
   let addr = net.parse_socket_addr("[2001:db8::1]:443")?
-  failure.check(net.format_socket_addr(addr) == "[2001:db8::1]:443", TextInvariant())
+  failure.check(net.socket_addr_to_string(addr) == "[2001:db8::1]:443", TextInvariant())
   failure.check(net.ends_in_number("0x7f.0.0.1"), TextInvariant())
   match net.validate_host("example.com") {
     Ok(()) => (),

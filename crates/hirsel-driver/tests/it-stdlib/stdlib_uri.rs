@@ -299,14 +299,14 @@ fn zig_percent_encoding_decoding_and_query_encoding() {
 #[test]
 fn zig_format_and_component_specific_escape_sets() {
     execute(
-        "let parsed_uri = std@1/uri.Uri(scheme: \"file\", user: None(), password: None(), host: None(), port: None(), path: Raw(\"/foo/bar/baz\"), query: None(), fragment: None())\ncore@1/test.check(t, std@1/uri.format(parsed_uri) == \"file:/foo/bar/baz\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Path()) == \"a/b:@%3F%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Query()) == \"a/b:@?%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a:b@c\"), User()) == \"a%3Ab%40c\")",
+        "let parsed_uri = std@1/uri.Uri(scheme: \"file\", user: None(), password: None(), host: None(), port: None(), path: Raw(\"/foo/bar/baz\"), query: None(), fragment: None())\ncore@1/test.check(t, std@1/uri.to_string(parsed_uri) == \"file:/foo/bar/baz\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Path()) == \"a/b:@%3F%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a/b:@? #\"), Query()) == \"a/b:@?%20%23\")\ncore@1/test.check(t, std@1/uri.component_encoded(Raw(\"a:b@c\"), User()) == \"a%3Ab%40c\")",
     );
     execute(
         "core@1/test.check(t, std@1/uri.component_encoded(Encoded(\"a%2Fb\"), Path()) == \"a%2Fb\")",
     );
     execute(&parsed(
         "http://user:pass@example.com:80?x#y",
-        "core@1/test.check(t, std@1/uri.format(parsed_uri) == \"http://user:pass@example.com:80/?x#y\")",
+        "core@1/test.check(t, std@1/uri.to_string(parsed_uri) == \"http://user:pass@example.com:80/?x#y\")",
     ));
 }
 #[test]
@@ -386,7 +386,7 @@ fn zig_remove_dot_segments_and_rfc3986_reference_resolution() {
         body += "let base = match std@1/uri.parse(\"http://a/b/c/d;p?q\") { Ok(parsed_uri) => take parsed_uri, Error(_) => {core@1/test.check(t, false); return Error(())} }\n";
         for &(reference, expected) in chunk {
             body += &format!(
-                "match std@1/uri.resolve(base, {reference:?}) {{ Ok(parsed_uri) => core@1/test.check(t, std@1/uri.format(parsed_uri) == {expected:?}), Error(_) => core@1/test.check(t, false) }}\n"
+                "match std@1/uri.resolve(base, {reference:?}) {{ Ok(parsed_uri) => core@1/test.check(t, std@1/uri.to_string(parsed_uri) == {expected:?}), Error(_) => core@1/test.check(t, false) }}\n"
             );
         }
         execute(&body);
@@ -396,7 +396,7 @@ fn zig_remove_dot_segments_and_rfc3986_reference_resolution() {
 #[test]
 fn absolute_reference_numeric_refusals_do_not_fall_back_to_paths() {
     execute(
-        "let base = match std@1/uri.parse(\"http://example.com/a\") { Ok(parsed_uri) => take parsed_uri, Error(_) => {core@1/test.check(t, false); return Error(())} }\nmatch std@1/uri.resolve(base, \"http://127.1/a\") { Error(InvalidHostName()) => (), _ => core@1/test.check(t, false) }\nmatch std@1/uri.resolve(base, \"http://127.0.0.1/a\") { Ok(parsed_uri) => core@1/test.check(t, std@1/uri.format(parsed_uri) == \"http://127.0.0.1/a\"), Error(_) => core@1/test.check(t, false) }",
+        "let base = match std@1/uri.parse(\"http://example.com/a\") { Ok(parsed_uri) => take parsed_uri, Error(_) => {core@1/test.check(t, false); return Error(())} }\nmatch std@1/uri.resolve(base, \"http://127.1/a\") { Error(InvalidHostName()) => (), _ => core@1/test.check(t, false) }\nmatch std@1/uri.resolve(base, \"http://127.0.0.1/a\") { Ok(parsed_uri) => core@1/test.check(t, std@1/uri.to_string(parsed_uri) == \"http://127.0.0.1/a\"), Error(_) => core@1/test.check(t, false) }",
     );
 }
 

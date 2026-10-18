@@ -10,7 +10,7 @@ fn parsed_bits(t: Test, text: String, expected: u64) -> () {
 
 pub fn main(t: Test) -> Result[(), ()] {
   let mut short: Inline[u8, 1] = [99]
-  core@1/test.check(t, f64.format(1.25f64, mut short) == Error(BufferTooSmall))
+  core@1/test.check(t, f64.format_inline(1.25f64, mut short) == Error(BufferTooSmall))
   core@1/test.check(t, short == [99u8])
   core@1/test.check(t, f64.parse("") == Error(Invalid))
   core@1/test.check(t, f64.parse("+1") == Error(Invalid))

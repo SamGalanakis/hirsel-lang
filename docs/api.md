@@ -1605,9 +1605,9 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 ## bool
 
-<a id="def-std_401_2fbool_2fformat"></a>
+<a id="def-std_401_2fbool_2fformat_5finline"></a>
 
-- `@noalloc pub fn bool.format[n: size](value: bool, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn bool.format_inline[n: size](value: bool, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -2523,9 +2523,9 @@ References: [`core@1/f32`](#def-core_401_2ff32)
 
 References: [`core@1/f32`](#def-core_401_2ff32)
 
-<a id="def-std_401_2ff32_2fformat"></a>
+<a id="def-std_401_2ff32_2fformat_5finline"></a>
 
-- `@noalloc pub fn f32.format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn f32.format_inline[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/f32`](#def-core_401_2ff32), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -2778,9 +2778,9 @@ References: [`core@1/f64`](#def-core_401_2ff64)
 
 References: [`core@1/f64`](#def-core_401_2ff64)
 
-<a id="def-std_401_2ff64_2fformat"></a>
+<a id="def-std_401_2ff64_2fformat_5finline"></a>
 
-- `@noalloc pub fn f64.format[n: size](value: f64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn f64.format_inline[n: size](value: f64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/f64`](#def-core_401_2ff64), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -3786,9 +3786,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i128`](#def-core
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i128`](#def-core_401_2fi128)
 
-<a id="def-std_401_2fi128_2fformat"></a>
+<a id="def-std_401_2fi128_2fformat_5finline"></a>
 
-- `@noalloc pub fn i128.format[n: size](value: i128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn i128.format_inline[n: size](value: i128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/i128`](#def-core_401_2fi128), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -3889,9 +3889,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i16`](#def-core_
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i16`](#def-core_401_2fi16)
 
-<a id="def-std_401_2fi16_2fformat"></a>
+<a id="def-std_401_2fi16_2fformat_5finline"></a>
 
-- `@noalloc pub fn i16.format[n: size](value: i16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn i16.format_inline[n: size](value: i16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/i16`](#def-core_401_2fi16), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -3992,9 +3992,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32)
 
-<a id="def-std_401_2fi32_2fformat"></a>
+<a id="def-std_401_2fi32_2fformat_5finline"></a>
 
-- `@noalloc pub fn i32.format[n: size](value: i32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn i32.format_inline[n: size](value: i32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -4095,9 +4095,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i64`](#def-core_
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i64`](#def-core_401_2fi64)
 
-<a id="def-std_401_2fi64_2fformat"></a>
+<a id="def-std_401_2fi64_2fformat_5finline"></a>
 
-- `@noalloc pub fn i64.format[n: size](value: i64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn i64.format_inline[n: size](value: i64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -4198,9 +4198,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i8`](#def-core_4
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i8`](#def-core_401_2fi8)
 
-<a id="def-std_401_2fi8_2fformat"></a>
+<a id="def-std_401_2fi8_2fformat_5finline"></a>
 
-- `@noalloc pub fn i8.format[n: size](value: i8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn i8.format_inline[n: size](value: i8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/i8`](#def-core_401_2fi8), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -4714,9 +4714,9 @@ Variant of log.Level.
 
 Variant of log.Level.
 
-<a id="def-std_401_2flog_2fformat"></a>
+<a id="def-std_401_2flog_2fto_5fstring"></a>
 
-- `pub fn log.format(entry: Entry) -> String uses {}`
+- `pub fn log.to_string(entry: Entry) -> String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/log/Entry`](#def-std_401_2flog_2fEntry)
 
@@ -4827,17 +4827,11 @@ a rule whose address is the canonical literal of `addr.ip`, with `addr.port`; a 
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
-<a id="def-std_401_2fnet_2fformat_5fip"></a>
+<a id="def-std_401_2fnet_2fip_5fto_5fstring"></a>
 
-- `pub fn net.format_ip(ip: IpAddr) -> unique String uses {}`
+- `pub fn net.ip_to_string(ip: IpAddr) -> unique String uses {}`
 
 References: [`core@1/IpAddr`](#def-core_401_2fIpAddr), [`core@1/String`](#def-core_401_2fString)
-
-<a id="def-std_401_2fnet_2fformat_5fsocket_5faddr"></a>
-
-- `pub fn net.format_socket_addr(addr: SocketAddr) -> unique String uses {}`
-
-References: [`core@1/SocketAddr`](#def-core_401_2fSocketAddr), [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-core_401_2fnet_2flisten"></a>
 
@@ -4906,6 +4900,12 @@ a rule naming `(host, port)`, any operation
 <a id="def-core_401_2fnet_2fshutdown"></a>
 
 - `@noalloc fn net.shutdown(n: Net, mut s: Stream of n, how: Shutdown) -> Result[(), NetError]`
+
+<a id="def-std_401_2fnet_2fsocket_5faddr_5fto_5fstring"></a>
+
+- `pub fn net.socket_addr_to_string(addr: SocketAddr) -> unique String uses {}`
+
+References: [`core@1/SocketAddr`](#def-core_401_2fSocketAddr), [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-core_401_2fnet_2fudp_5fbind"></a>
 
@@ -6234,9 +6234,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u128`](#def-core
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u128`](#def-core_401_2fu128)
 
-<a id="def-std_401_2fu128_2fformat"></a>
+<a id="def-std_401_2fu128_2fformat_5finline"></a>
 
-- `@noalloc pub fn u128.format[n: size](value: u128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn u128.format_inline[n: size](value: u128, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u128`](#def-core_401_2fu128), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -6337,9 +6337,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u16`](#def-core_
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u16`](#def-core_401_2fu16)
 
-<a id="def-std_401_2fu16_2fformat"></a>
+<a id="def-std_401_2fu16_2fformat_5finline"></a>
 
-- `@noalloc pub fn u16.format[n: size](value: u16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn u16.format_inline[n: size](value: u16, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u16`](#def-core_401_2fu16), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -6440,9 +6440,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u32`](#def-core_
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u32`](#def-core_401_2fu32)
 
-<a id="def-std_401_2fu32_2fformat"></a>
+<a id="def-std_401_2fu32_2fformat_5finline"></a>
 
-- `@noalloc pub fn u32.format[n: size](value: u32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn u32.format_inline[n: size](value: u32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -6543,9 +6543,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64)
 
-<a id="def-std_401_2fu64_2fformat"></a>
+<a id="def-std_401_2fu64_2fformat_5finline"></a>
 
-- `@noalloc pub fn u64.format[n: size](value: u64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn u64.format_inline[n: size](value: u64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -6646,9 +6646,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u8`](#def-core_4
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u8`](#def-core_401_2fu8)
 
-<a id="def-std_401_2fu8_2fformat"></a>
+<a id="def-std_401_2fu8_2fformat_5finline"></a>
 
-- `@noalloc pub fn u8.format[n: size](value: u8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
+- `@noalloc pub fn u8.format_inline[n: size](value: u8, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}`
 
 References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/scalar/FormatError`](#def-std_401_2fscalar_2fFormatError)
 
@@ -6987,12 +6987,6 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
 
-<a id="def-std_401_2furi_2fformat"></a>
-
-- `pub fn uri.format(parsed_uri: Uri) -> unique String uses {}`
-
-References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-std_401_2furi_2fUri)
-
 <a id="def-std_401_2furi_2fparse"></a>
 
 - `pub fn uri.parse(text: String) -> Result[Uri, UriError] uses {}`
@@ -7028,6 +7022,12 @@ References: [`core@1/String`](#def-core_401_2fString)
 - `pub fn uri.resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-std_401_2furi_2fUri), [`std@1/uri/UriError`](#def-std_401_2furi_2fUriError)
+
+<a id="def-std_401_2furi_2fto_5fstring"></a>
+
+- `pub fn uri.to_string(parsed_uri: Uri) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-std_401_2furi_2fUri)
 
 
 ## utf8

@@ -4,17 +4,17 @@ pub fn main(t: Test) -> Result[(), ()] {
   core@1/test.check(t, i8.to_string(-128i8) == "-128")
   core@1/test.check(t, i8.parse("-128") == Ok(-128i8))
   let mut buffer1: Inline[u8, 4] = [99u8, 99u8, 99u8, 99u8]
-  core@1/test.check(t, i8.format(-128i8, mut buffer1) == Ok(4u64))
+  core@1/test.check(t, i8.format_inline(-128i8, mut buffer1) == Ok(4u64))
   core@1/test.check(t, buffer1 == [45u8, 49u8, 50u8, 56u8])
   core@1/test.check(t, i8.to_string(127i8) == "127")
   core@1/test.check(t, i8.parse("127") == Ok(127i8))
   let mut buffer2: Inline[u8, 3] = [99u8, 99u8, 99u8]
-  core@1/test.check(t, i8.format(127i8, mut buffer2) == Ok(3u64))
+  core@1/test.check(t, i8.format_inline(127i8, mut buffer2) == Ok(3u64))
   core@1/test.check(t, buffer2 == [49u8, 50u8, 55u8])
   core@1/test.check(t, i8.to_string(0i8) == "0")
   core@1/test.check(t, i8.parse("0") == Ok(0i8))
   let mut buffer3: Inline[u8, 1] = [99u8]
-  core@1/test.check(t, i8.format(0i8, mut buffer3) == Ok(1u64))
+  core@1/test.check(t, i8.format_inline(0i8, mut buffer3) == Ok(1u64))
   core@1/test.check(t, buffer3 == [48u8])
   Ok(())
 }

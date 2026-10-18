@@ -2,7 +2,7 @@
 // expect: run
 pub fn main(t: Test) -> Result[(), ()] {
   let mut buffer: Inline[u8, 3] = [99, 99, 99]
-  core@1/test.check(t, bool.format(true, mut buffer) == Error(BufferTooSmall))
+  core@1/test.check(t, bool.format_inline(true, mut buffer) == Error(BufferTooSmall))
   core@1/test.check(t, buffer == [99u8, 99u8, 99u8])
   core@1/test.check(t, bool.parse("") == Error(Invalid))
   core@1/test.check(t, bool.parse("True") == Error(Invalid))

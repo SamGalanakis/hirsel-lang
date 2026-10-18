@@ -1,6 +1,6 @@
 // Decimal conversion is ordinary source; no numeric schema or hidden allocator.
 @noalloc
-pub fn format[n: size](value: i128, mut buffer: Inline[u8, n]) -> Result[
+pub fn format_inline[n: size](value: i128, mut buffer: Inline[u8, n]) -> Result[
   u64,
   scalar.FormatError
 ] uses {} {

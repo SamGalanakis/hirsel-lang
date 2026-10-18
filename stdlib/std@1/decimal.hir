@@ -32,7 +32,7 @@ pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u
   Ok(count + prefix)
 }
 
-// Appends the first `count` bytes of a `format` buffer.
+// Appends the first `count` bytes of a `format_inline` buffer.
 @preserves_unique(out)
 pub fn append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> () uses {} {
   core@1/list.reserve(mut out, core@1/list.len(out) + count)

@@ -16,7 +16,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), uri.UriError] {
     query: None(),
     fragment: None()
   )
-  failure.check(uri.format(raw_uri) == "file:/a/b", TextInvariant())
+  failure.check(uri.to_string(raw_uri) == "file:/a/b", TextInvariant())
   failure.check(uri.percent_encode(b"a/b ") == "a%2Fb%20", TextInvariant())
   failure.check(uri.percent_decode("a%2Fb%20") == b"a/b ", TextInvariant())
   failure.check(uri.component_raw(Raw("plain")) == b"plain", TextInvariant())

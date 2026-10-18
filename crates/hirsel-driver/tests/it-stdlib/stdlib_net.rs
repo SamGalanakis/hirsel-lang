@@ -192,7 +192,7 @@ fn rust_socket_parser() {
             };
             let check = match expected {
                 Some(addr) => format!(
-                    "Ok(addr) => core@1/test.check(t, std@1/net.format_socket_addr(addr) == {:?}), Error(_) => core@1/test.check(t, false)",
+                    "Ok(addr) => core@1/test.check(t, std@1/net.socket_addr_to_string(addr) == {:?}), Error(_) => core@1/test.check(t, false)",
                     addr.to_string()
                 ),
                 None => "Error(_) => (), Ok(_) => core@1/test.check(t, false)".into(),
@@ -227,7 +227,7 @@ fn rust_display_rfc5952_first_longest_run_and_mapped_ipv4() {
         for text in chunk {
             let ip: std::net::IpAddr = text.parse().unwrap();
             body += &format!(
-                "match std@1/net.parse_ip({text:?}) {{ Ok(ip) => {{ core@1/test.check(t, std@1/net.format_ip(ip) == {:?}); core@1/test.check(t, std@1/net.format_socket_addr(SocketAddr(ip: ip, port: 8080)) == {:?}) }}, Error(_) => core@1/test.check(t, false) }}\n",
+                "match std@1/net.parse_ip({text:?}) {{ Ok(ip) => {{ core@1/test.check(t, std@1/net.ip_to_string(ip) == {:?}); core@1/test.check(t, std@1/net.socket_addr_to_string(SocketAddr(ip: ip, port: 8080)) == {:?}) }}, Error(_) => core@1/test.check(t, false) }}\n",
                 ip.to_string(),
                 std::net::SocketAddr::new(ip, 8080).to_string()
             );

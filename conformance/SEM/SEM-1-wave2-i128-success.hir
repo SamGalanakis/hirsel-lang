@@ -4,7 +4,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   core@1/test.check(t, i128.to_string(12i128) == "12")
   core@1/test.check(t, i128.parse("12") == Ok(12i128))
   let mut buffer: Inline[u8, 2] = [99u8, 99u8]
-  core@1/test.check(t, i128.format(12i128, mut buffer) == Ok(2u64))
+  core@1/test.check(t, i128.format_inline(12i128, mut buffer) == Ok(2u64))
   core@1/test.check(t, buffer == [49u8, 50u8])
   Ok(())
 }

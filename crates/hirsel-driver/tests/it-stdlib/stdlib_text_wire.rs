@@ -135,7 +135,7 @@ fn cli_is_ordinary_source() {
 
 #[test]
 fn log_is_ordinary_source() {
-    source_codec("log", "log", &["format", "write"]);
+    source_codec("log", "log", &["to_string", "write"]);
 }
 
 // The source corpus cannot inject Stderr provider faults. This additionally

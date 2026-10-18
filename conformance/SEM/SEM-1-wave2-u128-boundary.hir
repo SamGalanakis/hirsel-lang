@@ -4,7 +4,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   core@1/test.check(t, u128.to_string(0u128) == "0")
   core@1/test.check(t, u128.parse("0") == Ok(0u128))
   let mut buffer1: Inline[u8, 1] = [99u8]
-  core@1/test.check(t, u128.format(0u128, mut buffer1) == Ok(1u64))
+  core@1/test.check(t, u128.format_inline(0u128, mut buffer1) == Ok(1u64))
   core@1/test.check(t, buffer1 == [48u8])
   core@1/test.check(
     t,
@@ -59,7 +59,9 @@ pub fn main(t: Test) -> Result[(), ()] {
   ]
   core@1/test.check(
     t,
-    u128.format(340282366920938463463374607431768211455u128, mut buffer2) == Ok(39u64)
+    u128.format_inline(340282366920938463463374607431768211455u128, mut buffer2) == Ok(
+      39u64
+    )
   )
   core@1/test.check(
     t,
@@ -108,7 +110,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   core@1/test.check(t, u128.to_string(0u128) == "0")
   core@1/test.check(t, u128.parse("0") == Ok(0u128))
   let mut buffer3: Inline[u8, 1] = [99u8]
-  core@1/test.check(t, u128.format(0u128, mut buffer3) == Ok(1u64))
+  core@1/test.check(t, u128.format_inline(0u128, mut buffer3) == Ok(1u64))
   core@1/test.check(t, buffer3 == [48u8])
   Ok(())
 }

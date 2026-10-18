@@ -181,7 +181,7 @@ fn http_host(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {} {
   if len >= 2 && raw[0] == 91 && raw[len - 1] == 93 {
     let name = http_text(raw, 1, len - 1)?
     return match net.parse_ip(name) {
-      Ok(ip) => Ok(net.format_ip(ip)),
+      Ok(ip) => Ok(net.ip_to_string(ip)),
       Error(_) => Error(Url(InvalidHostName())),
     }
   }
@@ -745,7 +745,7 @@ fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
   } else {
     r.method
   }
-  let next_url = uri.format(parsed_uri)
+  let next_url = uri.to_string(parsed_uri)
   let mut fresh = request(r.net, r.config, next_method, next_url, headers)?
   fresh.persistent = r.persistent
   fresh.redirects = r.redirects - 1

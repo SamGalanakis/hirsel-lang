@@ -1,6 +1,6 @@
 // Floating text is an ordinary source algorithm over the four IEEE primitives.
 @noalloc
-pub fn format[n: size](value: f64, mut buffer: Inline[u8, n]) -> Result[
+pub fn format_inline[n: size](value: f64, mut buffer: Inline[u8, n]) -> Result[
   u64,
   scalar.FormatError
 ] uses {} {
@@ -93,7 +93,7 @@ pub fn format_into(value: f64, mut out: List[u8]) -> () uses {} {
     0u8,
     0u8
   ]
-  let count = match format(value, mut buffer) {
+  let count = match format_inline(value, mut buffer) {
     Ok(count) => count,
     Error(_) => {
       core@1/failure.check(false, Bounds())
@@ -294,7 +294,7 @@ pub fn format_into_spec(
       0u8,
       0u8
     ]
-    let count = match format(core@1/f64.from_bits(absolute), mut buffer) {
+    let count = match format_inline(core@1/f64.from_bits(absolute), mut buffer) {
       Ok(count) => count,
       Error(_) => {
         core@1/failure.check(false, Bounds())

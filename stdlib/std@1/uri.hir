@@ -342,7 +342,7 @@ pub fn parse(text: String) -> Result[Uri, UriError] uses {} {
 }
 
 // Zig writeToStream(.all): an empty path is rendered as '/'.
-pub fn format(parsed_uri: Uri) -> unique String uses {} {
+pub fn to_string(parsed_uri: Uri) -> unique String uses {} {
   let mut out: List[u8] = []
   text.append(mut out, parsed_uri.scheme)
   core@1/list.push(mut out, 58)

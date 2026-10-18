@@ -23,7 +23,7 @@ fn rank(level: Level) -> u8 uses {} {
   }
 }
 
-pub fn format(entry: Entry) -> String uses {} {
+pub fn to_string(entry: Entry) -> String uses {} {
   let level = match entry.level {
     Debug() => "debug",
     Info() => "info",
@@ -69,5 +69,5 @@ pub fn write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputErr
   if rank(entry.level) < rank(minimum) {
     return Ok(())
   }
-  core@1/err.print(sink, format(entry))
+  core@1/err.print(sink, to_string(entry))
 }

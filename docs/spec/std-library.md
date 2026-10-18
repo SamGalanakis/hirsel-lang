@@ -112,6 +112,10 @@ signature works for the others:
   type comes first (`map.get(m, k)`, `string.find(s, pattern)`, `regex.find(re, text, ..)`).
 - A function that appends to a caller's builder is the returning function's name plus
   `_into`, with the builder `mut out` last (`json.stringify` and `json.stringify_into`).
+- A value renders to text with `to_string(value) -> String` and appends that text with
+  `format_into(value, mut out)`; a scalar's fixed-buffer form is `format_inline`. The name
+  `format` is kept for rendering under an explicit pattern or layout, which is its second
+  parameter. F-strings call the same `format_into` and `format_into_spec` names.
 - An element count is `len`; a predicate is named `is_..` where it shares a concept with
   another module (`regex.is_match`, `glob.is_match`), and equivalent draws share names
   across sources (`random.u64`, `random.below`, `random.bytes` and `prng.u64`,
@@ -387,7 +391,7 @@ options, overflowing constants and positional (`1$`) or `*` counts are SEM-3.
 - `format_into_spec(value, fill: char, align: u64, width: u64, precision: u64,
   flags: u64, kind: u64, mut out: List[u8]) -> ()`, using the constant option
   encoding above;
-- `@noalloc format[n: size](value, mut buffer: Inline[u8, n]) -> Result[u64, scalar.FormatError]`,
+- `@noalloc format_inline[n: size](value, mut buffer: Inline[u8, n]) -> Result[u64, scalar.FormatError]`,
   which checks capacity before writing, returns the length of the UTF-8 prefix and leaves
   the whole buffer unchanged on error;
 - `@noalloc parse(text: String) -> Result[scalar, scalar.ParseError]`.
@@ -430,7 +434,7 @@ including invalid syntax following overflowing digits; otherwise overflow yields
 `char` has a module of its own ([the catalogue](#the-catalogue)): `format_into` appends
 the char's UTF-8 encoding, one to four bytes, `to_string` is that text, and `from_ascii`
 returns the char of a byte below 0x80 and `None` otherwise; `from_u8` is total, the
-char U+0000 to U+00FF whose scalar value is the byte. A char has no `format`,
+char U+0000 to U+00FF whose scalar value is the byte. A char has no `format_inline`,
 `format_into_spec` or `parse`; f-string holes of type `char` take only fill, alignment
 and width ([SEM-3](semantics.md#sem-3-strings)). Its integer conversions are the core
 `char.to_u32` and `char.from_u32`.
@@ -677,8 +681,8 @@ owning helper's global input requirement.
 ## Network addresses and URIs
 
 `std@1/net` parses and formats addresses: `parse_ipv4`, `parse_ipv6`, `parse_ip` and
-`parse_socket_addr` return `AddrParseError = Invalid()` on bad input; `format_ip` uses RFC
-5952 compression for IPv6, and `format_socket_addr` brackets IPv6 addresses.
+`parse_socket_addr` return `AddrParseError = Invalid()` on bad input; `ip_to_string` uses RFC
+5952 compression for IPv6, and `socket_addr_to_string` brackets IPv6 addresses.
 `validate_host` checks a host name, returning `HostError = NameTooLong | InvalidHostName`,
 and `ends_in_number` is the numeric-host test of
 [CAP-1](capabilities.md#cap-1-authority). Zone and flow identifiers are not represented.
@@ -694,7 +698,7 @@ partial pairs. `uri.encode_query(List[(String, String)])` preserves order, write
 spaces as plus and percent-encodes bytes outside the unreserved alphabet with
 uppercase hex; it always writes `=` between key and value.
 
-`std@1/uri` parses, formats and resolves RFC 3986 references: `parse`, `format`,
+`std@1/uri` parses, formats and resolves RFC 3986 references: `parse`, `to_string`,
 `resolve`, `remove_dot_segments`, `percent_encode` and `percent_decode`, with components
 kept as `Raw(String) | Encoded(String)` and `UriError = UnexpectedCharacter |
 InvalidFormat | InvalidPort | InvalidHostName`. A reference with a syntactically valid scheme
@@ -1180,11 +1184,11 @@ severity order, `Field { name: String, value: String }`, and
 Option[time.Timestamp] }`.
 
 ```text
-fn log.format(entry: Entry) -> String uses {}
+fn log.to_string(entry: Entry) -> String uses {}
 fn log.write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputError]
 ```
 
-Format is pure source and emits one compact JSON object followed by exactly one
+`to_string` is pure source and emits one compact JSON object followed by exactly one
 LF, with keys in this order: level (lowercase name), message, fields (ordered
 objects with name/value strings), timestamp (integer Unix nanoseconds or null).
 The field list preserves duplicates and reserved names without shadowing core
