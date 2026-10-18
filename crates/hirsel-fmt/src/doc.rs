@@ -51,6 +51,7 @@ pub(crate) fn list(open: &str, parts: Vec<Doc>, close: &str, singleton_comma: bo
 }
 fn flat_width(doc: &Doc) -> usize {
     match doc {
+        Token(s) if s.contains('\n') => usize::MAX / 2,
         Token(s) => s.chars().count(),
         Space | Soft => 1,
         EmptySoft => 0,
@@ -81,7 +82,10 @@ pub(crate) fn render(doc: &Doc) -> Vec<PrintedToken> {
                     text: s.clone(),
                     before: std::mem::take(gap),
                 });
-                *column += s.chars().count();
+                *column = match s.rsplit_once('\n') {
+                    Some((_, last)) => last.chars().count(),
+                    None => *column + s.chars().count(),
+                };
             }
             Space => {
                 gap.push(' ');

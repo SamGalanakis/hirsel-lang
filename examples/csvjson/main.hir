@@ -188,7 +188,10 @@ fn run(rt: Io, args: Args) -> Result[(), Error] {
   }
   let output = if list.len(parsed.positional) == 0 {
     let mut source = MemorySource(
-      data: b"name,note\nAda,\"hello, sheep\"\nLin,\"a \"\"quote\"\"\"\n",
+      data: br#"name,note
+Ada,"hello, sheep"
+Lin,"a ""quote"""
+"#,
       offset: 0
     )
     convert(mut source, memory_refill, column)?

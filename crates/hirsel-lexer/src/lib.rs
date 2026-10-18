@@ -158,6 +158,8 @@ impl<'a> Scanner<'a> {
             b'"' if self.holes.last().is_some_and(|h| h.braces == 0) && !self.string_closes() => {
                 self.unclosed_hole()
             }
+            b'r' if self.raw_start(false).is_some() => self.raw_string(false),
+            b'b' if self.raw_start(true).is_some() => self.raw_string(true),
             b'"' => self.string(false),
             b'\'' => self.character_literal(false),
             b'b' if self.starts(b"b'") => self.character_literal(true),
@@ -417,6 +419,70 @@ impl<'a> Scanner<'a> {
             self.pos += 1;
         }
         valid && previous_digit && self.pos > start
+    }
+    // Delimiter-counted strings retain their complete source spelling on the tape.
+    fn raw_start(&self, bytes: bool) -> Option<usize> {
+        let prefix = if bytes {
+            b"br".as_slice()
+        } else {
+            b"r".as_slice()
+        };
+        let rest = self.bytes[self.pos..].strip_prefix(prefix)?;
+        let hashes = rest.iter().take_while(|&&b| b == b'#').count();
+        (rest.get(hashes) == Some(&b'"')).then_some(hashes)
+    }
+    fn raw_string(&mut self, bytes: bool) -> TokenKind {
+        let start = self.pos;
+        let hashes = self.raw_start(bytes).expect("checked raw prefix");
+        self.pos += if bytes { 3 } else { 2 };
+        self.pos += hashes;
+        while self.pos < self.bytes.len() {
+            if self.bytes[self.pos] == b'"'
+                && self.bytes[self.pos + 1..].iter().take(hashes).count() == hashes
+                && self.bytes[self.pos + 1..self.pos + 1 + hashes]
+                    .iter()
+                    .all(|&b| b == b'#')
+            {
+                self.pos += 1 + hashes;
+                return if bytes {
+                    TokenKind::Bytes
+                } else {
+                    TokenKind::String
+                };
+            }
+            let at = self.pos;
+            let (ch, len) = scalar(&self.bytes[at..]);
+            self.pos += len;
+            if ch == Some('\r') {
+                self.error(
+                    const { RuleId::of("LANG-1") },
+                    at,
+                    self.pos,
+                    "raw literal newlines must be LF; CR and CRLF are forbidden",
+                );
+            } else if ch.is_none()
+                || ch.is_some_and(|c| {
+                    (c < ' ' && c != '\n' && c != '\t')
+                        || c == '\u{7f}'
+                        || bidi(c)
+                        || (bytes && !c.is_ascii())
+                })
+            {
+                self.error(
+                    const { RuleId::of("SEM-3") },
+                    at,
+                    self.pos,
+                    "forbidden raw literal character",
+                );
+            }
+        }
+        self.error(
+            const { RuleId::of("SEM-3") },
+            start,
+            self.pos,
+            "unterminated raw string or bytes literal",
+        );
+        TokenKind::Invalid
     }
     fn string(&mut self, bytes: bool) -> TokenKind {
         let start = self.pos;

@@ -10,7 +10,12 @@ fn escape(take text: String) -> String {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let text = common.input(rt, args, "# Flock\n\nSheep & <grass>\n- ewe\n- lamb\n")?
+  let text = common.input(rt, args, r"# Flock
+
+Sheep & <grass>
+- ewe
+- lamb
+")?
   let mut builder: List[u8] = []
   let mut in_list: bool = false
   for raw in string.split(take text, "\n") {

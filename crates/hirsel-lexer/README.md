@@ -65,3 +65,7 @@ for the parser's desugaring, which reads an immutable snapshot.
 
 A top-level hole colon starts one raw `Format(Spec)` token through the options,
 ending before `}`; delimiters inside the expression protect their own colons.
+
+Raw String/Bytes literals use delimiter-counted r/br prefixes and retain multiline
+bodies as one token. CR (including CRLF) inside them is LANG-1; LF and tab are data.
+Other scalar restrictions and invalid-token recovery follow ordinary literals.

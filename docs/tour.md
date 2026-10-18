@@ -401,6 +401,13 @@ apple
 
 ## Strings and bytes
 
+Raw literals keep quotes, backslashes and physical LF newlines as data:
+`r#"{"path":"C:\tmp"}"#` is a String and `br"a\nb"` contains a literal
+backslash followed by `n`. Add hashes around the quotes when the body contains
+quotes; the closing delimiter must match. Multiline bodies retain their exact
+indentation. CRLF inside a raw literal is rejected. Raw literals have no
+interpolation or escapes.
+
 `String` is valid UTF-8; `Bytes` may contain arbitrary bytes. There is no generic
 string length or integer string indexing. Choose byte length, Unicode scalar
 iteration or `unicode.graphemes`. A `StrPos of text` comes from that exact

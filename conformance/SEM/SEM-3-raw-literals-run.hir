@@ -1,0 +1,26 @@
+// rule: SEM-3
+// expect: run
+// exit: 0
+pub fn main() -> Result[(), String] {
+  failure.check(r"a\nb" == "a\\nb", TextInvariant())
+  failure.check(r#"{"path":"C:\tmp"}"# == "{\"path\":\"C:\\tmp\"}", TextInvariant())
+  failure.check(r###"a"##b"#c"### == "a\"##b\"#c", TextInvariant())
+  failure.check(r"é🙂" == "é🙂", TextInvariant())
+  failure.check(br#"a"\n"# == b"a\"\\n", TextInvariant())
+  failure.check(
+    r"first
+  second
+" == "first\n  second\n",
+    TextInvariant()
+  )
+  failure.check(
+    br"name,note
+Ada,hello
+" == b"name,note\nAda,hello\n",
+    TextInvariant()
+  )
+  failure.check(r"{no interpolation}" == "{no interpolation}", TextInvariant())
+  let long = r############################################################################################################################################################################################################################################################################################################"many hashes"############################################################################################################################################################################################################################################################################################################
+  failure.check(long == "many hashes", TextInvariant())
+  Ok(())
+}

@@ -97,6 +97,15 @@ fn decode(s: &str, bytes: bool, span: Span) -> Result<Vec<u8>> {
     } else {
         s
     };
+    if let Some(raw) = s.strip_prefix('r') {
+        let hashes = raw.bytes().take_while(|&b| b == b'#').count();
+        let delimiter = format!("\"{}", "#".repeat(hashes));
+        let body = raw[hashes..]
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix(&delimiter))
+            .ok_or_else(|| bad(span, "raw literal spelling lacks matching delimiters"))?;
+        return Ok(body.as_bytes().to_vec());
+    }
     let s = s
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))

@@ -1,6 +1,6 @@
 // Query a top-level object member, preserving JSON number spelling.
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let text = common.input(rt, args, "{\"flock\":[\"ewe\",\"lamb\"],\"count\":2}")?
+  let text = common.input(rt, args, r#"{"flock":["ewe","lamb"],"count":2}"#)?
   let key = match arg.path(args, 1) {
     Ok(p) => path.text(p),
     Error(_) => "flock",

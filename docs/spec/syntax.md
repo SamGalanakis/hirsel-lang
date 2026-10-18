@@ -116,6 +116,9 @@ float        = digits(digit), ".", digits(digit), [ exponent ], [ float-suffix ]
 escape       = "\\", ( "\\" | '"' | "n" | "r" | "t" | "0" )
              | "\\x", hex-digit, hex-digit
              | "\\u{", hex-digit, { hex-digit }, "}" ;     (* SEM-3 *)
+raw-string   = "r", hashes, '"', raw-body, '"', hashes ; (* SEM-3 *)
+raw-bytes    = "br", hashes, '"', ascii-raw-body, '"', hashes ; (* SEM-3 *)
+hashes       = { "#" } ;
 string       = '"', { string-scalar | escape }, '"' ;      (* SEM-3 *)
 bytes        = 'b"', { ascii-string-scalar | byte-escape }, '"' ; (* SEM-3 *)
 byte-escape  = "\\", ( "\\" | '"' | "n" | "r" | "t" | "0" )
@@ -125,7 +128,7 @@ character-escape = "\\", ( "n" | "t" | "r" | "0" | "\\" | "'" )
                  | "\\u{", hex-digit, { hex-digit }, "}" ;
 byte         = "b'", ( ascii-character-scalar | character-escape
                      | "\\x", hex-digit, hex-digit ), "'" ;     (* LANG-1 *)
-literal      = integer | float | character | byte | string | bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
+literal      = integer | float | character | byte | string | bytes | raw-string | raw-bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
 f-string     = 'f"', f-text, { "{", expression, [ ":", format-spec ], "}", f-text }, '"' ; (* SEM-3 *)
 f-text       = { f-scalar | escape | "{{" | "}}" } ;      (* SEM-3 *)
 format-spec  = [ [ fill ], align ], [ "+" | "-" ], [ "#" ], [ "0" ],
@@ -149,8 +152,16 @@ character literals are LANG-1. Character literals have no suffix. A byte literal
 including `\xNN` and `\u{...}`, must denote a value from 00 to 7F. A byte literal
 that is empty, has more than one scalar, or denotes a non-ASCII value is LANG-1.
 `f-scalar` is a `string-scalar` other than `{` and `}`.
-There are no escape line continuations, raw or triple-quoted
-strings, hexadecimal floats, leading or trailing decimal
+Raw String literals (`r"text"`, `r#"a "quote""#`) and raw Bytes literals
+(`br"text"`, `br##"a "# quote"##`) close at the first quote followed by the
+opening delimiter's number of hashes. Any number of hashes is permitted. Their
+bodies preserve every source byte, including LF newlines and tabs; there are no
+escapes, interpolation or indentation stripping. CR, including CRLF inside a raw
+literal, is LANG-1. Outside raw literals the existing LF/CRLF source policy applies.
+Other raw controls, DEL, Bidi_Control and invalid UTF-8 retain ordinary string
+restrictions (SEM-3); raw Bytes additionally require ASCII source scalars.
+The formatter preserves the complete literal spelling verbatim.
+There are no escape line continuations or triple-quoted strings, hexadecimal floats, leading or trailing decimal
 points, or underscores immediately before a suffix.
 
 An f-string (`f"total: {n} of {list.len(xs)}\n"`, [SEM-3](semantics.md#sem-3-strings))

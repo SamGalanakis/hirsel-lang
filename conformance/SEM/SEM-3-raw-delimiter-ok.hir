@@ -1,0 +1,5 @@
+// rule: SEM-3
+// expect: accept
+fn value() {
+  let _ = r##"text"##
+}
