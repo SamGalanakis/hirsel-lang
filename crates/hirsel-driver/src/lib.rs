@@ -349,6 +349,10 @@ pub(crate) fn bind_host_run(
         .engine
         .semantic_program_revision(&program.entry)
         .map_err(|e| program.error(e))?;
+    let code = match program.unsafe_reach()? {
+        None => hirsel_run_config::CodeReach::Safe,
+        Some(reach) => hirsel_run_config::CodeReach::Escapes(reach.spelled()),
+    };
     match launch {
         HostLaunch::Live {
             config,
@@ -367,6 +371,7 @@ pub(crate) fn bind_host_run(
                 &revision,
                 LaunchKind::Main,
                 Some(&requested),
+                code,
                 &mut host,
                 admission_time()?,
             )
@@ -390,6 +395,7 @@ pub(crate) fn bind_host_run(
                     &revision,
                     LaunchKind::Main,
                     roots,
+                    code,
                 ))
                 .map_err(refused)?
                 .into_run();

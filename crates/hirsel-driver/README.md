@@ -51,6 +51,10 @@ inputs, passed after the runtime archive (`-l<name>` or the file); the link acce
 `Foreign` imports beside runtime ones. `foreign_unreplayable` sets hirsel-rt's
 `UNREPLAYABLE` bit beside the root mask, so the executable refuses `--hirsel-record` and
 `--hirsel-replay`; H refuses an extern call as `Unsupported`.
+`ReadyProgram.escaping` names the launch entries whose closure reaches an extern or
+`Unsafe` operation (CAP-6, from `ValidatedNativeInput::unsafe_reach`); each sets
+hirsel-rt's `ESCAPES` bit, so the executable refuses a record whose
+`admission.code` is `admit.safe@1`.
 `ReadyProgram.callbacks` names the definitions a unit references as C callbacks, whose
 objects define their callback thunks (linkonce for library and inlined units).
 

@@ -41,7 +41,15 @@ fn no_record_denies_roots_before_host_admission_and_empty_record_is_admitted() {
             let (signature, revision) = fixture(parameters);
             let mut host = Host::default();
             assert!(matches!(
-                admit_run(&signature, &revision, LaunchKind::Main, None, &mut host, 0),
+                admit_run(
+                    &signature,
+                    &revision,
+                    LaunchKind::Main,
+                    None,
+                    CodeReach::Safe,
+                    &mut host,
+                    0
+                ),
                 Err(RunRefusal::NotGranted { .. })
             ));
             assert_eq!(host.0, 0);
@@ -57,6 +65,7 @@ fn no_record_denies_roots_before_host_admission_and_empty_record_is_admitted() {
                     &revision,
                     LaunchKind::Main,
                     Some(&record),
+                    CodeReach::Safe,
                     &mut host,
                     0
                 )
@@ -71,6 +80,7 @@ fn no_record_denies_roots_before_host_admission_and_empty_record_is_admitted() {
                 &revision,
                 LaunchKind::Main,
                 None,
+                CodeReach::Safe,
                 &mut Host::default(),
                 0
             )
@@ -94,6 +104,7 @@ fn wrong_program_entry_kind_and_expired_admission_have_no_host_effects() {
                         not_before: None,
                         expires: Some(4),
                         revocation: None,
+                        code: None,
                     })
                 }
             }
@@ -104,6 +115,7 @@ fn wrong_program_entry_kind_and_expired_admission_have_no_host_effects() {
                     &revision,
                     LaunchKind::Main,
                     Some(&record.validated().unwrap()),
+                    CodeReach::Safe,
                     &mut host,
                     5
                 )
@@ -120,6 +132,7 @@ fn wrong_program_entry_kind_and_expired_admission_have_no_host_effects() {
                 &revision,
                 LaunchKind::Main,
                 Some(&record),
+                CodeReach::Safe,
                 &mut Host::default(),
                 5
             )
@@ -180,10 +193,21 @@ fn unrelated_signature_refuses_before_authorizing_the_selected_program() {
         wrong.definition.0.name = "other".into();
         let mut host = Host::default();
         assert!(
-            matches!(admit_run(&wrong, &revision, LaunchKind::Main, None, &mut host, 0), Err(RunRefusal::Binding { field }) if field == "entry.signature")
+            matches!(admit_run(&wrong, &revision, LaunchKind::Main, None, CodeReach::Safe, &mut host, 0), Err(RunRefusal::Binding { field }) if field == "entry.signature")
         );
         assert_eq!(host.0, 0);
-        assert!(admit_run(&signature, &revision, LaunchKind::Main, None, &mut host, 0).is_ok());
+        assert!(
+            admit_run(
+                &signature,
+                &revision,
+                LaunchKind::Main,
+                None,
+                CodeReach::Safe,
+                &mut host,
+                0
+            )
+            .is_ok()
+        );
         assert_eq!(host.0, 1);
     });
 }

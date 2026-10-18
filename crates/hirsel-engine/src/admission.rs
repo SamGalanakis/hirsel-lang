@@ -1,7 +1,7 @@
 //! Production entry selection and admission, before any evaluator starts.
 use hirsel_run_config::{
-    AdmittedRun, HostAuthority, LaunchKind, ProgramFacts, ProgramRevision, Root, RunConfig,
-    RunRefusal, ValidatedRun,
+    AdmittedRun, CodeReach, HostAuthority, LaunchKind, ProgramFacts, ProgramRevision, Root,
+    RunConfig, RunRefusal, ValidatedRun,
 };
 use hirsel_syntax::Visibility;
 use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeKind};
@@ -96,6 +96,7 @@ pub fn admit_run(
     revision: &ProgramRevision,
     launch: LaunchKind,
     requested: Option<&ValidatedRun>,
+    code: CodeReach,
     host: &mut dyn HostAuthority,
     now: i64,
 ) -> Result<AdmittedRun, RunRefusal> {
@@ -109,6 +110,6 @@ pub fn admit_run(
         Some(run) => run.clone(),
         None => RunConfig::for_program(revision, launch).validated()?,
     };
-    run.bind(&ProgramFacts::of(revision, launch, roots))?
+    run.bind(&ProgramFacts::of(revision, launch, roots, code))?
         .admit(host, now)
 }

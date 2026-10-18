@@ -168,6 +168,9 @@ pub struct ReadyProgram {
     pub foreign_links: Vec<hirsel_engine::LinkInput>,
     /// Executables refuse to record or replay (PROG-4).
     pub foreign_unreplayable: bool,
+    /// The launch entries that reach an escape from capability checking, which
+    /// `admit.safe@1` refuses (CAP-6).
+    pub(crate) escaping: BTreeSet<DefPath>,
     /// The failure table a program that isolates registers at launch (FAIL-2), bound with
     /// the revisions.
     pub(crate) failure_table: Option<super::observe::FailureTable>,
@@ -197,6 +200,12 @@ impl ReadyProgram {
             .collect::<Result<_, _>>()?;
         self.foreign_links = input.snapshot().foreign_links.clone();
         self.foreign_unreplayable = input.snapshot().foreign_unreplayable;
+        self.escaping = self
+            .launches
+            .keys()
+            .filter(|entry| input.unsafe_reach(entry).is_some())
+            .cloned()
+            .collect();
         self.exit_reports = self
             .launches
             .keys()
@@ -378,6 +387,7 @@ pub fn build_program(
         discharged,
         foreign_links: Vec::new(),
         foreign_unreplayable: false,
+        escaping: BTreeSet::new(),
         failure_table: None,
     })
 }

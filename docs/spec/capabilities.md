@@ -213,3 +213,15 @@ by name or hash.
 The **verdict** for a definition is either safe or the shortest dependency path from it to
 an escape, both included, found breadth-first in definition-path order, so equal programs
 report equal paths. `hirsel check --safe` prints the verdict for the program's entry.
+
+A host requires safe code through the run configuration's code admission policy,
+`admission.code` ([run configuration](determinism.md#run-configuration)), a seam whose
+choice changes which programs launch and never what an admitted program means:
+`admit.any@1`, the default, admits any checked code; `admit.safe@1` refuses a launch
+whose entry is not safe when the run binds to its code, before any host is consulted,
+with a refusal naming the path. Every launcher
+applies it: the interpreter and the native driver from the checked program, and an
+executable from the verdict compiled into it, which carries no path. A policy is part of
+the record and so of run identity; the default, written or not, is absent from the
+record's canonical bytes. Replay re-checks the policy against the code it replays. A
+runner place applies the same verdict to a callee definition on arrival.

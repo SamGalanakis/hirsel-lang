@@ -38,14 +38,53 @@ impl UnsafeReach {
     }
 }
 
+impl SemanticProgram {
+    /// The first of `escapes` that `root` reaches, breadth-first in definition
+    /// order, so the path is a shortest one and the same on every check.
+    pub(crate) fn reach(
+        &self,
+        root: &DefPath,
+        escapes: &BTreeMap<DefPath, Escape>,
+    ) -> Option<UnsafeReach> {
+        let mut parents: BTreeMap<&DefPath, &DefPath> = BTreeMap::new();
+        let mut queue = VecDeque::from([root]);
+        while let Some(at) = queue.pop_front() {
+            if let Some(&escape) = escapes.get(at) {
+                let mut path = vec![at.clone()];
+                let mut step = at;
+                while let Some(&parent) = parents.get(step) {
+                    path.push(parent.clone());
+                    step = parent;
+                }
+                path.reverse();
+                return Some(UnsafeReach { path, escape });
+            }
+            for next in self.uses.get(at).into_iter().flatten() {
+                if next != root && !parents.contains_key(next) {
+                    parents.insert(next, at);
+                    queue.push_back(next);
+                }
+            }
+        }
+        None
+    }
+}
+
 impl QueryEngine {
-    /// The escape `root` reaches, if any (CAP-6). Externs and `Unsafe` core
-    /// operations are the escapes; core operations behind safe signatures are the
-    /// runtime's own and reach none. Std is checked like any other package. The
-    /// search is breadth-first in definition order, so the path is a shortest one
-    /// and the same on every check.
+    /// The escape `root` reaches, if any (CAP-6).
     pub fn unsafe_reach(&mut self, root: &DefPath) -> Result<Option<UnsafeReach>, QueryError> {
         let program = self.semantic_program([root.clone()])?;
+        let escapes = self.escapes(&program)?;
+        Ok(program.reach(root, &escapes))
+    }
+
+    /// The escapes among `program`'s definitions: externs and `Unsafe` core
+    /// operations. Core operations behind safe signatures are the runtime's own and
+    /// are none; std is checked like any other package.
+    pub(crate) fn escapes(
+        &mut self,
+        program: &SemanticProgram,
+    ) -> Result<BTreeMap<DefPath, Escape>, QueryError> {
         let unsafe_operations: BTreeSet<_> = intrinsic_roles()
             .into_iter()
             .filter(|(_, role)| *role == Intrinsic::UnsafeOperation)
@@ -60,26 +99,6 @@ impl QueryEngine {
                 escapes.insert(path.clone(), Escape::Extern);
             }
         }
-        let mut parents: BTreeMap<&DefPath, &DefPath> = BTreeMap::new();
-        let mut queue = VecDeque::from([root]);
-        while let Some(at) = queue.pop_front() {
-            if let Some(&escape) = escapes.get(at) {
-                let mut path = vec![at.clone()];
-                let mut step = at;
-                while let Some(&parent) = parents.get(step) {
-                    path.push(parent.clone());
-                    step = parent;
-                }
-                path.reverse();
-                return Ok(Some(UnsafeReach { path, escape }));
-            }
-            for next in program.uses.get(at).into_iter().flatten() {
-                if next != root && !parents.contains_key(next) {
-                    parents.insert(next, at);
-                    queue.push_back(next);
-                }
-            }
-        }
-        Ok(None)
+        Ok(escapes)
     }
 }

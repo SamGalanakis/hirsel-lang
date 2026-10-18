@@ -75,7 +75,7 @@ from omitting the root. A requested but absent root is a launch refusal under
 | `args` | Absent or null, or the exact ordered UTF-8 snapshot, explicit empty included. |
 | `env` | Absent or null, or exact key-to-value entries, with null for a granted key that is unset; denied keys are distinguishable from granted unset keys. |
 | `unsafe` | Boolean explicit root grant, false by default. |
-| `admission` | Optional launch-only constraints: not-before, expiry and an external revocation reference. The resolved decision and its evidence are captured in the validated record. |
+| `admission` | Optional launch-only constraints: not-before, expiry, an external revocation reference and the code policy `code`, `admit.any@1` (the default when absent) or `admit.safe@1` ([CAP-6](capabilities.md#cap-6-safe-code)). The resolved decision and its evidence are captured in the validated record. |
 
 **Directory mounts** are sorted, unique, portable virtual paths (the empty path is the
 virtual root), each with an explicit absolute host root designator and `read` or

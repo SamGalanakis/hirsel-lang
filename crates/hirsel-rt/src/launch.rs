@@ -105,6 +105,7 @@ impl Launch {
     fn facts(
         &self,
         run: &hirsel_run_config::ValidatedRun,
+        escapes: bool,
     ) -> Result<hirsel_run_config::ProgramFacts, hirsel_run_config::RunRefusal> {
         use crate::standalone::{ROOT_ARGS, ROOT_IO, ROOT_TEST};
         let mask = match self {
@@ -113,7 +114,7 @@ impl Launch {
             Self::Test(_) => ROOT_TEST,
             Self::Roots(_, mask) => *mask,
         };
-        crate::standalone::facts(run.program(), &run.record().entry, mask)
+        crate::standalone::facts(run.program(), &run.record().entry, mask, escapes)
     }
 }
 /// The largest inline result an entry may return.
@@ -1097,6 +1098,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_zero(
             layout_count,
             config,
             false,
+            false,
         )
     }
 }
@@ -1123,6 +1125,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch(
             layout_count,
             config,
             false,
+            false,
         )
     }
 }
@@ -1145,6 +1148,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_test(
             layout_count,
             config,
             false,
+            false,
         )
     }
 }
@@ -1160,7 +1164,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
     config: *const Config,
     roots: u8,
 ) -> i32 {
-    let (roots, unreplayable) = crate::standalone::unreplayable(roots);
+    let (roots, unreplayable, escapes) = crate::standalone::split(roots);
     unsafe {
         launch(
             Launch::Roots(entry, roots),
@@ -1169,6 +1173,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
             layout_count,
             config,
             unreplayable,
+            escapes,
         )
     }
 }
@@ -1188,7 +1193,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
     name_len: u64,
     roots: u8,
 ) -> i32 {
-    let (roots, unreplayable) = crate::standalone::unreplayable(roots);
+    let (roots, unreplayable, escapes) = crate::standalone::split(roots);
     let Some(program) = (unsafe { program.as_ref() }) else {
         return refuse("missing program binding");
     };
@@ -1207,6 +1212,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
         *program,
         name,
         roots,
+        escapes,
     ) {
         Ok(selected) => selected,
         Err(error) => return refuse(&error.to_string()),
@@ -1240,6 +1246,7 @@ unsafe fn launch(
     layout_count: u32,
     launch_config: *const Config,
     unreplayable: bool,
+    escapes: bool,
 ) -> i32 {
     let Some(launch_config) = (unsafe { launch_config.as_ref() }) else {
         return refuse("missing launch configuration");
@@ -1250,7 +1257,7 @@ unsafe fn launch(
         match arguments.as_slice() {
             [_, path] => crate::host_launch::replay(std::path::Path::new(path))
                 .and_then(|(io, run)| {
-                    let facts = entry.facts(&run)?;
+                    let facts = entry.facts(&run, escapes)?;
                     Ok(Some(crate::standalone::Selected::Replay {
                         run: run.bind(&facts)?,
                         io,
@@ -1267,7 +1274,7 @@ unsafe fn launch(
                 [flag, path] if flag == "--hirsel-run" => {
                     hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))
                         .and_then(|run| {
-                            let facts = entry.facts(&run)?;
+                            let facts = entry.facts(&run, escapes)?;
                             run.bind(&facts)
                         })
                         .map(|run| {

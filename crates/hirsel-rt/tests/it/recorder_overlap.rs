@@ -264,6 +264,7 @@ fn validated_host_admission_reports_recorder_overlap_before_entry_for_read_only_
             entry: run.record().entry.clone(),
             launch: run.record().launch,
             roots: vec![],
+            code: hirsel_run_config::CodeReach::Safe,
         };
         let result = run
             .clone()

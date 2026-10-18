@@ -818,8 +818,14 @@ done:
  ret i8 %s
 }}"#
     );
-    // hirsel-rt's UNREPLAYABLE bit beside the roots (PROG-4).
-    let mask = kind.mask() | if program.foreign_unreplayable { 32 } else { 0 };
+    // hirsel-rt's UNREPLAYABLE (PROG-4) and ESCAPES (CAP-6) bits beside the roots.
+    let mask = kind.mask()
+        | if program.foreign_unreplayable { 32 } else { 0 }
+        | if program.escaping.contains(entry) {
+            128
+        } else {
+            0
+        };
     let registry_declaration = format!(
         "@\"{}\" = external constant [{} x ptr]",
         registry.symbol(),

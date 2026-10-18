@@ -1,5 +1,7 @@
 //! Standalone process inputs are explicit: one run record and an optional argv snapshot.
-use hirsel_run_config::{BoundRun, LaunchKind, ProgramFacts, Root, RunConfig, RunRefusal};
+use hirsel_run_config::{
+    BoundRun, CodeReach, LaunchKind, ProgramFacts, Root, RunConfig, RunRefusal,
+};
 use std::ffi::OsString;
 
 pub(crate) const ROOT_IO: u8 = 1;
@@ -10,10 +12,17 @@ pub(crate) const ROOT_TEST: u8 = 16;
 /// Not a root: the program calls C outside a deterministic wrapper (PROG-4).
 pub(crate) const UNREPLAYABLE: u8 = 32;
 
-/// Splits the compiled selection into its roots and whether recording or
-/// replaying is refused.
-pub(crate) fn unreplayable(mask: u8) -> (u8, bool) {
-    (mask & !UNREPLAYABLE, mask & UNREPLAYABLE != 0)
+/// Not a root: the entry reaches an escape from capability checking (CAP-6).
+pub(crate) const ESCAPES: u8 = 128;
+
+/// Splits the compiled selection into its roots, whether recording or replaying
+/// is refused, and whether the entry reaches an escape.
+pub(crate) fn split(mask: u8) -> (u8, bool, bool) {
+    (
+        mask & !(UNREPLAYABLE | ESCAPES),
+        mask & UNREPLAYABLE != 0,
+        mask & ESCAPES != 0,
+    )
 }
 
 pub(crate) fn required_roots(mask: u8) -> Result<Vec<Root>, RunRefusal> {
@@ -67,6 +76,7 @@ pub(crate) fn select(
     program: [u8; 32],
     entry: &str,
     roots: u8,
+    escapes: bool,
 ) -> Result<Selected, RunRefusal> {
     if arguments
         .first()
@@ -79,12 +89,12 @@ pub(crate) fn select(
             });
         };
         let (io, run) = crate::host_launch::replay(std::path::Path::new(path))?;
-        let run = run.bind(&facts(program, entry, roots)?)?;
+        let run = run.bind(&facts(program, entry, roots, escapes)?)?;
         return Ok(Selected::Replay { run, io });
     }
     let options = live_options(&arguments)?;
     Ok(Selected::Live {
-        run: select_run(options.input.to_vec(), program, entry, roots)?,
+        run: select_run(options.input.to_vec(), program, entry, roots, escapes)?,
         tape: options.tape,
         revocations: options.revocations,
     })
@@ -121,13 +131,24 @@ pub(crate) fn live_options(arguments: &[OsString]) -> Result<LiveOptions<'_>, Ru
     })
 }
 
-/// The compiled code a standalone launch binds its run to.
-pub(crate) fn facts(program: [u8; 32], entry: &str, roots: u8) -> Result<ProgramFacts, RunRefusal> {
+/// The compiled code a standalone launch binds its run to. An executable keeps only
+/// the escape verdict, so its reach names no path.
+pub(crate) fn facts(
+    program: [u8; 32],
+    entry: &str,
+    roots: u8,
+    escapes: bool,
+) -> Result<ProgramFacts, RunRefusal> {
     Ok(ProgramFacts {
         program,
         entry: entry.into(),
         launch: launch_kind(roots),
         roots: required_roots(roots)?,
+        code: if escapes {
+            CodeReach::Escapes(vec![])
+        } else {
+            CodeReach::Safe
+        },
     })
 }
 
@@ -147,6 +168,7 @@ fn select_run(
     program: [u8; 32],
     entry: &str,
     roots: u8,
+    escapes: bool,
 ) -> Result<BoundRun, RunRefusal> {
     let launch = launch_kind(roots);
     let invalid = || {
@@ -182,7 +204,9 @@ fn select_run(
     };
     // Preserve all configured inputs and grants; the process snapshot is the
     // only changed field and contributes to the admitted run's identity.
-    record.validated()?.bind(&facts(program, entry, roots)?)
+    record
+        .validated()?
+        .bind(&facts(program, entry, roots, escapes)?)
 }
 
 #[cfg(test)]
@@ -217,6 +241,7 @@ mod tests {
                 program,
                 entry,
                 0,
+                false,
             )
         };
         assert!(matches!(replay([1; 32]), Ok(Selected::Replay { .. })));
@@ -230,13 +255,14 @@ mod tests {
                 vec!["--hirsel-replay".into(), tape.clone().into(), "--".into()],
                 [1; 32],
                 entry,
-                0
+                0,
+                false
             ),
             Err(RunRefusal::Invalid { .. })
         ));
         std::fs::remove_file(&tape).unwrap();
         assert!(matches!(
-            select(vec!["--hirsel-record".into()], [1; 32], entry, 0),
+            select(vec!["--hirsel-record".into()], [1; 32], entry, 0, false),
             Err(RunRefusal::Invalid { .. })
         ));
         assert!(matches!(
@@ -244,7 +270,8 @@ mod tests {
                 vec!["--hirsel-record".into(), "tape".into(), "--".into(), "x".into()],
                 [1; 32],
                 entry,
-                ROOT_ARGS
+                ROOT_ARGS,
+                false
             ),
             Ok(Selected::Live { tape: Some(_), run, .. }) if run.run().record().args.as_deref() == Some(["x".to_string()].as_slice())
         ));
@@ -252,9 +279,9 @@ mod tests {
     #[test]
     fn unconfigured_process_denies_roots_and_explicit_argv_grants_only_args() {
         let entry = "standalone@0/main";
-        assert!(select_run(vec![], [0; 32], entry, 0).is_ok());
+        assert!(select_run(vec![], [0; 32], entry, 0, false).is_ok());
         assert!(matches!(
-            select_run(vec![], [0; 32], entry, ROOT_ARGS),
+            select_run(vec![], [0; 32], entry, ROOT_ARGS, false),
             Err(RunRefusal::NotGranted { .. })
         ));
         let run = select_run(
@@ -262,6 +289,7 @@ mod tests {
             [0; 32],
             entry,
             ROOT_ARGS,
+            false,
         )
         .unwrap();
         let run = run.run();
@@ -272,7 +300,7 @@ mod tests {
         assert!(run.record().io.is_none());
         assert!(run.record().env.is_none());
         assert!(matches!(
-            select_run(vec!["--".into()], [0; 32], entry, ROOT_IO),
+            select_run(vec!["--".into()], [0; 32], entry, ROOT_IO, false),
             Err(RunRefusal::NotGranted { .. })
         ));
     }

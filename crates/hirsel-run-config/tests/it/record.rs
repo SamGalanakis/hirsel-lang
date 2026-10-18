@@ -17,6 +17,7 @@ fn bound(run: &ValidatedRun) -> BoundRun {
         entry: run.record().entry.clone(),
         launch: run.record().launch,
         roots: vec![],
+        code: CodeReach::Safe,
     };
     run.clone().bind(&facts).unwrap()
 }
@@ -92,6 +93,7 @@ fn malformed_numbers_unknown_and_duplicate_fields_refuse_with_valid_twins() {
         not_before: Some(i64::MIN),
         expires: Some(i64::MAX),
         revocation: None,
+        code: None,
     });
     valid(&record);
     let duplicate = base.replace("\"env\":null", "\"env\":{\"K\":null,\"K\":\"v\"}");
@@ -320,12 +322,64 @@ impl HostAuthority for Host {
     }
 }
 #[test]
+fn safe_code_policy_refuses_an_escaping_program_at_bind() {
+    let path: Vec<String> = vec!["app@1/main".into(), "app@1/demo_add".into()];
+    let policy = |code: Option<&str>| {
+        let mut record = empty();
+        record.admission = Some(Admission {
+            not_before: None,
+            expires: None,
+            revocation: None,
+            code: code.map(Into::into),
+        });
+        record
+    };
+    let bind = |run: &ValidatedRun, code: CodeReach| {
+        run.clone().bind(&ProgramFacts {
+            program: run.program(),
+            entry: run.record().entry.clone(),
+            launch: run.record().launch,
+            roots: vec![],
+            code,
+        })
+    };
+    let safe = valid(&policy(Some("admit.safe@1")));
+    assert_eq!(
+        bind(&safe, CodeReach::Escapes(path.clone())).unwrap_err(),
+        RunRefusal::UnsafeCode { path: path.clone() }
+    );
+    assert!(bind(&safe, CodeReach::Safe).is_ok());
+    for run in [
+        valid(&policy(None)),
+        valid(&policy(Some("admit.any@1"))),
+        valid(&empty()),
+    ] {
+        assert!(bind(&run, CodeReach::Escapes(path.clone())).is_ok());
+    }
+    assert_eq!(
+        policy(Some("admit.none@1")).validated().unwrap_err(),
+        RunRefusal::Unsupported {
+            field: "admission.code".into()
+        }
+    );
+    // The default policy adds no member, so earlier records keep their identity.
+    let absent = valid(&policy(None));
+    assert!(!String::from_utf8_lossy(absent.canonical()).contains("code"));
+    assert_eq!(
+        valid(&policy(Some("admit.any@1"))).identity(),
+        absent.identity()
+    );
+    assert!(String::from_utf8_lossy(safe.canonical()).contains(r#""code":"admit.safe@1""#));
+    assert_ne!(absent.identity(), safe.identity());
+}
+#[test]
 fn expiry_revocation_and_host_permissions_are_admission_only() {
     let mut record = empty();
     record.admission = Some(Admission {
         not_before: Some(10),
         expires: Some(20),
         revocation: Some("r".into()),
+        code: None,
     });
     let run = valid(&record);
     let mut host = Host {
@@ -499,6 +553,7 @@ fn known_provider_contracts_are_shared_by_live_and_replayed_runs() {
         not_before: None,
         expires: None,
         revocation: Some("owner-list@7".into()),
+        code: None,
     });
     valid(&record);
 }

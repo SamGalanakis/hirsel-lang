@@ -704,7 +704,10 @@ zero calls `hirsel_rt_v2_foreign_violation(site)`, which reports PROG-4 and the 
 location before terminating. A callback passes site zero to select the active extern.
 Nullable pointer Options use zero as None without a guard. The launchers strip
 the `standalone::UNREPLAYABLE` bit from the compiled root mask and refuse a recording or a
-replay when it is set.
+replay when it is set. They also strip `standalone::ESCAPES` (CAP-6) and bind the run
+with `CodeReach::Escapes` and an empty path, so a record whose `admission.code` is
+`admit.safe@1` refuses with `unsafe_code`, live or replayed; `hirsel check --safe`
+prints the path.
 
 ## Timing, diagnostics and measurement archives
 

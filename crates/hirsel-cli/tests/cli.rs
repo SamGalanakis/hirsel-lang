@@ -1562,6 +1562,76 @@ fn cranelift_builds_and_runs_what_llvm_builds_and_runs() {
 }
 
 #[test]
+fn admit_safe_refuses_an_entry_reaching_an_escape_in_every_launcher() {
+    // CAP-6: the run-config code policy is outside the conformance header schema.
+    let main = "pub fn main(u: Unsafe) -> Result[(), ()] {\n  let _ = relay(u, 2)\n  Ok(())\n}\n";
+    let program = |body: &str| {
+        file(&format!(
+            "fn relay(u: Unsafe, a: i32) -> i32 {{\n  {body}\n}}\n\n{main}"
+        ))
+    };
+    // Executables call C where the interpreter calls no C, so they reach libc's abs.
+    let foreign = |body: &str| {
+        let path = file(&format!(
+            "/// Reads its argument and retains nothing.\nextern \"c\" fn abs(u: Unsafe, a: i32) -> i32\n\nfn relay(u: Unsafe, a: i32) -> i32 {{\n  {body}\n}}\n\n{main}"
+        ));
+        let sidecar = format!("{}.json", path.display());
+        std::fs::write(&sidecar, format!(r#"{{"schema":1,"package":{{"name":"app","version":"1"}},"entry":{{"module":[],"name":"main"}},"sources":[{{"path":"{}","module":[]}}],"dependencies":[],"unsafe_ffi":{{"link":[],"headers_checked":false,"wrappers":[]}}}}"#, path.display())).unwrap();
+        path
+    };
+    let policy = |code: &str| {
+        file(&format!(
+            r#"{{"unsafe":true,"admission":{{"code":"{code}"}}}}"#
+        ))
+    };
+    let (safe, any) = (policy("admit.safe@1"), policy("admit.any@1"));
+    let interpreted = |source: &std::path::Path, grants: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(source)
+            .arg("--grants")
+            .arg(grants)
+            .output()
+            .unwrap()
+    };
+    let escaping = program("int.unchecked_add(u, a, 1)");
+    let refused = interpreted(&escaping, &safe);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains(r#""kind":"unsafe_code","path":["standalone@0/main","standalone@0/relay","core@1/int/unchecked_add"]"#),
+        "{refused:?}"
+    );
+    for (source, grants) in [(&program("a + 1"), &safe), (&escaping, &any)] {
+        let output = interpreted(source, grants);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+    let (escaping, twin) = (foreign("abs(u, a)"), foreign("a + 1"));
+    for backend in ["llvm", "cranelift"] {
+        let launch = |source: &std::path::Path, grants: &std::path::Path| {
+            let executable = build_executable(source, &["--debug", "--backend", backend]);
+            let output = Command::new(&executable)
+                .arg("--hirsel-grants")
+                .arg(grants)
+                .output()
+                .unwrap();
+            std::fs::remove_file(executable).unwrap();
+            output
+        };
+        // The executable keeps only the verdict, so it names no path.
+        let refused = launch(&escaping, &safe);
+        assert_eq!(refused.status.code(), Some(3), "{backend}: {refused:?}");
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains(r#""kind":"unsafe_code","path":[]"#),
+            "{backend}: {refused:?}"
+        );
+        for (source, grants) in [(&escaping, &any), (&twin, &safe)] {
+            let output = launch(source, grants);
+            assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
+        }
+    }
+}
+
+#[test]
 fn build_rejects_invalid_options_and_source_before_writing_an_executable() {
     for args in [
         vec!["build", "source.hir"],

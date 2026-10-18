@@ -47,6 +47,7 @@ pub struct NativeInput {
 pub struct ValidatedNativeInput {
     input: NativeInput,
     semantic_program: crate::queries::SemanticProgram,
+    escapes: BTreeMap<DefPath, crate::Escape>,
 }
 impl ValidatedNativeInput {
     /// The same semantic closure as source execution, retained independently of
@@ -56,6 +57,10 @@ impl ValidatedNativeInput {
         entry: &DefPath,
     ) -> Result<hirsel_run_config::ProgramRevision, QueryError> {
         self.semantic_program.revision(entry)
+    }
+    /// The escape from capability checking `entry` reaches, if any (CAP-6).
+    pub fn unsafe_reach(&self, entry: &DefPath) -> Option<crate::UnsafeReach> {
+        self.semantic_program.reach(entry, &self.escapes)
     }
     pub fn snapshot(&self) -> &NativeInput {
         &self.input
@@ -377,9 +382,11 @@ impl QueryEngine {
             )));
         }
         let semantic_program = self.semantic_program(input.source_owners.keys().cloned())?;
+        let escapes = self.escapes(&semantic_program)?;
         Ok(ValidatedNativeInput {
             input,
             semantic_program,
+            escapes,
         })
     }
 }

@@ -18,6 +18,13 @@ Canonical JSON has fixed member order, explicit nulls, sorted grant sets, exact
 ordered Args, lowercase control escapes and length-framed SHA-256 identity.
 Absent Io/Args/Env differs from an explicitly empty grant/snapshot.
 
+`ProgramFacts.code` is the `CodeReach` the launcher found in checked code (CAP-6).
+`ValidatedRun::bind` checks it last: under `admission.code` `admit.safe@1` an `Escapes`
+reach refuses as `unsafe_code` with its path, before any host call, for live launches
+and replays alike; `admit.any@1` and an absent policy admit any code. Validation
+normalizes `admit.any@1` to absence, so it never reaches canonical bytes; an unknown
+policy refuses as Unsupported.
+
 `ValidatedRun::admit` invokes explicit host authorization and evaluates time and
 revocation evidence once. It returns an opaque `AdmittedRun` retaining the accepted
 record and evidence. `check_replay` validates the recorded binding without reading
@@ -65,8 +72,8 @@ artifact/compiler/position/instance details never belong in those fields.
 
 Known provider contracts have one closed enumeration, `ProviderContract`:
 `tasks.cooperative@1`, `stdin.bytes@1`, `stderr.bytes@1`, `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1` and
-`clock.wall.unix_ns@1`, `net.stream@1`, `net.script@2`, `process.spawn@1` and
-`process.script@1`. The validator checks the exact projection and version.
+`clock.wall.unix_ns@1`, `net.stream@1`, `net.script@2`, `process.spawn@1`,
+`process.script@1`, and the code admission policies `admit.any@1` and `admit.safe@1`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin
 belongs to tooling provenance. Unknown contracts and versions and
 scheduler policy refuse as Unsupported until adapters can enforce them.

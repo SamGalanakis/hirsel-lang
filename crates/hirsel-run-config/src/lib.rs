@@ -97,9 +97,11 @@ pub enum ProviderContract {
     NetScript,
     ProcessSpawn,
     ProcessScript,
+    AdmitAny,
+    AdmitSafe,
 }
 impl ProviderContract {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 14] = [
         Self::TasksCooperative,
         Self::StdinBytes,
         Self::StderrBytes,
@@ -112,6 +114,8 @@ impl ProviderContract {
         Self::NetScript,
         Self::ProcessSpawn,
         Self::ProcessScript,
+        Self::AdmitAny,
+        Self::AdmitSafe,
     ];
     pub const fn name(self) -> &'static str {
         match self {
@@ -127,6 +131,8 @@ impl ProviderContract {
             Self::NetScript => "net.script@2",
             Self::ProcessSpawn => "process.spawn@1",
             Self::ProcessScript => "process.script@1",
+            Self::AdmitAny => "admit.any@1",
+            Self::AdmitSafe => "admit.safe@1",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -191,6 +197,20 @@ pub struct Admission {
     pub not_before: Option<i64>,
     pub expires: Option<i64>,
     pub revocation: Option<String>,
+    /// The code admission policy (CAP-6). Its default, `admit.any@1`, is absent from
+    /// canonical bytes, so records without one keep their identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+/// What the selected code reaches (CAP-6), found by the launcher from checked code,
+/// never read from the record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CodeReach {
+    Safe,
+    /// The path from the entry to its first escape, each definition's versioned
+    /// spelling; empty where the launcher keeps only the verdict (an executable).
+    Escapes(Vec<String>),
 }
 
 /// Untrusted requested endowments. This is the only serialized run schema.
@@ -228,6 +248,7 @@ pub enum RunRefusal {
     Revoked { reference: String },
     MissingEvidence { reference: String },
     RecorderOverlap { mount: String },
+    UnsafeCode { path: Vec<String> },
 }
 impl fmt::Display for RunRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -496,7 +517,11 @@ impl RunConfig {
                 }
             }
         }
-        if let Some(admission) = &record.admission {
+        if let Some(admission) = &mut record.admission {
+            // A policy equal to its default is absent from canonical bytes.
+            if admission.code.as_deref() == Some(ProviderContract::AdmitAny.name()) {
+                admission.code = None;
+            }
             if let (Some(start), Some(end)) = (admission.not_before, admission.expires)
                 && start > end
             {
@@ -626,11 +651,19 @@ impl ValidatedRun {
         Ok(())
     }
     /// Check this run against the code it would execute, before any host is consulted: the
-    /// binding (program, entry, launch kind), then the entry's roots. Pure: no clock, grant or
-    /// host state is read, so a replay binds exactly as a live launch does.
+    /// binding (program, entry, launch kind), then the entry's roots, then the code policy
+    /// against what the code reaches (CAP-6). Pure: no clock, grant or host state is read,
+    /// so a replay binds exactly as a live launch does.
     pub fn bind(self, facts: &ProgramFacts) -> Result<BoundRun, RunRefusal> {
         self.check_program(facts.program, &facts.entry, facts.launch)?;
         self.require_roots(&facts.roots)?;
+        if let (Some(policy), CodeReach::Escapes(path)) = (
+            self.record.admission.as_ref().and_then(|a| a.code.as_ref()),
+            &facts.code,
+        ) && ProviderContract::parse(policy) == Some(ProviderContract::AdmitSafe)
+        {
+            return Err(RunRefusal::UnsafeCode { path: path.clone() });
+        }
         Ok(BoundRun { run: self })
     }
     /// Historical accepted admission replay. No HostAuthority is available on this path.
@@ -699,21 +732,29 @@ impl ValidatedRun {
     }
 }
 /// What binding needs to know about the compiled code a run would execute: its semantic
-/// program digest, entry, launch kind and the roots the entry declares.
+/// program digest, entry, launch kind, the roots the entry declares and what the entry
+/// reaches (CAP-6).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramFacts {
     pub program: [u8; 32],
     pub entry: String,
     pub launch: LaunchKind,
     pub roots: Vec<Root>,
+    pub code: CodeReach,
 }
 impl ProgramFacts {
-    pub fn of(revision: &ProgramRevision, launch: LaunchKind, roots: Vec<Root>) -> Self {
+    pub fn of(
+        revision: &ProgramRevision,
+        launch: LaunchKind,
+        roots: Vec<Root>,
+        code: CodeReach,
+    ) -> Self {
         Self {
             program: revision.digest(),
             entry: revision.entry().into(),
             launch,
             roots,
+            code,
         }
     }
 }
@@ -945,6 +986,14 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
         {
             return Err(unsupported("io.process.provider"));
         }
+    }
+    if let Some(code) = record.admission.as_ref().and_then(|a| a.code.as_ref())
+        && !matches!(
+            ProviderContract::parse(code),
+            Some(ProviderContract::AdmitAny | ProviderContract::AdmitSafe)
+        )
+    {
+        return Err(unsupported("admission.code"));
     }
     Ok(())
 }
