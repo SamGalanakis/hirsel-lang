@@ -4184,6 +4184,8 @@ conformance/SEM/SEM-1-http-client-bounds-run.hir
 conformance/SEM/SEM-1-http-client-chunked-reuse-run.hir
 conformance/SEM/SEM-1-http-client-close-wins-batches-run.hir
 conformance/SEM/SEM-1-http-client-close-wins-run.hir
+conformance/SEM/SEM-1-http-client-decompress-errors-run.hir
+conformance/SEM/SEM-1-http-client-decompress-run.hir
 conformance/SEM/SEM-1-http-client-eof-close-run.hir
 conformance/SEM/SEM-1-http-client-head-reuse-run.hir
 conformance/SEM/SEM-1-http-client-http10-close-run.hir
@@ -4197,12 +4199,14 @@ conformance/SEM/SEM-1-http-client-request-close-run.hir
 conformance/SEM/SEM-1-http-client-server-close-run.hir
 conformance/SEM/SEM-1-http-client-truncated-run.hir
 conformance/SEM/SEM-1-http-client-upgrade-close-run.hir
+conformance/SEM/SEM-1-http-content-coding-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-0-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-1-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-2-run.hir
 conformance/SEM/SEM-1-http-server-chunk-prefix-3-run.hir
 conformance/SEM/SEM-1-http-server-chunked-run.hir
 conformance/SEM/SEM-1-http-server-clock-authority-run.hir
+conformance/SEM/SEM-1-http-server-decode-run.hir
 conformance/SEM/SEM-1-http-server-persistence-run.hir
 conformance/SEM/SEM-1-http-server-tls-run.hir
 conformance/SEM/SEM-1-http-server-wire-run.hir

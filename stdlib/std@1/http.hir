@@ -37,6 +37,7 @@ pub type Config {
   user_agent: String,
   roots: TlsRoots,
   status_as_error: bool,
+  decompress: bool,
 }
 
 pub type ResponseHead {
@@ -60,7 +61,9 @@ pub type Response {
 
 pub type HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
   u16
-) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8
+) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8 | Decode(
+  flate.FlateError
+) | UnsupportedContentEncoding
 
 // ready=0, streaming request=1, sent=2, body=3, done=4, failed=5.
 // body_kind: EOF=0, content-length=1, chunked=2. chunk_suffix tracks the
@@ -101,7 +104,8 @@ pub fn default_config() -> Config uses {} {
     max_headers: 100,
     user_agent: "hirsel-std/1",
     roots: WebPki(),
-    status_as_error: true
+    status_as_error: true,
+    decompress: false
   )
 }
 
@@ -153,6 +157,128 @@ fn http_text(buf: Bytes, start: u64, end: u64) -> Result[unique String, HttpErro
     Ok(s) => Ok(take s),
     Error(_) => Error(Malformed(HeaderValue())),
   }
+}
+
+// Whether buf[start..end] is `word`, ignoring ASCII case.
+@noalloc
+fn http_token_is(buf: Bytes, start: u64, end: u64, word: String) -> bool uses {} {
+  let w = core@1/string.as_bytes(word)
+  if end - start != core@1/bytes.len(w) {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(w) {
+    if http_lower(buf[start + i]) != w[i] {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+/// Removes the content codings named by every Content-Encoding field, last
+/// applied first (RFC 9110 section 8.4): `gzip` and `x-gzip` are gzip data,
+/// `deflate` is zlib data and `identity` is ignored. Each decoded stage holds
+/// at most `limit` bytes (`BodyTooLarge` beyond); any other coding is
+/// `UnsupportedContentEncoding`, which a server answers with 415.
+pub fn decode_content(headers: List[Header], body: Bytes, limit: u64) -> Result[
+  unique Bytes,
+  HttpError
+] uses {} {
+  // 1 = gzip, 2 = deflate, in the order applied.
+  let mut codings: List[u8] = []
+  for h in headers {
+    if http_same(h.name, "content-encoding") {
+      let value = core@1/string.as_bytes(h.value)
+      let size = core@1/bytes.len(value)
+      let mut start: u64 = 0
+      while start <= size {
+        let mut stop = start
+        while stop < size && value[stop] != 44 {
+          stop += 1
+        }
+        let mut first = start
+        let mut last = stop
+        while first < last && (value[first] == 32 || value[first] == 9) {
+          first += 1
+        }
+        while last > first && (value[last - 1] == 32 || value[last - 1] == 9) {
+          last -= 1
+        }
+        if http_token_is(value, first, last, "gzip") || http_token_is(
+          value,
+          first,
+          last,
+          "x-gzip"
+        ) {
+          core@1/list.push(mut codings, 1)
+        } else if http_token_is(value, first, last, "deflate") {
+          core@1/list.push(mut codings, 2)
+        } else if first < last && !http_token_is(value, first, last, "identity") {
+          return Error(UnsupportedContentEncoding())
+        }
+        start = stop + 1
+      }
+    }
+  }
+  let mut current = unique body
+  let mut i = core@1/list.len(codings)
+  while i > 0 {
+    i -= 1
+    let decoded = if codings[i] == 1 {
+      flate.gzip_decode(current, limit)
+    } else {
+      flate.zlib_decode(current, limit)
+    }
+    current = match take decoded {
+      Ok(data) => take data,
+      Error(TooLarge()) => return Error(BodyTooLarge()),
+      Error(error) => return Error(Decode(error)),
+    }
+  }
+  if core@1/bytes.len(current) > limit {
+    return Error(BodyTooLarge())
+  }
+  Ok(take current)
+}
+
+// Go Transport's transparent decompression: only when the caller sent no
+// Accept-Encoding does the client ask for gzip and deflate and decode them.
+fn http_offer_codings(config: Config, headers: List[Header]) -> (
+  unique List[Header],
+  bool
+) uses {} {
+  let mut sent = unique headers
+  if !config.decompress || option.is_some(header(headers, "accept-encoding")) {
+    return (take sent, false)
+  }
+  core@1/list.push(mut sent, Header(name: "accept-encoding", value: "gzip, deflate"))
+  (take sent, true)
+}
+
+// A decoded response drops Content-Encoding and Content-Length, as in Go. An
+// empty body (HEAD, 204, 304 or Content-Length: 0) is returned unchanged.
+fn http_decoded(take response: Response, limit: u64) -> Result[Response, HttpError] uses {} {
+  if core@1/bytes.len(response.body) == 0 || option.is_none(
+    header(response.headers, "content-encoding")
+  ) {
+    return Ok(take response)
+  }
+  let body = decode_content(response.headers, response.body, limit)?
+  let mut kept: List[Header] = []
+  for h in response.headers {
+    if !http_same(h.name, "content-encoding") && !http_same(h.name, "content-length") {
+      core@1/list.push(mut kept, unique h)
+    }
+  }
+  Ok(
+    Response(
+      status: response.status,
+      headers: take kept,
+      body: take body,
+      url: response.url
+    )
+  )
 }
 
 fn http_net_error(error: NetError) -> HttpError uses {} {
@@ -978,7 +1104,8 @@ pub fn fetch(
   headers: List[Header],
   body: Option[Bytes]
 ) -> Result[Response, HttpError] {
-  let mut r = request(n, config, method, url, headers)?
+  let (sent, decoding) = http_offer_codings(config, headers)
+  let mut r = request(n, config, method, url, sent)?
   match body {
     Some(data) => send_body(mut r, data)?,
     None() => send_bodiless(mut r)?,
@@ -988,14 +1115,16 @@ pub fn fetch(
     return Error(Status(head.status))
   }
   let data = read_all(mut r, 10485760)?
-  Ok(
-    Response(
-      status: head.status,
-      headers: unique head.headers,
-      body: take data,
-      url: unique r.url
-    )
+  let response = Response(
+    status: head.status,
+    headers: unique head.headers,
+    body: take data,
+    url: unique r.url
   )
+  if decoding {
+    return http_decoded(take response, 10485760)
+  }
+  Ok(take response)
 }
 
 /// A sequential client owns its idle connections. Only complete, framed responses
@@ -1117,7 +1246,8 @@ pub fn client_fetch(
   headers: List[Header],
   body: Option[Bytes]
 ) -> Result[Response, HttpError] {
-  let mut r = http_client_request(mut c, method, url, headers)?
+  let (sent, decoding) = http_offer_codings(c.config, headers)
+  let mut r = http_client_request(mut c, method, url, sent)?
   match body {
     Some(data) => send_body(mut r, data)?,
     None() => send_bodiless(mut r)?,
@@ -1154,6 +1284,9 @@ pub fn client_fetch(
   }
   if c.config.status_as_error && head.status >= 400 && head.status <= 599 {
     return Error(Status(head.status))
+  }
+  if decoding {
+    return http_decoded(take response, c.config.max_body_bytes)
   }
   Ok(take response)
 }

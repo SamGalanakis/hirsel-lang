@@ -1,0 +1,120 @@
+// rule: SEM-1
+// expect: run
+// Go net/http Transport's transparent decompression as an explicit opt-in: with
+// Config.decompress and no caller Accept-Encoding the client offers gzip and
+// deflate and decodes the body, dropping Content-Encoding and Content-Length.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let hello = b"hello world\n"
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET /gzip HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: close\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: gzip\x0d\x0aX-Kept: 1\x0d\x0aContent-Length: 32\x0d\x0a\x0d\x0a\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00"
+              )
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /deflate HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: close\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: deflate\x0d\x0aContent-Length: 20\x0d\x0a\x0d\x0ax\xda\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00\x1er\x04g"
+              )
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /caller HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: close\x0d\x0aAccept-Encoding: gzip\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: gzip\x0d\x0aContent-Length: 32\x0d\x0a\x0d\x0a\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00"
+              )
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"HEAD /head HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: close\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: gzip\x0d\x0aContent-Length: 31\x0d\x0a\x0d\x0a"
+              )
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /plain HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: close\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: gzip\x0d\x0aContent-Length: 32\x0d\x0a\x0d\x0a\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00"
+              )
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let mut config = http.default_config()
+  config.decompress = true
+  let decoded = http.fetch(n, config, Get(), "http://example.com/gzip", [], None())?
+  check(
+    decoded.body == hello && decoded.headers == [
+      http.Header(name: "X-Kept", value: "1")
+    ]
+  )
+  check(
+    http.fetch(n, config, Get(), "http://example.com/deflate", [], None())?.body == hello
+  )
+  // A caller's Accept-Encoding is sent alone and its response is left encoded.
+  let raw = http.fetch(
+    n,
+    config,
+    Get(),
+    "http://example.com/caller",
+    [http.Header(name: "Accept-Encoding", value: "gzip")],
+    None()
+  )?
+  check(
+    raw.body == b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00" && http.header(
+      raw.headers,
+      "content-encoding"
+    ) == Some("gzip")
+  )
+  // A HEAD response has no body to decode and keeps its headers.
+  let head = http.fetch(n, config, Head(), "http://example.com/head", [], None())?
+  check(
+    head.body == b"" && http.header(head.headers, "content-encoding") == Some("gzip")
+  )
+  // Without the opt-in nothing is offered or decoded.
+  let plain = http.fetch(
+    n,
+    http.default_config(),
+    Get(),
+    "http://example.com/plain",
+    [],
+    None()
+  )?
+  check(
+    plain.body == b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00"
+  )
+  Ok(())
+}

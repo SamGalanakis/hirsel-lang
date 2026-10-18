@@ -1,0 +1,90 @@
+// rule: SEM-1
+// expect: run
+// Decoding failures with Config.decompress, and a pooled client bounding the
+// decoded body by max_body_bytes. A complete exchange returns its connection
+// even when decoding fails.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET /bad HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: close\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: gzip\x0d\x0aContent-Length: 32\x0d\x0a\x0d\x0a\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00,;\x08\xaf\x0c\x00\x00\x00"
+              )
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /br HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: close\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: br\x0d\x0aContent-Length: 3\x0d\x0a\x0d\x0axyz"
+              )
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /large HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: keep-alive\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: x-gzip\x0d\x0aContent-Length: 24\x0d\x0a\x0d\x0a\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03KL\x1c\x1e\x00\x00X\xf0\x9aY\xc8\x00\x00\x00"
+              ),
+              Expect(
+                b"GET /one HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: keep-alive\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\x0d\x0aContent-Encoding: deflate, gzip\x0d\x0aContent-Length: 41\x0d\x0a\x0d\x0a\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xab\xb8u\xda\xe3\xec\xc9\x93\xe1\x1a\xe7\xf5Oy>db\x90+bI\x07\x00X\x02P\x16\x14\x00\x00\x00"
+              ),
+              Expect(
+                b"GET /two HTTP/1.1\x0d\x0ahost: example.com\x0d\x0auser-agent: hirsel-std/1\x0d\x0aconnection: keep-alive\x0d\x0aaccept-encoding: gzip, deflate\x0d\x0a\x0d\x0a"
+              ),
+              Send(b"HTTP/1.1 200 OK\x0d\x0aContent-Length: 2\x0d\x0a\x0d\x0aok")
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let mut config = http.default_config()
+  config.decompress = true
+  check(
+    http.fetch(n, config, Get(), "http://example.com/bad", [], None()) == Error(
+      Decode(Checksum())
+    )
+  )
+  check(
+    http.fetch(n, config, Get(), "http://example.com/br", [], None()) == Error(
+      UnsupportedContentEncoding()
+    )
+  )
+  config.idle_timeout = None()
+  config.max_body_bytes = 100
+  let mut client = http.client(n, None(), config)?
+  check(
+    http.client_fetch(mut client, Get(), "http://example.com/large", [], None()) == Error(
+      BodyTooLarge()
+    )
+  )
+  let one = http.client_fetch(mut client, Get(), "http://example.com/one", [], None())?
+  check(one.body == b"hello world\n")
+  let two = http.client_fetch(mut client, Get(), "http://example.com/two", [], None())?
+  check(two.body == b"ok")
+  Ok(())
+}

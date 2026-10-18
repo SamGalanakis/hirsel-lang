@@ -1,0 +1,82 @@
+// rule: SEM-1
+// expect: run
+// http.decode_content removes content codings last applied first (RFC 9110
+// section 8.4), within a decoded-size bound.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let hello = b"hello world\n"
+  let gzipped = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00"
+  let gzip_only: List[http.Header] = [
+    http.Header(name: "Content-Encoding", value: "gzip")
+  ]
+  check(http.decode_content(gzip_only, gzipped, 1024)? == hello)
+  check(
+    http.decode_content(
+      [http.Header(name: "content-encoding", value: " X-GZIP ")],
+      gzipped,
+      1024
+    )? == hello
+  )
+  check(
+    http.decode_content(
+      [http.Header(name: "Content-Encoding", value: "deflate")],
+      b"x\xda\xcbH\xcd\xc9\xc9W(\xcf/\xcaI\xe1\x02\x00\x1er\x04g",
+      1024
+    )? == hello
+  )
+  let stacked = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03\xab\xb8u\xda\xe3\xec\xc9\x93\xe1\x1a\xe7\xf5Oy>db\x90+bI\x07\x00X\x02P\x16\x14\x00\x00\x00"
+  check(
+    http.decode_content(
+      [http.Header(name: "Content-Encoding", value: "deflate, gzip")],
+      stacked,
+      1024
+    )? == hello
+  )
+  check(
+    http.decode_content(
+      [
+        http.Header(name: "Content-Encoding", value: "deflate"),
+        http.Header(name: "Content-Encoding", value: "gzip")
+      ],
+      stacked,
+      1024
+    )? == hello
+  )
+  check(
+    http.decode_content(
+      [http.Header(name: "Content-Encoding", value: "identity")],
+      hello,
+      1024
+    )? == hello
+  )
+  check(http.decode_content([], hello, 1024)? == hello)
+  check(
+    http.decode_content(
+      [http.Header(name: "Content-Encoding", value: ",, gzip ,")],
+      gzipped,
+      1024
+    )? == hello
+  )
+  check(http.decode_content(gzip_only, gzipped, 12)? == hello)
+  check(http.decode_content(gzip_only, gzipped, 11) == Error(BodyTooLarge()))
+  check(http.decode_content([], hello, 11) == Error(BodyTooLarge()))
+  check(http.decode_content(gzip_only, hello, 1024) == Error(Decode(Header())))
+  check(
+    http.decode_content(
+      [http.Header(name: "Content-Encoding", value: "gzip, br")],
+      gzipped,
+      1024
+    ) == Error(UnsupportedContentEncoding())
+  )
+  check(
+    http.decode_content(
+      [http.Header(name: "Content-Encoding", value: "compress")],
+      hello,
+      1024
+    ) == Error(UnsupportedContentEncoding())
+  )
+  Ok(())
+}

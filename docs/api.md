@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1127 exported definitions; 313 variants.
+1128 exported definitions; 315 variants.
 
 ## Types and roots
 
@@ -4258,7 +4258,7 @@ References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/
 
 <a id="def-std_401_2fhttp_2fConfig"></a>
 
-- `pub type http.Config { max_redirects: u32, max_idle_connections: u64, max_idle_connections_per_host: u64, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, }`
+- `pub type http.Config { max_redirects: u32, max_idle_connections: u64, max_idle_connections_per_host: u64, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, decompress: bool, }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/TlsRoots`](#def-core_401_2fTlsRoots), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
@@ -4270,9 +4270,9 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fhttp_2fHttpError"></a>
 
-- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8`
+- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8 | Decode( flate.FlateError ) | UnsupportedContentEncoding`
 
-References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http_wire/HeadError`](#def-std_401_2fhttp_5fwire_2fHeadError), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/uri/UriError`](#def-std_401_2furi_2fUriError)
+References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/u16`](#def-core_401_2fu16), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError), [`std@1/http_wire/HeadError`](#def-std_401_2fhttp_5fwire_2fHeadError), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/uri/UriError`](#def-std_401_2furi_2fUriError)
 
 <a id="def-std_401_2fhttp_2fHttpError_23BodyTooLarge"></a>
 
@@ -4299,6 +4299,14 @@ References: [`core@1/ClockError`](#def-core_401_2fClockError)
 - `Closed -> http.HttpError`
 
 Variant of http.HttpError.
+
+<a id="def-std_401_2fhttp_2fHttpError_23Decode"></a>
+
+- `Decode( flate.FlateError ) -> http.HttpError`
+
+Variant of http.HttpError.
+
+References: [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
 
 <a id="def-std_401_2fhttp_2fHttpError_23HeadTooLarge"></a>
 
@@ -4377,6 +4385,12 @@ Variant of http.HttpError.
 <a id="def-std_401_2fhttp_2fHttpError_23Truncated"></a>
 
 - `Truncated -> http.HttpError`
+
+Variant of http.HttpError.
+
+<a id="def-std_401_2fhttp_2fHttpError_23UnsupportedContentEncoding"></a>
+
+- `UnsupportedContentEncoding -> http.HttpError`
 
 Variant of http.HttpError.
 
@@ -4527,6 +4541,18 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 Drop every idle stream. The Client remains usable.
 
 References: [`std@1/http/Client`](#def-std_401_2fhttp_2fClient)
+
+<a id="def-std_401_2fhttp_2fdecode_5fcontent"></a>
+
+- `pub fn http.decode_content(headers: List[Header], body: Bytes, limit: u64) -> Result[ unique Bytes, HttpError ] uses {}`
+
+Removes the content codings named by every Content-Encoding field, last
+applied first (RFC 9110 section 8.4): `gzip` and `x-gzip` are gzip data,
+`deflate` is zlib data and `identity` is ignored. Each decoded stage holds
+at most `limit` bytes (`BodyTooLarge` beyond); any other coding is
+`UnsupportedContentEncoding`, which a server answers with 415.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError)
 
 <a id="def-std_401_2fhttp_2fdefault_5fconfig"></a>
 

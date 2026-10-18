@@ -868,7 +868,7 @@ Config       = { max_redirects: u32, connect_timeout: Option[Duration],
                  max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[Duration],
                  max_idle_connections: u64, max_idle_connections_per_host: u64,
                  max_headers: u64, user_agent: String,
-                 roots: TlsRoots, status_as_error: bool }
+                 roots: TlsRoots, status_as_error: bool, decompress: bool }
 ResponseHead = { version: Version, status: u16, reason: String, headers: List[Header],
                  content_length: Option[u64], chunked: bool, keep_alive: bool,
                  location: Option[String], content_type: Option[String] }
@@ -877,6 +877,7 @@ HttpError    = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError
              | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects
              | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme
              | UnsupportedTransferEncoding | Status(u16) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8
+             | Decode(flate.FlateError) | UnsupportedContentEncoding
 
 pub opaque resource type Request: noalloc_drop uses {Net}
 
@@ -891,11 +892,12 @@ fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError]
 fn read_all(mut r: Request, limit: u64) -> Result[unique Bytes, HttpError]
 fn trailers(r: Request) -> List[Header]
 fn header(headers: List[Header], name: String) -> Option[String] uses {}
+fn decode_content(headers: List[Header], body: Bytes, limit: u64) -> Result[unique Bytes, HttpError] uses {}
 fn fetch(n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes]) -> Result[Response, HttpError]
 ```
 
 `default_config()` is 3 redirects, no timeouts, 64 KiB of head, 100 headers, user agent
-`hirsel-std/1`, `WebPki()` roots and `status_as_error` true. A `Request` holds its `Net`, a
+`hirsel-std/1`, `WebPki()` roots, `status_as_error` true and `decompress` false. A `Request` holds its `Net`, a
 `Stream` branded by it, the parsed URL, the redirect budget, an input buffer and the
 response state, so its operations take only `mut r` and its authority is `{Net}`; dropping
 it drops the stream.
@@ -923,7 +925,7 @@ it drops the stream.
   status is `Status(code)`.
 
 Content-Length and chunked framing are supported in both directions, with the rejections of
-`http_wire.framing`; no `accept-encoding` is sent. **Redirects** happen only for bodiless
+`http_wire.framing`. No `accept-encoding` is sent unless `decompress` is set (below). **Redirects** happen only for bodiless
 requests or after a 303; a 303, and a 301 or 302 after a `POST`, become a bodiless `GET`;
 a 307 or 308 after a body has been sent is `RedirectRequiresResend()`; more than
 `max_redirects` is `TooManyRedirects()`. The `Location` is resolved against the current URL
@@ -1009,6 +1011,25 @@ The transport still owns Content-Length and Transfer-Encoding.
 as UTF-8 and parses it with std JSON. Invalid UTF-8 is `InvalidJsonUtf8()`; parse and
 serialization errors are `Json(json.JsonError)`. Decoding does not require a response
 Content-Type and leaves the original response available through the borrowed argument.
+
+**Content codings** follow Go's Transport compression, as an explicit opt-in.
+With `decompress` true and no caller `accept-encoding` header, `fetch` and
+`client_fetch` send `accept-encoding: gzip, deflate` and pass a nonempty response
+body through `decode_content`, bounded by the same limit as the raw body (10 MiB
+for `fetch`, `max_body_bytes` for a client). The decoded `Response` omits
+`content-encoding` and `content-length`. A caller that sends its own
+`accept-encoding` receives the body as sent, and an empty body (HEAD, 204, 304,
+Content-Length 0) is returned unchanged. Decoding follows status handling, and a
+connection whose exchange completed returns to the pool even when decoding fails.
+The streaming `request`, `receive_head` and `read_body` never decode.
+
+`decode_content` removes the codings of every `content-encoding` field in reverse
+of their listed order (RFC 9110 section 8.4): `gzip` and `x-gzip` with
+`flate.gzip_decode`, `deflate` with `flate.zlib_decode`, and `identity` and empty
+list elements not at all; names are case-insensitive. Each decoded stage and the
+result hold at most `limit` bytes (`BodyTooLarge()` beyond); other decoding failures
+are `Decode(e)`; any other coding is `UnsupportedContentEncoding()`, which a server
+decoding a request body answers with 415.
 
 ## Input
 
@@ -1125,6 +1146,7 @@ reused or receive a second response. Dropping its resource closes the socket.
 
 Servers map malformed requests to a 400 response before application handling. The
 caller owns the listen/accept loop, routing and concurrency across connections.
+`ServerRequest.body` keeps its content codings; `decode_content` removes them.
 
 `serve_tls` serves HTTPS on an accepted stream: it sets the stream's read and write
 timeouts from `read_timeout` and `write_timeout` (unbounded when `None`), so they bound
