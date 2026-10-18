@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: accept
+// A copied `Shared` handle supplies only its handle, which owns one count on a
+// cell no copy or update of the result reaches, so it qualifies as a unique
+// supplier and the parametric result is unique. Twin is
+// MODE-2-parametric-shared-handle-supplier-bad.
+fn pair[A, B](take a: A, take b: B) -> (A, B) uses {} {
+  (take a, take b)
+}
+
+fn probe(take xs: unique List[u64]) -> u64 {
+  let h: Shared[List[u64]] = shared.freeze(take xs)
+  let t = copy h
+  let p: unique (Shared[List[u64]], List[u64]) = pair(take t, take [2u64])
+  0u64
+}

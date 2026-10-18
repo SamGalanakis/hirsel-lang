@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 15
+// The copied `Shared` handle qualifies, but the other supplier is a copy of
+// `ys`, so the parametric result is aliased. Twin is
+// MODE-2-parametric-shared-handle-supplier-ok.
+fn pair[A, B](take a: A, take b: B) -> (A, B) uses {} {
+  (take a, take b)
+}
+
+fn probe(take xs: unique List[u64]) -> u64 {
+  let h: Shared[List[u64]] = shared.freeze(take xs)
+  let t = copy h
+  let ys: List[u64] = [3u64]
+  let zs = copy ys
+  let p: unique (Shared[List[u64]], List[u64]) = pair(take t, take zs)
+  list.len(ys)
+}

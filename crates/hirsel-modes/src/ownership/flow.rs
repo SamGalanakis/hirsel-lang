@@ -2808,7 +2808,10 @@ impl Checker<'_> {
                 };
                 match inputs.get(requirement.parameter) {
                     Some(ParametricInput::Free) => true,
-                    Some(ParametricInput::Unique) => unique_arguments.contains(&argument.value),
+                    Some(ParametricInput::Unique) => {
+                        unique_arguments.contains(&argument.value)
+                            || self.property(argument.value).is_some_and(|p| p.handle_root)
+                    }
                     Some(ParametricInput::UniqueResult) => self
                         .ty(argument.value)
                         .and_then(|ty| match &self.body.types.get(ty)?.kind {
@@ -6618,7 +6621,7 @@ impl Checker<'_> {
                             || mutable && !ledger
                             || self
                                 .property(arg.value)
-                                .is_some_and(|p| p.plain || p.shared)
+                                .is_some_and(|p| p.plain || p.handle_root)
                             || !borrowed && unique_arguments.contains(&arg.value)
                     });
                 let parametric =

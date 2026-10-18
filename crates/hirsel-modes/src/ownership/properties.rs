@@ -73,6 +73,10 @@ pub(super) struct Properties {
     pub valid: bool,
     pub function: bool,
     pub shared: bool,
+    /// A `Shared`, `Mutex` or `Atomic` root: the handle owns one count on a
+    /// run-owned cell, so it supplies a unique result whether or not it is
+    /// unique (MODE-2), as V's `handle_root`.
+    pub handle_root: bool,
     pub scoped_capability: bool,
 }
 
@@ -148,6 +152,13 @@ pub(super) fn classify(
                 row.kind,
                 TypeKind::Builtin {
                     kind: BuiltinType::Shared,
+                    ..
+                }
+            ),
+            handle_root: matches!(
+                row.kind,
+                TypeKind::Builtin {
+                    kind: BuiltinType::Shared | BuiltinType::Mutex | BuiltinType::Atomic,
                     ..
                 }
             ),

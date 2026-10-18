@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 15
+// The copied `Atomic` handle qualifies, but the other supplier is a copy of
+// `ys`, so the parametric result is aliased. Twin is
+// MODE-2-parametric-atomic-handle-supplier-ok.
+fn pair[A, B](take a: A, take b: B) -> (A, B) uses {} {
+  (take a, take b)
+}
+
+fn probe(tasks: Tasks) -> u64 {
+  let h: Atomic[u64] = atomic.create(tasks, 1u64)
+  let t = copy h
+  let ys: List[u64] = [3u64]
+  let zs = copy ys
+  let p: unique (Atomic[u64], List[u64]) = pair(take t, take zs)
+  list.len(ys)
+}

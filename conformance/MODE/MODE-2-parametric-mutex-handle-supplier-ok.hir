@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: accept
+// A copied `Mutex` handle supplies only its handle, which owns one count on a
+// cell no copy or update of the result reaches, so it qualifies as a unique
+// supplier and the parametric result is unique. Twin is
+// MODE-2-parametric-mutex-handle-supplier-bad.
+fn pair[A, B](take a: A, take b: B) -> (A, B) uses {} {
+  (take a, take b)
+}
+
+fn probe(tasks: Tasks) -> u64 {
+  let h: Mutex[List[u64]] = mutex.create(tasks, take [1u64])
+  let t = copy h
+  let p: unique (Mutex[List[u64]], List[u64]) = pair(take t, take [2u64])
+  0u64
+}

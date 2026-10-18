@@ -200,8 +200,8 @@ A part reached by field and element steps from a currently unique owner, up to a
 boundary, is itself unique, so `mut st.items` may be passed to a `mut` parameter declared
 `unique`; the owner stays unique when the part comes back unique. A callable may declare
 `@preserves_unique` ([CLO-2](closures.md#clo-2-transparent)) on a `mut` or `take`
-parameter: a call whose selected argument and every other non-plain `take` argument are
-currently unique hands the selected `mut` argument back unique, or returns a unique result
+parameter: a call whose selected argument and every other non-plain `take` argument that
+is not a handle root are currently unique hands the selected `mut` argument back unique, or returns a unique result
 for a selected `take` parameter. Other `mut` arguments need not be unique, since the body
 is proved with them aliased (a bodyless core declaration, proved by nothing, needs them
 unique too), so `bufio.read_until(mut reader, mut stream, .., mut out, ..)` hands a fresh
@@ -214,7 +214,9 @@ no counted content except values of type parameters it has no copying permission
 ([GEN-1](generics.md#gen-1-bounds)). Such a body only moves those values, so the result
 holds exactly values its arguments supplied, and it is unique when every possible supplier
 is. The suppliers are each taken or `mut` argument whose type names such a parameter, which
-must be currently unique, and each function argument that receives them only by `take`,
+must be currently unique or a `Shared`, `Mutex` or `Atomic` handle (a handle root owns one
+count on a run-owned cell, and no copy or update of the result reaches the cell's
+contents), and each function argument that receives them only by `take`,
 whose instantiated result must prove uniqueness by its rows: written `unique`, or a tuple
 whose every part does or is plain, since a tuple is inline and owns no block of its own. A
 record or variant result counts only when written `unique`, since its declaration may hold
