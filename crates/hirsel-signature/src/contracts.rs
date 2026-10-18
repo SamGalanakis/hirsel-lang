@@ -316,6 +316,7 @@ impl Normalizer<'_, '_> {
                 e.tag("formatter");
                 e.tag(match step {
                     ast::FormatStep::Append => "append",
+                    ast::FormatStep::AppendSpec(_) => "append-spec",
                     ast::FormatStep::Finish => "finish",
                 });
             }

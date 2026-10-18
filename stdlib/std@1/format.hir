@@ -1,0 +1,384 @@
+// Padding and sign/prefix placement follow Rust core::fmt::Formatter.
+@preserves_unique(out)
+pub fn repeat(mut out: List[u8], fill: u64, count: u64) -> () uses {} {
+  let scalar: u32 = core@1/int.narrow(fill)
+  let mut at: u64 = 0
+  while at < count {
+    match utf8.append_scalar(mut out, scalar) {
+      Ok(()) => (),
+      Error(_) => core@1/failure.check(false, TextInvariant()),
+    }
+    at += 1
+  }
+}
+
+@noalloc
+pub fn padding(width: u64, length: u64, align: u64, numeric: bool) -> (u64, u64) uses {} {
+  let count = if width > length {
+    width - length
+  } else {
+    0u64
+  }
+  let left = if align == 1 || align == 0 && !numeric {
+    0u64
+  } else if align == 3 {
+    count / 2
+  } else {
+    count
+  }
+  (left, count - left)
+}
+
+// Emits left padding, then the sign and radix prefix. Returns right padding.
+@preserves_unique(out)
+pub fn begin(
+  length: u64,
+  negative: bool,
+  prefix: String,
+  fill: u64,
+  align: u64,
+  width: u64,
+  flags: u64,
+  mut out: List[u8]
+) -> u64 uses {} {
+  let sign = negative || flags & 1 != 0
+  let total = length + core@1/string.byte_len(prefix) + if sign {
+    1u64
+  } else {
+    0u64
+  }
+  let (left, right) = padding(width, total, align, true)
+  let zero = flags & 4 != 0
+  if !zero {
+    repeat(mut out, fill, left)
+  }
+  if negative {
+    core@1/list.push(mut out, 45u8)
+  } else if sign {
+    core@1/list.push(mut out, 43u8)
+  }
+  text.append(mut out, prefix)
+  if zero {
+    repeat(mut out, 48, left + right)
+    0
+  } else {
+    right
+  }
+}
+
+@preserves_unique(out)
+pub fn integer(
+  value: u128,
+  negative: bool,
+  fill: u64,
+  align: u64,
+  width: u64,
+  precision: u64,
+  flags: u64,
+  kind: u64,
+  mut out: List[u8]
+) -> () uses {} {
+  let radix: u128 = if kind == 120 || kind == 88 {
+    16
+  } else if kind == 98 {
+    2
+  } else if kind == 111 {
+    8
+  } else {
+    10
+  }
+  let prefix = if flags & 2 == 0 || kind == 0 {
+    ""
+  } else if kind == 98 {
+    "0b"
+  } else if kind == 111 {
+    "0o"
+  } else {
+    "0x"
+  }
+  let mut digits: Inline[u8, 128] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut remaining = value
+  let mut count: u64 = 0
+  while true {
+    let digit: u8 = core@1/int.narrow(remaining % radix)
+    digits[count] = if digit < 10 {
+      48 + digit
+    } else if kind == 88 {
+      65 + digit - 10
+    } else {
+      97 + digit - 10
+    }
+    count += 1
+    remaining /= radix
+    if remaining == 0 {
+      break
+    }
+  }
+  let right = begin(count, negative, prefix, fill, align, width, flags, mut out)
+  while count > 0 {
+    count -= 1
+    core@1/list.push(mut out, digits[count])
+  }
+  repeat(mut out, fill, right)
+}
+
+// Exact dyadic-to-decimal conversion reuses the same fixed bigint as shortest.
+// Divide discarded decimal digits with a sticky bit; ties select an even digit.
+@preserves_unique(out)
+pub fn fixed(
+  mantissa: u64,
+  exponent: i32,
+  negative: bool,
+  fill: u64,
+  align: u64,
+  width: u64,
+  precision: u64,
+  flags: u64,
+  kind: u64,
+  mut out: List[u8]
+) -> () uses {} {
+  let mut significand = mantissa
+  let mut binary_power = if mantissa == 0 {
+    0i32
+  } else {
+    exponent
+  }
+  while binary_power < 0 && significand % 2 == 0 {
+    significand /= 2
+    binary_power += 1
+  }
+  let mut digits = internal.big.big_from_word(significand)
+  let scale: u64 = if binary_power < 0 {
+    core@1/int.narrow(-binary_power)
+  } else {
+    0
+  }
+  internal.big.big_power(
+    mut digits,
+    if binary_power < 0 {
+      5
+    } else {
+      2
+    },
+    if binary_power < 0 {
+      scale
+    } else {
+      core@1/int.narrow(binary_power)
+    }
+  )
+  let mut discarded = if scale > precision {
+    scale - precision
+  } else {
+    0u64
+  }
+  let mut sticky = false
+  let mut last: u64 = 0
+  while discarded > 0 {
+    sticky = sticky || last != 0
+    let places: u64 = if discarded >= 9 {
+      9
+    } else {
+      1
+    }
+    let remainder = internal.big.big_divide(mut digits, places)
+    if places == 9 {
+      last = remainder / 100000000
+      sticky = sticky || remainder % 100000000 != 0
+    } else {
+      last = remainder
+    }
+    discarded -= places
+  }
+  if last > 5 || last == 5 && (sticky || internal.big.big_digit(digits, 0) % 2 != 0) {
+    internal.big.big_add_small(mut digits, 1)
+  }
+  let trailing = if precision > scale {
+    precision - scale
+  } else {
+    0u64
+  }
+  let mut count: u64 = if digits.used == 0 {
+    1
+  } else {
+    (digits.used - 1) * 9 + 1
+  }
+  let mut top = if digits.used == 0 {
+    0u64
+  } else {
+    internal.big.big_digit(digits, digits.used - 1)
+  }
+  while top >= 10 {
+    top /= 10
+    count += 1
+  }
+  let whole = if count + trailing > precision {
+    count + trailing - precision
+  } else {
+    1u64
+  }
+  let right = begin(
+    whole + if precision > 0 {
+      precision + 1
+    } else {
+      0u64
+    },
+    negative,
+    "",
+    fill,
+    align,
+    width,
+    flags,
+    mut out
+  )
+  let leading = whole + precision - count - trailing
+  let mut at: u64 = 0
+  while at < whole + precision {
+    if at == whole && precision > 0 {
+      core@1/list.push(mut out, 46u8)
+    }
+    let mut digit: u64 = 0
+    if at >= leading && at - leading < count {
+      let index = count - 1 - (at - leading)
+      let limb = internal.big.big_digit(digits, index / 9)
+      let mut divisor: u64 = 1
+      let mut power = index % 9
+      while power > 0 {
+        divisor *= 10
+        power -= 1
+      }
+      digit = limb / divisor % 10
+    }
+    core@1/list.push(mut out, core@1/int.narrow(48u64 + digit))
+    at += 1
+  }
+  repeat(mut out, fill, right)
+}

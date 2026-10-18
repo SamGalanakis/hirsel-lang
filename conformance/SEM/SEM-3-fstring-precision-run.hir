@@ -1,0 +1,37 @@
+// rule: SEM-3
+// expect: run
+// Rust core fmt and alloctests fmt padding/precision vectors.
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, f"{1.0f64:.3}" == "1.000")
+  test.check(t, f"{1.0f64:10.3}" == "     1.000")
+  test.check(t, f"{1.0f64:+10.3}" == "    +1.000")
+  test.check(t, f"{-1.0f64:+10.3}" == "    -1.000")
+  test.check(t, f"{2.5f64:.0}" == "2")
+  test.check(t, f"{3.5f64:.0}" == "4")
+  test.check(t, f"{-2.5f64:.0}" == "-2")
+  test.check(t, f"{1.25f32:.1}" == "1.2")
+  test.check(t, f"{1.75f32:.1}" == "1.8")
+  test.check(t, f"{9.999f64:.2}" == "10.00")
+  test.check(t, f"{0.125f64:.2}" == "0.12")
+  test.check(t, f"{0.375f64:.2}" == "0.38")
+  test.check(t, f"{2.675f64:.2}" == "2.67")
+  test.check(t, f"{-0.0f64:.3}" == "-0.000")
+  test.check(t, f"{1e21f64:.1}" == "1000000000000000000000.0")
+  test.check(t, f"{1e-7f64:.8}" == "0.00000010")
+  test.check(t, f"{0.1f32:.10}" == "0.1000000015")
+  test.check(t, f"{"🐑éabc":.2}" == "🐑é")
+  test.check(t, f"{"abc":.0}" == "")
+  test.check(t, f"{"abc":>5.2}" == "   ab")
+  test.check(t, f"{1u64:.3}" == "1")
+  test.check(t, f"{true:.2}" == "tr")
+  let nan = core@1/f64.from_bits(18444492273895866368u64)
+  let inf = core@1/f64.from_bits(9218868437227405312u64)
+  test.check(t, f"{nan:+08.2}" == "00000NaN")
+  test.check(t, f"{inf:+08.2}" == "+0000inf")
+  test.check(t, f"{-inf:08.2}" == "-0000inf")
+  test.check(
+    t,
+    f"{0.5f64:.60}" == "0.500000000000000000000000000000000000000000000000000000000000"
+  )
+  Ok(())
+}

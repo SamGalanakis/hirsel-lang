@@ -424,7 +424,9 @@ in its `{holes}`. A hole holds any expression, including calls and string litera
 `String`, `bool`, the integers and the floats format as their `to_string` text, and
 any other type is a compile error naming it, so format records field by field.
 `{{` and `}}` are literal braces. Holes are borrowed reads, and an f-string needs
-`std@1` selected. There are no format specifiers yet: `{x:08}` is an error.
+`std@1` selected. Format specifiers follow the expression: `{n:08}` zero-pads a number,
+`{mean:.2}` rounds a float to two decimal places, `{name:*^12}` centers text,
+and `{n:#x}` includes the hex prefix.
 
 <!-- tour: conformance/SEM/SEM-3-tour-14-fstrings-run.hir -->
 [Runnable source](../conformance/SEM/SEM-3-tour-14-fstrings-run.hir)
@@ -445,7 +447,7 @@ fn summary(chores: List[Chore]) -> String {
     }
   }
   let total = list.len(chores)
-  f"{done} of {total} chores done ({done * 100u64 / total}%)\n"
+  f"{done:1} of {total} chores done ({done * 100u64 / total}%)\n"
 }
 
 pub fn main(rt: Io) -> Result[(), AppError] {
@@ -459,7 +461,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   out.print(output, summary(chores)) ? Output
   out.print(output, f"next: {chores[3].name}, {{braces}} stay literal\n") ? Output
   let mean = 10.0f64 / 4.0f64
-  out.print(output, f"mean {mean}, all done: {chores[3].done}\n") ? Output
+  out.print(output, f"mean {mean:.1}, all done: {chores[3].done}\n") ? Output
   Ok(())
 }
 ```

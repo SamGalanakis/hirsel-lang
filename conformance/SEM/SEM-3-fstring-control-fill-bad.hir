@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 5
+// Fill characters obey string source scalar rules.
+fn label() -> String {
+  f"{1u64:	>4}"
+}

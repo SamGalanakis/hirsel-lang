@@ -243,6 +243,8 @@ pub enum TokenKind {
 /// an f-string without holes is one `f"abc"` (Whole). Text keeps its spelling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum FormatPiece {
+    /// A colon and its raw format specification, ending before `}`.
+    Spec,
     Whole,
     Head,
     Middle,
@@ -454,7 +456,20 @@ pub enum ExprKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum FormatStep {
     Append,
+    AppendSpec(FormatSpec),
     Finish,
+}
+/// Constant formatting options. Alignment: 0 default, 1 left, 2 right, 3 center.
+/// Flags: 1 plus, 2 alternate, 4 sign-aware zero padding, 8 precision present.
+/// Kind: 0 display or the ASCII radix letter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct FormatSpec {
+    pub fill: u64,
+    pub align: u64,
+    pub width: u64,
+    pub precision: u64,
+    pub flags: u64,
+    pub kind: u64,
 }
 /// A written f-string (SEM-3). The parser desugars it to `expression`, an ordinary
 /// block every later phase reads; the formatter prints these written pieces instead.
@@ -464,6 +479,8 @@ pub struct FormatString {
     /// Piece spellings, one more than `holes`: `f"a{`, `}b"`, or a single `f"ab"`.
     pub pieces: Vec<String>,
     pub holes: Vec<ExprId>,
+    /// One spelling per hole, empty for a plain hole, otherwise starting with `:`.
+    pub specs: Vec<String>,
 }
 /// Statement origin includes its terminator; the block tail does not (LANG-11).
 #[derive(Clone, Debug, Eq, PartialEq)]

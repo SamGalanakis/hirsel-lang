@@ -60,3 +60,6 @@ a lone `}` is SEM-3. Inside a hole, a quote that closes no string on its line is
 f-string's own quote: one SEM-3 diagnostic for the missing `}` and one Invalid
 token. A hole still open at EOF is SEM-3. Each head interns `List`, `u8` and
 `$fmt<depth>` for the parser's desugaring, which reads an immutable snapshot.
+
+A top-level hole colon starts one raw `Format(Spec)` token through the options,
+ending before `}`; delimiters inside the expression protect their own colons.

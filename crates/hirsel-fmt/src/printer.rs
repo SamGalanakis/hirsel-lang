@@ -697,6 +697,10 @@ impl<'a> Printer<'a> {
                 } else {
                     hole
                 });
+                let spec = format.specs.get(i)?;
+                if !spec.is_empty() {
+                    parts.push(token(spec));
+                }
             }
         }
         Some(cat(parts))

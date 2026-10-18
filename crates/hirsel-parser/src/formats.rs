@@ -2,6 +2,12 @@
 //! ordinary block, so no later phase has an f-string form.
 use super::*;
 
+struct FormatParts {
+    pieces: Vec<(usize, String)>,
+    holes: Vec<ExprId>,
+    specs: Vec<String>,
+}
+
 impl Parser<'_> {
     pub(super) fn at_format(&self, pieces: &[FormatPiece]) -> bool {
         matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::Format(p)) if pieces.contains(p))
@@ -15,7 +21,11 @@ impl Parser<'_> {
         self.formats += 1;
         let parts = self.format_parts();
         self.formats -= 1;
-        let (pieces, holes) = parts?;
+        let FormatParts {
+            pieces,
+            holes,
+            specs,
+        } = parts?;
         let whole = self.origin(start);
         let names = [format!("$fmt{}", self.formats), "List".into(), "u8".into()]
             .map(|name| self.symbols.get(&name));
@@ -58,14 +68,29 @@ impl Parser<'_> {
                 values.push((
                     origin,
                     self.synthetic_expr(origin, ExprKind::Literal(Literal::String(text))),
+                    FormatStep::Append,
                 ));
             }
             if let Some(&hole) = holes.get(i) {
-                values.push((self.tree.expressions[hole.0 as usize].origin, hole));
+                let step = if specs[i].is_empty() {
+                    FormatStep::Append
+                } else {
+                    match parse_spec(&specs[i]) {
+                        Ok(spec) => FormatStep::AppendSpec(spec),
+                        Err(message) => {
+                            return self.fail_at(
+                                const { RuleId::of("SEM-3") },
+                                self.tree.expressions[hole.0 as usize].origin.span,
+                                message,
+                            );
+                        }
+                    }
+                };
+                values.push((self.tree.expressions[hole.0 as usize].origin, hole, step));
             }
         }
-        for (origin, value) in values {
-            let call = self.format_step(origin, builder, FormatStep::Append, Some(value));
+        for (origin, value, step) in values {
+            let call = self.format_step(origin, builder, step, Some(value));
             statements.push(self.synthetic_stmt(origin, StmtKind::Expr(call)));
         }
         let tail = self.format_step(whole, builder, FormatStep::Finish, None);
@@ -80,19 +105,25 @@ impl Parser<'_> {
             expression: block,
             pieces: pieces.into_iter().map(|(_, spelling)| spelling).collect(),
             holes,
+            specs,
         });
         Ok(block)
     }
     /// Pieces with their positions, and the hole between each adjacent pair.
-    fn format_parts(&mut self) -> Parsed<(Vec<(usize, String)>, Vec<ExprId>)> {
+    fn format_parts(&mut self) -> Parsed<FormatParts> {
         let mut pieces = vec![];
         let mut holes = vec![];
+        let mut specs = vec![];
         loop {
             pieces.push((self.pos, self.text_at(0).to_owned()));
             let closed = self.at_format(&[FormatPiece::Whole, FormatPiece::Tail]);
             self.pos += 1;
             if closed {
-                return Ok((pieces, holes));
+                return Ok(FormatParts {
+                    pieces,
+                    holes,
+                    specs,
+                });
             }
             if self.at_format(&[FormatPiece::Middle, FormatPiece::Tail]) {
                 return self.fail(
@@ -107,6 +138,20 @@ impl Parser<'_> {
             let hole = self.expr(0);
             self.whitespace = outer;
             holes.push(hole?);
+            let spec = if self.at_format(&[FormatPiece::Spec]) {
+                if self.newline() {
+                    return self.fail(
+                        const { RuleId::of("SEM-3") },
+                        "an f-string format specifier follows its expression on the same line",
+                    );
+                }
+                let spec = self.text_at(0).to_owned();
+                self.pos += 1;
+                spec
+            } else {
+                String::new()
+            };
+            specs.push(spec);
             if self.at_format(&[FormatPiece::Middle, FormatPiece::Tail]) {
                 if self.newline() {
                     return self.fail(
@@ -117,11 +162,6 @@ impl Parser<'_> {
             } else if matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::Invalid)) {
                 // The lexer reported this quote closing the f-string inside a hole.
                 return Err(());
-            } else if self.at(":") {
-                return self.fail(
-                    const { RuleId::of("SEM-3") },
-                    "f-string holes take no format specifier (`{x:08}`); format the value with a function first",
-                );
             } else {
                 return self.fail(
                     const { RuleId::of("SEM-3") },
@@ -145,12 +185,28 @@ impl Parser<'_> {
             }),
         );
         let op = match step {
-            FormatStep::Append => UnaryOp::Mut,
+            FormatStep::Append | FormatStep::AppendSpec(_) => UnaryOp::Mut,
             FormatStep::Finish => UnaryOp::Take,
         };
         let place = self.synthetic_expr(origin, ExprKind::Unary { op, value: place });
         let callee = self.synthetic_expr(origin, ExprKind::Formatter(step));
-        let arguments = value
+        let mut values: Vec<_> = value.into_iter().collect();
+        if let FormatStep::AppendSpec(spec) = step {
+            for number in [
+                spec.fill,
+                spec.align,
+                spec.width,
+                spec.precision,
+                spec.flags,
+                spec.kind,
+            ] {
+                values.push(self.synthetic_expr(
+                    origin,
+                    ExprKind::Literal(Literal::Integer(format!("{number}u64"))),
+                ));
+            }
+        }
+        let arguments = values
             .into_iter()
             .chain([place])
             .map(|value| Argument { label: None, value })
@@ -242,4 +298,86 @@ fn format_text(piece: &str) -> String {
     } else {
         format!("\"{text}\"")
     }
+}
+
+/// Rust's static `[fill]align sign # 0 width .precision type` grammar.
+fn parse_spec(spelling: &str) -> Result<FormatSpec, String> {
+    let mut chars = spelling[1..].chars().peekable();
+    let mut spec = FormatSpec {
+        fill: 32,
+        align: 0,
+        width: 0,
+        precision: 0,
+        flags: 0,
+        kind: 0,
+    };
+    let alignment = |c| match c {
+        '<' => Some(1),
+        '>' => Some(2),
+        '^' => Some(3),
+        _ => None,
+    };
+    let mut look = chars.clone();
+    if let (Some(fill), Some(align)) = (look.next(), look.next()) {
+        if let Some(align) = alignment(align) {
+            if matches!(fill, '{' | '}') {
+                return Err("a format fill cannot be a brace".into());
+            }
+            spec.fill = fill as u64;
+            spec.align = align;
+            chars.next();
+            chars.next();
+        }
+    }
+    if spec.align == 0 {
+        if let Some(align) = chars.peek().and_then(|&c| alignment(c)) {
+            spec.align = align;
+            chars.next();
+        }
+    }
+    if chars.peek() == Some(&'+') {
+        spec.flags |= 1;
+        chars.next();
+    } else if chars.peek() == Some(&'-') {
+        chars.next();
+    }
+    if chars.peek() == Some(&'#') {
+        spec.flags |= 2;
+        chars.next();
+    }
+    if chars.peek() == Some(&'0') {
+        spec.flags |= 4;
+        chars.next();
+    }
+    let number =
+        |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| -> Result<Option<u64>, String> {
+            let mut value = None;
+            while let Some(digit) = chars.peek().and_then(|c| c.to_digit(10)) {
+                chars.next();
+                value = Some(
+                    value
+                        .unwrap_or(0u64)
+                        .checked_mul(10)
+                        .and_then(|n| n.checked_add(digit.into()))
+                        .ok_or("format width or precision exceeds u64")?,
+                );
+            }
+            Ok(value)
+        };
+    spec.width = number(&mut chars)?.unwrap_or(0);
+    if chars.peek() == Some(&'.') {
+        chars.next();
+        spec.flags |= 8;
+        spec.precision =
+            number(&mut chars)?.ok_or("format precision needs constant decimal digits")?;
+    }
+    if let Some(kind) = chars.next() {
+        if !matches!(kind, 'x' | 'X' | 'b' | 'o') || chars.next().is_some() {
+            return Err(format!(
+                "invalid format specifier `{spelling}`; expected constant width/precision and type x, X, b or o; width/precision holes are unsupported"
+            ));
+        }
+        spec.kind = kind as u64;
+    }
+    Ok(spec)
 }

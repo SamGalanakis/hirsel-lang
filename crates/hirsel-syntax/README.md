@@ -54,3 +54,6 @@ F-strings (SEM-3) add `TokenKind::Format(FormatPiece)`, `ExprKind::Formatter(For
 which only ever appears as the callee of a desugared step, and
 `SyntaxTree.formats`: each written f-string's piece spellings and hole IDs, keyed by
 the block the parser desugared it to.
+
+`FormatPiece::Spec` retains the raw colon/options token. `FormatStep::AppendSpec`
+carries parsed constant options; `FormatString.specs` retains each written spec.

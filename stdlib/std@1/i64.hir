@@ -38,3 +38,37 @@ pub fn to_string(value: i64) -> unique String uses {} {
 pub fn parse(text: String) -> Result[i64, scalar.ParseError] uses {} {
   parse_radix(text, 10)
 }
+
+@preserves_unique(out)
+pub fn format_into_spec(
+  value: i64,
+  fill: u64,
+  align: u64,
+  width: u64,
+  precision: u64,
+  flags: u64,
+  kind: u64,
+  mut out: List[u8]
+) -> () uses {} {
+  let word: u64 = core@1/int.truncate(value)
+  let raw: u128 = core@1/int.widen(word)
+  let wide: i128 = core@1/int.widen(value)
+  let signed_raw: u128 = core@1/int.truncate(wide)
+  let negative = kind == 0 && value < 0
+  let magnitude = if negative {
+    core@1/int.wrapping_add(~signed_raw, 1)
+  } else {
+    raw
+  }
+  internal.format.integer(
+    magnitude,
+    negative,
+    fill,
+    align,
+    width,
+    precision,
+    flags,
+    kind,
+    mut out
+  )
+}

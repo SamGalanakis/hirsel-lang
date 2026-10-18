@@ -210,3 +210,113 @@ pub fn sum_exact(xs: Array[f32]) -> f32 uses {} {
   let encoded: u32 = core@1/int.narrow(bits)
   core@1/f32.from_bits(encoded)
 }
+
+@preserves_unique(out)
+pub fn format_into_spec(
+  value: f32,
+  fill: u64,
+  align: u64,
+  width: u64,
+  precision: u64,
+  flags: u64,
+  kind: u64,
+  mut out: List[u8]
+) -> () uses {} {
+  let bits: u64 = core@1/int.widen(core@1/f32.bits(value))
+  let fraction = bits & 8388607u64
+  let raw_exponent = bits >> 23 & 255u64
+  let negative = bits & 2147483648u64 != 0 && !(raw_exponent == 255 && fraction != 0)
+  if flags & 8 != 0 && raw_exponent != 255 {
+    let mantissa = fraction + if raw_exponent == 0 {
+      0u64
+    } else {
+      1u64 << 23
+    }
+    let biased: i32 = core@1/int.narrow(raw_exponent)
+    let exponent = if raw_exponent == 0 {
+      1i32
+    } else {
+      biased
+    } - 150
+    internal.format.fixed(
+      mantissa,
+      exponent,
+      negative,
+      fill,
+      align,
+      width,
+      precision,
+      flags,
+      kind,
+      mut out
+    )
+  } else {
+    let absolute: u32 = core@1/int.narrow(bits & 2147483647u64)
+    let mut buffer: Inline[u8, 40] = [
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8
+    ]
+    let count = match format(core@1/f32.from_bits(absolute), mut buffer) {
+      Ok(count) => count,
+      Error(_) => {
+        core@1/failure.check(false, Bounds())
+        0
+      },
+    }
+    let sign_flags = if raw_exponent == 255 && fraction != 0 {
+      flags & ~1u64
+    } else {
+      flags
+    }
+    let right = internal.format.begin(
+      count,
+      negative,
+      "",
+      fill,
+      align,
+      width,
+      sign_flags,
+      mut out
+    )
+    internal.decimal.append_prefix(mut out, buffer, count)
+    internal.format.repeat(mut out, fill, right)
+  }
+}

@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| Rust standard library | `library/core/src/fmt/{mod,num,float}.rs`, `library/alloctests/tests/fmt.rs`, `library/coretests/tests/num/flt2dec/mod.rs` padding, sign/prefix, scalar precision and format vectors | `stdlib/std@1/format.hir`, scalar `format_into_spec`, `conformance/SEM/SEM-3-fstring-*` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Zig standard library | `lib/std/unicode.zig` utf8Encode and scalar-boundary cases | `stdlib/std@1/utf8.hir`, UTF-8 conformance; JSON and NFC share the scalar appender | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | Rust standard library | `library/core/src/str/validations.rs`, `library/alloc/src/string.rs`, `library/alloctests/tests/string.rs` lossy-prefix/error-span semantics and test_from_utf8_lossy vectors | `stdlib/std@1/utf8.hir`, UTF-8 conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/core/src/str/mod.rs`, `library/alloc/src/str.rs`, `library/alloctests/tests/str.rs` contains, lines and replace algorithms/contracts and multilingual/line-ending vectors | `stdlib/std@1/string.hir`, common string conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |

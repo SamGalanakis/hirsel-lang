@@ -124,8 +124,12 @@ character    = "'", ( character-scalar | character-escape ), "'" ;
 character-escape = "\\", ( "n" | "t" | "r" | "0" | "\\" | "'" )
                  | "\\u{", hex-digit, { hex-digit }, "}" ;
 literal      = integer | float | character | string | bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
-f-string     = 'f"', f-text, { "{", expression, "}", f-text }, '"' ; (* SEM-3 *)
+f-string     = 'f"', f-text, { "{", expression, [ ":", format-spec ], "}", f-text }, '"' ; (* SEM-3 *)
 f-text       = { f-scalar | escape | "{{" | "}}" } ;      (* SEM-3 *)
+format-spec  = [ [ fill ], align ], [ "+" | "-" ], [ "#" ], [ "0" ],
+               { digit }, [ ".", digit, { digit } ], [ "x" | "X" | "b" | "o" ] ;
+align        = "<" | ">" | "^" ;
+fill         = string-scalar ; (* one scalar, excluding braces *)
 ```
 
 `string-scalar` excludes the quote, backslash, raw controls U+0000–U+001F and U+007F,
@@ -151,9 +155,12 @@ tokens: `f"text{`, `}text{`, `}text"`, or a single `f"text"` with no holes, so a
 closing `}` is the first `}` that closes no brace the hole opened. A hole is not a
 grouping: its expression continues onto another line only where it would outside the
 f-string (an open delimiter or a missing operand), and its closing `}` stands on the line
-where the expression ends. An empty hole, a hole without its `}` and a format
-specifier (`{x:08}`) are SEM-3; width, precision and radix are not part of this
-revision.
+where the expression ends. A colon after the expression introduces a constant
+format specification, ending at `}`; its spelling is retained as one token.
+An empty hole, a hole without its `}`, an invalid specification or an unsupported
+format type for the hole's value is SEM-3. Width and precision are decimal u64
+constants; dynamic holes such as `{x:w$}` and `{x:.p$}` are unsupported. See
+[the formatting protocol](std-library.md#the-formatting-protocol) for semantics.
 
 Integers have no sign: `-128i8` is unary minus applied to a magnitude token, and the
 checker accepts the magnitude of `MIN` there. An adjacent malformed suffix or digit

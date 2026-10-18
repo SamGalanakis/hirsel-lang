@@ -54,6 +54,7 @@ struct Scanner<'a> {
 struct Hole {
     open: usize,
     braces: u32,
+    groups: u32,
 }
 impl<'a> Scanner<'a> {
     fn new(file: FileId, bytes: &'a [u8], interner: &'a mut Interner) -> Self {
@@ -127,6 +128,21 @@ impl<'a> Scanner<'a> {
             }
             b'/' if self.starts(b"//") => self.line_comment(),
             b'/' if self.starts(b"/*") => self.block_comment(),
+            b':' if self
+                .holes
+                .last()
+                .is_some_and(|h| h.braces == 0 && h.groups == 0) =>
+            {
+                self.pos += 1;
+                while self
+                    .bytes
+                    .get(self.pos)
+                    .is_some_and(|b| !matches!(b, b'}' | b'"' | b'\n' | b'\r'))
+                {
+                    self.literal_unit(false);
+                }
+                TokenKind::Format(FormatPiece::Spec)
+            }
             b'}' if self.holes.last().is_some_and(|h| h.braces == 0) => self.format_text(false),
             b'"' if self.holes.last().is_some_and(|h| h.braces == 0) && !self.string_closes() => {
                 self.unclosed_hole()
@@ -175,6 +191,13 @@ impl<'a> Scanner<'a> {
                 hole.braces += 1;
             } else {
                 hole.braces -= 1;
+            }
+        }
+        if let (TokenKind::Punct(p), Some(hole)) = (&kind, self.holes.last_mut()) {
+            match p {
+                Punct::LParen | Punct::LBracket => hole.groups += 1,
+                Punct::RParen | Punct::RBracket => hole.groups = hole.groups.saturating_sub(1),
+                _ => {}
             }
         }
         let kind = if self.output.diagnostics.len() > errors {
@@ -490,6 +513,7 @@ impl<'a> Scanner<'a> {
                 self.holes.push(Hole {
                     open: self.pos - 1,
                     braces: 0,
+                    groups: 0,
                 });
                 TokenKind::Format(FormatPiece::Head)
             }

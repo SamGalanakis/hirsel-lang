@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 5
+// Invalid static format or unsupported type.
+fn label() -> String {
+  f"{"abc":x}"
+}

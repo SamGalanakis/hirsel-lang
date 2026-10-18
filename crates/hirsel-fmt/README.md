@@ -102,3 +102,5 @@ remain distinct.
 An f-string prints from `SyntaxTree.formats`: its piece spellings verbatim and each
 hole as an ordinary expression, never the desugared block. A hole whose first token
 is `{` is spaced (`f"{ {...} }"`) so it cannot read as the escape `{{`.
+
+Each hole prints its retained spec after the expression, preserving Unicode fill.

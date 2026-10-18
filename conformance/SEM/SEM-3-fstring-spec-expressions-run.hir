@@ -1,0 +1,34 @@
+// rule: SEM-3
+// expect: run
+// Specs retain expression evaluation, nesting, ordinary-call and builder semantics.
+fn counted(mut calls: u64) -> u64 {
+  calls += 1
+  calls
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut calls = 0u64
+  let rendered = f"{counted(mut calls):04},{counted(mut calls):#x}"
+  test.check(t, rendered == "0001,0x2" && calls == 2)
+  test.check(t, f"{f"{1u64:04}":*>6}" == "**0001")
+  test.check(
+    t,
+    f"{fn(x: u64) -> u64 {
+      x
+    }(3u64):04}" == "0003"
+  )
+  test.check(
+    t,
+    f"{ {
+      2u64
+    } :04}" == "0002"
+  )
+  test.check(t, f"{1.5f64:}" == "1.5")
+  let owned = string.concat("hi", "rsel")
+  test.check(t, f"{owned:.3}" == "hir" && owned == "hirsel")
+  let mut out: List[u8] = [65u8]
+  u8.format_into_spec(15u8, 32, 0, 6, 0, 6, 120, mut out)
+  text.append(mut out, "!")
+  test.check(t, text.finish_valid(take out) == "A0x000f!")
+  Ok(())
+}

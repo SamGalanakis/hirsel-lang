@@ -49,7 +49,7 @@ impl Checker<'_, '_> {
         frame: usize,
     ) -> Result<(), QueryError> {
         match step {
-            ast::FormatStep::Append => {
+            ast::FormatStep::Append | ast::FormatStep::AppendSpec(_) => {
                 self.work
                     .push(Work::AfterChild(After::FormatAppend(id, expected, frame)));
                 self.work.push(Work::Enter(arguments[0].value, None, frame));
@@ -85,7 +85,7 @@ impl Checker<'_, '_> {
             TypeKind::Primitive(primitive) => append_operation(primitive),
             _ => None,
         };
-        let Some((module, name, ordinals)) = operation else {
+        let Some((mut module, mut name, ordinals)) = operation else {
             self.report(
                 const { RuleId::of("SEM-3") },
                 self.span(value),
@@ -97,11 +97,50 @@ impl Checker<'_, '_> {
             );
             return self.recover_format(id, callee, &arguments, expected, frame);
         };
+        let mut ordinals = ordinals.to_vec();
+        if let ast::ExprKind::Formatter(ast::FormatStep::AppendSpec(spec)) =
+            self.input.tree.expressions[callee.0 as usize].kind
+        {
+            let primitive = match self.kind(ty) {
+                TypeKind::Primitive(p) => p,
+                _ => unreachable!(),
+            };
+            let integer = matches!(
+                primitive,
+                Primitive::U8
+                    | Primitive::U16
+                    | Primitive::U32
+                    | Primitive::U64
+                    | Primitive::U128
+                    | Primitive::I8
+                    | Primitive::I16
+                    | Primitive::I32
+                    | Primitive::I64
+                    | Primitive::I128
+            );
+            if spec.kind != 0 && !integer {
+                self.report(
+                    const { RuleId::of("SEM-3") },
+                    self.span(value),
+                    &format!(
+                        "format type `{}` requires an integer; `{}` does not support it",
+                        char::from_u32(spec.kind as u32).unwrap_or('?'),
+                        self.type_spelling(ty)
+                    ),
+                );
+                return self.recover_format(id, callee, &arguments, expected, frame);
+            }
+            if primitive == Primitive::String {
+                module = "text";
+            }
+            name = "format_into_spec";
+            ordinals = (0..arguments.len()).collect();
+        }
         self.format_call(
             id,
             callee,
             std_operation(module, name),
-            ordinals.to_vec(),
+            ordinals,
             expected,
             frame,
         )
@@ -155,7 +194,7 @@ impl Checker<'_, '_> {
             .expressions
             .push((callee, ResolvedName::Definition(operation.clone())));
         self.formatters.insert(callee, (operation, ordinals));
-        self.start_call(id, expected, frame, arguments.len() - 1)
+        self.start_call(id, expected, frame, usize::from(arguments.len() > 1))
     }
     fn recover_format(
         &mut self,

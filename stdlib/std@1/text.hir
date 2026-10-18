@@ -27,3 +27,38 @@ pub fn finish_valid(take builder: List[u8]) -> String uses {} {
     },
   }
 }
+
+// Width and precision count Unicode scalars, following Rust Formatter::pad.
+@preserves_unique(out)
+pub fn format_into_spec(
+  value: String,
+  fill: u64,
+  align: u64,
+  width: u64,
+  precision: u64,
+  flags: u64,
+  kind: u64,
+  mut out: List[u8]
+) -> () uses {} {
+  let mut count: u64 = 0
+  for scalar in core@1/string.scalars(value) {
+    if flags & 8 != 0 && count == precision {
+      break
+    }
+    count += 1
+  }
+  let (left, right) = internal.format.padding(width, count, align, false)
+  internal.format.repeat(mut out, fill, left)
+  let mut at: u64 = 0
+  for scalar in core@1/string.scalars(value) {
+    if at == count {
+      break
+    }
+    match utf8.append_scalar(mut out, scalar) {
+      Ok(()) => (),
+      Error(_) => core@1/failure.check(false, TextInvariant()),
+    }
+    at += 1
+  }
+  internal.format.repeat(mut out, fill, right)
+}

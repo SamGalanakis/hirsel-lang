@@ -357,3 +357,7 @@ expected type, then its type selects `std@1/text.append` for `String` or
 `std@1/text.finish_valid`. The callee is then typed and recorded in the body's
 resolution as a named reference to that operation, so modes and lowering see an
 ordinary call. Another value type, or a program without std@1, is SEM-3.
+
+Specified appends select `<scalar>.format_into_spec` or `text.format_into_spec`,
+with six parser-supplied constant options between the value and builder. Radix
+specifiers require integers (SEM-3). Ordinary call checking checks every option.

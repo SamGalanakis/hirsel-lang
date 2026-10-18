@@ -171,9 +171,38 @@ valid UTF-8, keep existing content and fail only by allocation exhaustion.
 `text.finish_valid(take builder)` returns the builder's text as a `String` and fails `TextInvariant` on invalid UTF-8, which no protocol append produces.
 A scalar's `to_string` is its `format_into` applied to an empty builder, then
 `text.finish_valid`; an f-string is the same with one append per piece and hole
-([SEM-3](semantics.md#sem-3-strings)). Format specifiers are not part of this revision; the planned
-form is `{x:width}`, `{x:.precision}` and `{x:x}` (lowercase hex) after the hole's
-expression, appending through the same builder.
+([SEM-3](semantics.md#sem-3-strings)). A specified hole calls the same module's
+`format_into_spec(value, fill: u64, align: u64, width: u64, precision: u64,
+flags: u64, kind: u64, mut out: List[u8]) -> () uses {}`; `String` uses
+`text.format_into_spec`. These operations preserve the builder's uniqueness.
+The parser supplies constants: fill is a Unicode scalar (default space), alignment
+is 0 default, 1 left, 2 right or 3 center; flags are bit 1 plus, bit 2 alternate,
+bit 4 sign-aware zero padding and bit 8 precision present; kind is 0 display or
+the ASCII code of `x`, `X`, `b` or `o`. Width and precision are decimal u64 values.
+Ordinary callers must supply these same valid option encodings.
+
+- `{x:9}` sets a minimum width, right-aligned for numbers and left-aligned for
+  strings and bool. `<`, `>` and `^` choose left, right and center alignment;
+  odd center padding puts the extra scalar on the right. `*^9` chooses `*` as fill.
+  Width and string precision count Unicode scalars, not UTF-8 bytes or graphemes.
+- `{x:09}` pads numbers with zeros after their sign and radix prefix, overriding
+  alignment and fill. `{x:+}` adds a plus for nonnegative numbers; a minus remains
+  on negative values, including negative zero. `-` is the default sign policy.
+- `{x:.2}` formats a float with exactly two fractional decimal digits, rounded
+  from its exact binary value with ties to even, including carry into the integer
+  part. Default float formatting retains its shortest round-trip representation
+  and existing fixed/scientific thresholds. Both paths use exact decimal rounding.
+  NaN and infinities keep their ordinary spelling; NaN has no sign. Strings and bool are truncated
+  to at most the precision's scalar count before padding; integer precision is ignored.
+- `{x:x}`, `{x:X}`, `{x:b}` and `{x:o}` format integers in lowercase hex,
+  uppercase hex, binary and octal. Signed radix output uses the scalar's two's
+  complement bit width. `#` adds `0x`, `0b` or `0o` (also `0x` for uppercase hex).
+  Radix formats on other types are SEM-3. String and bool formatting ignores sign,
+  alternate and zero flags; alternate display has no effect on numbers.
+
+An empty specification is default formatting. Unknown type characters, malformed
+options and overflowing constants are SEM-3. Dynamic widths and precisions such as
+`{x:w$}` and `{x:.p$}` are not supported.
 
 ## Scalars
 
@@ -183,6 +212,9 @@ expression, appending through the same builder.
 - `to_string(value) -> unique String`;
 - `format_into(value, mut out: List[u8]) -> ()`, which appends exactly the text `to_string`
   returns and fails only by allocation exhaustion;
+- `format_into_spec(value, fill: u64, align: u64, width: u64, precision: u64,
+  flags: u64, kind: u64, mut out: List[u8]) -> ()`, using the constant option
+  encoding above;
 - `@noalloc format[n: size](value, mut buffer: Inline[u8, n]) -> Result[u64, scalar.FormatError]`,
   which checks capacity before writing, returns the length of the UTF-8 prefix and leaves
   the whole buffer unchanged on error;

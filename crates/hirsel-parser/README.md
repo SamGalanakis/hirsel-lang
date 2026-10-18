@@ -57,5 +57,7 @@ holes become one ordinary block binding `$fmt<depth>: List[u8] = []`, an
 written form is recorded in `SyntaxTree.formats` for the formatter. Synthetic nodes
 take the f-string's, the piece's or the hole's origin. A hole parses in statement
 newline context and must close on the line its expression ends; an empty hole, a
-missing `}` and a format specifier are SEM-3. Recovery treats Head and Tail pieces
+missing `}` and an invalid format specifier are SEM-3. Constant specifications
+become `AppendSpec` calls with six u64 option arguments; written spec spellings
+remain alongside holes for formatting. Recovery treats Head and Tail pieces
 as braces.

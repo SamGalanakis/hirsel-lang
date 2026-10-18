@@ -55,3 +55,30 @@ pub fn parse(text: String) -> Result[bool, scalar.ParseError] uses {} {
     Error(Invalid)
   }
 }
+
+@preserves_unique(out)
+pub fn format_into_spec(
+  value: bool,
+  fill: u64,
+  align: u64,
+  width: u64,
+  precision: u64,
+  flags: u64,
+  kind: u64,
+  mut out: List[u8]
+) -> () uses {} {
+  text.format_into_spec(
+    if value {
+      "true"
+    } else {
+      "false"
+    },
+    fill,
+    align,
+    width,
+    precision,
+    flags,
+    kind,
+    mut out
+  )
+}

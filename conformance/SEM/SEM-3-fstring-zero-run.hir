@@ -1,0 +1,18 @@
+// rule: SEM-3
+// expect: run
+// Rust core fmt and alloctests fmt padding/precision vectors.
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, f"{1u64:08}" == "00000001")
+  test.check(t, f"{-1i64:08}" == "-0000001")
+  test.check(t, f"{1i8:^03}" == "001")
+  test.check(t, f"{1u16:^+03}" == "+01")
+  test.check(t, f"{1u32:^#05x}" == "0x001")
+  test.check(t, f"{1.2f64:^05}" == "001.2")
+  test.check(t, f"{-1.2f64:^05}" == "-01.2")
+  test.check(t, f"{1.2f64:^+05}" == "+01.2")
+  test.check(t, f"{-128i8:05}" == "-0128")
+  test.check(t, f"{0u128:+05}" == "+0000")
+  test.check(t, f"{1u8:*>05}" == "00001")
+  test.check(t, f"{"a":05}" == "a    ")
+  Ok(())
+}

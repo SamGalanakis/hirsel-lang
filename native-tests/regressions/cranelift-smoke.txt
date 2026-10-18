@@ -4,3 +4,6 @@ conformance/LANG/LANG-11-block-captured-value-run.hir
 conformance/SEM/SEM-1-signed-add-fail.hir
 native-tests/regressions/match-on-variant-value.hir
 conformance/PROG/PROG-3-exit-report-variant-error-run.hir
+conformance/SEM/SEM-3-fstring-zero-run.hir
+conformance/SEM/SEM-3-fstring-radix-run.hir
+conformance/SEM/SEM-3-fstring-precision-run.hir

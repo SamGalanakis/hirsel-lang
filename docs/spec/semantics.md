@@ -84,6 +84,13 @@ and `bool`, the integers and the floats as `to_string` spells them. A character 
 is a `u32` and formats as its number. Any other hole type, including `Bytes`, records
 and type parameters, is SEM-3 naming the type: format it into a `String` first.
 
+A hole may carry a constant format specification, such as `{n:08}` or `{mean:.2}`.
+The parser passes its options as constant arguments to the selected type's
+`format_into_spec`, through the same builder and ordinary call checking as a plain
+hole. Invalid syntax and a radix format on a noninteger value are SEM-3, with the
+unsupported format and value type named. Width, alignment, padding, precision and
+radix follow [the formatting protocol](std-library.md#the-formatting-protocol).
+
 ### SEM-4: Iteration
 
 `Bytes` is a byte sequence: `for b in data` yields `u8` values in byte order.

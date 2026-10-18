@@ -424,6 +424,13 @@
       "module": [
         "log"
       ]
+    },
+    {
+      "path": "format.hir",
+      "module": [
+        "internal",
+        "format"
+      ]
     }
   ],
   "dependencies": []

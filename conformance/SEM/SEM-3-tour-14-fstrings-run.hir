@@ -18,7 +18,7 @@ fn summary(chores: List[Chore]) -> String {
     }
   }
   let total = list.len(chores)
-  f"{done} of {total} chores done ({done * 100u64 / total}%)\n"
+  f"{done:1} of {total} chores done ({done * 100u64 / total}%)\n"
 }
 
 pub fn main(rt: Io) -> Result[(), AppError] {
@@ -32,6 +32,6 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   out.print(output, summary(chores)) ? Output
   out.print(output, f"next: {chores[3].name}, {{braces}} stay literal\n") ? Output
   let mean = 10.0f64 / 4.0f64
-  out.print(output, f"mean {mean}, all done: {chores[3].done}\n") ? Output
+  out.print(output, f"mean {mean:.1}, all done: {chores[3].done}\n") ? Output
   Ok(())
 }
