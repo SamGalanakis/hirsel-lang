@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: run
+// "`unique x` deep-copies when `x` is not provably unique (an allocation site)."
+// After a branch joins the deep copy of a borrowed record with a replacement, its field
+// holds global content, so the function may return it.
+type Big {
+  magnitude: List[u64],
+}
+
+fn magnitude(value: Big) -> List[u64] {
+  let mut current = unique value
+  if list.len(value.magnitude) > 1 {
+    current = Big(magnitude: [])
+  }
+  current.magnitude
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(list.len(magnitude(Big(magnitude: [8]))) == 1, Arithmetic())
+  failure.check(list.len(magnitude(Big(magnitude: [8, 9]))) == 0, Arithmetic())
+  Ok(())
+}

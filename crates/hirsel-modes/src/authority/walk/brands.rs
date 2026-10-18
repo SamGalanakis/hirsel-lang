@@ -688,7 +688,7 @@ impl Checker<'_> {
                     let mut prefix = vec![];
                     let mut projections = vec![];
                     for field in &path {
-                        let Some(fields) = self.fields(ty) else {
+                        let Some(fields) = self.declared_fields(ty) else {
                             break;
                         };
                         let Some(part) = fields.get(field.0 as usize) else {
@@ -706,9 +706,10 @@ impl Checker<'_> {
                             .collect();
                         let part =
                             super::facts::siblings(&mut self.out.body.types, part.ty, &siblings);
+                        // I places the declared part under the binding's final row.
                         ty = self.projected_item(ty, part);
                         prefix.push(*field);
-                        projections.push((*field, ty));
+                        projections.push((*field, part));
                     }
                     if projections.len() == path.len() {
                         let mut origin = fresh.clone();
@@ -1229,7 +1230,15 @@ impl Checker<'_> {
         }
     }
     pub(super) fn fields(&mut self, root: TypeId) -> Option<Vec<Field>> {
-        let mut fields = match self.layout(root)? {
+        let mut fields = self.declared_fields(root)?;
+        for field in &mut fields {
+            field.ty = self.placed_item(root, field.ty);
+        }
+        Some(fields)
+    }
+    /// The fields as declared, before placement under `root`.
+    pub(super) fn declared_fields(&mut self, root: TypeId) -> Option<Vec<Field>> {
+        let fields = match self.layout(root)? {
             TypeKind::Record(fields) => Some(fields),
             TypeKind::Tuple(ts) => Some(
                 ts.into_iter()
@@ -1243,9 +1252,6 @@ impl Checker<'_> {
             ),
             _ => None,
         }?;
-        for field in &mut fields {
-            field.ty = self.placed_item(root, field.ty);
-        }
         Some(fields.to_vec())
     }
     pub(super) fn layout(&mut self, root: TypeId) -> Option<TypeKind> {

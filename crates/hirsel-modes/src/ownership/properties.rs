@@ -307,9 +307,11 @@ pub(super) fn identity_projections(
         let Some(&root) = bindings.get(&(*owner, origin.root.clone())) else {
             continue;
         };
+        // Each part is its declared row: place and project it under the
+        // binding's final row, which flow may have refined since J recorded it.
         let mut parent = root;
         for (_, part) in projections {
-            *part = projected_type(&mut body.types, parent, *part, &declarations, &mut |path| {
+            let mut lookup = |path: &hirsel_syntax::DefPath| {
                 if path == &own.definition {
                     Ok(Some(std::sync::Arc::new(own.clone())))
                 } else {
@@ -317,7 +319,10 @@ pub(super) fn identity_projections(
                         .read_with_reads(path, &mut body.resolution.reads, provider)
                         .map(Some)
                 }
-            })?;
+            };
+            let placed =
+                placed_part_type(&mut body.types, parent, *part, &declarations, &mut lookup)?;
+            *part = projected_type(&mut body.types, parent, placed, &declarations, &mut lookup)?;
             parent = *part;
         }
     }

@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: run
+// "`unique x` deep-copies when `x` is not provably unique (an allocation site)."
+// A deep copy of a borrowed record owns its fields, so after a loop joins it with a
+// replacement, the field read in the loop condition and after it is the record's own.
+type Big {
+  magnitude: List[u64],
+}
+
+fn shrink(value: Big) -> u64 {
+  let mut current = unique value
+  while list.len(current.magnitude) > 0 {
+    current = Big(magnitude: [])
+  }
+  list.len(current.magnitude)
+}
+
+pub fn main() -> Result[(), ()] {
+  let h = Big(magnitude: [8])
+  failure.check(shrink(h) == 0, Arithmetic())
+  Ok(())
+}

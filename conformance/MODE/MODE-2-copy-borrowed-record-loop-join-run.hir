@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: run
+// "Copying, sharing a part, or passing as a plain `mut` argument ends a binding's uniqueness."
+// The control twin of MODE-2-unique-borrowed-record-loop-join-run: a shared copy of the
+// borrowed record, joined with a replacement by the loop.
+type Big {
+  magnitude: List[u64],
+}
+
+fn shrink(value: Big) -> u64 {
+  let mut current = copy value
+  while list.len(current.magnitude) > 0 {
+    current = Big(magnitude: [])
+  }
+  list.len(current.magnitude)
+}
+
+pub fn main() -> Result[(), ()] {
+  let h = Big(magnitude: [8])
+  failure.check(shrink(h) == 0, Arithmetic())
+  Ok(())
+}

@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: run
+// "`unique x` deep-copies when `x` is not provably unique (an allocation site)."
+// A branch, not a loop, joins the deep copy of a borrowed record with a replacement;
+// the field is read after the join.
+type Big {
+  magnitude: List[u64],
+}
+
+fn trimmed(value: Big) -> u64 {
+  let mut current = unique value
+  if list.len(value.magnitude) > 1 {
+    current = Big(magnitude: [1])
+  }
+  list.len(current.magnitude)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(trimmed(Big(magnitude: [8])) == 1, Arithmetic())
+  failure.check(trimmed(Big(magnitude: [8, 9])) == 1, Arithmetic())
+  Ok(())
+}

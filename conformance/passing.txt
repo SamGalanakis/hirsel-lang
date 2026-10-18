@@ -2679,6 +2679,7 @@ conformance/MODE/MODE-2-copied-callable-getter-result-share-bad.hir
 conformance/MODE/MODE-2-copied-callable-getter-result-share-ok.hir
 conformance/MODE/MODE-2-copied-part-type-argument-bad.hir
 conformance/MODE/MODE-2-copied-part-type-argument-ok.hir
+conformance/MODE/MODE-2-copy-borrowed-record-loop-join-run.hir
 conformance/MODE/MODE-2-copy-ends-bad.hir
 conformance/MODE/MODE-2-copy-ends-ok.hir
 conformance/MODE/MODE-2-copy-temporary-aliased-bad.hir
@@ -2842,6 +2843,9 @@ conformance/MODE/MODE-2-std-sorted-map-remove-bad.hir
 conformance/MODE/MODE-2-std-sorted-map-remove-ok.hir
 conformance/MODE/MODE-2-unique-argument-bad.hir
 conformance/MODE/MODE-2-unique-argument-ok.hir
+conformance/MODE/MODE-2-unique-borrowed-record-branch-join-run.hir
+conformance/MODE/MODE-2-unique-borrowed-record-join-field-return-run.hir
+conformance/MODE/MODE-2-unique-borrowed-record-loop-join-run.hir
 conformance/MODE/MODE-2-unique-clause-borrow-copy-bad.hir
 conformance/MODE/MODE-2-unique-clause-exit-branch-bad.hir
 conformance/MODE/MODE-2-unique-clause-exit-early-bad.hir
