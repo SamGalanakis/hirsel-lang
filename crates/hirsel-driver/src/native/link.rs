@@ -1372,9 +1372,7 @@ fn launch_impl(
                 if let Some(path) = revocations {
                     command.arg("--hirsel-revocations").arg(absolute(path)?);
                 }
-                if live.as_ref().is_some_and(|live| live.run.is_some()) {
-                    command.arg("--hirsel-run").arg(dir.join("run.json"));
-                }
+                command.arg("--hirsel-run").arg(dir.join("run.json"));
             } else if let Some(path) = record {
                 command.env("HIRSEL_RT_TAPE", path);
             }
@@ -1396,7 +1394,9 @@ fn launch_impl(
         let stdin = !matches!(tape, Tape::Replay(_))
             && live
                 .run
-                .and_then(|run| run.record().io.as_ref())
+                .record()
+                .io
+                .as_ref()
                 .is_some_and(|io| io.stdin.is_some());
         run_live(&mut command, stdin, live.inherit, live.stdout, live.stderr)?
     } else {
@@ -1416,7 +1416,7 @@ fn absolute(path: &Path) -> Result<PathBuf, NativeError> {
 }
 
 pub(crate) struct LiveRun<'a> {
-    pub run: Option<&'a hirsel_run_config::ValidatedRun>,
+    pub run: &'a hirsel_run_config::ValidatedRun,
     pub inherit: bool,
     pub stdout: &'a mut dyn std::io::Write,
     pub stderr: &'a mut dyn std::io::Write,

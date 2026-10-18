@@ -3,8 +3,8 @@
 Every tool selects `std@1` through its `hirsel.json`. From the repository root:
 
 ```sh
-hirsel run examples/wordscan/hirsel.json
-hirsel run --native examples/wordscan/hirsel.json
+hirsel run examples/wordscan/hirsel.json --grants '{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}'
+hirsel run --native examples/wordscan/hirsel.json --grants '{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}'
 hirsel run --simulation examples/wordscan/demo.json examples/wordscan/hirsel.json
 ```
 
@@ -43,7 +43,7 @@ printf '1 + 2\n9 / 3\n' | hirsel run --native examples/calculator/hirsel.json --
 
 Each expression produces a line immediately; blank lines are ignored and malformed
 expressions produce `error`. EOF ends the session, including a final unterminated line.
-Simulated interpreted CLI runs default to one billion execution steps; `--max-steps <n>`
+Interpreted CLI runs without `--run` or `--grants` default to one billion execution steps; `--max-steps <n>`
 selects an explicit bound.
 
 | Program | Job and optional second argument |

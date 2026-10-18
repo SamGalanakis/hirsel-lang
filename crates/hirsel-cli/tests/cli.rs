@@ -241,7 +241,10 @@ fn real_pipeline_accepts_clean_source_and_checks_launch_shape() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("entry must be pub fn"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("expected a public, complete, monomorphic Hirsel function")
+    );
     std::fs::remove_file(path).unwrap();
     // A program without its entry checks, and running it names the entry.
     let path = file("fn probe() -> u64 {\n  1\n}\n");
@@ -603,7 +606,12 @@ fn native_run_matches_the_reference_run() {
         if native {
             command.arg("--native");
         }
-        command.arg(path).output().unwrap()
+        command
+            .arg(path)
+            .arg("--grants")
+            .arg(r#"{"io":{"stdout":"stdout.bytes@1","dirs":[],"net":{"provider":"net.stream@1","rules":[]}},"args":[]}"#)
+            .output()
+            .unwrap()
     };
     let prints = file(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let _ = out.print(io.stdout(rt)?, \"hi\\n\")\n  Ok(())\n}\n",
@@ -686,6 +694,61 @@ fn source_projection_controls_distinguish_granted_and_empty_io() {
         }
         std::fs::remove_file(source).unwrap();
     }
+}
+
+/// A run without a record admits the empty-grant record (determinism.md, Run
+/// configuration) in every engine: an Io main is refused at launch and never reaches
+/// its directory or stdout, and the refusal names the flags that grant authority.
+#[test]
+fn bare_run_refuses_an_io_main_identically_in_every_engine() {
+    let source = file(
+        r#"
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  let _ = match io.dir(rt, path.of("")) { Ok(d) => file.write_bytes(d, path.of("granted"), b""), Error(_) => Ok(()) }
+  let output = match io.stdout(rt) { Ok(s) => s, Error(_) => return Error("stdout") }
+  let _ = out.print(output, "granted")
+  Ok(())
+}
+"#,
+    );
+    let engines: [&[&str]; 3] = [&[], &["--native"], &["--native", "--backend", "cranelift"]];
+    for flags in engines {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(flags)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{flags:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{flags:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "hirsel: launch: {\"kind\":\"not_granted\",\"root\":\"Io\"}\n\
+             hirsel: the entry takes `Io`, which this run does not grant: grant it with \
+             `--grants <grants.json>`, or run interpreted in a simulated world with \
+             `--simulation <world.json>`\n",
+            "{flags:?}"
+        );
+    }
+    std::fs::remove_file(source).unwrap();
+}
+
+#[test]
+fn bare_run_executes_a_root_free_main_in_every_engine() {
+    let source = file("pub fn main() -> Result[(), ()] { Error(()) }");
+    let engines: [&[&str]; 3] = [&[], &["--native"], &["--native", "--backend", "cranelift"]];
+    for flags in engines {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(flags)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{flags:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{flags:?}");
+        assert_eq!(output.stderr, b"error: ()\n", "{flags:?}");
+    }
+    std::fs::remove_file(source).unwrap();
 }
 
 /// Generate the real semantic binding through the public CLI, then select grants.
@@ -2628,11 +2691,15 @@ fn host_quiescence_matches_simulation_and_retains_waits_without_cleanup() {
                 &source,
                 serde_json::json!({"io":{"tasks":"tasks.cooperative@1","stdout":"stdout.bytes@1","dirs":[]},"args":[]}),
             );
+            let world = source.with_extension("world.json");
+            std::fs::write(&world, "{}").unwrap();
             for host in [false, true] {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
                 command.arg("run").arg(&source);
                 if host {
                     command.arg("--run").arg(&record);
+                } else {
+                    command.arg("--simulation").arg(&world);
                 }
                 let output = command.output().unwrap();
                 assert_eq!(
@@ -2665,6 +2732,7 @@ fn host_quiescence_matches_simulation_and_retains_waits_without_cleanup() {
             }
             std::fs::remove_file(source).unwrap();
             std::fs::remove_file(record).unwrap();
+            std::fs::remove_file(world).unwrap();
         }
     }
 }
@@ -2857,10 +2925,11 @@ fn runtime_failure_reports_a_complete_site_in_human_and_json() {
 
 #[test]
 fn native_runtime_failure_reports_match_the_interpreter_and_standalone() {
-    let path =
-        file("pub fn main(t: Test) -> Result[(), ()] {\n  test.check(t, false)\n  Ok(())\n}\n");
+    let path = file(
+        "pub fn main() -> Result[(), ()] {\n  failure.check(false, Arithmetic())\n  Ok(())\n}\n",
+    );
     let expected = format!(
-        "runtime failure[LANG-9] at standalone@0/main ({}:2:3)\n",
+        "runtime failure[SEM-1] at standalone@0/main ({}:2:3)\n",
         path.display()
     );
     for backend in ["llvm", "cranelift"] {
@@ -2875,7 +2944,7 @@ fn native_runtime_failure_reports_match_the_interpreter_and_standalone() {
             let text = String::from_utf8(output.stderr).unwrap();
             if json {
                 let report: serde_json::Value = serde_json::from_str(&text).unwrap();
-                assert_eq!(report["runtime_failure"]["rule"], "LANG-9");
+                assert_eq!(report["runtime_failure"]["rule"], "SEM-1");
                 assert_eq!(
                     report["runtime_failure"]["site"]["file"],
                     path.to_str().unwrap()

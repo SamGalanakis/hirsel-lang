@@ -8,7 +8,7 @@ const END: &str = "<!-- /tour -->";
 // Only a program that calls C may be checked without running: the reference
 // interpreter does not call C.
 const ACCEPT: &str = "`hirsel check` accepts it; the reference interpreter does not call C, \
-                      so run it with `hirsel run --native`.";
+                      so run it with `hirsel run --native --grants '{\"io\":{\"stdout\":\"stdout.bytes@1\",\"dirs\":[]},\"unsafe\":true}'`.";
 
 fn snippets() -> Vec<(&'static str, &'static str)> {
     PAGE.split(START)

@@ -6,7 +6,7 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 PAGE = ROOT / 'docs/tour.md'
 ACCEPT = ('`hirsel check` accepts it; the reference interpreter does not call C, '
-          'so run it with `hirsel run --native`.')
+          "so run it with `hirsel run --native --grants '{\"io\":{\"stdout\":\"stdout.bytes@1\",\"dirs\":[]},\"unsafe\":true}'`.")
 PATTERN = re.compile(r'<!-- tour: (conformance/[^\n]+\.hir) -->\n.*?<!-- /tour -->', re.S)
 
 

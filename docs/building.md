@@ -110,10 +110,14 @@ with the exact UTF-8 snapshot, including an explicitly empty snapshot. Without
 `--`, the template's `args` remain. With `hirsel run --run`, the record's `args`
 are authoritative and trailing arguments are an error. Without either option,
 `hirsel run program.hir -- args...` grants only Args with exactly those values,
-including an explicitly empty snapshot. No other authority is implied.
+including an explicitly empty snapshot. No other authority is implied. A bare
+`hirsel run program.hir`, in either engine, admits the empty-grant record: a root-free
+`main()` runs, and an entry taking `Io`, `Args` or `Env` is refused at launch
+(`{"kind":"not_granted","root":"Io"}`, exit 1), with a line naming `--grants` and
+`--simulation` (a simulated world, interpreted only).
 
 Interpreted host runs (`--run` and `--grants`) have no default step budget;
-simulated runs keep a 1,000,000,000-step budget. `--max-steps <n>` selects a
+simulated runs and runs without `--run` or `--grants` keep a 1,000,000,000-step budget. `--max-steps <n>` selects a
 nonnegative u64 bound, and `--max-steps unbounded` removes it. These are tooling
 limits, independent of language semantics; `--native` rejects the option.
 

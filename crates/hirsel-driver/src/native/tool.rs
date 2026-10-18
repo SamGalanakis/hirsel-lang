@@ -21,8 +21,9 @@ pub enum Output<'a> {
 
 /// Check `path` exactly as `run` does (the same first static diagnostics),
 /// then build it for x86-64 Linux with every optimization, link it against
-/// the in-tree runtime and launch it. The executable's output is written to
-/// `stdout` and its failure chain to `stderr`.
+/// the in-tree runtime and launch it under the empty-grant record, as a launch
+/// without a record. The executable's output is written to `stdout` and its
+/// failure chain to `stderr`.
 ///
 /// The outer error is a source or tool error of the checker; the inner one is
 /// a native tool outcome (a stage does not support the program yet), which is
@@ -32,7 +33,12 @@ pub fn run_path_native(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
-    run_path_native_with_config(path, None, None, Output::Streams { stdout, stderr })
+    run_path_native_with_config(
+        path,
+        crate::HostLaunch::empty(),
+        None,
+        Output::Streams { stdout, stderr },
+    )
 }
 
 /// `run_path_native` with a host launch and PS-12 evidence; the proof report goes to
@@ -41,7 +47,7 @@ pub fn run_path_native(
 /// recording of other code refuses before building.
 pub fn run_path_native_with_config(
     path: &Path,
-    launch: Option<crate::HostLaunch<'_>>,
+    launch: crate::HostLaunch<'_>,
     evidence: Option<&super::Evidence>,
     output: Output<'_>,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
@@ -52,7 +58,7 @@ pub fn run_path_native_with_config(
 /// unoptimized, for a fast debug loop.
 pub fn run_path_native_backend(
     path: &Path,
-    launch: Option<crate::HostLaunch<'_>>,
+    launch: crate::HostLaunch<'_>,
     evidence: Option<&super::Evidence>,
     backend: super::Backend,
     output: Output<'_>,
@@ -67,42 +73,39 @@ pub fn run_path_native_backend(
     loaded.check_for_execution()?;
     if matches!(
         launch,
-        Some(
-            crate::HostLaunch::Replay(_)
-                | crate::HostLaunch::Live {
-                    record: Some(_),
-                    ..
-                }
-        )
+        crate::HostLaunch::Replay(_)
+            | crate::HostLaunch::Live {
+                record: Some(_),
+                ..
+            }
     ) {
         loaded.refuse_unreplayable()?;
     }
     let host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
     let host = match launch {
-        Some(crate::HostLaunch::Live {
+        crate::HostLaunch::Live {
             config,
             record,
             revocations,
-        }) => {
+        } => {
             let live = crate::HostLaunch::Live {
                 config,
                 record: None,
                 revocations,
             };
             let bound = crate::bind_host_run(&mut loaded, live, host)?;
-            Some((
+            (
                 bound.run().clone(),
                 super::link::Tape::Live {
                     record,
                     revocations,
                 },
-            ))
+            )
         }
-        Some(launch @ crate::HostLaunch::Replay(tape)) => {
+        launch @ crate::HostLaunch::Replay(tape) => {
             let bound = crate::bind_host_run(&mut loaded, launch, host)?;
-            Some((bound.run().clone(), super::link::Tape::Replay(tape)))
+            (bound.run().clone(), super::link::Tape::Replay(tape))
         }
-        None => None,
     };
     let entry = loaded.entry;
     let mut engine = loaded.engine;
@@ -134,7 +137,7 @@ pub fn run_path_native_backend(
     Ok(run(
         &validated,
         &entry,
-        host.as_ref().map(|(run, tape)| (run, *tape)),
+        (&host.0, host.1),
         proofs.as_ref(),
         backend,
         inherit,
@@ -184,14 +187,13 @@ pub fn run_path_native_backend(
 fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
     entry: &hirsel_engine::DefPath,
-    host: Option<(&hirsel_run_config::ValidatedRun, super::link::Tape<'_>)>,
+    (run, tape): (&hirsel_run_config::ValidatedRun, super::link::Tape<'_>),
     proofs: Option<&super::Proofs>,
     backend: super::Backend,
     inherit: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Observation, NativeError> {
-    let run = host.map(|(run, _)| run);
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let mut options = Options::new(target.clone());
     if let Some(proofs) = proofs {
@@ -223,37 +225,26 @@ fn run(
             None,
         )?;
         let executable = super::link::link_objects_with_run(
-            &program, entry, &objects, &toolchain, &scratch, run,
+            &program,
+            entry,
+            &objects,
+            &toolchain,
+            &scratch,
+            Some(run),
         )?;
-        let launched = if host.is_some() || inherit {
-            let tape = host
-                .map(|(_, tape)| tape)
-                .unwrap_or(super::link::Tape::Live {
-                    record: None,
-                    revocations: None,
-                });
-            super::link::launch_live(
-                &executable,
-                &target,
-                &toolchain,
-                &scratch,
-                tape,
-                super::link::LiveRun {
-                    run,
-                    inherit,
-                    stdout,
-                    stderr,
-                },
-            )?
-        } else {
-            let launched = super::link::launch(&executable, &target, &toolchain, &scratch, false)?;
-            stdout
-                .write_all(&launched.stdout)
-                .and_then(|()| stdout.flush())
-                .map_err(io)?;
-            stderr.write_all(&launched.stderr).map_err(io)?;
-            launched
-        };
+        let launched = super::link::launch_live(
+            &executable,
+            &target,
+            &toolchain,
+            &scratch,
+            tape,
+            super::link::LiveRun {
+                run,
+                inherit,
+                stdout,
+                stderr,
+            },
+        )?;
         let observation = observe(&launched, &program, &Sites::new(validated.snapshot()))?;
         Ok(observation)
     })();

@@ -153,6 +153,13 @@
         },
         {
           "kind": null,
+          "name": "hirsel-run-config",
+          "path": "crates/hirsel-run-config",
+          "req": "*",
+          "uses_default_features": true
+        },
+        {
+          "kind": null,
           "name": "serde_json",
           "req": "^1",
           "uses_default_features": true

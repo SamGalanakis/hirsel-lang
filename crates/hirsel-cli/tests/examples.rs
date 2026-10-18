@@ -112,11 +112,23 @@ impl Fixture {
         if native {
             command.arg("--native");
         }
-        if let Some(config) = simulation {
-            let path = self.0.join("run.json");
-            std::fs::write(&path, config.to_string()).unwrap();
-            command.arg("--simulation").arg(path);
-        }
+        // Without a simulated world the demo is granted host stdout, a fresh empty
+        // read-write directory and empty Args.
+        let (flag, config) = match simulation {
+            Some(config) => ("--simulation", config),
+            None => {
+                let root = self.0.join("granted");
+                let _ = std::fs::remove_dir_all(&root);
+                std::fs::create_dir(&root).unwrap();
+                (
+                    "--grants",
+                    serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"","host":root,"access":"read_write"}]},"args":[]}),
+                )
+            }
+        };
+        let path = self.0.join("run.json");
+        std::fs::write(&path, config.to_string()).unwrap();
+        command.arg(flag).arg(path);
         let output = command.arg(self.0.join("hirsel.json")).output().unwrap();
         assert_eq!(
             output.status.code(),

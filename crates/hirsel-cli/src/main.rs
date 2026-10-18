@@ -54,7 +54,7 @@ enum Command {
     },
     Run {
         file: OsString,
-        launch: Option<Launch>,
+        launch: Launch,
         native: bool,
         backend: Option<hirsel_driver::native::Backend>,
         proofs: Proofs,
@@ -417,9 +417,11 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 } else {
                     Some(DEFAULT_RUN_MAX_STEPS)
                 });
-                // The explicit delimiter grants precisely Args. Bind an empty template
-                // through the same host admission path as an explicit grants launch.
-                if arguments.is_some() && config.is_none() {
+                // Without a record the run is the empty-grant record; the explicit
+                // delimiter grants precisely Args. Both bind an empty template through
+                // the same host admission path as an explicit grants launch.
+                if config.is_none() && record.is_none() && replay.is_none() && simulation.is_none()
+                {
                     config = Some((true, "{}".into()));
                 }
                 let launch = match (config, record, replay) {
@@ -439,20 +441,19 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         );
                     }
                 };
-                if let Some(config) = simulation {
-                    if native || launch.is_some() {
-                        return Err(
-                            "--simulation cannot combine with --native, --run, --grants, --record or --replay".into(),
-                        );
-                    }
-                    Command::Simulation {
+                match (simulation, launch) {
+                    (Some(config), None) if !native => Command::Simulation {
                         config,
                         file,
                         max_steps,
                         json,
+                    },
+                    (Some(_), _) => {
+                        return Err(
+                            "--simulation cannot combine with --native, --run, --grants, --record or --replay".into(),
+                        );
                     }
-                } else {
-                    Command::Run {
+                    (None, Some(launch)) => Command::Run {
                         file,
                         launch,
                         native,
@@ -461,7 +462,8 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         arguments,
                         max_steps,
                         json,
-                    }
+                    },
+                    (None, None) => unreachable!("a run without a record binds the empty template"),
                 }
             } else {
                 match args.next()? {
@@ -811,9 +813,7 @@ fn execute(mut args: Vec<OsString>) -> u8 {
             // program yet is a tool outcome (exit 2).
             return match hirsel_driver::native::run_path_native_backend(
                 Path::new(&file),
-                launch
-                    .as_ref()
-                    .map(|launch| launch.host(arguments.as_deref())),
+                launch.host(arguments.as_deref()),
                 evidence.as_ref(),
                 backend.unwrap_or_default(),
                 hirsel_driver::native::Output::Inherit { json },
@@ -839,21 +839,11 @@ fn execute(mut args: Vec<OsString>) -> u8 {
             json,
         } => {
             return run_result(
-                match &launch {
-                    Some(launch) => hirsel_driver::run_path_on_host(
-                        Path::new(&file),
-                        launch.host(arguments.as_deref()),
-                        max_steps,
-                    ),
-                    // Without a record the simulated world grants no host authority.
-                    None => hirsel_driver::run_path_with_step_budget(
-                        Path::new(&file),
-                        hirsel_engine::SimulationConfig::default(),
-                        max_steps,
-                        &mut std::io::stdout().lock(),
-                        &mut std::io::stderr().lock(),
-                    ),
-                },
+                hirsel_driver::run_path_on_host(
+                    Path::new(&file),
+                    launch.host(arguments.as_deref()),
+                    max_steps,
+                ),
                 json,
             );
         }
@@ -1032,6 +1022,14 @@ fn tool_error(error: ToolError, json: bool) -> u8 {
         );
     }
     eprintln!("hirsel: {error}");
+    // A run without a record grants nothing (determinism.md); say how to grant the root.
+    if let ToolError::Launch(hirsel_run_config::RunRefusal::NotGranted { root }) = &error
+        && !json
+    {
+        eprintln!(
+            "hirsel: the entry takes `{root}`, which this run does not grant: grant it with `--grants <grants.json>`, or run interpreted in a simulated world with `--simulation <world.json>`"
+        );
+    }
     if parser_limit
         || matches!(
             error,

@@ -25,6 +25,10 @@ Commands (arguments use the shared lexopt parser):
   from the entry to an extern or `Unsafe` operation (CAP-6).
 - `hirsel run <file>` requires complete checking/lowering and writes exact stdout
   bytes. Exit 0 is success; any runtime failure/nonzero program exit becomes 1.
+  Without `--run`, `--grants`, `--simulation` or `--replay` it admits the empty-grant
+  record in either engine: an entry taking a root capability is refused at launch
+  (`hirsel: launch: {"kind":"not_granted","root":"Io"}`, exit 1), followed by a line
+  naming `--grants` and `--simulation`.
 - `hirsel fmt [--check] <file>` writes canonical source to the file, or compares
   without writing with `--check`. A difference exits 1, agreement exits 0.
 - `hirsel expand <source|manifest.json>` checks the program and prints each
@@ -167,9 +171,9 @@ hosts before ordinary validation and admission.
 otherwise a path. Executables use `--hirsel-run` and `--hirsel-grants` to leave
 the program's flag space available. Inline templates require absolute directory
 hosts. `hirsel run <source|manifest> -- args...` grants only the exact Args
-snapshot through host admission, with the simulated CLI's default step budget.
+snapshot through host admission, with the default step budget of a run without a record.
 
-The examples harness supplies the same default step budget as the simulated CLI
+The examples harness supplies the same default step budget as the CLI without a record
 when invoking the interpreter in process; explicit test budgets remain selected
 by their callers. Bench-lite exercises both 40-word and 200-word corpora.
 

@@ -5,7 +5,9 @@ Browse the [full signature index](api.md) for every public core and std declarat
 Start here when writing Hirsel. The [specification](spec/index.md) defines the
 rules; [building](building.md) covers toolchains and launch details. The programs
 below are small enough to copy and run from the repository root with
-`hirsel run <linked-source.hir>`. Each selects
+`hirsel run --simulation docs/tour/world.json <linked-source.hir>`, in a simulated
+world that grants every root and projection but no host access; a bare `hirsel run`
+grants nothing, so it refuses any entry taking a root capability. Each selects
 `std@1` through its adjacent `.hir.json` manifest; copy that sidecar too, and
 adjust its source and dependency paths when moving a program. There are no imports
 or dependency downloads. `json.parse` names a selected package definition;
@@ -155,8 +157,9 @@ choose `int.checked_add` or `int.wrapping_add` explicitly when needed. A public
 signature may mention only public types. `f"{n}\n"` formats a value into a fresh
 string ([f-strings](#building-text-with-f-strings) below).
 
-Run `hirsel run conformance/LANG/LANG-2-tour-01-values-run.hir`.
-The default source runner uses a simulated world; it grants no host access.
+Run `hirsel run --simulation docs/tour/world.json conformance/LANG/LANG-2-tour-01-values-run.hir`.
+The simulated world grants no host access; `--grants docs/tour/stdout.json` instead
+grants the real standard output alone.
 
 <!-- tour: conformance/LANG/LANG-2-tour-01-values-run.hir -->
 [Runnable source](../conformance/LANG/LANG-2-tour-01-values-run.hir)
@@ -968,7 +971,8 @@ with `task.scope_until` (below). `http.fetch` makes one unpooled request. Networ
 authority is a finite set of exact address/port/operation rules; a URL cannot widen
 it, including on redirects. This complete program uses a scripted peer from `Test`
 that accepts one connection, so it needs no live server. Run a Test entry with
-`hirsel run` just like the other source fixtures: the simulator supplies Test.
+`hirsel run --simulation docs/tour/world.json` just like the other source fixtures:
+the simulator supplies Test.
 
 <!-- tour: conformance/LANG/LANG-9-tour-08-http-run.hir -->
 [Runnable source](../conformance/LANG/LANG-9-tour-08-http-run.hir)
@@ -1683,7 +1687,7 @@ pub fn main(rt: Io, u: Unsafe) -> Result[(), AppError] {
 
 Expected:
 
-`hirsel check` accepts it; the reference interpreter does not call C, so run it with `hirsel run --native`.
+`hirsel check` accepts it; the reference interpreter does not call C, so run it with `hirsel run --native --grants '{"io":{"stdout":"stdout.bytes@1","dirs":[]},"unsafe":true}'`.
 <!-- /tour -->
 
 ## Documenting your package

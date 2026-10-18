@@ -15,6 +15,8 @@ pub enum ToolError {
     Io(io::Error),
     SourceTooLarge,
     Runtime(String),
+    /// Admission refused the run before entry (PROG-3).
+    Launch(hirsel_run_config::RunRefusal),
     Query {
         error: QueryError,
         phase: Option<QueryKind>,
@@ -30,6 +32,7 @@ impl std::fmt::Display for ToolError {
             } => write!(f, "{}: {}", error.operation, error.message),
             Self::Io(error) => error.fmt(f),
             Self::Runtime(message) => f.write_str(message),
+            Self::Launch(refusal) => write!(f, "launch: {refusal}"),
             Self::SourceTooLarge => f.write_str("source exceeds the u32 source-map limit"),
             Self::Query {
                 error: QueryError::NotImplemented,

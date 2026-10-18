@@ -290,6 +290,20 @@ pub enum HostLaunch<'a> {
     },
     Replay(&'a Path),
 }
+impl HostLaunch<'static> {
+    /// The launch without a record: the empty-grant record with all seeds zero
+    /// (determinism.md, Run configuration), admitted like any template.
+    pub fn empty() -> Self {
+        Self::Live {
+            config: LaunchConfig::Grants {
+                input: std::ffi::OsStr::new("{}"),
+                arguments: None,
+            },
+            record: None,
+            revocations: None,
+        }
+    }
+}
 
 /// A host launch bound to the checked program, before entry.
 pub(crate) enum HostRun {
@@ -356,7 +370,7 @@ pub(crate) fn bind_host_run(
                 &mut host,
                 admission_time()?,
             )
-            .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            .map_err(ToolError::Launch)?;
             let mut io = host.into_io();
             if let Some(tape) = record {
                 hirsel_rt::host_launch::record(&mut io, &admitted, tape, &[])

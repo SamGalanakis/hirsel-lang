@@ -507,7 +507,7 @@ fn native_calls_c_with_scalars_a_byte_view_and_a_released_handle() {
         };
         let refused = native::run_path_native_with_config(
             &path,
-            Some(launch),
+            launch,
             None,
             native::Output::Streams {
                 stdout: &mut Vec::new(),

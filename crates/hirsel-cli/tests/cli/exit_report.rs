@@ -107,6 +107,8 @@ fn buffered_stdout_is_flushed_before_the_host_exit_report() {
     );
     let grants = source.with_extension("grants.json");
     std::fs::write(&grants, r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]}}"#).unwrap();
+    let world = source.with_extension("world.json");
+    std::fs::write(&world, "{}").unwrap();
     let exe = build_executable(&source, &[]);
     let tape = source.with_extension("tape");
     for mode in 0..6 {
@@ -128,7 +130,9 @@ fn buffered_stdout_is_flushed_before_the_host_exit_report() {
                     "--replay"
                 })
                 .arg(&tape);
-        } else if mode != 0 {
+        } else if mode == 0 {
+            command.arg("--simulation").arg(&world);
+        } else {
             if mode == 3 {
                 command.arg("--hirsel-record").arg(&tape);
             }
@@ -151,7 +155,7 @@ fn buffered_stdout_is_flushed_before_the_host_exit_report() {
         reader.read_to_string(&mut output).unwrap();
         assert_eq!(output, "beforeerror: NotGranted\n", "mode={mode}");
     }
-    for p in [source, grants, exe, tape] {
+    for p in [source, grants, world, exe, tape] {
         std::fs::remove_file(p).unwrap();
     }
 }
@@ -171,6 +175,8 @@ fn returned_resources_finalize_after_the_report_in_both_engines() {
     );
     let grants = source.with_extension("grants.json");
     std::fs::write(&grants, r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]}}"#).unwrap();
+    let world = source.with_extension("world.json");
+    std::fs::write(&world, "{}").unwrap();
     let exe = build_executable(&source, &[]);
     let tape = source.with_extension("tape");
     for mode in 0..6 {
@@ -192,7 +198,9 @@ fn returned_resources_finalize_after_the_report_in_both_engines() {
                     "--replay"
                 })
                 .arg(&tape);
-        } else if mode != 0 {
+        } else if mode == 0 {
+            command.arg("--simulation").arg(&world);
+        } else {
             if mode == 3 {
                 command.arg("--hirsel-record").arg(&tape);
             }
@@ -218,7 +226,7 @@ fn returned_resources_finalize_after_the_report_in_both_engines() {
             "mode={mode}"
         );
     }
-    for p in [source, grants, exe, tape] {
+    for p in [source, grants, world, exe, tape] {
         std::fs::remove_file(p).unwrap();
     }
 }
