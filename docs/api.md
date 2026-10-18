@@ -329,22 +329,22 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn bufio.buffered(r: Reader) -> u64 uses {}` <!-- std@1/bufio/buffered -->
 - `pub fn bufio.consume(mut r: Reader, count: u64) -> () uses {}` <!-- std@1/bufio/consume -->
 - `pub fn bufio.contents(r: Reader) -> unique Bytes uses {}` <!-- std@1/bufio/contents -->
-- `pub fn bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[ u64, ReadError[FileError] ]` <!-- std@1/bufio/file_read -->
-- `pub fn bufio.file_read_exact( d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64 ) -> Result[(), ReadError[FileError]]` <!-- std@1/bufio/file_read_exact -->
-- `pub fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[ String, ReadError[FileError] ]` <!-- std@1/bufio/file_read_line -->
+- `@preserves_unique(out) pub fn bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[ u64, ReadError[FileError] ]` <!-- std@1/bufio/file_read -->
+- `@preserves_unique(out) pub fn bufio.file_read_exact( d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64 ) -> Result[(), ReadError[FileError]]` <!-- std@1/bufio/file_read_exact -->
+- `pub fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[ unique String, ReadError[FileError] ]` <!-- std@1/bufio/file_read_line -->
 - `pub fn bufio.file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Result[ u64, ReadError[FileError] ]` <!-- std@1/bufio/file_read_more -->
-- `pub fn bufio.file_read_until( d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[FileError]]` <!-- std@1/bufio/file_read_until -->
+- `@preserves_unique(out) pub fn bufio.file_read_until( d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[FileError]]` <!-- std@1/bufio/file_read_until -->
 - `pub fn bufio.new(capacity: u64) -> Reader uses {}` <!-- std@1/bufio/new -->
-- `pub fn bufio.read[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], mut out: List[u8], max: u64 ) -> Result[u64, ReadError[E]] uses {refill}` <!-- std@1/bufio/read -->
-- `pub fn bufio.read_exact[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], mut out: List[u8], count: u64 ) -> Result[(), ReadError[E]] uses {refill}` <!-- std@1/bufio/read_exact -->
-- `pub fn bufio.read_line[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], limit: u64 ) -> Result[String, ReadError[E]] uses {refill}` <!-- std@1/bufio/read_line -->
+- `@preserves_unique(out) pub fn bufio.read[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], mut out: List[u8], max: u64 ) -> Result[u64, ReadError[E]] uses {refill}` <!-- std@1/bufio/read -->
+- `@preserves_unique(out) pub fn bufio.read_exact[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], mut out: List[u8], count: u64 ) -> Result[(), ReadError[E]] uses {refill}` <!-- std@1/bufio/read_exact -->
+- `pub fn bufio.read_line[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], limit: u64 ) -> Result[unique String, ReadError[E]] uses {refill}` <!-- std@1/bufio/read_line -->
 - `pub fn bufio.read_more[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], max: u64 ) -> Result[u64, ReadError[E]] uses {refill}` <!-- std@1/bufio/read_more -->
-- `pub fn bufio.read_until[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[E]] uses {refill}` <!-- std@1/bufio/read_until -->
-- `pub fn bufio.stream_read( n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64 ) -> Result[u64, ReadError[NetError]]` <!-- std@1/bufio/stream_read -->
-- `pub fn bufio.stream_read_exact( n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64 ) -> Result[(), ReadError[NetError]]` <!-- std@1/bufio/stream_read_exact -->
-- `pub fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[ String, ReadError[NetError] ]` <!-- std@1/bufio/stream_read_line -->
+- `@preserves_unique(out) pub fn bufio.read_until[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[E]] uses {refill}` <!-- std@1/bufio/read_until -->
+- `@preserves_unique(out) pub fn bufio.stream_read( n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64 ) -> Result[u64, ReadError[NetError]]` <!-- std@1/bufio/stream_read -->
+- `@preserves_unique(out) pub fn bufio.stream_read_exact( n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64 ) -> Result[(), ReadError[NetError]]` <!-- std@1/bufio/stream_read_exact -->
+- `pub fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[ unique String, ReadError[NetError] ]` <!-- std@1/bufio/stream_read_line -->
 - `pub fn bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[ u64, ReadError[NetError] ]` <!-- std@1/bufio/stream_read_more -->
-- `pub fn bufio.stream_read_until( n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[NetError]]` <!-- std@1/bufio/stream_read_until -->
+- `@preserves_unique(out) pub fn bufio.stream_read_until( n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[NetError]]` <!-- std@1/bufio/stream_read_until -->
 
 ## bytes
 
@@ -566,8 +566,8 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn http.fetch( n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes] ) -> Result[Response, HttpError]` <!-- std@1/http/fetch -->
 - `pub fn http.header(headers: List[Header], name: String) -> Option[String] uses {}` — Zig HeaderIterator lookup; the first case-insensitive match wins. <!-- std@1/http/header -->
 - `pub fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[ Option[(ServerRequest, u64)], HttpError ] uses {}` — Complete includes the consumed body; subsequent bytes belong to another request. <!-- std@1/http/parse_server_request -->
-- `pub fn http.read_all(mut r: Request, limit: u64) -> Result[Bytes, HttpError]` <!-- std@1/http/read_all -->
-- `pub fn http.read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]` <!-- std@1/http/read_body -->
+- `pub fn http.read_all(mut r: Request, limit: u64) -> Result[unique Bytes, HttpError]` <!-- std@1/http/read_all -->
+- `@preserves_unique(out) pub fn http.read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]` <!-- std@1/http/read_body -->
 - `pub fn http.receive_head(mut r: Request) -> Result[ResponseHead, HttpError]` <!-- std@1/http/receive_head -->
 - `pub fn http.receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError]` — Clean EOF and the keep-alive idle limit return Closed. <!-- std@1/http/receive_request -->
 - `pub fn http.request( n: Net, config: Config, method: Method, url: String, headers: List[Header] ) -> Result[Request, HttpError]` <!-- std@1/http/request -->
@@ -715,8 +715,8 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## input
 
-- `pub fn input.read_all(s: Stdin) -> Result[Bytes, InputError]` — Adapted from Rust alloc::io read_to_end/read_until and their tests (MIT option; third-party/NOTICES.md). <!-- std@1/input/read_all -->
-- `pub fn input.read_line(s: Stdin) -> Result[Option[String], InputError]` <!-- std@1/input/read_line -->
+- `pub fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]` — Adapted from Rust alloc::io read_to_end/read_until and their tests (MIT option; third-party/NOTICES.md). <!-- std@1/input/read_all -->
+- `pub fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]` <!-- std@1/input/read_line -->
 
 ## instant
 
@@ -1027,7 +1027,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## stdin
 
-- `fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]` <!-- core@1/stdin/read -->
+- `@preserves_unique(buf) @unretained(s) fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]` <!-- core@1/stdin/read -->
 
 ## stock
 

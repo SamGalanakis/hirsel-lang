@@ -2468,14 +2468,18 @@ impl Checker<'_> {
             })
         })
     }
+    /// A `@preserves_unique` proof enters with its selection and every taken
+    /// parameter unique; another `mut` parameter enters as declared, so the
+    /// call needs nothing of that argument (MODE-2).
     fn proof_entry(&self, mut state: State) -> State {
-        if self.unique_proof.is_some() {
+        if let Some(selected) = self.unique_proof {
             for &index in &self.parameters {
                 let binding = &self.body.bindings[index];
                 let ResolvedName::Parameter(parameter) = binding.binding else {
                     continue;
                 };
-                if self.parameter_passing(&binding.owner, parameter) != PassingMode::Borrow
+                let passing = self.parameter_passing(&binding.owner, parameter);
+                if (parameter == selected || passing == PassingMode::Take)
                     && !self.properties[binding.ty.index()].plain
                 {
                     state.slots[index].value.modes.uniqueness = Uniqueness::Unique;
@@ -6041,10 +6045,12 @@ impl Checker<'_> {
                     value.content = Content::default();
                 }
                 // MODE-2: what a `@preserves_unique` callee may install comes
-                // from its taken and `mut` arguments only. A bodyless core
-                // callee may also store a share of a borrowed argument, so
-                // that argument must be Plain or Shared, unless the ledger
-                // marks it unretained.
+                // from its taken and `mut` arguments only, and its proof
+                // covers other `mut` arguments aliased. A bodyless core
+                // callee has no proof: its other `mut` arguments must be
+                // unique too, and it may also store a share of a borrowed
+                // argument, so that argument must be Plain or Shared, unless
+                // the ledger marks it unretained.
                 let ledger = self
                     .callee_definition(*callee)
                     .is_some_and(|path| path.package_is("core", "1"));
@@ -6059,7 +6065,11 @@ impl Checker<'_> {
                             && requirement
                                 .as_ref()
                                 .is_none_or(|r| !self.callee_unretained(*callee, r.parameter));
+                        let mutable = requirement
+                            .as_ref()
+                            .is_some_and(|r| r.passing == PassingMode::Mut);
                         borrowed && !retained
+                            || mutable && !ledger
                             || self
                                 .property(arg.value)
                                 .is_some_and(|p| p.plain || p.shared)
@@ -6067,6 +6077,16 @@ impl Checker<'_> {
                                 && self.value(state, arg.value).modes.uniqueness
                                     == Uniqueness::Unique
                     });
+                // The selected `mut` argument itself must be unique.
+                let unique_arguments: BTreeSet<ExprId> = arguments
+                    .iter()
+                    .filter(|arg| {
+                        self.property(arg.value)
+                            .is_some_and(|p| p.plain || p.shared)
+                            || self.value(state, arg.value).modes.uniqueness == Uniqueness::Unique
+                    })
+                    .map(|arg| arg.value)
+                    .collect();
                 for (storage, mutable, argument) in &loans {
                     let declared = self
                         .body
@@ -6096,6 +6116,7 @@ impl Checker<'_> {
                                     && requirement.as_ref().is_some_and(|r| {
                                         r.modes.uniqueness == Uniqueness::Unique
                                             || unique_inputs
+                                                && unique_arguments.contains(argument)
                                                 && self
                                                     .callee_preserves_unique(*callee, r.parameter)
                                     })

@@ -1420,10 +1420,12 @@ impl Checker<'_> {
                 initial.must[root].set(MustFacts::GLOBAL, true);
             }
         }
-        if model.unique_proof.is_some() {
+        // MODE-2: the selection and every taken parameter enter unique; another
+        // `mut` parameter enters as declared.
+        if let Some(selected) = model.unique_proof {
             for local in &self.body.parameters {
                 let root = local.0 as usize;
-                if !model.borrowed[root] || model.mutable_parameters[root] {
+                if root == selected || !model.borrowed[root] && !model.mutable_parameters[root] {
                     initial.current_unique[root] = true;
                 }
             }
@@ -5553,10 +5555,13 @@ impl Checker<'_> {
                 // which must then be plain or a handle.
                 let ledger = matches!(callee, Callee::Definition { path, .. }
                     if path.package_is("core", "1"));
+                // Its proof covers other `mut` arguments aliased; a bodyless
+                // core callee has none, so those must be unique too.
                 let unique_inputs = arguments.iter().all(|a| {
                     let borrowed = a.value.usage == UseKind::Borrow;
                     let retained = ledger && !self.callee_unretained(callee, a.parameter);
                     borrowed && !retained
+                        || a.value.usage == UseKind::Mut && !ledger
                         || !needs_release(
                             self,
                             self.place_type(a.value.place),
@@ -5568,11 +5573,17 @@ impl Checker<'_> {
                         )
                         || !borrowed && self.operand_unique(state, &a.value)
                 });
-                for a in arguments {
+                let unique_arguments: Vec<bool> = arguments
+                    .iter()
+                    .map(|a| self.operand_unique(state, &a.value))
+                    .collect();
+                for (a, unique) in arguments.iter().zip(unique_arguments) {
                     if a.value.usage == UseKind::Mut
                         && !self.callee_preserves_state(callee, a.parameter, false)
                         && !self.mut_requires_unique(callee, a.parameter)
-                        && !(unique_inputs && self.callee_preserves_unique(callee, a.parameter))
+                        && !(unique_inputs
+                            && unique
+                            && self.callee_preserves_unique(callee, a.parameter))
                     {
                         share_root(
                             state,

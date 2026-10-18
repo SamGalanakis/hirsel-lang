@@ -876,6 +876,7 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
   Error(Truncated())
 }
 
+@preserves_unique(out)
 pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError] {
   if max == 0 {
     return Error(http_net_error(InvalidInput()))
@@ -930,7 +931,7 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
   Ok(count)
 }
 
-pub fn read_all(mut r: Request, limit: u64) -> Result[Bytes, HttpError] {
+pub fn read_all(mut r: Request, limit: u64) -> Result[unique Bytes, HttpError] {
   let mut out: List[u8] = []
   while true {
     let len = core@1/list.len(out)

@@ -360,8 +360,9 @@ A `mut` call argument marks its root shared unless the callee declares the param
 `@preserves_unique` on it (never an indirect callee, whose function value may come
 from an unproved closure, nor a foreign one, whose C body proves nothing) with every borrowed argument plain or a handle when the
 callee is core@1 (bodyless, so it may store a share of one) and its promise does not
-list that parameter `unretained`, and every
-counted taken and `mut` argument currently unique; the same promise on a taken
+list that parameter `unretained`, the argument itself and every
+counted taken argument currently unique, and, for a core@1 callee, every other `mut`
+argument too; the same promise on a taken
 parameter makes the call's destination currently unique. A `mut` use of a part of a
 currently unique root is unique. `mutable_storage_exit` requires a `mut x: unique T`
 parameter to be unique at each exit and at each evaluation failure edge, but not on
@@ -373,7 +374,7 @@ argument's). Before each instruction and terminator, `restore_borrowed` makes a 
 unique again once no live local holds one; a failure edge accepts `borrow_only`, and so
 does a return whose value holds none (`returning_shares`). A
 `@preserves_unique` body is re-proved by a second flow run (`flow_with`) whose entry
-makes the selected and taken or `mut` parameters current-unique; a selected `mut`
+makes the selected and taken parameters current-unique, other `mut` parameters as declared; a selected `mut`
 parameter is held to the same exits and a selected `take` parameter's returned value
 must be unique. Only its "preserved unique
 hand-back" violations are kept. Hand-built controls are in

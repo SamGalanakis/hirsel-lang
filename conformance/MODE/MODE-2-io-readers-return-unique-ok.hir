@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: accept
+// The std readers append to a fresh `out` through promises whose proofs take
+// the reader, stream and request aliased, so their results are unique.
+fn all(s: Stdin) -> Result[unique Bytes, InputError] {
+  input.read_all(s)
+}
+
+fn line(s: Stdin) -> Result[Option[unique String], InputError] {
+  input.read_line(s)
+}
+
+fn net_line(n: Net, mut s: Stream of n, mut r: bufio.Reader) -> Result[
+  unique String,
+  bufio.ReadError[NetError]
+] {
+  bufio.stream_read_line(n, mut s, mut r, 8192)
+}
+
+fn body(mut r: http.Request) -> Result[unique Bytes, http.HttpError] {
+  http.read_all(mut r, 1024)
+}

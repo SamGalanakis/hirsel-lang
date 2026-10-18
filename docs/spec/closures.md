@@ -99,14 +99,18 @@ state parameter is `mut` (`@preserves_unique` may also select a `take` parameter
   hands the stronger actual contract back unchanged.
 - `@preserves_unique(p)` on a `mut` or `take` parameter
   ([MODE-2](ownership.md#mode-2-uniqueness)): when the selected argument and every other
-  non-plain `take` or `mut` argument are unique at the call, a selected `mut` argument is
+  non-plain `take` argument are unique at the call, a selected `mut` argument is
   handed back unique and a selected `take` parameter's call returns a unique result.
+  Other `mut` arguments impose nothing, since the proof covers them aliased, except for a
+  bodyless core declaration, which has no proof: its other non-plain `mut` arguments must
+  be unique too.
   Borrowed arguments impose nothing, since the body can only share out of them, except
   for a bodyless core declaration, which may store a share of a borrowed argument: there
   each borrowed argument it may retain must also be Plain or Shared. One the ledger marks `@unretained`, which the operation only reads and stores
   nothing derived from (`sorted_map.insert`'s `by`, whose brand is type-level), is
   exempt. The body is checked again with the selected parameter and every non-plain
-  `take` and `mut` parameter entering unique; the selected `mut` parameter must then be
+  `take` parameter entering unique, and every other `mut` parameter entering as declared
+  (aliased unless written `unique`); the selected `mut` parameter must then be
   unique at every exit (MODE-2's hand-back), and for a selected `take` parameter every
   returned value must be unique. A claim this check cannot prove is MODE-2. The selection names a whole
   parameter, with no field path. It prefixes only a function declaration, never a

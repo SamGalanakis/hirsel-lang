@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: accept
+// The promise's proof takes the plain `mut c` aliased, so a caller's aliased
+// cursor no longer blocks it: `out` comes back unique from every call. Twin is
+// MODE-2-preserves-unique-plain-mut-sibling-bad.
+type Cursor {
+  data: List[u8],
+  at: u64,
+}
+
+@preserves_unique(out)
+fn step(mut c: Cursor, mut out: List[u8]) -> () {
+  list.push(mut out, c.data[c.at])
+  c.at += 1
+}
+
+fn two(mut c: Cursor) -> unique List[u8] {
+  let mut out: List[u8] = []
+  step(mut c, mut out)
+  step(mut c, mut out)
+  out
+}

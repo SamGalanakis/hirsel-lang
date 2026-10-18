@@ -483,9 +483,9 @@ a currently unique root is itself unique, so it meets a `mut unique` parameter a
 keeps the root unique. A directly called declaration with `@preserves_unique(p)`
 (`callee_preserves_unique` checks the callee resolves to a definition) hands a selected
 `mut` argument back unique, or returns a unique result for a selected `take`
-parameter, when every non-plain taken and `mut` argument is unique at the call, and,
-for a bodyless core@1 callee (`callee_definition`), every borrowed argument is Plain or
-Shared, since a ledger operation may store a share of it, unless the
+parameter, when the selected and every non-plain taken argument is unique at the call
+(`unique_arguments`), and, for a bodyless core@1 callee (`callee_definition`), every other
+`mut` argument is unique too and every borrowed argument is Plain or Shared, since a ledger operation may store a share of it, unless the
 promise lists it `unretained` (`callee_unretained`: `sorted_map.insert`'s `by`); that
 result uniqueness is flow evidence only, so the published call row stays the
 declared one, as V derives it. A `mut x: unique T` parameter must be unique at every
@@ -497,7 +497,8 @@ its last use stays `parked` on the storage until its statement's `StatementEnd`;
 no live binding, evaluated temporary or parked temporary reaches it. A taken argument of
 a call reaching it makes the share real (`share`). A `@preserves_unique`
 body is checked a second time (`flow::check` with a proof parameter) with its
-selected and taken or `mut` parameters entering unique; a selected `mut` parameter
+selected and non-plain taken parameters entering unique (`proof_entry`), other `mut`
+parameters as declared; a selected `mut` parameter
 must be unique at the same sites, a selected `take` parameter's result at every
 return, and only the promise's own diagnostic is kept from that run.
 

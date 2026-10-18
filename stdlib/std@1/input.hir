@@ -1,6 +1,6 @@
 // Adapted from Rust alloc::io read_to_end/read_until and their tests
 // (MIT option; third-party/NOTICES.md). Byte-at-a-time lines leave the next line unread.
-pub fn read_all(s: Stdin) -> Result[Bytes, InputError] {
+pub fn read_all(s: Stdin) -> Result[unique Bytes, InputError] {
   let mut buffer: List[u8] = []
   while core@1/stdin.read(s, mut buffer, 8192)? != 0 {
     ()
@@ -8,7 +8,7 @@ pub fn read_all(s: Stdin) -> Result[Bytes, InputError] {
   Ok(core@1/bytes.from_list(take buffer))
 }
 
-pub fn read_line(s: Stdin) -> Result[Option[String], InputError] {
+pub fn read_line(s: Stdin) -> Result[Option[unique String], InputError] {
   let mut buffer: List[u8] = []
   while core@1/stdin.read(s, mut buffer, 1)? != 0 {
     if buffer[core@1/list.len(buffer) - 1] == 10 {

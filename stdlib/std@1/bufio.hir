@@ -86,6 +86,7 @@ fn fill[S, E](
   read_more(mut r, mut source, refill, capacity)
 }
 
+@preserves_unique(out)
 pub fn read[S, E](
   mut r: Reader,
   mut source: S,
@@ -111,6 +112,7 @@ pub fn read[S, E](
   Ok(count)
 }
 
+@preserves_unique(out)
 pub fn read_exact[S, E](
   mut r: Reader,
   mut source: S,
@@ -129,6 +131,7 @@ pub fn read_exact[S, E](
   Ok(())
 }
 
+@preserves_unique(out)
 pub fn read_until[S, E](
   mut r: Reader,
   mut source: S,
@@ -180,7 +183,7 @@ pub fn read_line[S, E](
   mut source: S,
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
   limit: u64
-) -> Result[String, ReadError[E]] uses {refill} {
+) -> Result[unique String, ReadError[E]] uses {refill} {
   let mut out: List[u8] = []
   let _ = read_until(mut r, mut source, refill, 10u8, mut out, limit)?
   match core@1/string.from_bytes(core@1/bytes.from_list(take out)) {
@@ -189,6 +192,7 @@ pub fn read_line[S, E](
   }
 }
 
+@preserves_unique(out)
 pub fn stream_read_until(
   n: Net,
   mut s: Stream of n,
@@ -229,6 +233,7 @@ pub fn stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> 
   )
 }
 
+@preserves_unique(out)
 pub fn stream_read_exact(
   n: Net,
   mut s: Stream of n,
@@ -251,7 +256,7 @@ pub fn stream_read_exact(
 }
 
 pub fn stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[
-  String,
+  unique String,
   ReadError[NetError]
 ] {
   read_line(
@@ -267,6 +272,7 @@ pub fn stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -
   )
 }
 
+@preserves_unique(out)
 pub fn stream_read(
   n: Net,
   mut s: Stream of n,
@@ -288,6 +294,7 @@ pub fn stream_read(
   )
 }
 
+@preserves_unique(out)
 pub fn file_read_until(
   d: Dir,
   mut f: File of d,
@@ -328,6 +335,7 @@ pub fn file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Resu
   )
 }
 
+@preserves_unique(out)
 pub fn file_read_exact(
   d: Dir,
   mut f: File of d,
@@ -350,7 +358,7 @@ pub fn file_read_exact(
 }
 
 pub fn file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[
-  String,
+  unique String,
   ReadError[FileError]
 ] {
   read_line(
@@ -366,6 +374,7 @@ pub fn file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Re
   )
 }
 
+@preserves_unique(out)
 pub fn file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[
   u64,
   ReadError[FileError]

@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+// The selected argument itself must still be unique: an `out` copied from a
+// parameter stays aliased, whatever the cursor. Twin is
+// MODE-2-preserves-unique-plain-mut-sibling-ok.
+type Cursor {
+  data: List[u8],
+  at: u64,
+}
+
+@preserves_unique(out)
+fn step(mut c: Cursor, mut out: List[u8]) -> () {
+  list.push(mut out, c.data[c.at])
+  c.at += 1
+}
+
+fn two(mut c: Cursor, take seed: List[u8]) -> unique List[u8] {
+  let mut out: List[u8] = copy seed
+  step(mut c, mut out)
+  step(mut c, mut out)
+  out
+}

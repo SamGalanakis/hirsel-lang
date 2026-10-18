@@ -75,8 +75,8 @@ N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
 fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
 fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
-fn input.read_all(s: Stdin) -> Result[Bytes, InputError]
-fn input.read_line(s: Stdin) -> Result[Option[String], InputError]
+fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]
+fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]
 N fn prng.seed(value: u64) -> prng.Generator uses {}
 N fn prng.next_u64(mut generator: prng.Generator) -> u64 uses {}
 N fn prng.below(mut generator: prng.Generator, upper_exclusive: u64) -> Result[u64, prng.SampleError] uses {}
@@ -459,20 +459,20 @@ fn bufio.buffered(r: Reader) -> u64 uses {}
 fn bufio.contents(r: Reader) -> unique Bytes uses {}
 fn bufio.consume(mut r: Reader, count: u64) -> () uses {}
 fn bufio.read_more[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], max: u64) -> Result[u64,ReadError[E]]
-fn bufio.read[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,ReadError[E]]
-fn bufio.read_exact[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], count: u64) -> Result[(),ReadError[E]]
-fn bufio.read_until[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[E]]
-fn bufio.read_line[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[String,ReadError[E]]
+@preserves_unique(out) fn bufio.read[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,ReadError[E]]
+@preserves_unique(out) fn bufio.read_exact[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], count: u64) -> Result[(),ReadError[E]]
+@preserves_unique(out) fn bufio.read_until[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[E]]
+fn bufio.read_line[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[unique String,ReadError[E]]
 fn bufio.stream_read_more(n: Net, mut s: Stream of n, mut r: Reader, max: u64) -> Result[u64,ReadError[NetError]]
-fn bufio.stream_read(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[NetError]]
-fn bufio.stream_read_exact(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[NetError]]
-fn bufio.stream_read_until(n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[NetError]]
-fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[String,ReadError[NetError]]
+@preserves_unique(out) fn bufio.stream_read(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[NetError]]
+@preserves_unique(out) fn bufio.stream_read_exact(n: Net, mut s: Stream of n, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[NetError]]
+@preserves_unique(out) fn bufio.stream_read_until(n: Net, mut s: Stream of n, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[NetError]]
+fn bufio.stream_read_line(n: Net, mut s: Stream of n, mut r: Reader, limit: u64) -> Result[unique String,ReadError[NetError]]
 fn bufio.file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Result[u64,ReadError[FileError]]
-fn bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[FileError]]
-fn bufio.file_read_exact(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[FileError]]
-fn bufio.file_read_until(d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[FileError]]
-fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[String,ReadError[FileError]]
+@preserves_unique(out) fn bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[FileError]]
+@preserves_unique(out) fn bufio.file_read_exact(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[FileError]]
+@preserves_unique(out) fn bufio.file_read_until(d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[FileError]]
+fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[unique String,ReadError[FileError]]
 ```
 
 `new(0)` uses capacity one. Capacity bounds each refill, not accumulated unread data.
@@ -563,8 +563,8 @@ fn send_body(mut r: Request, body: Bytes) -> Result[(), HttpError]
 fn send_chunk(mut r: Request, data: Bytes) -> Result[(), HttpError]
 fn end_body(mut r: Request, request_trailers: List[Header]) -> Result[(), HttpError]
 fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError]
-fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]
-fn read_all(mut r: Request, limit: u64) -> Result[Bytes, HttpError]
+@preserves_unique(out) fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]
+fn read_all(mut r: Request, limit: u64) -> Result[unique Bytes, HttpError]
 fn trailers(r: Request) -> List[Header]
 fn header(headers: List[Header], name: String) -> Option[String] uses {}
 fn fetch(n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes]) -> Result[Response, HttpError]
@@ -612,8 +612,8 @@ There is no whole-request deadline, since a deadline needs a clock.
 
 ## Input
 
-`input.read_all(s: Stdin) -> Result[Bytes, InputError]` reads to end of input.
-`input.read_line(s: Stdin) -> Result[Option[String], InputError]` reads through
+`input.read_all(s: Stdin) -> Result[unique Bytes, InputError]` reads to end of input.
+`input.read_line(s: Stdin) -> Result[Option[unique String], InputError]` reads through
 one newline, retaining it (and a preceding carriage return). It returns `None()`
 only for EOF before any bytes, and `InvalidUtf8()` for an invalid complete line.
 Both are ordinary source loops over `core@1/stdin.read`; they grant no authority

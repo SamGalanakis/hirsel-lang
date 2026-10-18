@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: accept
+// `stdin.read` only appends bytes to its `mut buf` and stores nothing of the
+// borrowed `Stdin`, so a fresh buffer stays unique through every read.
+fn all(s: Stdin) -> Result[unique Bytes, InputError] {
+  let mut buffer: List[u8] = []
+  while stdin.read(s, mut buffer, 8192)? != 0 {
+    ()
+  }
+  Ok(bytes.from_list(take buffer))
+}

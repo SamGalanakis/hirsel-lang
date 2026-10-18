@@ -53,7 +53,7 @@ N fn arg.count(args: Args) -> u64
 fn arg.text(args: Args, index: u64) -> Result[String, ArgError]
 fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
 fn path.of(text: String) -> Path
-fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]
+@preserves_unique(buf) @unretained(s) fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]
 N fn err.print(s: Stderr, text: String) -> Result[(), OutputError]
 N fn out.print(s: Stdout, text: String) -> Result[(), OutputError]
 fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]

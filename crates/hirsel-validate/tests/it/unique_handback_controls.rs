@@ -653,3 +653,81 @@ fn a_format_association_implies_the_builder_body_proof() {
     format_body(false, true).valid();
     handback_error(&format_body(true, true), "preserved unique hand-back");
 }
+
+/// `fn main(mut x: String, mut z: String)` calling `callee(mut x, mut z)`,
+/// which declares `@preserves_unique(x)` and is core@1 when `core`. With
+/// `proving`, main declares `@preserves_unique(x)` itself; otherwise its `x`
+/// is `unique`.
+fn sibling_call(core: bool, proving: bool) -> Fixture {
+    let (mut f, x) = handback(!proving);
+    let z = param(&mut f, TypeKind::Primitive(Primitive::String));
+    let callee_path = if core {
+        DefPath::core("test.keep")
+    } else {
+        path("callee")
+    };
+    let result = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
+    f.body().blocks[0].terminator = Terminator::Call {
+        callee: Callee::Definition {
+            path: callee_path.clone(),
+            arguments: vec![],
+        },
+        arguments: vec![
+            CallArgument {
+                parameter: ParamId(0),
+                value: operand(x, UseKind::Mut),
+            },
+            CallArgument {
+                parameter: ParamId(1),
+                value: operand(z, UseKind::Mut),
+            },
+        ],
+        returns: Some(CallReturn {
+            destination: PlaceId(result),
+            next: BlockId(1),
+        }),
+        on_failure: CleanupId(0),
+    };
+    f.body().blocks.push(block(vec![], ret(result, 0)));
+    owner_sig(&mut f, &[PassingMode::Mut, PassingMode::Mut]);
+    if proving {
+        promise(&mut f);
+    }
+    let mut callee = function_signature(
+        "callee",
+        vec![
+            (PassingMode::Mut, TypeKind::Primitive(Primitive::String)),
+            (PassingMode::Mut, TypeKind::Primitive(Primitive::String)),
+        ],
+        TypeKind::Tuple(vec![].into()),
+    );
+    callee.definition = callee_path.clone();
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    fun.state_promises = vec![StatePromise {
+        selector: ParameterRef::bound(ParamId(0)).into(),
+        advance_only: false,
+        preserve_captures: false,
+        preserve_unique: true,
+        unretained: Default::default(),
+    }]
+    .into();
+    f.signatures.insert(callee_path, callee);
+    f
+}
+
+#[test]
+fn a_plain_mut_sibling_does_not_block_a_proved_promise() {
+    // The callee's proof took `z` aliased, so `x` comes back unique.
+    sibling_call(false, false).valid();
+    // A bodyless core promise has no proof covering `z`.
+    handback_error(&sibling_call(true, false), "mutable unique hand-back");
+}
+
+#[test]
+fn a_preserves_unique_proof_enters_a_plain_mut_sibling_aliased() {
+    // `z` enters as declared, so the core callee cannot keep `x` unique.
+    handback_error(&sibling_call(true, true), "preserved unique hand-back");
+    sibling_call(false, true).valid();
+}
