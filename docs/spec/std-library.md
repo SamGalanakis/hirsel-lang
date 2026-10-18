@@ -566,6 +566,28 @@ sequential listen/accept loop. A server maps malformed requests to a 400 respons
 invoking application handling. No routing, concurrency or persistent-connection framework
 is implied.
 
+## Unicode scalar properties and simple case
+
+The pure allocation-free `std@1/unicode` helpers use the same pinned Unicode
+16.0.0 data as NFC and grapheme segmentation:
+
+```text
+fn unicode.is_whitespace(cp: u32) -> bool uses {}
+fn unicode.is_letter(cp: u32) -> bool uses {}
+fn unicode.is_digit(cp: u32) -> bool uses {}
+fn unicode.simple_lower(cp: u32) -> u32 uses {}
+fn unicode.simple_upper(cp: u32) -> u32 uses {}
+```
+
+Whitespace is the Unicode White_Space property, letters are general categories
+L*, and digits are Nd. Invalid scalar values return false from predicates and
+pass through unchanged from case functions. Unmapped scalars also pass through.
+These helpers classify scalar numbers; they do not validate text. Simple case
+maps one scalar to one scalar, without full string casing, casefold or locale
+rules. Generated immutable ranges and mapping rows come from the vendored
+UnicodeData.txt and PropList.txt; `stdlib/unicode16/generate.py --check` verifies
+byte-identical NFC and property table regeneration.
+
 ## SHA-256
 
 `std@1/sha256` implements SHA-256 entirely in ordinary, allocation-free source.

@@ -1,0 +1,62 @@
+// Go unicode range search/simple scalar conversion over pinned Unicode16 data.
+@noalloc
+fn property_contains(table: Bytes, cp: u32) -> bool uses {} {
+  let mut low: u64 = 0
+  let mut high = core@1/bytes.len(table) / 6
+  while low < high {
+    let middle = low + (high - low) / 2
+    let start = scalar_at(table, middle * 6)
+    let end = scalar_at(table, middle * 6 + 3)
+    if cp < start {
+      high = middle
+    } else if cp > end {
+      low = middle + 1
+    } else {
+      return true
+    }
+  }
+  false
+}
+
+@noalloc
+fn simple_case(table: Bytes, cp: u32) -> u32 uses {} {
+  let mut low: u64 = 0
+  let mut high = core@1/bytes.len(table) / 6
+  while low < high {
+    let middle = low + (high - low) / 2
+    let value = scalar_at(table, middle * 6)
+    if cp < value {
+      high = middle
+    } else if cp > value {
+      low = middle + 1
+    } else {
+      return scalar_at(table, middle * 6 + 3)
+    }
+  }
+  cp
+}
+
+@noalloc
+pub fn is_whitespace(cp: u32) -> bool uses {} {
+  property_contains(WHITE_SPACE, cp)
+}
+
+@noalloc
+pub fn is_letter(cp: u32) -> bool uses {} {
+  property_contains(LETTERS, cp)
+}
+
+@noalloc
+pub fn is_digit(cp: u32) -> bool uses {} {
+  property_contains(DIGITS, cp)
+}
+
+@noalloc
+pub fn simple_lower(cp: u32) -> u32 uses {} {
+  simple_case(SIMPLE_LOWER, cp)
+}
+
+@noalloc
+pub fn simple_upper(cp: u32) -> u32 uses {} {
+  simple_case(SIMPLE_UPPER, cp)
+}

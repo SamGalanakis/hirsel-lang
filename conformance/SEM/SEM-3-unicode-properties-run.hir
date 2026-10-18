@@ -1,0 +1,94 @@
+// rule: SEM-3
+// expect: run
+// Unicode16 property and simple-case edges; invalid scalar controls.
+fn mapping(cp: u32, lower: u32, upper: u32) -> () {
+  failure.check(std@1/unicode.simple_lower(cp) == lower, TextInvariant())
+  failure.check(std@1/unicode.simple_upper(cp) == upper, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  let scalars_1: List[u32] = [
+    '\t',
+    '\n',
+    '\u{b}',
+    '\u{c}',
+    '\r',
+    ' ',
+    0x85u32,
+    0xa0u32,
+    0x1680u32,
+    0x2000u32,
+    0x200au32,
+    0x2028u32,
+    0x2029u32,
+    0x202fu32,
+    0x205fu32,
+    0x3000u32
+  ]
+  for cp in scalars_1 {
+    failure.check(std@1/unicode.is_whitespace(cp), TextInvariant())
+  }
+  let scalars_2: List[u32] = [
+    0u32,
+    8u32,
+    14u32,
+    0x180eu32,
+    0x200bu32,
+    0x2060u32,
+    0xfeffu32,
+    0xd800u32,
+    0x110000u32,
+    0xffffffffu32
+  ]
+  for cp in scalars_2 {
+    failure.check(!std@1/unicode.is_whitespace(cp), TextInvariant())
+  }
+  for cp in string.scalars("Aaλ中é") {
+    failure.check(std@1/unicode.is_letter(cp), TextInvariant())
+    failure.check(!std@1/unicode.is_digit(cp), TextInvariant())
+  }
+  // New in the pinned Unicode16 data, rather than a host's Unicode version.
+  failure.check(std@1/unicode.is_letter(0x11380u32), TextInvariant())
+  failure.check(std@1/unicode.is_digit(0x10d40u32), TextInvariant())
+  for cp in string.scalars("09९０") {
+    failure.check(std@1/unicode.is_digit(cp), TextInvariant())
+    failure.check(!std@1/unicode.is_letter(cp), TextInvariant())
+  }
+  let scalars_3: List[u32] = [
+    0x301u32,
+    0x378u32,
+    0x2160u32,
+    0xd800u32,
+    0xdfffu32,
+    0x110000u32,
+    0xffffffffu32
+  ]
+  for cp in scalars_3 {
+    failure.check(!std@1/unicode.is_letter(cp), TextInvariant())
+    failure.check(!std@1/unicode.is_digit(cp), TextInvariant())
+  }
+  failure.check(!std@1/unicode.is_digit(0xb2u32), TextInvariant())
+  mapping('A', 'a', 'A')
+  mapping('a', 'a', 'A')
+  mapping(0x3a3u32, 0x3c3u32, 0x3a3u32)
+  mapping(0x3c2u32, 0x3c2u32, 0x3a3u32)
+  mapping(0x1f2u32, 0x1f3u32, 0x1f1u32)
+  mapping(0x130u32, 'i', 0x130u32)
+  mapping(0xdfu32, 0xdfu32, 0xdfu32)
+  mapping(0x1e9eu32, 0xdfu32, 0x1e9eu32)
+  mapping(0x212au32, 'k', 0x212au32)
+  mapping(0x10400u32, 0x10428u32, 0x10400u32)
+  mapping(0x10428u32, 0x10428u32, 0x10400u32)
+  let scalars_4: List[u32] = [
+    0x378u32,
+    0x1f600u32,
+    0xd800u32,
+    0xdfffu32,
+    0x110000u32,
+    0xffffffffu32
+  ]
+  for cp in scalars_4 {
+    mapping(cp, cp, cp)
+  }
+  Ok(())
+}

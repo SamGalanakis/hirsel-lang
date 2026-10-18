@@ -75,3 +75,14 @@ boundary markers. The full oracle is an explicit scheduled `full_gate_` test;
 table regeneration and directed conformance remain in the fast gate; the
 source/native unit and heap control uses the same full-gate convention because
 its debug execution exceeds a minute on this host.
+
+Scalar property and simple-case helpers in `../std@1/unicode_properties.hir`
+share this module and the `scalar_at` decoder. `generate.py` additionally emits
+`unicode_property_tables.hir` from UnicodeData categories L*/Nd and simple
+upper/lower columns, and the unmodified official `PropList-16.0.0.txt` input for
+White_Space. PropList.txt SHA-256 is
+`53d614508e2a0b2305a8aa21cd60d993de9326cdf65993660dfcce4503548583`.
+Six-byte rows encode three-byte inclusive range endpoints or source/destination
+scalars. The generator merges adjacent property ranges; no foreign-version
+property or case tables are imported. Existing NFC and grapheme data and
+regeneration checks are preserved. Invalid scalars match no property or case row.

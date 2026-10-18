@@ -354,6 +354,18 @@
       ]
     },
     {
+      "path": "unicode_properties.hir",
+      "module": [
+        "unicode"
+      ]
+    },
+    {
+      "path": "unicode_property_tables.hir",
+      "module": [
+        "unicode"
+      ]
+    },
+    {
       "path": "hex.hir",
       "module": [
         "hex"

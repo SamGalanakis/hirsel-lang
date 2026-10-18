@@ -81,3 +81,30 @@ fn full_gate_sha256_million_a_native_reference() {
         assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     });
 }
+
+#[test]
+fn unicode_properties_are_ordinary_source() {
+    source_codec(
+        "unicode-properties",
+        "unicode",
+        &[
+            "is_whitespace",
+            "is_letter",
+            "is_digit",
+            "simple_lower",
+            "simple_upper",
+        ],
+    );
+}
+
+#[test]
+fn unicode16_property_tables_regenerate() {
+    assert!(
+        std::process::Command::new("python3")
+            .current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .args(["stdlib/unicode16/generate.py", "--check"])
+            .status()
+            .unwrap()
+            .success()
+    );
+}
