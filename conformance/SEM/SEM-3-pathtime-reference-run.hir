@@ -56,24 +56,24 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   check_parent("a", ".")
   check_parent("a//", ".")
   failure.check(
-    path.filename(path.of("/dir/basename.ext")) == "basename.ext",
+    path.filename(path.of("/dir/basename.ext")) == Some("basename.ext"),
     TextInvariant()
   )
   failure.check(
-    path.filename(path.of("basename.ext//")) == "basename.ext",
+    path.filename(path.of("basename.ext//")) == Some("basename.ext"),
     TextInvariant()
   )
-  failure.check(path.filename(path.of("/aaa/")) == "aaa", TextInvariant())
-  failure.check(path.filename(path.of("//a")) == "a", TextInvariant())
-  failure.check(path.filename(path.of("")) == "", TextInvariant())
-  failure.check(path.extension(path.of(".gitignore")) == "", TextInvariant())
-  failure.check(path.extension(path.of(".image.png")) == "png", TextInvariant())
-  failure.check(path.extension(path.of("file.ext.")) == "", TextInvariant())
+  failure.check(path.filename(path.of("/aaa/")) == Some("aaa"), TextInvariant())
+  failure.check(path.filename(path.of("//a")) == Some("a"), TextInvariant())
+  failure.check(path.filename(path.of("")) == None(), TextInvariant())
+  failure.check(path.extension(path.of(".gitignore")) == None(), TextInvariant())
+  failure.check(path.extension(path.of(".image.png")) == Some("png"), TextInvariant())
+  failure.check(path.extension(path.of("file.ext.")) == Some(""), TextInvariant())
   failure.check(
-    path.extension(path.of("very-long-file.bruh")) == "bruh",
+    path.extension(path.of("very-long-file.bruh")) == Some("bruh"),
     TextInvariant()
   )
-  failure.check(path.extension(path.of("/a.b.c/")) == "c", TextInvariant())
+  failure.check(path.extension(path.of("/a.b.c/")) == Some("c"), TextInvariant())
   failure.check(
     path.components(path.of("/a//b/c///")) == ["a", "b", "c"],
     TextInvariant()

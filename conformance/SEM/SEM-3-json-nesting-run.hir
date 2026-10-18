@@ -42,7 +42,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     _ => failure.check(false, TextInvariant()),
   }
   let mut output: List[u8] = []
-  match json.write(over, mut output) {
+  match json.stringify_into(over, mut output) {
     Error(Nesting(128)) => failure.check(
       core@1/list.len(output) == 128,
       TextInvariant()

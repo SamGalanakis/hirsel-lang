@@ -1,7 +1,7 @@
 // JSON DOM contracts: STD-OP-json.* and TYPE-ROW-Value/JsonError.
-pub type Value = Null | Bool(bool) | Number(String) | Text(String) | Array(
-  List[Value]
-) | Object(Map[String, Value])
+pub type Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[Value]) | Object(
+  Map[String, Value]
+)
 
 pub type JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber
 
@@ -440,16 +440,16 @@ fn json_write_value(value: Value, mut builder: List[u8], depth: u64) -> Result[
 // Adapted serde_json src/ser.rs compact Serializer dispatch and sequence/map
 // emission, commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
 // Borrow input, append to the caller's counted builder, retain prefixes on error.
-@preserves_unique(builder)
-pub fn write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
-  json_write_value(value, mut builder, 0)
+@preserves_unique(out)
+pub fn stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {} {
+  json_write_value(value, mut out, 0)
 }
 
 // Adapted serde_json src/ser.rs to_string,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: one writer path.
 pub fn stringify(value: Value) -> Result[unique String, JsonError] uses {} {
   let mut builder: List[u8] = []
-  write(value, mut builder)?
+  stringify_into(value, mut builder)?
   let built = text.finish(take builder)
   match take built {
     Ok(s) => Ok(take s),

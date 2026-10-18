@@ -4,7 +4,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   let value: json.Value = Array([Text("owned"), Number("01")])
   let mut builder: List[u8] = [112, 114, 101, 58]
   let alias = copy builder
-  match json.write(value, mut builder) {
+  match json.stringify_into(value, mut builder) {
     Error(InvalidNumber()) => (),
     _ => failure.check(false, TextInvariant()),
   }

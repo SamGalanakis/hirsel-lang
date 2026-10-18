@@ -119,7 +119,7 @@ fn accepts(token: Token, cp: char) -> bool uses {} {
 
 // Two DP rows: O(pattern scalars * path scalars), O(pattern scalars) memory.
 // Unlike recursive wildcard expansion, repeated stars cannot cause exponential work.
-pub fn matches(pattern: Pattern, path: String) -> bool uses {} {
+pub fn is_match(pattern: Pattern, path: String) -> bool uses {} {
   let count = core@1/list.len(pattern.tokens)
   let mut row: List[bool] = [true]
   let mut i: u64 = 0
@@ -160,7 +160,7 @@ pub fn files(d: Dir, pattern: String) -> Result[unique List[Path], ExpandError] 
       Ok(p) => take p,
       Error(e) => return Error(Files(take e)),
     }
-    if matches(compiled, core@1/path.text(p)) {
+    if is_match(compiled, core@1/path.text(p)) {
       core@1/list.push(mut out, copy p)
     }
   }

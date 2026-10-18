@@ -37,7 +37,7 @@ pub fn seed(value: u64) -> Generator uses {} {
 }
 
 @noalloc
-pub fn next_u64(mut generator: Generator) -> u64 uses {} {
+pub fn u64(mut generator: Generator) -> u64 uses {} {
   let output = core@1/int.wrapping_add(
     rotl(core@1/int.wrapping_add(generator.s0, generator.s3), 23),
     generator.s0
@@ -61,7 +61,7 @@ pub fn below(mut generator: Generator, upper_exclusive: u64) -> Result[u64, Samp
   let mut value: u64 = 0
   let mut accepted = false
   while !accepted {
-    if let Some(drawn) = internal.sample.below(next_u64(mut generator), upper_exclusive) {
+    if let Some(drawn) = internal.sample.below(u64(mut generator), upper_exclusive) {
       value = drawn
       accepted = true
     }
@@ -69,11 +69,12 @@ pub fn below(mut generator: Generator, upper_exclusive: u64) -> Result[u64, Samp
   Ok(value)
 }
 
-// Appends count bytes: each draw little-endian, the last draw cut short.
-pub fn fill(mut generator: Generator, mut out: List[u8], count: u64) -> () uses {} {
+// Count bytes: each draw little-endian, the last draw cut short, as random.bytes.
+pub fn bytes(mut generator: Generator, count: u64) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
   let mut left = count
   while left > 0 {
-    let mut word = next_u64(mut generator)
+    let mut word = u64(mut generator)
     let mut i: u64 = 0
     while i < 8 && left > 0 {
       core@1/list.push(mut out, core@1/int.truncate(word))
@@ -82,4 +83,5 @@ pub fn fill(mut generator: Generator, mut out: List[u8], count: u64) -> () uses 
       left -= 1
     }
   }
+  core@1/bytes.from_list(take out)
 }

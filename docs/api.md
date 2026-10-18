@@ -2592,9 +2592,9 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/List`](#def-core_401_2fList), [`core@1/Path`](#def-core_401_2fPath), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/glob/ExpandError`](#def-std_401_2fglob_2fExpandError)
 
-<a id="def-std_401_2fglob_2fmatches"></a>
+<a id="def-std_401_2fglob_2fis_5fmatch"></a>
 
-- `pub fn glob.matches(pattern: Pattern, path: String) -> bool uses {}`
+- `pub fn glob.is_match(pattern: Pattern, path: String) -> bool uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/glob/Pattern`](#def-std_401_2fglob_2fPattern)
 
@@ -3966,13 +3966,13 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fjson_2fValue"></a>
 
-- `pub type json.Value = Null | Bool(bool) | Number(String) | Text(String) | Array( List[Value] ) | Object(Map[String, Value])`
+- `pub type json.Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[Value]) | Object( Map[String, Value] )`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
 <a id="def-std_401_2fjson_2fValue_23Array"></a>
 
-- `Array( List[Value] ) -> json.Value`
+- `Array(List[Value]) -> json.Value`
 
 Variant of json.Value.
 
@@ -4002,7 +4002,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fjson_2fValue_23Object"></a>
 
-- `Object(Map[String, Value]) -> json.Value`
+- `Object( Map[String, Value] ) -> json.Value`
 
 Variant of json.Value.
 
@@ -4028,9 +4028,9 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
-<a id="def-std_401_2fjson_2fwrite"></a>
+<a id="def-std_401_2fjson_2fstringify_5finto"></a>
 
-- `@preserves_unique(builder) pub fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}`
+- `@preserves_unique(out) pub fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
@@ -4512,15 +4512,15 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Path`](#def-core_401
 
 <a id="def-std_401_2fpath_2fextension"></a>
 
-- `pub fn path.extension(p: Path) -> unique String uses {}`
+- `pub fn path.extension(p: Path) -> Option[unique String] uses {}`
 
-References: [`core@1/Path`](#def-core_401_2fPath), [`core@1/String`](#def-core_401_2fString)
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core_401_2fPath), [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fpath_2ffilename"></a>
 
-- `pub fn path.filename(p: Path) -> unique String uses {}`
+- `pub fn path.filename(p: Path) -> Option[unique String] uses {}`
 
-References: [`core@1/Path`](#def-core_401_2fPath), [`core@1/String`](#def-core_401_2fString)
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core_401_2fPath), [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fpath_2fjoin"></a>
 
@@ -4600,25 +4600,25 @@ Variant of prng.SampleError.
 
 - `@noalloc pub fn prng.below(mut generator: Generator, upper_exclusive: u64) -> Result[u64, SampleError] uses {}`
 
-References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator), [`std@1/prng/SampleError`](#def-std_401_2fprng_2fSampleError)
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator), [`std@1/prng/SampleError`](#def-std_401_2fprng_2fSampleError), [`std@1/prng/u64`](#def-std_401_2fprng_2fu64)
 
-<a id="def-std_401_2fprng_2ffill"></a>
+<a id="def-std_401_2fprng_2fbytes"></a>
 
-- `pub fn prng.fill(mut generator: Generator, mut out: List[u8], count: u64) -> () uses {}`
+- `pub fn prng.bytes(mut generator: Generator, count: u64) -> unique Bytes uses {}`
 
-References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator)
-
-<a id="def-std_401_2fprng_2fnext_5fu64"></a>
-
-- `@noalloc pub fn prng.next_u64(mut generator: Generator) -> u64 uses {}`
-
-References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator)
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator), [`std@1/prng/u64`](#def-std_401_2fprng_2fu64)
 
 <a id="def-std_401_2fprng_2fseed"></a>
 
 - `@noalloc pub fn prng.seed(value: u64) -> Generator uses {}`
 
-References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator)
+References: [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator), [`std@1/prng/u64`](#def-std_401_2fprng_2fu64)
+
+<a id="def-std_401_2fprng_2fu64"></a>
+
+- `@noalloc pub fn prng.u64(mut generator: Generator) -> u64 uses {}`
+
+References: [`std@1/prng/Generator`](#def-std_401_2fprng_2fGenerator)
 
 
 ## probe

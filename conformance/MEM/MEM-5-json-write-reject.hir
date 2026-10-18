@@ -2,5 +2,5 @@
 // expect: reject MEM-5 at line 5
 @noalloc
 fn probe(s: String, mut builder: List[u8]) -> Result[(), json.JsonError] uses {} {
-  json.write(Text(s), mut builder)
+  json.stringify_into(Text(s), mut builder)
 }

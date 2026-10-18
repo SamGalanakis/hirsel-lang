@@ -3,7 +3,7 @@
 // Go path/match_test.go vectors, plus Unicode and whole-path controls.
 fn check(pattern: String, path: String, expected: bool) {
   match glob.compile(pattern) {
-    Ok(p) => failure.check(glob.matches(p, path) == expected, TextInvariant()),
+    Ok(p) => failure.check(glob.is_match(p, path) == expected, TextInvariant()),
     Error(_) => failure.check(false, TextInvariant()),
   }
 }

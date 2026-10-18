@@ -14,8 +14,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Some(q) => failure.check(path.text(q) == "/a/é/..", TextInvariant()),
     None() => failure.check(false, TextInvariant()),
   }
-  failure.check(path.filename(p) == "b.txt", TextInvariant())
-  failure.check(path.extension(p) == "txt", TextInvariant())
+  failure.check(path.filename(p) == Some("b.txt"), TextInvariant())
+  failure.check(path.extension(p) == Some("txt"), TextInvariant())
   failure.check(path.components(p) == ["a", "é", "..", "b.txt"], TextInvariant())
   match path.normalize(path.of("../../a/../..")) {
     Ok(q) => failure.check(path.text(q) == "../../..", TextInvariant()),

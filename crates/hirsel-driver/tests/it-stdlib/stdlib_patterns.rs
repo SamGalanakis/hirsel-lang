@@ -19,9 +19,9 @@ fn glob_exports_have_source_owners_and_no_builtin_operations() {
                 .map(|p| p.0.name.as_str())
                 .collect();
             for function in if name.contains("files") {
-                vec!["compile", "matches", "files"]
+                vec!["compile", "is_match", "files"]
             } else {
-                vec!["compile", "matches"]
+                vec!["compile", "is_match"]
             } {
                 assert!(
                     names.contains(&function),

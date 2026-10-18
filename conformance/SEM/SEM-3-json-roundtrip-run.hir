@@ -21,7 +21,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     Error(_) => failure.check(false, TextInvariant()),
   }
   let mut builder: List[u8] = [112, 114, 101, 58]
-  match json.write(value, mut builder) {
+  match json.stringify_into(value, mut builder) {
     Ok(_) => (),
     Error(_) => failure.check(false, TextInvariant()),
   }

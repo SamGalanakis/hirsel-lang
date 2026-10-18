@@ -43,7 +43,7 @@ def valid_body(vectors):
     let value = match std@1/json.parse(copy input) { Ok(v) => v, Error(_) => { failure.check(false, TextInvariant()); let empty: std@1/json.Value = Null(); empty } }
     match std@1/json.stringify(value) { Ok(s) => failure.check(s == expected, TextInvariant()), Error(_) => failure.check(false, TextInvariant()) }
     let mut builder: List[u8] = []
-    match std@1/json.write(value, mut builder) { Ok(_) => (), Error(_) => failure.check(false, TextInvariant()) }
+    match std@1/json.stringify_into(value, mut builder) { Ok(_) => (), Error(_) => failure.check(false, TextInvariant()) }
     match std@1/text.finish(take builder) { Ok(s) => failure.check(s == expected, TextInvariant()), Error(_) => failure.check(false, TextInvariant()) }
   }'''
 def fuzz_body():

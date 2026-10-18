@@ -12,13 +12,13 @@ fn check_root(text: String) -> () uses {} {
     None() => (),
     Some(_) => failure.check(false, TextInvariant()),
   }
-  failure.check(path.filename(path.of(text)) == "", TextInvariant())
-  failure.check(path.extension(path.of(text)) == "", TextInvariant())
+  failure.check(path.filename(path.of(text)) == None(), TextInvariant())
+  failure.check(path.extension(path.of(text)) == None(), TextInvariant())
   failure.check(list.len(path.components(path.of(text))) == 0, TextInvariant())
 }
 
 fn check_name(text: String) -> () uses {} {
-  failure.check(path.extension(path.of(text)) == "", TextInvariant())
+  failure.check(path.extension(path.of(text)) == None(), TextInvariant())
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
@@ -47,9 +47,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   }
   failure.check(path.components(path.of("./../")) == [".", ".."], TextInvariant())
   check_name(".hidden")
-  check_name("a.")
   check_name("plain")
-  failure.check(path.extension(path.of(".hidden.é")) == "é", TextInvariant())
-  failure.check(path.extension(path.of("a.b.c")) == "c", TextInvariant())
+  failure.check(path.extension(path.of("a.")) == Some(""), TextInvariant())
+  failure.check(path.extension(path.of(".hidden.é")) == Some("é"), TextInvariant())
+  failure.check(path.extension(path.of("a.b.c")) == Some("c"), TextInvariant())
   Ok(())
 }

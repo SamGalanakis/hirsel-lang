@@ -1179,7 +1179,7 @@ fn http_json_error(error: json.JsonError) -> HttpError uses {} {
 
 pub fn json_body(value: json.Value) -> Result[Body, HttpError] uses {} {
   let mut out: List[u8] = []
-  json.write(value, mut out) ? http_json_error
+  json.stringify_into(value, mut out) ? http_json_error
   Ok(Body(bytes: core@1/bytes.from_list(take out), content_type: "application/json"))
 }
 

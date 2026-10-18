@@ -58,8 +58,8 @@ fn char.to_string(value: char) -> unique String uses {}
 fn path.normalize(p: Path) -> Result[Path, path.PathError] uses {}
 fn path.join(base: Path, child: Path) -> Result[Path, path.PathError] uses {}
 fn path.parent(p: Path) -> Option[Path] uses {}
-fn path.filename(p: Path) -> unique String uses {}
-fn path.extension(p: Path) -> unique String uses {}
+fn path.filename(p: Path) -> Option[unique String] uses {}
+fn path.extension(p: Path) -> Option[unique String] uses {}
 fn path.components(p: Path) -> unique List[String] uses {}
 N fn duration.from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {}
 N fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {}
@@ -77,7 +77,7 @@ N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
 N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
-@preserves_unique(builder) fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}
+@preserves_unique(out) fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}
 @track_caller N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 @track_caller N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
 @track_caller fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
@@ -85,9 +85,9 @@ fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]
 fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]
 N fn prng.seed(value: u64) -> prng.Generator uses {}
-N fn prng.next_u64(mut generator: prng.Generator) -> u64 uses {}
+N fn prng.u64(mut generator: prng.Generator) -> u64 uses {}
 N fn prng.below(mut generator: prng.Generator, upper_exclusive: u64) -> Result[u64, prng.SampleError] uses {}
-fn prng.fill(mut generator: prng.Generator, mut out: List[u8], count: u64) -> () uses {}
+fn prng.bytes(mut generator: prng.Generator, count: u64) -> unique Bytes uses {}
 fn random.u64(r: Random) -> Result[u64, RandomError]
 fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleError]
 ```
@@ -95,6 +95,27 @@ fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleErr
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`,
 `task` and the `format_into` and NFC functions below) define their contracts by their declared
 signatures and the rules in this part.
+
+## Conventions
+
+Sibling operations share one shape per concept, so a call written from one function's
+signature works for the others:
+
+- A read that can reach the end of its input returns `Option`, `None()` at EOF:
+  `input.read_line`, every `bufio` `read_line` and `csv.read_record` return
+  `Result[Option[T], E]`, so `while let Some(x) = ..?` consumes them. Byte-count reads
+  (`read`, `read_until`, `read_more`) return the count, zero at EOF, as core `file.read` does.
+- An absent result is `None()`, never a sentinel such as `""` or an out-of-range index
+  (`path.parent`, `path.filename`, `path.extension`, `string.find`, `list.find`, `map.get`);
+  `Result` carries only failures.
+- A query takes the container first and the key or pattern after it; a module's own
+  type comes first (`map.get(m, k)`, `string.find(s, pattern)`, `regex.find(re, text, ..)`).
+- A function that appends to a caller's builder is the returning function's name plus
+  `_into`, with the builder `mut out` last (`json.stringify` and `json.stringify_into`).
+- An element count is `len`; a predicate is named `is_..` where it shares a concept with
+  another module (`regex.is_match`, `glob.is_match`), and equivalent draws share names
+  across sources (`random.u64`, `random.below`, `random.bytes` and `prng.u64`,
+  `prng.below`, `prng.bytes`).
 
 ## Option and Result helpers
 
@@ -125,9 +146,10 @@ result is `.`; an absolute empty component stack is `/`. `join` requires a relat
 rejects NUL and backslash in both arguments and normalizes the combined path; an empty base
 contributes no separator. `parent`, `filename` and `components` inspect the raw nonempty
 slash components, ignoring trailing slashes, without normalizing. Empty and root paths have
-no parent or file name; a single relative component has parent `.`, and a single absolute
-component has parent `/`. `extension` is the last non-leading dot suffix; empty means both
-an absent extension and an empty suffix (`a.`). These functions take no `Dir`, touch no
+no parent or file name (`None()`); a single relative component has parent `.`, and a single
+absolute component has parent `/`. `extension` is the last non-leading dot suffix of the file
+name: `None()` without one (`a`, `.hidden`), `Some("")` for an empty suffix (`a.`). Absence is
+`None()` throughout, never an empty string. These functions take no `Dir`, touch no
 host, resolve no links and establish no confinement.
 
 ## Durations and timestamps
@@ -171,7 +193,7 @@ JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber()
 
 Arrays and objects hold `Value`s directly ([MEM-7](memory.md#mem-7-layout)): a member
 selected with `list` or `map` operations is a `Value`, which passes straight to
-`json.stringify` or `json.write`.
+`json.stringify` or `json.stringify_into`.
 
 `json.parse` takes a UTF-8 `String` and returns an owned tree, keeping validated decimal
 number lexemes exactly. It accepts JSON whitespace only, validates escaped UTF-16 surrogate
@@ -182,7 +204,7 @@ The constant `MAX_NESTING: u64 = 128` counts open arrays and objects, scalars us
 level; opening container 129 is `Nesting`. A partial tree is released through ordinary error
 cleanup.
 
-`json.stringify` borrows a `Value` and returns compact UTF-8 JSON; `json.write` borrows it
+`json.stringify` borrows a `Value` and returns compact UTF-8 JSON; `json.stringify_into` borrows it
 and appends to a mutable builder, keeping existing content and possibly leaving a written
 prefix on error. Both validate every `Number` against
 `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?`, requiring complete consumption, and return
@@ -427,13 +449,14 @@ add no authority or entropy of their own: their security is the launch provider'
 
 `prng.Generator` is opaque, noncopyable Xoshiro256++ state (Blackman and Vigna, as in Zig's
 `std.Random.Xoshiro256`). `prng.seed(value)` expands the 64-bit seed into the four state
-words with four successive SplitMix64 outputs. `prng.next_u64` returns the next Xoshiro256++
+words with four successive SplitMix64 outputs. `prng.u64` returns the next Xoshiro256++
 output. `prng.below(g, upper)` returns `Error(EmptyRange())` for `upper == 0` without
 advancing; otherwise it draws until Lemire's multiply-shift accepts a draw (rejecting the
 low products below `2^64 mod upper`) and returns the high word of the accepted product, so
 every value below `upper` is equally likely and modulo reduction is never used.
-`prng.fill(g, out, count)` appends `count` bytes, each output little-endian, cutting the
-last output short. The generator is a pure deterministic function of its seed: identical
+`prng.bytes(g, count)` returns `count` bytes, each output little-endian, cutting the
+last output short. The names match `random`: `u64`, `below` and `bytes` draw the same
+shapes from a generator as from the `Random` capability. The generator is a pure deterministic function of its seed: identical
 on every engine and target, it holds no authority and is never cryptographically secure.
 Programs that need secrets draw from their `Random` capability instead.
 
@@ -782,7 +805,7 @@ relative network-provider bounds and return `TimedOut`, independently of a scope
 `form_body(pairs: List[(String, String)]) -> Body` uses `uri.encode_query`, preserving
 pair order, repeated keys and empty values, encoding spaces as `+` and literal `+` as
 `%2B`; its media type is `application/x-www-form-urlencoded`.
-`json_body(value: json.Value) -> Result[Body, HttpError]` uses `json.write` and selects
+`json_body(value: json.Value) -> Result[Body, HttpError]` uses `json.stringify_into` and selects
 `application/json`. Invalid JSON number representations return `Json(InvalidNumber())`.
 
 `client_send(mut c, method, url, headers, body: Body) -> Result[Response, HttpError]`
@@ -1241,7 +1264,7 @@ advance by one scalar, and stop after an empty EOF match.
 pub type glob.PatternError = Syntax(u64)
 pub type glob.ExpandError = InvalidPattern(glob.PatternError) | Files(FileError)
 fn glob.compile(pattern: String) -> Result[glob.Pattern, glob.PatternError] uses {}
-fn glob.matches(pattern: glob.Pattern, path: String) -> bool uses {}
+fn glob.is_match(pattern: glob.Pattern, path: String) -> bool uses {}
 fn glob.files(d: Dir, pattern: String) -> Result[unique List[Path], glob.ExpandError]
 ```
 

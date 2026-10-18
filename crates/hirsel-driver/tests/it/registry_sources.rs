@@ -159,7 +159,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "unicode.graphemes",
                 "json.parse",
                 "json.stringify",
-                "json.write",
+                "json.stringify_into",
                 "test.equal",
                 "test.approx",
                 "test.for_all",
@@ -167,9 +167,9 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "input.read_all",
                 "input.read_line",
                 "prng.seed",
-                "prng.next_u64",
+                "prng.u64",
                 "prng.below",
-                "prng.fill",
+                "prng.bytes",
                 "random.u64",
                 "random.below"
             ]

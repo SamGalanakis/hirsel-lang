@@ -174,33 +174,38 @@ pub fn parent(p: Path) -> Option[Path] uses {} {
 
 // Adapted from Zig lib/std/fs/path.zig basenameInner (last component; owned UTF-8 result).
 // Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
-pub fn filename(p: Path) -> unique String uses {} {
+pub fn filename(p: Path) -> Option[unique String] uses {} {
   let text = core@1/path.text(p)
   let bytes = core@1/string.as_bytes(text)
   let mut end = core@1/bytes.len(bytes)
   while end != 0 && bytes[end - 1] == 47 {
     end -= 1
   }
+  if end == 0 {
+    return None()
+  }
   let mut begin = end
   while begin != 0 && bytes[begin - 1] != 47 {
     begin -= 1
   }
-  owned_piece(text, begin, end)
+  Some(owned_piece(text, begin, end))
 }
 
-// Empty means both absent extension and an empty suffix ("a.").
-// Adapted from Zig lib/std/fs/path.zig extension (suffix excludes dot per Hirsel contract).
+// None without a non-leading dot; Some("") for an empty suffix ("a."), as Rust's
+// Path::extension. Adapted from Zig lib/std/fs/path.zig extension (suffix excludes dot).
 // Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
-pub fn extension(p: Path) -> unique String uses {} {
-  let name = filename(p)
+pub fn extension(p: Path) -> Option[unique String] uses {} {
+  let Some(name) = filename(p) else {
+    return None()
+  }
   let bytes = core@1/string.as_bytes(name)
   let len = core@1/bytes.len(bytes)
   let mut i = len
   while i > 1 {
     i -= 1
     if bytes[i] == 46 {
-      return owned_piece(name, i + 1, len)
+      return Some(owned_piece(name, i + 1, len))
     }
   }
-  ""
+  None()
 }

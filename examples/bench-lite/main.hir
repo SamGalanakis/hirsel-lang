@@ -54,9 +54,9 @@ const SYLLABLES: List[String] = [
 // One word of one to three syllables; the generator alone decides it.
 fn word(mut g: prng.Generator) -> String {
   let mut out: List[u8] = []
-  let syllables = 1u64 + int.mod(prng.next_u64(mut g), 3u64)
+  let syllables = 1u64 + int.mod(prng.u64(mut g), 3u64)
   for _ in 0u64..syllables {
-    text.append(mut out, SYLLABLES[int.mod(prng.next_u64(mut g), list.len(SYLLABLES))])
+    text.append(mut out, SYLLABLES[int.mod(prng.u64(mut g), list.len(SYLLABLES))])
   }
   match text.finish(take out) {
     Ok(s) => take s,

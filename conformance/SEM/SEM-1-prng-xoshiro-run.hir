@@ -4,16 +4,16 @@
 // uintLessThan, commit bff490a23889750de7096d9057c0a432efc929a8.
 fn check_sequence() -> () uses {} {
   let mut g = prng.seed(0)
-  failure.check(prng.next_u64(mut g) == 0x53175d61490b23df, Arithmetic())
-  failure.check(prng.next_u64(mut g) == 0x61da6f3dc380d507, Arithmetic())
-  failure.check(prng.next_u64(mut g) == 0x5c0fdf91ec9a7bfc, Arithmetic())
-  failure.check(prng.next_u64(mut g) == 0x02eebf8c3bbe5e1a, Arithmetic())
-  failure.check(prng.next_u64(mut g) == 0x7eca04ebaf4a5eea, Arithmetic())
-  failure.check(prng.next_u64(mut g) == 0x0543c37757f08d9a, Arithmetic())
+  failure.check(prng.u64(mut g) == 0x53175d61490b23df, Arithmetic())
+  failure.check(prng.u64(mut g) == 0x61da6f3dc380d507, Arithmetic())
+  failure.check(prng.u64(mut g) == 0x5c0fdf91ec9a7bfc, Arithmetic())
+  failure.check(prng.u64(mut g) == 0x02eebf8c3bbe5e1a, Arithmetic())
+  failure.check(prng.u64(mut g) == 0x7eca04ebaf4a5eea, Arithmetic())
+  failure.check(prng.u64(mut g) == 0x0543c37757f08d9a, Arithmetic())
 }
 
-// Each seven-byte fill cuts one word short: its bytes are that word's first seven.
-fn check_fill() -> () uses {} {
+// Each seven-byte draw cuts one word short: its bytes are that word's first seven.
+fn check_bytes() -> () uses {} {
   let words: List[u64] = [
     0x53175d61490b23df,
     0x61da6f3dc380d507,
@@ -25,9 +25,8 @@ fn check_fill() -> () uses {} {
   let mut g = prng.seed(0)
   let mut w: u64 = 0
   while w < list.len(words) {
-    let mut out: List[u8] = []
-    prng.fill(mut g, mut out, 7)
-    failure.check(list.len(out) == 7, Arithmetic())
+    let out = prng.bytes(mut g, 7)
+    failure.check(bytes.len(out) == 7, Arithmetic())
     let mut word = words[w]
     let mut i: u64 = 0
     while i < 7 {
@@ -38,9 +37,7 @@ fn check_fill() -> () uses {} {
     }
     w += 1
   }
-  let mut empty: List[u8] = []
-  prng.fill(mut g, mut empty, 0)
-  failure.check(list.len(empty) == 0, Arithmetic())
+  failure.check(bytes.len(prng.bytes(mut g, 0)) == 0, Arithmetic())
 }
 
 // Expected values from an independent Xoshiro256++ and Lemire model. Bound 2^63 + 1
@@ -66,7 +63,7 @@ fn check_rejection() -> () uses {} {
     }
     i += 1
   }
-  failure.check(prng.next_u64(mut g) == 0x439401c53ed0d70b, Arithmetic())
+  failure.check(prng.u64(mut g) == 0x439401c53ed0d70b, Arithmetic())
   let small: List[u64] = [7, 5, 6, 2, 4, 7, 3, 7, 4, 8]
   let mut h = prng.seed(2)
   let mut j: u64 = 0
@@ -95,12 +92,12 @@ fn check_below() -> () uses {} {
   }
   let mut a = prng.seed(9)
   let mut b = prng.seed(9)
-  failure.check(prng.next_u64(mut a) == prng.next_u64(mut b), Arithmetic())
+  failure.check(prng.u64(mut a) == prng.u64(mut b), Arithmetic())
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   check_sequence()
-  check_fill()
+  check_bytes()
   check_rejection()
   check_below()
   Ok(())
