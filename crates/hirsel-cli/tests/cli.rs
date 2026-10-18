@@ -1873,10 +1873,12 @@ fn real_host_detached_results_drop_before_scope_exit() {
         "tasks":"tasks.cooperative@1", "dirs":[]
     }, "args":[]}),
     );
-    let output = host_run(&source, &record, false).output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    for native in [false, true] {
+        let output = host_run(&source, &record, native).output().unwrap();
+        assert!(output.status.success(), "native={native}: {output:?}");
+        assert!(output.stdout.is_empty(), "native={native}");
+        assert!(output.stderr.is_empty(), "native={native}");
+    }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }
