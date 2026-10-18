@@ -860,9 +860,7 @@ for i in 0u64..COUNTu64
             stalled
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
-            stalled
-                .write_all(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\na")
-                .unwrap();
+            // Send nothing: even the initial bytes must not race the server's deadline.
             let mut response = vec![];
             stalled.read_to_end(&mut response).unwrap();
             assert_eq!(
