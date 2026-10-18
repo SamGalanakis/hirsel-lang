@@ -1,0 +1,107 @@
+// rule: SEM-1
+// expect: run
+// Vectors from Zig lib/std/Random/Xoshiro256.zig "sequence"/fill and lib/std/Random/test.zig
+// uintLessThan, commit bff490a23889750de7096d9057c0a432efc929a8.
+fn check_sequence() -> () uses {} {
+  let mut g = prng.seed(0)
+  failure.check(prng.next_u64(mut g) == 0x53175d61490b23df, Arithmetic())
+  failure.check(prng.next_u64(mut g) == 0x61da6f3dc380d507, Arithmetic())
+  failure.check(prng.next_u64(mut g) == 0x5c0fdf91ec9a7bfc, Arithmetic())
+  failure.check(prng.next_u64(mut g) == 0x02eebf8c3bbe5e1a, Arithmetic())
+  failure.check(prng.next_u64(mut g) == 0x7eca04ebaf4a5eea, Arithmetic())
+  failure.check(prng.next_u64(mut g) == 0x0543c37757f08d9a, Arithmetic())
+}
+
+// Each seven-byte fill cuts one word short: its bytes are that word's first seven.
+fn check_fill() -> () uses {} {
+  let words: List[u64] = [
+    0x53175d61490b23df,
+    0x61da6f3dc380d507,
+    0x5c0fdf91ec9a7bfc,
+    0x02eebf8c3bbe5e1a,
+    0x7eca04ebaf4a5eea,
+    0x0543c37757f08d9a
+  ]
+  let mut g = prng.seed(0)
+  let mut w: u64 = 0
+  while w < list.len(words) {
+    let mut out: List[u8] = []
+    prng.fill(mut g, mut out, 7)
+    failure.check(list.len(out) == 7, Arithmetic())
+    let mut word = words[w]
+    let mut i: u64 = 0
+    while i < 7 {
+      let low: u8 = int.truncate(word)
+      failure.check(out[i] == low, Arithmetic())
+      word >>= 8
+      i += 1
+    }
+    w += 1
+  }
+  let mut empty: List[u8] = []
+  prng.fill(mut g, mut empty, 0)
+  failure.check(list.len(empty) == 0, Arithmetic())
+}
+
+// Expected values from an independent Xoshiro256++ and Lemire model. Bound 2^63 + 1
+// rejects nearly half its draws: these eight samples discard twelve, so the
+// generator afterwards yields its 21st word.
+fn check_rejection() -> () uses {} {
+  let expected: List[u64] = [
+    0x5f8408cf82e6ab6b,
+    0x2bf7d76ecfb67fd9,
+    0x32819d2777282824,
+    0x14032d547a14545d,
+    0x4750238b2f820ed1,
+    0x3c88196cd27b9779,
+    0x7a9c412a141cf6cf,
+    0x52356f58a04007a5
+  ]
+  let mut g = prng.seed(1)
+  let mut i: u64 = 0
+  while i < list.len(expected) {
+    match prng.below(mut g, 0x8000000000000001) {
+      Ok(value) => failure.check(value == expected[i], Arithmetic()),
+      Error(_) => failure.check(false, Arithmetic()),
+    }
+    i += 1
+  }
+  failure.check(prng.next_u64(mut g) == 0x439401c53ed0d70b, Arithmetic())
+  let small: List[u64] = [7, 5, 6, 2, 4, 7, 3, 7, 4, 8]
+  let mut h = prng.seed(2)
+  let mut j: u64 = 0
+  while j < list.len(small) {
+    match prng.below(mut h, 10) {
+      Ok(value) => failure.check(value == small[j], Arithmetic()),
+      Error(_) => failure.check(false, Arithmetic()),
+    }
+    j += 1
+  }
+}
+
+fn check_below() -> () uses {} {
+  let mut g = prng.seed(42)
+  match prng.below(mut g, 0) {
+    Error(EmptyRange()) => {},
+    Ok(_) => failure.check(false, Arithmetic()),
+  }
+  let mut i: u64 = 0
+  while i < 1000 {
+    match prng.below(mut g, 7) {
+      Ok(value) => failure.check(value < 7, Arithmetic()),
+      Error(_) => failure.check(false, Arithmetic()),
+    }
+    i += 1
+  }
+  let mut a = prng.seed(9)
+  let mut b = prng.seed(9)
+  failure.check(prng.next_u64(mut a) == prng.next_u64(mut b), Arithmetic())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  check_sequence()
+  check_fill()
+  check_rejection()
+  check_below()
+  Ok(())
+}

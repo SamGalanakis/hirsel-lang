@@ -3549,6 +3549,7 @@ conformance/SEM/SEM-1-pathtime-duration-boundary-run.hir
 conformance/SEM/SEM-1-pathtime-duration-run.hir
 conformance/SEM/SEM-1-pathtime-time-boundary-run.hir
 conformance/SEM/SEM-1-pathtime-time-run.hir
+conformance/SEM/SEM-1-prng-xoshiro-run.hir
 conformance/SEM/SEM-1-saturating-add-in-range.hir
 conformance/SEM/SEM-1-saturating-add-signed-max.hir
 conformance/SEM/SEM-1-saturating-add-signed-min.hir

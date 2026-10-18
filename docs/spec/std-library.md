@@ -56,6 +56,10 @@ fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> (
 fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
 fn input.read_all(s: Stdin) -> Result[Bytes, InputError]
 fn input.read_line(s: Stdin) -> Result[Option[String], InputError]
+N fn prng.seed(value: u64) -> prng.Generator uses {}
+N fn prng.next_u64(mut generator: prng.Generator) -> u64 uses {}
+N fn prng.below(mut generator: prng.Generator, upper_exclusive: u64) -> Result[u64, prng.SampleError] uses {}
+fn prng.fill(mut generator: prng.Generator, mut out: List[u8], count: u64) -> () uses {}
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`
@@ -167,6 +171,20 @@ relative tolerance of the larger magnitude. `test.for_all` runs exactly 100 sequ
 generator and law calls using the run's Test grant, reporting each through
 `test.check_case`, without shrinking. `test.expect_error` returns the error of an `Error`,
 and destroys an unexpected `Ok` value before failing the test with `test.fail`.
+
+## Pseudorandom numbers
+
+`prng.Generator` is opaque, noncopyable Xoshiro256++ state (Blackman and Vigna, as in Zig's
+`std.Random.Xoshiro256`). `prng.seed(value)` expands the 64-bit seed into the four state
+words with four successive SplitMix64 outputs. `prng.next_u64` returns the next Xoshiro256++
+output. `prng.below(g, upper)` returns `Error(EmptyRange())` for `upper == 0` without
+advancing; otherwise it draws until Lemire's multiply-shift accepts a draw (rejecting the
+low products below `2^64 mod upper`) and returns the high word of the accepted product, so
+every value below `upper` is equally likely and modulo reduction is never used.
+`prng.fill(g, out, count)` appends `count` bytes, each output little-endian, cutting the
+last output short. The generator is a pure deterministic function of its seed: identical
+on every engine and target, it holds no authority and is never cryptographically secure.
+Programs that need secrets draw from their `Random` capability instead.
 
 ## Unicode
 

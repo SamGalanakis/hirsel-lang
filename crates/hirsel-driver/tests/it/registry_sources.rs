@@ -137,7 +137,11 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "test.for_all",
                 "test.expect_error",
                 "input.read_all",
-                "input.read_line"
+                "input.read_line",
+                "prng.seed",
+                "prng.next_u64",
+                "prng.below",
+                "prng.fill"
             ]
         );
     });

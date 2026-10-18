@@ -60,6 +60,19 @@
       ]
     },
     {
+      "path": "sample.hir",
+      "module": [
+        "internal",
+        "sample"
+      ]
+    },
+    {
+      "path": "prng.hir",
+      "module": [
+        "prng"
+      ]
+    },
+    {
       "path": "scalar.hir",
       "module": [
         "scalar"

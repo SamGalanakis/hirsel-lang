@@ -1,0 +1,19 @@
+// Adapted from Zig lib/std/Random.zig uintLessThan (Lemire's multiply-shift with
+// O'Neill's threshold), commit bff490a23889750de7096d9057c0a432efc929a8;
+// copyright Zig contributors (third-party/NOTICES.md).
+// One draw's verdict: Some(value) below upper, or None when the caller must draw again.
+@noalloc
+pub fn below(draw: u64, upper: u64) -> Option[u64] uses {} {
+  let wide_draw: u128 = core@1/int.widen(draw)
+  let wide_upper: u128 = core@1/int.widen(upper)
+  let product = wide_draw * wide_upper
+  let low: u64 = core@1/int.truncate(product)
+  if low < upper {
+    // 2^64 mod upper: the low words below it would bias the high word.
+    let threshold = (18446744073709551615 - upper + 1) % upper
+    if low < threshold {
+      return None()
+    }
+  }
+  Some(core@1/int.narrow(product >> 64))
+}

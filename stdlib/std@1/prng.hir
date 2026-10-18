@@ -1,0 +1,95 @@
+// Adapted from Zig lib/std/Random/Xoshiro256.zig (Xoshiro256++) and
+// lib/std/Random/SplitMix64.zig, commit bff490a23889750de7096d9057c0a432efc929a8;
+// copyright Zig contributors (third-party/NOTICES.md).
+// Deterministic and noncryptographic: never use it for secrets.
+pub type SampleError = EmptyRange()
+
+pub opaque type Generator: inert + noalloc_drop uses {} {
+  s0: u64,
+  s1: u64,
+  s2: u64,
+  s3: u64,
+}
+
+@noalloc
+fn wrapping_mul(a: u64, b: u64) -> u64 uses {} {
+  let wide_a: u128 = core@1/int.widen(a)
+  let wide_b: u128 = core@1/int.widen(b)
+  core@1/int.truncate(wide_a * wide_b)
+}
+
+@noalloc
+fn rotl(x: u64, k: u64) -> u64 uses {} {
+  x << k | x >> 64 - k
+}
+
+// SplitMix64 expands the 64-bit seed into the 256-bit state, as Zig's seed does.
+@noalloc
+fn splitmix(mut state: u64) -> u64 uses {} {
+  state = core@1/int.wrapping_add(state, 0x9e3779b97f4a7c15)
+  let mut z = state
+  z = wrapping_mul(z ^ z >> 30, 0xbf58476d1ce4e5b9)
+  z = wrapping_mul(z ^ z >> 27, 0x94d049bb133111eb)
+  z ^ z >> 31
+}
+
+@noalloc
+pub fn seed(value: u64) -> Generator uses {} {
+  let mut state = value
+  let s0 = splitmix(mut state)
+  let s1 = splitmix(mut state)
+  let s2 = splitmix(mut state)
+  let s3 = splitmix(mut state)
+  Generator(s0: s0, s1: s1, s2: s2, s3: s3)
+}
+
+@noalloc
+pub fn next_u64(mut generator: Generator) -> u64 uses {} {
+  let output = core@1/int.wrapping_add(
+    rotl(core@1/int.wrapping_add(generator.s0, generator.s3), 23),
+    generator.s0
+  )
+  let t = generator.s1 << 17
+  generator.s2 ^= generator.s0
+  generator.s3 ^= generator.s1
+  generator.s1 ^= generator.s2
+  generator.s0 ^= generator.s3
+  generator.s2 ^= t
+  generator.s3 = rotl(generator.s3, 45)
+  output
+}
+
+// Unbiased: rejected draws are discarded, never reduced by modulo.
+@noalloc
+pub fn below(mut generator: Generator, upper_exclusive: u64) -> Result[u64, SampleError] uses {} {
+  if upper_exclusive == 0 {
+    return Error(EmptyRange())
+  }
+  let mut value: u64 = 0
+  let mut accepted = false
+  while !accepted {
+    match internal.sample.below(next_u64(mut generator), upper_exclusive) {
+      Some(drawn) => {
+        value = drawn
+        accepted = true
+      },
+      None() => {},
+    }
+  }
+  Ok(value)
+}
+
+// Appends count bytes: each draw little-endian, the last draw cut short.
+pub fn fill(mut generator: Generator, mut out: List[u8], count: u64) -> () uses {} {
+  let mut left = count
+  while left > 0 {
+    let mut word = next_u64(mut generator)
+    let mut i: u64 = 0
+    while i < 8 && left > 0 {
+      core@1/list.push(mut out, core@1/int.truncate(word))
+      word >>= 8
+      i += 1
+      left -= 1
+    }
+  }
+}
