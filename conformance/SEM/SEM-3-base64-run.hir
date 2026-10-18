@@ -1,0 +1,277 @@
+// rule: SEM-3
+// expect: run
+// Go base64 pairs in all four strict encodings.
+fn roundtrip(
+  data: Bytes,
+  encoded: String,
+  alphabet: std@1/base64.Alphabet,
+  padding: std@1/base64.Padding
+) -> () {
+  failure.check(
+    std@1/base64.encode(data, alphabet, padding) == encoded,
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode(encoded, alphabet, padding) == Ok(data),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  roundtrip(
+    bytes.from_list([20, 251, 156, 3, 217, 126]),
+    "FPucA9l+",
+    Standard(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([20, 251, 156, 3, 217, 126]),
+    "FPucA9l+",
+    Standard(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([20, 251, 156, 3, 217, 126]),
+    "FPucA9l-",
+    UrlSafe(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([20, 251, 156, 3, 217, 126]),
+    "FPucA9l-",
+    UrlSafe(),
+    Omitted()
+  )
+  roundtrip(bytes.from_list([20, 251, 156, 3, 217]), "FPucA9k=", Standard(), Required())
+  roundtrip(bytes.from_list([20, 251, 156, 3, 217]), "FPucA9k", Standard(), Omitted())
+  roundtrip(bytes.from_list([20, 251, 156, 3, 217]), "FPucA9k=", UrlSafe(), Required())
+  roundtrip(bytes.from_list([20, 251, 156, 3, 217]), "FPucA9k", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([20, 251, 156, 3]), "FPucAw==", Standard(), Required())
+  roundtrip(bytes.from_list([20, 251, 156, 3]), "FPucAw", Standard(), Omitted())
+  roundtrip(bytes.from_list([20, 251, 156, 3]), "FPucAw==", UrlSafe(), Required())
+  roundtrip(bytes.from_list([20, 251, 156, 3]), "FPucAw", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([]), "", Standard(), Required())
+  roundtrip(bytes.from_list([]), "", Standard(), Omitted())
+  roundtrip(bytes.from_list([]), "", UrlSafe(), Required())
+  roundtrip(bytes.from_list([]), "", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([102]), "Zg==", Standard(), Required())
+  roundtrip(bytes.from_list([102]), "Zg", Standard(), Omitted())
+  roundtrip(bytes.from_list([102]), "Zg==", UrlSafe(), Required())
+  roundtrip(bytes.from_list([102]), "Zg", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([102, 111]), "Zm8=", Standard(), Required())
+  roundtrip(bytes.from_list([102, 111]), "Zm8", Standard(), Omitted())
+  roundtrip(bytes.from_list([102, 111]), "Zm8=", UrlSafe(), Required())
+  roundtrip(bytes.from_list([102, 111]), "Zm8", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([102, 111, 111]), "Zm9v", Standard(), Required())
+  roundtrip(bytes.from_list([102, 111, 111]), "Zm9v", Standard(), Omitted())
+  roundtrip(bytes.from_list([102, 111, 111]), "Zm9v", UrlSafe(), Required())
+  roundtrip(bytes.from_list([102, 111, 111]), "Zm9v", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([102, 111, 111, 98]), "Zm9vYg==", Standard(), Required())
+  roundtrip(bytes.from_list([102, 111, 111, 98]), "Zm9vYg", Standard(), Omitted())
+  roundtrip(bytes.from_list([102, 111, 111, 98]), "Zm9vYg==", UrlSafe(), Required())
+  roundtrip(bytes.from_list([102, 111, 111, 98]), "Zm9vYg", UrlSafe(), Omitted())
+  roundtrip(
+    bytes.from_list([102, 111, 111, 98, 97]),
+    "Zm9vYmE=",
+    Standard(),
+    Required()
+  )
+  roundtrip(bytes.from_list([102, 111, 111, 98, 97]), "Zm9vYmE", Standard(), Omitted())
+  roundtrip(bytes.from_list([102, 111, 111, 98, 97]), "Zm9vYmE=", UrlSafe(), Required())
+  roundtrip(bytes.from_list([102, 111, 111, 98, 97]), "Zm9vYmE", UrlSafe(), Omitted())
+  roundtrip(
+    bytes.from_list([102, 111, 111, 98, 97, 114]),
+    "Zm9vYmFy",
+    Standard(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([102, 111, 111, 98, 97, 114]),
+    "Zm9vYmFy",
+    Standard(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([102, 111, 111, 98, 97, 114]),
+    "Zm9vYmFy",
+    UrlSafe(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([102, 111, 111, 98, 97, 114]),
+    "Zm9vYmFy",
+    UrlSafe(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([115, 117, 114, 101, 46]),
+    "c3VyZS4=",
+    Standard(),
+    Required()
+  )
+  roundtrip(bytes.from_list([115, 117, 114, 101, 46]), "c3VyZS4", Standard(), Omitted())
+  roundtrip(
+    bytes.from_list([115, 117, 114, 101, 46]),
+    "c3VyZS4=",
+    UrlSafe(),
+    Required()
+  )
+  roundtrip(bytes.from_list([115, 117, 114, 101, 46]), "c3VyZS4", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([115, 117, 114, 101]), "c3VyZQ==", Standard(), Required())
+  roundtrip(bytes.from_list([115, 117, 114, 101]), "c3VyZQ", Standard(), Omitted())
+  roundtrip(bytes.from_list([115, 117, 114, 101]), "c3VyZQ==", UrlSafe(), Required())
+  roundtrip(bytes.from_list([115, 117, 114, 101]), "c3VyZQ", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([115, 117, 114]), "c3Vy", Standard(), Required())
+  roundtrip(bytes.from_list([115, 117, 114]), "c3Vy", Standard(), Omitted())
+  roundtrip(bytes.from_list([115, 117, 114]), "c3Vy", UrlSafe(), Required())
+  roundtrip(bytes.from_list([115, 117, 114]), "c3Vy", UrlSafe(), Omitted())
+  roundtrip(bytes.from_list([115, 117]), "c3U=", Standard(), Required())
+  roundtrip(bytes.from_list([115, 117]), "c3U", Standard(), Omitted())
+  roundtrip(bytes.from_list([115, 117]), "c3U=", UrlSafe(), Required())
+  roundtrip(bytes.from_list([115, 117]), "c3U", UrlSafe(), Omitted())
+  roundtrip(
+    bytes.from_list([108, 101, 97, 115, 117, 114, 101, 46]),
+    "bGVhc3VyZS4=",
+    Standard(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([108, 101, 97, 115, 117, 114, 101, 46]),
+    "bGVhc3VyZS4",
+    Standard(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([108, 101, 97, 115, 117, 114, 101, 46]),
+    "bGVhc3VyZS4=",
+    UrlSafe(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([108, 101, 97, 115, 117, 114, 101, 46]),
+    "bGVhc3VyZS4",
+    UrlSafe(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([101, 97, 115, 117, 114, 101, 46]),
+    "ZWFzdXJlLg==",
+    Standard(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([101, 97, 115, 117, 114, 101, 46]),
+    "ZWFzdXJlLg",
+    Standard(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([101, 97, 115, 117, 114, 101, 46]),
+    "ZWFzdXJlLg==",
+    UrlSafe(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([101, 97, 115, 117, 114, 101, 46]),
+    "ZWFzdXJlLg",
+    UrlSafe(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([97, 115, 117, 114, 101, 46]),
+    "YXN1cmUu",
+    Standard(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([97, 115, 117, 114, 101, 46]),
+    "YXN1cmUu",
+    Standard(),
+    Omitted()
+  )
+  roundtrip(
+    bytes.from_list([97, 115, 117, 114, 101, 46]),
+    "YXN1cmUu",
+    UrlSafe(),
+    Required()
+  )
+  roundtrip(
+    bytes.from_list([97, 115, 117, 114, 101, 46]),
+    "YXN1cmUu",
+    UrlSafe(),
+    Omitted()
+  )
+  failure.check(
+    std@1/base64.decode("A", Standard(), Required()) == Error(InvalidLength()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zg", Standard(), Required()) == Error(InvalidLength()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("=", Standard(), Required()) == Error(InvalidPadding(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("AA=A", Standard(), Required()) == Error(InvalidPadding(3)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("AA===", Standard(), Required()) == Error(InvalidPadding(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zg==x", Standard(), Required()) == Error(InvalidPadding(4)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zg==", Standard(), Omitted()) == Error(InvalidPadding(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zh==", Standard(), Required()) == Error(NonCanonical(1)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zm9=", Standard(), Required()) == Error(NonCanonical(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zh", Standard(), Omitted()) == Error(NonCanonical(1)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zm9", Standard(), Omitted()) == Error(NonCanonical(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zg\n==", Standard(), Required()) == Error(InvalidByte(2)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode(" Zg==", Standard(), Required()) == Error(InvalidByte(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("Zg==\n", Standard(), Required()) == Error(InvalidPadding(4)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("é", Standard(), Required()) == Error(InvalidByte(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("-w==", Standard(), Required()) == Error(InvalidByte(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("_w", Standard(), Omitted()) == Error(InvalidByte(0)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/base64.decode("+w==", UrlSafe(), Required()) == Error(InvalidByte(0)),
+    TextInvariant()
+  )
+  Ok(())
+}

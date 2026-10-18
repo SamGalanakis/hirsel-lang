@@ -1,0 +1,158 @@
+// Go encoding/base64 Encode/decodeQuantum, with strict RFC4648 input policy.
+pub type Alphabet = Standard | UrlSafe
+
+pub type Padding = Required | Omitted
+
+pub type DecodeError = InvalidByte(u64) | InvalidLength | InvalidPadding(u64) | NonCanonical(
+  u64
+)
+
+fn alphabet_bytes(alphabet: Alphabet) -> Bytes uses {} {
+  core@1/string.as_bytes(
+    match alphabet {
+      Standard() => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+      UrlSafe() => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+    }
+  )
+}
+
+pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> String uses {} {
+  let table = alphabet_bytes(alphabet)
+  let len = core@1/bytes.len(data)
+  let remainder = len % 3
+  let tail: u64 = if remainder == 0 {
+    0
+  } else if padding == Required() {
+    4
+  } else {
+    remainder + 1
+  }
+  core@1/failure.check(len / 3 <= (18446744073709551615u64 - tail) / 4, TextInvariant())
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < len {
+    let remaining = len - i
+    let a: u32 = core@1/int.widen(data[i])
+    let b: u32 = if remaining > 1 {
+      core@1/int.widen(data[i + 1])
+    } else {
+      0
+    }
+    let c: u32 = if remaining > 2 {
+      core@1/int.widen(data[i + 2])
+    } else {
+      0
+    }
+    let value = a * 65536u32 + b * 256u32 + c
+    let first: u64 = core@1/int.widen(value / 262144u32)
+    let second: u64 = core@1/int.widen(value / 4096u32 % 64u32)
+    core@1/list.push(mut out, table[first])
+    core@1/list.push(mut out, table[second])
+    if remaining > 1 {
+      let third: u64 = core@1/int.widen(value / 64u32 % 64u32)
+      core@1/list.push(mut out, table[third])
+    } else if padding == Required() {
+      core@1/list.push(mut out, 61u8)
+    }
+    if remaining > 2 {
+      let fourth: u64 = core@1/int.widen(value % 64u32)
+      core@1/list.push(mut out, table[fourth])
+    } else if padding == Required() {
+      core@1/list.push(mut out, 61u8)
+    }
+    i += if remaining > 2 {
+      3
+    } else {
+      remaining
+    }
+  }
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+@noalloc
+fn sextet(byte: u8, alphabet: Alphabet) -> u32 uses {} {
+  if byte >= 65 && byte <= 90 {
+    core@1/int.widen(byte - 65)
+  } else if byte >= 97 && byte <= 122 {
+    core@1/int.widen(byte - 71)
+  } else if byte >= 48 && byte <= 57 {
+    core@1/int.widen(byte + 4)
+  } else if alphabet == Standard() && byte == 43 || alphabet == UrlSafe() && byte == 45 {
+    62
+  } else if alphabet == Standard() && byte == 47 || alphabet == UrlSafe() && byte == 95 {
+    63
+  } else {
+    64
+  }
+}
+
+pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
+  Bytes,
+  DecodeError
+] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let len = core@1/bytes.len(data)
+  let mut end = len
+  let mut i: u64 = 0
+  while i < len {
+    if data[i] == 61 {
+      if padding == Omitted() {
+        return Error(InvalidPadding(i))
+      }
+      if end == len {
+        end = i
+      }
+    } else {
+      if end != len {
+        return Error(InvalidPadding(i))
+      }
+      if sextet(data[i], alphabet) == 64 {
+        return Error(InvalidByte(i))
+      }
+    }
+    i += 1
+  }
+  let rest = end % 4
+  if end != len {
+    let pads = len - end
+    if pads > 2 || rest < 2 || pads != 4 - rest || len % 4 != 0 {
+      return Error(InvalidPadding(end))
+    }
+  } else if rest == 1 || padding == Required() && rest != 0 {
+    return Error(InvalidLength())
+  }
+  if rest == 2 && sextet(data[end - 1], alphabet) % 16u32 != 0 {
+    return Error(NonCanonical(end - 1))
+  }
+  if rest == 3 && sextet(data[end - 1], alphabet) % 4u32 != 0 {
+    return Error(NonCanonical(end - 1))
+  }
+  let mut out: List[u8] = []
+  i = 0
+  let mut bits: u32 = 0
+  let mut count: u32 = 0
+  while i < end {
+    bits = bits * 64u32 + sextet(data[i], alphabet)
+    count += 6
+    if count >= 8 {
+      count -= 8
+      let divisor: u32 = if count == 4 {
+        16
+      } else if count == 2 {
+        4
+      } else {
+        1
+      }
+      core@1/list.push(mut out, core@1/int.narrow(bits / divisor))
+      bits = bits % divisor
+    }
+    i += 1
+  }
+  Ok(core@1/bytes.from_list(take out))
+}

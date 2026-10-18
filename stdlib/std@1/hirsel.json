@@ -273,6 +273,12 @@
       "module": [
         "glob"
       ]
+    },
+    {
+      "path": "base64.hir",
+      "module": [
+        "base64"
+      ]
     }
   ],
   "dependencies": []

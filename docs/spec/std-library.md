@@ -483,6 +483,26 @@ sequential listen/accept loop. A server maps malformed requests to a 400 respons
 invoking application handling. No routing, concurrency or persistent-connection framework
 is implied.
 
+## Base64 codec
+
+`std@1/base64` provides `Alphabet = Standard | UrlSafe`, `Padding = Required |
+Omitted`, and `DecodeError = InvalidByte(u64) | InvalidLength |
+InvalidPadding(u64) | NonCanonical(u64)`. Its pure source functions borrow input
+and return owned output:
+
+```text
+fn base64.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> String uses {}
+fn base64.decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[Bytes, DecodeError] uses {}
+```
+
+Encoding checks output-size arithmetic before building. Required padding emits
+and requires `=` for incomplete quanta; complete quanta need no padding. Omitted
+padding rejects every `=`. Decoding rejects whitespace, the other alphabet's
+symbols, padding before the final quantum, and nonzero unused low bits. Errors
+use input byte offsets: the first invalid byte or invalid padding placement is
+reported during scanning, followed by length/padding shape validation, then the
+last data byte of a noncanonical final quantum. No partial output is returned.
+
 ## Hexadecimal codec
 
 `hex.encode(data: Bytes) -> String` emits lowercase hexadecimal.

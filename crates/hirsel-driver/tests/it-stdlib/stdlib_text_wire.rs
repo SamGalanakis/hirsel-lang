@@ -9,7 +9,12 @@ fn source_codec(name: &str, module: &str, functions: &[&str]) {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../conformance/SEM/SEM-3-{name}-run.hir"));
         let mut loaded = load_program(&path).unwrap();
-        loaded.check_for_execution().unwrap();
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|error| match error {
+                ToolError::Query { error, .. } => panic!("{error:?}"),
+                error => panic!("{error}"),
+            });
         let input = loaded.engine.export_native_input().unwrap();
         let validated = loaded.engine.import_native_input(input).unwrap();
         let ready = native::build(
@@ -38,4 +43,9 @@ fn source_codec(name: &str, module: &str, functions: &[&str]) {
 #[test]
 fn hex_is_ordinary_source() {
     source_codec("hex", "hex", &["encode", "decode"]);
+}
+
+#[test]
+fn base64_is_ordinary_source() {
+    source_codec("base64", "base64", &["encode", "decode"]);
 }

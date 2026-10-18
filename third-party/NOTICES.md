@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| Go standard library | `src/encoding/base64/{base64.go,base64_test.go}` quanta, strict unused-bit checks and four-mode reference pairs | `stdlib/std@1/base64.hir`, base64 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/encoding/hex/{hex.go,hex_test.go}` nibble codec and vectors | `stdlib/std@1/hex.hir`, hex conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/path/match.go`, `src/path/match_test.go` slash grammar, scalar classes and matching vectors | `stdlib/std@1/glob.hir`, `conformance/SEM/SEM-3-glob-*.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | lexopt | command-line parser dependency | `crates/hirsel-cli-args` | blyxxyz/lexopt 0.3.2 | MIT |
