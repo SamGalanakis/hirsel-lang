@@ -202,6 +202,26 @@ correctly, ties to even. `OutOfRange` applies exactly when correct IEEE rounding
 infinity; values above `MAX` that round back to `MAX` succeed. Underflow rounds to a
 subnormal or signed zero without error.
 
+The two float modules also declare these ordinary source functions:
+
+```text
+N fn f32.floor(value: f32) -> f32 uses {}
+N fn f32.ceil(value: f32) -> f32 uses {}
+N fn f32.round(value: f32) -> f32 uses {}
+N fn f32.sqrt(value: f32) -> f32 uses {}
+N fn f64.floor(value: f64) -> f64 uses {}
+N fn f64.ceil(value: f64) -> f64 uses {}
+N fn f64.round(value: f64) -> f64 uses {}
+N fn f64.sqrt(value: f64) -> f64 uses {}
+```
+
+Floor rounds toward negative infinity, ceil toward positive infinity and round to
+nearest with halfway cases away from zero. All preserve signed zero and infinity,
+and canonicalize NaNs under SEM-2. Square root rounds correctly to nearest, ties
+to even, handles subnormals, preserves either zero and positive infinity, and
+returns canonical NaN for negative nonzero input. The portable baseline uses bit
+decomposition and integer arithmetic without a platform math call.
+
 `@noalloc f32.sum(xs: Array[f32]) -> f32` and `f64.sum(xs: Array[f64]) -> f64`, and
 `f32.sum_exact` and `f64.sum_exact` with the same types and allocation allowed, implement the
 reductions of [the core library](core-library.md#numeric-and-string-details).

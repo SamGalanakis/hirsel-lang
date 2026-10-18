@@ -4,6 +4,7 @@
 #[path = "../support/source_std.rs"]
 mod source_std;
 mod source_std_cache;
+mod stdlib_float_math;
 mod stdlib_graphemes;
 mod stdlib_http;
 mod stdlib_http_wire;

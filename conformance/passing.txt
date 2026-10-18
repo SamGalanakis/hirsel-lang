@@ -3693,6 +3693,8 @@ conformance/SEM/SEM-2-nan-not-equal.hir
 conformance/SEM/SEM-2-negative-zero.hir
 conformance/SEM/SEM-2-no-contraction.hir
 conformance/SEM/SEM-2-no-reassociation.hir
+conformance/SEM/SEM-2-std-float-f32-math-run.hir
+conformance/SEM/SEM-2-std-float-f64-math-run.hir
 conformance/SEM/SEM-2-sum-exact-and-f32-run.hir
 conformance/SEM/SEM-2-sum-tree.hir
 conformance/SEM/SEM-2-to-i32-contract.hir

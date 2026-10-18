@@ -223,7 +223,19 @@
       ]
     },
     {
+      "path": "f32_math.hir",
+      "module": [
+        "f32"
+      ]
+    },
+    {
       "path": "f64.hir",
+      "module": [
+        "f64"
+      ]
+    },
+    {
+      "path": "f64_math.hir",
       "module": [
         "f64"
       ]
