@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-803 exported definitions; 257 variants.
+808 exported definitions; 257 variants.
 
 ## Types and roots
 
@@ -1677,6 +1677,36 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 - `@preserves_unique(out) pub fn bufio.read_until[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[E]] uses {refill}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fstdin_5fread"></a>
+
+- `@preserves_unique(out) pub fn bufio.stdin_read(s: Stdin, mut r: Reader, mut out: List[u8], max: u64) -> Result[ u64, ReadError[InputError] ]`
+
+References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fstdin_5fread_5fexact"></a>
+
+- `@preserves_unique(out) pub fn bufio.stdin_read_exact(s: Stdin, mut r: Reader, mut out: List[u8], count: u64) -> Result[ (), ReadError[InputError] ]`
+
+References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fstdin_5fread_5fline"></a>
+
+- `pub fn bufio.stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[ unique String, ReadError[InputError] ]`
+
+References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fstdin_5fread_5fmore"></a>
+
+- `pub fn bufio.stdin_read_more(s: Stdin, mut r: Reader, max: u64) -> Result[ u64, ReadError[InputError] ]`
+
+References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
+
+<a id="def-std_401_2fbufio_2fstdin_5fread_5funtil"></a>
+
+- `@preserves_unique(out) pub fn bufio.stdin_read_until( s: Stdin, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64 ) -> Result[u64, ReadError[InputError]]`
+
+References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader)
 
 <a id="def-std_401_2fbufio_2fstream_5fread"></a>
 
