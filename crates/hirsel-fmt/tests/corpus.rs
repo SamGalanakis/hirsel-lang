@@ -92,6 +92,9 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
     for p in &mut tree.patterns {
         p.origin = origin;
     }
+    // Written parentheses are source detail; the formatter keeps only those the
+    // tree needs.
+    tree.groups.clear();
     for t in &mut tree.types {
         t.origin = origin;
         match &mut t.kind {
@@ -131,6 +134,11 @@ fn adversarial_comment_newline_and_projection_boundaries_roundtrip() {
         "fn main() { let x = f()?\n C }",
         "fn main() { return\n x }",
         "fn main() { x; }",
+        "fn main() { if let Some(x) = (a || b) { x } else if let None = y {} else { 1 } }",
+        "fn main() { if let A(x) | B(x) = take t { x; } }",
+        "fn main() { 'l: while let Some(x) = list.pop(mut xs) { continue 'l } }",
+        "fn main() { let Some(x) = a + (if c { a } else { b }) else { return } }",
+        "fn main() { let Some(x) = (match c { _ => a }) else { return } }",
         "/// doc\nfn a() {} // end\n\n/// next\nfn b() {}\n// orphan",
     ] {
         let mut names = Interner::default();

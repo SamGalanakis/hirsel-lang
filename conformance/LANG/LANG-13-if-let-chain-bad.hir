@@ -1,0 +1,10 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 5
+// A conditional let does not chain with && or ||.
+fn first(x: Option[u32], ready: bool) -> u32 {
+  if let Some(n) = x && ready {
+    n
+  } else {
+    0
+  }
+}

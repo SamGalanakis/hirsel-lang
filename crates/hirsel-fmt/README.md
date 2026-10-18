@@ -103,4 +103,8 @@ An f-string prints from `SyntaxTree.formats`: its piece spellings verbatim and e
 hole as an ordinary expression, never the desugared block. A hole whose first token
 is `{` is spaced (`f"{ {...} }"`) so it cannot read as the escape `{{`.
 
+A conditional let prints from `SyntaxTree.conditions` as written, never the desugared
+match or loop; a lazy boolean scrutinee keeps its parentheses. A let-else initializer
+that ends in a block, ignoring parentheses, is printed parenthesized.
+
 Each hole prints its retained spec after the expression, preserving Unicode fill.

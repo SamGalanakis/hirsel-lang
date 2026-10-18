@@ -155,6 +155,10 @@ impl Parser<'_> {
                         let height = self.heights.expressions[first.0 as usize] + 1;
                         self.check_height(height);
                         self.heights.expressions[first.0 as usize] = height;
+                        self.tree.groups.push(Group {
+                            expression: first,
+                            origin: self.origin(start),
+                        });
                         Ok(first)
                     }
                 })();
@@ -166,11 +170,8 @@ impl Parser<'_> {
         } else if self.at("{") {
             return self.block_context();
         } else if self.eat("if") {
-            if self.at("let") {
-                return self.fail(
-                    const { RuleId::of("LANG-13") },
-                    "if let is excluded; use match",
-                );
+            if self.eat("let") {
+                return self.if_let(start);
             }
             let condition = self.required(|p| p.expr(0))?;
             let then_branch = self.block()?;
@@ -382,21 +383,6 @@ impl Parser<'_> {
         }
         Ok(self.push_expr(start, ExprKind::Block { statements, tail }))
     }
-    /// Whether an expression's last token closes a block, closure or match:
-    /// parentheses are not retained, so `(if ..)` ends in one too.
-    fn ends_in_block(&self, mut e: ExprId) -> bool {
-        loop {
-            match &self.tree.expressions[e.0 as usize].kind {
-                ExprKind::Block { .. }
-                | ExprKind::If { .. }
-                | ExprKind::Match { .. }
-                | ExprKind::Closure { .. } => return true,
-                ExprKind::Unary { value, .. } | ExprKind::Return(Some(value)) => e = *value,
-                ExprKind::Binary { right, .. } => e = *right,
-                _ => return false,
-            }
-        }
-    }
     fn block_valued(&self, e: ExprId) -> bool {
         matches!(
             self.tree.expressions[e.0 as usize].kind,
@@ -414,6 +400,7 @@ impl Parser<'_> {
         Some(label)
     }
     fn statement(&mut self) -> Parsed<StmtKind> {
+        let start = self.pos;
         let label = if let Some(Token {
             kind: TokenKind::Label(label),
             ..
@@ -443,7 +430,7 @@ impl Parser<'_> {
             self.expect("=", const { RuleId::of("LANG-5") })?;
             let value = self.expr(0)?;
             let otherwise = if self.at("else") {
-                if self.ends_in_block(value) {
+                if self.tree.ends_in_block(value, true) {
                     return self.fail(
                         const { RuleId::of("LANG-13") },
                         "a let-else initializer cannot end in a block; bind it first",
@@ -475,6 +462,9 @@ impl Parser<'_> {
             });
         }
         if self.eat("while") {
+            if self.eat("let") {
+                return self.while_let(label, start);
+            }
             let condition = self.required(|p| p.expr(0))?;
             let body = self.block()?;
             return Ok(StmtKind::While {

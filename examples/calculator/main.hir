@@ -57,11 +57,10 @@ fn repl(rt: Io) -> Result[(), common.Error] {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  match arg.path(args, 0) {
-    Ok(p) => if path.text(p) == "-" {
+  if let Ok(p) = arg.path(args, 0) {
+    if path.text(p) == "-" {
       return repl(rt)
-    },
-    Error(_) => (),
+    }
   }
   let text = common.input(rt, args, "12 + 7 * 2\n-9 / 2\n100 - 1\n")?
   let mut builder: List[u8] = []
@@ -81,9 +80,8 @@ fn evaluates_left_to_right(t: Test) {
 
 @test
 fn rejects_zero_division(t: Test) {
-  match evaluate("4 / 0") {
-    Ok(_) => test.fail(t),
-    Error(_) => (),
+  if let Ok(_) = evaluate("4 / 0") {
+    test.fail(t)
   }
 }
 

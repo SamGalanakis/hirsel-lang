@@ -1,0 +1,7 @@
+// rule: LANG-13
+// expect: accept
+// An if-let pattern must be able to fail; an irrefutable one is a let.
+fn sum(pair: (u32, u32)) -> u32 {
+  let (a, b) = pair
+  a + b
+}

@@ -1,0 +1,10 @@
+// rule: LANG-4
+// expect: accept
+// An if-let binding is not in scope in its else block.
+fn first(x: Option[u32]) -> u32 {
+  if let Some(n) = x {
+    n
+  } else {
+    1
+  }
+}

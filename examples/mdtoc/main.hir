@@ -90,25 +90,18 @@ fn headings(take text: String) -> List[Heading] {
       },
       false => unique raw,
     }
-    match open {
-      Some(marker) => {
-        if string.starts_with(string.trim(line), marker) {
-          open = None()
-        }
-        continue
-      },
-      None() => (),
+    if let Some(marker) = open {
+      if string.starts_with(string.trim(line), marker) {
+        open = None()
+      }
+      continue
     }
-    match fence(line) {
-      Some(marker) => {
-        open = Some(take marker)
-        continue
-      },
-      None() => (),
+    if let Some(marker) = fence(line) {
+      open = Some(take marker)
+      continue
     }
-    match heading(line) {
-      Some(h) => list.push(mut found, take h),
-      None() => (),
+    if let Some(h) = heading(line) {
+      list.push(mut found, take h)
     }
   }
   take found
@@ -194,8 +187,7 @@ fn headings_require_a_separator(t: Test) {
     },
     None() => test.fail(t),
   }
-  match heading("##not-a-heading") {
-    Some(_) => test.fail(t),
-    None() => (),
+  if let Some(_) = heading("##not-a-heading") {
+    test.fail(t)
   }
 }

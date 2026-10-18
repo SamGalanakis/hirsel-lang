@@ -561,6 +561,33 @@ pub struct FormatString {
     /// One spelling per hole, empty for a plain hole, otherwise starting with `:`.
     pub specs: Vec<String>,
 }
+/// A written `if let` or `while let` (LANG-13). The parser desugars each to an
+/// ordinary match every later phase reads; the formatter prints the written form.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LetCondition {
+    /// `if let P = e A`, optionally `else B`: `matching` is
+    /// `match e { P => A, _ => B }`, with `{}` for an omitted else.
+    If { matching: ExprId, otherwise: bool },
+    /// `while let P = e A`: the `while true` statement whose body block `body`
+    /// holds only `matching`, `match e { P => A, _ => break }`.
+    While { body: ExprId, matching: ExprId },
+}
+impl LetCondition {
+    /// The desugared match.
+    pub fn matching(self) -> ExprId {
+        match self {
+            Self::If { matching, .. } | Self::While { matching, .. } => matching,
+        }
+    }
+}
+/// A parenthesized expression, kept so a parse can tell `(if ..)` from `if ..`;
+/// grouping is otherwise implied by the tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Group {
+    pub expression: ExprId,
+    /// The parentheses and everything between them.
+    pub origin: Origin,
+}
 /// Statement origin includes its terminator; the block tail does not (LANG-11).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Stmt {
@@ -919,6 +946,8 @@ pub struct SyntaxTree {
     pub patterns: Vec<Pattern>,
     pub types: Vec<TypeExpr>,
     pub formats: Vec<FormatString>,
+    pub conditions: Vec<LetCondition>,
+    pub groups: Vec<Group>,
 }
 /// The most ways one pattern may match through its or-patterns (LANG-13): the
 /// checker rejects more, so every later phase may enumerate them.
@@ -927,6 +956,28 @@ pub const MAX_PATTERN_CHOICES: usize = 256;
 /// reaches, keyed by the or-pattern.
 pub type PatternChoice = std::collections::BTreeMap<PatternId, PatternId>;
 impl SyntaxTree {
+    /// Whether an expression's last token closes a block, closure or match, so
+    /// a following `else` would continue it (LANG-13). With `grouped`, a
+    /// parenthesized expression ends in `)`; without, parentheses are ignored.
+    pub fn ends_in_block(&self, mut e: ExprId, grouped: bool) -> bool {
+        loop {
+            // An f-string's desugared block ends in its closing quote.
+            if grouped && self.groups.iter().any(|g| g.expression == e)
+                || self.formats.iter().any(|f| f.expression == e)
+            {
+                return false;
+            }
+            match &self.expressions[e.0 as usize].kind {
+                ExprKind::Block { .. }
+                | ExprKind::If { .. }
+                | ExprKind::Match { .. }
+                | ExprKind::Closure { .. } => return true,
+                ExprKind::Unary { value, .. } | ExprKind::Return(Some(value)) => e = *value,
+                ExprKind::Binary { right, .. } => e = *right,
+                _ => return false,
+            }
+        }
+    }
     /// A pattern's direct subpatterns: tuple elements, constructor fields or
     /// alternatives.
     pub fn pattern_children(&self, id: PatternId) -> Vec<PatternId> {

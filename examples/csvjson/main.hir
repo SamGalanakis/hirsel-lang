@@ -92,32 +92,24 @@ fn convert[S](
       let mut names: Map[String, bool] = map.empty()
       for i in 0u64..list.len(headers) {
         let name = headers[i]
-        match map.get(names, name) {
-          Some(_) => return Error(Invalid()),
-          None() => (),
+        if let Some(_) = map.get(names, name) {
+          return Error(Invalid())
         }
         map.insert(mut names, copy name, true)
-        match encoded_column {
-          Some(column) => {
-            if column == name {
-              encoded_index = Some(i)
-            }
-          },
-          None() => (),
+        if let Some(column) = encoded_column {
+          if column == name {
+            encoded_index = Some(i)
+          }
         }
       }
-      match encoded_column {
-        Some(column) => {
-          if encoded_index == None() {
-            return Error(Invalid())
-          }
-          hash_name = string.concat(column, "_sha256")
-          match map.get(names, hash_name) {
-            Some(_) => return Error(Invalid()),
-            None() => (),
-          }
-        },
-        None() => (),
+      if let Some(column) = encoded_column {
+        if encoded_index == None() {
+          return Error(Invalid())
+        }
+        hash_name = string.concat(column, "_sha256")
+        if let Some(_) = map.get(names, hash_name) {
+          return Error(Invalid())
+        }
       }
       continue
     }
@@ -176,9 +168,8 @@ fn run(rt: Io, args: Args) -> Result[(), Error] {
     list.push(mut snapshot, arg.text(args, i) ? Arguments)
   }
   let parsed = std@1/cli.parse(take snapshot, specs()) ? Flags
-  match map.get(parsed.flags, "help") {
-    Some(_) => return emit(rt, std@1/cli.usage("csvjson", specs())),
-    None() => (),
+  if let Some(_) = map.get(parsed.flags, "help") {
+    return emit(rt, std@1/cli.usage("csvjson", specs()))
   }
   if list.len(parsed.positional) > 1 {
     return Error(Invalid())
@@ -240,12 +231,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), Error] {
         fields: [std@1/log.Field(name: "reason", value: describe(error))],
         timestamp: None()
       )
-      match io.stderr(rt) {
-        Ok(sink) => {
-          // The launcher also reports the returned error after program stderr.
-          std@1/log.write(sink, Debug(), entry) ? Output
-        },
-        Error(_) => (),
+      if let Ok(sink) = io.stderr(rt) {
+        // The launcher also reports the returned error after program stderr.
+        std@1/log.write(sink, Debug(), entry) ? Output
       }
       Error(Invalid())
     },

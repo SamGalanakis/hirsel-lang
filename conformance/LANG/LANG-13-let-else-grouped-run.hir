@@ -1,0 +1,32 @@
+// rule: LANG-13
+// expect: run
+// A let-else initializer that ends in a block is accepted in parentheses,
+// which end it before the else.
+fn pick(fresh: bool, x: Option[u32]) -> u32 {
+  let Some(n) = (if fresh {
+    x
+  } else {
+    None
+  }) else {
+    return 0
+  }
+  n
+}
+
+fn sign(x: i32) -> u32 {
+  let 1..=9 = (match x {
+    0 => 0u32,
+    _ => 1u32 + 4,
+  }) else {
+    return 99
+  }
+  5
+}
+
+pub fn main(t: Test) -> Result[(), String] {
+  test.check(t, pick(true, Some(3)) == 3)
+  test.check(t, pick(false, Some(3)) == 0)
+  test.check(t, sign(2) == 5)
+  test.check(t, sign(0) == 99)
+  Ok(())
+}

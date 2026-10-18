@@ -1846,9 +1846,25 @@ impl Checker<'_, '_> {
                 if !self.invalid(ty) {
                     self.unreachable_patterns(ty, &arms)?;
                 }
+                // LANG-13: an if-let without else is an if without else.
+                let mut arm_expected = expected;
+                let conditions = &self.input.tree.conditions;
+                if let Some(condition) = conditions.iter().copied().find(|c| c.matching() == id) {
+                    self.let_condition(condition, ty, arms[0].pattern)?;
+                    if let ast::LetCondition::If {
+                        otherwise: false, ..
+                    } = condition
+                    {
+                        arm_expected = Some(self.ty(TypeKind::Tuple(vec![].into())));
+                    }
+                }
                 self.work.push(Work::Finish(id, expected, frame));
-                self.work
-                    .push(Work::AfterChild(After::MatchArm(id, 0, expected, frame)));
+                self.work.push(Work::AfterChild(After::MatchArm(
+                    id,
+                    0,
+                    arm_expected,
+                    frame,
+                )));
             }
             After::MatchArm(id, index, expected, frame) => {
                 let ast::ExprKind::Match { arms, .. } =

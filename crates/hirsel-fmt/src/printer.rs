@@ -9,6 +9,8 @@ pub(crate) struct Printer<'a> {
     file: &'a SyntaxFile,
     /// Written f-strings by the block each desugars to.
     formats: std::collections::BTreeMap<ExprId, &'a FormatString>,
+    /// Written `if let` by its match, and `while let` by its loop body block.
+    conditions: std::collections::BTreeMap<ExprId, LetCondition>,
 }
 impl<'a> Printer<'a> {
     pub fn new(file: &'a SyntaxFile, _sources: &SourceMap) -> Self {
@@ -18,7 +20,20 @@ impl<'a> Printer<'a> {
             .iter()
             .map(|f| (f.expression, f))
             .collect();
-        Self { file, formats }
+        let conditions = file
+            .tree
+            .conditions
+            .iter()
+            .map(|c| match *c {
+                LetCondition::If { matching, .. } => (matching, *c),
+                LetCondition::While { body, .. } => (body, *c),
+            })
+            .collect();
+        Self {
+            file,
+            formats,
+            conditions,
+        }
     }
     fn comment_group(&self, origin: Origin) -> bool {
         fn comment(t: &Token) -> bool {
@@ -648,7 +663,13 @@ impl<'a> Printer<'a> {
                 if let Some(t) = ty {
                     ds.extend([token(":"), Space, self.ty(*t)?]);
                 }
-                ds.extend([Space, token("="), Space, self.expr(*value, 0)?]);
+                // LANG-13: an else would continue an initializer ending in a block.
+                let value = if otherwise.is_some() && self.file.tree.ends_in_block(*value, false) {
+                    cat([token("("), self.expr(*value, 0)?, token(")")])
+                } else {
+                    self.expr(*value, 0)?
+                };
+                ds.extend([Space, token("="), Space, value]);
                 if let Some(otherwise) = otherwise {
                     ds.extend([Space, token("else"), Space, self.expr(*otherwise, 0)?]);
                 }
@@ -666,6 +687,16 @@ impl<'a> Printer<'a> {
                 self.expr(*e, 0)?,
                 if final_statement { token(";") } else { cat([]) },
             ]),
+            StmtKind::While { body, label, .. }
+                if let Some(LetCondition::While { matching, .. }) = self.conditions.get(body) =>
+            {
+                cat([
+                    self.loop_label(*label, true)?,
+                    token("while"),
+                    Space,
+                    self.let_condition(*matching)?,
+                ])
+            }
             StmtKind::While {
                 condition,
                 body,
@@ -741,11 +772,45 @@ impl<'a> Printer<'a> {
         }
         Some(cat(parts))
     }
+    /// `let P = e A` of a conditional let desugared to `matching` (LANG-13). A
+    /// scrutinee that is a lazy boolean operation keeps its parentheses.
+    fn let_condition(&self, matching: ExprId) -> Printed {
+        let ExprKind::Match { value, arms } =
+            &self.file.tree.expressions.get(matching.0 as usize)?.kind
+        else {
+            return None;
+        };
+        let arm = arms.first()?;
+        cat([
+            token("let"),
+            Space,
+            self.pattern(arm.pattern)?,
+            Space,
+            token("="),
+            Space,
+            self.expr(*value, 4)?,
+            Space,
+            self.expr(arm.body, 0)?,
+        ])
+        .into()
+    }
     fn expr_inner(&self, id: ExprId, minimum: u8) -> Printed {
         if let Some(format) = self.formats.get(&id) {
             return self.format_string(format);
         }
         let e = self.file.tree.expressions.get(id.0 as usize)?;
+        if let Some(LetCondition::If { otherwise, .. }) = self.conditions.get(&id) {
+            let mut ds = vec![token("if"), Space, self.let_condition(id)?];
+            if let (true, ExprKind::Match { arms, .. }) = (otherwise, &e.kind) {
+                ds.extend([
+                    Space,
+                    token("else"),
+                    Space,
+                    self.expr(arms.get(1)?.body, 0)?,
+                ]);
+            }
+            return Some(cat(ds));
+        }
         let precedence = match &e.kind {
             ExprKind::Binary { op, .. } => binary(*op).1,
             ExprKind::Unary { .. } | ExprKind::Comptime(_) => 11,

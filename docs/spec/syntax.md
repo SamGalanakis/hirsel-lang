@@ -428,7 +428,8 @@ assignment   = expression, assign-op, expression ;       (* LANG-5 *)
 assign-op    = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=" | "&=" | "|=" | "^=" ; (* LANG-1, SEM-1 *)
 loop-label   = "'", name ; (* one token; separate from character literals *)
 for-stmt     = [ loop-label, ":" ], "for", pattern, "in", expression, block ; (* SEM-4, LANG-13 *)
-while-stmt   = [ loop-label, ":" ], "while", expression, block ;              (* LANG-1 *)
+while-stmt   = [ loop-label, ":" ], "while", ( expression | let-cond ), block ; (* LANG-1/13 *)
+let-cond     = "let", pattern, "=", expression ;         (* LANG-13 *)
 local-fn     = "fn", name, fn-header, block ;            (* LANG-10 *)
 expression   = range ;                                   (* LANG-1 *)
 range        = logical-or, [ (".." | "..="), logical-or ] ; (* SEM-4 *)
@@ -455,7 +456,7 @@ primary      = literal | f-string | value-path | "heap" | "result"
              | "before", "(", expression, ")"
              | "todo", [ "(", string, ")" ]
              | "return", [ expression ] | "break", [ loop-label ] | "continue", [ loop-label ] ; (* LANG-1/2/11, MEM-4, FACT-1, CT-3 *)
-if-expr      = "if", expression, block, [ "else", (block | if-expr) ] ; (* LANG-1 *)
+if-expr      = "if", ( expression | let-cond ), block, [ "else", (block | if-expr) ] ; (* LANG-1/13 *)
 match-expr   = "match", expression, "{",
                [ arm, { entry-sep, arm }, [ entry-sep ] ], "}" ; (* LANG-7/13 *)
 arm          = pattern, [ "if", expression ], "=>", expression ; (* LANG-7/13 *)
@@ -482,8 +483,9 @@ Labels and payload arity are checked against the expected type. A record rest pa
 last and needs a comma after preceding fields (`Rec(x: x, ..)`). A range pattern is
 closed (`a..=b`) and its bounds are literals. A parenthesized alternation inside an
 alternation is the same alternation (`(A | B) | C` is `A | B | C`). A `let` with `else` takes a refutable
-pattern; its initializer cannot end in a block. There is no `if let` and no qualified
-variant constructor.
+pattern; its initializer cannot end in a block unless parenthesized. A `let-cond` takes a
+refutable pattern, and its expression cannot be an unparenthesized `&&` or `||` (no let
+chains). There is no qualified variant constructor.
 
 A statement expression becomes the block's tail exactly when it is last and not followed
 by a semicolon. An assignment's left side parses as an expression and must check as a

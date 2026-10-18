@@ -37,5 +37,13 @@ pub fn main() -> Result[(), String] {
     total += v
   }
   failure.check(total == 7, Arithmetic())
+  let mut queue: unique List[u64] = [5, 6]
+  while let Some(v) = list.pop(mut queue) {
+    total += v
+  }
+  if let Ok(v) = u64.parse("8") {
+    total += v
+  }
+  failure.check(total == 26, Arithmetic())
   Ok(())
 }

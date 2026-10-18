@@ -1,0 +1,9 @@
+// rule: LANG-4
+// expect: reject LANG-4 at line 8
+// An if-let binding is in scope only in the block that runs on a match.
+fn first(x: Option[u32]) -> u32 {
+  if let Some(n) = x {
+    return n
+  }
+  n
+}

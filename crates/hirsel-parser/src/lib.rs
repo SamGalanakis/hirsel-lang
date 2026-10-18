@@ -4,6 +4,7 @@ use hirsel_intern::{Interner, Symbol};
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::*;
 
+mod conditions;
 mod declarations;
 mod depth;
 mod expressions;

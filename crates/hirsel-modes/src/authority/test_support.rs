@@ -112,14 +112,7 @@ impl Fixture {
             kind: SignatureKind::Function(function(unit)),
             fingerprint: ContentHash([1; 32]),
         };
-        let tree = SyntaxTree {
-            items: vec![],
-            expressions: vec![],
-            statements: vec![],
-            patterns: vec![],
-            types: vec![],
-            formats: vec![],
-        };
+        let tree = SyntaxTree::default();
         let body = CheckedBody {
             tails: vec![],
             places: vec![],

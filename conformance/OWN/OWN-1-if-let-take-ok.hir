@@ -1,0 +1,9 @@
+// rule: OWN-1
+// expect: accept
+// An if-let can take its payload only from a value it owns.
+fn size(take x: Option[String]) -> String {
+  if let Some(s) = take x {
+    return s
+  }
+  ""
+}

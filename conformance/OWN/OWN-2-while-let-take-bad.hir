@@ -1,0 +1,11 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 7
+// A while-let evaluates its value before every iteration, so taking a binding
+// there moves it again after the first.
+fn total(take x: Option[String]) -> u64 {
+  let mut n = 0u64
+  while let Some(s) = take x {
+    n += string.byte_len(s)
+  }
+  n
+}

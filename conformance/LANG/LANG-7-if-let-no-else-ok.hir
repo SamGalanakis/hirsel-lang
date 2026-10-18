@@ -1,0 +1,9 @@
+// rule: LANG-7
+// expect: accept
+// An if-let without else is an if without else: its block has unit type.
+fn first(x: Option[u32]) -> u32 {
+  if let Some(n) = x {
+    n;
+  }
+  0
+}

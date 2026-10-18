@@ -50,6 +50,12 @@ Binding-level `mut` in a pattern reports LANG-13 with the accepted
 
 After LANG-14, a keyword used as a name is retained as a recovery name, including subsequent references. Its diagnostic names the keyword’s syntax role; the invalid file remains unpublished.
 
+Conditional lets (LANG-13, `conditions.rs`) desugar here too: `if let P = e A else B`
+becomes `match e { P => A, _ => B }` (`{}` without an else) and `'l: while let P = e A`
+becomes `'l: while true { match e { P => A, _ => break } }`, recorded in
+`SyntaxTree.conditions`. A scrutinee that is an unparenthesized `&&` or `||` is a
+LANG-13 let chain and is rejected. Each `( e )` is recorded in `SyntaxTree.groups`.
+
 F-strings (SEM-3, `formats.rs`) desugar here, in one place: the written pieces and
 holes become one ordinary block binding `$fmt<depth>: List[u8] = []`, an
 `Append(value, mut $fmt<depth>)` call per nonempty text piece and hole, and a tail

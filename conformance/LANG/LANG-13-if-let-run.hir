@@ -1,0 +1,102 @@
+// rule: LANG-13
+// expect: run
+// A conditional let runs its block with the pattern's bindings when the value
+// matches and its else block otherwise; while-let evaluates its value before
+// each iteration, and break and continue, labelled or not, leave or repeat it.
+type Token = Plus | Number(u8) | Name(String) | Label(String)
+
+fn name_len(t: Token) -> u64 {
+  if let Name(s) = t {
+    string.byte_len(s)
+  } else {
+    0
+  }
+}
+
+fn owned(take t: Token) -> String {
+  if let Number(n) = t {
+    "number"
+  } else if let Name(s) = take t {
+    s
+  } else {
+    "none"
+  }
+}
+
+fn count_names(xs: List[Token]) -> u64 {
+  let mut total = 0u64
+  for x in xs {
+    if let Name(s) = x {
+      total += string.byte_len(s)
+    }
+  }
+  total
+}
+
+fn drain(source: List[Option[u32]]) -> u32 {
+  let mut xs: unique List[Option[u32]] = unique source
+  let mut total = 0u32
+  while let Some(Some(n)) = list.pop(mut xs) {
+    total += n
+  }
+  total
+}
+
+fn skip_odd(source: List[u32]) -> u32 {
+  let mut xs: unique List[u32] = unique source
+  let mut total = 0u32
+  'outer: while let Some(n) = list.pop(mut xs) {
+    if n % 2 == 1 {
+      continue 'outer
+    }
+    let factors: List[u32] = [1, 2]
+    for k in factors {
+      if n == 100 {
+        break 'outer
+      }
+      total += k * n
+    }
+  }
+  total
+}
+
+fn either(x: Option[Result[u32, u32]]) -> u32 {
+  if let Some(Ok(n) | Error(n)) = x {
+    n
+  } else {
+    99
+  }
+}
+
+fn either_len(t: Token) -> u64 {
+  if let Name(s) | Label(s) = t {
+    string.byte_len(s)
+  } else {
+    0
+  }
+}
+
+fn small(r: Result[u8, u8]) -> bool {
+  if let Ok(0..=9) | Error(0) = r {
+    return true
+  }
+  false
+}
+
+pub fn main(t: Test) -> Result[(), String] {
+  test.check(t, name_len(Name("abc")) == 3)
+  test.check(t, name_len(Plus()) == 0)
+  test.check(t, owned(Name("x")) == "x")
+  test.check(t, owned(Number(3)) == "number")
+  test.check(t, owned(Plus()) == "none")
+  test.check(t, count_names([Name("ab"), Plus(), Name("c")]) == 3)
+  test.check(t, drain([None, Some(1), Some(2)]) == 3)
+  test.check(t, skip_odd([100, 2, 3, 4]) == 18)
+  test.check(t, either(Some(Error(4))) == 4)
+  test.check(t, either(None) == 99)
+  test.check(t, either_len(Label("abcd")) == 4)
+  test.check(t, either_len(Plus()) == 0)
+  test.check(t, small(Ok(7)))
+  test.check(t, !small(Error(7)))
+  Ok(())
+}

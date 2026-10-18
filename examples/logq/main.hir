@@ -141,18 +141,15 @@ fn parse_line(number: u64, line: String) -> Result[Option[Entry], String] {
 }
 
 fn keep(query: Query, entry: Entry) -> bool {
-  match query.level {
-    Some(l) => if entry.level != l {
+  if let Some(l) = query.level {
+    if entry.level != l {
       return false
-    },
-    None() => (),
+    }
   }
-  match query.pattern {
-    Some(p) => match string.find(entry.message, p) {
-      Some(_) => (),
-      None() => return false,
-    },
-    None() => (),
+  if let Some(p) = query.pattern {
+    if string.find(entry.message, p) == None() {
+      return false
+    }
   }
   match query.field {
     Some((key, wanted)) => match text_member(entry.fields, key) {
@@ -195,9 +192,8 @@ fn report(query: Query, levels: Map[String, u64], messages: Map[String, u64]) ->
   for name in sorted_names {
     text.append(mut out, name)
     text.append(mut out, " ")
-    match map.get(levels, name) {
-      Some(n) => u64.format_into(n, mut out),
-      None() => (),
+    if let Some(n) = map.get(levels, name) {
+      u64.format_into(n, mut out)
     }
     text.append(mut out, "\n")
   }

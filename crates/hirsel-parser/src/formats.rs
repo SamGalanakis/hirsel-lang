@@ -337,7 +337,7 @@ impl Parser<'_> {
             },
         }
     }
-    fn synthetic_expr(&mut self, origin: Origin, kind: ExprKind) -> ExprId {
+    pub(super) fn synthetic_expr(&mut self, origin: Origin, kind: ExprKind) -> ExprId {
         let id = ExprId(self.tree.expressions.len() as u32);
         let height = self.heights.expression(&kind);
         self.check_height(height);
@@ -345,7 +345,7 @@ impl Parser<'_> {
         self.tree.expressions.push(Expr { origin, kind });
         id
     }
-    fn synthetic_stmt(&mut self, origin: Origin, kind: StmtKind) -> StmtId {
+    pub(super) fn synthetic_stmt(&mut self, origin: Origin, kind: StmtKind) -> StmtId {
         let id = StmtId(self.tree.statements.len() as u32);
         let height = self.heights.statement(&kind);
         self.check_height(height);
@@ -361,7 +361,7 @@ impl Parser<'_> {
         self.tree.types.push(TypeExpr { origin, kind });
         id
     }
-    fn synthetic_pattern(&mut self, origin: Origin, kind: PatternKind) -> PatternId {
+    pub(super) fn synthetic_pattern(&mut self, origin: Origin, kind: PatternKind) -> PatternId {
         let id = PatternId(self.tree.patterns.len() as u32);
         let height = self.heights.pattern_expression(&kind);
         self.check_height(height);

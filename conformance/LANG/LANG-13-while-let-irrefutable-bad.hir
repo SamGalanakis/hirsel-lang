@@ -1,0 +1,14 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 7
+// A while-let pattern must be able to fail; an irrefutable one never ends the loop.
+fn count(source: List[u32]) -> u32 {
+  let mut xs: unique List[u32] = unique source
+  let mut total = 0u32
+  while let next = list.pop(mut xs) {
+    total += 1
+    if next == None {
+      break
+    }
+  }
+  total
+}

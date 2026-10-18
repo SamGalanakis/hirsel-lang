@@ -361,7 +361,7 @@ A structural or literal pattern on `box T` inspects `T` through an implicit payl
 projection, recursively through nested boxes. A binding or `_` keeps or ignores the whole
 value; a contextual nullary variant name is a structural pattern. `let` accepts only
 irrefutable patterns (tuples, records, `distinct` types, `_`), unless it has an else
-block. Other refutable patterns appear only in `match`; there is no `if let`.
+block. Other refutable patterns appear only in `match`, `if let` and `while let`.
 
 `let P = e else { .. }` binds `P` in the enclosing block when `e` matches, and otherwise
 runs the else block, which must diverge: its type is `Never`, through `return`,
@@ -371,7 +371,17 @@ an unmarked binding place is inspected in place and its parts borrowed, while `t
 or a computed value is taken, so its bindings borrow or take exactly as `match` binds
 them. The scrutinee and the scopes the else block leaves release under the ordinary
 cleanup rules. The initializer cannot end in a block (`if`, `match`, a block or a
-closure literal); bind such a value first.
+closure literal) unless it is parenthesized: `let Some(x) = (if c { a } else { b }) else
+{ .. }`.
+
+A conditional let is a match with one refutable arm. `if let P = e { A } else { B }` is
+`match e { P => A, _ => B }`, and without an else it is `match e { P => A, _ => {} }`, so
+`A` has unit type as in an `if` without else. `'l: while let P = e { A }` is
+`'l: while true { match e { P => A, _ => break } }`: `e` is evaluated before every
+iteration, and `break` and `continue`, labelled or not, leave or repeat the loop. The
+bindings of `P` are in scope only in `A`, and they borrow or take exactly as the match
+arm's do. `P` must be refutable. There are no let chains: the scrutinee cannot be an
+unparenthesized `&&` or `||`; nest an `if` instead.
 
 ```hirsel
 type Figure = Circle(radius: u32) | Rect(w: u32, h: u32) | Empty

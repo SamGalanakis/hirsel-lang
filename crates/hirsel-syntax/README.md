@@ -55,6 +55,12 @@ which only ever appears as the callee of a desugared step, and
 `SyntaxTree.formats`: each written f-string's piece spellings and hole IDs, keyed by
 the block the parser desugared it to.
 
+Conditional lets (LANG-13) have no node either: `SyntaxTree.conditions` records each
+written `if let` by its desugared match and each `while let` by its `while true` body
+block, for the formatter and H's refutability judgment. `SyntaxTree.groups` keeps every
+parenthesized expression with its span; `ends_in_block` reads it to accept
+`let P = (if ..) else { .. }`.
+
 `FormatPiece::Spec` retains the raw colon/options token. `FormatStep::AppendSpec`
 carries parsed options; `FormatStep::Mark` and `FormatStep::Pad(hole)` pad a hole
 whose options are only fill, alignment and width; `FormatString.specs` retains each

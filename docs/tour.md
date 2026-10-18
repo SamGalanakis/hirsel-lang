@@ -131,8 +131,9 @@ The mistakes to avoid first:
   a final `return` is rejected (LANG-6, LANG-11).
 - Functions are module-qualified, not methods. Build records with labelled
   fields; write variants bare, such as `Ok(())`, never `Result.Ok(())`.
-  Match refutable patterns or bind one with `let P = e else { return .. }`;
-  there is no `if let` (LANG-4, LANG-12, LANG-13).
+  Match refutable patterns, test one with `if let P = e { .. }` or
+  `while let`, or bind one with `let P = e else { return .. }` (LANG-4, LANG-12,
+  LANG-13).
 - Reading a parameter borrows it. `let y = x` moves counted data;
   `copy x` shares it; `unique x` deep-copies when necessary. `copy` does not
   extend local lifetimes. Match `mut` and `take` at the declaration and call.
@@ -438,16 +439,19 @@ Expected:
 No stdout; exit 0 (all checks pass).
 <!-- /tour -->
 
-## Patterns: let-else, alternatives and ranges
+## Patterns: conditional let, alternatives and ranges
 
 `let P = e else { ... }` binds a refutable pattern into the enclosing block;
 the else block must diverge with `return`, `break`, `continue` or a call that
-never returns. It borrows or takes exactly as `match` does. `P | Q` matches
+never returns. `if let P = e { ... } else { ... }` runs its block with the
+bindings when `e` matches, and `while let P = e { ... }` repeats while it does,
+evaluating `e` before each iteration. All three borrow or take exactly as
+`match` does, and there are no let chains (`if let .. && ..`). `P | Q` matches
 either alternative wherever a pattern may appear; every alternative binds the
 same names with the same types. `a..=b` matches a closed integer, `char` or
 byte range with literal bounds, and ranges count toward exhaustiveness, so
-`0..=127` and `128..=255` cover `u8` without a wildcard. There is no `if let`
-and no half-open range pattern (LANG-13).
+`0..=127` and `128..=255` cover `u8` without a wildcard. There is no
+half-open range pattern (LANG-13).
 
 <!-- tour: conformance/LANG/LANG-13-tour-patterns-run.hir -->
 [Runnable source](../conformance/LANG/LANG-13-tour-patterns-run.hir)
@@ -490,6 +494,14 @@ pub fn main() -> Result[(), String] {
     total += v
   }
   failure.check(total == 7, Arithmetic())
+  let mut queue: unique List[u64] = [5, 6]
+  while let Some(v) = list.pop(mut queue) {
+    total += v
+  }
+  if let Ok(v) = u64.parse("8") {
+    total += v
+  }
+  failure.check(total == 26, Arithmetic())
   Ok(())
 }
 ```

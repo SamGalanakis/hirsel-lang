@@ -1,0 +1,15 @@
+// rule: LANG-13
+// expect: accept
+// A conditional let does not chain with && or ||; nest the if instead, or
+// parenthesize a boolean scrutinee.
+fn first(x: Option[u32], ready: bool) -> u32 {
+  if let Some(n) = x {
+    if ready {
+      return n
+    }
+  }
+  if let true = (ready && x == None) {
+    return 1
+  }
+  0
+}

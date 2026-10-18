@@ -1145,10 +1145,15 @@ conformance/LANG/LANG-12-variant-positional-ok.hir
 conformance/LANG/LANG-13-drop-defining-module.hir
 conformance/LANG/LANG-13-external-destructure-bad.hir
 conformance/LANG/LANG-13-external-destructure-ok.hir
-conformance/LANG/LANG-13-if-let-bad.hir
+conformance/LANG/LANG-13-if-let-chain-bad.hir
+conformance/LANG/LANG-13-if-let-chain-ok.hir
+conformance/LANG/LANG-13-if-let-irrefutable-bad.hir
+conformance/LANG/LANG-13-if-let-irrefutable-ok.hir
 conformance/LANG/LANG-13-if-let-ok.hir
+conformance/LANG/LANG-13-if-let-run.hir
 conformance/LANG/LANG-13-irrefutable-patterns.hir
 conformance/LANG/LANG-13-let-else-bad.hir
+conformance/LANG/LANG-13-let-else-grouped-run.hir
 conformance/LANG/LANG-13-let-else-initializer-bad.hir
 conformance/LANG/LANG-13-let-else-initializer-ok.hir
 conformance/LANG/LANG-13-let-else-irrefutable-bad.hir
@@ -1191,6 +1196,8 @@ conformance/LANG/LANG-13-range-type-ok.hir
 conformance/LANG/LANG-13-refutable-let-bad.hir
 conformance/LANG/LANG-13-refutable-let-ok.hir
 conformance/LANG/LANG-13-tour-patterns-run.hir
+conformance/LANG/LANG-13-while-let-irrefutable-bad.hir
+conformance/LANG/LANG-13-while-let-irrefutable-ok.hir
 conformance/LANG/LANG-14-keyword-before-bad.hir
 conformance/LANG/LANG-14-keyword-before-ok.hir
 conformance/LANG/LANG-14-keyword-box-bad.hir
@@ -1404,6 +1411,10 @@ conformance/LANG/LANG-4-external-own-head-bad.hir
 conformance/LANG/LANG-4-external-own-head-ok.hir
 conformance/LANG/LANG-4-external-repeated-head-bad.hir
 conformance/LANG/LANG-4-external-repeated-head-ok.hir
+conformance/LANG/LANG-4-if-let-else-scope-bad.hir
+conformance/LANG/LANG-4-if-let-else-scope-ok.hir
+conformance/LANG/LANG-4-if-let-scope-bad.hir
+conformance/LANG/LANG-4-if-let-scope-ok.hir
 conformance/LANG/LANG-4-inert-recovery-bad.hir
 conformance/LANG/LANG-4-inert-recovery-ok.hir
 conformance/LANG/LANG-4-local-shadow-bad.hir
@@ -1501,6 +1512,8 @@ conformance/LANG/LANG-7-generic-size-context-conflict.hir
 conformance/LANG/LANG-7-generic-type-context-conflict.hir
 conformance/LANG/LANG-7-graphemes-string-bad.hir
 conformance/LANG/LANG-7-graphemes-string-ok.hir
+conformance/LANG/LANG-7-if-let-no-else-bad.hir
+conformance/LANG/LANG-7-if-let-no-else-ok.hir
 conformance/LANG/LANG-7-implicit-width-conversion-bad.hir
 conformance/LANG/LANG-7-implicit-width-conversion-ok.hir
 conformance/LANG/LANG-7-incomplete-product-option-bool-bad.hir
@@ -3087,6 +3100,8 @@ conformance/OWN/OWN-1-borrowed-take-capture-nested-bad.hir
 conformance/OWN/OWN-1-borrowed-take-capture-ok.hir
 conformance/OWN/OWN-1-caller-keeps-on-error.hir
 conformance/OWN/OWN-1-cursor-borrowed-item-take.hir
+conformance/OWN/OWN-1-if-let-take-bad.hir
+conformance/OWN/OWN-1-if-let-take-ok.hir
 conformance/OWN/OWN-1-let-else-take-bad.hir
 conformance/OWN/OWN-1-let-else-take-ok.hir
 conformance/OWN/OWN-1-local-result-annotated-closure-bad.hir
@@ -3138,6 +3153,8 @@ conformance/OWN/OWN-2-error-still-moves-bad.hir
 conformance/OWN/OWN-2-error-still-moves-ok.hir
 conformance/OWN/OWN-2-explicit-binding-use-after-move-bad.hir
 conformance/OWN/OWN-2-explicit-binding-use-after-move-ok.hir
+conformance/OWN/OWN-2-if-let-take-bad.hir
+conformance/OWN/OWN-2-if-let-take-ok.hir
 conformance/OWN/OWN-2-json-parse-accept.hir
 conformance/OWN/OWN-2-json-parse-reject.hir
 conformance/OWN/OWN-2-json-stringify-accept.hir
@@ -3212,6 +3229,8 @@ conformance/OWN/OWN-2-wave2-starts_with-accept.hir
 conformance/OWN/OWN-2-wave2-starts_with-reject.hir
 conformance/OWN/OWN-2-wave2-trim-accept.hir
 conformance/OWN/OWN-2-wave2-trim-reject.hir
+conformance/OWN/OWN-2-while-let-take-bad.hir
+conformance/OWN/OWN-2-while-let-take-ok.hir
 conformance/OWN/OWN-3-borrow-and-mut-bad.hir
 conformance/OWN/OWN-3-borrow-and-mut-ok.hir
 conformance/OWN/OWN-3-borrowed-loop-source-mut-call-bad.hir

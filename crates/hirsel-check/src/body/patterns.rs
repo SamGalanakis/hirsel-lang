@@ -365,6 +365,29 @@ impl Checker<'_, '_> {
         }
         Ok(())
     }
+    /// LANG-13: an if-let or while-let pattern can fail to match.
+    pub(super) fn let_condition(
+        &mut self,
+        condition: ast::LetCondition,
+        ty: TypeId,
+        pattern: ast::PatternId,
+    ) -> Result<(), QueryError> {
+        if !self.invalid(ty) && !self.useful(ty, vec![vec![Some(pattern)]], vec![None])? {
+            self.report(
+                const { RuleId::of("LANG-13") },
+                self.input.tree.patterns[pattern.0 as usize].origin.span,
+                match condition {
+                    ast::LetCondition::If { .. } => {
+                        "an if-let pattern matches every value; bind it with let"
+                    }
+                    ast::LetCondition::While { .. } => {
+                        "a while-let pattern matches every value; bind it with let in the loop"
+                    }
+                },
+            );
+        }
+        Ok(())
+    }
     /// LANG-13: outside match, every way a pattern's alternatives match moves
     /// or copies its bindings into one slot per name, so no binding is a view.
     pub(super) fn joined_bindings_own(&mut self, root: ast::PatternId) {

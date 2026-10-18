@@ -187,6 +187,9 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
     for pattern in &mut tree.patterns {
         pattern.origin = origin;
     }
+    // Written parentheses are source detail; a grouping the tree needs reparses
+    // the same way or not at all.
+    tree.groups.clear();
     for ty in &mut tree.types {
         ty.origin = origin;
         match &mut ty.kind {
@@ -200,7 +203,7 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
     }
     tree
 }
-/// Grouping has no AST node. Erase only source coordinates/trivia/hashes;
+/// Grouping has no AST node. Erase only source coordinates, written groups, trivia and hashes;
 /// operators, qualifiers, clauses, roots and every indexed child must agree.
 pub fn verify_tree(old: &str, new: &str) -> Result<(), String> {
     let mut engine = QueryEngine::new(
