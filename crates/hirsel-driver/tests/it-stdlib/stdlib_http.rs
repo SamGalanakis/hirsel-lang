@@ -613,3 +613,75 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
         }
     });
 }
+
+// Corpus outcomes check wire behavior; this additionally checks the recorded
+// provider exchanges and resource cleanup replay to the same observation.
+#[test]
+fn pooled_client_scripts_replay_without_network_authority() {
+    use hirsel_interp::observation::Effect;
+    with_compiler_stack(|| {
+        for relative in [
+            "conformance/SEM/SEM-1-http-client-length-reuse-run.hir",
+            "conformance/SEM/SEM-1-http-client-server-close-run.hir",
+            "conformance/SEM/SEM-1-http-client-post-reset-run.hir",
+            "conformance/SEM/SEM-1-http-client-idle-expiry-run.hir",
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(relative);
+            let mut program =
+                load_program_source(&path, None).unwrap_or_else(|e| panic!("{}", details(&e)));
+            program
+                .check_for_execution()
+                .unwrap_or_else(|e| panic!("{}", details(&e)));
+            let config = RunConfiguration {
+                entry: program.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let source = std::fs::read_to_string(&path).unwrap();
+            let mut simulation = SimulationConfig::default();
+            if source.lines().any(|line| line == "// grant: clock") {
+                simulation.grants.insert("MonotonicClock".into());
+            }
+            if let Some(net) = source
+                .lines()
+                .find_map(|line| line.strip_prefix("// net: "))
+            {
+                simulation.net = Some(serde_json::from_str(net).unwrap());
+            }
+            let recorded =
+                run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
+            assert!(
+                matches!(recorded.outcome, Ok(RunOutcome::Exit(0))),
+                "{:?}",
+                recorded.outcome
+            );
+            let observation = recorded.observation.unwrap();
+            let events: Vec<_> = observation
+                .effects
+                .iter()
+                .filter_map(|effect| match &effect.effect {
+                    Effect::CapabilityConsumed(event) => Some(event.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert!(events.iter().any(|e| e.operation == "net.connect"));
+            let replayed = run_observed_snapshot(
+                &mut program.engine,
+                &RunConfiguration {
+                    inputs: events,
+                    ..config
+                },
+                simulation,
+            )
+            .unwrap();
+            assert_eq!(replayed.observation.as_ref(), Some(&observation));
+            assert!(
+                matches!(replayed.outcome, Ok(RunOutcome::Exit(0))),
+                "{:?}",
+                replayed.outcome
+            );
+        }
+    });
+}

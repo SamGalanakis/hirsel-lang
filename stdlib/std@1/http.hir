@@ -2,7 +2,7 @@
 // Request.receiveHead/redirect/fetch and lib/std/http.zig Reader.State and
 // BodyWriter.chunkedDrain/endChunked, bff490a23889750de7096d9057c0a432efc929a8.
 // MIT, third-party/NOTICES.md. Explicit Net and branded Stream replace Io and
-// the pooled Connection; owned buffers replace borrowed reader/writer slices.
+// connection handles; owned buffers replace borrowed reader/writer slices.
 // Limits/defaults follow ureq src/config.rs.
 pub type Method = Get | Head | Post | Put | Delete | Patch | Options
 
@@ -15,6 +15,8 @@ pub type Header {
 
 pub type Config {
   max_redirects: u32,
+  max_idle_connections: u64,
+  max_idle_connections_per_host: u64,
   connect_timeout: Option[time.Duration],
   read_timeout: Option[time.Duration],
   write_timeout: Option[time.Duration],
@@ -69,12 +71,17 @@ pub opaque resource type Request: noalloc_drop uses {Net} {
   remaining: u64,
   chunk_suffix: bool,
   response_trailers: List[Header],
+  persistent: bool,
+  reusable: bool,
+  idle_since: u64,
 }
 @noalloc drop(self) {}
 
 pub fn default_config() -> Config uses {} {
   Config(
     max_redirects: 3,
+    max_idle_connections: 16,
+    max_idle_connections_per_host: 2,
     connect_timeout: None(),
     read_timeout: None(),
     write_timeout: None(),
@@ -298,7 +305,10 @@ pub fn request(
       body_kind: 0,
       remaining: 0,
       chunk_suffix: false,
-      response_trailers: []
+      response_trailers: [],
+      persistent: false,
+      reusable: false,
+      idle_since: 0
     )
   )
 }
@@ -368,7 +378,14 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
   }
   text.append(mut out, "\r\nuser-agent: ")
   text.append(mut out, r.config.user_agent)
-  text.append(mut out, "\r\nconnection: close\r\n")
+  text.append(
+    mut out,
+    if r.persistent {
+      "\r\nconnection: keep-alive\r\n"
+    } else {
+      "\r\nconnection: close\r\n"
+    }
+  )
   for h in r.headers {
     // Framing and connection headers belong to this state machine (Zig's
     // overridable built-in headers), never to two competing wire encodings.
@@ -527,7 +544,6 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
   let mut headers: List[Header] = []
   let mut content_length: Option[u64] = None()
   let mut chunked: bool = false
-  let mut keep_alive: bool = false
   while true {
     let parsed = if first {
       http_wire.parse_response(buf, mut line, mut raw, mut count)
@@ -576,17 +592,11 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
       Error(TransferEncoding()) => return Error(UnsupportedTransferEncoding()),
       Error(e) => return Error(Malformed(e)),
     }
-    if first {
-      keep_alive = frame.keep_alive
-    }
     let mut i: u64 = 0
     while i < count {
       let h = raw[i]
       let name = http_text(buf, h.name_start, h.name_end)?
       let value = http_text(buf, h.value_start, h.value_end)?
-      if http_same(name, "connection") {
-        keep_alive = frame.keep_alive
-      }
       core@1/list.push(mut headers, Header(name: take name, value: take value))
       i += 1
     }
@@ -616,6 +626,14 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
       }
       let location = header(headers, "location")
       let content_type = header(headers, "content-type")
+      let keep_alive = http_server_keep_alive(
+        headers,
+        if line.version == 1 {
+          Http11()
+        } else {
+          Http10()
+        }
+      )
       return Ok(
         Some(
           (
@@ -736,6 +754,7 @@ fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
   }
   let next_url = uri.format(parsed_uri)
   let mut fresh = request(r.net, r.config, next_method, next_url, headers)?
+  fresh.persistent = r.persistent
   fresh.redirects = r.redirects - 1
   r = take fresh
   send_bodiless(mut r)
@@ -757,7 +776,9 @@ pub fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
       r.state = 5
       continue
     }
+    r.reusable = r.persistent && head.keep_alive && head.status >= 200
     if no_body {
+      r.body_kind = 1
       r.state = 4
     } else {
       r.state = 3
@@ -985,6 +1006,161 @@ pub fn fetch(
       url: unique r.url
     )
   )
+}
+
+/// A sequential client owns its idle connections. Only complete, framed responses
+/// return a connection to the pool. Failed exchanges are never retried, including
+/// writes on stale connections: callers decide whether resending is safe.
+/// Supply a clock for idle_timeout, or disable idle_timeout and pass None().
+pub opaque resource type Client: noalloc_drop uses {Net, MonotonicClock} {
+  net: Net,
+  clock: Option[MonotonicClock],
+  config: Config,
+  idle: List[Request],
+}
+@noalloc drop(self) {}
+
+pub fn client(n: Net, clock: Option[MonotonicClock], config: Config) -> Result[
+  Client,
+  HttpError
+] {
+  http_timeout(config.idle_timeout)?
+  let no_clock = match clock {
+    None() => true,
+    Some(_) => false,
+  }
+  if config.idle_timeout != None() && no_clock || config.max_idle_connections_per_host == 0 {
+    return Error(http_net_error(InvalidInput()))
+  }
+  Ok(Client(net: n, clock: clock, config: unique config, idle: []))
+}
+
+/// Drop every idle stream. The Client remains usable.
+pub fn close_idle(mut c: Client) {
+  c.idle = []
+}
+
+fn http_client_now(c: Client) -> Result[u64, HttpError] {
+  match c.clock {
+    None() => Ok(0),
+    Some(clock) => Ok(
+      core@1/instant.ticks(core@1/clock.monotonic(clock) ? http_clock_error)
+    ),
+  }
+}
+
+fn http_same_origin(a: uri.Uri, b: uri.Uri) -> Result[bool, HttpError] uses {} {
+  Ok(
+    http_same(a.scheme, b.scheme) && http_host(a)? == http_host(b)? && http_port(a) == http_port(
+      b
+    )
+  )
+}
+
+fn http_client_request(
+  mut c: Client,
+  method: Method,
+  url: String,
+  headers: List[Header]
+) -> Result[Request, HttpError] {
+  http_validate_headers(headers)?
+  let parsed = uri.parse(url) ? Url
+  if !http_same(parsed.scheme, "http") && !http_same(parsed.scheme, "https") {
+    return Error(UnsupportedScheme())
+  }
+  http_validate_target(uri.component_encoded(parsed.path, Path()))?
+  match parsed.query {
+    Some(q) => http_validate_target(uri.component_encoded(q, Query()))?,
+    None() => (),
+  }
+  let now = http_client_now(c)?
+  let timeout = http_timeout(c.config.idle_timeout)?
+  let pending = replace(mut c.idle, [])
+  let mut selected: Option[Request] = None()
+  // Move resource elements through the bounded list. No counted buffer or
+  // connection is copied, and no deep-uniqueness promise is needed from I/O.
+  for stored in take pending {
+    let expired = match timeout {
+      Unbounded() => false,
+      Nanos(ns) => now - stored.idle_since >= ns,
+    }
+    if !expired {
+      if option.is_none(selected) && http_same_origin(stored.uri, parsed)? {
+        selected = Some(take stored)
+      } else {
+        core@1/list.push(mut c.idle, take stored)
+      }
+    }
+  }
+  let mut r = match take selected {
+    Some(stored) => take stored,
+    None() => request(c.net, c.config, method, url, headers)?,
+  }
+  r.method = method
+  r.uri = unique parsed
+  r.url = unique url
+  r.headers = unique headers
+  r.redirects = c.config.max_redirects
+  r.state = 0
+  r.sent_body = false
+  r.body_kind = 0
+  r.remaining = 0
+  r.chunk_suffix = false
+  r.response_trailers = []
+  r.reusable = false
+  r.persistent = http_server_keep_alive(headers, Http11())
+  Ok(take r)
+}
+
+/// Fetch with connection reuse. The exclusive borrow permits one exchange at a
+/// time per Client; use one Client per concurrent worker. The per-host limit
+/// bounds idle connections only. max_idle_connections bounds the entire idle pool.
+pub fn client_fetch(
+  mut c: Client,
+  method: Method,
+  url: String,
+  headers: List[Header],
+  body: Option[Bytes]
+) -> Result[Response, HttpError] {
+  let mut r = http_client_request(mut c, method, url, headers)?
+  match body {
+    Some(data) => send_body(mut r, data)?,
+    None() => send_bodiless(mut r)?,
+  }
+  let head = receive_head(mut r)?
+  let data = read_all(mut r, c.config.max_body_bytes)?
+  let response = Response(
+    status: head.status,
+    headers: unique head.headers,
+    body: take data,
+    url: unique r.url
+  )
+  if r.reusable && r.body_kind != 0 && r.state == 4 && bufio.buffered(r.input) == 0 && c.config.max_idle_connections > 0 {
+    let mut same_host: u64 = 0
+    for idle in c.idle {
+      if http_same_origin(idle.uri, r.uri)? {
+        same_host += 1
+      }
+    }
+    if same_host < c.config.max_idle_connections_per_host {
+      r.idle_since = http_client_now(c)?
+      if core@1/list.len(c.idle) >= c.config.max_idle_connections {
+        let pending = replace(mut c.idle, [])
+        let mut first = true
+        for stored in take pending {
+          if !first {
+            core@1/list.push(mut c.idle, take stored)
+          }
+          first = false
+        }
+      }
+      core@1/list.push(mut c.idle, take r)
+    }
+  }
+  if c.config.status_as_error && head.status >= 400 && head.status <= 599 {
+    return Error(Status(head.status))
+  }
+  Ok(take response)
 }
 
 // A sequential server connection owns its stream and unread bytes. A response

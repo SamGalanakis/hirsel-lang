@@ -1,0 +1,54 @@
+// Go Transport no-body reuse controls. Protocol upgrades never enter the pool.
+pub fn exercise(t: Test, method: http.Method, status: u16) -> Result[(), http.HttpError] {
+  let first = if method == Head() {
+    b"HEAD / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  } else {
+    b"GET / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  }
+  let next = b"GET / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  let response = unique string.as_bytes(
+    string.concat(
+      string.concat("HTTP/1.1 ", u16.to_string(status)),
+      " OK\r\nContent-Length: 99\r\n\r\n"
+    )
+  )
+  let good = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+  let connections: List[NetConnection] = if status == 101 {
+    [Open([Expect(first), Send(response)]), Open([Expect(next), Send(good)])]
+  } else {
+    [Open([Expect(first), Send(response), Expect(next), Send(good)])]
+  }
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: connections
+      )
+    ],
+    []
+  )
+  let mut config = http.default_config()
+  config.idle_timeout = None()
+  let mut client = http.client(n, None(), config)?
+  let first_response = http.client_fetch(
+    mut client,
+    method,
+    "http://example.com/",
+    [],
+    None()
+  )?
+  test.check(t, first_response.status == status && first_response.body == b"")
+  let second_response = http.client_fetch(
+    mut client,
+    Get(),
+    "http://example.com/",
+    [],
+    None()
+  )?
+  test.check(t, second_response.body == b"ok")
+  Ok(())
+}

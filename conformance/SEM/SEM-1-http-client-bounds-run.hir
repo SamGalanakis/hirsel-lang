@@ -1,0 +1,72 @@
+// rule: SEM-1
+// expect: run
+// Pool capacity evicts the oldest idle connection; origins include the port.
+fn peer(port: u16, twice: bool) -> NetPeer uses {} {
+  let request = if port == 80 {
+    b"GET / HTTP/1.1\r\nhost: example.com:80\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  } else {
+    b"GET / HTTP/1.1\r\nhost: example.com:81\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  }
+  let response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+  let connections: List[NetConnection] = if twice {
+    [
+      Open([Expect(copy request), Send(copy response)]),
+      Open([Expect(copy request), Send(copy response)])
+    ]
+  } else {
+    [Open([Expect(copy request), Send(copy response)])]
+  }
+  NetPeer(
+    address: "example.com",
+    port: port,
+    resolves_to: [],
+    tls: Plain(),
+    connections: connections
+  )
+}
+
+fn invalid_input(error: http.HttpError) -> bool uses {} {
+  match error {
+    Net(actual) => actual == InvalidInput(),
+    _ => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(t, [peer(80u16, true), peer(81u16, false)], [])
+  let mut config = http.default_config()
+  config.idle_timeout = None()
+  config.max_idle_connections = 1
+  config.max_idle_connections_per_host = 1
+  let mut client = http.client(n, None(), config)?
+  let _ = http.client_fetch(mut client, Get(), "http://example.com:80/", [], None())?
+  let _ = http.client_fetch(mut client, Get(), "http://example.com:81/", [], None())?
+  let _ = http.client_fetch(mut client, Get(), "http://example.com:80/", [], None())?
+  http.close_idle(mut client)
+  // Construction validates limits before opening any connection.
+  config.max_idle_connections_per_host = 0
+  test.check(
+    t,
+    match http.client(n, None(), config) {
+      Error(error) => invalid_input(error),
+      _ => false,
+    }
+  )
+  config = http.default_config()
+  test.check(
+    t,
+    match http.client(n, None(), config) {
+      Error(error) => invalid_input(error),
+      _ => false,
+    }
+  )
+  config.idle_timeout = Some(time.Duration(nanoseconds: -1))
+  test.check(
+    t,
+    match http.client(n, None(), config) {
+      Error(error) => invalid_input(error),
+      _ => false,
+    }
+  )
+  Ok(())
+}

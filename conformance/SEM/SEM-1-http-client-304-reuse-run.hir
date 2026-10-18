@@ -1,0 +1,6 @@
+// rule: SEM-1
+// expect: run
+// Go Transport vectors, with one exchange scenario per corpus program.
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  vectors.exercise(t, Get(), 304u16)
+}

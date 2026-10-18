@@ -1,0 +1,81 @@
+// Go Transport read-to-end and stale-connection controls: no implicit POST retry.
+fn network(error: http.HttpError) -> bool uses {} {
+  match error {
+    Net(_) => true,
+    Truncated() => true,
+    _ => false,
+  }
+}
+
+pub fn exercise(t: Test, mode: u8) -> Result[(), http.HttpError] {
+  let get = b"GET / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  let good = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+  let mut first: List[NetStep] = [Expect(copy get)]
+  if mode == 0 {
+    list.push(mut first, Send(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na"))
+    list.push(mut first, Close())
+  } else if mode == 1 {
+    list.push(mut first, Send(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbig!"))
+  } else if mode == 2 {
+    list.push(mut first, Send(copy good))
+    list.push(
+      mut first,
+      Expect(
+        b"POST / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\ncontent-length: 1\r\n\r\nx"
+      )
+    )
+    list.push(mut first, Reset())
+  } else {
+    // A server can close an apparently persistent connection while it is idle.
+    list.push(mut first, Send(copy good))
+    list.push(mut first, Close())
+  }
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open(take first), Open([Expect(copy get), Send(copy good)])]
+      )
+    ],
+    []
+  )
+  let mut config = http.default_config()
+  config.idle_timeout = None()
+  config.max_body_bytes = 2
+  let mut client = http.client(n, None(), config)?
+  let outcome = http.client_fetch(mut client, Get(), "http://example.com/", [], None())
+  if mode == 0 {
+    test.check(t, outcome == Error(Truncated()))
+  } else if mode == 1 {
+    test.check(t, outcome == Error(BodyTooLarge()))
+  } else {
+    test.check(
+      t,
+      match outcome {
+        Ok(response) => response.body == b"ok",
+        _ => false,
+      }
+    )
+    let failed = http.client_fetch(
+      mut client,
+      Post(),
+      "http://example.com/",
+      [],
+      Some(b"x")
+    )
+    test.check(
+      t,
+      match failed {
+        Error(error) => network(error),
+        _ => false,
+      }
+    )
+  }
+  let response = http.client_fetch(mut client, Get(), "http://example.com/", [], None())?
+  test.check(t, response.body == b"ok")
+  Ok(())
+}

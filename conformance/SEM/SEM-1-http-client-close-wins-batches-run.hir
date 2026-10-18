@@ -1,0 +1,7 @@
+// rule: SEM-1
+// expect: run
+// A close token in an earlier parser batch wins over later keep-alive tokens.
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nx: y\r\nConnection: keep-alive\r\n\r\nok"
+  vectors.exercise(t, response, false, false, false)
+}

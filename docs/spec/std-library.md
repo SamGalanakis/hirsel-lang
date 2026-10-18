@@ -596,6 +596,7 @@ Header       = { name: String, value: String }
 Config       = { max_redirects: u32, connect_timeout: Option[Duration],
                  read_timeout: Option[Duration], write_timeout: Option[Duration],
                  max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[Duration],
+                 max_idle_connections: u64, max_idle_connections_per_host: u64,
                  max_headers: u64, user_agent: String,
                  roots: TlsRoots, status_as_error: bool }
 ResponseHead = { version: Version, status: u16, reason: String, headers: List[Header],
@@ -659,9 +660,33 @@ a 307 or 308 after a body has been sent is `RedirectRequiresResend()`; more than
 with `uri.resolve`. `authorization`, `cookie` and `proxy-authorization` are kept only within
 the exact canonical origin (scheme, host and port). A redirect target goes through the same
 `Net`, so a target outside the grant fails with `Net(NotGranted())`, and an https-to-http
-downgrade fails under a `ConnectTls` rule. There is no connection reuse: each request opens
-its own connection and sends `connection: close`, while `keep_alive` is still reported.
-There is no client whole-request deadline, since that API has no clock parameter.
+downgrade fails under a `ConnectTls` rule.
+
+`Client` is an opaque resource with authority `{Net, MonotonicClock}`. Construct it with
+`client(n, clock: Option[MonotonicClock], config) -> Result[Client, HttpError]` and use
+`client_fetch(mut c, method, url, headers, body) -> Result[Response, HttpError]` for
+persistent requests. `close_idle(mut c)` drops every idle stream and leaves the client
+usable. Dropping the client drops its pool. The exclusive mutable borrow permits one
+exchange at a time; concurrent workers each own a client.
+
+Idle connections are keyed by canonical `(scheme, host, port)` (including default ports),
+and reused only after a complete, framed response whose connection tokens permit
+persistence. All Connection fields contribute tokens; `close` wins. EOF-framed responses,
+protocol upgrades, extra unread bytes, failed reads/writes, malformed responses and bodies
+above `max_body_bytes` do not return their connection. A stale connection is dropped on
+failure, with no automatic retry for any method: the caller decides whether resending is
+safe. A fully consumed status-error response may return its connection before `Status`.
+One-shot `request` and `fetch` continue sending `connection: close`.
+
+`max_idle_connections` defaults to 16 for the entire client and evicts the oldest idle
+connection when full; zero disables pooling. `max_idle_connections_per_host` defaults to 2,
+must be positive and bounds idle connections retained per origin. These limits do
+not impose a dialing budget or count an active exchange. Sequential borrowing
+normally needs only one connection per origin.
+`idle_timeout` defaults to 30 seconds and requires `Some(clock)` at construction;
+`None()` disables expiry and permits `None()` for the clock. Expired connections are
+dropped at checkout, before reuse. Invalid timeout values or a missing required clock
+return `Net(InvalidInput())`. These are ordinary std resources and core calls.
 
 ## Input
 

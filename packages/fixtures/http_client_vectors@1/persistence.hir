@@ -1,0 +1,83 @@
+// Go transport_test.go TestTransportKeepAlives,
+// TestTransportConnectionCloseOnResponse, TestTransportRespectRequestWantsClose,
+// and TestTransportReadToEndReusesConn, adapted to scripted peers.
+fn wire(value: String) -> unique Bytes uses {} {
+  unique string.as_bytes(value)
+}
+
+pub fn exercise(
+  t: Test,
+  response: String,
+  reuse: bool,
+  disabled: bool,
+  close_request: bool
+) -> Result[(), http.HttpError] {
+  let request = if close_request {
+    b"GET / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\n\r\n"
+  } else {
+    b"GET / HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  }
+  let second_request = if close_request {
+    b"GET / HTTP/1.1\r\nhost: example.com:80\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\n\r\n"
+  } else {
+    b"GET / HTTP/1.1\r\nhost: example.com:80\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+  }
+  let connections: List[NetConnection] = if reuse {
+    [
+      Open(
+        [
+          Expect(copy request),
+          Send(wire(response)),
+          Expect(copy second_request),
+          Send(wire(response))
+        ]
+      )
+    ]
+  } else {
+    [
+      Open([Expect(copy request), Send(wire(response))]),
+      Open([Expect(copy second_request), Send(wire(response))])
+    ]
+  }
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: connections
+      )
+    ],
+    []
+  )
+  let mut config = http.default_config()
+  config.idle_timeout = None()
+  if disabled {
+    config.max_idle_connections = 0
+  }
+  let mut client = http.client(n, None(), config)?
+  let headers: List[http.Header] = if close_request {
+    [http.Header(name: "Connection", value: "close")]
+  } else {
+    []
+  }
+  let first = http.client_fetch(
+    mut client,
+    Get(),
+    "http://EXAMPLE.COM/",
+    headers,
+    None()
+  )?
+  let second = http.client_fetch(
+    mut client,
+    Get(),
+    "http://example.com:80/",
+    headers,
+    None()
+  )?
+  test.check(t, first.status == 200 && first.body == b"ok" && second.body == b"ok")
+  http.close_idle(mut client)
+  Ok(())
+}

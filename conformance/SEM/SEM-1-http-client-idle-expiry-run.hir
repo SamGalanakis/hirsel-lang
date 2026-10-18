@@ -1,0 +1,44 @@
+// rule: SEM-1
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"example.com","service":"80","operation":"connect"}],"peers":[{"address":"example.com","port":80,"resolves_to":["127.0.0.1"],"tls":"plain","connections":[{"open":[{"expect":[71,69,84,32,47,32,72,84,84,80,47,49,46,49,13,10,104,111,115,116,58,32,101,120,97,109,112,108,101,46,99,111,109,13,10,117,115,101,114,45,97,103,101,110,116,58,32,104,105,114,115,101,108,45,115,116,100,47,49,13,10,99,111,110,110,101,99,116,105,111,110,58,32,107,101,101,112,45,97,108,105,118,101,13,10,13,10]},{"send":[72,84,84,80,47,49,46,49,32,50,48,48,32,79,75,13,10,67,111,110,116,101,110,116,45,76,101,110,103,116,104,58,32,50,13,10,13,10,111,107]}]},{"open":[{"expect":[71,69,84,32,47,32,72,84,84,80,47,49,46,49,13,10,104,111,115,116,58,32,101,120,97,109,112,108,101,46,99,111,109,13,10,117,115,101,114,45,97,103,101,110,116,58,32,104,105,114,115,101,108,45,115,116,100,47,49,13,10,99,111,110,110,101,99,116,105,111,110,58,32,107,101,101,112,45,97,108,105,118,101,13,10,13,10]},{"send":[72,84,84,80,47,49,46,49,32,50,48,48,32,79,75,13,10,67,111,110,116,101,110,116,45,76,101,110,103,116,104,58,32,50,13,10,13,10,111,107]}]}]}]}
+// stdout: fresh
+// Expiry at the exact boundary discards the old stream before checkout.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let output = io.stdout(rt)?
+  let mut config = http.default_config()
+  config.idle_timeout = Some(time.Duration(nanoseconds: 100))
+  let mut client = match http.client(n, Some(c), config) {
+    Ok(client) => take client,
+    Error(_) => return Ok(()),
+  }
+  let first = http.client_fetch(mut client, Get(), "http://example.com/", [], None())
+  failure.check(
+    match first {
+      Ok(response) => response.body == b"ok",
+      _ => false,
+    },
+    Arithmetic()
+  )
+  let start = match clock.monotonic(c) {
+    Ok(at) => at,
+    Error(_) => return Ok(()),
+  }
+  let at = match instant.checked_add(c, start, 100u64) {
+    Some(at) => at,
+    None() => return Ok(()),
+  }
+  let _ = clock.sleep_until(c, at)
+  let second = http.client_fetch(mut client, Get(), "http://example.com/", [], None())
+  failure.check(
+    match second {
+      Ok(response) => response.body == b"ok",
+      _ => false,
+    },
+    Arithmetic()
+  )
+  let _ = out.print(output, "fresh\n")
+  Ok(())
+}

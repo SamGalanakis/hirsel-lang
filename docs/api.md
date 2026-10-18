@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-792 exported definitions; 257 variants.
+796 exported definitions; 257 variants.
 
 ## Types and roots
 
@@ -2495,9 +2495,20 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 ## http
 
+<a id="def-std_401_2fhttp_2fClient"></a>
+
+- `pub opaque resource type http.Client: noalloc_drop uses {Net, MonotonicClock}`
+
+A sequential client owns its idle connections. Only complete, framed responses
+return a connection to the pool. Failed exchanges are never retried, including
+writes on stale connections: callers decide whether resending is safe.
+Supply a clock for idle_timeout, or disable idle_timeout and pass None().
+
+References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Net`](#def-core_401_2fNet)
+
 <a id="def-std_401_2fhttp_2fConfig"></a>
 
-- `pub type http.Config { max_redirects: u32, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, }`
+- `pub type http.Config { max_redirects: u32, max_idle_connections: u64, max_idle_connections_per_host: u64, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/TlsRoots`](#def-core_401_2fTlsRoots), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
@@ -2716,6 +2727,30 @@ Variant of http.Version.
 - `Http11 -> http.Version`
 
 Variant of http.Version.
+
+<a id="def-std_401_2fhttp_2fclient"></a>
+
+- `pub fn http.client(n: Net, clock: Option[MonotonicClock], config: Config) -> Result[ Client, HttpError ]`
+
+References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Net`](#def-core_401_2fNet), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Client`](#def-std_401_2fhttp_2fClient), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError)
+
+<a id="def-std_401_2fhttp_2fclient_5ffetch"></a>
+
+- `pub fn http.client_fetch( mut c: Client, method: Method, url: String, headers: List[Header], body: Option[Bytes] ) -> Result[Response, HttpError]`
+
+Fetch with connection reuse. The exclusive borrow permits one exchange at a
+time per Client; use one Client per concurrent worker. The per-host limit
+bounds idle connections only. max_idle_connections bounds the entire idle pool.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Client`](#def-std_401_2fhttp_2fClient), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Method`](#def-std_401_2fhttp_2fMethod), [`std@1/http/Response`](#def-std_401_2fhttp_2fResponse)
+
+<a id="def-std_401_2fhttp_2fclose_5fidle"></a>
+
+- `pub fn http.close_idle(mut c: Client)`
+
+Drop every idle stream. The Client remains usable.
+
+References: [`std@1/http/Client`](#def-std_401_2fhttp_2fClient)
 
 <a id="def-std_401_2fhttp_2fdefault_5fconfig"></a>
 
