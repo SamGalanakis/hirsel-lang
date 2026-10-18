@@ -5,8 +5,11 @@
 //! A switch is requested inside an operation and made once the running frame
 //! is back on its stack ([`Machine::finish_switch`]). A task that blocks in a
 //! task operation leaves its call terminator unexecuted and records where it
-//! waits ([`Wait`]); the terminator runs again when the task resumes and
-//! completes the operation. What the runtime keeps per task in `RunCtx` H
+//! stopped ([`Wait`]); the terminator runs again when the task resumes and
+//! completes the operation. A task that must wait parks with what it waits for
+//! ([`Park`]); parked tasks are polled in park order at every yield and
+//! whenever the running task stops, as the runtime polls them, and a task due
+//! to park after its operation's yield parks when it reaches the front. What the runtime keeps per task in `RunCtx` H
 //! keeps per task here: its failure chain, with the spawn path of each
 //! failure a child contributed. A child's closure is a harness root while the
 //! scheduler holds it, and its environment is released after its frame
@@ -32,16 +35,26 @@ enum State {
 /// Where a task stopped inside a task operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Wait {
-    /// A join of `child`, parked until it completes.
+    /// A join of `child`, parked until a poll found it finished.
     Join(u32),
-    /// A join that handed off to holding `child`; it yields once the child completed.
-    JoinHanded(u32),
+    /// A join that handed off to holding `child`; it completes once the child completed,
+    /// with the operation's yield when it had not parked.
+    JoinHanded(u32, bool),
     /// A scope exit after its first part: waiting for, or discarding, children.
     Exit(u32),
     /// A finished child holding its result until a join or a discard resumes it.
     Finish,
     /// A detach that handed off to a holding child.
     Detach(u32),
+}
+
+/// What a parked task waits for; its poll performs the wait's effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Park {
+    /// A join of `child`, which moves its result to `slot`.
+    Join { child: u32, slot: Ptr },
+    /// A scope exit, until every child of `scope` holds its result or completed.
+    Exit(u32),
 }
 
 /// A holding child's result: its slot, the slot's layout and its `None` image.
@@ -67,9 +80,11 @@ struct Task {
     canceled: Option<u32>,
     scopes: Vec<u32>,
     wait: Option<Wait>,
+    /// What the task waits for while parked, or once at the front (`parking`).
+    park: Option<Park>,
+    /// Queued after its operation's yield, to park when it reaches the front.
+    parking: bool,
     slot: Option<Slot>,
-    /// A task parked in a join of this one, and the slot it receives the result in.
-    awaiter: Option<(u32, Ptr)>,
     handoff: Option<u32>,
     detached: bool,
     /// The completed frame failed, or the environment's release did.
@@ -96,8 +111,9 @@ impl Task {
             canceled,
             scopes: Vec::new(),
             wait: None,
+            park: None,
+            parking: false,
             slot: None,
-            awaiter: None,
             handoff: None,
             detached: false,
             failed: false,
@@ -113,7 +129,6 @@ struct Scope {
     generation: u32,
     children: Vec<u32>,
     canceled: Option<u32>,
-    joiner: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -123,6 +138,8 @@ pub(super) struct Tasks {
     generation: u32,
     current: u32,
     runnable: VecDeque<u32>,
+    /// Parked tasks, in park order.
+    parked: Vec<u32>,
     /// The switch the running operation requested, and whether the running
     /// task completed (its stack is not kept).
     switch: Option<(u32, bool)>,
@@ -168,6 +185,7 @@ impl Tasks {
             generation: 1,
             current: 0,
             runnable: VecDeque::new(),
+            parked: Vec::new(),
             switch: None,
             spawns: Vec::new(),
         }
@@ -238,41 +256,13 @@ impl Tasks {
             })
         })
     }
-    fn wake(&mut self, task: u32) -> Checked<()> {
-        let row = self.task(task)?;
-        if row.state != State::Parked {
-            return fail(V::Malformed, "waking a task that is not parked");
-        }
-        row.state = State::Ready;
-        self.runnable.push_back(task);
-        Ok(())
-    }
-    /// Wake a scope's exit once its last child completed or holds its result.
-    fn notify_joiner(&mut self, scope: u32) -> Checked<()> {
-        let Some(joiner) = self.scopes[scope as usize].as_ref().and_then(|s| s.joiner) else {
-            return Ok(());
-        };
-        if self.settled(scope) {
-            self.scope(scope)?.joiner = None;
-            self.wake(joiner)?;
-        }
-        Ok(())
-    }
-    fn yield_now(&mut self) {
-        if self.switch.is_none()
-            && let Some(next) = self.runnable.pop_front()
-        {
-            self.runnable.push_back(self.current);
-            self.switch = Some((next, false));
-        }
-    }
-    /// The running task parked or holds its result: run the front of the queue.
-    fn run_next(&mut self) -> Checked<()> {
-        let Some(next) = self.runnable.pop_front() else {
-            // CONC-8: environmental in the runtime, never a valid program's schedule here.
-            return fail(V::Unsupported, "every task of the run is blocked (CONC-8)");
-        };
-        self.switch = Some((next, false));
+    /// Park the running task on `park`.
+    fn park_current(&mut self, park: Park) -> Checked<()> {
+        let current = self.current;
+        let row = self.task(current)?;
+        row.state = State::Parked;
+        row.park = Some(park);
+        self.parked.push(current);
         Ok(())
     }
     /// Resume holding `child` directly; the running task parks until it completes.
@@ -475,12 +465,11 @@ impl<S: Stage> Machine<'_, S> {
                     generation,
                     children: Vec::new(),
                     canceled: None,
-                    joiner: None,
                 }));
                 let index = (s.scopes.len() - 1) as u32;
                 let current = s.current;
                 s.task(current)?.scopes.push(index);
-                s.yield_now();
+                self.task_yield()?;
                 let result = site
                     .result
                     .ok_or_else(|| err(V::Malformed, "a scope entry without a result"))?;
@@ -524,7 +513,6 @@ impl<S: Stage> Machine<'_, S> {
                 let index = (s.tasks.len() - 1) as u32;
                 s.scope(scope)?.children.push(index);
                 s.runnable.push_back(index);
-                s.yield_now();
                 // The scheduler holds the closure until the child's frame returns.
                 self.set_root(
                     MAIN_ROOT | u64::from(index),
@@ -537,6 +525,7 @@ impl<S: Stage> Machine<'_, S> {
                         borrow: None,
                     }),
                 );
+                self.task_yield()?;
                 let result = site
                     .result
                     .ok_or_else(|| err(V::Malformed, "a spawn without a result"))?;
@@ -570,12 +559,8 @@ impl<S: Stage> Machine<'_, S> {
                 };
                 let s = self.scheduler();
                 let row = s.task(current)?;
-                let scope = row
-                    .scope
-                    .ok_or_else(|| err(V::Malformed, "the root task finished as a child"))?;
-                if let Some((_, out)) = row.awaiter {
-                    self.deliver(slot, out)?;
-                    return self.task_return(f, &arguments, None, normal);
+                if row.scope.is_none() {
+                    return fail(V::Malformed, "the root task finished as a child");
                 }
                 if row.detached {
                     return self.task_return(f, &arguments, None, normal);
@@ -583,8 +568,7 @@ impl<S: Stage> Machine<'_, S> {
                 row.slot = Some(slot);
                 row.state = State::Holding;
                 row.wait = Some(Wait::Finish);
-                s.notify_joiner(scope)?;
-                s.run_next()?;
+                self.run_next(false)?;
                 Ok(Control::Continue)
             }
             "$intrinsic.TaskJoin" => {
@@ -605,27 +589,33 @@ impl<S: Stage> Machine<'_, S> {
                                 let r = self.task_slot(f, &Self::task_argument(&arguments, 2)?)?;
                                 self.deliver(held, r.ptr)?;
                                 let s = self.scheduler();
-                                s.task(current)?.wait = Some(Wait::JoinHanded(child));
+                                s.task(current)?.wait = Some(Wait::JoinHanded(child, true));
                                 s.hand_off(child)?;
                                 return Ok(Control::Continue);
                             }
-                            State::Done => s.yield_now(),
+                            State::Done => self.task_yield()?,
                             State::Ready | State::Parked => {
                                 let r = self.task_slot(f, &Self::task_argument(&arguments, 2)?)?;
-                                let s = self.scheduler();
-                                s.task(child)?.awaiter = Some((current, r.ptr));
-                                let row = s.task(current)?;
-                                row.state = State::Parked;
-                                row.wait = Some(Wait::Join(child));
-                                s.run_next()?;
+                                self.scheduler().task(current)?.wait = Some(Wait::Join(child));
+                                self.park_until(Park::Join { child, slot: r.ptr }, true)?;
                                 return Ok(Control::Continue);
                             }
                         }
                     }
-                    Some(Wait::Join(waited)) if waited == child => s.task(current)?.wait = None,
-                    Some(Wait::JoinHanded(waited)) if waited == child => {
+                    Some(Wait::Join(waited)) if waited == child => {
+                        // The poll moved a holding child's result; its frame finishes now.
+                        if s.task(child)?.state == State::Holding {
+                            s.task(current)?.wait = Some(Wait::JoinHanded(child, false));
+                            s.hand_off(child)?;
+                            return Ok(Control::Continue);
+                        }
                         s.task(current)?.wait = None;
-                        s.yield_now();
+                    }
+                    Some(Wait::JoinHanded(waited, yields)) if waited == child => {
+                        s.task(current)?.wait = None;
+                        if yields {
+                            self.task_yield()?;
+                        }
                     }
                     _ => return fail(V::Malformed, "a task resumed in another operation"),
                 }
@@ -676,11 +666,11 @@ impl<S: Stage> Machine<'_, S> {
                     _ => return fail(V::Malformed, "a task resumed in another operation"),
                 }
                 if !s.settled(index) {
-                    s.scope(index)?.joiner = Some(current);
-                    s.task(current)?.state = State::Parked;
-                    s.run_next()?;
+                    // The exit is not a yield.
+                    self.park_until(Park::Exit(index), false)?;
                     return Ok(Control::Continue);
                 }
+                let s = self.scheduler();
                 // Discard the results nobody awaited, the last spawned first.
                 let children = s.scope(index)?.children.clone();
                 for &child in children.iter().rev() {
@@ -714,7 +704,7 @@ impl<S: Stage> Machine<'_, S> {
                 let scope = s.scope_handle(word)?;
                 let child = s.task_handle(task, scope)?;
                 s.cancel(child, CANCEL_REQUESTED)?;
-                s.yield_now();
+                self.task_yield()?;
                 self.task_return(f, &arguments, None, normal)
             }
             "task.detach" => {
@@ -750,7 +740,7 @@ impl<S: Stage> Machine<'_, S> {
                     }
                     _ => return fail(V::Malformed, "a task resumed in another operation"),
                 }
-                self.scheduler().yield_now();
+                self.task_yield()?;
                 // The handle word is taken: nothing of it remains to release.
                 self.task_return(f, &arguments, None, normal)
             }
@@ -758,11 +748,116 @@ impl<S: Stage> Machine<'_, S> {
         }
     }
 
-    /// The yield after a capability operation.
-    pub(super) fn task_yield(&mut self) {
-        if let Some(s) = self.tasks.as_deref_mut() {
-            s.yield_now();
+    /// Poll every parked task in park order: each whose wait is over has its
+    /// effect performed and joins the back of the queue.
+    fn poll_parked(&mut self) -> Checked<()> {
+        let parked = std::mem::take(&mut self.scheduler().parked);
+        let mut waiting = Vec::with_capacity(parked.len());
+        for task in parked {
+            if self.poll(task)? {
+                let s = self.scheduler();
+                let row = s.task(task)?;
+                row.state = State::Ready;
+                row.park = None;
+                s.runnable.push_back(task);
+            } else {
+                waiting.push(task);
+            }
         }
+        // A poll never parks a task.
+        self.scheduler().parked = waiting;
+        Ok(())
+    }
+
+    /// Whether parked `task`'s wait is over, after performing its effect if it is.
+    fn poll(&mut self, task: u32) -> Checked<bool> {
+        let s = self.scheduler();
+        match s.task(task)?.park {
+            Some(Park::Join { child, slot }) => match s.task(child)?.state {
+                State::Holding => {
+                    let held = s
+                        .task(child)?
+                        .slot
+                        .take()
+                        .ok_or_else(|| err(V::Malformed, "a holding child without a slot"))?;
+                    self.deliver(held, slot)?;
+                    Ok(true)
+                }
+                State::Done => Ok(true),
+                State::Ready | State::Parked => Ok(false),
+            },
+            Some(Park::Exit(scope)) => Ok(s.settled(scope)),
+            None => fail(V::Malformed, "a parked task without a wait"),
+        }
+    }
+
+    /// Take the front of the queue; a task due to park parks there, the
+    /// parked tasks are polled, and the next front is taken.
+    fn front(&mut self) -> Checked<u32> {
+        loop {
+            let s = self.scheduler();
+            let Some(next) = s.runnable.pop_front() else {
+                // CONC-8: environmental in the runtime, never a valid program's schedule here.
+                return fail(V::Unsupported, "every task of the run is blocked (CONC-8)");
+            };
+            let row = s.task(next)?;
+            if !row.parking {
+                return Ok(next);
+            }
+            row.parking = false;
+            row.state = State::Parked;
+            s.parked.push(next);
+            self.poll_parked()?;
+        }
+    }
+
+    /// The running task stopped (it parked, holds its result or completed):
+    /// poll the parked tasks and run the front, which may be the running task.
+    fn run_next(&mut self, departing: bool) -> Checked<()> {
+        self.poll_parked()?;
+        let next = self.front()?;
+        self.scheduler().switch = Some((next, departing));
+        Ok(())
+    }
+
+    /// The yield after an operation: poll the parked tasks and, when another
+    /// task is runnable, queue the running task and run the front.
+    pub(super) fn task_yield(&mut self) -> Checked<()> {
+        if self.tasks.is_none() || self.scheduler().switch.is_some() {
+            return Ok(());
+        }
+        self.poll_parked()?;
+        let s = self.scheduler();
+        if s.runnable.is_empty() {
+            return Ok(());
+        }
+        let current = s.current;
+        s.runnable.push_back(current);
+        let next = self.front()?;
+        self.scheduler().switch = Some((next, false));
+        Ok(())
+    }
+
+    /// Wait for `park`; the operation runs again once a poll performed its
+    /// effect. `yielded`: the operation yields first, and the task parks when
+    /// it is next at the front.
+    fn park_until(&mut self, park: Park, yielded: bool) -> Checked<()> {
+        if yielded {
+            self.poll_parked()?;
+            let s = self.scheduler();
+            if !s.runnable.is_empty() {
+                let current = s.current;
+                let row = s.task(current)?;
+                row.park = Some(park);
+                row.parking = true;
+                s.runnable.push_back(current);
+                let next = self.front()?;
+                self.scheduler().switch = Some((next, false));
+                return Ok(());
+            }
+        }
+        self.scheduler().park_current(park)?;
+        self.run_next(false)
     }
 
     /// Whether the running task is a child (the root's frames finish the run).
@@ -830,7 +925,7 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     /// The running child's stack emptied after its frame returned: record its
-    /// outcome, wake whoever waits for it and run another task.
+    /// outcome and run another task.
     pub(super) fn task_complete(&mut self) -> Checked<()> {
         let s = self.scheduler();
         let index = s.current;
@@ -855,7 +950,6 @@ impl<S: Stage> Machine<'_, S> {
         let scope = row
             .scope
             .ok_or_else(|| err(V::Malformed, "the root task completed as a child"))?;
-        let awaiter = row.awaiter.take();
         let handoff = row.handoff.take();
         let detached = row.detached;
         if failed {
@@ -872,15 +966,11 @@ impl<S: Stage> Machine<'_, S> {
             s.scope(scope)?.children.retain(|&c| c != index);
             s.vacate(index);
         }
-        if let Some((awaiter, _)) = awaiter {
-            s.wake(awaiter)?;
+        match handoff {
+            // A join or a discard ran the rest of a holding child: no schedule point.
+            Some(next) => s.switch = Some((next, true)),
+            None => self.run_next(true)?,
         }
-        s.notify_joiner(scope)?;
-        let next = match handoff.or_else(|| s.runnable.pop_front()) {
-            Some(next) => next,
-            None => return fail(V::Unsupported, "every task of the run is blocked (CONC-8)"),
-        };
-        s.switch = Some((next, true));
         self.finish_switch()
     }
 

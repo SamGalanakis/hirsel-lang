@@ -14,14 +14,18 @@
 //! - one FIFO queue of runnable tasks; a spawned child joins its back;
 //! - after every capability operation ([`yield_now`]) the running task, when another is
 //!   runnable, joins the back and the front runs;
-//! - a task waiting for a join parks, and joins the back when the awaited child completes.
+//! - a task that must wait (a join, a scope exit) parks with what it waits for ([`Wait`]).
+//!   Parked tasks are polled in park order at every yield and whenever the running task stops
+//!   (it parked, holds its result or completed); a successful poll performs the wait's effect
+//!   and moves the task to the back of the queue. An operation that parks yields first, and its
+//!   task parks when it is next at the front.
 //!
-//! A child runs the compiled `$native.task_main` closure the spawn received. On success that
-//! body hands its `Some(result)` slot to [`hirsel_rt_v2_task_finish`] and, unless an awaiter
-//! already waits, stays parked in that call: a completed child holds its result in its own
-//! frame. A join moves the slot's whole `Option` image into the awaiter's slot and writes the
-//! child's `None` back; a discard resumes the child with its slot intact, and the child's own
-//! compiled cleanup drops the result. The runtime therefore moves results without knowing their
+//! A child runs the compiled `$native.task_main` closure the spawn received, which drops the
+//! callable (and so its captures) once it returns. On success that body hands its `Some(result)`
+//! slot to [`hirsel_rt_v2_task_finish`] and stays in that call: a completed child holds its
+//! result in its own frame. A join's poll moves the slot's whole `Option` image into the
+//! awaiter's slot and writes the child's `None` back; a discard resumes the child with its slot
+//! intact, and the child's own compiled cleanup drops the result. The runtime therefore moves results without knowing their
 //! layouts. Either way the child then finishes its frame, the runtime releases its closure
 //! environment, and the child completes: completion follows cleanup and precedes the join
 //! (CONC-2). A failed child completes with its failure chain instead, which cancels its
@@ -90,12 +94,25 @@ impl Saved {
 enum State {
     /// Running or in the runnable queue.
     Ready,
-    /// Waiting for a join or a child's discard.
+    /// In the parked list, or resuming a child it handed off to.
     Parked,
     /// Completed with a value it holds in its `$native.task_main` frame.
     Holding,
     /// Completed: its value was delivered or dropped, or it failed.
     Done,
+}
+
+/// What a parked task waits for; its poll performs the wait's effect.
+#[derive(Clone, Copy)]
+enum Wait {
+    /// A join of `child`, which moves its result into `slot` (`size` bytes).
+    Join {
+        child: u32,
+        slot: *mut u8,
+        size: u64,
+    },
+    /// A scope exit, until every child of `scope` holds its result or completed.
+    Exit { scope: u32 },
 }
 
 /// A completed child's result slot, inside its parked frame.
@@ -121,8 +138,8 @@ struct Task {
     saved: Saved,
     code: Option<(TaskCode, *mut Header)>,
     slot: Option<Slot>,
-    /// A task parked in a join of this one, and the slot it receives the result in.
-    awaiter: Option<(u32, *mut u8)>,
+    /// What the task waits for while parked.
+    wait: Option<Wait>,
     /// The task to resume directly when this one completes (a join or a discard ran it).
     handoff: Option<u32>,
     detached: bool,
@@ -133,8 +150,6 @@ struct Scope {
     generation: u32,
     children: Vec<u32>,
     canceled: Option<u32>,
-    /// The task parked in this scope's exit until every child completes.
-    joiner: Option<u32>,
 }
 
 /// Every task and scope of one run, and the runnable queue.
@@ -147,6 +162,8 @@ pub(crate) struct Scheduler {
     generation: u32,
     current: u32,
     runnable: VecDeque<u32>,
+    /// Parked tasks, in park order.
+    parked: Vec<u32>,
     idle_stacks: Vec<Stack>,
     /// The stack of a task that completed; the next task to run recycles it.
     retired: Option<Stack>,
@@ -225,6 +242,13 @@ impl Scheduler {
             }
         }
     }
+    /// Whether every child of `scope` holds its result or completed.
+    fn settled(&mut self, scope: u32) -> bool {
+        let children = self.scope(scope).children.clone();
+        children
+            .iter()
+            .all(|&c| matches!(self.task(c).state, State::Holding | State::Done))
+    }
     fn vacate_task(&mut self, index: u32) {
         let task = self.tasks[index as usize]
             .take()
@@ -251,7 +275,7 @@ impl Task {
             saved: Saved::default(),
             code: None,
             slot: None,
-            awaiter: None,
+            wait: None,
             handoff: None,
             detached: false,
             failure: None,
@@ -328,28 +352,91 @@ fn recycle(ctx: *mut RunCtx) {
     }
 }
 
-/// Run the front of the queue; the running task has parked or is holding.
+/// Poll every parked task in park order: each whose wait is over has its effect performed and
+/// joins the back of the queue.
+///
+/// # Safety
+/// `ctx` is live.
+unsafe fn poll_parked(ctx: *mut RunCtx) {
+    let s = scheduler(ctx);
+    let parked = std::mem::take(&mut s.parked);
+    let mut waiting = Vec::with_capacity(parked.len());
+    for task in parked {
+        // SAFETY: the context is live and `task` is parked.
+        if unsafe { poll(ctx, task) } {
+            let s = scheduler(ctx);
+            let row = s.task(task);
+            row.state = State::Ready;
+            row.wait = None;
+            s.runnable.push_back(task);
+        } else {
+            waiting.push(task);
+        }
+    }
+    // A poll never parks a task.
+    scheduler(ctx).parked = waiting;
+}
+
+/// Whether parked `task`'s wait is over, after performing its effect if it is.
+///
+/// # Safety
+/// `ctx` is live and `task` is parked; a join's slot is in its frame.
+unsafe fn poll(ctx: *mut RunCtx, task: u32) -> bool {
+    let s = scheduler(ctx);
+    match s.task(task).wait {
+        Some(Wait::Join { child, slot, size }) => match s.task(child).state {
+            State::Holding => {
+                let held = s.task(child).slot.take().unwrap();
+                // SAFETY: the child is in its finish and the awaiter parked, both slots live.
+                unsafe { deliver(held, slot, size) };
+                true
+            }
+            State::Done => true,
+            State::Ready | State::Parked => false,
+        },
+        Some(Wait::Exit { scope }) => s.settled(scope),
+        None => fault("a parked task without a wait"),
+    }
+}
+
+/// The running task stopped (it parked, holds its result or completed): poll the parked tasks,
+/// then run the front of the queue, which may be the running task itself.
 ///
 /// # Safety
 /// `ctx` is live.
 unsafe fn run_next(ctx: *mut RunCtx) {
+    // SAFETY: the context is live.
+    let next = unsafe { next_task(ctx) };
+    unsafe { switch_to(ctx, next) };
+}
+
+/// Poll the parked tasks and take the front of the queue.
+///
+/// # Safety
+/// `ctx` is live.
+unsafe fn next_task(ctx: *mut RunCtx) -> u32 {
+    // SAFETY: the context is live.
+    unsafe { poll_parked(ctx) };
     let Some(next) = scheduler(ctx).runnable.pop_front() else {
         // CONC-8: no task can run and nothing outside the run can wake one.
         crate::environmental("every task of the run is blocked (CONC-8)");
     };
-    unsafe { switch_to(ctx, next) };
+    next
 }
 
-/// The yield after a capability operation: when another task is runnable, the running task
-/// joins the back of the queue and the front runs.
+/// The yield after a capability operation: the parked tasks are polled and, when another task
+/// is runnable, the running task joins the back of the queue and the front runs.
 ///
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
 pub unsafe fn yield_now(ctx: *mut RunCtx) {
     // SAFETY: the context is live.
-    let Some(s) = (unsafe { (*ctx).tasks.as_deref_mut() }) else {
+    if unsafe { (*ctx).tasks.is_none() } {
         return;
-    };
+    }
+    // SAFETY: the context is live.
+    unsafe { poll_parked(ctx) };
+    let s = scheduler(ctx);
     let Some(next) = s.runnable.pop_front() else {
         return;
     };
@@ -357,15 +444,29 @@ pub unsafe fn yield_now(ctx: *mut RunCtx) {
     unsafe { switch_to(ctx, next) };
 }
 
-/// Make a parked task runnable.
-fn wake(ctx: *mut RunCtx, task: u32) {
-    let s = scheduler(ctx);
-    let row = s.task(task);
-    if row.state != State::Parked {
-        fault("waking a task that is not parked");
+/// Park the running task until `wait` is over; returns once a poll performed its effect.
+/// `yielded`: the operation yields first, and the task parks when it is next at the front.
+///
+/// # Safety
+/// `ctx` is live; whatever `wait` names outlives the wait.
+unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool) {
+    if yielded {
+        // SAFETY: the context is live.
+        unsafe { poll_parked(ctx) };
+        let s = scheduler(ctx);
+        if let Some(next) = s.runnable.pop_front() {
+            s.runnable.push_back(s.current);
+            unsafe { switch_to(ctx, next) };
+        }
     }
-    row.state = State::Ready;
-    s.runnable.push_back(task);
+    let s = scheduler(ctx);
+    let current = s.current;
+    let row = s.task(current);
+    row.state = State::Parked;
+    row.wait = Some(wait);
+    s.parked.push(current);
+    // SAFETY: the context is live; a poll makes this task runnable again.
+    unsafe { run_next(ctx) };
 }
 
 /// Resume `child` directly (a join delivered its result, or its result is discarded) and
@@ -398,8 +499,8 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     unsafe { complete(ctx, index, status) }
 }
 
-/// The running child finished its frame (and its environment): record its outcome, wake
-/// whoever waits for it and run another task.
+/// The running child finished its frame (and its environment): record its outcome and run
+/// another task.
 ///
 /// # Safety
 /// `ctx` is live and `index` is the running child.
@@ -428,7 +529,6 @@ unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> u32 {
     let scope = row
         .scope
         .unwrap_or_else(|| fault("the root task completed as a child"));
-    let awaiter = row.awaiter.take();
     let handoff = row.handoff.take();
     let detached = row.detached;
     if failed {
@@ -451,34 +551,11 @@ unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> u32 {
     } else {
         s.retired = s.task(index).stack.take();
     }
-    if let Some((awaiter, _)) = awaiter {
-        wake(ctx, awaiter);
-    }
-    notify_joiner(ctx, scope);
-    let next = handoff.or_else(|| scheduler(ctx).runnable.pop_front());
-    let Some(next) = next else {
-        // CONC-8: no task can run and nothing outside the run can wake one.
-        crate::environmental("every task of the run is blocked (CONC-8)");
-    };
-    next
-}
-
-/// Wake a scope's exit when its last child completes.
-fn notify_joiner(ctx: *mut RunCtx, scope: u32) {
-    let s = scheduler(ctx);
-    let Some(row) = s.scopes[scope as usize].as_ref() else {
-        return;
-    };
-    let Some(joiner) = row.joiner else {
-        return;
-    };
-    let children = row.children.clone();
-    if children
-        .iter()
-        .all(|&c| matches!(s.task(c).state, State::Holding | State::Done))
-    {
-        s.scope(scope).joiner = None;
-        wake(ctx, joiner);
+    match handoff {
+        // A join or a discard ran the rest of a holding child: no schedule point.
+        Some(next) => next,
+        // SAFETY: the context is live.
+        None => unsafe { next_task(ctx) },
     }
 }
 
@@ -514,7 +591,6 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
         generation,
         children: Vec::new(),
         canceled: None,
-        joiner: None,
     };
     let index = match s.vacant_scopes.pop() {
         Some(index) => {
@@ -565,14 +641,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
             s.cancel(child, CANCEL_PARENT);
         }
     }
-    if !children
-        .iter()
-        .all(|&c| matches!(s.task(c).state, State::Holding | State::Done))
-    {
-        s.scope(index).joiner = Some(current);
-        s.task(current).state = State::Parked;
-        // SAFETY: the context is live; the last child to complete wakes this task.
-        unsafe { run_next(ctx) };
+    if !s.settled(index) {
+        // SAFETY: the context is live; the exit is not a yield.
+        unsafe { block(ctx, Wait::Exit { scope: index }, false) };
     }
     let s = scheduler(ctx);
     let children = s.scope(index).children.clone();
@@ -654,9 +725,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
 }
 
 /// `$intrinsic.TaskFinish[R](mut slot, none, size)`: the running child computed `Some(r)` in
-/// `slot`. An awaiter already waiting receives it now and the slot becomes `none`; a detached
-/// child keeps it, to drop; otherwise the child parks holding it until a join takes it or its
-/// scope discards it.
+/// `slot`. A detached child keeps it, to drop; otherwise the child holds it, stopped in this
+/// call, until a join's poll takes it (leaving `none`) and a join or a discard resumes it.
 ///
 /// # Safety
 /// `ctx` is live; `slot` and `none` are `Option[R]` images of `size` bytes, `slot` in the
@@ -679,18 +749,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     if row.scope.is_none() {
         fault("the root task finished as a child");
     }
-    if let Some((_, out)) = row.awaiter {
-        // SAFETY: the awaiter is parked in its join, its slot live.
-        unsafe { deliver(held, out, size) };
-        return STATUS_OK;
-    }
     if row.detached {
         return STATUS_OK;
     }
     row.slot = Some(held);
     row.state = State::Holding;
-    let scope = row.scope.unwrap();
-    notify_joiner(ctx, scope);
     // SAFETY: the context is live; a join or a discard hands control back here.
     unsafe { run_next(ctx) };
     STATUS_OK
@@ -715,11 +778,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
-    let current = s.current;
     match s.task(child).state {
         State::Holding => {
             let held = s.task(child).slot.take().unwrap();
-            // SAFETY: the child is parked in its finish, its slot live.
+            // SAFETY: the child is stopped in its finish, its slot live.
             unsafe {
                 deliver(held, slot, size);
                 hand_off(ctx, child);
@@ -728,10 +790,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
         }
         State::Done => unsafe { yield_now(ctx) },
         State::Ready | State::Parked => {
-            s.task(child).awaiter = Some((current, slot));
-            s.task(current).state = State::Parked;
-            // SAFETY: the child's completion wakes this task.
-            unsafe { run_next(ctx) };
+            // SAFETY: the slot is in this task's frame, parked with it.
+            unsafe { block(ctx, Wait::Join { child, slot, size }, true) };
+            // The poll moved a holding child's result; its frame finishes now.
+            if scheduler(ctx).task(child).state == State::Holding {
+                unsafe { hand_off(ctx, child) };
+            }
         }
     }
     let s = scheduler(ctx);

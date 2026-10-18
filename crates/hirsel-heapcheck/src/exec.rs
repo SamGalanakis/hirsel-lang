@@ -7018,7 +7018,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         let outcome = self.ops.call(&id, &args, &mut self.output);
         // Every capability operation is a scheduling point (CONC-1).
         if self.ops.yielded() {
-            self.task_yield();
+            self.task_yield()?;
         }
         let outcome = match outcome {
             OpOutcome::Updated {

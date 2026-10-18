@@ -340,7 +340,9 @@ single-threaded, with the reference interpreter's schedule:
 
 - one FIFO queue of runnable tasks;
 - a yield after every capability operation (`yield_now`, called by the Io entries and the task entries);
-- a join parks until the awaited child completes.
+- a task that must wait (a join, a scope exit) parks with what it waits for;
+- parked tasks are polled in park order at every yield and whenever the running task stops;
+- a successful poll performs the wait's effect (a join's poll moves the result) and queues the task.
 
 All tasks of a run share its one heap. A value crossing tasks moves by copying its root, and
 the checker's sendability rules keep each counted value owned by one task. What is a task's own
@@ -358,10 +360,11 @@ The compiled bodies of `task.scope`, `task.async` and `task.await` (`hirsel-rc::
 call the `$intrinsic.Task*` entries (`hirsel_rt_v2_task_*`). A result crosses as a whole
 `Option[R]` image, so the runtime never reads a result's layout:
 
-- A child's `$native.task_main` closure calls the spawned function and hands its `Some(r)` slot to
-  `hirsel_rt_v2_task_finish`. The child then stays parked in that call holding the result.
-- A join copies the image into the awaiter's `None` slot and writes `None` back. A discard leaves
-  `Some(r)`.
+- A child's `$native.task_main` closure moves the spawned function out of its environment, calls
+  it and drops it, so its captures die with the child's frame. It then hands its `Some(r)` slot
+  to `hirsel_rt_v2_task_finish` and stays in that call holding the result.
+- A join's poll copies the image into the awaiter's `None` slot and writes `None` back. A discard
+  leaves `Some(r)`.
 - Either way the child's own compiled cleanup drops what its slot holds, and the runtime then
   releases the closure environment.
 

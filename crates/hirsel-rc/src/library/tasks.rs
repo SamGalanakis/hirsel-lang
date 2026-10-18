@@ -358,7 +358,8 @@ fn spawn(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
             store: &entry.store,
             captures: &[(f, Passing::Take)],
             sizes: &[],
-            movable: &[],
+            // The child moves the callable out to drop it with its frame (CONC-2).
+            movable: &[0],
         })
         .map_err(|e| PassError::Layout(path.clone(), e))?;
     let mut request = Request::native(
@@ -525,10 +526,38 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let environment = cx
         .environment()
         .ok_or_else(|| PassError::Malformed("a task main without environment".into()))?;
-    let field = cx.record(environment).fields[0].layout;
+    let record = cx.record(environment);
+    let field = record.fields[0].layout;
+    let live = record
+        .fields
+        .last()
+        .map(|w| (w.ordinal, w.layout))
+        .ok_or_else(|| {
+            PassError::Malformed("a task main environment without its live word".into())
+        })?;
     let mut b = Body::new(cx)?;
     let f = b.capture(0, field)?;
-    let (callee, loan) = b.borrow(f.address, false)?;
+    let word = b.capture(live.0, live.1)?;
+    b.ed.unit.tables.init_flags.push(InitFlag {
+        path: PoolRange::EMPTY,
+        value: word.value,
+        slot: word.slot,
+        environment: Some(environment),
+    });
+    // The callable's captures die with the child's frame, before its result is held
+    // (CONC-2): move it out of the environment, whose release then skips it.
+    let moved = b.take(f.address)?;
+    let old = b.read_bits(word.address)?;
+    let cleared = b.value(live.1, Holding::Plain);
+    b.push(Inst::UpdateMask {
+        result: cleared,
+        mask: old,
+        field: 0,
+        initialized: false,
+    });
+    b.store(word.address, cleared)?;
+    let (f_slot, f_address) = local(&mut b, moved)?;
+    let (callee, loan) = b.borrow(f_address, false)?;
     let propagate = b.failure(None);
     let value = invoke(
         &mut b,
@@ -547,6 +576,7 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
             b.constant(unit, ConstantValue::Unit)
         }
     };
+    super::iter::drop_local(&mut b, f_slot, f_address);
     let some = option(&mut b, option_layout, 1, &[value]);
     let (slot, address) = local(&mut b, some)?;
     let none = option(&mut b, option_layout, 0, &[]);

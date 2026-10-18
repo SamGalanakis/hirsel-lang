@@ -335,6 +335,8 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
 
 - A switch an operation requests is made once the running frame is back on its stack.
 - A task blocked in a task operation leaves its call terminator to run again when it resumes.
+- A waiting task parks; parked tasks are polled in park order at every yield and whenever the
+  running task stops, and a task due to park after its operation's yield parks at the front.
 - A capability operation (`Operations::yielded`) is a scheduling point.
 - While the scheduler holds a spawned closure it is a harness root. Its environment is
   released after the child's frame returns.
