@@ -1,0 +1,89 @@
+// rule: SEM-4
+// expect: run
+// A loop over Inline[T, n] with a size parameter n reads each selected size.
+type Entry {
+  name: String,
+  weight: u64,
+}
+
+fn count[n: size](xs: Inline[u8, n]) -> u64 {
+  let mut c = 0u64
+  for b in xs {
+    c += 1
+  }
+  c
+}
+
+fn sum[n: size](xs: Inline[u8, n]) -> u64 {
+  let mut total = 0u64
+  for b in xs {
+    total += int.widen(b)
+  }
+  total
+}
+
+fn bump[n: size](mut xs: Inline[u8, n]) -> () {
+  for x in mut xs {
+    x += 1
+  }
+}
+
+fn weights[n: size](entries: Inline[Entry, n]) -> u64 {
+  let mut total = 0u64
+  for entry in entries {
+    total += entry.weight + string.byte_len(entry.name)
+  }
+  total
+}
+
+fn names[n: size](take entries: Inline[Entry, n]) -> u64 {
+  let mut total = 0u64
+  for entry in take entries {
+    total += string.byte_len(entry.name)
+  }
+  total
+}
+
+fn elements[T, n: size](xs: Inline[T, n]) -> u64 {
+  let mut c = 0u64
+  for x in xs {
+    c += 1
+  }
+  c
+}
+
+fn outer[n: size](xs: Inline[u8, n]) -> u64 {
+  fn inner[m: size](ys: Inline[u8, m]) -> u64 {
+    let mut c = 0u64
+    for y in ys {
+      c += n
+    }
+    c
+  }
+  count(xs) + sum(xs) + elements(xs) + inner(xs)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let three: Inline[u8, 3] = [1, 2, 3]
+  test.check(t, count(three) == 3u64)
+  test.check(t, sum(three) == 6u64)
+  let none: Inline[u8, 0] = []
+  test.check(t, count(none) == 0u64)
+  test.check(t, sum(none) == 0u64)
+  test.check(t, outer(none) == 0u64)
+  test.check(t, outer(three) == 21u64)
+  let mut bytes: Inline[u8, 2] = [7, 9]
+  bump(mut bytes)
+  test.check(t, bytes[0] == 8 && bytes[1] == 10)
+  let entries: Inline[Entry, 2] = [
+    Entry(name: "ab", weight: 10),
+    Entry(name: "cde", weight: 20)
+  ]
+  test.check(t, weights(entries) == 35u64)
+  test.check(t, elements(entries) == 2u64)
+  test.check(t, names(take entries) == 5u64)
+  let empty: Inline[Entry, 0] = []
+  test.check(t, weights(empty) == 0u64)
+  test.check(t, names(take empty) == 0u64)
+  Ok(())
+}

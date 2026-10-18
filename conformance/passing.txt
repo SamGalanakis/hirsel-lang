@@ -4642,6 +4642,7 @@ conformance/SEM/SEM-4-fresh-iteration-name.hir
 conformance/SEM/SEM-4-grapheme-parameter-source.hir
 conformance/SEM/SEM-4-index-counter-types.hir
 conformance/SEM/SEM-4-inline-borrow.hir
+conformance/SEM/SEM-4-inline-generic-size-run.hir
 conformance/SEM/SEM-4-inline-mut.hir
 conformance/SEM/SEM-4-inline-take.hir
 conformance/SEM/SEM-4-iterator-marker-bad.hir

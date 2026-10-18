@@ -89,7 +89,7 @@ and constructor error mapping), closure/local-function result owners, checked
 shape arguments and integer ranges. Propagation tags and target result types come
 directly from H's TryPlan. Local functions use their syntax body as J's capture
 identity, without a separate statement-to-closure transport. Indexed
-sequence protocols use H's checked length type, length definition or materialized Inline size and
+sequence protocols use H's checked length type, length definition or Inline size (a constant, or a size parameter read as `Rvalue::Size`) and
 explicit index projections. Definition-backed Iter advancement uses checked
 instantiations and Option tags, with receiver mutation reaching its owner. Intrinsic
 cursor protocols consume shared `CursorPlan` rows from `Plans.cursors`: open/next

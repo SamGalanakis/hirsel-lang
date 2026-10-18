@@ -329,9 +329,12 @@ impl Builder<'_, '_> {
                     Rvalue::Constant(Constant::Integer(*n as u128)),
                     span,
                 ),
-                LoopLength::Inline { .. } => {
-                    return self.error(span, "Inline loop size needs materialization");
-                }
+                // A size parameter reads its instantiation's actual, as a
+                // source expression naming it does.
+                LoopLength::Inline {
+                    size: hirsel_types::Size::Parameter(parameter),
+                    ..
+                } => self.rvalue(index_type, Rvalue::Size(*parameter), span),
             };
             let zero = self.rvalue(index_type, Rvalue::Constant(Constant::Integer(0)), span);
             let LoopRead::Index { result } = read;
