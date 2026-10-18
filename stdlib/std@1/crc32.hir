@@ -289,6 +289,20 @@ pub fn update(mut state: State, data: Bytes) -> () uses {} {
   state.crc = extend(state.crc, TABLE, data)
 }
 
+/// Extends the checksum with the bytes of a list builder from `start` on.
+@noalloc
+pub fn update_list(mut state: State, data: List[u8], start: u64) -> () uses {} {
+  let mut value = state.crc
+  let mut i = start
+  while i < core@1/list.len(data) {
+    let byte: u32 = core@1/int.widen(data[i])
+    let index: u64 = core@1/int.widen(value & 255u32 ^ byte)
+    value = TABLE[index] ^ value >> 8
+    i += 1
+  }
+  state.crc = value
+}
+
 @noalloc
 pub fn finish(take state: State) -> u32 uses {} {
   ~state.crc

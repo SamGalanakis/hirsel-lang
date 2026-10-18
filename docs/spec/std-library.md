@@ -1441,7 +1441,13 @@ fn <checksum>.finish(take state: State) -> u32 uses {}    // u64 for xxhash64
 fn <checksum>.digest(data: Bytes) -> u32 uses {}          // u64 for xxhash64
 fn <checksum>.digest_hex(data: Bytes) -> unique String uses {}
 fn xxhash64.new_with_seed(seed: u64) -> State uses {}
+fn crc32.update_list(mut state: State, data: List[u8], start: u64) -> () uses {}
+fn adler32.update_list(mut state: State, data: List[u8], start: u64) -> () uses {}
 ```
+
+`update_list` extends the CRC-32 or Adler-32 with a list builder's bytes from index
+`start` on (none when `start` is at or past the end), so output built in a `List[u8]`
+is checked where it is, as `update` checks `Bytes`.
 
 `digest_hex` writes the value as fixed-width lowercase hexadecimal, most
 significant digit first (8 digits, or 16 for `xxhash64`), the form `cksum`-style

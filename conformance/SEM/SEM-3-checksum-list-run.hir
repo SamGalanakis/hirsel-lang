@@ -1,0 +1,21 @@
+// rule: SEM-3
+// expect: run
+// update_list checks a list builder's bytes from an index, as update checks
+// the same bytes, including from the end and past it.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut built: List[u8] = []
+  for byte in b"skipped:123456789" {
+    list.push(mut built, byte)
+  }
+  let mut crc = crc32.new()
+  crc32.update_list(mut crc, built, 8)
+  test.check(t, crc32.finish(take crc) == 0xcbf43926)
+  let mut adler = adler32.new()
+  adler32.update_list(mut adler, built, 8)
+  test.check(t, adler32.finish(take adler) == adler32.digest(b"123456789"))
+  let mut empty = crc32.new()
+  crc32.update_list(mut empty, built, 17)
+  crc32.update_list(mut empty, built, 40)
+  test.check(t, crc32.finish(take empty) == 0)
+  Ok(())
+}

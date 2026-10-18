@@ -4494,6 +4494,7 @@ conformance/SEM/SEM-3-bytes-freeze-run.hir
 conformance/SEM/SEM-3-bytewise-order.hir
 conformance/SEM/SEM-3-char-run.hir
 conformance/SEM/SEM-3-character-literals-run.hir
+conformance/SEM/SEM-3-checksum-list-run.hir
 conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
 conformance/SEM/SEM-3-cookie-run.hir

@@ -39,6 +39,31 @@ pub fn update(mut state: State, data: Bytes) -> () uses {} {
   state.b = b
 }
 
+/// Extends the checksum with the bytes of a list builder from `start` on.
+@noalloc
+pub fn update_list(mut state: State, data: List[u8], start: u64) -> () uses {} {
+  let len = core@1/list.len(data)
+  let mut a = state.a
+  let mut b = state.b
+  let mut i = start
+  while i < len {
+    let mut end = i + NMAX
+    if end > len {
+      end = len
+    }
+    while i < end {
+      let byte: u32 = core@1/int.widen(data[i])
+      a += byte
+      b += a
+      i += 1
+    }
+    a %= MOD
+    b %= MOD
+  }
+  state.a = a
+  state.b = b
+}
+
 @noalloc
 pub fn finish(take state: State) -> u32 uses {} {
   state.b << 16 | state.a
