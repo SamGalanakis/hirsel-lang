@@ -1265,7 +1265,6 @@ fn full_gate_logq_aarch64() {
     logq(true);
 }
 
-
 fn mdtoc(aarch64: bool) {
     let mut example = Example::new(
         "mdtoc",
@@ -1308,7 +1307,10 @@ fn mdtoc(aarch64: bool) {
             (&["nfd.md"], (0, "- [Cafe\u{301}](#café)\n", "")),
             (&["empty.md"], (0, "", "")),
             (&["latin1.md"], (1, "", "error: latin1.md is not UTF-8\n")),
-            (&["missing.md"], (1, "", "error: no such file: missing.md\n")),
+            (
+                &["missing.md"],
+                (1, "", "error: no such file: missing.md\n"),
+            ),
             (&[], (1, "", "error: usage: mdtoc FILE\n")),
         ],
     );
@@ -1328,7 +1330,10 @@ fn full_gate_mdtoc_aarch64() {
 fn bench_lite(aarch64: bool) {
     let example = Example::new(
         "bench-lite",
-        &[("main.hir", include_str!("../../../examples/bench-lite/main.hir"))],
+        &[(
+            "main.hir",
+            include_str!("../../../examples/bench-lite/main.hir"),
+        )],
         include_str!("../../../examples/bench-lite/hirsel.json"),
     );
     // Small enough for the interpreter's default step budget.
@@ -1339,9 +1344,23 @@ fn bench_lite(aarch64: bool) {
         aarch64,
         &[
             (&["40", "7"], (0, small, "")),
-            (&["0"], (0, "words 0\ndifferent 0\nbytes 0\nchecksum 14695981039346656037\nheap and arena agree\n", "")),
+            (
+                &["0"],
+                (
+                    0,
+                    "words 0\ndifferent 0\nbytes 0\nchecksum 14695981039346656037\nheap and arena agree\n",
+                    "",
+                ),
+            ),
             (&["x"], (1, "", "error: not a number: x\n")),
-            (&["1", "2", "3", "4"], (1, "", "error: usage: bench-lite [WORDS [SEED [ARENA_BYTES]]]\n")),
+            (
+                &["1", "2", "3", "4"],
+                (
+                    1,
+                    "",
+                    "error: usage: bench-lite [WORDS [SEED [ARENA_BYTES]]]\n",
+                ),
+            ),
         ],
     );
 }
@@ -1355,4 +1374,103 @@ fn bench_lite_heap_and_arena_summaries_agree() {
 #[ignore = "full gate"]
 fn full_gate_bench_lite_aarch64() {
     bench_lite(true);
+}
+
+/// examples/kvstore in a fresh directory with a data directory and grants that
+/// listen on an ephemeral port; returns it with its manifest and grants.
+fn kvstore_fixture() -> (Example, PathBuf, PathBuf) {
+    let example = Example::new(
+        "kvstore",
+        &[(
+            "main.hir",
+            include_str!("../../../examples/kvstore/main.hir"),
+        )],
+        include_str!("../../../examples/kvstore/hirsel.json"),
+    );
+    let dir = example.dir.clone();
+    let grants = serde_json::json!({
+        "io": {
+            "stdout": "stdout.bytes@1",
+            "tasks": "tasks.cooperative@1",
+            "dirs": [{"path": "data", "host": dir.join("data"), "access": "read_write"}],
+            "net": {"provider": "net.stream@1", "rules": [{"address": "127.0.0.1", "service": "0", "operation": "listen"}]},
+        },
+        "args": ["0"],
+    });
+    std::fs::write(dir.join("grants.json"), grants.to_string()).unwrap();
+    (example, dir.join("hirsel.json"), dir.join("grants.json"))
+}
+
+fn kv(server: &TodoServer, method: &str, path: &str, body: Option<&[u8]>) -> (u16, String, String) {
+    let mut request = format!("{method} {path} HTTP/1.1\r\nHost: x\r\n").into_bytes();
+    if let Some(body) = body {
+        request.extend(format!("Content-Length: {}\r\n", body.len()).bytes());
+    }
+    request.extend(b"\r\n");
+    request.extend(body.unwrap_or_default());
+    server.send(&request)
+}
+
+#[test]
+fn kvstore_serves_clients_concurrently_and_persists() {
+    let (example, manifest, grants) = kvstore_fixture();
+    let server = TodoServer::start(&manifest, &grants);
+    assert_eq!(kv(&server, "GET", "/kv", None).2, "{}");
+    // An incomplete request holds its own task while two clients write.
+    let mut held =
+        std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, server.port)).unwrap();
+    {
+        use std::io::Write;
+        held.write_all(b"GET /kv/sheep HTTP/1.1\r\nHost:").unwrap();
+    }
+    std::thread::scope(|scope| {
+        let writers: Vec<_> = [("sheep", "woolly"), ("caf%C3%A9", "βeta")]
+            .map(|(key, value)| {
+                let server = &server;
+                scope.spawn(move || {
+                    kv(server, "PUT", &format!("/kv/{key}"), Some(value.as_bytes())).0
+                })
+            })
+            .into_iter()
+            .collect();
+        for writer in writers {
+            assert_eq!(writer.join().unwrap(), 201);
+        }
+    });
+    {
+        use std::io::{Read, Write};
+        held.write_all(b" x\r\n\r\n").unwrap();
+        held.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = String::new();
+        held.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+        assert!(response.ends_with("\r\n\r\nwoolly"), "{response}");
+    }
+    let (status, head, body) = kv(&server, "PUT", "/kv/sheep", Some(b"shorn"));
+    assert_eq!((status, body.as_str()), (200, ""), "{head}");
+    let (status, head, body) = kv(&server, "GET", "/kv/sheep", None);
+    assert_eq!((status, body.as_str()), (200, "shorn"));
+    assert!(
+        head.contains("\r\nContent-Type: text/plain; charset=utf-8\r\n"),
+        "{head}"
+    );
+    assert_eq!(kv(&server, "DELETE", "/kv/sheep", None).0, 204);
+    assert_eq!(kv(&server, "DELETE", "/kv/sheep", None).0, 404);
+    assert_eq!(kv(&server, "GET", "/kv/sheep", None).0, 404);
+    assert_eq!(kv(&server, "PUT", "/kv/x", Some(b"\xff")).0, 400);
+    assert_eq!(kv(&server, "GET", "/kv/%FF", None).0, 400);
+    assert_eq!(kv(&server, "GET", "/nope", None).0, 404);
+    let (status, head, _) = kv(&server, "POST", "/kv/x", Some(b"v"));
+    assert_eq!(status, 405);
+    assert!(head.contains("\r\nAllow: GET, PUT, DELETE\r\n"), "{head}");
+    let listed = kv(&server, "GET", "/kv", None);
+    assert_eq!((listed.0, listed.2.as_str()), (200, r#"{"café":"βeta"}"#));
+    assert_eq!(
+        std::fs::read_to_string(example.dir.join("data/kv.json")).unwrap(),
+        r#"{"café":"βeta"}"#
+    );
+    // A restart serves the saved entries.
+    drop(server);
+    let server = TodoServer::start(&manifest, &grants);
+    assert_eq!(kv(&server, "GET", "/kv/caf%C3%A9", None).2, "βeta");
 }

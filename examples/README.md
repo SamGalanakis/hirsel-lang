@@ -62,6 +62,7 @@ selects an explicit bound.
 | [logq](logq/main.hir) | Query a JSON-lines or plain log: `[--level L] [--match TEXT] [--field KEY=VALUE] [--top N] FILE` prints matches per level and the most frequent messages; bad input exits 1 with `error: ...` on stderr. Takes flags and the file, with no demo. |
 | [mdtoc](mdtoc/main.hir) | Print a nested Markdown table of contents for `FILE`: ATX headings outside code fences, GitHub-style anchors over NFC text with `-1`, `-2` for repeats; non-UTF-8 input exits 1 with `error: ...`. |
 | [bench-lite](bench-lite/main.hir) | `[WORDS [SEED [ARENA_BYTES]]]`: count the words of a seeded generated corpus in a `List`/`Map` on the heap and again in a bounded arena, print the summary and its checksum, and check the two agree. Deterministic, with no timing. |
+| [kvstore](kvstore/main.hir) | `[PORT]`: serve `GET /kv`, `GET`/`PUT`/`DELETE /kv/<key>` with percent-decoded UTF-8 keys, one task per connection; entries live in a mutex and a writer task replaces `data/kv.json` atomically before each reply. Interpreted only: native builds support only a `Mutex` of a pointer-free payload so far. |
 
 The E2E tests are in `crates/hirsel-cli/tests/examples.rs`. They check exact output
 through both CLI backends and additional supplied-file cases, including a
