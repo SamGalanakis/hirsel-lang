@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1193 exported definitions; 339 variants.
+1213 exported definitions; 364 variants.
 
 ## Types and roots
 
@@ -7375,6 +7375,356 @@ References: [`core@1/String`](#def-core_401_2fString)
 - `@noalloc pub fn string.trim(s: String) -> String in s uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString)
+
+
+## tar
+
+<a id="def-std_401_2ftar_2fExtractError"></a>
+
+- `pub type tar.ExtractError[E] = Read(ReadError[E]) | Insecure(String) | Unsupported(String) | TooLarge | File( FileError )`
+
+Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
+would exceed its byte limit, or a file operation failed.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/String`](#def-core_401_2fString), [`std@1/tar/ReadError`](#def-std_401_2ftar_2fReadError)
+
+<a id="def-std_401_2ftar_2fExtractError_23File"></a>
+
+- `File( FileError ) -> tar.ExtractError[E]`
+
+Variant of tar.ExtractError.
+
+References: [`core@1/FileError`](#def-core_401_2fFileError)
+
+<a id="def-std_401_2ftar_2fExtractError_23Insecure"></a>
+
+- `Insecure(String) -> tar.ExtractError[E]`
+
+Variant of tar.ExtractError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftar_2fExtractError_23Read"></a>
+
+- `Read(ReadError[E]) -> tar.ExtractError[E]`
+
+Variant of tar.ExtractError.
+
+References: [`std@1/tar/ReadError`](#def-std_401_2ftar_2fReadError)
+
+<a id="def-std_401_2ftar_2fExtractError_23TooLarge"></a>
+
+- `TooLarge -> tar.ExtractError[E]`
+
+Variant of tar.ExtractError.
+
+<a id="def-std_401_2ftar_2fExtractError_23Unsupported"></a>
+
+- `Unsupported(String) -> tar.ExtractError[E]`
+
+Variant of tar.ExtractError.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftar_2fHeader"></a>
+
+- `pub type tar.Header { name: String, kind: Kind, linkname: String, size: u64, mode: u64, uid: u64, gid: u64, uname: String, gname: String, modified: i64, devmajor: u64, devminor: u64, records: Map[String, String], }`
+
+One entry's metadata. `records` holds the PAX extended header records that
+applied to it, which `name`, `size` and the other fields already reflect.
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/i64`](#def-core_401_2fi64), [`core@1/u64`](#def-core_401_2fu64), [`std@1/tar/Kind`](#def-std_401_2ftar_2fKind)
+
+<a id="def-std_401_2ftar_2fKind"></a>
+
+- `pub type tar.Kind = Regular | Link | Symlink | Char | Block | Directory | Fifo | Global | Other( u8 )`
+
+An entry's type flag (POSIX.1-2001 ustar typeflag).
+
+References: [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2ftar_2fKind_23Block"></a>
+
+- `Block -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fKind_23Char"></a>
+
+- `Char -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fKind_23Directory"></a>
+
+- `Directory -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fKind_23Fifo"></a>
+
+- `Fifo -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fKind_23Global"></a>
+
+- `Global -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fKind_23Link"></a>
+
+- `Link -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fKind_23Other"></a>
+
+- `Other( u8 ) -> tar.Kind`
+
+Variant of tar.Kind.
+
+References: [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2ftar_2fKind_23Regular"></a>
+
+- `Regular -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fKind_23Symlink"></a>
+
+- `Symlink -> tar.Kind`
+
+Variant of tar.Kind.
+
+<a id="def-std_401_2ftar_2fReadError"></a>
+
+- `pub type tar.ReadError[E] = Input(bufio.ReadError[E]) | Data(flate.FlateError) | Archive( TarError )`
+
+A read from the buffered source failed, a compressed archive does not
+decode, or the archive is malformed.
+
+References: [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError), [`std@1/tar/TarError`](#def-std_401_2ftar_2fTarError)
+
+<a id="def-std_401_2ftar_2fReadError_23Archive"></a>
+
+- `Archive( TarError ) -> tar.ReadError[E]`
+
+Variant of tar.ReadError.
+
+References: [`std@1/tar/TarError`](#def-std_401_2ftar_2fTarError)
+
+<a id="def-std_401_2ftar_2fReadError_23Data"></a>
+
+- `Data(flate.FlateError) -> tar.ReadError[E]`
+
+Variant of tar.ReadError.
+
+References: [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2ftar_2fReadError_23Input"></a>
+
+- `Input(bufio.ReadError[E]) -> tar.ReadError[E]`
+
+Variant of tar.ReadError.
+
+References: [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError)
+
+<a id="def-std_401_2ftar_2fReader"></a>
+
+- `pub opaque type tar.Reader: copyable + inert + noalloc_drop uses {}`
+
+Reading state: the decompressor (if any), the archive offset and the
+current entry's unread data and padding.
+
+<a id="def-std_401_2ftar_2fTarError"></a>
+
+- `pub type tar.TarError = Header(u64) | Encoding(u64) | Unsupported(u64) | Truncated`
+
+Malformed archive data. `Header(n)` names the byte offset of the header
+block that is invalid; `Encoding(n)` one whose name is not UTF-8;
+`Unsupported(n)` a GNU sparse entry.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftar_2fTarError_23Encoding"></a>
+
+- `Encoding(u64) -> tar.TarError`
+
+Variant of tar.TarError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftar_2fTarError_23Header"></a>
+
+- `Header(u64) -> tar.TarError`
+
+Variant of tar.TarError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftar_2fTarError_23Truncated"></a>
+
+- `Truncated -> tar.TarError`
+
+Variant of tar.TarError.
+
+<a id="def-std_401_2ftar_2fTarError_23Unsupported"></a>
+
+- `Unsupported(u64) -> tar.TarError`
+
+Variant of tar.TarError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftar_2fWriteError"></a>
+
+- `pub type tar.WriteError = Field | TooLong | Short | Closed`
+
+A header that the writer cannot encode, data beyond or short of the
+declared size, or a write after `close`.
+
+<a id="def-std_401_2ftar_2fWriteError_23Closed"></a>
+
+- `Closed -> tar.WriteError`
+
+Variant of tar.WriteError.
+
+<a id="def-std_401_2ftar_2fWriteError_23Field"></a>
+
+- `Field -> tar.WriteError`
+
+Variant of tar.WriteError.
+
+<a id="def-std_401_2ftar_2fWriteError_23Short"></a>
+
+- `Short -> tar.WriteError`
+
+Variant of tar.WriteError.
+
+<a id="def-std_401_2ftar_2fWriteError_23TooLong"></a>
+
+- `TooLong -> tar.WriteError`
+
+Variant of tar.WriteError.
+
+<a id="def-std_401_2ftar_2fWriter"></a>
+
+- `pub opaque type tar.Writer: copyable + inert + noalloc_drop uses {}`
+
+Writing state: the current entry's unwritten data and padding.
+
+<a id="def-std_401_2ftar_2fclose"></a>
+
+- `@preserves_unique(out) pub fn tar.close(mut w: Writer, mut out: List[u8]) -> Result[(), WriteError] uses {}`
+
+Go Writer.Close: finishes the last entry and appends the two zero blocks
+that end an archive; later writes are `Closed`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/tar/WriteError`](#def-std_401_2ftar_2fWriteError), [`std@1/tar/Writer`](#def-std_401_2ftar_2fWriter)
+
+<a id="def-std_401_2ftar_2fextract"></a>
+
+- `pub fn tar.extract[S, E]( into: Dir, mut t: Reader, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], limit: u64 ) -> Result[u64, ExtractError[E]]`
+
+Extracts every entry from the reader into `into` and returns how many
+were written: directories and regular files only, creating missing parent
+directories. A name that is empty, absolute or holds a `..` component, a
+NUL or a backslash is `Insecure`, as is a path through or onto an existing
+symlink: extraction never follows one. Links, devices, FIFOs and other
+kinds are `Unsupported`; PAX global headers are skipped. An entry whose
+data would take the total past `limit` bytes is `TooLarge` before any of
+it is written. Permissions and times are not applied. The first refusal
+stops extraction, leaving earlier entries in place.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/tar/ExtractError`](#def-std_401_2ftar_2fExtractError), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
+
+<a id="def-std_401_2ftar_2ffile_5fextract"></a>
+
+- `pub fn tar.file_extract( from: Dir, mut f: File of from, into: Dir, mut t: Reader, limit: u64 ) -> Result[u64, ExtractError[FileError]]`
+
+`extract` from an archive file, through a 64 KiB buffer.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/tar/ExtractError`](#def-std_401_2ftar_2fExtractError), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
+
+<a id="def-std_401_2ftar_2ffile_5fnext"></a>
+
+- `pub fn tar.file_next(dir: Dir, mut f: File of dir, mut t: Reader, mut r: bufio.Reader) -> Result[ Option[Header], ReadError[FileError] ]`
+
+`next` from a file through the buffered reader `r`.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/tar/Header`](#def-std_401_2ftar_2fHeader), [`std@1/tar/ReadError`](#def-std_401_2ftar_2fReadError), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
+
+<a id="def-std_401_2ftar_2ffile_5fread"></a>
+
+- `@preserves_unique(out) pub fn tar.file_read( dir: Dir, mut f: File of dir, mut t: Reader, mut r: bufio.Reader, mut out: List[u8], max: u64 ) -> Result[u64, ReadError[FileError]]`
+
+`read` from a file through the buffered reader `r`.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/tar/ReadError`](#def-std_401_2ftar_2fReadError), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
+
+<a id="def-std_401_2ftar_2fheader"></a>
+
+- `pub fn tar.header(take name: String, kind: Kind, size: u64) -> Header uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/tar/Header`](#def-std_401_2ftar_2fHeader), [`std@1/tar/Kind`](#def-std_401_2ftar_2fKind)
+
+<a id="def-std_401_2ftar_2fnext"></a>
+
+- `pub fn tar.next[S, E]( mut t: Reader, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E] ) -> Result[Option[Header], ReadError[E]] uses {refill}`
+
+Go Reader.Next: skips the rest of the current entry and returns the next
+entry's header, or None after the end-of-archive marker or at the end of
+the input at a block boundary. PAX `x` records and GNU long names apply to
+the entry that follows them; a PAX global header is returned as a `Global`
+entry. Entry names are returned as stored: `extract` refuses unsafe ones.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/tar/Header`](#def-std_401_2ftar_2fHeader), [`std@1/tar/ReadError`](#def-std_401_2ftar_2fReadError), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
+
+<a id="def-std_401_2ftar_2fread"></a>
+
+- `@preserves_unique(out) pub fn tar.read[S, E]( mut t: Reader, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], mut out: List[u8], max: u64 ) -> Result[u64, ReadError[E]] uses {refill}`
+
+Appends at most `max` bytes of the current entry's data to `out` and
+returns how many, zero at the end of the entry.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/tar/ReadError`](#def-std_401_2ftar_2fReadError), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
+
+<a id="def-std_401_2ftar_2freader"></a>
+
+- `pub fn tar.reader(compression: Option[flate.Format]) -> unique Reader uses {}`
+
+A reader of an uncompressed archive, or of one compressed as `format`.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/flate/Format`](#def-std_401_2fflate_2fFormat), [`std@1/tar/Reader`](#def-std_401_2ftar_2fReader)
+
+<a id="def-std_401_2ftar_2fwrite"></a>
+
+- `@preserves_unique(out) pub fn tar.write(mut w: Writer, data: Bytes, mut out: List[u8]) -> Result[(), WriteError] uses {}`
+
+Appends `data` to the current entry. Data beyond the declared size is
+`TooLong`, and nothing is appended.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/tar/WriteError`](#def-std_401_2ftar_2fWriteError), [`std@1/tar/Writer`](#def-std_401_2ftar_2fWriter)
+
+<a id="def-std_401_2ftar_2fwrite_5fheader"></a>
+
+- `@preserves_unique(out) pub fn tar.write_header(mut w: Writer, h: Header, mut out: List[u8]) -> Result[ (), WriteError ] uses {}`
+
+Go Writer.WriteHeader: finishes the previous entry and appends `h`'s
+header blocks, USTAR when its fields fit (a long name split into prefix
+and name), else a PAX extended header first; the entry's `size` bytes of
+data follow through `write`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/tar/Header`](#def-std_401_2ftar_2fHeader), [`std@1/tar/WriteError`](#def-std_401_2ftar_2fWriteError), [`std@1/tar/Writer`](#def-std_401_2ftar_2fWriter)
+
+<a id="def-std_401_2ftar_2fwriter"></a>
+
+- `pub fn tar.writer() -> unique Writer uses {}`
+
+References: [`std@1/tar/Writer`](#def-std_401_2ftar_2fWriter)
 
 
 ## task
