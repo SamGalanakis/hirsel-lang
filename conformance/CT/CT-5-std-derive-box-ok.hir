@@ -1,0 +1,8 @@
+// rule: CT-5
+// expect: accept
+// Recursion through a List needs no box, and the deriver calls itself.
+type Chain = End | Link(u64, List[Chain])
+
+fn chain_to_json(c: Chain) -> json.Value uses {} = comptime derive.json_value(
+  shape(Chain)
+)

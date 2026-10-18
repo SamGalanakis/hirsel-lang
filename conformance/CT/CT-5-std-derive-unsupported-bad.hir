@@ -1,9 +1,9 @@
 // rule: CT-5
 // expect: reject CT-1 at line 9
-// "a field type it has no form for fails CT-1 ... naming the type": no JSON form for f64.
+// "a field type it has no form for fails CT-1 ... naming the type": no JSON form for Bytes.
 type Reading {
   sensor: String,
-  value: f64,
+  value: Bytes,
 }
 
 fn reading_value(r: Reading) -> json.Value uses {} = comptime derive.json_value(

@@ -8,8 +8,8 @@
 //! tape that is parsed, resolved and checked like a written body.
 use super::*;
 use hirsel_syntax::{
-    ExprId, ExprKind, FunctionSyntax, Keyword, PackageId, Path, TokenKind, TypeArgument, TypeExpr,
-    TypeExprId, TypeExprKind, Visibility,
+    ExprId, ExprKind, FunctionSyntax, Generated, Keyword, PackageId, Path, TokenKind, TypeArgument,
+    TypeExpr, TypeExprId, TypeExprKind, TypeModifier, Visibility,
 };
 use hirsel_types::SignatureKind;
 
@@ -249,7 +249,16 @@ impl QueryEngine {
             tree.types.push(TypeExpr { origin: site, kind });
             TypeExprId(tree.types.len() as u32 - 1)
         };
-        // F: the header's parameters with their passing modes, result and `uses`.
+        // F: the header's parameters with their passing modes, result and `uses`,
+        // without uniqueness, which the declaration alone decides.
+        for ty in signature
+            .parameters
+            .iter()
+            .map(|p| p.ty)
+            .chain(signature.result)
+        {
+            without_uniqueness(&mut file.tree, ty);
+        }
         let function = push(
             TypeExprKind::Function(FunctionSyntax {
                 parameters: signature.parameters.clone(),
@@ -287,6 +296,9 @@ impl QueryEngine {
         item.visibility = Visibility::Private;
         item.attributes.clear();
         item.kind = ItemKind::Const { ty, value };
+        item.generated = Some(Generated::Generator(
+            signature.parameters.iter().filter_map(|p| p.name).collect(),
+        ));
         let id = ItemId(file.tree.items.len() as u32);
         file.tree.items.push(item);
         let file = Arc::new(file);
@@ -318,30 +330,7 @@ impl QueryEngine {
             resolver.resolve(file.clone(), id, &symbols, r)
         })?;
         if has_errors(&resolution.diagnostics) {
-            // `e` is a closed frame, like an inline comptime: naming a declared parameter
-            // reads a run-time value, which is CT-2, not an unknown name.
-            let mut diagnostics = resolution.diagnostics;
-            for d in &mut diagnostics {
-                let parameter = signature
-                    .parameters
-                    .iter()
-                    .filter_map(|p| self.symbols.resolve(p.name?))
-                    .find(|name| {
-                        d.rule.as_str() == "LANG-4"
-                            && d.message == format!("unresolved name `{name}`")
-                    });
-                if let Some(name) = parameter {
-                    *d = Diagnostic::error(
-                        const { hirsel_diag::RuleId::of("CT-2") },
-                        d.primary,
-                        format!(
-                            "a generator reads no parameter: `{name}` is a run-time value of the \
-                             generated function"
-                        ),
-                    );
-                }
-            }
-            return Err(QueryError::Diagnostics(diagnostics));
+            return Err(QueryError::Diagnostics(resolution.diagnostics));
         }
         let typed = self.recorded(definition, reads, |r| {
             checker.check(file.clone(), id, resolution.value, &constant, r)
@@ -409,6 +398,13 @@ impl QueryEngine {
         reads: &mut Reads,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
         let source = &snapshot.file.tree.items[snapshot.item.0 as usize];
+        let ItemKind::Function {
+            signature: source_signature,
+            ..
+        } = &source.kind
+        else {
+            return Err(QueryError::NotImplemented);
+        };
         let context = FileContext {
             package: definition.0.package.clone(),
             modules: definition.0.modules.clone(),
@@ -504,6 +500,27 @@ impl QueryEngine {
             end: literal.tokens[body_start].span.start,
         };
         literal.tree.items[literal_item.0 as usize].definition = renamed(definition, "literal");
+        // The literal and the header are compared without uniqueness: the body
+        // is checked against the declared header, which alone decides it.
+        let mut header = (*snapshot.file).clone();
+        let mut header_item = source.clone();
+        header_item.definition = renamed(definition, "header");
+        let header_id = ItemId(header.tree.items.len() as u32);
+        header.tree.items.push(header_item);
+        for (tree, signature) in [
+            (&mut header.tree, source_signature),
+            (&mut literal.tree, &literal_signature),
+        ] {
+            for ty in signature
+                .parameters
+                .iter()
+                .map(|p| p.ty)
+                .chain(signature.result)
+            {
+                without_uniqueness(tree, ty);
+            }
+        }
+        let header = Arc::new(header);
         let literal = Arc::new(literal);
         let normalized = self.recorded(definition, reads, |r| {
             signer.signature(literal.clone(), literal_item, &symbols, r)
@@ -511,7 +528,13 @@ impl QueryEngine {
         if has_errors(&normalized.diagnostics) {
             return Err(QueryError::Diagnostics(normalized.diagnostics));
         }
-        if !same_function(signature, &normalized.value) {
+        let declared = self.recorded(definition, reads, |r| {
+            signer.signature(header.clone(), header_id, &symbols, r)
+        })?;
+        if has_errors(&declared.diagnostics) {
+            return Err(QueryError::Diagnostics(declared.diagnostics));
+        }
+        if !same_function(&declared.value, &normalized.value) {
             return Err(diagnostic(
                 "LANG-7",
                 header_span,
@@ -521,11 +544,11 @@ impl QueryEngine {
         let parameters: Vec<_> = literal_signature
             .parameters
             .iter()
-            .filter_map(|p| {
+            .map(|p| {
                 let span = literal
                     .parameter_name_span(literal_origin, p)
                     .unwrap_or(header_span);
-                Some((p.name?, span))
+                (p.name, span)
             })
             .collect();
         // The written header up to its `=`, then the literal's body: one item.
@@ -563,7 +586,7 @@ impl QueryEngine {
                     self.generated[definition].text.as_bytes(),
                 ],
             );
-            item.generated = Some(parameters);
+            item.generated = Some(Generated::Body(parameters));
         }
         let file = Arc::new(file);
         let resolution = self.recorded(definition, reads, |r| {
@@ -595,4 +618,47 @@ fn same_function(declared: &Signature, literal: &Signature) -> bool {
             .all(|(a, b)| a.passing == b.passing && equal(a.ty, b.ty))
         && equal(d.result, l.result)
         && d.uses == l.uses
+}
+
+/// Drop every `unique` modifier from the type `ty` of `tree`, in place: a
+/// generator's body type and a literal's header carry no uniqueness of their
+/// own, since the generated body is checked against the declared header.
+fn without_uniqueness(tree: &mut hirsel_syntax::SyntaxTree, ty: TypeExprId) {
+    let mut pending = vec![ty];
+    while let Some(id) = pending.pop() {
+        let node = &mut tree.types[id.0 as usize];
+        match &mut node.kind {
+            TypeExprKind::Named { arguments, .. } => {
+                pending.extend(arguments.iter().filter_map(|argument| match argument {
+                    TypeArgument::Type(ty) => Some(*ty),
+                    TypeArgument::SizeLiteral(_) => None,
+                }))
+            }
+            TypeExprKind::Tuple(items) => pending.extend(items.iter().copied()),
+            TypeExprKind::Function(function) => pending.extend(
+                function
+                    .parameters
+                    .iter()
+                    .map(|p| p.ty)
+                    .chain(function.result),
+            ),
+            TypeExprKind::Box(inner) => pending.push(*inner),
+            TypeExprKind::Qualified {
+                base,
+                modifiers,
+                brand,
+                relation,
+            } => {
+                modifiers.retain(|m| *m != TypeModifier::Unique);
+                let base = *base;
+                if modifiers.is_empty() && brand.is_none() && relation.is_none() {
+                    tree.types[id.0 as usize].kind = tree.types[base.0 as usize].kind.clone();
+                    pending.push(id);
+                } else {
+                    pending.push(base);
+                }
+            }
+            TypeExprKind::Error => {}
+        }
+    }
 }

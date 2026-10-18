@@ -1,0 +1,11 @@
+// rule: CT-5
+// expect: reject CT-1 at line 9
+// A nested Option, here as a List element, has no JSON form: null cannot tell `None`
+// from `Some(None)`, so the generator's Error names the type.
+type Setting {
+  values: List[Option[Option[u64]]],
+}
+
+fn setting_to_json(s: Setting) -> json.Value uses {} = comptime derive.json_value(
+  shape(Setting)
+)

@@ -1,0 +1,179 @@
+// rule: CT-5
+// expect: run
+// stdout: {"name":"s","origin":{"x":-0,"y":2.5},"colors":["Red",{"Custom":[1,2,3]}],"tags":["a"],"weights":{"w":0.5},"ids":[[3,{"x":1e-7,"y":0.1}],[4,null]],"span":[7,"seven"],"single":[true],"tree":{"Node":[[{"Leaf":[1]},{"Node":[[{"Leaf":[2]}]]}]]}}
+// stdout: round trip equal: true
+// stdout: Scene(name: s, origin: Point(x: -0, y: 2.5), colors: [Red, Custom(1, 2, 3)], tags: {a}, weights: {w: 0.5}, ids: {3: Some(Point(x: 1e-7, y: 0.1)), 4: None}, span: (7, seven), single: (true,), tree: Node([Leaf(1), Node([Leaf(2)])]))
+// stdout: true true
+// stdout: set order hash equal: true
+// stdout: {"x":"NaN","y":"-inf"}
+// stdout: Point(x: NaN, y: -inf)
+// std@1/derive covers fields of user record and variant types through their own
+// derivers (point_to_json for Point), floats with non-finite values as JSON strings,
+// Map with String and other keys, Set, Option, tuples and Lists of these, and a type
+// that recurses through a List, whose deriver calls itself. Decoders declared
+// `-> Result[unique T, String]` build fresh values.
+type Point {
+  x: f64,
+  y: f32,
+}
+
+type Color = Red | Custom(u8, u8, u8)
+
+type Tree = Leaf(u64) | Node(List[Tree])
+
+type Scene {
+  name: String,
+  origin: Point,
+  colors: List[Color],
+  tags: Set[String],
+  weights: Map[String, f64],
+  ids: Map[u64, Option[Point]],
+  span: (u64, String),
+  single: (bool,),
+  tree: Tree,
+}
+
+fn point_to_json(p: Point) -> json.Value uses {} = comptime derive.json_value(
+  shape(Point)
+)
+
+fn point_from_json(v: json.Value) -> Result[unique Point, String] uses {} = comptime derive.from_json(
+  shape(Point)
+)
+
+fn point_format(p: Point, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Point)
+)
+
+fn color_to_json(c: Color) -> json.Value uses {} = comptime derive.json_value(
+  shape(Color)
+)
+
+fn color_from_json(v: json.Value) -> Result[unique Color, String] uses {} = comptime derive.from_json(
+  shape(Color)
+)
+
+fn color_format(c: Color, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Color)
+)
+
+fn color_hash(c: Color) -> u64 uses {} = comptime derive.hash(shape(Color))
+
+fn tree_to_json(t: Tree) -> json.Value uses {} = comptime derive.json_value(shape(Tree))
+
+fn tree_from_json(v: json.Value) -> Result[unique Tree, String] uses {} = comptime derive.from_json(
+  shape(Tree)
+)
+
+fn tree_format(t: Tree, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Tree)
+)
+
+fn tree_hash(t: Tree) -> u64 uses {} = comptime derive.hash(shape(Tree))
+
+type Bag {
+  items: Set[String],
+}
+
+fn bag_hash(b: Bag) -> u64 uses {} = comptime derive.hash(shape(Bag))
+
+fn scene_to_json(s: Scene) -> json.Value uses {} = comptime derive.json_value(
+  shape(Scene)
+)
+
+fn scene_from_json(v: json.Value) -> Result[unique Scene, String] uses {} = comptime derive.from_json(
+  shape(Scene)
+)
+
+fn scene_equal(a: Scene, b: Scene) -> bool uses {} = comptime derive.equal(shape(Scene))
+
+fn scene_format(s: Scene, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Scene)
+)
+
+fn json_text(v: json.Value) -> unique String uses {} {
+  match json.stringify(v) {
+    Ok(s) => take s,
+    Error(_) => "?",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let mut tags: Set[String] = set.empty()
+  set.insert(mut tags, "a")
+  let mut weights: Map[String, f64] = map.empty()
+  map.insert(mut weights, "w", 0.5)
+  let mut ids: Map[u64, Option[Point]] = map.empty()
+  map.insert(mut ids, 3, Some(Point(x: 1.0e-7, y: 0.1)))
+  map.insert(mut ids, 4, None)
+  let scene = Scene(
+    name: "s",
+    origin: Point(x: -0.0, y: 2.5),
+    colors: [Red, Custom(1, 2, 3)],
+    tags: take tags,
+    weights: take weights,
+    ids: take ids,
+    span: (7, "seven"),
+    single: (true,),
+    tree: Node([Leaf(1), Node([Leaf(2)])])
+  )
+  let text = json_text(scene_to_json(scene))
+  let _ = out.print(out, f"{text}\n")
+  match scene_from_json(scene_to_json(scene)) {
+    Ok(back) => {
+      let _ = out.print(
+        out,
+        f"round trip equal: {bool.to_string(scene_equal(scene, back))}\n"
+      )
+      let mut buffer: List[u8] = []
+      scene_format(back, mut buffer)
+      let _ = out.print(out, f"{text.finish_valid(take buffer)}\n")
+    },
+    Error(e) => {
+      let _ = out.print(out, f"error: {e}\n")
+    },
+  }
+  let _ = out.print(
+    out,
+    f"{bool.to_string(tree_hash(Node([Leaf(1)])) == tree_hash(Node([Leaf(1)])))} {bool.to_string(
+      color_hash(Red) != color_hash(Custom(0, 0, 0))
+    )}\n"
+  )
+  let mut first: Set[String] = set.empty()
+  set.insert(mut first, "x")
+  set.insert(mut first, "y")
+  let mut second: Set[String] = set.empty()
+  set.insert(mut second, "y")
+  set.insert(mut second, "x")
+  let same = bag_hash(Bag(items: take first)) == bag_hash(Bag(items: take second))
+  let _ = out.print(out, f"set order hash equal: {bool.to_string(same)}\n")
+  let odd = Point(x: wide("NaN"), y: narrow("-inf"))
+  let odd_text = json_text(point_to_json(odd))
+  let _ = out.print(out, f"{odd_text}\n")
+  match point_from_json(point_to_json(odd)) {
+    Ok(p) => {
+      let mut buffer: List[u8] = []
+      point_format(p, mut buffer)
+      let _ = out.print(out, f"{text.finish_valid(take buffer)}\n")
+    },
+    Error(e) => {
+      let _ = out.print(out, f"error: {e}\n")
+    },
+  }
+  Ok(())
+}
+
+fn wide(text: String) -> f64 uses {} {
+  match f64.parse(text) {
+    Ok(x) => x,
+    Error(_) => 0.0,
+  }
+}
+
+fn narrow(text: String) -> f32 uses {} {
+  match f32.parse(text) {
+    Ok(x) => x,
+    Error(_) => 0.0,
+  }
+}

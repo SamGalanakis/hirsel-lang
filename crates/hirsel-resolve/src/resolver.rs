@@ -180,6 +180,7 @@ pub fn resolve_view(
         signatures: BTreeMap::new(),
         next_local: 0,
         alternative_locals: Vec::new(),
+        generator_parameters: Vec::new(),
         callees: BTreeSet::new(),
         local_function_depth: 0,
         return_type: ExpectedType::Unknown,
@@ -237,6 +238,9 @@ struct Resolver<'a, P: ?Sized> {
     /// While resolving a later alternative of an or-pattern: the locals the
     /// first alternative bound, and whether this alternative has bound each.
     alternative_locals: Vec<BTreeMap<Symbol, (LocalId, bool)>>,
+    /// While resolving a CT-5 generator: the generated function's declared
+    /// parameters, which name run-time values outside its closed frame.
+    generator_parameters: Vec<Symbol>,
 }
 
 impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
@@ -337,6 +341,19 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         d.primary = span;
                         d
                     }))
+            }
+            LookupError::Missing
+                if path.package.is_none()
+                    && matches!(&path.segments[..], [segment] if self.generator_parameters.contains(segment)) =>
+            {
+                self.diagnostic(
+                    const { RuleId::of("CT-2") },
+                    span,
+                    format!(
+                        "a generator reads no parameter: `{name}` is a run-time value of the \
+                         generated function"
+                    ),
+                )
             }
             LookupError::Missing => self.diagnostic(
                 const { RuleId::of("LANG-4") },
@@ -587,7 +604,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 self.return_type = result.clone();
                 // CT-5: a generated body binds the declared parameters by its
                 // literal's names; the header and its contracts keep the declared ones.
-                if let Some(names) = &item.generated {
+                if let Some(Generated::Body(names)) = &item.generated {
                     let scope = self.scopes.last_mut().unwrap();
                     let bindings: Vec<_> = signature
                         .parameters
@@ -595,7 +612,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         .map(|p| p.name.and_then(|name| scope.values.remove(&name)))
                         .collect();
                     for (&(name, span), binding) in names.iter().zip(bindings) {
-                        if let Some(binding) = binding {
+                        if let (Some(name), Some(binding)) = (name, binding) {
                             self.bind(name, Binding { span, ..binding });
                         }
                     }
@@ -607,6 +624,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 }
             }
             ItemKind::Const { ty, value } => {
+                if let Some(Generated::Generator(names)) = &item.generated {
+                    self.generator_parameters = names.clone();
+                }
                 let expected = self.type_expr(ty);
                 self.exported = false;
                 if !matches!(self.view, ResolveView::Header(_)) {

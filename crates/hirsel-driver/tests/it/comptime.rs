@@ -507,3 +507,41 @@ fn generated_bodies_regenerate_after_shape_and_generator_edits_on_compiler_threa
     };
     assert_eq!(fresh(source("x: u64, y: u64, z: u64", edited)), edited);
 }
+#[test]
+fn generated_body_diagnostics_name_the_literal_parameter() {
+    hirsel_engine::with_compiler_stack(
+        generated_body_diagnostics_name_the_literal_parameter_on_compiler_thread,
+    );
+}
+fn generated_body_diagnostics_name_the_literal_parameter_on_compiler_thread() {
+    // CT-5: the body binds the declared parameter `t` by its literal's name `tag`,
+    // so OWN-1 names and points at `tag`, the binding the generated text uses.
+    let mut engine = engine(
+        "type Tag { name: String }\n\
+         fn renaming() -> Result[Body[fn(Tag) -> () uses {}], String] {\n\
+         Ok(codegen.body(\"fn(tag: standalone@0/Tag) -> () uses {} { tag.name = \\\"x\\\" }\"))\n\
+         }\n\
+         fn rename(t: Tag) -> () uses {} = comptime renaming()\n",
+    );
+    let diagnostics = match engine.mode_definition(&path("rename")) {
+        Ok(out) => out.diagnostics,
+        Err(QueryError::Diagnostics(ds)) => ds,
+        Err(e) => panic!("{e:?}"),
+    };
+    let own = diagnostics
+        .iter()
+        .find(|d| d.rule.as_str() == "OWN-1")
+        .unwrap_or_else(|| panic!("{diagnostics:?}"));
+    assert!(
+        own.message.contains("`tag` is a borrowed parameter"),
+        "{own:?}"
+    );
+    let generated = engine.generated_source(&path("rename")).unwrap().file;
+    let provided = own
+        .secondary
+        .iter()
+        .find(|l| l.message.starts_with("provided"))
+        .unwrap_or_else(|| panic!("{own:?}"));
+    assert_eq!(provided.span.file, generated, "{own:?}");
+    assert_eq!(engine.sources.slice(provided.span), Some("tag"), "{own:?}");
+}

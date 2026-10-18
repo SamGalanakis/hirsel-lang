@@ -1,0 +1,18 @@
+// rule: CT-5
+// expect: reject MODE-2 at line 2
+// A generator's body type carries no uniqueness; the declaration's `-> unique Holder`
+// decides it, and the generated body is checked against it: a taken parameter that is
+// not `unique` may still be shared.
+type Holder {
+  name: String,
+}
+
+fn passing() -> Result[Body[fn(take Holder) -> Holder uses {}], String] {
+  Ok(
+    codegen.body(
+      "fn(take h: standalone@0/Holder) -> standalone@0/Holder uses {} {\n  take h\n}"
+    )
+  )
+}
+
+fn rebuild(take h: Holder) -> unique Holder uses {} = comptime passing()

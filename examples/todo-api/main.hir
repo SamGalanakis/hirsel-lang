@@ -43,7 +43,7 @@ fn text_value(s: String) -> json.Value uses {} {
 // A todo's JSON object and its decoding are generated from Todo's shape (CT-5).
 fn todo_value(t: Todo) -> json.Value uses {} = comptime derive.json_value(shape(Todo))
 
-fn todo_from(value: json.Value) -> Result[Todo, String] uses {} = comptime derive.from_json(
+fn todo_from(value: json.Value) -> Result[unique Todo, String] uses {} = comptime derive.from_json(
   shape(Todo)
 )
 
@@ -125,7 +125,7 @@ fn parse_store(take text: String) -> Result[unique Store, ServerError] uses {} {
   let mut todos: List[Todo] = []
   for item in items {
     match todo_from(item) {
-      Ok(decoded) => list.push(mut todos, unique decoded),
+      Ok(decoded) => list.push(mut todos, take decoded),
       Error(message) => return Error(Corrupt(take message)),
     }
   }

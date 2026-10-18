@@ -1408,23 +1408,47 @@ fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String]
 fn todo_value(t: Todo) -> json.Value uses {} = comptime derive.json_value(shape(Todo))
 ```
 
-Field and payload types may be `bool`, `String`, the sized integers, and
-`Option` and `List` of supported types; any other is the generator's `Error`,
-`no JSON form for T` or `no text form for T`, which CT-5 reports as CT-1 at the
-declaration. A record's JSON form is an object with a member per field, in
-declaration order; integers are JSON numbers, `None` is `null` and a list is an
-array. A variant without payload is its name as a JSON string, and one with
-payloads is an object whose single member, its name, holds the array of its
-payloads. `from_json` reads that form back. An absent member of an `Option`
-field decodes as `None`. Any other mismatch is `Error` with a message that
-begins with the type's name. `equal` compares every field, or the payloads of
-equal variants, with `==`. `format` writes `Name(field: value, ..)` for a record
-and `Variant(payload, ..)` or `Variant` for a variant; strings are written
-unquoted, `Option` as `Some(..)` or `None` and lists as `[a, b]`. Its header is
-that of an `@format` function. `hash` is the FNV-1a hash of each field's value as
-`format` writes it, or of the variant's name and each payload, with a zero byte
-after each. `json_bool`, `json_text`, `json_number` and `parsed` are the
-helpers generated decoders call.
+Field and payload types may be `bool`, `String`, the sized integers, `f32`,
+`f64`, another record or variant type, and `Option`, `List`, `Set`, `Map` and
+tuples of supported types; any other is the generator's `Error`, `no JSON form
+for T`, `no text form for T` or `no hash form for T`, which CT-5 reports as
+CT-1 at the declaration.
+
+A field of another record or variant type `Item` (any package, generic
+instances included) uses `Item`'s own deriver, named from its declared name in
+snake case: `item_to_json`, `item_from_json`, `item_format` and `item_hash`
+(`TodoItem` gives `todo_item_to_json`, `HTTPRequest` gives
+`http_request_to_json`). The generated call is resolved in the declaring module
+like a call written there, so the deriver may be derived or written by hand,
+and a missing one is LANG-4 in the generated text. A naming convention keeps
+headers exactly what their writers declare, where a dictionary argument would
+add a parameter to every derived function and its callers. A type that recurses
+through a `List`, `Set` or `Map` gets a deriver that calls itself. A `box T`
+field has no form: a deriver takes its type by value and a box's payload is
+reached only through patterns ([MEM-7](memory.md#mem-7-layout)). `equal`
+compares every field with `==`, nested types included.
+
+A record's JSON form is an object with a member per field, in declaration
+order; integers are JSON numbers, and so are finite floats, written by
+`to_string`; `NaN`, `inf` and `-inf` are those JSON strings. `None` is `null`,
+so `Option[Option[T]]`, at any depth, has no JSON form. A list, a set and a
+tuple are arrays; a `Map[String, V]` is an object and any other map an array of
+`[key, value]` arrays. A variant without payload is its name as a JSON string,
+and one with payloads is an object whose single member, its name, holds the
+array of its payloads. `from_json` reads that form back. An absent member of an
+`Option` field decodes as `None`. A duplicate set element or map key, and any
+other mismatch, is `Error`. Its body builds every value fresh, so a header may
+declare `-> Result[unique T, String]` (CT-5 decides uniqueness from the header).
+`format` writes `Name(field: value, ..)` for a record and `Variant(payload, ..)`
+or `Variant` for a variant; strings are written unquoted, `Option` as `Some(..)`
+or `None`, lists as `[a, b]`, sets as `{a, b}`, maps as `{k: v}` and tuples as
+`(a, b)` or `(a,)`. Its header is that of an `@format` function. `hash` is the
+FNV-1a hash of each field's value as `format` writes it, or of the variant's
+name and each payload, with a zero byte after each; a nested type contributes
+its own `_hash` in decimal and a set the xor of its elements' hashes, so equal
+sets hash alike. Floats are not `key` ([GEN-1](generics.md#gen-1-bounds)) and
+have no hash form. `json_bool`, `json_text`, `json_number`, `json_float`,
+`json_float_text` and `parsed` are the helpers generated bodies call.
 
 ## ASCII radix digits
 

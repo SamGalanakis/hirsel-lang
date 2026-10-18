@@ -1,0 +1,34 @@
+// rule: CT-5
+// expect: run
+// stdout: fresh
+// The same generator body type serves a `-> unique Holder` declaration whose generated
+// body builds a fresh value, and the caller keeps it unique.
+type Holder {
+  name: String,
+}
+
+fn passing() -> Result[Body[fn(take Holder) -> Holder uses {}], String] {
+  Ok(
+    codegen.body(
+      "fn(take h: standalone@0/Holder) -> standalone@0/Holder uses {} {\n  Holder(name: unique h.name)\n}"
+    )
+  )
+}
+
+fn rebuild(take h: Holder) -> unique Holder uses {} = comptime passing()
+
+fn keep(take h: unique Holder) -> unique Holder uses {} {
+  take h
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let h = keep(rebuild(Holder(name: "fresh")))
+  let text = if h.name == "fresh" {
+    "fresh\n"
+  } else {
+    "wrong\n"
+  }
+  let _ = out.print(out, text)
+  Ok(())
+}

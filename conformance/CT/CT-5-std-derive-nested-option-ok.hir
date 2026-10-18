@@ -1,0 +1,10 @@
+// rule: CT-5
+// expect: accept
+// An Option inside a List inside an Option is not ambiguous: the array separates them.
+type Setting {
+  values: Option[List[Option[u64]]],
+}
+
+fn setting_to_json(s: Setting) -> json.Value uses {} = comptime derive.json_value(
+  shape(Setting)
+)

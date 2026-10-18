@@ -936,10 +936,20 @@ pub struct Item {
     pub visibility: Visibility,
     pub attributes: Vec<Attribute>,
     pub kind: ItemKind,
-    /// A function whose body was generated (CT-5): its function literal's
-    /// parameter names and their spans, which bind the declared parameters by
-    /// position in the body. The header and its contracts keep the declared names.
-    pub generated: Option<Vec<(Symbol, Span)>>,
+    /// The item's role in typed generation (CT-5), if any.
+    pub generated: Option<Generated>,
+}
+/// Items the compiler builds for a `= comptime e` declaration (CT-5).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Generated {
+    /// The declaration with its generated body: the function literal's
+    /// parameter names (None for `_`) and their sites, which bind the declared
+    /// parameters by position in the body. The header and its contracts keep
+    /// the declared names.
+    Body(Vec<(Option<Symbol>, Span)>),
+    /// The generator `e`, checked as a constant: the declared parameter names.
+    /// They are run-time values of the generated function, which `e` cannot read.
+    Generator(Vec<Symbol>),
 }
 /// Owning AST arenas. All IDs address these Vecs; no AST node borrows source storage (LANG-1).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

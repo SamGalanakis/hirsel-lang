@@ -161,25 +161,30 @@ callable an agent can use is written in source and checking stays signature-only
 independent of topology ([PROG-5](programs.md#prog-5-topology)).
 
 - **Typing.** `e` has type `Result[Body[F], String]`, where `F` is the declared function
-  type: its parameter types with their modes, result and `uses`. `Body[F]` is a
+  type without uniqueness: its parameter types with their passing modes, result and
+  `uses`, with every `unique` dropped. The declaration alone decides uniqueness, since the
+  generated body is checked against its header (below), so one generator serves
+  `-> Result[T, String]` and `-> Result[unique T, String]`. `Body[F]` is a
   compile-time-only core type ([CT-3](#ct-3-shapes)). Generators are ordinary functions;
   the shaped type's parameter links shape and body, so `record_value(shape(Todo))` with
   `fn record_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}], String]`
   checks from signatures alone as a body for `fn(Todo) -> json.Value uses {}`, and a
   declaration with any other header is LANG-7 at `e` before evaluation. `e` is inside
-  CT-2's closed frame: it reads no parameter, and a generic declaration is CT-2 at `e`
-  (generic shape inputs are reserved).
+  CT-2's closed frame: it reads no parameter, and naming a declared parameter in `e` is
+  CT-2 at the name. A generic declaration is CT-2 at `e` (generic shape inputs are reserved).
 - **Bodies.** `codegen.body(text)` builds a `Body[F]`, taking `F` from the expected type.
   `Error(message)` from a generator is CT-1 at `e`, with the message as a note; a failing
   evaluation is CT-1 as for any comptime expression. The text must be one function literal
   `fn(..) -> .. uses {..} { .. }` and nothing else, or CT-5 at its first token. The literal's
-  type must equal `F`, or LANG-7 at its header. Its parameters bind the declared parameters
-  by position: the body uses the literal's names, while the header and contracts keep the
-  declared ones. Shapes spell types canonically, so a generator can write parameter and
+  type must equal the declared function type up to uniqueness, or LANG-7 at its header. Its
+  parameters bind the declared parameters by position: the body uses the literal's names,
+  and diagnostics in the body name them at the literal's parameters, while the header and
+  contracts keep the declared ones. Shapes spell types canonically, so a generator can write parameter and
   field types that resolve the same way in every module.
 - **Checking.** A generated body is checked exactly as if written in the declaring module:
   that module's names, package view and PROG-2 opacity, against the declared header, under
-  every ownership, mode, authority, allocation and contract rule. A client package cannot
+  every ownership, mode, authority, allocation and contract rule, so a `-> unique T`
+  header requires a body that builds a fresh value (MODE-2). A client package cannot
   reach an opaque representation through generated text. Diagnostics keep their ordinary
   rule owners; the primary span is in the generated text and a secondary label marks `e`.
   Generated bodies construct and read values only through ordinary source, so nominal
