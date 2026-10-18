@@ -1,0 +1,11 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 7
+// Alternatives count toward exhaustiveness.
+type Light = Red | Amber | Green | Off
+
+fn stop(l: Light) -> bool {
+  match l {
+    Red | Amber => true,
+    Green => false,
+  }
+}

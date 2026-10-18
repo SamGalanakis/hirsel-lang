@@ -1,0 +1,10 @@
+// rule: LANG-13
+// expect: accept
+// Every alternative of an or-pattern binds the same names.
+type Shape = Square(u32) | Rect(u32, u32)
+
+fn side(s: Shape) -> u32 {
+  match s {
+    Square(n) | Rect(n, _) => n,
+  }
+}

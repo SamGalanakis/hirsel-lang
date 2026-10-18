@@ -92,7 +92,7 @@ impl Builder<'_, '_> {
             Storage::Temporary,
             span,
         );
-        self.bind_fresh_pattern(pattern, item.place, bodies)?;
+        self.bind_refutable(pattern, item.place, true, None, span, bodies)?;
         self.expression(expression, bodies)?;
         if self.current.is_some() {
             self.exit_scope(scope, span);
@@ -468,7 +468,7 @@ impl Builder<'_, '_> {
         };
         // The yielded value is named anew on each iteration. In particular,
         // an indexed element has no whole-container identity to alias.
-        self.bind_fresh_pattern(pattern, item, bodies)?;
+        self.bind_refutable(pattern, item, true, None, span, bodies)?;
         self.expression(expression, bodies)?;
         if self.current.is_some() {
             self.exit_scope(scope, span);

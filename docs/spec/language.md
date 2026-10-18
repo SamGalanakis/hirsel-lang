@@ -385,6 +385,17 @@ need no `_`. Arms are tried in order and overlapping ranges are allowed, but a r
 pattern no value reaches, because earlier unguarded arms match every value it
 matches, is rejected.
 
+An or-pattern `P | Q` matches a value either alternative matches, trying them left to
+right, anywhere a pattern is allowed, nested too. Every alternative binds the same names,
+each with the same type and modes; alternatives normalize into the exhaustiveness
+judgment, so `let Ok(v) | Error(v) = r` is irrefutable. An alternative no value reaches,
+because earlier arms or earlier alternatives match every value it matches, is rejected,
+and a pattern may match in at most 256 ways through its alternatives. A match arm's
+bindings follow `match` exactly, borrowed or taken. Outside `match`, the matching
+alternative moves or copies each binding into the one binding its name declares, so a
+`let` or `for` or-pattern binds plain values or takes its payloads: a binding that would
+borrow is rejected.
+
 Destructuring a value of a type that declares `drop` is allowed only in that type's
 defining module. A committed whole destructure consumes the resource without running its
 finalizer: bound fields move to their bindings, and fields omitted with `_` or a rest

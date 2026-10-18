@@ -390,11 +390,8 @@ pub(super) fn pattern_declarations(
         .iter()
         .map(|p| (p.pattern, p.clone()))
         .collect();
-    let children: std::collections::BTreeSet<_> = body
-        .patterns
-        .iter()
-        .flat_map(|p| p.fields.iter().map(|(_, child)| *child))
-        .collect();
+    let children: std::collections::BTreeSet<_> =
+        body.patterns.iter().flat_map(|p| p.subpatterns()).collect();
     let mut pending: Vec<_> = body
         .patterns
         .iter()
@@ -404,6 +401,14 @@ pub(super) fn pattern_declarations(
     let mut result = BTreeMap::new();
     while let Some((pattern, ty)) = pending.pop() {
         let row = &rows[&pattern];
+        if let PatternDecisionKind::Or(alternatives) = &row.kind {
+            // Alternatives declare the same place as their or-pattern.
+            for alternative in alternatives {
+                result.insert(*alternative, ty);
+                pending.push((*alternative, ty));
+            }
+            continue;
+        }
         if row.fields.is_empty() {
             continue;
         }

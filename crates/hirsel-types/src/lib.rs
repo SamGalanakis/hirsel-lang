@@ -863,6 +863,19 @@ pub struct PatternDecision {
     /// writes. `None` for an unannotated let and every other pattern.
     pub annotation: Option<WrittenModes>,
 }
+impl PatternDecision {
+    /// Direct subpatterns: the field patterns, or the alternatives.
+    pub fn subpatterns(&self) -> impl Iterator<Item = PatternId> + '_ {
+        let alternatives = match &self.kind {
+            PatternDecisionKind::Or(alternatives) => alternatives.as_slice(),
+            _ => &[],
+        };
+        self.fields
+            .iter()
+            .map(|(_, child)| *child)
+            .chain(alternatives.iter().copied())
+    }
+}
 /// The mode axes a `let` annotation writes (MODE-1/2/3). A written axis is the
 /// receiving contract; an unwritten one follows the received value.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -888,6 +901,8 @@ pub enum PatternDecisionKind {
     Range,
     Tuple,
     Constructor(ContextualName),
+    /// Alternatives, each a pattern of the same place and type (LANG-13).
+    Or(Vec<PatternId>),
     Error,
 }
 /// A checked source storage path. Value roots cover computed receivers as well

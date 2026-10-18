@@ -519,13 +519,7 @@ impl<'a> Audit<'a, '_> {
                                 let mut patterns = vec![*pattern];
                                 while let Some(p) = patterns.pop() {
                                     lets.insert(p, (e, index));
-                                    match &self.input.tree.patterns[p.0 as usize].kind {
-                                        ast::PatternKind::Tuple(parts) => patterns.extend(parts),
-                                        ast::PatternKind::Constructor { fields, .. } => {
-                                            patterns.extend(fields.iter().map(|f| f.pattern))
-                                        }
-                                        _ => (),
-                                    }
+                                    patterns.extend(self.input.tree.pattern_children(p));
                                 }
                                 todo.push(*value);
                             }
@@ -869,7 +863,7 @@ impl<'a> Audit<'a, '_> {
         while let Some(p) = todo.pop() {
             match &self.input.tree.patterns[p.0 as usize].kind {
                 ast::PatternKind::Wildcard => return true,
-                ast::PatternKind::Tuple(parts) => todo.extend(parts),
+                ast::PatternKind::Tuple(parts) | ast::PatternKind::Or(parts) => todo.extend(parts),
                 ast::PatternKind::Constructor { fields, rest, .. } => {
                     if *rest {
                         return true;

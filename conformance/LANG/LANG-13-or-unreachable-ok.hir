@@ -1,0 +1,10 @@
+// rule: LANG-13
+// expect: accept
+// An alternative no value reaches, because earlier arms or earlier
+// alternatives match every value it matches, is rejected.
+fn digit(c: char) -> bool {
+  match c {
+    '0'..='9' | '_' => true,
+    _ => false,
+  }
+}

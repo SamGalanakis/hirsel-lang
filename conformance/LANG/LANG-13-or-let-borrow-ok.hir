@@ -1,0 +1,14 @@
+// rule: LANG-13
+// expect: accept
+// An or-pattern outside match binds plain values or takes its payloads: a
+// match arm may borrow its bindings.
+fn label(r: Result[String, String]) -> u64 {
+  match r {
+    Ok(s) | Error(s) => string.byte_len(s),
+  }
+}
+
+fn owned(take r: Result[String, String]) -> String {
+  let Ok(s) | Error(s) = take r
+  s
+}

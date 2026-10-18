@@ -133,7 +133,9 @@ impl Heights {
     }
     pub fn pattern_expression(&self, kind: &PatternKind) -> usize {
         1 + match kind {
-            PatternKind::Tuple(xs) => xs.iter().map(|id| self.pattern(*id)).max().unwrap_or(0),
+            PatternKind::Tuple(xs) | PatternKind::Or(xs) => {
+                xs.iter().map(|id| self.pattern(*id)).max().unwrap_or(0)
+            }
             PatternKind::Constructor { fields, .. } => fields
                 .iter()
                 .map(|f| self.pattern(f.pattern))

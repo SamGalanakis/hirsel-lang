@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: accept
+// A pattern matches in at most 256 ways through its alternatives.
+fn small(p: (u8, u8, u8, u8, u8)) -> bool {
+  match p {
+    (0..=3, 0..=3, 0..=3, 0..=3, 0..=3) => true,
+    _ => false,
+  }
+}

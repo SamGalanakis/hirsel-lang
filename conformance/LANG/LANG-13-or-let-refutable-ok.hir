@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: accept
+// A let pattern with alternatives is irrefutable when they cover the type.
+type Reading = Exact(u32) | Rounded(u32)
+
+fn value(r: Reading) -> u32 {
+  let Exact(n) | Rounded(n) = r
+  n
+}

@@ -1153,11 +1153,8 @@ fn retention_depth(body: &CheckedBody) -> usize {
         .unwrap_or(0)
         .max(1);
     let pattern_rows: BTreeMap<_, _> = body.patterns.iter().map(|p| (p.pattern, p)).collect();
-    let pattern_children: BTreeSet<_> = body
-        .patterns
-        .iter()
-        .flat_map(|p| p.fields.iter().map(|(_, child)| *child))
-        .collect();
+    let pattern_children: BTreeSet<_> =
+        body.patterns.iter().flat_map(|p| p.subpatterns()).collect();
     let mut patterns: Vec<_> = pattern_rows
         .keys()
         .filter(|p| !pattern_children.contains(p))
@@ -1166,7 +1163,7 @@ fn retention_depth(body: &CheckedBody) -> usize {
     while let Some((pattern, depth)) = patterns.pop() {
         retention_depth = retention_depth.max(depth);
         if let Some(row) = pattern_rows.get(&pattern) {
-            patterns.extend(row.fields.iter().map(|(_, child)| (*child, depth + 1)));
+            patterns.extend(row.subpatterns().map(|child| (child, depth + 1)));
         }
     }
     retention_depth
@@ -2202,6 +2199,7 @@ impl Checker<'_> {
                 value,
                 guarded: true,
                 test: false,
+                ..
             } => {
                 let borrowed = place(self.body, *value, self.source_rows).is_some()
                     && !matches!(
@@ -2215,7 +2213,7 @@ impl Checker<'_> {
                 while let Some(pattern) = pending.pop() {
                     if let Some(row) = self.body.patterns.iter_mut().find(|p| p.pattern == pattern)
                     {
-                        pending.extend(row.fields.iter().map(|f| f.1));
+                        pending.extend(row.subpatterns());
                         let plain = self.properties[row.ty.index()].plain;
                         let commit = if plain {
                             UseKind::Copy
@@ -4617,6 +4615,7 @@ impl Checker<'_> {
                 value,
                 guarded,
                 test,
+                choice,
             } => {
                 let source = *value;
                 let value = self.value(state, source);
@@ -4734,9 +4733,29 @@ impl Checker<'_> {
                 } else {
                     value.modes.clone()
                 };
+                // LANG-13: an or-pattern binds through the alternative this
+                // node takes; a root alternative stands for the whole pattern.
+                let chosen = |pattern: hirsel_syntax::PatternId| match &self.tree.patterns
+                    [pattern.0 as usize]
+                    .kind
+                {
+                    hirsel_syntax::PatternKind::Or(alternatives) => choice
+                        .get(&pattern)
+                        .copied()
+                        .or(alternatives.first().copied()),
+                    _ => None,
+                };
+                let mut root_pattern = root_pattern;
+                while let Some(alternative) = chosen(root_pattern) {
+                    root_pattern = alternative;
+                }
                 let mut pending =
                     vec![(root_pattern, Vec::new(), physical_root, value.fresh_receipt)];
                 while let Some((pattern, mut path, parent_modes, fresh_receipt)) = pending.pop() {
+                    if let Some(alternative) = chosen(pattern) {
+                        pending.push((alternative, path, parent_modes, fresh_receipt));
+                        continue;
+                    }
                     if let Some(&index) = self.pattern_indices.get(&pattern) {
                         let row = &self.body.patterns[index];
                         if !matches!(
@@ -4797,11 +4816,18 @@ impl Checker<'_> {
                             self.pattern_modes.insert(pattern, physical_modes.clone());
                         }
                     }
-                    let binding = self
+                    let site = self
                         .body
                         .bindings
                         .iter()
                         .position(|b| b.site == NameSite::Pattern(pattern));
+                    // Every alternative's binder names the first's slot.
+                    let binding = site.map(|i| {
+                        let row = &self.body.bindings[i];
+                        self.source_rows
+                            .binding(self.body, Some(row.owner), &row.binding)
+                            .unwrap_or(i)
+                    });
                     let ty = binding.map(|i| self.body.bindings[i].ty).or_else(|| {
                         self.body
                             .patterns
@@ -5078,7 +5104,7 @@ impl Checker<'_> {
                             },
                         };
                         if self.emit && !test {
-                            self.body.bindings[index].usage = usage;
+                            self.body.bindings[site.unwrap_or(index)].usage = usage;
                             self.binding_modes.insert(index, storage_modes.clone());
                             if part.environment_local() {
                                 self.environment_bindings.insert(index);

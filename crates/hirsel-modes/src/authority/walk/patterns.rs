@@ -202,6 +202,22 @@ impl Checker<'_> {
         if let Some(row) = self.pattern_row_mut(pattern) {
             row.ty = refined;
         }
+        if let PatternDecisionKind::Or(alternatives) = &decision.kind {
+            // Each alternative receives the whole value. Which one bound a
+            // name is dynamic, so no alternative's part identity survives.
+            for alternative in alternatives {
+                self.bind_pattern_value(*alternative, actual, value, ownership, part, iteration);
+            }
+            for alternative in alternatives {
+                if let Some(b) = self.out.body.bindings.iter().find(|b| {
+                    work::count(Counter::AuthoritySourceRows);
+                    b.site == NameSite::Pattern(*alternative)
+                }) {
+                    self.identities.remove(&binding_key(b));
+                }
+            }
+            return;
+        }
         let boundary = matches!(
             self.out.body.types.get(refined).unwrap().kind,
             TypeKind::Builtin {

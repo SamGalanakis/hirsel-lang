@@ -521,6 +521,13 @@ impl Normalizer<'_, '_> {
                 literal_pattern(start, e);
                 literal_pattern(end, e);
             }
+            ast::PatternKind::Or(alternatives) => {
+                e.tag("or-pattern");
+                e.number(alternatives.len() as u64);
+                for alternative in alternatives {
+                    self.pattern(*alternative, e, locals, active)?;
+                }
+            }
             ast::PatternKind::Error => {
                 return Err(diagnostic(
                     const { RuleId::of("LANG-6") },

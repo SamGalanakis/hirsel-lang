@@ -1,6 +1,6 @@
 use super::builder::{Builder, Value};
 use super::*;
-use hirsel_syntax::PatternId;
+use hirsel_syntax::{PatternChoice, PatternId};
 use hirsel_tir::*;
 use hirsel_types::{ContextualName, PatternDecision, PatternDecisionKind, ResolvedName, UseKind};
 impl Builder<'_, '_> {
@@ -23,7 +23,9 @@ impl Builder<'_, '_> {
     fn inspected_pattern_place(&mut self, row: &PatternDecision, mut place: PlaceId) -> PlaceId {
         if matches!(
             row.kind,
-            PatternDecisionKind::Binding(_) | PatternDecisionKind::Wildcard
+            PatternDecisionKind::Binding(_)
+                | PatternDecisionKind::Wildcard
+                | PatternDecisionKind::Or(_)
         ) {
             return place;
         }
@@ -42,35 +44,40 @@ impl Builder<'_, '_> {
         }
         place
     }
+    /// Bind the names `choice` reaches in pattern `id` from `place`.
     pub fn bind_pattern(
         &mut self,
         id: PatternId,
         place: PlaceId,
+        choice: &PatternChoice,
         bodies: &mut Vec<Option<Body>>,
     ) -> Result<()> {
-        self.bind_pattern_stage(id, place, bodies, None, false)
+        self.bind_pattern_stage(id, place, choice, bodies, None, false)
     }
     pub fn guard_pattern(
         &mut self,
         id: PatternId,
         place: PlaceId,
+        choice: &PatternChoice,
         bodies: &mut Vec<Option<Body>>,
         test: bool,
     ) -> Result<()> {
-        self.bind_pattern_stage(id, place, bodies, Some(test), false)
+        self.bind_pattern_stage(id, place, choice, bodies, Some(test), false)
     }
     pub fn bind_fresh_pattern(
         &mut self,
         id: PatternId,
         place: PlaceId,
+        choice: &PatternChoice,
         bodies: &mut Vec<Option<Body>>,
     ) -> Result<()> {
-        self.bind_pattern_stage(id, place, bodies, None, true)
+        self.bind_pattern_stage(id, place, choice, bodies, None, true)
     }
     fn bind_pattern_stage(
         &mut self,
         id: PatternId,
         place: PlaceId,
+        choice: &PatternChoice,
         bodies: &mut Vec<Option<Body>>,
         stage: Option<bool>,
         fresh: bool,
@@ -79,6 +86,12 @@ impl Builder<'_, '_> {
         let place = self.inspected_pattern_place(&row, place);
         let span = self.input.tree.patterns[id.0 as usize].origin.span;
         match row.kind {
+            PatternDecisionKind::Or(_) => {
+                let Some(alternative) = choice.get(&id) else {
+                    return self.error(span, "or-pattern without a chosen alternative");
+                };
+                return self.bind_pattern_stage(*alternative, place, choice, bodies, stage, fresh);
+            }
             PatternDecisionKind::Wildcard
             | PatternDecisionKind::Literal
             | PatternDecisionKind::Range => {}
@@ -151,6 +164,22 @@ impl Builder<'_, '_> {
                 } else {
                     usage
                 };
+                if let Some(slot) = self.joining.as_ref().and_then(|j| j.get(&local)).copied() {
+                    if stage.is_some() || matches!(usage, UseKind::Borrow | UseKind::Mut) {
+                        return self.error(span, "joined alternatives bind a view");
+                    }
+                    self.transfer_to(
+                        slot,
+                        Value {
+                            checked_ty: None,
+                            place,
+                            usage,
+                        },
+                        None,
+                        span,
+                    );
+                    return Ok(());
+                }
                 if stage == Some(true) || matches!(usage, UseKind::Borrow | UseKind::Mut) {
                     // Borrowed bindings are views of their source place. Their
                     // scope loan ends without creating an owned alias slot;
@@ -273,6 +302,7 @@ impl Builder<'_, '_> {
                     self.bind_pattern_stage(
                         child,
                         projected,
+                        choice,
                         bodies,
                         stage,
                         if staging { false } else { fresh },
@@ -337,16 +367,41 @@ impl Builder<'_, '_> {
         let _ = bodies;
         Ok(())
     }
+    /// The match-table pattern of the alternatives `choice` takes in `id`.
+    /// Whether committing pattern `id` emits anything: a binding, or a
+    /// resource destructure that defuses its owner (LANG-13).
+    pub fn pattern_commits(&self, id: PatternId) -> bool {
+        let mut todo = vec![id];
+        while let Some(id) = todo.pop() {
+            let Some(row) = self.decisions.patterns.get(&id).iter().copied().next() else {
+                continue;
+            };
+            if matches!(row.kind, PatternDecisionKind::Binding(_))
+                || !self.decisions.resource_patterns.get(&id).is_empty()
+            {
+                return true;
+            }
+            todo.extend(row.subpatterns());
+        }
+        false
+    }
     pub fn table_pattern(
         &mut self,
         id: PatternId,
         place: PlaceId,
+        choice: &PatternChoice,
         patterns: &mut Vec<MatchPattern>,
         guarded: bool,
     ) -> Result<MatchPatternId> {
         let row = self.pattern(id)?;
         let place = self.inspected_pattern_place(&row, place);
         let span = self.input.tree.patterns[id.0 as usize].origin.span;
+        if let PatternDecisionKind::Or(_) = row.kind {
+            let Some(alternative) = choice.get(&id) else {
+                return self.error(span, "or-pattern without a chosen alternative");
+            };
+            return self.table_pattern(*alternative, place, choice, patterns, guarded);
+        }
         let mut fields = vec![];
         for (field, child) in &row.fields {
             let projection = match &row.kind {
@@ -360,7 +415,7 @@ impl Builder<'_, '_> {
             };
             let child_row = self.pattern(*child)?;
             let child_place = self.project(place, projection, child_row.ty);
-            let node = self.table_pattern(*child, child_place, patterns, guarded)?;
+            let node = self.table_pattern(*child, child_place, choice, patterns, guarded)?;
             fields.push((field.0, node));
         }
         let kind = match row.kind {
@@ -443,5 +498,119 @@ impl Builder<'_, '_> {
         let node = MatchPatternId(patterns.len() as u32);
         patterns.push(MatchPattern { place, kind });
         Ok(node)
+    }
+}
+impl Builder<'_, '_> {
+    /// Bind `pattern` from the staged `place` in the enclosing scope (LANG-13).
+    /// One way to match and no `otherwise` binds directly. Otherwise a match
+    /// table tries each way the alternatives match, in order, and the bindings
+    /// of every way are moved or copied into one slot per name; a value no way
+    /// matches runs `otherwise`, which diverges.
+    pub fn bind_refutable(
+        &mut self,
+        pattern: PatternId,
+        place: PlaceId,
+        fresh: bool,
+        otherwise: Option<hirsel_syntax::ExprId>,
+        span: Span,
+        bodies: &mut Vec<Option<Body>>,
+    ) -> Result<()> {
+        let Some(choices) = self.input.tree.pattern_choices(pattern) else {
+            return self.error(span, "unchecked or-pattern expansion");
+        };
+        if choices.len() == 1 && otherwise.is_none() {
+            return if fresh {
+                self.bind_fresh_pattern(pattern, place, &choices[0], bodies)
+            } else {
+                self.bind_pattern(pattern, place, &choices[0], bodies)
+            };
+        }
+        let joined = choices.len() > 1;
+        let mut slots = std::collections::BTreeMap::new();
+        if joined {
+            for id in self.input.tree.chosen_patterns(pattern, &choices[0]) {
+                let row = self.pattern(id)?;
+                let PatternDecisionKind::Binding(local) = row.kind else {
+                    continue;
+                };
+                let slot = self.slot(row.ty, Storage::Local, span, false);
+                self.emit(InstructionKind::StorageLive(self.root(slot)), span);
+                slots.insert(local, slot);
+            }
+        }
+        let table_id = MatchTableId(self.body.matches.len() as u32);
+        let mut table = MatchTable {
+            scrutinee: place,
+            patterns: vec![],
+            arms: vec![],
+        };
+        self.body.matches.push(table.clone());
+        self.terminate(
+            Terminator::Match {
+                table: table_id,
+                from: 0,
+            },
+            span,
+        );
+        let incoming = self.state.clone();
+        let join = self.block(span);
+        let mut states = vec![];
+        let outer = std::mem::replace(&mut self.joining, joined.then(|| slots.clone()));
+        for choice in &choices {
+            let target = self.block(span);
+            let node = self.table_pattern(pattern, place, choice, &mut table.patterns, false)?;
+            table.arms.push(hirsel_tir::MatchArm {
+                pattern: node,
+                guard: None,
+                target,
+            });
+            self.current = Some(target);
+            self.state = incoming.clone();
+            let bound = if fresh {
+                self.bind_fresh_pattern(pattern, place, choice, bodies)
+            } else {
+                self.bind_pattern(pattern, place, choice, bodies)
+            };
+            if let Err(error) = bound {
+                self.joining = outer;
+                return Err(error);
+            }
+            states.push(self.state.clone());
+            self.terminate(Terminator::Goto(join), span);
+        }
+        self.joining = outer;
+        if let Some(otherwise) = otherwise {
+            let target = self.block(span);
+            let node = MatchPatternId(table.patterns.len() as u32);
+            table.patterns.push(MatchPattern {
+                place,
+                kind: MatchPatternKind::Wildcard,
+            });
+            table.arms.push(hirsel_tir::MatchArm {
+                pattern: node,
+                guard: None,
+                target,
+            });
+            self.current = Some(target);
+            self.state = incoming.clone();
+            if self.expression(otherwise, bodies)?.is_some() || self.current.is_some() {
+                return self.error(span, "let-else block completes normally");
+            }
+        }
+        self.body.matches[table_id.0 as usize] = table;
+        self.current = Some(join);
+        self.state = self.merge(&states);
+        for (local, slot) in slots {
+            let origin = Self::binding_origin(self.owner, &ResolvedName::Local(local)).unwrap();
+            let kind = if fresh {
+                OriginBindingKind::Fresh
+            } else {
+                OriginBindingKind::Alias
+            };
+            let place = self.bind_origin(slot, origin, kind, span);
+            self.bindings
+                .push((self.owner, ResolvedName::Local(local), place));
+        }
+        Ok(())
     }
 }

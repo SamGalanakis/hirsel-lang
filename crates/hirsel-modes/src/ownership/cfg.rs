@@ -67,11 +67,13 @@ pub(super) enum Op {
         expression: ExprId,
         value: ExprId,
     },
+    /// Bind `pattern` from `value`, taking the alternatives `choice` names.
     Bind {
         pattern: PatternId,
         value: ExprId,
         guarded: bool,
         test: bool,
+        choice: std::sync::Arc<PatternChoice>,
     },
     Write {
         place: ExprId,
@@ -236,6 +238,45 @@ fn reserve(nodes: &mut Vec<Node>, span: Span) -> usize {
 /// An early exit (`break`, `continue`, `return`, `?`) ends every statement it
 /// leaves, innermost first, up to `until` (a loop the exit stays in), so their
 /// temporaries are released on that edge too (MODE-2).
+/// Bind nodes for every way `pattern`'s alternatives match, each continuing
+/// at `next`; one node when it has no alternatives (LANG-13).
+#[allow(clippy::too_many_arguments)]
+fn bind(
+    nodes: &mut Vec<Node>,
+    tree: &SyntaxTree,
+    pattern: PatternId,
+    value: ExprId,
+    guarded: bool,
+    test: bool,
+    next: usize,
+    span: Span,
+) -> usize {
+    let choices = tree
+        .pattern_choices(pattern)
+        .unwrap_or_else(|| vec![PatternChoice::new()]);
+    let binds: Vec<usize> = choices
+        .into_iter()
+        .map(|choice| {
+            node(
+                nodes,
+                Op::Bind {
+                    pattern,
+                    value,
+                    guarded,
+                    test,
+                    choice: std::sync::Arc::new(choice),
+                },
+                vec![next],
+                span,
+            )
+        })
+        .collect();
+    if let [one] = binds[..] {
+        one
+    } else {
+        node(nodes, Op::Nop, binds, span)
+    }
+}
 fn exit_statements(
     nodes: &mut Vec<Node>,
     statements: &Statements,
@@ -263,13 +304,7 @@ pub(super) fn binders(
     let mut todo = patterns.to_vec();
     while let Some(pattern) = todo.pop() {
         result.extend(rows.at(NameSite::Pattern(pattern)));
-        match &tree.patterns[pattern.0 as usize].kind {
-            PatternKind::Tuple(children) => todo.extend(children),
-            PatternKind::Constructor { fields, .. } => {
-                todo.extend(fields.iter().map(|f| f.pattern))
-            }
-            _ => {}
-        }
+        todo.extend(tree.pattern_children(pattern));
     }
     result
 }
@@ -936,15 +971,14 @@ pub(super) fn build(
                                     next: finish,
                                     env: arm_env.clone(),
                                 });
-                                let commit = node(
+                                let commit = bind(
                                     &mut nodes,
-                                    Op::Bind {
-                                        pattern: arm.pattern,
-                                        value: *value,
-                                        guarded: arm.guard.is_some(),
-                                        test: false,
-                                    },
-                                    vec![arm_entry],
+                                    tree,
+                                    arm.pattern,
+                                    *value,
+                                    arm.guard.is_some(),
+                                    false,
+                                    arm_entry,
                                     expr.origin.span,
                                 );
                                 let selected = if let Some(guard) = arm.guard {
@@ -971,15 +1005,14 @@ pub(super) fn build(
                                         next: branch,
                                         env: arm_env,
                                     });
-                                    node(
+                                    bind(
                                         &mut nodes,
-                                        Op::Bind {
-                                            pattern: arm.pattern,
-                                            value: *value,
-                                            guarded: true,
-                                            test: true,
-                                        },
-                                        vec![guard_entry],
+                                        tree,
+                                        arm.pattern,
+                                        *value,
+                                        true,
+                                        true,
+                                        guard_entry,
                                         expr.origin.span,
                                     )
                                 } else {
@@ -1417,15 +1450,14 @@ pub(super) fn build(
                         StmtKind::Let {
                             pattern, value, ty, ..
                         } => {
-                            let bind = node(
+                            let bind = bind(
                                 &mut nodes,
-                                Op::Bind {
-                                    pattern: *pattern,
-                                    value: *value,
-                                    guarded: false,
-                                    test: false,
-                                },
-                                vec![next],
+                                tree,
+                                *pattern,
+                                *value,
+                                false,
+                                false,
+                                next,
                                 stmt.origin.span,
                             );
                             jobs.push(Job::Expr {
@@ -1583,15 +1615,14 @@ pub(super) fn build(
                                 next: kill,
                                 env: env.clone(),
                             });
-                            let bind = node(
+                            let bind = bind(
                                 &mut nodes,
-                                Op::Bind {
-                                    pattern: *pattern,
-                                    value: *source,
-                                    guarded: false,
-                                    test: false,
-                                },
-                                vec![loop_entry],
+                                tree,
+                                *pattern,
+                                *source,
+                                false,
+                                false,
+                                loop_entry,
                                 stmt.origin.span,
                             );
                             nodes[header].next = vec![bind, loop_exit];

@@ -1,0 +1,94 @@
+// rule: LANG-13
+// expect: run
+// Or-patterns select alternatives anywhere a pattern is allowed: whole arms
+// with and without bindings, guarded arms, nested fields, ranges, and
+// irrefutable let and for patterns that take or copy their bindings.
+type Token = Plus | Minus | Star | Number(u8) | Name(String) | Word(String)
+
+type Pair = Pair(left: Token, right: u8)
+
+fn operator(t: Token) -> bool {
+  match t {
+    Plus | Minus | Star => true,
+    _ => false,
+  }
+}
+
+fn text(t: Token) -> u64 {
+  match t {
+    Name(s) | Word(s) => string.byte_len(s),
+    Number(0..=9 | 100..=109) => 1,
+    _ => 0,
+  }
+}
+
+fn long_text(t: Token) -> u32 {
+  match t {
+    Name(s) | Word(s) if string.byte_len(s) > 2 => 1,
+    Plus | Minus if true => 2,
+    _ => 0,
+  }
+}
+
+fn owned(take t: Token) -> String {
+  match take t {
+    Name(s) | Word(s) => s,
+    _ => "",
+  }
+}
+
+fn nested(p: Pair) -> u64 {
+  match p {
+    Pair(left: Name(s) | Word(s), right: 1 | 2) => 10 + string.byte_len(s),
+    Pair(left: Number(_), right: _) => 20,
+    _ => 0,
+  }
+}
+
+fn either(r: Result[u32, u32]) -> u32 {
+  let Ok(v) | Error(v) = r
+  v
+}
+
+fn either_owned(take r: Result[String, String]) -> String {
+  let Ok(s) | Error(s) = take r
+  s
+}
+
+fn sum(xs: List[Result[u32, u32]]) -> u32 {
+  let mut total = 0u32
+  for Ok(v) | Error(v) in xs {
+    total += v
+  }
+  total
+}
+
+fn space(b: u8) -> bool {
+  match b {
+    b' ' | b'\t' | b'\n' | b'\r' => true,
+    _ => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, operator(Minus()))
+  test.check(t, !operator(Number(3)))
+  test.check(t, text(Word("abc")) == 3)
+  test.check(t, text(Name("ab")) == 2)
+  test.check(t, text(Number(105)) == 1)
+  test.check(t, text(Number(50)) == 0)
+  test.check(t, long_text(Word("abc")) == 1)
+  test.check(t, long_text(Word("ab")) == 0)
+  test.check(t, long_text(Minus()) == 2)
+  test.check(t, owned(Name("x")) == "x")
+  test.check(t, owned(Star()) == "")
+  test.check(t, nested(Pair(left: Word("ab"), right: 2)) == 12)
+  test.check(t, nested(Pair(left: Word("ab"), right: 3)) == 0)
+  test.check(t, nested(Pair(left: Number(1), right: 3)) == 20)
+  test.check(t, either(Error(4)) == 4)
+  test.check(t, either_owned(Ok("hi")) == "hi")
+  test.check(t, sum([Ok(1), Error(2), Ok(3)]) == 6)
+  test.check(t, space(b'\t'))
+  test.check(t, !space(b'x'))
+  Ok(())
+}

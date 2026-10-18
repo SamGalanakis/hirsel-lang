@@ -606,6 +606,16 @@ impl<'a> Printer<'a> {
                     }
                     cat([self.path(path)?, list("(", args, ")", false)])
                 }
+                PatternKind::Or(alternatives) => {
+                    let mut ds = vec![];
+                    for (i, alternative) in alternatives.iter().enumerate() {
+                        if i > 0 {
+                            ds.extend([Space, token("|"), Space]);
+                        }
+                        ds.push(self.pattern(*alternative)?);
+                    }
+                    cat(ds)
+                }
                 PatternKind::Error => return None,
             })
         })()

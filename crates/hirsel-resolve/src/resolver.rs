@@ -166,6 +166,7 @@ pub fn resolve_view(
         scopes: vec![Scope::default()],
         signatures: BTreeMap::new(),
         next_local: 0,
+        alternative_locals: Vec::new(),
         callees: BTreeSet::new(),
         local_function_depth: 0,
         return_type: ExpectedType::Unknown,
@@ -217,6 +218,9 @@ struct Resolver<'a, P: ?Sized> {
     declaring: Vec<Symbol>,
     /// Relation places that name a binding being declared, resolved once it is.
     deferred: Vec<(Path, Span, NameSite)>,
+    /// While resolving a later alternative of an or-pattern: the locals the
+    /// first alternative bound, and whether this alternative has bound each.
+    alternative_locals: Vec<BTreeMap<Symbol, (LocalId, bool)>>,
 }
 
 impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
@@ -2005,6 +2009,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 .iter()
                 .flat_map(|f| self.pattern_names(f.pattern))
                 .collect(),
+            PatternKind::Or(alternatives) => self.pattern_names(alternatives[0]),
             _ => vec![],
         }
     }
@@ -2101,12 +2106,60 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         let node = self.file.tree.patterns[id.0 as usize].clone();
         match node.kind {
             PatternKind::Binding(name) => {
-                if self
+                let variant = self
                     .variant(name, &expected, NameSite::Pattern(id), node.origin.span)
-                    .is_none()
-                {
+                    .is_some();
+                if variant {
+                    // A contextual nullary variant binds nothing.
+                } else if let Some(first) = self.alternative_locals.last_mut() {
+                    // LANG-13: a later alternative binds the first one's locals.
+                    match first.get_mut(&name) {
+                        Some((local, false)) => {
+                            let local = *local;
+                            first.insert(name, (local, true));
+                            self.output.query.value.bindings.push((id, name, local));
+                        }
+                        Some((_, true)) => self.diagnostic(
+                            const { RuleId::of("LANG-4") },
+                            node.origin.span,
+                            "a local cannot shadow another local",
+                        ),
+                        None => {
+                            let message = format!(
+                                "every alternative binds the same names; the first does not bind `{}`",
+                                self.spelling(name)
+                            );
+                            self.diagnostic(
+                                const { RuleId::of("LANG-13") },
+                                node.origin.span,
+                                message,
+                            )
+                        }
+                    }
+                } else {
                     let local = self.local(name, node.origin.span, expected);
                     self.output.query.value.bindings.push((id, name, local));
+                }
+            }
+            PatternKind::Or(alternatives) => {
+                let mark = self.output.query.value.bindings.len();
+                self.pattern(alternatives[0], expected.clone());
+                let first: BTreeMap<_, _> = self.output.query.value.bindings[mark..]
+                    .iter()
+                    .map(|(_, name, local)| (*name, (*local, false)))
+                    .collect();
+                for alternative in &alternatives[1..] {
+                    self.alternative_locals.push(first.clone());
+                    self.pattern(*alternative, expected.clone());
+                    let bound = self.alternative_locals.pop().unwrap_or_default();
+                    for (name, _) in bound.into_iter().filter(|(_, (_, used))| !used) {
+                        let message = format!(
+                            "every alternative binds the same names; this one does not bind `{}`",
+                            self.spelling(name)
+                        );
+                        let span = self.file.tree.patterns[alternative.0 as usize].origin.span;
+                        self.diagnostic(const { RuleId::of("LANG-13") }, span, message);
+                    }
                 }
             }
             PatternKind::Tuple(patterns) => {

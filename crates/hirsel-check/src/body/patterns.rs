@@ -1,13 +1,16 @@
 use super::*;
 impl Checker<'_, '_> {
     pub(super) fn mutable_map_pattern(&mut self, root: ast::PatternId) {
-        let mut pending = vec![(root, false)];
-        while let Some((pattern, key)) = pending.pop() {
+        let mut pending = vec![(root, false, true)];
+        while let Some((pattern, key, whole)) = pending.pop() {
             let Some(row) = self.body.patterns.iter().find(|p| p.pattern == pattern) else {
                 continue;
             };
             let fields = row.fields.clone();
-            let whole = pattern == root;
+            // An alternative stands where its or-pattern does.
+            if let PatternDecisionKind::Or(alternatives) = &row.kind {
+                pending.extend(alternatives.iter().map(|a| (*a, key, whole)));
+            }
             let usage = if key || whole {
                 if row.usage == UseKind::Copy {
                     UseKind::Copy
@@ -33,7 +36,7 @@ impl Checker<'_, '_> {
             pending.extend(
                 fields
                     .into_iter()
-                    .map(|(field, child)| (child, key || whole && field.0 == 0)),
+                    .map(|(field, child)| (child, key || whole && field.0 == 0, false)),
             );
         }
     }
@@ -50,6 +53,7 @@ impl Checker<'_, '_> {
         let root_span = self.input.tree.patterns[root.0 as usize].origin.span;
         let mut todo = vec![(root, ty)];
         let mut refutable = false;
+        let mut alternations = vec![];
         while let Some((id, ty)) = todo.pop() {
             let p = self.input.tree.patterns[id.0 as usize].clone();
             let inspected = self.box_payload(ty);
@@ -62,7 +66,9 @@ impl Checker<'_, '_> {
             let mut children = vec![];
             let kind = if self.invalid(ty) {
                 match &p.kind {
-                    ast::PatternKind::Tuple(ps) => children.extend(ps.iter().map(|p| (*p, ty))),
+                    ast::PatternKind::Tuple(ps) | ast::PatternKind::Or(ps) => {
+                        children.extend(ps.iter().map(|p| (*p, ty)))
+                    }
                     ast::PatternKind::Constructor { fields: fs, .. } => {
                         children.extend(fs.iter().map(|f| (f.pattern, ty)))
                     }
@@ -262,6 +268,12 @@ impl Checker<'_, '_> {
                             PatternDecisionKind::Error
                         }
                     }
+                    ast::PatternKind::Or(alternatives) => {
+                        // Every alternative inspects the same place as the whole.
+                        children.extend(alternatives.iter().map(|a| (*a, ty)));
+                        alternations.push(id);
+                        PatternDecisionKind::Or(alternatives.clone())
+                    }
                     ast::PatternKind::Error => PatternDecisionKind::Error,
                 }
             };
@@ -298,14 +310,132 @@ impl Checker<'_, '_> {
             });
             todo.extend(children.into_iter().rev());
         }
-        if irrefutable && refutable {
+        for alternation in &alternations {
+            self.alternatives_agree(*alternation);
+        }
+        if !alternations.is_empty() && self.input.tree.pattern_choices(root).is_none() {
             self.report(
                 const { RuleId::of("LANG-13") },
                 root_span,
-                "binding pattern must be irrefutable",
+                &format!(
+                    "pattern matches in more than {} ways through its alternatives",
+                    hirsel_syntax::MAX_PATTERN_CHOICES
+                ),
             );
+        } else if irrefutable && !self.invalid(ty) {
+            // Alternatives may cover together what each leaves uncovered.
+            let refutable = if alternations.is_empty() {
+                refutable
+            } else {
+                self.useful(ty, vec![vec![Some(root)]], vec![None])?
+            };
+            if refutable {
+                self.report(
+                    const { RuleId::of("LANG-13") },
+                    root_span,
+                    "binding pattern must be irrefutable",
+                );
+            }
         }
         Ok(())
+    }
+    /// LANG-13: outside match, every way a pattern's alternatives match moves
+    /// or copies its bindings into one slot per name, so no binding is a view.
+    pub(super) fn joined_bindings_own(&mut self, root: ast::PatternId) {
+        if self
+            .input
+            .tree
+            .pattern_choices(root)
+            .is_none_or(|choices| choices.len() < 2)
+        {
+            return;
+        }
+        let mut todo = vec![root];
+        while let Some(id) = todo.pop() {
+            let Some(row) = self.body.patterns.iter().find(|p| p.pattern == id).cloned() else {
+                continue;
+            };
+            if matches!(row.kind, PatternDecisionKind::Binding(_))
+                && matches!(row.usage, UseKind::Borrow | UseKind::Mut)
+                && !self.invalid(row.ty)
+            {
+                self.report(
+                    const { RuleId::of("LANG-13") },
+                    self.input.tree.patterns[id.0 as usize].origin.span,
+                    "an or-pattern outside match binds plain values or takes its payloads, \
+                     but this binding borrows; take the value or use match",
+                );
+            }
+            // Alternatives agree, so the first one's bindings stand for all.
+            match &row.kind {
+                PatternDecisionKind::Or(alternatives) => todo.extend(alternatives.first()),
+                _ => todo.extend(row.subpatterns()),
+            }
+        }
+    }
+    /// The bindings a pattern introduces through its first alternatives, with
+    /// their decisions' types and mutability.
+    fn pattern_bindings(&self, root: ast::PatternId) -> BTreeMap<LocalId, (TypeId, bool)> {
+        let mut out = BTreeMap::new();
+        let mut todo = vec![root];
+        while let Some(id) = todo.pop() {
+            let Some(row) = self.body.patterns.iter().find(|p| p.pattern == id) else {
+                continue;
+            };
+            match &row.kind {
+                PatternDecisionKind::Binding(local) => {
+                    if let Some(b) = self
+                        .body
+                        .bindings
+                        .iter()
+                        .find(|b| b.site == NameSite::Pattern(id))
+                    {
+                        out.insert(*local, (b.ty, b.mutable));
+                    }
+                }
+                PatternDecisionKind::Or(alternatives) => todo.extend(alternatives.first()),
+                _ => todo.extend(row.fields.iter().map(|(_, child)| *child)),
+            }
+        }
+        out
+    }
+    /// LANG-13: alternatives bind the same names with the same types and modes.
+    fn alternatives_agree(&mut self, alternation: ast::PatternId) {
+        let ast::PatternKind::Or(alternatives) = self.input.tree.patterns[alternation.0 as usize]
+            .kind
+            .clone()
+        else {
+            return;
+        };
+        let first = self.pattern_bindings(alternatives[0]);
+        for alternative in &alternatives[1..] {
+            let bound = self.pattern_bindings(*alternative);
+            for (local, (ty, mutable)) in &bound {
+                let Some((expected, expected_mutable)) = first.get(local) else {
+                    continue;
+                };
+                let same = mutable == expected_mutable
+                    && (self.invalid(*ty)
+                        || self.invalid(*expected)
+                        || hirsel_types::semantic_equal(
+                            &self.body.types,
+                            *ty,
+                            &self.body.types,
+                            *expected,
+                        )
+                        .unwrap_or(false));
+                if !same {
+                    let span = self.input.tree.patterns[alternative.0 as usize].origin.span;
+                    self.type_mismatch(
+                        const { RuleId::of("LANG-13") },
+                        span,
+                        "every alternative binds each name with the same type",
+                        *ty,
+                        *expected,
+                    );
+                }
+            }
+        }
     }
     /// LANG-13: a closed range of integer or char literals, whose start does
     /// not exceed its end.
@@ -390,55 +520,156 @@ impl Checker<'_, '_> {
             .collect();
         Ok(!self.useful(root, rows, vec![None])?)
     }
-    /// LANG-13: a range pattern no value reaches, because earlier arms match every
-    /// value it matches, is rejected. Other unreachable arms are not judged here.
-    pub(super) fn unreachable_ranges(
-        &mut self,
-        root: TypeId,
-        arms: &[ast::MatchArm],
-    ) -> Result<(), QueryError> {
-        let mut rows = vec![];
-        for arm in arms {
-            if let Some(range) = self.first_range(arm.pattern)
-                && !self.useful(root, rows.clone(), vec![Some(arm.pattern)])?
-            {
-                self.report(
-                    const { RuleId::of("LANG-13") },
-                    self.input.tree.patterns[range.0 as usize].origin.span,
-                    "range pattern can never match: earlier arms match every value it matches",
-                );
-            }
-            if arm.guard.is_none() {
-                rows.push(vec![Some(arm.pattern)]);
-            }
-        }
-        Ok(())
-    }
-    fn first_range(&self, root: ast::PatternId) -> Option<ast::PatternId> {
-        let mut todo = vec![root];
-        while let Some(id) = todo.pop() {
-            let row = self.body.patterns.iter().find(|p| p.pattern == id)?;
-            if matches!(row.kind, PatternDecisionKind::Range) {
-                return Some(id);
-            }
-            todo.extend(row.fields.iter().rev().map(|(_, child)| *child));
-        }
-        None
-    }
-    /// Usefulness by matrix specialization: whether some value matches `query`
-    /// and no row. Nested products and variants split by constructor, rather
-    /// than treating any occurrence of a variant tag as complete payload
-    /// coverage; integer and char columns split their domain at the bounds
-    /// their literal and range patterns name.
+    /// Usefulness where every row and the query take every alternative.
     fn useful(
         &mut self,
         root: TypeId,
         rows: Vec<Vec<Cell>>,
         query: Vec<Cell>,
     ) -> Result<bool, QueryError> {
+        let free = std::rc::Rc::new(ast::PatternChoice::new());
+        let rows = rows.into_iter().map(|r| (r, free.clone())).collect();
+        self.useful_choosing(root, rows, (query, free))
+    }
+    /// LANG-13: a range pattern or an alternative no value reaches, because
+    /// earlier arms or earlier alternatives of its or-pattern match every value
+    /// it matches, is rejected. Other unreachable arms are not judged here.
+    pub(super) fn unreachable_patterns(
+        &mut self,
+        root: TypeId,
+        arms: &[ast::MatchArm],
+    ) -> Result<(), QueryError> {
+        let free = std::rc::Rc::new(ast::PatternChoice::new());
+        let mut rows: Vec<Row> = vec![];
+        for arm in arms {
+            let whole = vec![Some(arm.pattern)];
+            let (alternations, range) = self.refining_patterns(arm.pattern);
+            if alternations.is_empty() {
+                if let Some(range) = range
+                    && !self.useful_choosing(root, rows.clone(), (whole.clone(), free.clone()))?
+                {
+                    self.report(
+                        const { RuleId::of("LANG-13") },
+                        self.input.tree.patterns[range.0 as usize].origin.span,
+                        "range pattern can never match: earlier arms match every value it matches",
+                    );
+                }
+            }
+            for (alternation, alternatives) in alternations {
+                let mut earlier = rows.clone();
+                for alternative in alternatives {
+                    let choice =
+                        std::rc::Rc::new(ast::PatternChoice::from([(alternation, alternative)]));
+                    if !self.useful_choosing(
+                        root,
+                        earlier.clone(),
+                        (whole.clone(), choice.clone()),
+                    )? {
+                        self.report(
+                            const { RuleId::of("LANG-13") },
+                            self.input.tree.patterns[alternative.0 as usize].origin.span,
+                            "pattern alternative can never match: earlier patterns match every value it matches",
+                        );
+                    }
+                    earlier.push((whole.clone(), choice));
+                }
+            }
+            if arm.guard.is_none() {
+                rows.push((whole, free.clone()));
+            }
+        }
+        Ok(())
+    }
+    /// A pattern's or-patterns with their alternatives, and its first range.
+    #[allow(clippy::type_complexity)]
+    fn refining_patterns(
+        &self,
+        root: ast::PatternId,
+    ) -> (
+        Vec<(ast::PatternId, Vec<ast::PatternId>)>,
+        Option<ast::PatternId>,
+    ) {
+        let mut alternations = vec![];
+        let mut range = None;
+        let mut todo = vec![root];
+        while let Some(id) = todo.pop() {
+            let Some(row) = self.body.patterns.iter().find(|p| p.pattern == id) else {
+                continue;
+            };
+            match &row.kind {
+                PatternDecisionKind::Range => {
+                    range.get_or_insert(id);
+                }
+                PatternDecisionKind::Or(alternatives) => {
+                    alternations.push((id, alternatives.clone()));
+                    todo.extend(alternatives.iter().rev());
+                }
+                _ => todo.extend(row.fields.iter().rev().map(|(_, child)| *child)),
+            }
+        }
+        (alternations, range)
+    }
+    /// The alternatives a row takes at an or-pattern cell: its choice there, or all.
+    fn alternatives_of(
+        &self,
+        cell: Cell,
+        choice: &ast::PatternChoice,
+    ) -> Option<Vec<ast::PatternId>> {
+        let id = cell?;
+        let ast::PatternKind::Or(alternatives) = &self.input.tree.patterns[id.0 as usize].kind
+        else {
+            return None;
+        };
+        Some(match choice.get(&id) {
+            Some(chosen) => vec![*chosen],
+            None => alternatives.clone(),
+        })
+    }
+    /// Usefulness by matrix specialization: whether some value matches `query`
+    /// and no row. Nested products and variants split by constructor, rather
+    /// than treating any occurrence of a variant tag as complete payload
+    /// coverage; integer and char columns split their domain at the bounds
+    /// their literal and range patterns name.
+    /// Each row, and the query, takes the alternatives its choice names and
+    /// every alternative elsewhere.
+    fn useful_choosing(
+        &mut self,
+        root: TypeId,
+        rows: Vec<Row>,
+        query: Row,
+    ) -> Result<bool, QueryError> {
         let mut todo = vec![(vec![root], rows, query)];
-        while let Some((types, rows, query)) = todo.pop() {
-            if rows.iter().any(|r| r.iter().all(|p| self.wild(*p))) {
+        while let Some((types, rows, (query, asked_choice))) = todo.pop() {
+            let rows: Vec<Row> = if types.is_empty() {
+                rows
+            } else {
+                rows.into_iter()
+                    .flat_map(
+                        |(cells, choice)| match self.alternatives_of(cells[0], &choice) {
+                            Some(alternatives) => alternatives
+                                .into_iter()
+                                .map(|a| {
+                                    let mut c = cells.clone();
+                                    c[0] = Some(a);
+                                    (c, choice.clone())
+                                })
+                                .collect(),
+                            None => vec![(cells, choice)],
+                        },
+                    )
+                    .collect()
+            };
+            if !types.is_empty()
+                && let Some(alternatives) = self.alternatives_of(query[0], &asked_choice)
+            {
+                for alternative in alternatives {
+                    let mut q = query.clone();
+                    q[0] = Some(alternative);
+                    todo.push((types.clone(), rows.clone(), (q, asked_choice.clone())));
+                }
+                continue;
+            }
+            if rows.iter().any(|(r, _)| r.iter().all(|p| self.wild(*p))) {
                 continue;
             }
             if rows.is_empty() {
@@ -479,7 +710,7 @@ impl Checker<'_, '_> {
             if let Some(primitive) = scalar {
                 let intervals: Vec<_> = rows
                     .iter()
-                    .map(|r| self.scalar_interval(r[0], primitive))
+                    .map(|(r, _)| self.scalar_interval(r[0], primitive))
                     .collect();
                 let asked = self.scalar_interval(query[0], primitive);
                 if intervals.iter().any(Option::is_some) || asked.is_some() {
@@ -499,22 +730,22 @@ impl Checker<'_, '_> {
                         .clone();
                     let kept = rows
                         .into_iter()
-                        .filter(|r| {
+                        .filter(|(r, _)| {
                             self.wild(r[0])
                                 || self.input.tree.patterns[r[0].unwrap().0 as usize].kind
                                     == spelling
                         })
-                        .map(|r| r[1..].to_vec())
+                        .map(|(r, c)| (r[1..].to_vec(), c))
                         .collect();
-                    todo.push((rest.to_vec(), kept, query[1..].to_vec()));
+                    todo.push((rest.to_vec(), kept, (query[1..].to_vec(), asked_choice)));
                     continue;
                 }
                 let defaults = rows
                     .into_iter()
-                    .filter(|r| self.wild(r[0]))
-                    .map(|r| r[1..].to_vec())
+                    .filter(|(r, _)| self.wild(r[0]))
+                    .map(|(r, c)| (r[1..].to_vec(), c))
                     .collect();
-                todo.push((rest.to_vec(), defaults, query[1..].to_vec()));
+                todo.push((rest.to_vec(), defaults, (query[1..].to_vec(), asked_choice)));
                 continue;
             };
             for (tag, fields) in choices {
@@ -523,11 +754,13 @@ impl Checker<'_, '_> {
                 };
                 let specialized = rows
                     .iter()
-                    .filter_map(|row| self.specialize(row, &tag, fields.len(), scalar))
+                    .filter_map(|(row, c)| {
+                        Some((self.specialize(row, &tag, fields.len(), scalar)?, c.clone()))
+                    })
                     .collect();
                 let mut next = fields;
                 next.extend_from_slice(rest);
-                todo.push((next, specialized, asked));
+                todo.push((next, specialized, (asked, asked_choice.clone())));
             }
         }
         Ok(false)
@@ -601,6 +834,8 @@ impl Checker<'_, '_> {
     }
 }
 type Cell = Option<ast::PatternId>;
+/// Pattern cells, and the alternatives they take at chosen or-patterns.
+type Row = (Vec<Cell>, std::rc::Rc<ast::PatternChoice>);
 /// The disjoint key intervals of a scalar domain that every named interval
 /// either contains or misses, keeping one interval per distinct set of rows
 /// that cover it (equal sets specialize identically). Inside `asked` only,

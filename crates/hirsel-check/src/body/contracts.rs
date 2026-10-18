@@ -292,7 +292,7 @@ impl Checker<'_, '_> {
                             if let Some(row) =
                                 self.body.patterns.iter().find(|p| p.pattern == pattern)
                             {
-                                pending.extend(row.fields.iter().map(|(_, p)| *p));
+                                pending.extend(row.subpatterns());
                             }
                         }
                     }

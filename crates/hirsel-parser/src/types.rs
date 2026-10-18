@@ -322,9 +322,39 @@ impl Parser<'_> {
     }
     pub(super) fn pattern(&mut self) -> Parsed<PatternId> {
         self.enter()?;
-        let result = self.pattern_inner();
+        let result = self.alternatives();
         self.depth -= 1;
         self.complete(result)
+    }
+    /// `P | Q | ..`; a parenthesized alternation inside flattens into this one.
+    fn alternatives(&mut self) -> Parsed<PatternId> {
+        let start = self.pos;
+        let first = self.pattern_inner()?;
+        if !self.at("|") {
+            return Ok(first);
+        }
+        let mut alternatives = vec![];
+        let mut next = first;
+        loop {
+            match &self.tree.patterns[next.0 as usize].kind {
+                PatternKind::Or(inner) => alternatives.extend(inner.iter().copied()),
+                _ => alternatives.push(next),
+            }
+            if !self.eat("|") {
+                break;
+            }
+            next = self.pattern_inner()?;
+        }
+        let kind = PatternKind::Or(alternatives);
+        let id = PatternId(self.tree.patterns.len() as u32);
+        let height = self.heights.pattern_expression(&kind);
+        self.check_height(height);
+        self.heights.patterns.push(height);
+        self.tree.patterns.push(Pattern {
+            origin: self.origin(start),
+            kind,
+        });
+        Ok(id)
     }
     /// A literal pattern or range bound; a negative integer keeps its sign.
     fn pattern_literal(&mut self) -> Parsed<Option<Literal>> {

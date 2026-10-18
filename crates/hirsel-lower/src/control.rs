@@ -375,11 +375,7 @@ impl Builder<'_, '_> {
                     } else {
                         let _ = self.loan(&mut value, span);
                     }
-                    if fresh {
-                        self.bind_fresh_pattern(pattern, value.place, bodies)?;
-                    } else {
-                        self.bind_pattern(pattern, value.place, bodies)?;
-                    }
+                    self.bind_refutable(pattern, value.place, fresh, None, span, bodies)?;
                     if matches!(
                         self.input.tree.patterns[pattern.0 as usize].kind,
                         hirsel_syntax::PatternKind::Wildcard
@@ -855,6 +851,37 @@ impl Builder<'_, '_> {
         self.current = Some(exit);
         Ok(())
     }
+    /// Lower a match arm's body into the match result and continue at the join.
+    #[allow(clippy::too_many_arguments)]
+    fn arm_body(
+        &mut self,
+        body: ExprId,
+        destination: PlaceId,
+        ty: TypeId,
+        lent: Option<ScopeId>,
+        scope: ScopeId,
+        parent: ScopeId,
+        states: &mut Vec<super::builder::State>,
+        next: &mut Option<BlockId>,
+        bodies: &mut Vec<Option<Body>>,
+        span: Span,
+    ) -> Result<()> {
+        if let Some(result) = self.expression(body, bodies)? {
+            self.transfer_to(destination, result, lent, span);
+            if !self.types.get(ty).unwrap().modes.relation.is_global() {
+                for (_, loan_scope) in &mut self.state.loans {
+                    if *loan_scope == scope {
+                        *loan_scope = parent;
+                    }
+                }
+            }
+            self.exit_scope(scope, span);
+            states.push(self.state.clone());
+            let join = *next.get_or_insert_with(|| self.block(span));
+            self.terminate(Terminator::Goto(join), span);
+        }
+        Ok(())
+    }
     pub fn match_expression(
         &mut self,
         id: ExprId,
@@ -888,81 +915,128 @@ impl Builder<'_, '_> {
             },
             span,
         );
-        for (index, arm) in arms.into_iter().enumerate() {
-            let hit = self.block(span);
-            let target = if arm.guard.is_some() {
-                self.block(span)
-            } else {
-                hit
+        for arm in arms {
+            let Some(choices) = self.input.tree.pattern_choices(arm.pattern) else {
+                return self.error(span, "unchecked or-pattern expansion");
             };
-            let pattern = self.table_pattern(
-                arm.pattern,
-                value.place,
-                &mut table.patterns,
-                arm.guard.is_some(),
-            )?;
-            table.arms.push(hirsel_tir::MatchArm {
-                pattern,
-                guard: arm.guard.map(|_| hit),
-                target,
-            });
-            self.current = Some(hit);
-            self.state = incoming.clone();
-            let parent = self.scope;
-            let scope = ScopeId(self.body.scopes.len() as u32);
-            self.body.scopes.push(Scope {
-                parent: Some(parent),
-                span,
-            });
-            self.scope = scope;
-            let binding_mark = self.bindings.len();
-            if arm.guard.is_some() {
-                self.guard_pattern(arm.pattern, value.place, bodies, true)?;
-            } else {
-                self.bind_pattern(arm.pattern, value.place, bodies)?;
-            }
-            if let Some(guard) = arm.guard {
-                let Some(mut guard) = self.expression(guard, bodies)? else {
-                    return self.error(span, "checked guard diverges");
+            // LANG-13: each way the arm's alternatives match is its own table
+            // arm. An arm that commits nothing shares one body; one that binds
+            // lowers its body once per way, each with that way's bindings.
+            let shared =
+                (choices.len() > 1 && !self.pattern_commits(arm.pattern)).then(|| self.block(span));
+            let mut shared_state = None;
+            for choice in &choices {
+                let from = table.arms.len() as u32 + 1;
+                let hit = match (shared, arm.guard) {
+                    (Some(body), None) => body,
+                    _ => self.block(span),
                 };
-                let _ = self.loan(&mut guard, span);
-                let condition = self.consume(guard);
-                let yes = self.block(span);
-                let no = self.block(span);
-                self.terminate(Terminator::Branch { condition, yes, no }, span);
-                let guard_state = self.state.clone();
-                self.current = Some(no);
-                self.exit_scope(scope, span);
-                self.terminate(
-                    Terminator::Match {
-                        table: table_id,
-                        from: index as u32 + 1,
-                    },
-                    span,
-                );
-                self.current = Some(yes);
-                self.state = guard_state;
-                self.exit_scope(scope, span);
-                self.terminate(Terminator::Goto(target), span);
-                self.current = Some(target);
-                self.guard_pattern(arm.pattern, value.place, bodies, false)?;
-            }
-            if let Some(result) = self.expression(arm.body, bodies)? {
-                self.transfer_to(destination, result, lent, span);
-                if !self.types.get(ty).unwrap().modes.relation.is_global() {
-                    for (_, loan_scope) in &mut self.state.loans {
-                        if *loan_scope == scope {
-                            *loan_scope = parent;
-                        }
-                    }
+                let target = match (shared, arm.guard) {
+                    (Some(body), _) => body,
+                    (None, Some(_)) => self.block(span),
+                    (None, None) => hit,
+                };
+                let pattern = self.table_pattern(
+                    arm.pattern,
+                    value.place,
+                    choice,
+                    &mut table.patterns,
+                    arm.guard.is_some(),
+                )?;
+                table.arms.push(hirsel_tir::MatchArm {
+                    pattern,
+                    guard: arm.guard.map(|_| hit),
+                    target,
+                });
+                if shared.is_some() && arm.guard.is_none() {
+                    continue;
                 }
-                self.exit_scope(scope, span);
-                states.push(self.state.clone());
-                let join = *next.get_or_insert_with(|| self.block(span));
-                self.terminate(Terminator::Goto(join), span);
+                self.current = Some(hit);
+                self.state = incoming.clone();
+                let parent = self.scope;
+                let scope = ScopeId(self.body.scopes.len() as u32);
+                self.body.scopes.push(Scope {
+                    parent: Some(parent),
+                    span,
+                });
+                self.scope = scope;
+                let binding_mark = self.bindings.len();
+                if arm.guard.is_some() {
+                    self.guard_pattern(arm.pattern, value.place, choice, bodies, true)?;
+                } else {
+                    self.bind_pattern(arm.pattern, value.place, choice, bodies)?;
+                }
+                if let Some(guard) = arm.guard {
+                    let Some(mut guard) = self.expression(guard, bodies)? else {
+                        return self.error(span, "checked guard diverges");
+                    };
+                    let _ = self.loan(&mut guard, span);
+                    let condition = self.consume(guard);
+                    let yes = self.block(span);
+                    let no = self.block(span);
+                    self.terminate(Terminator::Branch { condition, yes, no }, span);
+                    let guard_state = self.state.clone();
+                    self.current = Some(no);
+                    self.exit_scope(scope, span);
+                    self.terminate(
+                        Terminator::Match {
+                            table: table_id,
+                            from,
+                        },
+                        span,
+                    );
+                    self.current = Some(yes);
+                    self.state = guard_state;
+                    self.exit_scope(scope, span);
+                    self.terminate(Terminator::Goto(target), span);
+                    if shared.is_some() {
+                        shared_state.get_or_insert_with(|| self.state.clone());
+                        self.bindings.truncate(binding_mark);
+                        self.scope = parent;
+                        continue;
+                    }
+                    self.current = Some(target);
+                    self.guard_pattern(arm.pattern, value.place, choice, bodies, false)?;
+                }
+                self.arm_body(
+                    arm.body,
+                    destination,
+                    ty,
+                    lent,
+                    scope,
+                    parent,
+                    &mut states,
+                    &mut next,
+                    bodies,
+                    span,
+                )?;
+                self.bindings.truncate(binding_mark);
+                self.scope = parent;
             }
-            self.bindings.truncate(binding_mark);
-            self.scope = parent;
+            if let Some(body) = shared {
+                self.current = Some(body);
+                self.state = shared_state.unwrap_or_else(|| incoming.clone());
+                let parent = self.scope;
+                let scope = ScopeId(self.body.scopes.len() as u32);
+                self.body.scopes.push(Scope {
+                    parent: Some(parent),
+                    span,
+                });
+                self.scope = scope;
+                self.arm_body(
+                    arm.body,
+                    destination,
+                    ty,
+                    lent,
+                    scope,
+                    parent,
+                    &mut states,
+                    &mut next,
+                    bodies,
+                    span,
+                )?;
+                self.scope = parent;
+            }
         }
         self.body.matches[table_id.0 as usize] = table;
         if let Some(next) = next {

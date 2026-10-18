@@ -83,6 +83,9 @@ pub(super) struct Builder<'a, 'b> {
     pub snapshots: Vec<(ExprId, PlaceId)>,
     pub contract_result: Option<PlaceId>,
     pub clauses: Vec<(ExprId, PlaceId)>,
+    /// While binding one way an irrefutable pattern's alternatives match: the
+    /// slot every way moves or copies each bound local into (LANG-13).
+    pub joining: Option<BTreeMap<hirsel_types::LocalId, PlaceId>>,
 }
 impl<'a, 'b> Builder<'a, 'b> {
     pub fn new(
@@ -151,6 +154,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             snapshots: vec![],
             contract_result: None,
             clauses: vec![],
+            joining: None,
         };
         this.current = Some(this.block(Span::default()));
         if input.plans.evaluation_frame && owner == input.owner {

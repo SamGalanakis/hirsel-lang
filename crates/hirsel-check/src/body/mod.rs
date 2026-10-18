@@ -1736,6 +1736,7 @@ impl Checker<'_, '_> {
                 // The initializer retains its current modes; written locality
                 // belongs to the receiving binding and its checked storage.
                 self.pattern(pattern, received, usage, mutable, true, written, frame)?;
+                self.joined_bindings_own(pattern);
                 // LANG-15/OWN-8: only a borrowed receipt aliases the parameter.
                 // Plain reads have already selected Copy in binding_use.
                 if usage == UseKind::Borrow
@@ -1809,7 +1810,7 @@ impl Checker<'_, '_> {
                     );
                 }
                 if !self.invalid(ty) {
-                    self.unreachable_ranges(ty, &arms)?;
+                    self.unreachable_patterns(ty, &arms)?;
                 }
                 self.work.push(Work::Finish(id, expected, frame));
                 self.work
@@ -1957,6 +1958,7 @@ impl Checker<'_, '_> {
                 if marker == UseKind::Mut && matches!(protocol, ForProtocol::Map(_)) {
                     self.mutable_map_pattern(pattern);
                 }
+                self.joined_bindings_own(pattern);
                 let kind = if let Some(cursor) = cursor {
                     ForPlanKind::Cursor { cursor }
                 } else {

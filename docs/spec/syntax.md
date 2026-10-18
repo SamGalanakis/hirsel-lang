@@ -460,7 +460,8 @@ match-expr   = "match", expression, "{",
 arm          = pattern, [ "if", expression ], "=>", expression ; (* LANG-7/13 *)
 closure      = "fn", "(", list(parameter), ")", [ "->", type ],
                [ uses ], { contract }, block, [ uses ] ; (* CLO-1/4, FACT-1 *)
-pattern      = "_" | name | scalar, [ "..=", scalar ]
+pattern      = alternative, { "|", alternative } ;      (* LANG-13 *)
+alternative  = "_" | name | scalar, [ "..=", scalar ]
              | "(", ")" | "(", pattern, ")"
              | "(", pattern, ",", list(pattern), ")"
              | name, "(", pattern-fields, ")" ;          (* LANG-7/13 *)
@@ -478,7 +479,8 @@ count toward exhaustiveness. `let` rejects refutable patterns semantically, incl
 bare name that resolves to a nullary variant; parsing never guesses from capitalisation.
 Labels and payload arity are checked against the expected type. A record rest pattern is
 last and needs a comma after preceding fields (`Rec(x: x, ..)`). A range pattern is
-closed (`a..=b`) and its bounds are literals. There is no pattern alternation, no
+closed (`a..=b`) and its bounds are literals. A parenthesized alternation inside an
+alternation is the same alternation (`(A | B) | C` is `A | B | C`). There is no
 `if let`, no `let .. else` and no qualified variant constructor.
 
 A statement expression becomes the block's tail exactly when it is last and not followed

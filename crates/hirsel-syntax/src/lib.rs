@@ -632,6 +632,9 @@ pub enum PatternKind {
         fields: Vec<PatternField>,
         rest: bool,
     },
+    /// Alternatives `P | Q`, two or more, none itself an `Or`; each binds the
+    /// same names (LANG-13).
+    Or(Vec<PatternId>),
     Error,
 }
 /// Constructor pattern field; Some(label) for records, None for positional variants (LANG-12/13).
@@ -913,6 +916,81 @@ pub struct SyntaxTree {
     pub patterns: Vec<Pattern>,
     pub types: Vec<TypeExpr>,
     pub formats: Vec<FormatString>,
+}
+/// The most ways one pattern may match through its or-patterns (LANG-13): the
+/// checker rejects more, so every later phase may enumerate them.
+pub const MAX_PATTERN_CHOICES: usize = 256;
+/// One way a pattern matches: the alternative taken at each or-pattern it
+/// reaches, keyed by the or-pattern.
+pub type PatternChoice = std::collections::BTreeMap<PatternId, PatternId>;
+impl SyntaxTree {
+    /// A pattern's direct subpatterns: tuple elements, constructor fields or
+    /// alternatives.
+    pub fn pattern_children(&self, id: PatternId) -> Vec<PatternId> {
+        match &self.patterns[id.0 as usize].kind {
+            PatternKind::Tuple(parts) | PatternKind::Or(parts) => parts.clone(),
+            PatternKind::Constructor { fields, .. } => fields.iter().map(|f| f.pattern).collect(),
+            _ => vec![],
+        }
+    }
+    /// Every way `root` matches, alternatives in source order, left to right;
+    /// one empty choice when it has no or-pattern. None past `MAX_PATTERN_CHOICES`.
+    pub fn pattern_choices(&self, root: PatternId) -> Option<Vec<PatternChoice>> {
+        let choices = match &self.patterns[root.0 as usize].kind {
+            PatternKind::Or(alternatives) => {
+                let mut all = vec![];
+                for alternative in alternatives {
+                    for mut choice in self.pattern_choices(*alternative)? {
+                        choice.insert(root, *alternative);
+                        all.push(choice);
+                    }
+                    if all.len() > MAX_PATTERN_CHOICES {
+                        return None;
+                    }
+                }
+                all
+            }
+            _ => {
+                let mut all = vec![PatternChoice::new()];
+                for child in self.pattern_children(root) {
+                    let parts = self.pattern_choices(child)?;
+                    if parts.len() > 1 {
+                        if all.len() * parts.len() > MAX_PATTERN_CHOICES {
+                            return None;
+                        }
+                        all = all
+                            .iter()
+                            .flat_map(|choice| {
+                                parts.iter().map(move |part| {
+                                    let mut c = choice.clone();
+                                    c.extend(part.iter().map(|(k, v)| (*k, *v)));
+                                    c
+                                })
+                            })
+                            .collect();
+                    }
+                }
+                all
+            }
+        };
+        Some(choices)
+    }
+    /// The subpatterns one choice reaches from `root`, `root` first: an
+    /// or-pattern contributes only its chosen alternative.
+    pub fn chosen_patterns(&self, root: PatternId, choice: &PatternChoice) -> Vec<PatternId> {
+        let mut out = vec![];
+        let mut todo = vec![root];
+        while let Some(id) = todo.pop() {
+            out.push(id);
+            match &self.patterns[id.0 as usize].kind {
+                PatternKind::Or(alternatives) => {
+                    todo.extend(choice.get(&id).or(alternatives.first()));
+                }
+                _ => todo.extend(self.pattern_children(id).into_iter().rev()),
+            }
+        }
+        out
+    }
 }
 /// Parser output retains invalid tokens and orphan/EOF trivia for round-trip formatting (LANG-1).
 #[derive(Clone, Debug, Eq, PartialEq)]

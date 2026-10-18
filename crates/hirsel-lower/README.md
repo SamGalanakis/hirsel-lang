@@ -233,6 +233,12 @@ Match lowering transports CheckedBody.patterns into ordered TIR match tables.
 H publishes checked literal payloads through its private lowering plan; K adds no
 pattern acceptance decision. Guard tests borrow before commit and false guards
 restart the same table after cleanup. There is no match fallthrough sentinel.
+TIR has no or-pattern: each way an arm's alternatives match
+(`SyntaxTree::pattern_choices`) is its own table arm. An arm that commits nothing
+(no binding, no resource destructure) shares one body block; one that does lowers
+its guard and body once per way, so every copy keeps match's own views and takes.
+`let` and `for` alternatives become a table whose arms move or copy each binding
+into one slot per name (`Builder::joining`) and join; H rejects a borrowed one.
 The independent V matrix proof and direct table evaluator preserve correlated
 variant/Boolean products; generated matrices and retained-size gates cover the
 cutover. See the R4 match addendum.

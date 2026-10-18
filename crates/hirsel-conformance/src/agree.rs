@@ -572,6 +572,8 @@ impl Catalogue<'_> {
                     self.pattern(field.pattern, None, mutable, scope);
                 }
             }
+            // Every alternative binds the same names.
+            PatternKind::Or(alternatives) => self.pattern(alternatives[0], None, mutable, scope),
             _ => {}
         }
     }

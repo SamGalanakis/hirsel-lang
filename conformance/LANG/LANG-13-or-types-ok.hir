@@ -1,0 +1,10 @@
+// rule: LANG-13
+// expect: accept
+// Every alternative binds each name with the same type.
+type Size = Small(u64) | Large(u64)
+
+fn bytes(s: Size) -> u64 {
+  match s {
+    Small(n) | Large(n) => n,
+  }
+}

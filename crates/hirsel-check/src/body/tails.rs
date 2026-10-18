@@ -270,7 +270,7 @@ impl Checker<'_, '_> {
                             }),
                         );
                         if let Some(p) = self.body.patterns.iter().find(|p| p.pattern == pattern) {
-                            patterns.extend(p.fields.iter().map(|f| f.1));
+                            patterns.extend(p.subpatterns());
                         }
                     }
                 }

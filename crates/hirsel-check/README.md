@@ -38,7 +38,9 @@ that promise before publication (CLO-2, MEM-5).
 
 H emits one expression elaboration per visited expression, one scoped binding
 row per declared parameter/local/local function, and one pattern row for every
-pattern including unused binders, wildcards and recovery. Pattern field ordinals
+pattern including unused binders, wildcards and recovery; every alternative of an
+or-pattern has its own binding row for the local the first alternative declares,
+and usefulness expands alternatives the way it splits constructors. Pattern field ordinals
 refer to declaration order; rows retain source order independently. Generic
 instantiations use caller-owned actual types, preserving complete mode/sendability
 evidence. Dictionaries remain explicit ordinary call arguments. I/J enrich modes,

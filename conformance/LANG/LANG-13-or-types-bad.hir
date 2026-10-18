@@ -1,0 +1,10 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 8
+// Every alternative binds each name with the same type.
+type Size = Small(u8) | Large(u64)
+
+fn bytes(s: Size) -> u32 {
+  match s {
+    Small(n) | Large(n) => 1,
+  }
+}
