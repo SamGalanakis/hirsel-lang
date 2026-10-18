@@ -1,0 +1,85 @@
+// rule: SEM-3
+// expect: run
+// flate.read on a stored block one byte per read, truncation at the end of
+// the source, a corrupt block whose offset counts the whole input as
+// flate.inflate's does, and file_read over a gzip file.
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+fn feed(mut s: Source, mut buffer: List[u8], requested: u64) -> Result[u64, ()] uses {} {
+  let mut n: u64 = 0
+  while n < requested && s.at < core@1/bytes.len(s.data) {
+    list.push(mut buffer, s.data[s.at])
+    s.at += 1
+    n += 1
+  }
+  Ok(n)
+}
+
+// The decoded bytes and the input left after the stream.
+fn drain(format: flate.Format, take data: Bytes, capacity: u64, max: u64) -> Result[
+  (Bytes, Bytes),
+  flate.ReadError[()]
+] {
+  let mut d = flate.decoder(format)
+  let mut r = bufio.new(capacity)
+  let mut source = Source(data: take data, at: 0)
+  let mut out: List[u8] = []
+  while flate.read(mut d, mut r, mut source, feed, mut out, max)? > 0 {
+    failure.check(core@1/list.len(out) > 0, Bounds())
+  }
+  let mut rest: List[u8] = []
+  for byte in bufio.contents(r) {
+    list.push(mut rest, byte)
+  }
+  while source.at < core@1/bytes.len(source.data) {
+    list.push(mut rest, source.data[source.at])
+    source.at += 1
+  }
+  Ok((core@1/bytes.from_list(take out), core@1/bytes.from_list(take rest)))
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  test.check(
+    t,
+    drain(Raw(), b"\x01\x11\x00\xee\xffstored bytes here!", 2, 1) == Ok(
+      (b"stored bytes here", b"!")
+    )
+  )
+  test.check(
+    t,
+    drain(
+      Raw(),
+      b"\x15\xc9\xb1\x0d\x84@\x0c\x04\xc0V\xb6\x00\xf4e\x10\xd1\x849\x16\xce",
+      4,
+      64
+    ) == Error(Data(Truncated()))
+  )
+  test.check(t, flate.inflate(b"\x00\x03\x00\xfc\xffabc\x07", 64) == Error(Corrupt(9)))
+  test.check(
+    t,
+    drain(Raw(), b"\x00\x03\x00\xfc\xffabc\x07", 2, 64) == Error(Data(Corrupt(9)))
+  )
+  let dir = test.dir(
+    t,
+    [
+      (
+        path.of("sheep.gz"),
+        b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\xcb\xcfKU(\xceHM-\xe0\x02\x00\x0f'\x8b\xa9\x0a\x00\x00\x00"
+      )
+    ]
+  )
+  let mut f = file.open(dir, path.of("sheep.gz"))?
+  let mut d = flate.decoder(Gzip())
+  let mut r = bufio.new(5)
+  let mut out: List[u8] = []
+  let mut reads: u64 = 0
+  while flate.file_read(dir, mut f, mut d, mut r, mut out, 3) != Ok(0) {
+    reads += 1
+    test.check(t, reads <= 10 && core@1/list.len(out) <= 3 * reads)
+  }
+  test.check(t, out == [b'o', b'n', b'e', b' ', b's', b'h', b'e', b'e', b'p', b'\n'])
+  Ok(())
+}

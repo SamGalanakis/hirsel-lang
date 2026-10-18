@@ -1884,6 +1884,28 @@ bit (RFC 1952 section 2.3.1.2; Go ignores them) or a header CRC mismatch is
 `Header()`. Extra fields, names and comments are skipped. A CRC-32 or size
 mismatch is `Checksum()`. No partial output is returned.
 
+A `Decoder` decodes the same formats from a buffered source with bounded memory:
+
+```text
+ReadError[E] = Input(bufio.ReadError[E]) | Data(FlateError)
+fn flate.decoder(format: Format) -> unique Decoder uses {}
+@preserves_unique(out) fn flate.read[S,E](mut d: Decoder, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,flate.ReadError[E]]
+@preserves_unique(out) fn flate.file_read(dir: Dir, mut f: File of dir, mut d: Decoder, mut r: bufio.Reader, mut out: List[u8], max: u64) -> Result[u64,flate.ReadError[FileError]]
+```
+
+`read` appends at most `max` bytes to `out` and returns how many; a short count is not
+the end. It returns zero once the stream has ended: after the trailer for raw and zlib
+data, whose following bytes stay unread in `r`, and for gzip at the end of the source
+after a member. It pulls input through `bufio.read_more` only when the buffered bytes
+cannot complete the unit it is decoding (a header field, block header, code table,
+symbol or trailer), and consumes from `r` only the whole bytes it has decoded. The
+decoder keeps one block's codes and at most 64 KiB of output history; `r` holds at most
+one refill beyond the unit in progress. A source that ends inside the stream is
+`Data(Truncated())`, `Corrupt(n)` counts the stream's input from its first byte, and the
+other errors are those of the whole-buffer decoders, which share this decoder.
+Decompression output is bounded only by what the caller asks for: a whole-buffer
+`limit`, or the total of the `max` arguments.
+
 Encoding ports zlib 1.3's `deflate.c` and `trees.c` at a 32 KiB window, memory level 8
 and the default strategy, so every level writes exactly zlib's bytes:
 

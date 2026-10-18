@@ -1,0 +1,64 @@
+// rule: SEM-3
+// expect: run
+// flate.read decodes through a buffered source a few bytes at a time: zlib
+// with the bytes after its trailer left unread, and concatenated gzip members.
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+fn feed(mut s: Source, mut buffer: List[u8], requested: u64) -> Result[u64, ()] uses {} {
+  let mut n: u64 = 0
+  while n < requested && s.at < core@1/bytes.len(s.data) {
+    list.push(mut buffer, s.data[s.at])
+    s.at += 1
+    n += 1
+  }
+  Ok(n)
+}
+
+// The decoded bytes and the input left after the stream.
+fn drain(format: flate.Format, take data: Bytes, capacity: u64, max: u64) -> Result[
+  (Bytes, Bytes),
+  flate.ReadError[()]
+] {
+  let mut d = flate.decoder(format)
+  let mut r = bufio.new(capacity)
+  let mut source = Source(data: take data, at: 0)
+  let mut out: List[u8] = []
+  while flate.read(mut d, mut r, mut source, feed, mut out, max)? > 0 {
+    failure.check(core@1/list.len(out) > 0, Bounds())
+  }
+  let mut rest: List[u8] = []
+  for byte in bufio.contents(r) {
+    list.push(mut rest, byte)
+  }
+  while source.at < core@1/bytes.len(source.data) {
+    list.push(mut rest, source.data[source.at])
+    source.at += 1
+  }
+  Ok((core@1/bytes.from_list(take out), core@1/bytes.from_list(take rest)))
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let text = b"Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty."
+  test.check(
+    t,
+    drain(
+      Zlib(),
+      b"x\xda\x15\xc9\xb1\x0d\x84@\x0c\x04\xc0V\xb6\x00\xf4e\x10\xd1\x849\x16\xce\xc9Z\xf2\x19\x10\xdd\xf3\x84\xa3\x99\xe3L\x8c\x16I\x986\x0c^\x14\x1eZ\x0e\xd8\x11\xf8v\xb7\xea\xfc{\xcd8\x8f^\xd8#\xab#\x84\xea>\xd0B\xe5\xa2j\x82A\xbc!+\x0fM_4\xfa\xc5\x0d.,\xbe2\xeb\xf9\xbd\xea\xb9(\x8cTAIL",
+      7,
+      5
+    ) == Ok((copy text, b"TAIL"))
+  )
+  test.check(
+    t,
+    drain(
+      Gzip(),
+      b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\xcb\xcfKU(\xceHM-\xe0\x02\x00\x0f'\x8b\xa9\x0a\x00\x00\x00\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff+)\xcfW(\xceHM-\xe0\x02\x00\xf2\xb5f\xe7\x0a\x00\x00\x00",
+      3,
+      4
+    ) == Ok((b"one sheep\ntwo sheep\n", b""))
+  )
+  Ok(())
+}

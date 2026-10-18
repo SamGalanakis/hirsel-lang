@@ -2,7 +2,9 @@
 // huffmanBlock, dataBlock and the huffmanDecoder.init completeness rule),
 // src/compress/gzip/gunzip.go and src/compress/zlib/reader.go, golang/go
 // ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause; third-party/NOTICES.md).
-// Whole-buffer decoding with an output bound replaces the streaming readers.
+// One resumable decoder serves whole buffers and buffered sources: it stops at
+// an output bound and, when input runs out, rewinds to the start of the unit
+// (header, block header, symbol or trailer) it was reading.
 // Codes longer than Go's chunk table use a canonical count/symbol walk (RFC 1951
 // section 3.2.2) instead of link tables. Unlike Go, bytes after the stream are
 // an error.
@@ -50,27 +52,6 @@ const ORDER: Inline[u64, 19] = [
   14,
   1,
   15
-]
-
-// CRC-32 (IEEE, RFC 1952 section 8) four bits at a time: CRC[n] is the
-// remainder of nibble n under the reflected polynomial 0xEDB88320.
-const CRC: Inline[u32, 16] = [
-  0x00000000,
-  0x1DB71064,
-  0x3B6E20C8,
-  0x26D930AC,
-  0x76DC4190,
-  0x6B6B51F4,
-  0x4DB26158,
-  0x5005713C,
-  0xEDB88320,
-  0xF00F9344,
-  0xD6D6A3E8,
-  0xCB61B38C,
-  0x9B64C2B0,
-  0x86D3D2D4,
-  0xA00AE278,
-  0xBDBDF21C
 ]
 
 fn zeros(n: u64) -> unique List[u64] uses {} {
@@ -286,92 +267,6 @@ fn fixed_literal(data: Bytes, mut s: Bits) -> Result[u64, FlateError] uses {} {
 // lookup tables only once it is long enough to repay them.
 const WALKED: u64 = 64
 
-// Go huffmanBlock. A distance may reach back only within this stream's output,
-// which starts at `base`.
-@preserves_unique(out)
-fn codes_block(
-  data: Bytes,
-  mut s: Bits,
-  codes: Codes,
-  base: u64,
-  limit: u64,
-  mut out: List[u8]
-) -> Result[(), FlateError] uses {} {
-  let mut literal_table: List[u64] = []
-  let mut distance_table: List[u64] = []
-  let mut decoded: u64 = 0
-  while true {
-    decoded += 1
-    let symbol = match codes {
-      Fixed() => fixed_literal(data, mut s)?,
-      Dynamic(literal_code, distance_code) => {
-        if decoded == WALKED {
-          literal_table = fast_table(literal_code)
-          if distance_code.max > 0 {
-            distance_table = fast_table(distance_code)
-          }
-        }
-        decode(data, mut s, literal_code, literal_table)?
-      },
-    }
-    if symbol < 256 {
-      if core@1/list.len(out) >= limit {
-        return Error(TooLarge())
-      }
-      core@1/list.push(mut out, core@1/int.truncate(symbol))
-    } else if symbol == 256 {
-      return Ok(())
-    } else {
-      let (start, extra) = if symbol < 265 {
-        (symbol - 254, 0u64)
-      } else if symbol < 269 {
-        (symbol * 2 - 519, 1u64)
-      } else if symbol < 273 {
-        (symbol * 4 - 1057, 2u64)
-      } else if symbol < 277 {
-        (symbol * 8 - 2149, 3u64)
-      } else if symbol < 281 {
-        (symbol * 16 - 4365, 4u64)
-      } else if symbol < 285 {
-        (symbol * 32 - 8861, 5u64)
-      } else if symbol == 285 {
-        (258u64, 0u64)
-      } else {
-        return Error(Corrupt(consumed(s)))
-      }
-      let length = start + bits(data, mut s, extra)?
-      // The fixed distance code is 32 five-bit codes; Go rejects 30 and 31.
-      let code = match codes {
-        Fixed() => reverse8(bits(data, mut s, 5)? << 3),
-        Dynamic(_, distance_code) => decode(data, mut s, distance_code, distance_table)?,
-      }
-      let back = if code < 4 {
-        code + 1
-      } else if code < 30 {
-        let more = code - 2 >> 1
-        let low = (code & 1) << more | bits(data, mut s, more)?
-        (1u64 << more + 1) + 1 + low
-      } else {
-        return Error(Corrupt(consumed(s)))
-      }
-      let end = core@1/list.len(out)
-      if back > end - base {
-        return Error(Corrupt(consumed(s)))
-      }
-      if length > limit - end {
-        return Error(TooLarge())
-      }
-      let mut i: u64 = 0
-      while i < length {
-        let byte = out[end - back + i]
-        core@1/list.push(mut out, byte)
-        i += 1
-      }
-    }
-  }
-  Ok(())
-}
-
 // Go readHuffman.
 fn dynamic_codes(data: Bytes, mut s: Bits) -> Result[Codes, FlateError] uses {} {
   let header = bits(data, mut s, 14)?
@@ -427,243 +322,616 @@ fn dynamic_codes(data: Bytes, mut s: Bits) -> Result[Codes, FlateError] uses {} 
   }
 }
 
-@noalloc
-fn little_endian(data: Bytes, at: u64, n: u64) -> u64 uses {} {
-  let mut value: u64 = 0
+// A decoder's place in its stream. Gzip header fields carry the member's
+// flags; `Stored` the bytes left in a stored block.
+type Phase = Header | Extra(u64) | Skip(u64, u64) | Name(u64) | Comment(u64) | HeaderCheck | Block | Stored(
+  u64
+) | Symbols | Trailer | Between | End
+
+// Why decoding stopped: the stream (for gzip, the input) ended, the output
+// bound was reached, or more input is needed.
+type Status = Ended | Full | Hungry
+
+// Decoding state between calls. `mark` is the bit cursor at the start of the
+// current unit (a header, block header, symbol or trailer), restored when the
+// input ends inside it. `base` is where the member's output starts in the
+// output list and `checked` how far its checksum has read.
+type Inflate {
+  format: Format,
+  phase: Phase,
+  last: bool,
+  s: Bits,
+  mark: Bits,
+  codes: Codes,
+  literal_table: List[u64],
+  distance_table: List[u64],
+  decoded: u64,
+  copy_length: u64,
+  copy_distance: u64,
+  base: u64,
+  checked: u64,
+  size: u64,
+  crc: crc32.State,
+  header: crc32.State,
+  adler: adler32.State,
+}
+
+fn inflater(format: Format) -> unique Inflate uses {} {
+  Inflate(
+    format: format,
+    phase: Header(),
+    last: false,
+    s: Bits(pos: 0, buf: 0, count: 0),
+    mark: Bits(pos: 0, buf: 0, count: 0),
+    codes: Fixed(),
+    literal_table: [],
+    distance_table: [],
+    decoded: 0,
+    copy_length: 0,
+    copy_distance: 0,
+    base: 0,
+    checked: 0,
+    size: 0,
+    crc: crc32.new(),
+    header: crc32.new(),
+    adler: adler32.new()
+  )
+}
+
+// Extends the member's checksum over its output not yet read.
+fn sum(mut z: Inflate, out: List[u8]) -> () uses {} {
+  let end = core@1/list.len(out)
+  if end == z.checked {
+    return
+  }
+  let format = z.format
+  match format {
+    Raw() => (),
+    Zlib() => adler32.update_list(mut z.adler, out, z.checked),
+    Gzip() => crc32.update_list(mut z.crc, out, z.checked),
+  }
+  z.size += end - z.checked
+  z.checked = end
+}
+
+// Copies the pending match while the output bound allows; true once done.
+@preserves_unique(out)
+fn copy_match(mut z: Inflate, limit: u64, mut out: List[u8]) -> bool uses {} {
+  let end = core@1/list.len(out)
+  let room = limit - end
+  let n = if z.copy_length < room {
+    z.copy_length
+  } else {
+    room
+  }
+  let from = end - z.copy_distance
   let mut i: u64 = 0
   while i < n {
-    let byte: u64 = core@1/int.widen(data[at + i])
-    value = value | byte << 8 * i
+    let byte = out[from + i]
+    core@1/list.push(mut out, byte)
     i += 1
   }
-  value
+  z.copy_length -= n
+  z.copy_length == 0
 }
 
-// Go dataBlock: stored blocks start at a byte boundary.
+// Go huffmanBlock, one symbol at a time from `mark`: a distance may reach back
+// only within this member's output. Ended means the block ended.
 @preserves_unique(out)
-fn stored_block(data: Bytes, mut s: Bits, limit: u64, mut out: List[u8]) -> Result[
-  (),
+fn decode_symbols(data: Bytes, mut z: Inflate, limit: u64, mut out: List[u8]) -> Result[
+  Status,
   FlateError
 ] uses {} {
-  s.pos = consumed(s)
-  s.buf = 0
-  s.count = 0
-  let size = core@1/bytes.len(data)
-  if size - s.pos < 4 {
-    s.pos = size
-    return Error(Truncated())
+  if z.copy_length > 0 && !copy_match(mut z, limit, mut out) {
+    return Ok(Full())
   }
-  let length = little_endian(data, s.pos, 2)
-  let check = little_endian(data, s.pos + 2, 2)
-  s.pos += 4
-  if length ^ check != 65535 {
-    return Error(Corrupt(s.pos))
-  }
-  if length > limit - core@1/list.len(out) {
-    return Error(TooLarge())
-  }
-  if size - s.pos < length {
-    return Error(Truncated())
-  }
-  let mut i: u64 = 0
-  while i < length {
-    core@1/list.push(mut out, data[s.pos + i])
-    i += 1
-  }
-  s.pos += length
-  Ok(())
-}
-
-// Decodes one DEFLATE stream starting at byte `start`, appending to `out`, and
-// returns the offset after its final block.
-@preserves_unique(out)
-fn stream(data: Bytes, start: u64, limit: u64, mut out: List[u8]) -> Result[
-  u64,
-  FlateError
-] uses {} {
-  let mut s = Bits(pos: start, buf: 0, count: 0)
-  let base = core@1/list.len(out)
-  let mut last = false
-  while !last {
-    last = bits(data, mut s, 1)? == 1
-    let kind = bits(data, mut s, 2)?
-    if kind == 0 {
-      stored_block(data, mut s, limit, mut out)?
-    } else if kind == 1 {
-      codes_block(data, mut s, Fixed(), base, limit, mut out)?
-    } else if kind == 2 {
-      let codes = dynamic_codes(data, mut s)?
-      codes_block(data, mut s, codes, base, limit, mut out)?
+  let codes = z.codes
+  while true {
+    z.mark = z.s
+    z.decoded += 1
+    let symbol = match codes {
+      Fixed() => fixed_literal(data, mut z.s)?,
+      Dynamic(literal_code, distances) => {
+        if z.decoded == WALKED {
+          z.literal_table = fast_table(literal_code)
+          if distances.max > 0 {
+            z.distance_table = fast_table(distances)
+          }
+        }
+        decode(data, mut z.s, literal_code, z.literal_table)?
+      },
+    }
+    if symbol < 256 {
+      if core@1/list.len(out) >= limit {
+        z.s = z.mark
+        return Ok(Full())
+      }
+      core@1/list.push(mut out, core@1/int.truncate(symbol))
+    } else if symbol == 256 {
+      return Ok(Ended())
     } else {
-      return Error(Corrupt(consumed(s)))
+      let (start, extra) = if symbol < 265 {
+        (symbol - 254, 0u64)
+      } else if symbol < 269 {
+        (symbol * 2 - 519, 1u64)
+      } else if symbol < 273 {
+        (symbol * 4 - 1057, 2u64)
+      } else if symbol < 277 {
+        (symbol * 8 - 2149, 3u64)
+      } else if symbol < 281 {
+        (symbol * 16 - 4365, 4u64)
+      } else if symbol < 285 {
+        (symbol * 32 - 8861, 5u64)
+      } else if symbol == 285 {
+        (258u64, 0u64)
+      } else {
+        return Error(Corrupt(consumed(z.s)))
+      }
+      let length = start + bits(data, mut z.s, extra)?
+      // The fixed distance code is 32 five-bit codes; Go rejects 30 and 31.
+      let code = match codes {
+        Fixed() => reverse8(bits(data, mut z.s, 5)? << 3),
+        Dynamic(_, distances) => decode(data, mut z.s, distances, z.distance_table)?,
+      }
+      let back = if code < 4 {
+        code + 1
+      } else if code < 30 {
+        let more = code - 2 >> 1
+        let low = (code & 1) << more | bits(data, mut z.s, more)?
+        (1u64 << more + 1) + 1 + low
+      } else {
+        return Error(Corrupt(consumed(z.s)))
+      }
+      if back > core@1/list.len(out) - z.base {
+        return Error(Corrupt(consumed(z.s)))
+      }
+      z.copy_length = length
+      z.copy_distance = back
+      if !copy_match(mut z, limit, mut out) {
+        return Ok(Full())
+      }
     }
   }
-  Ok(consumed(s))
+  Ok(Ended())
 }
 
-/// Decodes a raw DEFLATE stream (RFC 1951) that ends exactly at the end of
-/// `data`, producing at most `limit` bytes.
-pub fn inflate(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {} {
+// Starts a member's output at the end of `out`.
+fn begin(mut z: Inflate, out: List[u8]) -> () uses {} {
+  let end = core@1/list.len(out)
+  z.base = end
+  z.checked = end
+  z.size = 0
+  z.crc = crc32.new()
+  z.adler = adler32.new()
+  z.phase = Block()
+}
+
+// The gzip header field after those `flags` (RFC 1952 section 2.3.1) has
+// already read; `after` is the bit of the field just read, or 0 for none.
+fn next_field(flags: u64, after: u64) -> Phase uses {} {
+  if after < 4 && flags & 4 != 0 {
+    Extra(flags)
+  } else if after < 8 && flags & 8 != 0 {
+    Name(flags)
+  } else if after < 16 && flags & 16 != 0 {
+    Comment(flags)
+  } else if flags & 2 != 0 {
+    HeaderCheck()
+  } else {
+    Block()
+  }
+}
+
+// Header bytes read since `mark`, for the gzip header CRC.
+fn header_bytes(mut z: Inflate, data: Bytes) -> () uses {} {
+  let start = consumed(z.mark)
+  let end = consumed(z.s)
+  crc32.update(mut z.header, core@1/bytes.slice(data, start, end))
+}
+
+// Unread whole bytes from the cursor, which is at a byte boundary.
+@noalloc
+fn unread_bytes(data: Bytes, s: Bits) -> u64 uses {} {
+  core@1/bytes.len(data) - s.pos
+}
+
+// Advances one unit. Truncated leaves the cursor inside the unit, to be
+// restored to `mark`; None means continue.
+@preserves_unique(out)
+fn advance(data: Bytes, mut z: Inflate, last_input: bool, limit: u64, mut out: List[u8]) -> Result[
+  Option[Status],
+  FlateError
+] uses {} {
+  let phase = z.phase
+  match phase {
+    Header() => {
+      let format = z.format
+      match format {
+        Raw() => begin(mut z, out),
+        Zlib() => {
+          let method = bits(data, mut z.s, 8)?
+          let flags = bits(data, mut z.s, 8)?
+          if method & 15 != 8 || method >> 4 > 7 || (method * 256 + flags) % 31 != 0 || flags & 0x20 != 0 {
+            return Error(Header())
+          }
+          begin(mut z, out)
+        },
+        Gzip() => {
+          let magic = bits(data, mut z.s, 16)?
+          let method = bits(data, mut z.s, 8)?
+          let flags = bits(data, mut z.s, 8)?
+          let _ = bits(data, mut z.s, 48)?
+          if magic != 0x8B1F || method != 8 || flags & 0xE0 != 0 {
+            return Error(Header())
+          }
+          z.header = crc32.new()
+          header_bytes(mut z, data)
+          begin(mut z, out)
+          z.phase = next_field(flags, 0)
+        },
+      }
+    },
+    Extra(flags) => {
+      let length = bits(data, mut z.s, 16)?
+      header_bytes(mut z, data)
+      z.phase = Skip(flags, length)
+    },
+    Skip(flags, left) => {
+      let have = unread_bytes(data, z.s)
+      let n = if left < have {
+        left
+      } else {
+        have
+      }
+      z.s.pos += n
+      header_bytes(mut z, data)
+      if n < left {
+        z.phase = Skip(flags, left - n)
+        if last_input {
+          return Error(Truncated())
+        }
+        return Ok(Some(Hungry()))
+      }
+      z.phase = next_field(flags, 4)
+    },
+    Name(flags) | Comment(flags) => {
+      let field: u64 = match phase {
+        Name(_) => 8,
+        _ => 16,
+      }
+      let size = core@1/bytes.len(data)
+      let mut found = false
+      while z.s.pos < size && !found {
+        found = data[z.s.pos] == 0
+        z.s.pos += 1
+      }
+      header_bytes(mut z, data)
+      if !found {
+        if last_input {
+          return Error(Truncated())
+        }
+        return Ok(Some(Hungry()))
+      }
+      z.phase = next_field(flags, field)
+    },
+    HeaderCheck() => {
+      let stored = bits(data, mut z.s, 16)?
+      let header = z.header
+      let expected: u64 = core@1/int.widen(crc32.finish(take header) & 0xFFFF)
+      if stored != expected {
+        return Error(Header())
+      }
+      z.phase = Block()
+    },
+    Block() => {
+      let is_last = bits(data, mut z.s, 1)? == 1
+      let kind = bits(data, mut z.s, 2)?
+      if kind == 0 {
+        // Go dataBlock: stored blocks start at a byte boundary.
+        let partial = z.s.count % 8
+        let _ = bits(data, mut z.s, partial)?
+        let length = bits(data, mut z.s, 16)?
+        let check = bits(data, mut z.s, 16)?
+        if length ^ check != 65535 {
+          return Error(Corrupt(consumed(z.s)))
+        }
+        z.phase = Stored(length)
+      } else if kind == 1 {
+        z.codes = Fixed()
+        z.phase = Symbols()
+      } else if kind == 2 {
+        z.codes = dynamic_codes(data, mut z.s)?
+        z.phase = Symbols()
+      } else {
+        return Error(Corrupt(consumed(z.s)))
+      }
+      z.last = is_last
+      z.literal_table = []
+      z.distance_table = []
+      z.decoded = 0
+    },
+    Stored(left) => {
+      let mut remaining = left
+      while remaining > 0 && z.s.count >= 8 && core@1/list.len(out) < limit {
+        core@1/list.push(mut out, core@1/int.truncate(bits(data, mut z.s, 8)?))
+        remaining -= 1
+      }
+      let room = limit - core@1/list.len(out)
+      let have = unread_bytes(data, z.s)
+      let mut n = remaining
+      if room < n {
+        n = room
+      }
+      if have < n {
+        n = have
+      }
+      let mut i: u64 = 0
+      while i < n {
+        core@1/list.push(mut out, data[z.s.pos + i])
+        i += 1
+      }
+      z.s.pos += n
+      remaining -= n
+      if remaining > 0 {
+        z.phase = Stored(remaining)
+        if core@1/list.len(out) >= limit {
+          return Ok(Some(Full()))
+        }
+        if last_input {
+          return Error(Truncated())
+        }
+        return Ok(Some(Hungry()))
+      }
+      z.phase = if z.last {
+        Trailer()
+      } else {
+        Block()
+      }
+    },
+    Symbols() => {
+      let status = decode_symbols(data, mut z, limit, mut out)?
+      match status {
+        Ended() => {
+          z.phase = if z.last {
+            Trailer()
+          } else {
+            Block()
+          }
+        },
+        _ => return Ok(Some(status)),
+      }
+    },
+    Trailer() => {
+      let format = z.format
+      match format {
+        Raw() => {
+          z.phase = End()
+        },
+        Zlib() => {
+          let partial = z.s.count % 8
+          let _ = bits(data, mut z.s, partial)?
+          // Adler-32 (RFC 1950 section 8.2), most significant byte first.
+          let mut stored: u64 = 0
+          let mut i: u64 = 0
+          while i < 4 {
+            stored = stored << 8 | bits(data, mut z.s, 8)?
+            i += 1
+          }
+          sum(mut z, out)
+          let adler = z.adler
+          let expected: u64 = core@1/int.widen(adler32.finish(take adler))
+          if stored != expected {
+            return Error(Checksum())
+          }
+          z.phase = End()
+        },
+        Gzip() => {
+          let partial = z.s.count % 8
+          let _ = bits(data, mut z.s, partial)?
+          let stored_crc = bits(data, mut z.s, 32)?
+          let stored_size = bits(data, mut z.s, 32)?
+          sum(mut z, out)
+          let crc = z.crc
+          let expected: u64 = core@1/int.widen(crc32.finish(take crc))
+          if stored_crc != expected || stored_size != z.size & 0xFFFFFFFF {
+            return Error(Checksum())
+          }
+          z.phase = Between()
+        },
+      }
+    },
+    Between() => {
+      if z.s.count == 0 && unread_bytes(data, z.s) == 0 {
+        if last_input {
+          return Ok(Some(Ended()))
+        }
+        return Ok(Some(Hungry()))
+      }
+      z.phase = Header()
+    },
+    End() => return Ok(Some(Ended())),
+  }
+  Ok(None())
+}
+
+// Decodes from `data` until the stream ends, `out` reaches `limit` bytes or
+// the input runs out; `last_input` says no input follows `data`.
+@preserves_unique(out)
+fn run_inflate(
+  data: Bytes,
+  mut z: Inflate,
+  last_input: bool,
+  limit: u64,
+  mut out: List[u8]
+) -> Result[Status, FlateError] uses {} {
+  while true {
+    z.mark = z.s
+    match advance(data, mut z, last_input, limit, mut out) {
+      Ok(None()) => (),
+      Ok(Some(status)) => return Ok(status),
+      Error(Truncated()) => {
+        z.s = z.mark
+        if last_input {
+          return Error(Truncated())
+        }
+        return Ok(Hungry())
+      },
+      Error(error) => return Error(error),
+    }
+  }
+  Ok(Hungry())
+}
+
+fn decode_all(format: Format, data: Bytes, limit: u64) -> Result[
+  unique Bytes,
+  FlateError
+] uses {} {
+  let mut z = inflater(format)
   let mut out: List[u8] = []
-  let end = stream(data, 0, limit, mut out)?
+  match run_inflate(data, mut z, true, limit, mut out)? {
+    Ended() => (),
+    _ => return Error(TooLarge()),
+  }
+  let end = consumed(z.s)
   if end < core@1/bytes.len(data) {
     return Error(TrailingData(end))
   }
   Ok(core@1/bytes.from_list(take out))
 }
 
-@noalloc
-fn crc_byte(crc: u32, byte: u8) -> u32 uses {} {
-  let value: u32 = core@1/int.widen(byte)
-  let c = crc ^ value
-  let low: u64 = core@1/int.widen(c & 15)
-  let next = c >> 4 ^ CRC[low]
-  let high: u64 = core@1/int.widen(next & 15)
-  next >> 4 ^ CRC[high]
-}
-
-@noalloc
-fn crc_bytes(data: Bytes, start: u64, end: u64) -> u32 uses {} {
-  let mut c = ~0u32
-  let mut i = start
-  while i < end {
-    c = crc_byte(c, data[i])
-    i += 1
-  }
-  ~c
-}
-
-@noalloc
-fn crc_list(data: List[u8], start: u64) -> u32 uses {} {
-  let mut c = ~0u32
-  let mut i = start
-  while i < core@1/list.len(data) {
-    c = crc_byte(c, data[i])
-    i += 1
-  }
-  ~c
-}
-
-// The offset after the zero byte ending a field that starts at `at`.
-fn zero_terminated(data: Bytes, at: u64) -> Result[u64, FlateError] uses {} {
-  let mut i = at
-  while i < core@1/bytes.len(data) {
-    if data[i] == 0 {
-      return Ok(i + 1)
-    }
-    i += 1
-  }
-  Error(Truncated())
-}
-
-// Go Reader.readHeader and Read for one member; returns the offset after it.
-@preserves_unique(out)
-fn gzip_member(data: Bytes, start: u64, limit: u64, mut out: List[u8]) -> Result[
-  u64,
-  FlateError
-] uses {} {
-  let size = core@1/bytes.len(data)
-  if size - start < 10 {
-    return Error(Truncated())
-  }
-  if data[start] != 0x1F || data[start + 1] != 0x8B || data[start + 2] != 8 {
-    return Error(Header())
-  }
-  let flags = data[start + 3]
-  // RFC 1952 section 2.3.1.2: reserved flag bits must be zero (Go ignores them).
-  if flags & 0xE0 != 0 {
-    return Error(Header())
-  }
-  let mut at = start + 10
-  if flags & 4 != 0 {
-    if size - at < 2 {
-      return Error(Truncated())
-    }
-    let extra = little_endian(data, at, 2)
-    if size - at - 2 < extra {
-      return Error(Truncated())
-    }
-    at += 2 + extra
-  }
-  if flags & 8 != 0 {
-    at = zero_terminated(data, at)?
-  }
-  if flags & 16 != 0 {
-    at = zero_terminated(data, at)?
-  }
-  if flags & 2 != 0 {
-    if size - at < 2 {
-      return Error(Truncated())
-    }
-    let expected: u64 = core@1/int.widen(crc_bytes(data, start, at) & 0xFFFF)
-    if little_endian(data, at, 2) != expected {
-      return Error(Header())
-    }
-    at += 2
-  }
-  let base = core@1/list.len(out)
-  let end = stream(data, at, limit, mut out)?
-  if size - end < 8 {
-    return Error(Truncated())
-  }
-  let crc: u64 = core@1/int.widen(crc_list(out, base))
-  let length = core@1/list.len(out) - base
-  if little_endian(data, end, 4) != crc || little_endian(data, end + 4, 4) != length & 0xFFFFFFFF {
-    return Error(Checksum())
-  }
-  Ok(end + 8)
+/// Decodes a raw DEFLATE stream (RFC 1951) that ends exactly at the end of
+/// `data`, producing at most `limit` bytes.
+pub fn inflate(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {} {
+  decode_all(Raw(), data, limit)
 }
 
 /// Decodes gzip data (RFC 1952): one or more members, concatenated, producing
 /// at most `limit` bytes in total. Bytes after a member must begin another.
 pub fn gzip_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {} {
-  let mut out: List[u8] = []
-  let mut at = gzip_member(data, 0, limit, mut out)?
-  while at < core@1/bytes.len(data) {
-    at = gzip_member(data, at, limit, mut out)?
-  }
-  Ok(core@1/bytes.from_list(take out))
+  decode_all(Gzip(), data, limit)
 }
 
 /// Decodes zlib data (RFC 1950) without a preset dictionary, producing at most
 /// `limit` bytes. The stream must end exactly at the end of `data`.
 pub fn zlib_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {} {
-  let size = core@1/bytes.len(data)
-  if size < 2 {
-    return Error(Truncated())
+  decode_all(Zlib(), data, limit)
+}
+
+/// Streaming decompression state for one stream of a format: its position,
+/// the current block's codes, the last 32 KiB of output and the input bytes
+/// read so far, which `Corrupt` offsets count from.
+pub opaque type Decoder: copyable + inert + noalloc_drop uses {} {
+  state: Inflate,
+  window: List[u8],
+  offset: u64,
+}
+
+/// A read from a buffered source failed, or its bytes do not decode.
+pub type ReadError[E] = Input(bufio.ReadError[E]) | Data(FlateError)
+
+pub fn decoder(format: Format) -> unique Decoder uses {} {
+  Decoder(state: inflater(format), window: [], offset: 0)
+}
+
+/// Appends at most `max` decoded bytes to `out` and returns how many, zero
+/// once the stream has ended: after its trailer for raw and zlib data, and at
+/// the end of the source for gzip members. Input is read through `r` only as
+/// decoding needs it, and bytes after a raw or zlib stream stay unread in `r`.
+@preserves_unique(out)
+pub fn read[S, E](
+  mut d: Decoder,
+  mut r: bufio.Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  mut out: List[u8],
+  max: u64
+) -> Result[u64, ReadError[E]] uses {refill} {
+  if max == 0 {
+    return Ok(0)
   }
-  let method = data[0]
-  let flags = data[1]
-  let check = little_endian(data, 1, 1) + 256 * little_endian(data, 0, 1)
-  if method & 15 != 8 || method >> 4 > 7 || check % 31 != 0 || flags & 0x20 != 0 {
-    return Error(Header())
+  let mut last_input = false
+  while true {
+    let data = bufio.contents(r)
+    let start = core@1/list.len(d.window)
+    let status = match run_inflate(
+      data,
+      mut d.state,
+      last_input,
+      start + max,
+      mut d.window
+    ) {
+      Ok(status) => status,
+      Error(Corrupt(at)) => return Error(Data(Corrupt(d.offset + at))),
+      Error(error) => return Error(Data(error)),
+    }
+    let s = d.state.s
+    let used = consumed(s)
+    let partial = s.count % 8
+    d.state.s = Bits(pos: 0, buf: s.buf & (1u64 << partial) - 1, count: partial)
+    bufio.consume(mut r, used)
+    d.offset += used
+    sum(mut d.state, d.window)
+    let end = core@1/list.len(d.window)
+    let mut i = start
+    while i < end {
+      core@1/list.push(mut out, d.window[i])
+      i += 1
+    }
+    // Keep the last 32 KiB once the window passes 64 KiB.
+    if end > 65536 {
+      let cut = end - 32768
+      let mut kept: List[u8] = []
+      let mut j = cut
+      while j < end {
+        core@1/list.push(mut kept, d.window[j])
+        j += 1
+      }
+      d.window = take kept
+      d.state.base = if d.state.base > cut {
+        d.state.base - cut
+      } else {
+        0
+      }
+      d.state.checked -= cut
+    }
+    if end > start {
+      return Ok(end - start)
+    }
+    match status {
+      Hungry() => {
+        if bufio.read_more(mut r, mut source, refill, 65536) ? Input == 0 {
+          last_input = true
+        }
+      },
+      _ => return Ok(0),
+    }
   }
-  let mut out: List[u8] = []
-  let end = stream(data, 2, limit, mut out)?
-  if size - end < 4 {
-    return Error(Truncated())
-  }
-  // Adler-32 (RFC 1950 section 8.2), stored most significant byte first.
-  let mut a: u64 = 1
-  let mut b: u64 = 0
-  for byte in out {
-    let value: u64 = core@1/int.widen(byte)
-    a = (a + value) % 65521
-    b = (b + a) % 65521
-  }
-  let mut stored: u64 = 0
-  let mut i: u64 = 0
-  while i < 4 {
-    stored = stored << 8 | little_endian(data, end + i, 1)
-    i += 1
-  }
-  if stored != b << 16 | a {
-    return Error(Checksum())
-  }
-  if end + 4 < size {
-    return Error(TrailingData(end + 4))
-  }
-  Ok(core@1/bytes.from_list(take out))
+  Ok(0)
+}
+
+/// `read` from a file through the buffered reader `r`.
+@preserves_unique(out)
+pub fn file_read(
+  dir: Dir,
+  mut f: File of dir,
+  mut d: Decoder,
+  mut r: bufio.Reader,
+  mut out: List[u8],
+  max: u64
+) -> Result[u64, ReadError[FileError]] {
+  read(
+    mut d,
+    mut r,
+    mut f,
+    fn(mut source: File of dir, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(dir, mut source, mut buffer, requested)
+    },
+    mut out,
+    max
+  )
 }
 
 // Encoding: a port of zlib 1.3 deflate.c (fill_window, longest_match,

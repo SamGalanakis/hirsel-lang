@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1174 exported definitions; 318 variants.
+1181 exported definitions; 320 variants.
 
 ## Types and roots
 
@@ -1495,6 +1495,14 @@ References: [`std@1/adler32/State`](#def-std_401_2fadler32_2fState)
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/adler32/State`](#def-std_401_2fadler32_2fState)
 
+<a id="def-std_401_2fadler32_2fupdate_5flist"></a>
+
+- `@noalloc pub fn adler32.update_list(mut state: State, data: List[u8], start: u64) -> () uses {}`
+
+Extends the checksum with the bytes of a list builder from `start` on.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/adler32/State`](#def-std_401_2fadler32_2fState)
+
 
 ## arena
 
@@ -2728,6 +2736,14 @@ References: [`std@1/crc32/State`](#def-std_401_2fcrc32_2fState)
 - `@noalloc pub fn crc32.update(mut state: State, data: Bytes) -> () uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/crc32/State`](#def-std_401_2fcrc32_2fState)
+
+<a id="def-std_401_2fcrc32_2fupdate_5flist"></a>
+
+- `@noalloc pub fn crc32.update_list(mut state: State, data: List[u8], start: u64) -> () uses {}`
+
+Extends the checksum with the bytes of a list builder from `start` on.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/crc32/State`](#def-std_401_2fcrc32_2fState)
 
 
 ## crc32c
@@ -4030,6 +4046,14 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 
 ## flate
 
+<a id="def-std_401_2fflate_2fDecoder"></a>
+
+- `pub opaque type flate.Decoder: copyable + inert + noalloc_drop uses {}`
+
+Streaming decompression state for one stream of a format: its position,
+the current block's codes, the last 32 KiB of output and the input bytes
+read so far, which `Corrupt` offsets count from.
+
 <a id="def-std_401_2fflate_2fEncoder"></a>
 
 - `pub opaque type flate.Encoder: copyable + inert + noalloc_drop uses {}`
@@ -4108,6 +4132,36 @@ Variant of flate.Format.
 
 Variant of flate.Format.
 
+<a id="def-std_401_2fflate_2fReadError"></a>
+
+- `pub type flate.ReadError[E] = Input(bufio.ReadError[E]) | Data(FlateError)`
+
+A read from a buffered source failed, or its bytes do not decode.
+
+References: [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fflate_2fReadError_23Data"></a>
+
+- `Data(FlateError) -> flate.ReadError[E]`
+
+Variant of flate.ReadError.
+
+References: [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fflate_2fReadError_23Input"></a>
+
+- `Input(bufio.ReadError[E]) -> flate.ReadError[E]`
+
+Variant of flate.ReadError.
+
+References: [`std@1/bufio/ReadError`](#def-std_401_2fbufio_2fReadError)
+
+<a id="def-std_401_2fflate_2fdecoder"></a>
+
+- `pub fn flate.decoder(format: Format) -> unique Decoder uses {}`
+
+References: [`std@1/flate/Decoder`](#def-std_401_2fflate_2fDecoder), [`std@1/flate/Format`](#def-std_401_2fflate_2fFormat)
+
 <a id="def-std_401_2fflate_2fdeflate"></a>
 
 - `@track_caller pub fn flate.deflate(data: Bytes, level: u64) -> unique Bytes uses {}`
@@ -4132,6 +4186,14 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 A compressor at `level` 0 (stored) through 9 (smallest), writing `format`.
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/Encoder`](#def-std_401_2fflate_2fEncoder), [`std@1/flate/Format`](#def-std_401_2fflate_2fFormat)
+
+<a id="def-std_401_2fflate_2ffile_5fread"></a>
+
+- `@preserves_unique(out) pub fn flate.file_read( dir: Dir, mut f: File of dir, mut d: Decoder, mut r: bufio.Reader, mut out: List[u8], max: u64 ) -> Result[u64, ReadError[FileError]]`
+
+`read` from a file through the buffered reader `r`.
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/File`](#def-core_401_2fFile), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/flate/Decoder`](#def-std_401_2fflate_2fDecoder), [`std@1/flate/ReadError`](#def-std_401_2fflate_2fReadError)
 
 <a id="def-std_401_2fflate_2ffinish"></a>
 
@@ -4168,6 +4230,17 @@ Decodes a raw DEFLATE stream (RFC 1951) that ends exactly at the end of
 `data`, producing at most `limit` bytes.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fflate_2fread"></a>
+
+- `@preserves_unique(out) pub fn flate.read[S, E]( mut d: Decoder, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E], mut out: List[u8], max: u64 ) -> Result[u64, ReadError[E]] uses {refill}`
+
+Appends at most `max` decoded bytes to `out` and returns how many, zero
+once the stream has ended: after its trailer for raw and zlib data, and at
+the end of the source for gzip members. Input is read through `r` only as
+decoding needs it, and bytes after a raw or zlib stream stay unread in `r`.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bufio/Reader`](#def-std_401_2fbufio_2fReader), [`std@1/flate/Decoder`](#def-std_401_2fflate_2fDecoder), [`std@1/flate/ReadError`](#def-std_401_2fflate_2fReadError)
 
 <a id="def-std_401_2fflate_2fzlib_5fdecode"></a>
 
