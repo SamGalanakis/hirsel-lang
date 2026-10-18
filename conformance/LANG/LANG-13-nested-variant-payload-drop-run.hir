@@ -1,0 +1,68 @@
+// rule: LANG-13
+// expect: run
+// stdout: obj 2
+// stdout: num
+// stdout: error
+// stdout: same
+// stdout: differ
+// stdout: none
+// A nested pattern over an owned value proves an inner variant on some paths
+// only, and a tuple pattern over a borrowed field takes its parts into the
+// match temporary. Cleanup releases exactly what each path still owns.
+type V = Num(u64) | Obj(Map[String, u64])
+
+type Query {
+  field: Option[(String, String)],
+}
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn object(take v: Result[V, u64]) -> Option[Map[String, u64]] {
+  match v {
+    Ok(Obj(members)) => Some(copy members),
+    _ => None(),
+  }
+}
+
+fn describe(take v: Result[V, u64]) -> String {
+  match object(take v) {
+    Some(m) => match map.get(m, "b") {
+      Some(2) => "obj 2\n",
+      _ => "obj ?\n",
+    },
+    None() => "none\n",
+  }
+}
+
+fn same(q: Query) -> String {
+  match q.field {
+    Some((key, wanted)) => if key == wanted {
+      "same\n"
+    } else {
+      "differ\n"
+    },
+    None() => "none\n",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let mut m: Map[String, u64] = map.empty()
+  map.insert(mut m, "a", 1)
+  map.insert(mut m, "b", 2)
+  out.print(output, describe(Ok(Obj(take m)))) ? Output
+  let num = match object(Ok(Num(7))) {
+    Some(_) => "obj\n",
+    None() => "num\n",
+  }
+  out.print(output, num) ? Output
+  let error = match object(Error(3)) {
+    Some(_) => "obj\n",
+    None() => "error\n",
+  }
+  out.print(output, error) ? Output
+  out.print(output, same(Query(field: Some(("sheep", "sheep"))))) ? Output
+  out.print(output, same(Query(field: Some(("sheep", "goat"))))) ? Output
+  out.print(output, same(Query(field: None()))) ? Output
+  Ok(())
+}

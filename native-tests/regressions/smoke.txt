@@ -10,6 +10,7 @@ conformance/DROP/DROP-2-mut-replacement-finalizer-failure.hir
 conformance/FACT/FACT-1-requires-false.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-run.hir
 conformance/GEN/GEN-1-generic-float-ieee.hir
+conformance/LANG/LANG-13-nested-variant-payload-drop-run.hir
 conformance/LANG/LANG-3-take-temporaries-early-exit.hir
 conformance/OWN/OWN-2-callee-owns-on-error.hir
 conformance/PROV/PROV-1-copied-prefix-write-run.hir

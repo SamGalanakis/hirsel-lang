@@ -2828,28 +2828,104 @@ impl<'p, S: Stage> Machine<'p, S> {
             layout = field.layout;
         }
         let extent = &self.ledger.check(ptr)?.extent;
-        if let Some(resource) = extent.resources.get(&self.ledger.path(ptr))
-            && self.ledger.resources[resource.0 as usize].state == ResourceState::FieldsPending
-        {
-            let end = ptr.offset + self.size(layout)?;
-            let cells = extent
-                .cells
-                .range(ptr.offset..end)
-                .any(|(_, c)| matches!(c, Cell::Data { counted: true, .. }));
-            let resources = extent
-                .resources
-                .iter()
-                .filter(|(path, _)| path.starts_with(&self.ledger.path(ptr)))
-                .any(|(_, r)| {
-                    matches!(
-                        self.ledger.resources[r.0 as usize].state,
-                        ResourceState::Live | ResourceState::Finalizing
-                    )
-                });
-            return Ok(cells || resources);
+        let path = self.ledger.path(ptr);
+        let record = self.record(layout)?;
+        if record.drop.is_empty() && record.finalizer.is_none() {
+            // A plain part keeps initialized-byte semantics.
+            return Ok(self.initialized(extent, ptr.offset, layout)?.1
+                || extent.resources.contains_key(&path));
         }
-        Ok(self.initialized(extent, ptr.offset, layout)?.1
-            || extent.resources.contains_key(&self.ledger.path(ptr)))
+        // Any other part holds content while an owner remains in its active
+        // storage.
+        self.owners(extent, ptr.offset, layout, path)
+    }
+
+    /// Whether an owner remains in the active storage of a value of `layout`
+    /// at `offset` and `path`: a data handle not yet taken, or a resource not
+    /// yet finalized. Inactive variants, plain parts and the fields a pending
+    /// finalizer already completed own nothing.
+    fn owners(
+        &self,
+        extent: &Extent,
+        offset: u64,
+        layout: LayoutId,
+        path: Vec<ProjectionStep<u64>>,
+    ) -> Checked<bool> {
+        let mut work = vec![(offset, layout, path)];
+        while let Some((offset, layout, path)) = work.pop() {
+            let record = self.record(layout)?;
+            if record.drop.is_empty() && record.finalizer.is_none() {
+                continue;
+            }
+            if let Some(r) = extent.resources.get(&path) {
+                match self.ledger.resources[r.0 as usize].state {
+                    ResourceState::Live | ResourceState::Finalizing => return Ok(true),
+                    ResourceState::FieldsPending => {}
+                    ResourceState::Dead => continue,
+                }
+            }
+            let size = self.size(layout)?;
+            if let Some(tag) = &record.tag {
+                let width = if tag.form == TagForm::Ordinal {
+                    4
+                } else {
+                    self.word
+                };
+                let tag_at = offset + tag.offset;
+                if !extent.all_init(tag_at, width) {
+                    continue;
+                }
+                let active = extent.active(tag_at, tag.form, self.word)?;
+                let active = tag
+                    .variants
+                    .iter()
+                    .find(|v| v.ordinal == active)
+                    .ok_or_else(|| err(V::Malformed, "unknown variant tag"))?;
+                for field in &active.fields {
+                    let mut at = path.clone();
+                    at.push(ProjectionStep::VariantField {
+                        variant: active.ordinal,
+                        field: field.ordinal,
+                    });
+                    work.push((offset + field.offset, field.layout, at));
+                }
+                continue;
+            }
+            match &record.kind {
+                // A run-context handle, such as a file's, owns its word until
+                // a move takes it.
+                LayoutKind::Handle => {
+                    if extent.any_init(offset, size) {
+                        return Ok(true);
+                    }
+                }
+                LayoutKind::Aggregate | LayoutKind::Resource | LayoutKind::Opaque { .. } => {
+                    for field in &record.fields {
+                        let mut at = path.clone();
+                        at.push(ProjectionStep::Field(field.ordinal));
+                        work.push((offset + field.offset, field.layout, at));
+                    }
+                }
+                LayoutKind::Inline { element, count } => {
+                    let stride = self.size(*element)?;
+                    for i in 0..*count {
+                        let mut at = path.clone();
+                        at.push(ProjectionStep::Index(i));
+                        work.push((offset + i * stride, *element, at));
+                    }
+                }
+                _ => {
+                    if extent
+                        .cells
+                        .range(offset..offset + size)
+                        .any(|(_, c)| matches!(c, Cell::Data { .. }))
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 
     fn mask(&self, f: &Frame, live: MaskRef) -> Checked<Option<Vec<bool>>> {

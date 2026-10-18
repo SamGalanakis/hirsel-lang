@@ -422,8 +422,11 @@ clear bit over live cells. Source-free controls and both native targets share
 `hirsel-llvm/tests/once_capture.rs`.
 
 Revision 13 field flags are checked on every incoming edge against the physical
-initialized-byte and resource ledger. Inactive variant fields are absent;
-completed inline finalizers count only remaining owners. Static inline indices
+initialized-byte and resource ledger. A plain part is present when any of its bytes
+is initialized; any other part only while an owner remains in its active storage
+(a data handle not yet taken, static ones included, a run-context handle's
+initialized word, or a resource not yet finalized), so inactive variant fields, taken fields and completed inline
+finalizers count as absent. Static inline indices
 are decoded from their constant declarations, not from possibly unavailable SSA
 runtime values. The producer's moved masks and C's proof are never consulted.
 The cleanup join controls exercise both incremental and per-step recount modes.

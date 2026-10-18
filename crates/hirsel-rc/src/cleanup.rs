@@ -659,7 +659,10 @@ fn join_flags(
     lay: Lay<'_>,
     table: &LayoutTable,
 ) -> Result<BTreeMap<(BlockId, usize), Flags>, PassError> {
-    let mut wanted = std::collections::BTreeSet::new();
+    // Each flagged part with its layout. A flag is true exactly when its part
+    // still owns content (LIR revision 13): a part whose remaining fields are
+    // all absent or plain, an inactive variant's included, owns nothing.
+    let mut wanted: BTreeMap<Part, LayoutId> = BTreeMap::new();
     for (b, i, state) in drop_states(ed, facts, lay) {
         let Inst::Drop { address, .. } = ed.code[b.index()][i] else {
             unreachable!()
@@ -670,13 +673,14 @@ fn join_flags(
         let s = &state.slots[slot.index()];
         let layout = ed.unit.types[ed.unit.slots[slot.index()].ty.index()].layout;
         if !lay.trivial(layout) && owner_presence(s, &[], layout, lay) == Tri::Maybe {
-            wanted.insert((slot, Vec::new()));
+            wanted.insert((slot, Vec::new()), layout);
         }
         for (path, &moved) in &s.moved {
             if moved == Tri::Maybe
-                && inline_part_layout(lay, layout, path)?.is_some_and(|l| !lay.trivial(l))
+                && let Some(part) = inline_part_layout(lay, layout, path)?
+                && !lay.trivial(part)
             {
-                wanted.insert((slot, path.clone()));
+                wanted.insert((slot, path.clone()), part);
             }
         }
     }
@@ -715,15 +719,10 @@ fn join_flags(
     let shape = |st: &State| -> Shape {
         wanted
             .iter()
-            .map(|p| {
+            .map(|(p, &layout)| {
                 (
                     p.clone(),
-                    if p.1.is_empty() {
-                        let layout = ed.unit.types[ed.unit.slots[p.0.index()].ty.index()].layout;
-                        owner_presence(&st.slots[p.0.index()], &[], layout, lay)
-                    } else {
-                        presence(&st.slots[p.0.index()], &p.1)
-                    },
+                    owner_presence(&st.slots[p.0.index()], &p.1, layout, lay),
                 )
             })
             .collect()
@@ -801,7 +800,7 @@ fn join_flags(
                 flags.insert((block, i), current.clone());
             }
             let before = current.clone();
-            for part in &wanted {
+            for part in wanted.keys() {
                 if pre[part] != post[part] {
                     current.remove(part);
                 }
