@@ -885,7 +885,19 @@ impl Catalogue<'_> {
             self.add("argument/related-binding", span, replacement);
         }
     }
+    /// The holes of the f-string `id` desugars, whose other nodes have no
+    /// source text of their own to edit (SEM-3).
+    fn format_holes(&self, id: ExprId) -> Option<&[ExprId]> {
+        let format = self.file.tree.formats.iter().find(|f| f.expression == id)?;
+        Some(&format.holes)
+    }
     fn expr(&mut self, id: ExprId, scope: &[Binding]) {
+        if let Some(holes) = self.format_holes(id) {
+            for hole in holes.to_vec() {
+                self.expr(hole, scope);
+            }
+            return;
+        }
         let node = self.file.tree.expressions[id.0 as usize].clone();
         let span = node.origin.span;
         let text = self.expr_text(id).to_owned();
@@ -1213,6 +1225,12 @@ impl Catalogue<'_> {
     /// The calls an expression evaluates in its own scope: not those inside a
     /// nested block, branch, match or closure.
     fn calls(&self, id: ExprId, out: &mut Vec<ExprId>) {
+        if let Some(holes) = self.format_holes(id) {
+            for hole in holes {
+                self.calls(*hole, out);
+            }
+            return;
+        }
         match &self.file.tree.expressions[id.0 as usize].kind {
             ExprKind::Call { callee, arguments } => {
                 out.push(id);

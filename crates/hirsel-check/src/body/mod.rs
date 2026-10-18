@@ -2,6 +2,7 @@
 mod calls;
 mod comptime;
 mod contracts;
+mod formats;
 mod intrinsics;
 mod iteration;
 mod literals;
@@ -86,6 +87,7 @@ fn check_inner(
         snapshots: BTreeMap::new(),
         plans: Plans::default(),
         calls: vec![],
+        formatters: BTreeMap::new(),
         ranges: BTreeMap::new(),
         range_sources: BTreeSet::new(),
         expected_sites: BTreeMap::new(),
@@ -262,6 +264,7 @@ enum After {
     Binary(ast::ExprId, Option<TypeId>, usize),
     CallCallee(ast::ExprId, Option<TypeId>, usize),
     CallArgument(usize, usize),
+    FormatAppend(ast::ExprId, Option<TypeId>, usize),
     Let(ast::StmtId, usize),
     Assign(ast::StmtId, usize),
     AssignPlace(ast::StmtId, usize),
@@ -288,6 +291,9 @@ struct Checker<'a, 'p> {
     snapshots: BTreeMap<ast::DefPath, SignatureRef>,
     plans: Plans,
     calls: Vec<calls::PendingCall>,
+    /// F-string callees (SEM-3) with their selected operation and the declared
+    /// ordinals of their written arguments.
+    formatters: BTreeMap<ast::ExprId, (ast::DefPath, Vec<usize>)>,
     ranges: BTreeMap<ast::ExprId, TypeId>,
     range_sources: BTreeSet<ast::ExprId>,
     expected_sites: BTreeMap<ast::ExprId, (Span, RuleId)>,
@@ -914,6 +920,7 @@ impl Checker<'_, '_> {
                 self.put(id, ty, expected, UseKind::Copy)?;
             }
             E::Path(_)
+            | E::Formatter(_)
             | E::Heap
             | E::Result
             | E::Shape(_)
@@ -921,6 +928,12 @@ impl Checker<'_, '_> {
             | E::Error
             | E::Break
             | E::Continue => self.finish(id, expected, frame)?,
+            E::Call { callee, arguments }
+                if let ast::ExprKind::Formatter(step) =
+                    self.input.tree.expressions[callee.0 as usize].kind =>
+            {
+                self.start_format_step(id, callee, step, &arguments, expected, frame)?;
+            }
             E::Call { callee, .. } => {
                 self.work
                     .push(Work::AfterChild(After::CallCallee(id, expected, frame)));
@@ -1579,6 +1592,7 @@ impl Checker<'_, '_> {
             E::Call { .. } | E::Closure { .. } | E::Literal(_) => {
                 unreachable!("specialized continuation finishes this expression")
             }
+            E::Formatter(_) => unreachable!("the parser builds a formatter only as a callee"),
         };
         if usage == UseKind::Borrow && self.bound(ty, ast::Bound::Plain)? {
             usage = UseKind::Copy;
@@ -1661,8 +1675,9 @@ impl Checker<'_, '_> {
                 let t = self.compared_operand_type(op, t);
                 self.work.push(Work::Enter(right, Some(t), frame));
             }
-            After::CallCallee(id, expected, frame) => self.start_call(id, expected, frame)?,
+            After::CallCallee(id, expected, frame) => self.start_call(id, expected, frame, 0)?,
             After::CallArgument(call, arg) => self.call_argument(call, arg)?,
+            After::FormatAppend(id, expected, frame) => self.format_append(id, expected, frame)?,
             After::Let(id, frame) => {
                 let ast::StmtKind::Let {
                     mutable,

@@ -1471,6 +1471,8 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             | ExprKind::Error
             | ExprKind::Break
             | ExprKind::Continue => expected,
+            // The body checker selects a formatter's operation (SEM-3).
+            ExprKind::Formatter(_) => ExpectedType::Unknown,
             ExprKind::Result => {
                 if self.contract_kind != Some(ContractKind::Ensures) {
                     self.diagnostic(

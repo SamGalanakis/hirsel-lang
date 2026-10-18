@@ -117,12 +117,7 @@ fn parse_line(number: u64, line: String) -> Result[Option[Entry], String] {
   if string.starts_with(trimmed, "{") {
     let fields = match json.parse(unique trimmed) {
       Ok(Object(fields)) => copy fields,
-      _ => return Error(
-        string.concat(
-          "line ",
-          string.concat(u64.to_string(number), ": invalid JSON object")
-        )
-      ),
+      _ => return Error(f"line {number}: invalid JSON object"),
     }
     let level = match text_member(fields, "level") {
       Some(l) => string.ascii_upper(l),
@@ -255,15 +250,8 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
   while true {
     let line = match bufio.file_read_line(dir, mut f, mut reader, MAX_LINE) {
       Ok(l) => take l,
-      Error(Limit()) => return Error(
-        string.concat("line ", string.concat(u64.to_string(number + 1), ": too long"))
-      ),
-      Error(InvalidUtf8()) => return Error(
-        string.concat(
-          "line ",
-          string.concat(u64.to_string(number + 1), ": invalid UTF-8")
-        )
-      ),
+      Error(Limit()) => return Error(f"line {number + 1}: too long"),
+      Error(InvalidUtf8()) => return Error(f"line {number + 1}: invalid UTF-8"),
       Error(_) => return Error(string.concat("cannot read ", query.file)),
     }
     if string.byte_len(line) == 0 {

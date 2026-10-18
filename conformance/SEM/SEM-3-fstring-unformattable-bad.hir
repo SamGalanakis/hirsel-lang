@@ -1,0 +1,11 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 10
+// A hole's type must format; a record does not, so the hole names its type.
+type Point {
+  x: i64,
+  y: i64,
+}
+
+fn label(p: Point) -> String {
+  f"at {p}"
+}

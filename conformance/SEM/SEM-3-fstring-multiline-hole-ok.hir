@@ -1,0 +1,18 @@
+// rule: SEM-3
+// expect: accept
+// Twin of the multiline hole: a hole's expression spans lines where it would
+// outside the f-string, here inside its blocks, and closes where it ends.
+fn label(n: u64) -> String {
+  f"total {if n > 0u64 {
+    "some"
+  } else {
+    "none"
+  }}"
+}
+
+// A hole that starts with a block is spaced, so `{ {` never reads as `{{`.
+fn braced(n: u64) -> String {
+  f"{ {
+    n
+  } }"
+}

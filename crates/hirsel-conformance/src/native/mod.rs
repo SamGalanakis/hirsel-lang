@@ -447,11 +447,13 @@ fn run_source_path(
 /// Run one source's real-Io record and replay (`real_io_replay`). Must be
 /// called on a compiler stack.
 pub fn replay_source(id: &str, source: &str, toolchain: &Toolchain, dir: &Path) -> CaseResult {
-    replay_source_with_config(id, source, toolchain, dir, Default::default())
+    replay_source_with_config(id, source, None, toolchain, dir, Default::default())
 }
+/// `path` selects the case's sidecar package graph, as `Case::run` does.
 pub fn replay_source_with_config(
     id: &str,
     source: &str,
+    path: Option<&Path>,
     toolchain: &Toolchain,
     dir: &Path,
     launch: hirsel_driver::native::LaunchInputs,
@@ -460,7 +462,7 @@ pub fn replay_source_with_config(
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
     );
-    match checked_with_config(&mut engine, source, None, launch.clone()) {
+    match checked_with_config(&mut engine, source, path, launch.clone()) {
         Err(reason) => CaseResult {
             id: id.to_string(),
             snapshot: Some(reason),

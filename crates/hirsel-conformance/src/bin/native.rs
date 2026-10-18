@@ -202,6 +202,7 @@ fn run() -> Result<bool, String> {
                     native::replay_source_with_config(
                         &case.id,
                         &case.source,
+                        case.path.as_deref(),
                         &toolchain,
                         dir,
                         matrix[0].options.launch.clone(),

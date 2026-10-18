@@ -53,6 +53,37 @@ sources like sequences. Slicing with a `StrPos of s` never splits a scalar. `==`
 hash are bytewise; normalisation is explicit. Unicode tables are pinned definitions. Bidi
 control characters in source must be escaped; invalid UTF-8 in a source file is SEM-3.
 
+An f-string ([syntax](syntax.md)) evaluates to a fresh `unique String`: its text and
+holes, left to right, appended to an empty builder through
+[the formatting protocol](std-library.md#the-formatting-protocol), then finished.
+The two functions below are equivalent:
+
+```hirsel
+fn label(x: u64) -> String {
+  f"a{x}b"
+}
+
+fn label_spelled_out(x: u64) -> String {
+  let mut out: List[u8] = []
+  text.append(mut out, "a")
+  u64.format_into(x, mut out)
+  text.append(mut out, "b")
+  text.finish_valid(take out)
+}
+```
+
+except that the f-string's builder is a block-scoped name no program can write, and a
+piece's text is appended only when it is nonempty.
+The parser performs exactly this rewrite, so checking, ownership, lowering and both
+engines see ordinary calls of `std@1`, which the program must select; otherwise every
+f-string is SEM-3. A hole is a borrowed argument, read and not consumed, like an operand
+of `==`; it is checked with no expected type, so an unsuffixed literal hole needs a
+suffix. The f-string's `uses` are its holes' `uses`, because the protocol operations use
+nothing, and it allocates only its builder. A hole of type `String` is appended as is,
+and `bool`, the integers and the floats as `to_string` spells them. A character literal
+is a `u32` and formats as its number. Any other hole type, including `Bytes`, records
+and type parameters, is SEM-3 naming the type: format it into a `String` first.
+
 ### SEM-4: Iteration
 
 `Bytes` is a byte sequence: `for b in data` yields `u8` values in byte order.

@@ -40,6 +40,10 @@ impl Interner {
         rows.indices.insert(text.to_owned(), symbol);
         symbol
     }
+    /// The symbol already interned for `text`, without extending the session.
+    pub fn get(&self, text: &str) -> Option<Symbol> {
+        self.rows.indices.get(text).copied()
+    }
     pub fn resolve(&self, symbol: Symbol) -> Option<&str> {
         self.rows.strings.get(symbol.0 as usize).map(String::as_str)
     }

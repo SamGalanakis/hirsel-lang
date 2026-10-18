@@ -233,9 +233,20 @@ pub enum TokenKind {
     Character,
     String,
     Bytes,
+    /// One piece of an f-string literal (SEM-3); hole expressions are ordinary tokens.
+    Format(FormatPiece),
     Trivia(TriviaKind),
     Invalid,
     Eof,
+}
+/// The pieces of `f"a{x}b{y}c"` are `f"a{` (Head), `}b{` (Middle) and `}c"` (Tail);
+/// an f-string without holes is one `f"abc"` (Whole). Text keeps its spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum FormatPiece {
+    Whole,
+    Head,
+    Middle,
+    Tail,
 }
 /// Every source byte belongs to exactly one non-EOF token, even on errors (LANG-1).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -432,7 +443,27 @@ pub enum ExprKind {
     Heap,
     Result,
     Todo(Option<String>),
+    /// The callee of one step of a desugared f-string (SEM-3), only ever called:
+    /// the body checker selects its std operation from the step and, for an
+    /// append, the appended value's type.
+    Formatter(FormatStep),
     Error,
+}
+/// `Append(value, mut builder)` appends a hole or text piece; `Finish(take builder)`
+/// returns the built `String`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum FormatStep {
+    Append,
+    Finish,
+}
+/// A written f-string (SEM-3). The parser desugars it to `expression`, an ordinary
+/// block every later phase reads; the formatter prints these written pieces instead.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FormatString {
+    pub expression: ExprId,
+    /// Piece spellings, one more than `holes`: `f"a{`, `}b"`, or a single `f"ab"`.
+    pub pieces: Vec<String>,
+    pub holes: Vec<ExprId>,
 }
 /// Statement origin includes its terminator; the block tail does not (LANG-11).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -759,6 +790,7 @@ pub struct SyntaxTree {
     pub statements: Vec<Stmt>,
     pub patterns: Vec<Pattern>,
     pub types: Vec<TypeExpr>,
+    pub formats: Vec<FormatString>,
 }
 /// Parser output retains invalid tokens and orphan/EOF trivia for round-trip formatting (LANG-1).
 #[derive(Clone, Debug, Eq, PartialEq)]

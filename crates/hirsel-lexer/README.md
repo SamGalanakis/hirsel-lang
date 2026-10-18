@@ -51,3 +51,12 @@ Single-quoted character literals denote one Unicode scalar and produce a Charact
 token retaining its source spelling. Malformed spellings recover through their
 closing quote or the next physical newline as one Invalid token and one LANG-1
 diagnostic. The complete original tape is retained.
+
+F-strings (SEM-3) tape as `Format` pieces around ordinary hole tokens: `f"text{`
+(Head), `}text{` (Middle), `}text"` (Tail), or a hole-free `f"text"` (Whole). A
+stack of open holes counts the braces each hole's expression opens, so a hole closes
+at the first `}` that closes none. Piece text follows string rules plus `{{`/`}}`;
+a lone `}` is SEM-3. Inside a hole, a quote that closes no string on its line is the
+f-string's own quote: one SEM-3 diagnostic for the missing `}` and one Invalid
+token. A hole still open at EOF is SEM-3. Each head interns `List`, `u8` and
+`$fmt<depth>` for the parser's desugaring, which reads an immutable snapshot.

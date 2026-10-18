@@ -98,3 +98,7 @@ their canonical result against the hand-built goldens.
 v20 prints field markers as ` @ growable`, drop annotations as `@noalloc drop(x)`,
 and the contextual `noalloc_drop` bound. Omitted and explicit `: ()` bound clauses
 remain distinct.
+
+An f-string prints from `SyntaxTree.formats`: its piece spellings verbatim and each
+hole as an ordinary expression, never the desugared block. A hole whose first token
+is `{` is spaced (`f"{ {...} }"`) so it cannot read as the escape `{{`.

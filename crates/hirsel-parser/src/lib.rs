@@ -7,6 +7,7 @@ use hirsel_syntax::*;
 mod declarations;
 mod depth;
 mod expressions;
+mod formats;
 mod types;
 
 type Parsed<T> = Result<T, ()>;
@@ -53,6 +54,7 @@ pub fn parse(
         depth: 0,
         heights: depth::Heights::default(),
         nesting_limit: None,
+        formats: 0,
     };
     let mut roots = vec![];
     while !parser.eof() && parser.nesting_limit.is_none() {
@@ -105,6 +107,8 @@ struct Parser<'a> {
     depth: usize,
     heights: depth::Heights,
     nesting_limit: Option<Span>,
+    /// How many f-strings enclose the current position (SEM-3).
+    formats: usize,
 }
 
 impl Parser<'_> {
@@ -420,15 +424,22 @@ impl Parser<'_> {
         self.significant[start..self.pos]
             .iter()
             .fold(0usize, |depth, &i| match self.tokens[i].kind {
-                TokenKind::Punct(Punct::LBrace) => depth + 1,
-                TokenKind::Punct(Punct::RBrace) => depth.saturating_sub(1),
+                TokenKind::Punct(Punct::LBrace) | TokenKind::Format(FormatPiece::Head) => depth + 1,
+                TokenKind::Punct(Punct::RBrace) | TokenKind::Format(FormatPiece::Tail) => {
+                    depth.saturating_sub(1)
+                }
                 _ => depth,
             })
     }
+    /// An f-string's head and tail pieces enclose its holes like braces.
     fn recovery_step(&mut self, braces: &mut usize) {
         match self.token(0).map(|t| &t.kind) {
-            Some(TokenKind::Punct(Punct::LBrace)) => *braces += 1,
-            Some(TokenKind::Punct(Punct::RBrace)) => *braces = braces.saturating_sub(1),
+            Some(TokenKind::Punct(Punct::LBrace) | TokenKind::Format(FormatPiece::Head)) => {
+                *braces += 1
+            }
+            Some(TokenKind::Punct(Punct::RBrace) | TokenKind::Format(FormatPiece::Tail)) => {
+                *braces = braces.saturating_sub(1)
+            }
             _ => {}
         }
         self.pos += 1;

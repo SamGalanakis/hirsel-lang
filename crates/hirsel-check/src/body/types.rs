@@ -353,6 +353,21 @@ impl Checker<'_, '_> {
         }
         Ok(None)
     }
+    /// The value type of a named function definition.
+    pub(super) fn named_function(&mut self, mut f: FunctionType) -> TypeId {
+        // Spec #58: a known definition carries signature-derived
+        // value evidence; written function types keep defaults.
+        match &f.uses {
+            Uses::Unrestricted => f.uses = Uses::Only(f.authority.clone()),
+            Uses::Only(allowed) => f.authority = allowed.clone(),
+        }
+        let ty = self.ty(TypeKind::Function(f));
+        // Named references have no environment; parameter types
+        // are invocation inputs rather than captured values.
+        let mut row = self.body.types.get(ty).unwrap().clone();
+        row.modes.sendability = Sendability::Sendable;
+        self.body.types.push(row)
+    }
     pub(super) fn path_type(
         &mut self,
         id: ast::ExprId,
@@ -497,20 +512,9 @@ impl Checker<'_, '_> {
                 };
                 match &s.kind {
                     SignatureKind::Function(f) => {
-                        let mut f = self.import_function(f, &s.types)?;
-                        // Spec #58: a known definition carries signature-derived
-                        // value evidence; written function types keep defaults.
-                        match &f.uses {
-                            Uses::Unrestricted => f.uses = Uses::Only(f.authority.clone()),
-                            Uses::Only(allowed) => f.authority = allowed.clone(),
-                        }
+                        let f = self.import_function(f, &s.types)?;
                         let callable = f.generics.is_empty() && f.foreign.is_none();
-                        let ty = self.ty(TypeKind::Function(f));
-                        // Named references have no environment; parameter types
-                        // are invocation inputs rather than captured values.
-                        let mut row = self.body.types.get(ty).unwrap().clone();
-                        row.modes.sendability = Sendability::Sendable;
-                        let named = self.body.types.push(row);
+                        let named = self.named_function(f);
                         // PROG-4: a non-generic definition named where a callback
                         // `FnPtr[F]` of its shape is expected is that callback.
                         if let Some(pointer) = expected.filter(|_| callable)

@@ -409,6 +409,62 @@ Expected:
 ```
 <!-- /tour -->
 
+## Building text with f-strings
+
+An `f`-prefixed string builds a fresh `unique String` from its text and the values
+in its `{holes}`. A hole holds any expression, including calls and string literals;
+`String`, `bool`, the integers and the floats format as their `to_string` text, and
+any other type is a compile error naming it, so format records field by field.
+`{{` and `}}` are literal braces. Holes are borrowed reads, and an f-string needs
+`std@1` selected. There are no format specifiers yet: `{x:08}` is an error.
+
+<!-- tour: conformance/SEM/SEM-3-tour-14-fstrings-run.hir -->
+[Runnable source](../conformance/SEM/SEM-3-tour-14-fstrings-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+type Chore {
+  name: String,
+  done: bool,
+}
+
+fn summary(chores: List[Chore]) -> String {
+  let mut done = 0u64
+  for chore in chores {
+    if chore.done {
+      done += 1
+    }
+  }
+  let total = list.len(chores)
+  f"{done} of {total} chores done ({done * 100u64 / total}%)\n"
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let chores: List[Chore] = [
+    Chore(name: "plan", done: true),
+    Chore(name: "build", done: true),
+    Chore(name: "test", done: true),
+    Chore(name: "write docs", done: false)
+  ]
+  let output = io.stdout(rt) ? Grant
+  out.print(output, summary(chores)) ? Output
+  out.print(output, f"next: {chores[3].name}, {{braces}} stay literal\n") ? Output
+  let mean = 10.0f64 / 4.0f64
+  out.print(output, f"mean {mean}, all done: {chores[3].done}\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+3 of 4 chores done (75%)
+next: write docs, {braces} stay literal
+mean 2.5, all done: false
+```
+<!-- /tour -->
+
 ## Standard library: JSON
 
 `std@1` is ordinary Hirsel source. JSON numbers retain their decimal spelling;

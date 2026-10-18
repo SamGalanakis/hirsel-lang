@@ -1,0 +1,7 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 6
+// A hole closes on the line where its expression ends.
+fn label(n: u64) -> String {
+  f"total {n
+  }"
+}

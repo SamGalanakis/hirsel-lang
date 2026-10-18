@@ -349,3 +349,11 @@ borrow of T cannot change a separate callback's promised T result; named source
 relations and explicit placement remain part of the inferred contract. Nominal
 type arguments and taken callback parameters retain their declared abstract
 relations.
+
+F-string steps (SEM-3, `body/formats.rs`): an `Append` checks its value with no
+expected type, then its type selects `std@1/text.append` for `String` or
+`std@1/<scalar>.format_into` for `bool`, integers and floats, with the written
+`(value, mut builder)` mapped to declared ordinals; `Finish` is
+`std@1/text.finish_valid`. The callee is then typed and recorded in the body's
+resolution as a named reference to that operation, so modes and lowering see an
+ordinary call. Another value type, or a program without std@1, is SEM-3.

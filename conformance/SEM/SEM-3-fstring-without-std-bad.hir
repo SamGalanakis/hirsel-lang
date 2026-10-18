@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 5
+// F-strings format through std@1; this program selects no packages.
+fn label(n: u64) -> String {
+  f"total {n}"
+}

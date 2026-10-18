@@ -49,3 +49,8 @@ Absent tape/anonymous parameters return no precise site, preserving manual fixtu
 origins as the consumer fallback.
 
 Revision 7 adds contextual Bound::Serializable. The existing Attribute row retains @serializable without a new keyword; represented opaque ordinary/resource capabilities reuse TypeBody and explicit bounds/authority/drop rows. Syntax conveys written facts, never schema or seal proof.
+
+F-strings (SEM-3) add `TokenKind::Format(FormatPiece)`, `ExprKind::Formatter(FormatStep)`,
+which only ever appears as the callee of a desugared step, and
+`SyntaxTree.formats`: each written f-string's piece spellings and hole IDs, keyed by
+the block the parser desugared it to.

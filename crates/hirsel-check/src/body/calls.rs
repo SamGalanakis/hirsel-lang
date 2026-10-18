@@ -12,6 +12,8 @@ pub(super) struct PendingCall {
     bad: bool,
     capability_parameters: BTreeSet<usize>,
     missing_capabilities: bool,
+    /// Leading written arguments the checker has already checked.
+    checked: usize,
 }
 impl Checker<'_, '_> {
     /// A borrowed callable parameter's Environment is its access view,
@@ -60,6 +62,7 @@ impl Checker<'_, '_> {
         id: ast::ExprId,
         expected: Option<TypeId>,
         frame: usize,
+        checked: usize,
     ) -> Result<(), QueryError> {
         let ast::ExprKind::Call { callee, arguments } =
             self.input.tree.expressions[id.0 as usize].kind.clone()
@@ -68,8 +71,10 @@ impl Checker<'_, '_> {
         };
         let callee_ty = self.value(callee);
         let resolved = self.input_name(callee).map(|(_, r)| r.clone());
-        let mut target = match resolved {
-            Some(ResolvedName::Definition(p)) => CallTarget::Definition(p),
+        let formatter = self.formatters.get(&callee).cloned();
+        let mut target = match (resolved, &formatter) {
+            (_, Some((p, _))) => CallTarget::Definition(p.clone()),
+            (Some(ResolvedName::Definition(p)), _) => CallTarget::Definition(p),
             _ => CallTarget::Value(callee),
         };
         let mut bad = self.invalid(callee_ty);
@@ -288,7 +293,7 @@ impl Checker<'_, '_> {
                 }
             })
             .collect();
-        let ordinals = self
+        let mut ordinals = self
             .labels(
                 &arguments
                     .iter()
@@ -304,6 +309,9 @@ impl Checker<'_, '_> {
             .into_iter()
             .map(|i| i.map(|i| slots[i]))
             .collect::<Vec<_>>();
+        if let Some((_, declared)) = formatter {
+            ordinals = declared.into_iter().map(Some).collect();
+        }
         bad |= ordinals.iter().any(Option::is_none)
             || (!missing_capabilities && arguments.len() != f.parameters.len());
         let mut inferred = vec![None; f.generics.len()];
@@ -334,6 +342,7 @@ impl Checker<'_, '_> {
             capability_parameters,
             missing_capabilities,
             bad,
+            checked,
         });
         self.next_argument(call, 0)
     }
@@ -372,6 +381,9 @@ impl Checker<'_, '_> {
     fn next_argument(&mut self, call: usize, index: usize) -> Result<(), QueryError> {
         if index == self.calls[call].arguments.len() {
             return self.finish_call(call);
+        }
+        if index < self.calls[call].checked {
+            return self.call_argument(call, index);
         }
         let c = &self.calls[call];
         let arg = c.arguments[index].value;

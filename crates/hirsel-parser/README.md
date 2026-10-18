@@ -49,3 +49,13 @@ Binding-level `mut` in a pattern reports LANG-13 with the accepted
 `let mut (stream, _) = ...` spelling; mutability still applies to the whole pattern.
 
 After LANG-14, a keyword used as a name is retained as a recovery name, including subsequent references. Its diagnostic names the keyword’s syntax role; the invalid file remains unpublished.
+
+F-strings (SEM-3, `formats.rs`) desugar here, in one place: the written pieces and
+holes become one ordinary block binding `$fmt<depth>: List[u8] = []`, an
+`Append(value, mut $fmt<depth>)` call per nonempty text piece and hole, and a tail
+`Finish(take $fmt<depth>)`, whose callees are `ExprKind::Formatter` leaves. The
+written form is recorded in `SyntaxTree.formats` for the formatter. Synthetic nodes
+take the f-string's, the piece's or the hole's origin. A hole parses in statement
+newline context and must close on the line its expression ends; an empty hole, a
+missing `}` and a format specifier are SEM-3. Recovery treats Head and Tail pieces
+as braces.

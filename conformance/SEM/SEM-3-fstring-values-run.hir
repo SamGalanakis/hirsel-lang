@@ -1,0 +1,59 @@
+// rule: SEM-3
+// expect: run
+// An f-string appends its text and holes, left to right, through the formatting
+// protocol: integers and floats as their to_string text, strings as they are.
+type Point {
+  x: i64,
+  y: i64,
+}
+
+fn label(p: Point) -> String {
+  f"({p.x}, {p.y})"
+}
+
+fn count(t: Test, mut calls: u64) -> u64 {
+  calls += 1
+  test.check(t, calls > 0)
+  calls
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let n = 3u64
+  let xs: List[u64] = [1, 2, 3, 4]
+  test.check(t, f"total: {n} of {list.len(xs)}\n" == "total: 3 of 4\n")
+  test.check(t, f"" == "")
+  test.check(t, f"plain" == "plain")
+  test.check(t, f"{n}" == "3")
+  test.check(t, f"{n}{n}" == "33")
+  test.check(t, f"{0u8} {255u8} {65535u16} {4294967295u32}" == "0 255 65535 4294967295")
+  test.check(t, f"{18446744073709551615u64}" == "18446744073709551615")
+  test.check(
+    t,
+    f"{340282366920938463463374607431768211455u128}" == "340282366920938463463374607431768211455"
+  )
+  test.check(t, f"{-128i8} {-32768i16} {-2147483648i32}" == "-128 -32768 -2147483648")
+  test.check(t, f"{-9223372036854775808i64}" == "-9223372036854775808")
+  test.check(
+    t,
+    f"{-170141183460469231731687303715884105728i128}" == "-170141183460469231731687303715884105728"
+  )
+  test.check(t, f"{1.5f64} {0.1f32} {-0.0f64} {1e21f64}" == "1.5 0.1 -0 1e21")
+  test.check(t, f"{true} and {false}" == "true and false")
+  let name = "hirsel"
+  test.check(t, f"hello, {name}!" == "hello, hirsel!")
+  test.check(t, f"{string.trim("  padded  ")}|" == "padded|")
+  test.check(t, f"{{literal}} {{{n}}}" == "{literal} {3}")
+  test.check(t, f"tab\there \"quoted\" \u{1f411}" == "tab\there \"quoted\" 🐑")
+  test.check(t, f"é{name}ü{'é'}" == "éhirselü233")
+  test.check(t, f"outer {f"inner {n}"} done" == "outer inner 3 done")
+  test.check(t, label(Point(x: -1, y: 2)) == "(-1, 2)")
+  test.check(t, f"{n * 2u64 + 1u64}" == "7")
+  // A hole is a borrowed read: the value stays usable afterwards.
+  let owned = string.concat("own", "ed")
+  test.check(t, f"{owned}" == "owned" && owned == "owned")
+  // Holes evaluate once each, left to right.
+  let mut calls = 0u64
+  let text = f"{count(t, mut calls)},{count(t, mut calls)}"
+  test.check(t, text == "1,2" && calls == 2)
+  Ok(())
+}

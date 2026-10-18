@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: accept
+// Twin of the f-string without std: the same program selecting std@1.
+fn label(n: u64) -> String {
+  f"total {n}"
+}

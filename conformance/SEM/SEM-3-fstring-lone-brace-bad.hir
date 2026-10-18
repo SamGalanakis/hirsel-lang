@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 5
+// A literal closing brace in f-string text is doubled.
+fn label(n: u64) -> String {
+  f"{n} }"
+}

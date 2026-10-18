@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 5
+// Holes take no format specifier in this revision.
+fn label(n: u64) -> String {
+  f"total {n:08}"
+}

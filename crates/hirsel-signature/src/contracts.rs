@@ -312,6 +312,13 @@ impl Normalizer<'_, '_> {
                 self.expression(*x, e, active, locals)?;
             }
             ast::ExprKind::Heap => e.tag("heap"),
+            ast::ExprKind::Formatter(step) => {
+                e.tag("formatter");
+                e.tag(match step {
+                    ast::FormatStep::Append => "append",
+                    ast::FormatStep::Finish => "finish",
+                });
+            }
             ast::ExprKind::Result => e.tag("result"),
             ast::ExprKind::Todo(_) | ast::ExprKind::Error => {
                 return Err(diagnostic(

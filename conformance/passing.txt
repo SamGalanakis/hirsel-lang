@@ -3834,6 +3834,19 @@ conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
 conformance/SEM/SEM-3-empty-graphemes.hir
 conformance/SEM/SEM-3-empty-scalars.hir
+conformance/SEM/SEM-3-fstring-lone-brace-bad.hir
+conformance/SEM/SEM-3-fstring-lone-brace-ok.hir
+conformance/SEM/SEM-3-fstring-multiline-hole-bad.hir
+conformance/SEM/SEM-3-fstring-multiline-hole-ok.hir
+conformance/SEM/SEM-3-fstring-specifier-bad.hir
+conformance/SEM/SEM-3-fstring-specifier-ok.hir
+conformance/SEM/SEM-3-fstring-unclosed-hole-bad.hir
+conformance/SEM/SEM-3-fstring-unclosed-hole-ok.hir
+conformance/SEM/SEM-3-fstring-unformattable-bad.hir
+conformance/SEM/SEM-3-fstring-unformattable-ok.hir
+conformance/SEM/SEM-3-fstring-values-run.hir
+conformance/SEM/SEM-3-fstring-without-std-bad.hir
+conformance/SEM/SEM-3-fstring-without-std-ok.hir
 conformance/SEM/SEM-3-glob-files-run.hir
 conformance/SEM/SEM-3-glob-run.hir
 conformance/SEM/SEM-3-graphemes-reference-run.hir
@@ -3872,6 +3885,7 @@ conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir
 conformance/SEM/SEM-3-string-compare-run.hir
 conformance/SEM/SEM-3-tour-05-text-run.hir
+conformance/SEM/SEM-3-tour-14-fstrings-run.hir
 conformance/SEM/SEM-3-unicode-positions.hir
 conformance/SEM/SEM-3-unicode-scalars.hir
 conformance/SEM/SEM-3-wave1-byte-alias-run.hir

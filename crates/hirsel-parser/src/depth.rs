@@ -76,6 +76,7 @@ impl Heights {
             ExprKind::Shape(id) => self.ty(*id),
             ExprKind::Literal(_)
             | ExprKind::Path(_)
+            | ExprKind::Formatter(_)
             | ExprKind::Break
             | ExprKind::Continue
             | ExprKind::Heap

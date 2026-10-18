@@ -675,6 +675,9 @@ impl Builder<'_, '_> {
                 }
                 return self.call(id, id, vec![], bodies);
             }
+            ExprKind::Formatter(_) => {
+                return self.error(span, "an f-string formatter is only ever a direct callee");
+            }
             ExprKind::Error => return self.error(span, "recovery expression reached lowering"),
         };
         Ok(Some(value))

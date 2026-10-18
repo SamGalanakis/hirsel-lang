@@ -147,7 +147,7 @@ fn toc(found: List[Heading]) -> String {
   for h in found {
     let base = slug(h.title)
     let anchor = match map.get(seen, base) {
-      Some(n) => string.concat(base, string.concat("-", u64.to_string(n))),
+      Some(n) => f"{base}-{n}",
       None() => copy base,
     }
     let count = match map.get(seen, base) {

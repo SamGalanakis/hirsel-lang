@@ -41,6 +41,7 @@ impl Builder<'_, '_> {
             match &self.input.tree.expressions[id.0 as usize].kind {
                 ExprKind::Literal(_)
                 | ExprKind::Path(_)
+                | ExprKind::Formatter(_)
                 | ExprKind::Heap
                 | ExprKind::Break
                 | ExprKind::Continue

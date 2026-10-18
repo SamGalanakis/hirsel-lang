@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: accept
+// Twin of the format specifier: the plain hole.
+fn label(n: u64) -> String {
+  f"total {n}"
+}

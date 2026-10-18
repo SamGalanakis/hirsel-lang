@@ -3,7 +3,7 @@
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Interner;
 use hirsel_span::{FileId, SourceMap, Span};
-use hirsel_syntax::{Keyword, Punct, Token, TokenKind, TriviaKind};
+use hirsel_syntax::{FormatPiece, Keyword, Punct, Token, TokenKind, TriviaKind};
 
 /// Complete source-order tape, including invalid text and an empty EOF token.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -46,6 +46,14 @@ struct Scanner<'a> {
     pos: usize,
     interner: &'a mut Interner,
     output: LexOutput,
+    /// Open f-string holes, innermost last (SEM-3).
+    holes: Vec<Hole>,
+}
+/// An f-string hole being lexed: the offset of its `{` and how many braces the
+/// hole's expression has opened, so its closing `}` resumes the text.
+struct Hole {
+    open: usize,
+    braces: u32,
 }
 impl<'a> Scanner<'a> {
     fn new(file: FileId, bytes: &'a [u8], interner: &'a mut Interner) -> Self {
@@ -55,6 +63,7 @@ impl<'a> Scanner<'a> {
             pos: 0,
             interner,
             output: LexOutput::default(),
+            holes: Vec::new(),
         }
     }
     fn span(&self, start: usize, end: usize) -> Span {
@@ -77,6 +86,14 @@ impl<'a> Scanner<'a> {
         });
     }
     fn finish(mut self) -> LexOutput {
+        for hole in std::mem::take(&mut self.holes) {
+            self.error(
+                const { RuleId::of("SEM-3") },
+                hole.open,
+                hole.open + 1,
+                "f-string hole `{` has no closing `}`",
+            );
+        }
         self.output.tokens.push(Token {
             kind: TokenKind::Eof,
             span: self.span(self.pos, self.pos),
@@ -110,9 +127,14 @@ impl<'a> Scanner<'a> {
             }
             b'/' if self.starts(b"//") => self.line_comment(),
             b'/' if self.starts(b"/*") => self.block_comment(),
+            b'}' if self.holes.last().is_some_and(|h| h.braces == 0) => self.format_text(false),
+            b'"' if self.holes.last().is_some_and(|h| h.braces == 0) && !self.string_closes() => {
+                self.unclosed_hole()
+            }
             b'"' => self.string(false),
             b'\'' => self.character_literal(),
             b'b' if self.starts(b"b\"") => self.string(true),
+            b'f' if self.starts(b"f\"") => self.format_text(true),
             b'0'..=b'9' => self.number(),
             b if letter(b) => {
                 self.pos += 1;
@@ -146,6 +168,15 @@ impl<'a> Scanner<'a> {
                 }
             }
         };
+        if let (TokenKind::Punct(p @ (Punct::LBrace | Punct::RBrace)), Some(hole)) =
+            (&kind, self.holes.last_mut())
+        {
+            if *p == Punct::LBrace {
+                hole.braces += 1;
+            } else {
+                hole.braces -= 1;
+            }
+        }
         let kind = if self.output.diagnostics.len() > errors {
             TokenKind::Invalid
         } else {
@@ -358,37 +389,7 @@ impl<'a> Scanner<'a> {
                 }
                 // Leave the newline to the tape and resume on the next line.
                 b'\r' | b'\n' => break,
-                b'\\' => {
-                    self.escape(bytes);
-                    // A forbidden continuation is one invalid literal. Recover
-                    // through its closing quote while retaining the physical
-                    // newline bytes in that token's lossless span.
-                    if self.bytes.get(self.pos) == Some(&b'\r') {
-                        self.pos += 1;
-                        if self.bytes.get(self.pos) == Some(&b'\n') {
-                            self.pos += 1;
-                        }
-                    } else if self.bytes.get(self.pos) == Some(&b'\n') {
-                        self.pos += 1;
-                    }
-                }
-                _ => {
-                    let at = self.pos;
-                    let (ch, len) = scalar(&self.bytes[at..]);
-                    self.pos += len;
-                    if ch.is_none()
-                        || ch.is_some_and(|c| {
-                            c <= '\u{1f}' || c == '\u{7f}' || bidi(c) || (bytes && !c.is_ascii())
-                        })
-                    {
-                        self.error(
-                            const { RuleId::of("SEM-3") },
-                            at,
-                            self.pos,
-                            "forbidden literal character",
-                        );
-                    }
-                }
+                _ => self.literal_unit(bytes),
             }
         }
         if !closed {
@@ -404,6 +405,132 @@ impl<'a> Scanner<'a> {
         } else {
             TokenKind::String
         }
+    }
+    /// One escape or scalar of a string, bytes or f-string literal.
+    fn literal_unit(&mut self, bytes: bool) {
+        if self.bytes[self.pos] == b'\\' {
+            self.escape(bytes);
+            // A forbidden continuation is one invalid literal. Recover
+            // through its closing quote while retaining the physical
+            // newline bytes in that token's lossless span.
+            if self.bytes.get(self.pos) == Some(&b'\r') {
+                self.pos += 1;
+                if self.bytes.get(self.pos) == Some(&b'\n') {
+                    self.pos += 1;
+                }
+            } else if self.bytes.get(self.pos) == Some(&b'\n') {
+                self.pos += 1;
+            }
+            return;
+        }
+        let at = self.pos;
+        let (ch, len) = scalar(&self.bytes[at..]);
+        self.pos += len;
+        if ch.is_none()
+            || ch.is_some_and(|c| {
+                c <= '\u{1f}' || c == '\u{7f}' || bidi(c) || (bytes && !c.is_ascii())
+            })
+        {
+            self.error(
+                const { RuleId::of("SEM-3") },
+                at,
+                self.pos,
+                "forbidden literal character",
+            );
+        }
+    }
+    /// One text piece of an f-string: from `f"` (a head) or a hole's closing `}`
+    /// through the next unescaped `{`, the closing quote, or the line's end.
+    /// `{{` and `}}` are literal braces; a lone `}` is SEM-3.
+    fn format_text(&mut self, head: bool) -> TokenKind {
+        let start = self.pos;
+        if head {
+            // The parser desugars every f-string into a block that binds its builder
+            // as `$fmt<depth>: List[u8]`; it reads names from an immutable snapshot.
+            self.interner.intern("List");
+            self.interner.intern("u8");
+            self.interner.intern(&format!("$fmt{}", self.holes.len()));
+        }
+        self.pos += if head { 2 } else { 1 };
+        let (open, closed) = loop {
+            match self.bytes.get(self.pos) {
+                Some(b'"') => {
+                    self.pos += 1;
+                    break (false, true);
+                }
+                Some(b'{') if self.bytes.get(self.pos + 1) == Some(&b'{') => self.pos += 2,
+                Some(b'{') => {
+                    self.pos += 1;
+                    break (true, true);
+                }
+                Some(b'}') if self.bytes.get(self.pos + 1) == Some(&b'}') => self.pos += 2,
+                Some(b'}') => {
+                    self.pos += 1;
+                    self.error(
+                        const { RuleId::of("SEM-3") },
+                        self.pos - 1,
+                        self.pos,
+                        "a `}` in f-string text is written `}}`",
+                    );
+                }
+                None | Some(b'\r' | b'\n') => break (false, false),
+                Some(_) => self.literal_unit(false),
+            }
+        };
+        if !closed {
+            self.error(
+                const { RuleId::of("SEM-3") },
+                start,
+                self.pos,
+                "unterminated f-string",
+            );
+        }
+        match (head, open) {
+            (true, true) => {
+                self.holes.push(Hole {
+                    open: self.pos - 1,
+                    braces: 0,
+                });
+                TokenKind::Format(FormatPiece::Head)
+            }
+            (true, false) => TokenKind::Format(FormatPiece::Whole),
+            (false, true) => {
+                if let Some(hole) = self.holes.last_mut() {
+                    hole.open = self.pos - 1;
+                }
+                TokenKind::Format(FormatPiece::Middle)
+            }
+            (false, false) => {
+                self.holes.pop();
+                TokenKind::Format(FormatPiece::Tail)
+            }
+        }
+    }
+    /// Whether a quote at the cursor opens a string literal closed on its line.
+    fn string_closes(&self) -> bool {
+        let mut at = self.pos + 1;
+        while let Some(&byte) = self.bytes.get(at) {
+            match byte {
+                b'"' => return true,
+                b'\r' | b'\n' => return false,
+                b'\\' => at += 2,
+                _ => at += 1,
+            }
+        }
+        false
+    }
+    /// `f"{x"`: inside a hole, a quote that closes no string on its line is the
+    /// f-string's own closing quote, so the hole lacks its `}`.
+    fn unclosed_hole(&mut self) -> TokenKind {
+        let open = self.holes.pop().map_or(self.pos, |h| h.open);
+        self.pos += 1;
+        self.error(
+            const { RuleId::of("SEM-3") },
+            open,
+            self.pos,
+            "f-string hole `{` has no closing `}` before the closing quote",
+        );
+        TokenKind::Invalid
     }
     fn escape(&mut self, bytes: bool) {
         let start = self.pos;

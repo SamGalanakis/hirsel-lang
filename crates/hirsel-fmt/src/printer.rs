@@ -7,10 +7,18 @@ use hirsel_syntax::*;
 type Printed = Option<Doc>;
 pub(crate) struct Printer<'a> {
     file: &'a SyntaxFile,
+    /// Written f-strings by the block each desugars to.
+    formats: std::collections::BTreeMap<ExprId, &'a FormatString>,
 }
 impl<'a> Printer<'a> {
     pub fn new(file: &'a SyntaxFile, _sources: &SourceMap) -> Self {
-        Self { file }
+        let formats = file
+            .tree
+            .formats
+            .iter()
+            .map(|f| (f.expression, f))
+            .collect();
+        Self { file, formats }
     }
     fn comment_group(&self, origin: Origin) -> bool {
         fn comment(t: &Token) -> bool {
@@ -668,7 +676,35 @@ impl<'a> Printer<'a> {
     fn expr(&self, id: ExprId, minimum: u8) -> Printed {
         self.expr_inner(id, minimum)
     }
+    /// A written f-string, in place of the block the parser desugared it to.
+    /// A hole starting with `{` is spaced so it cannot read as an escaped `{{`.
+    fn format_string(&self, format: &FormatString) -> Printed {
+        let mut parts = vec![];
+        for (i, piece) in format.pieces.iter().enumerate() {
+            parts.push(token(piece));
+            if let Some(&hole) = format.holes.get(i) {
+                let origin = self.file.tree.expressions.get(hole.0 as usize)?.origin;
+                let braced = matches!(
+                    self.file
+                        .tokens
+                        .get(origin.tokens.start as usize)
+                        .map(|t| &t.kind),
+                    Some(TokenKind::Punct(Punct::LBrace))
+                );
+                let hole = self.expr(hole, 0)?;
+                parts.push(if braced {
+                    cat([Space, hole, Space])
+                } else {
+                    hole
+                });
+            }
+        }
+        Some(cat(parts))
+    }
     fn expr_inner(&self, id: ExprId, minimum: u8) -> Printed {
+        if let Some(format) = self.formats.get(&id) {
+            return self.format_string(format);
+        }
         let e = self.file.tree.expressions.get(id.0 as usize)?;
         let precedence = match &e.kind {
             ExprKind::Binary { op, .. } => binary(*op).1,
@@ -884,6 +920,7 @@ impl<'a> Printer<'a> {
             }
             ExprKind::Comptime(v) => cat([token("comptime"), Space, self.expr(*v, 11)?]),
             ExprKind::Heap => token("heap"),
+            ExprKind::Formatter(_) => return None,
             ExprKind::Result => token("result"),
             ExprKind::Todo(s) => {
                 let mut ds = vec![token("todo")];

@@ -162,6 +162,19 @@ nesting bound, returning `Nesting(128)` at the attempted container depth. This i
 policy, independent of the depth limits of [MEM-3](memory.md#mem-3-freeing), with no
 reflection, automatic record conversion or authority.
 
+## The formatting protocol
+
+An ordinary `List[u8]` is the UTF-8 text builder. A type formats when std declares how
+to append it: `text.append(mut builder, s)` appends a `String`'s bytes, and each scalar
+module's `format_into(value, mut builder)` appends that scalar's text. Both only add
+valid UTF-8, keep existing content and fail only by allocation exhaustion.
+`text.finish_valid(take builder)` returns the builder's text as a `String` and fails `TextInvariant` on invalid UTF-8, which no protocol append produces.
+A scalar's `to_string` is its `format_into` applied to an empty builder, then
+`text.finish_valid`; an f-string is the same with one append per piece and hole
+([SEM-3](semantics.md#sem-3-strings)). Format specifiers are not part of this revision; the planned
+form is `{x:width}`, `{x:.precision}` and `{x:x}` (lowercase hex) after the hole's
+expression, appending through the same builder.
+
 ## Scalars
 
 `bool`, `u8` to `u128`, `i8` to `i128`, `f32` and `f64` each have a module exposing, with

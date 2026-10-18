@@ -6,6 +6,8 @@ use hirsel_syntax::*;
 pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> {
     let mut tokens = vec![];
     let mut pos = 0;
+    // Braces each open f-string hole has opened, innermost last.
+    let mut holes: Vec<usize> = vec![];
     while pos < source.len() {
         let start = pos;
         let rest = &source[pos..];
@@ -57,6 +59,43 @@ pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> 
                 }
             }
             TokenKind::Character
+        } else if rest.starts_with("f\"") || (rest.starts_with('}') && holes.last() == Some(&0)) {
+            let head = rest.starts_with('f');
+            if head {
+                // The parser's f-string desugaring reads these names (SEM-3).
+                names.intern("List");
+                names.intern("u8");
+                names.intern(&format!("$fmt{}", holes.len()));
+            }
+            pos += if head { 2 } else { 1 };
+            let mut open = false;
+            while pos < source.len() {
+                let text = &source[pos..];
+                if text.starts_with("{{") || text.starts_with("}}") {
+                    pos += 2;
+                } else if text.starts_with('{') || text.starts_with('"') {
+                    open = text.starts_with('{');
+                    pos += 1;
+                    break;
+                } else {
+                    if text.starts_with('\\') {
+                        pos += 1;
+                    }
+                    pos += source[pos..].chars().next().map_or(0, char::len_utf8);
+                }
+            }
+            TokenKind::Format(match (head, open) {
+                (true, true) => {
+                    holes.push(0);
+                    FormatPiece::Head
+                }
+                (true, false) => FormatPiece::Whole,
+                (false, true) => FormatPiece::Middle,
+                (false, false) => {
+                    holes.pop();
+                    FormatPiece::Tail
+                }
+            })
         } else if rest.starts_with('"') || rest.starts_with("b\"") {
             let bytes = rest.starts_with('b');
             pos += if bytes { 2 } else { 1 };
@@ -215,6 +254,13 @@ pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> 
             ];
             if let Some((text, p)) = punctuation.iter().find(|(text, _)| rest.starts_with(text)) {
                 pos += text.len();
+                if let Some(braces) = holes.last_mut() {
+                    match p {
+                        Punct::LBrace => *braces += 1,
+                        Punct::RBrace => *braces -= 1,
+                        _ => {}
+                    }
+                }
                 TokenKind::Punct(*p)
             } else {
                 pos += rest.chars().next().unwrap().len_utf8();

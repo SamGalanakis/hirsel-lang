@@ -118,6 +118,7 @@ impl Fixture {
             statements: vec![],
             patterns: vec![],
             types: vec![],
+            formats: vec![],
         };
         let body = CheckedBody {
             tails: vec![],

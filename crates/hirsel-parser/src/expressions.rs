@@ -114,6 +114,9 @@ impl Parser<'_> {
     }
     fn primary(&mut self) -> Parsed<ExprId> {
         let start = self.pos;
+        if self.at_format(&[FormatPiece::Whole, FormatPiece::Head]) {
+            return self.format_string();
+        }
         if let Some(literal) = self.literal() {
             return Ok(self.push_expr(start, ExprKind::Literal(literal)));
         }

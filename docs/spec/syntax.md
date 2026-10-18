@@ -124,6 +124,8 @@ character    = "'", ( character-scalar | character-escape ), "'" ;
 character-escape = "\\", ( "n" | "t" | "r" | "0" | "\\" | "'" )
                  | "\\u{", hex-digit, { hex-digit }, "}" ;
 literal      = integer | float | character | string | bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
+f-string     = 'f"', f-text, { "{", expression, "}", f-text }, '"' ; (* SEM-3 *)
+f-text       = { f-scalar | escape | "{{" | "}}" } ;      (* SEM-3 *)
 ```
 
 `string-scalar` excludes the quote, backslash, raw controls U+0000–U+001F and U+007F,
@@ -135,9 +137,23 @@ nothing above 10FFFF). A character literal denotes exactly one Unicode scalar;
 and U+007F, newlines and `Bidi_Control`. Its Unicode escape has the same one-to-six
 hex-digit scalar restriction. Malformed, unterminated, empty or multi-scalar
 character literals are LANG-1. Character literals have no suffix.
-There are no escape line continuations, interpolation, raw or triple-quoted
+`f-scalar` is a `string-scalar` other than `{` and `}`.
+There are no escape line continuations, raw or triple-quoted
 strings, hexadecimal floats, leading or trailing decimal
 points, or underscores immediately before a suffix.
+
+An f-string (`f"total: {n} of {list.len(xs)}\n"`, [SEM-3](semantics.md#sem-3-strings))
+is a string with holes. `f"` is one token start, like `b"`: `f "x"` is a name and a
+string. Its text follows string rules, with `{{` and `}}` for literal braces; a lone `}`
+in the text is SEM-3. Each hole holds one expression, which may contain string literals
+and f-strings of its own. The lexer tapes an f-string as pieces around ordinary hole
+tokens: `f"text{`, `}text{`, `}text"`, or a single `f"text"` with no holes, so a hole's
+closing `}` is the first `}` that closes no brace the hole opened. A hole is not a
+grouping: its expression continues onto another line only where it would outside the
+f-string (an open delimiter or a missing operand), and its closing `}` stands on the line
+where the expression ends. An empty hole, a hole without its `}` and a format
+specifier (`{x:08}`) are SEM-3; width, precision and radix are not part of this
+revision.
 
 Integers have no sign: `-128i8` is unary minus applied to a magnitude token, and the
 checker accepts the magnitude of `MIN` there. An adjacent malformed suffix or digit
@@ -401,7 +417,7 @@ prefix       = ("-" | "!" | "~" | "take" | "mut" | "copy" | "unique" | "box" | "
 postfix      = primary, { "(", list(argument), ")" | "[", expression, "]"
              | ".", member | "?", [ same-line-value-path ] } ; (* LANG-2/8/12 *)
 argument     = [ name, ":" ], expression ;               (* LANG-12 *)
-primary      = literal | value-path | "heap" | "result"
+primary      = literal | f-string | value-path | "heap" | "result"
              | "(", ")" | "(", expression, ")"
              | "(", expression, ",", list(expression), ")"
              | "[", list(expression), "]"
