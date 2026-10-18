@@ -268,6 +268,15 @@ fn execute_frames(
         // checking host readiness on every interpreter instruction would make
         // a waiting socket slow all pure computation.
         if yield_now || frames.is_empty() {
+            // Stable sorting keeps non-timer waits and equal-deadline timers in
+            // suspension order. Poll timers by their original absolute ticks,
+            // including when several deadlines passed during a blocking step.
+            parked.sort_by_cached_key(|(_, stack, _)| {
+                match &stack.last().unwrap().operation.as_ref().unwrap().0 {
+                    OperationResult::Park { token, .. } => operations.wait_deadline(*token),
+                    _ => None,
+                }
+            });
             let mut waiting = vec![];
             for (id, mut stack, failures) in parked.drain(..) {
                 operations.enter_task(id, stack.iter().any(|f| f.finalized.is_some()));

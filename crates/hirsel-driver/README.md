@@ -144,3 +144,7 @@ the template's snapshot; an empty override grants empty Args.
 `api_index` enumerates public core registry entries and std manifest declarations
 with the compiler parser, retaining source signatures and constructor payloads.
 `hirsel doc --index` renders the deterministic full signature index in `docs/api.md`.
+
+Host timer waits expose their original absolute deadline to the interpreter's poll
+ordering. Several overdue timers resume by deadline, with suspension order breaking
+ties, identically in live recording and replay.

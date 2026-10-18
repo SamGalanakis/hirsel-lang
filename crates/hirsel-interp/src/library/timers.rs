@@ -14,6 +14,9 @@ pub(super) struct Timers {
     pending: BTreeMap<u64, (u64, Vec<u8>)>,
 }
 impl Timers {
+    pub fn deadline(&self, token: u64) -> Option<u64> {
+        self.pending.get(&token).map(|(deadline, _)| *deadline)
+    }
     pub fn contains(&self, token: u64) -> bool {
         self.pending.contains_key(&token)
     }

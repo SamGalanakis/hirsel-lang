@@ -1029,6 +1029,9 @@ impl Operations for Library {
         )?;
         self.tasks.finished(id, result)
     }
+    fn wait_deadline(&self, token: u64) -> Option<u64> {
+        self.timers.deadline(token)
+    }
     fn take_yield(&mut self) -> bool {
         std::mem::take(&mut self.tasks.yield_now)
     }

@@ -9,7 +9,8 @@
 //! descriptor interest or deadline under the token, and in replay the tape recorded the park.
 //! The task then parks ([`crate::tasks::park_host`]): a network request yields first and parks
 //! when it is next at the front, while a stdin read parks at once, as the interpreter parks
-//! them. The scheduler polls the parked task in park order ([`poll`]). When the task is
+//! them. The scheduler polls timer waits by deadline (ties by suspension order), and other
+//! waits in park order ([`poll`]). When the task is
 //! canceled while its request has committed no effect, or the adapter finds the token ready,
 //! the poll re-issues the request, so the effect and its tape event happen at the poll; the
 //! completion waits here for the task to resume. With no runnable task the scheduler sleeps
@@ -126,6 +127,18 @@ pub(crate) unsafe fn issue(
         .and_then(|parked| parked.completion)
         .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
     (completion, true)
+}
+
+/// Original absolute timer ticks for scheduler ordering, alike in live runs and replay.
+///
+/// # Safety
+/// `ctx` is live, its Binding bound, and `token` parked.
+pub(crate) unsafe fn deadline(ctx: *mut RunCtx, token: u64) -> Option<u64> {
+    let binding = unsafe { Binding::get(ctx) };
+    match &binding.waits.parked.get(&token)?.request {
+        Request::SleepUntil { deadline, .. } => Some(*deadline),
+        _ => None,
+    }
 }
 
 /// The scheduler's poll of a task parked on `token`, `cause` its cancellation: whether the

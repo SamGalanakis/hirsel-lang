@@ -15,8 +15,9 @@
 //! - after every capability operation ([`yield_now`]) the running task, when another is
 //!   runnable, joins the back and the front runs;
 //! - a task that must wait (a join, a scope exit) parks with what it waits for ([`Wait`]).
-//!   Parked tasks are polled in park order at every yield and whenever the running task stops
-//!   (it parked, holds its result or completed); a successful poll performs the wait's effect
+//!   Parked tasks are polled at every yield and whenever the running task stops
+//!   (it parked, holds its result or completed). Timers go in deadline order (ties in park
+//!   order), other waits in park order. A successful poll performs the wait's effect
 //!   and moves the task to the back of the queue. An operation that parks yields first, and its
 //!   task parks when it is next at the front.
 //!
@@ -379,14 +380,21 @@ fn recycle(ctx: *mut RunCtx) {
     }
 }
 
-/// Poll every parked task in park order: each whose wait is over has its effect performed and
+/// Poll parked tasks: timers by deadline (ties by park order), other waits by park order.
+/// Each whose wait is over has its effect performed and
 /// joins the back of the queue.
 ///
 /// # Safety
 /// `ctx` is live.
 unsafe fn poll_parked(ctx: *mut RunCtx) {
     let s = scheduler(ctx);
-    let parked = std::mem::take(&mut s.parked);
+    let mut parked = std::mem::take(&mut s.parked);
+    // Original request ticks preserve exact ties; readiness's host Instant is
+    // only for sleeping and may have rounding or sampling skew.
+    parked.sort_by_cached_key(|task| match scheduler(ctx).task(*task).wait {
+        Some(Wait::Host { token }) => unsafe { crate::host_waits::deadline(ctx, token) },
+        _ => None,
+    });
     let mut waiting = Vec::with_capacity(parked.len());
     for task in parked {
         // SAFETY: the context is live and `task` is parked.

@@ -291,6 +291,10 @@ holds one is as secret-bearing as its granted `Env` values, and no tool prints a
 drawn bytes. A completed `clock.sleep_until` is recorded with its deadline ticks and its
 outcome; replay returns that outcome at once, never waits, and refuses a later recorded
 monotonic sample below a completed deadline. A cancelled wait issues no provider request.
+In deterministic simulation, virtual monotonic time advances to the earliest pending
+deadline only when no task is runnable. When several timer waits are ready at one
+poll, the scheduler resumes them in deadline order, with ties in suspension order;
+this applies to real host and native runs as well as virtual time.
 
 ## The Blocked observation
 

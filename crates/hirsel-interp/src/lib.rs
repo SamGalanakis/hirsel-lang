@@ -230,6 +230,9 @@ macro_rules! operation_boundary {
 }
 operation_boundary! {
     shared {
+    /// Absolute deadline of a parked timer, independent of host readiness or replay.
+    /// The scheduler polls timers by deadline, preserving suspension order on ties.
+    fn wait_deadline(&self, _token: u64) -> Option<u64> { None }
     fn choose_task(&self, _runnable: &[u64]) -> Result<usize, Error> {
         Ok(0)
     }

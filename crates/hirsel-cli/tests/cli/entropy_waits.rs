@@ -25,12 +25,25 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 }
 "#;
 
-// Real time orders the wakes; cancelling the hour-long sleeper removes its timer,
-// so the run ends as soon as the short sleeps do.
+// Register the early wait first: host preemption may expire deadlines before a
+// later child starts. Deterministic overdue controls cover reversed waits and ties.
+// Cancelling the hour-long sleeper removes its timer, so the short sleeps end the run.
 const SLEEPERS: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
   let output = io.stdout(rt)?
   let tasks = io.tasks(rt)?
   let c = io.monotonic_clock(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let late_deadline = match instant.checked_add(c, start, 60000000u64) {
+    Some(t) => t,
+    None() => return Ok(()),
+  }
+  let early_deadline = match instant.checked_add(c, start, 20000000u64) {
+    Some(t) => t,
+    None() => return Ok(()),
+  }
   task.scope(
     tasks,
     fn(s: Scope) {
@@ -43,25 +56,25 @@ const SLEEPERS: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
           }
         }
       )
-      let late = task.async(
-        s,
-        fn() -> bool {
-          let slept = match time.sleep(c, duration.from_parts(0, 60000000)) {
-            Ok(()) => true,
-            Error(_) => false,
-          }
-          let _ = out.print(output, "late\n")
-          slept
-        }
-      )
       let early = task.async(
         s,
         fn() -> bool {
-          let slept = match time.sleep(c, duration.from_parts(0, 20000000)) {
+          let slept = match clock.sleep_until(c, early_deadline) {
             Ok(()) => true,
             Error(_) => false,
           }
           let _ = out.print(output, "early\n")
+          slept
+        }
+      )
+      let late = task.async(
+        s,
+        fn() -> bool {
+          let slept = match clock.sleep_until(c, late_deadline) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+          let _ = out.print(output, "late\n")
           slept
         }
       )

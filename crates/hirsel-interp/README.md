@@ -540,7 +540,9 @@ changing authority or replay state; it then uses the same operation implementati
 layers override only intercepted hooks. `Operations::wait` is called only after all
 runnable work is exhausted. The simulation returns false (CONC-8); a host adapter may
 wait for external readiness and ask the scheduler to poll again. Parked operations are
-polled only at suspension points, so pure code does not issue readiness syscalls.
+polled only at suspension points, so pure code does not issue readiness syscalls. `Operations::wait_deadline`
+exposes a timer's absolute ticks to the scheduler: timer polls use deadline order,
+with equal deadlines in suspension order, in both virtual time and host adapters.
 
 Detached task results are released on the child's evaluator stack before completion;
 an already-completed result is released by detach's ordinary Complete.released work.

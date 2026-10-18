@@ -1187,6 +1187,16 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     fn operations_mut(&mut self) -> &mut dyn Operations {
         &mut self.library
     }
+    fn wait_deadline(&self, token: u64) -> Option<u64> {
+        match self.waits.get(&token) {
+            Some(wait) if wait.name == "clock.sleep_until" => match wait.arguments.get(1) {
+                Some(Value::Handle { kind, id }) if kind == "Instant" => Some(*id),
+                _ => None,
+            },
+            Some(_) => None,
+            None => self.library.wait_deadline(token),
+        }
+    }
     fn take_yield(&mut self) -> bool {
         let host = std::mem::take(&mut self.yield_now);
         self.library.take_yield() || host

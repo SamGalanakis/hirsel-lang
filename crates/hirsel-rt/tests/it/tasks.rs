@@ -212,3 +212,68 @@ fn cancel_names_a_child_of_its_scope_and_stacks_are_reused() {
     take_trace();
     assert_eq!(ctx.stats().live_blocks, 0);
 }
+
+// The host is deliberately stalled until all three timers are parked. Advancing
+// its clock is the blocking step before the first poll at which any timer is due.
+#[test]
+fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
+    use hirsel_rt::io::{Adapter, AdapterError, Binding, Completion, Request, UnitResult};
+    use std::{cell::Cell, rc::Rc};
+    struct Clock(Rc<Cell<u64>>);
+    impl Adapter for Clock {
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            let Request::SleepUntil { deadline, .. } = request else {
+                panic!("unexpected request: {request:?}")
+            };
+            if deadline <= self.0.get() {
+                Ok(Completion::Wait(Ok(())))
+            } else {
+                Err(AdapterError::Blocked)
+            }
+        }
+        fn ready(&mut self, _: u64) -> Result<bool, AdapterError> {
+            Ok(self.0.get() == 100)
+        }
+    }
+    unsafe extern "C" fn sleeper(ctx: *mut RunCtx, env: *mut Header) -> u8 {
+        let id = read_u64(env, 0);
+        let deadline = if id == 1 { 30 } else { 10 };
+        let mut result = MaybeUninit::<UnitResult>::uninit();
+        assert_eq!(
+            unsafe {
+                hirsel_rt::io::hirsel_rt_v2_clock_sleep_until(
+                    ctx,
+                    std::ptr::null_mut(),
+                    result.as_mut_ptr(),
+                    &2,
+                    &deadline,
+                )
+            },
+            0
+        );
+        assert_eq!(unsafe { result.assume_init() }.tag, 0);
+        trace(id);
+        let mut slot = [1u64, id];
+        unsafe { hirsel_rt_v2_task_finish(ctx, slot.as_mut_ptr().cast(), NONE.as_ptr().cast(), 16) }
+    }
+    let ctx = Ctx::diagnostic();
+    index(ctx.0, environment());
+    let now = Rc::new(Cell::new(0));
+    let mut binding = Box::new(Binding::new(Clock(now.clone())));
+    unsafe { binding.bind(&mut *ctx.0) };
+    let scope = enter(ctx.0);
+    let late = spawn(ctx.0, scope, sleeper, 1);
+    let early = spawn(ctx.0, scope, sleeper, 2);
+    let tied = spawn(ctx.0, scope, sleeper, 3);
+    // Let the last child reach its timer before making every deadline overdue.
+    unsafe { yield_now(ctx.0) };
+    assert!(take_trace().is_empty());
+    now.set(100);
+    assert_eq!(join(ctx.0, scope, late), (0, [1, 1]));
+    assert_eq!(join(ctx.0, scope, early), (0, [1, 2]));
+    assert_eq!(join(ctx.0, scope, tied), (0, [1, 3]));
+    assert_eq!(exit(ctx.0, scope), 0);
+    assert_eq!(take_trace(), [2, 3, 1]);
+    unsafe { (*ctx.0).bind_io_data(std::ptr::null_mut()) };
+    assert_eq!(ctx.stats().live_blocks, 0);
+}

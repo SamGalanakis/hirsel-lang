@@ -244,7 +244,9 @@ deadline-only interest under the entered token in the cooperative Readiness
 (`Readiness::timer`) and returns `Blocked`; `host_waits::may_park` includes it, so the task
 parks, the same request is reissued when `ready`, and a cancellation finishes the token,
 which removes the timer, and completes `WaitError::Canceled(cause)` with no host request. `Readiness::wait` with only timers left sleeps until the
-earliest. `State::sample` validates replayed draws and waits and, after a completed wait,
+earliest. The scheduler orders timer polls by the original `SleepUntil` ticks, including
+when several are overdue; equal deadlines retain suspension order. Host `Instant`
+rounding cannot reorder ties, and replay uses the same request deadlines. `State::sample` validates replayed draws and waits and, after a completed wait,
 refuses a later monotonic sample below its deadline. `instant.checked_add` is pure. Tape
 forms are `random_bytes` and `sleep_until` requests and `random` and `wait` completions.
 
@@ -362,7 +364,8 @@ single-threaded, with the reference interpreter's schedule:
 - one FIFO queue of runnable tasks;
 - a yield after every capability operation (`yield_now`, called by the Io entries and the task entries);
 - a task that must wait (a join, a scope exit) parks with what it waits for;
-- parked tasks are polled in park order at every yield and whenever the running task stops;
+- parked tasks are polled at every yield and whenever the running task stops; timer waits
+  use deadline order (ties by suspension order), other waits use park order;
 - a successful poll performs the wait's effect (a join's poll moves the result) and queues the task.
 
 Host requests park too (`host_waits.rs`). Every capability request goes through
