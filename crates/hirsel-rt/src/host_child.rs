@@ -114,9 +114,14 @@ impl HostChildren {
             HostCall::Read { child, stream, max } => {
                 Completion::ChildBytes(self.read(child, stream, max, readiness)?)
             }
-            HostCall::Wait { child } => Completion::ChildExit(self.wait(child, readiness)?),
-            HostCall::Kill { child } => {
-                let _ = self.child(child)?.child.kill();
+            HostCall::Wait { child, deadline } => {
+                Completion::ChildExit(self.wait(child, deadline, readiness)?)
+            }
+            // The child is unreaped until its wait or drop, so its pid still names it.
+            HostCall::Kill { child, signal } => {
+                let pid = self.child(child)?.child.id() as libc::pid_t;
+                // SAFETY: kill(2) on a live child's pid with a valid signal number.
+                unsafe { libc::kill(pid, signal.number()) };
                 Completion::ChildUnit(Ok(()))
             }
             // A child a cancelled wait took was dropped with its job already.
@@ -229,18 +234,22 @@ impl HostChildren {
     fn wait(
         &mut self,
         id: u64,
+        deadline: Option<u64>,
         readiness: Option<&Readiness>,
     ) -> Result<Result<ExitStatus, ProcessFailure>, AdapterError> {
         let outcome = match readiness {
             None => finish(
                 self.0.remove(&id).ok_or(AdapterError::InvalidHandle(id))?,
                 None,
+                deadline,
             ),
             Some(readiness) => {
                 let children = &mut self.0;
                 crate::process::cooperative_job(readiness, || {
                     let child = children.remove(&id)?;
-                    Some(Box::new(move |cancel| finish(child, Some(cancel))))
+                    Some(Box::new(move |cancel| {
+                        finish(child, Some(cancel), deadline)
+                    }))
                 })?
             }
         };
@@ -252,8 +261,13 @@ impl HostChildren {
 }
 
 /// Close input, read and discard both outputs to end of file, then reap. A readable
-/// `cancel` drops the child instead, which kills it.
-fn finish(mut child: HostChild, cancel: Option<RawFd>) -> ProcessOutcome {
+/// `cancel` drops the child instead, which kills it. At `deadline` the child gets
+/// SIGTERM, then SIGKILL after the grace, and is reaped: `TimedOut`.
+fn finish(mut child: HostChild, cancel: Option<RawFd>, deadline: Option<u64>) -> ProcessOutcome {
+    let timed_out = |child: &mut HostChild| {
+        crate::process::terminate(&mut child.child, cancel);
+        ProcessOutcome::Error(ProcessFailure::TimedOut)
+    };
     child.stdin = None;
     let mut open = [true, true];
     let mut chunk = vec![0u8; 64 * 1024];
@@ -283,8 +297,12 @@ fn finish(mut child: HostChild, cancel: Option<RawFd>) -> ProcessOutcome {
                 revents: 0,
             },
         ];
+        if deadline.is_some_and(|d| crate::process::monotonic_now() >= d) {
+            return timed_out(&mut child);
+        }
+        let timeout = crate::process::poll_timeout(deadline);
         // SAFETY: fds is a live array of three pollfd records.
-        if unsafe { libc::poll(fds.as_mut_ptr(), 3, -1) } < 0 {
+        if unsafe { libc::poll(fds.as_mut_ptr(), 3, timeout) } < 0 {
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
@@ -314,7 +332,7 @@ fn finish(mut child: HostChild, cancel: Option<RawFd>) -> ProcessOutcome {
         }
     }
     // A reaped child's Drop signals nothing: std keeps its status.
-    match crate::process::wait_child(&mut child.child, None, cancel) {
+    match crate::process::wait_child(&mut child.child, deadline, cancel) {
         Ok(Ended::Exited(status)) => match exit_status(status) {
             Some(status) => ProcessOutcome::Output {
                 status,
@@ -324,6 +342,7 @@ fn finish(mut child: HostChild, cancel: Option<RawFd>) -> ProcessOutcome {
             None => ProcessOutcome::Error(ProcessFailure::Fault(1)),
         },
         Ok(Ended::Canceled) => ProcessOutcome::Error(ProcessFailure::Canceled(0)),
-        Ok(Ended::Expired) | Err(_) => ProcessOutcome::Error(ProcessFailure::Fault(1)),
+        Ok(Ended::Expired) => timed_out(&mut child),
+        Err(_) => ProcessOutcome::Error(ProcessFailure::Fault(1)),
     }
 }

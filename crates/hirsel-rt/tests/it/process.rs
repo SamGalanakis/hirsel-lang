@@ -225,6 +225,9 @@ fn the_environment_holds_only_the_rule_names_and_the_directory_is_explicit() {
     );
 }
 
+/// Go os/exec's TestDedupEnvEcho and TestEnvNULCharacter (exec_test.go, adapted;
+/// third-party/NOTICES.md): a repeated name or a NUL is invalid input rather than
+/// deduplicated or a start failure.
 #[test]
 fn an_exact_environment_replaces_inheritance_and_names_only_granted_variables() {
     let (_temp, mut io, p) = host(&[("/usr/bin/env", &["HIRSEL_SET", "PATH"])]);
@@ -677,6 +680,7 @@ fn a_cat_child_streams_a_line_protocol_until_its_input_closes() {
     let wait = Request::ChildWait {
         process: p,
         child: c,
+        deadline: None,
     };
     assert_eq!(
         io.call(wait.clone()),
@@ -710,6 +714,88 @@ fn spawns_make_the_run_checks_and_child_operations_need_their_own_proc() {
     assert_eq!(io.call(write(p, c, b"x")), Ok(UNIT));
 }
 
+/// Go os/exec's graceful-stop tests (exec_test.go `TestWaitInterrupt`, adapted;
+/// third-party/NOTICES.md): a child that handles SIGTERM exits on its own terms, one that
+/// ignores it is killed once the wait's deadline and grace pass.
+#[test]
+fn a_chosen_signal_stops_a_child_and_a_wait_deadline_terminates_one_that_ignores_it() {
+    let (_temp, mut io, p) = host(&[(SH, &[]), ("/bin/sleep", &[]), ("/bin/true", &[])]);
+    let signal = |io: &mut RealIo, c, signal| {
+        io.call(Request::ChildKill {
+            process: p,
+            child: c,
+            signal,
+        })
+    };
+    let wait = |io: &mut RealIo, c, deadline| {
+        io.call(Request::ChildWait {
+            process: p,
+            child: c,
+            deadline,
+        })
+    };
+    let handles = spawned(
+        &mut io,
+        spawn(
+            p,
+            SH,
+            &[
+                "-c",
+                "trap 'exit 7' TERM; echo ready; while :; do sleep 0.05; done",
+            ],
+        ),
+    );
+    assert_eq!(read_line(&mut io, p, handles, 6), b"ready\n");
+    assert_eq!(signal(&mut io, handles, Signal::Terminate), Ok(UNIT));
+    assert_eq!(
+        wait(&mut io, handles, None),
+        Ok(Completion::ChildExit(Ok(ExitStatus::Exited(7))))
+    );
+    let sleeper = spawned(&mut io, spawn(p, "/bin/sleep", &["5"]));
+    assert_eq!(signal(&mut io, sleeper, Signal::Interrupt), Ok(UNIT));
+    assert_eq!(
+        wait(&mut io, sleeper, None),
+        Ok(Completion::ChildExit(Ok(ExitStatus::Signaled(2))))
+    );
+    // A child that ends before its deadline returns its status.
+    let (clock, now) = clock(&mut io);
+    let soon = |ns: u64| {
+        Some(Deadline {
+            clock,
+            ticks: now + ns,
+        })
+    };
+    let quick = spawned(&mut io, spawn(p, "/bin/true", &[]));
+    assert_eq!(
+        wait(&mut io, quick, soon(10_000_000_000)),
+        Ok(Completion::ChildExit(Ok(ExitStatus::Exited(0))))
+    );
+    // One that ignores SIGTERM is killed one grace period after its deadline.
+    let stubborn = spawned(
+        &mut io,
+        spawn(p, SH, &["-c", "trap '' TERM; echo ready; exec sleep 30"]),
+    );
+    assert_eq!(read_line(&mut io, p, stubborn, 6), b"ready\n");
+    let begun = std::time::Instant::now();
+    assert_eq!(
+        wait(&mut io, stubborn, soon(100_000_000)),
+        Ok(Completion::ChildExit(Err(ProcessFailure::TimedOut)))
+    );
+    assert!(begun.elapsed() >= TERMINATION_GRACE);
+    assert!(begun.elapsed() < std::time::Duration::from_secs(10));
+    // A deadline the clock already reached terminates at once, and its wait consumes the
+    // Child.
+    let late = spawned(&mut io, spawn(p, "/bin/sleep", &["30"]));
+    assert_eq!(
+        wait(&mut io, late, Some(Deadline { clock, ticks: now })),
+        Ok(Completion::ChildExit(Err(ProcessFailure::TimedOut)))
+    );
+    assert_eq!(
+        wait(&mut io, late, None),
+        Err(AdapterError::InvalidHandle(late))
+    );
+}
+
 #[test]
 fn kill_signals_the_child_writes_after_exit_are_input_closed_and_a_drop_kills() {
     let (temp, mut io, p) = host(&[(SH, &[]), ("/bin/true", &[])]);
@@ -717,13 +803,15 @@ fn kill_signals_the_child_writes_after_exit_are_input_closed_and_a_drop_kills() 
     let kill = Request::ChildKill {
         process: p,
         child: c,
+        signal: Signal::Kill,
     };
     assert_eq!(io.call(kill.clone()), Ok(UNIT));
     assert_eq!(io.call(kill), Ok(UNIT));
     assert_eq!(
         io.call(Request::ChildWait {
             process: p,
-            child: c
+            child: c,
+            deadline: None,
         }),
         Ok(Completion::ChildExit(Ok(ExitStatus::Signaled(9))))
     );
@@ -770,11 +858,13 @@ fn children_record_and_replay_without_spawning() {
     io.call(Request::ChildKill {
         process: p,
         child: c,
+        signal: Signal::Kill,
     })
     .unwrap();
     io.call(Request::ChildWait {
         process: p,
         child: c,
+        deadline: None,
     })
     .unwrap();
     let c = spawned(&mut io, spawn(p, "/bin/cat", &[]));
@@ -848,6 +938,7 @@ fn cooperative_reads_and_waits_park_and_a_cancelled_wait_kills_its_child() {
     let wait = Request::ChildWait {
         process: p,
         child: c,
+        deadline: None,
     };
     io.enter(6);
     let status = loop {
@@ -883,7 +974,8 @@ fn cooperative_reads_and_waits_park_and_a_cancelled_wait_kills_its_child() {
     assert_eq!(
         io.call(Request::ChildWait {
             process: p,
-            child: c
+            child: c,
+            deadline: None,
         }),
         Err(AdapterError::Blocked)
     );
@@ -944,7 +1036,8 @@ fn scripted_children_play_steps_wait_at_an_expect_and_fail_a_contradiction() {
     assert_eq!(
         io.call(Request::ChildWait {
             process: p,
-            child: c
+            child: c,
+            deadline: None,
         }),
         Ok(Completion::ChildExit(Ok(ExitStatus::Exited(4))))
     );

@@ -57,6 +57,7 @@ conformance/CAP/CAP-1-net-tls-truncate-run.hir
 conformance/CAP/CAP-1-net-ungranted-host-run.hir
 conformance/CAP/CAP-1-normalize-tree-example.hir
 conformance/CAP/CAP-1-output-no-added-newline.hir
+conformance/CAP/CAP-1-process-child-signal-run.hir
 conformance/CAP/CAP-1-process-env-run.hir
 conformance/CAP/CAP-1-process-env-scripted-run.hir
 conformance/CAP/CAP-1-process-projection-bad.hir
@@ -517,6 +518,7 @@ conformance/CONC/CONC-3-cancellation-shields-drop-run.hir
 conformance/CONC/CONC-3-check-canceled-run.hir
 conformance/CONC/CONC-3-child-local-scope.hir
 conformance/CONC/CONC-3-clock-cancel-sleep-run.hir
+conformance/CONC/CONC-3-clock-child-wait-deadline-run.hir
 conformance/CONC/CONC-3-clock-deadline-child-run.hir
 conformance/CONC/CONC-3-clock-deadline-finished-run.hir
 conformance/CONC/CONC-3-clock-deadline-inner-first-run.hir

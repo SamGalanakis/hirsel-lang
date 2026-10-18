@@ -188,6 +188,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ),
         ("GrantError", "", "NotGranted()"),
         ("ExitStatus", "", "Exited(i32)|Signaled(i32)"),
+        ("Signal", "", "Interrupt()|Terminate()|Kill()"),
         (
             "ChildStep",
             "",

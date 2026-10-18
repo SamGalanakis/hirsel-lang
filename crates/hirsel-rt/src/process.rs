@@ -13,7 +13,7 @@ use crate::handles::Grant;
 use crate::io::{AdapterError, Completion, Request, State};
 pub use hirsel_run_config::{
     ChildRun, ChildStep, ChildStream, Command, ExitStatus, ProcessFailure, ProcessOutcome,
-    ProcessRule, ProcessRun, ScriptChild, ScriptRead, bounded, canonical_program,
+    ProcessRule, ProcessRun, ScriptChild, ScriptRead, Signal, bounded, canonical_program,
 };
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -103,10 +103,11 @@ pub enum HostCall<'a> {
         stream: ChildStream,
         max: u64,
     },
-    /// [`Completion::ChildExit`].
-    Wait { child: u64 },
+    /// [`Completion::ChildExit`]; `TimedOut` only with a deadline, in CLOCK_MONOTONIC
+    /// nanoseconds.
+    Wait { child: u64, deadline: Option<u64> },
     /// [`Completion::ChildUnit`] `Ok`.
-    Kill { child: u64 },
+    Kill { child: u64, signal: Signal },
     /// The drop of a Child never waited: [`Completion::Unit`] `Ok`.
     Close { child: u64 },
 }
@@ -193,8 +194,15 @@ impl State {
                 self.child_grant(*process, *child)?;
                 (*max == 0).then_some(ProcessFailure::InvalidInput)
             }
-            Request::ChildWait { process, child } => {
+            Request::ChildWait {
+                process,
+                child,
+                deadline,
+            } => {
                 self.child_grant(*process, *child)?;
+                if let Some(d) = deadline {
+                    self.expect(d.clock, Grant::MonotonicClock)?;
+                }
                 None
             }
             _ => None,
@@ -467,9 +475,23 @@ impl State {
                     },
                 }
             }
-            Request::ChildWait { process, child } => {
+            Request::ChildWait {
+                process,
+                child,
+                deadline,
+            } => {
                 let (world, stdin_open) = self.child_grant(*process, *child)?;
                 let status = match world {
+                    // A scripted child takes no time: only a deadline the clock's latest
+                    // reading already reached ends it, at once and without checking an
+                    // Expect, as a kill does.
+                    ProcessWorld::Script(_)
+                        if deadline.is_some_and(|d| {
+                            self.last_monotonic.is_some_and(|now| now >= d.ticks)
+                        }) =>
+                    {
+                        Err(ProcessFailure::TimedOut)
+                    }
                     ProcessWorld::Script(_) => {
                         if stdin_open {
                             self.close_child_input(*child);
@@ -481,24 +503,43 @@ impl State {
                         let status = self.script_child(*child)?.status();
                         Ok(status.ok_or(AdapterError::InvalidCompletion)?)
                     }
-                    ProcessWorld::Host => match host(HostCall::Wait { child: *child })? {
+                    ProcessWorld::Host => match host(HostCall::Wait {
+                        child: *child,
+                        deadline: deadline.map(|d| d.ticks),
+                    })? {
                         Completion::ChildExit(Ok(status)) => Ok(status),
                         Completion::ChildExit(Err(failure @ ProcessFailure::Fault(_))) => {
                             Err(failure)
                         }
+                        Completion::ChildExit(Err(ProcessFailure::TimedOut))
+                            if deadline.is_some() =>
+                        {
+                            Err(ProcessFailure::TimedOut)
+                        }
                         _ => return Err(AdapterError::InvalidCompletion),
                     },
                 };
+                // A completed timeout proves the clock reached the deadline.
+                if let (Err(ProcessFailure::TimedOut), Some(d)) = (&status, deadline) {
+                    self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(d.ticks));
+                }
                 // The wait consumes the Child on every outcome.
                 self.end_child(*child);
                 Ok(Completion::ChildExit(status))
             }
-            Request::ChildKill { process, child } => {
+            Request::ChildKill {
+                process,
+                child,
+                signal,
+            } => {
                 let (world, _) = self.child_grant(*process, *child)?;
                 match world {
-                    ProcessWorld::Script(_) => self.script_child(*child)?.kill(),
+                    ProcessWorld::Script(_) => self.script_child(*child)?.kill(*signal),
                     ProcessWorld::Host => {
-                        if host(HostCall::Kill { child: *child })? != Completion::ChildUnit(Ok(()))
+                        if host(HostCall::Kill {
+                            child: *child,
+                            signal: *signal,
+                        })? != Completion::ChildUnit(Ok(()))
                         {
                             return Err(AdapterError::InvalidCompletion);
                         }
@@ -603,7 +644,7 @@ pub(crate) fn monotonic_now() -> u64 {
 }
 
 /// Milliseconds a poll may sleep before `deadline`, rounded up; -1 without one.
-fn poll_timeout(deadline: Option<u64>) -> libc::c_int {
+pub(crate) fn poll_timeout(deadline: Option<u64>) -> libc::c_int {
     deadline.map_or(-1, |d| {
         let left = d.saturating_sub(monotonic_now());
         left.div_ceil(1_000_000).min(libc::c_int::MAX as u64) as libc::c_int
@@ -676,7 +717,7 @@ fn kill(child: &mut std::process::Child) {
 }
 
 /// A timed-out child: SIGTERM, then SIGKILL once [`TERMINATION_GRACE`] passes, then reap.
-fn terminate(child: &mut std::process::Child, cancel: Option<RawFd>) {
+pub(crate) fn terminate(child: &mut std::process::Child, cancel: Option<RawFd>) {
     // SAFETY: the child is unreaped, so its pid still names it.
     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     let grace = monotonic_now() + TERMINATION_GRACE.as_nanos() as u64;
@@ -698,6 +739,18 @@ pub(crate) fn host_command(spec: &ProcessSpec<'_>, cwd: Option<RawFd>) -> std::p
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // A launcher that ignores SIGINT or SIGTERM must not make its children ignore the
+    // signals `child.kill` sends: each starts with their default dispositions.
+    // SAFETY: the hook only calls signal(2), which is async-signal-safe after fork.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            for signal in [libc::SIGINT, libc::SIGTERM] {
+                libc::signal(signal, libc::SIG_DFL);
+            }
+            Ok(())
+        });
+    }
     match &spec.env {
         ChildEnv::Inherit(names) => {
             for name in names {
@@ -1205,6 +1258,17 @@ unsafe fn command(ctx: *mut crate::RunCtx, at: *const u8) -> Command {
     }
 }
 
+/// One borrowed `Option[Deadline]`: u32 tag, the clock at 8 and the Instant's ticks at 16.
+unsafe fn deadline_of(at: *const u8) -> Option<Deadline> {
+    match unsafe { at.cast::<u32>().read() } {
+        0 => None,
+        _ => Some(Deadline {
+            clock: unsafe { at.add(8).cast::<u64>().read() },
+            ticks: unsafe { at.add(16).cast::<u64>().read() },
+        }),
+    }
+}
+
 /// # Safety
 /// Context is bound; Proc, the Command, the Bytes slice and the `Option[Deadline]` (u32
 /// tag, the clock at 8 and the Instant's ticks at 16) are borrowed live values; out is
@@ -1227,13 +1291,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
         command: unsafe { command(ctx, cmd) },
         stdin: unsafe { crate::io::slice_bytes(stdin_owner, stdin_start, stdin_length) }.to_vec(),
         max_output,
-        deadline: match unsafe { deadline.cast::<u32>().read() } {
-            0 => None,
-            _ => Some(Deadline {
-                clock: unsafe { deadline.add(8).cast::<u64>().read() },
-                ticks: unsafe { deadline.add(16).cast::<u64>().read() },
-            }),
-        },
+        deadline: unsafe { deadline_of(deadline) },
     };
     let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
@@ -1487,10 +1545,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_read_stderr(
     unsafe { child_read(ctx, out, p, c, buffer, max, ChildStream::Stderr) }
 }
 
-/// `child.wait(p, take c) -> Result[ExitStatus, ProcessError]`; the Child is consumed on
-/// every outcome, and closing at a scripted child's unmet Expect fails LANG-9.
+/// `child.wait(p, take c, deadline) -> Result[ExitStatus, ProcessError]`; the Child is
+/// consumed on every outcome, and closing at a scripted child's unmet Expect fails LANG-9.
 /// # Safety
-/// Context is bound; p readable; c the address of the transferred Child word; out writable.
+/// Context is bound; p readable; c the address of the transferred Child word; the
+/// `Option[Deadline]` (u32 tag, the clock at 8 and the Instant's ticks at 16) borrowed;
+/// out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_wait(
     ctx: *mut crate::RunCtx,
@@ -1498,10 +1558,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_wait(
     out: *mut ChildPairResult,
     p: *const u64,
     c: *mut u64,
+    deadline: *const u8,
 ) -> u8 {
     let request = Request::ChildWait {
         process: unsafe { p.read() },
         child: unsafe { c.read() },
+        deadline: unsafe { deadline_of(deadline) },
     };
     // Erasing the transferred word makes accidental reuse fail closed.
     unsafe { c.write(0) };
@@ -1514,18 +1576,22 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_wait(
     crate::STATUS_OK
 }
 
-/// `child.kill(p, mut c)`.
+/// `child.kill(p, mut c, signal)`.
 /// # Safety
-/// Context is bound; p readable; c the exclusive address of a live Child.
+/// Context is bound; p readable; c the exclusive address of a live Child; signal the
+/// borrowed `Signal` ordinal.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_child_kill(
     ctx: *mut crate::RunCtx,
     p: *const u64,
     c: *mut u64,
+    signal: *const u32,
 ) -> u8 {
     let request = Request::ChildKill {
         process: unsafe { p.read() },
         child: unsafe { c.read() },
+        signal: Signal::of_ordinal(unsafe { signal.read() })
+            .unwrap_or_else(|| crate::fault("Signal tag")),
     };
     match unsafe { crate::io::capability_call(ctx, request) } {
         Ok(Completion::ChildUnit(Ok(()))) => crate::STATUS_OK,

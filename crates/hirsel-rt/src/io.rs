@@ -165,10 +165,12 @@ pub enum Request {
     ChildWait {
         process: u64,
         child: u64,
+        deadline: Option<crate::process::Deadline>,
     },
     ChildKill {
         process: u64,
         child: u64,
+        signal: hirsel_run_config::Signal,
     },
     TestCheck {
         test: u64,

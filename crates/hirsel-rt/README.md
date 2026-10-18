@@ -261,11 +261,15 @@ completes `Checked(false)` (LANG-9). A host child goes through `HostCall` to
 block records its pipe as the token's interest and parks (a write that accepted bytes is
 committed, so it is no longer a cancellation point), and without cooperative admission it
 polls that pipe. `child.wait` closes input, discards the remaining output and reaps, as a
-`HostJob` under cooperative admission. Dropping a Child (`Request::Close`) closes its
+`HostJob` under cooperative admission; at its deadline the child gets SIGTERM, then SIGKILL
+after `TERMINATION_GRACE`, and the wait completes `TimedOut`. `child.kill` sends its
+`Signal` with kill(2) to the unreaped child; `host_command` resets SIGINT and SIGTERM to
+their default dispositions in every child, so a launcher that ignores them cannot make a
+child ignore them. Dropping a Child (`Request::Close`) closes its
 input, SIGKILLs and reaps it, then closes its outputs; a cancelled wait drops the Child
 it took (`host_waits.rs`). Child tape forms are `process_spawn`, `child_write`,
-`child_close_stdin`, `child_read` (with `stdout` or `stderr`), `child_wait` and
-`child_kill` requests, the dropped Child's `close`, and `spawned`, `child_unit`,
+`child_close_stdin`, `child_read` (with `stdout` or `stderr`), `child_wait` (with its
+deadline or `none`) and `child_kill` (with `interrupt`, `terminate` or `kill`) requests, the dropped Child's `close`, and `spawned`, `child_unit`,
 `child_bytes` and `child_exit` completions; `SimIo` replays them without spawning.
 
 ## Random draws and timer waits

@@ -17,7 +17,7 @@ pub use net::{
 };
 mod child;
 pub mod tls;
-pub use child::{ChildStream, ScriptChild, ScriptRead, child_mismatch, child_unmet};
+pub use child::{ChildStream, ScriptChild, ScriptRead, Signal, child_mismatch, child_unmet};
 mod process;
 pub use process::{
     ChildRun, ChildStep, Command, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome,

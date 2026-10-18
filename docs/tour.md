@@ -1364,8 +1364,8 @@ exact environment (`None()` passes through only the names the grant lists).
 `proc.run` runs one to completion with its stdin, an output bound and an
 optional `Deadline`: past it the child is stopped and the run returns `TimedOut()`.
 `proc.spawn` instead returns a `Child of p` to stream: `child.write`, `close_stdin`,
-`read_stdout` (0 at end of output), `read_stderr`, `wait` and `kill` each park only
-their task. Dropping a `Child` kills and reaps it. A process grant names exact
+`read_stdout` (0 at end of output), `read_stderr`, `wait` (with an optional deadline)
+and `kill` (with a chosen `Signal`) each park only their task. Dropping a `Child` kills and reaps it. A process grant names exact
 program paths. `test.process` scripts both kinds: a `ProcessScript` is one `proc.run`
 outcome, and a `ChildScript` plays `Print`, `Expect` and `Exit` steps against what the
 program writes. [testrun](../examples/testrun/main.hir) streams a real child under a
@@ -1411,7 +1411,7 @@ pub fn main(t: Test) -> Result[(), ProcessError] {
   let mut answer: List[u8] = []
   while child.read_stdout(p, mut calc, mut answer, 64u64)? > 0 {}
   test.check(t, bytes.from_list(take answer) == b"42\n")
-  test.check(t, child.wait(p, take calc) == Ok(Exited(0)))
+  test.check(t, child.wait(p, take calc, None()) == Ok(Exited(0)))
   Ok(())
 }
 ```

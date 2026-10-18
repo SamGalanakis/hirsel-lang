@@ -82,14 +82,14 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
   test.check(t, child.write(p, mut c, b"more") == Error(InputClosed()))
   child.close_stdin(p, mut c)
   test.check(t, child.write(p, mut c, b"x") == Error(InvalidInput()))
-  test.check(t, child.wait(p, take c) == Ok(Exited(3)))
+  test.check(t, child.wait(p, take c, None()) == Ok(Exited(3)))
   // A kill ends the script without checking its Expect.
   let mut second = proc.spawn(
     p,
     Command(program: path, args: ["-q"], dir: None(), env: None())
   )?
-  child.kill(p, mut second)
-  test.check(t, child.wait(p, take second) == Ok(Signaled(9)))
+  child.kill(p, mut second, Kill())
+  test.check(t, child.wait(p, take second, None()) == Ok(Signaled(9)))
   test.check(
     t,
     refused(

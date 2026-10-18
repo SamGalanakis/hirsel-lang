@@ -59,7 +59,7 @@ fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
   if list.len(line) > 0u64 {
     print_line(out, take line)
   }
-  match child.wait(p, take test) {
+  match child.wait(p, take test, None()) {
     Ok(Exited(0)) => Passed(),
     Ok(status) => Failed(status),
     Error(e) => NotRun(e),

@@ -29,6 +29,6 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
   let ran = proc.run(p, echo(Some([])), b"", 64u64, None())?
   test.check(t, ran.stdout == b"hi\n")
   let c = proc.spawn(p, echo(Some([])))?
-  test.check(t, child.wait(p, take c) == Ok(Exited(0)))
+  test.check(t, child.wait(p, take c, None()) == Ok(Exited(0)))
   Ok(())
 }

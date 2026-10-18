@@ -70,7 +70,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         Error(Canceled(e)) => cause(e),
         Error(_) => "failed",
       }
-      child.kill(p, mut test)
+      child.kill(p, mut test, Kill())
       f"{utf8(take first)}{outcome}"
     }
   )

@@ -67,7 +67,7 @@ rules of the `Proc` they are given before any host effect; a failed check return
 names: those the launcher has set, or exactly the program's own values for them, never
 another name. Its working directory is set only by an explicit `Dir`. A
 streaming `Child of p` carries `p`'s authority, and every operation on it takes `p` as
-well ([CAP-2](#cap-2-charged-at-use)). A run's deadline names a `MonotonicClock` the
+well ([CAP-2](#cap-2-charged-at-use)). A run's or a wait's deadline names a `MonotonicClock` the
 program already holds; it grants nothing, and no implicit clock is read. The child's own
 file system, network and process access is outside Hirsel's model: granting a program is
 trusting it with whatever the host lets it do ([processes](core-library.md#processes)).

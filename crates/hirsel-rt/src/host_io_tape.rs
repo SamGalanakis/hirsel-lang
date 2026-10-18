@@ -1,7 +1,7 @@
 //! Additional typed tape forms for host streams, exact environment reads, processes,
 //! random draws and timer waits.
 use crate::io::{ClockError, Completion, EnvError, InputError, RandomError, Request, WaitError};
-use hirsel_run_config::{ChildStream, ExitStatus, ProcessFailure, ProcessOutcome, hex};
+use hirsel_run_config::{ChildStream, ExitStatus, ProcessFailure, ProcessOutcome, Signal, hex};
 
 fn failure_word(failure: ProcessFailure) -> String {
     match failure {
@@ -107,8 +107,23 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
                 ChildStream::Stderr => "stderr",
             }
         ),
-        Request::ChildWait { process, child } => format!("child_wait {process} {child}"),
-        Request::ChildKill { process, child } => format!("child_kill {process} {child}"),
+        Request::ChildWait {
+            process,
+            child,
+            deadline,
+        } => format!("child_wait {process} {child} {}", deadline_word(*deadline)),
+        Request::ChildKill {
+            process,
+            child,
+            signal,
+        } => format!(
+            "child_kill {process} {child} {}",
+            match signal {
+                Signal::Interrupt => "interrupt",
+                Signal::Terminate => "terminate",
+                Signal::Kill => "kill",
+            }
+        ),
         _ => return None,
     })
 }
@@ -334,13 +349,20 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             },
             max: number(max)?,
         },
-        ["child_wait", process, child] => Request::ChildWait {
+        ["child_wait", process, child, deadline] => Request::ChildWait {
             process: number(process)?,
             child: number(child)?,
+            deadline: parse_deadline(deadline)?,
         },
-        ["child_kill", process, child] => Request::ChildKill {
+        ["child_kill", process, child, signal] => Request::ChildKill {
             process: number(process)?,
             child: number(child)?,
+            signal: match *signal {
+                "interrupt" => Signal::Interrupt,
+                "terminate" => Signal::Terminate,
+                "kill" => Signal::Kill,
+                _ => return Err("bad process tape signal".into()),
+            },
         },
         _ => return Ok(None),
     }))

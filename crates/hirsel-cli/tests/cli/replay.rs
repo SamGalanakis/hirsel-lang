@@ -455,12 +455,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   if child.read_stdout(p, mut c, mut rest, 64u64) == Ok(0u64) {
     let _ = out.print(out, "eof\n")
   }
-  if child.wait(p, take c) == Ok(Exited(0)) {
+  if child.wait(p, take c, None()) == Ok(Exited(0)) {
     let _ = out.print(out, "exited 0\n")
   }
   let mut killed = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None())) ? failed
-  child.kill(p, mut killed)
-  if child.wait(p, take killed) == Ok(Signaled(9)) {
+  child.kill(p, mut killed, Kill())
+  if child.wait(p, take killed, None()) == Ok(Signaled(9)) {
     let _ = out.print(out, "killed\n")
   }
   let _ = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None()))

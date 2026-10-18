@@ -1,0 +1,32 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// child.kill sends the chosen signal: a scripted child ends at once with that signal's
+// number, without checking its Expect, and a child that already ended keeps its status.
+fn cat() -> ChildScript {
+  ChildScript(program: "/bin/cat", args: [], steps: [Expect(b"never\n")])
+}
+
+fn plain() -> Command {
+  Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None())
+}
+
+pub fn exercise(t: Test) -> Result[(), ProcessError] {
+  let ended = ChildScript(program: "/bin/cat", args: [], steps: [Exit(Exited(4))])
+  let p = test.process(t, [], [cat(), cat(), cat(), ended])
+  let mut stopped = proc.spawn(p, plain())?
+  child.kill(p, mut stopped, Terminate())
+  test.check(t, child.wait(p, take stopped, None()) == Ok(Signaled(15)))
+  let mut interrupted = proc.spawn(p, plain())?
+  child.kill(p, mut interrupted, Interrupt())
+  // Signalling again has no further effect.
+  child.kill(p, mut interrupted, Kill())
+  test.check(t, child.wait(p, take interrupted, None()) == Ok(Signaled(2)))
+  let mut killed = proc.spawn(p, plain())?
+  child.kill(p, mut killed, Kill())
+  test.check(t, child.wait(p, take killed, None()) == Ok(Signaled(9)))
+  let mut exited = proc.spawn(p, plain())?
+  child.kill(p, mut exited, Terminate())
+  test.check(t, child.wait(p, take exited, None()) == Ok(Exited(4)))
+  Ok(())
+}

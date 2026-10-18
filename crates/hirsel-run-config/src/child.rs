@@ -11,6 +11,30 @@ pub enum ChildStream {
     Stderr,
 }
 
+/// `Signal`, in its docs/spec/core-library.md variant order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Signal {
+    Interrupt,
+    Terminate,
+    Kill,
+}
+impl Signal {
+    /// The signal's Linux number, the one `Signaled` reports.
+    pub fn number(self) -> i32 {
+        match self {
+            Signal::Interrupt => 2,
+            Signal::Terminate => 15,
+            Signal::Kill => 9,
+        }
+    }
+    /// The signal of variant ordinal `ordinal`.
+    pub fn of_ordinal(ordinal: u32) -> Option<Self> {
+        [Signal::Interrupt, Signal::Terminate, Signal::Kill]
+            .get(ordinal as usize)
+            .copied()
+    }
+}
+
 /// One spawned scripted child. Its steps play in order: `Print` and `PrintErr` make bytes
 /// available at once, `Expect` waits for the program's input, and `Exit` (or the end of
 /// the steps) ends the child.
@@ -126,10 +150,11 @@ impl ScriptChild {
             None => ScriptRead::Waiting,
         }
     }
-    /// `child.kill`: end the script without checking an `Expect`; an ended child keeps
-    /// its status.
-    pub fn kill(&mut self) {
-        self.exit.get_or_insert(ExitStatus::Signaled(9));
+    /// `child.kill`: any signal ends the script at once without checking an `Expect`; an
+    /// ended child keeps its status.
+    pub fn kill(&mut self, signal: Signal) {
+        self.exit
+            .get_or_insert(ExitStatus::Signaled(signal.number()));
     }
     /// The ended child's status: after its input closed with no unmet `Expect`, always
     /// present.
@@ -222,11 +247,11 @@ mod tests {
             c.close_stdin(),
             Some("test failure: child /bin/cat expected b\"ping\" but the program closed its input after writing b\"pi\"\n".into())
         );
-        c.kill();
+        c.kill(Signal::Terminate);
         assert_eq!(c.close_stdin(), None);
-        assert_eq!(c.status(), Some(ExitStatus::Signaled(9)));
+        assert_eq!(c.status(), Some(ExitStatus::Signaled(15)));
         let mut ended = child(vec![]);
-        ended.kill();
+        ended.kill(Signal::Kill);
         assert_eq!(ended.status(), Some(ExitStatus::Exited(0)));
     }
 }

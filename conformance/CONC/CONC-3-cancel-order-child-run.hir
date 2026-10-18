@@ -46,7 +46,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         Arithmetic()
       )
       failure.check(
-        child.wait(p, take child) == Error(Canceled(DeadlineExceeded())),
+        child.wait(p, take child, None()) == Error(Canceled(DeadlineExceeded())),
         Arithmetic()
       )
       failure.check(

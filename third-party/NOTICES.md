@@ -112,6 +112,7 @@ the license named in its row; the license texts follow once each.
 | Rust libm crate | `libm/src/math/` exp, exp2, expm1, log, log2, log10, log1p, pow, cbrt, hypot, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, asinh, acosh, atanh and their `f` forms, kernels, rem_pio2, rem_pio2_large, generic copysign and scalbn; unit-test vectors | `stdlib/std@1/f{32,64}_{exp,power,trig,hyperbolic}.hir`, `stdlib/std@1/libm.hir`, `tools/generate-float-math.py`, `conformance/SEM/SEM-2-std-float-*` | rust-lang/compiler-builtins `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT; musl and FreeBSD msun notices below |
 | libm-test | `libm-test/src/generate/case_list.rs` MPFR-checked vectors, `src/precision.rs` ULP bounds | `conformance/SEM/SEM-2-std-float-libm-mpfr-run.hir`, `docs/spec/std-library.md` | rust-lang/compiler-builtins `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | compiler-builtins | `compiler-builtins/src/float/pow.rs` (`__powidf2`, `__powisf2`) | `tools/generate-float-math.py` powi | rust-lang/compiler-builtins `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
+| Go standard library | `src/os/exec/exec_test.go` TestWaitInterrupt (graceful interrupt, then kill after a delay), TestDedupEnvEcho and TestEnvNULCharacter; Hirsel refuses a repeated or NUL-bearing variable as invalid input where Go deduplicates or fails at start | host process tests in `crates/hirsel-rt/tests/it/process.rs` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 

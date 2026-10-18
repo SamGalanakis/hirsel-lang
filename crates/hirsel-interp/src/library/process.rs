@@ -10,8 +10,8 @@ use super::{
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
     ChildRun, ChildStep, ChildStream, Command, ExitStatus, ProcessFailure, ProcessGrant,
-    ProcessOutcome, ProcessRule, ProcessRun, ProviderContract, ScriptChild, ScriptRead, bounded,
-    canonical_program, scriptable,
+    ProcessOutcome, ProcessRule, ProcessRun, ProviderContract, ScriptChild, ScriptRead, Signal,
+    bounded, canonical_program, scriptable,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
@@ -707,11 +707,24 @@ impl Simulation {
                 // The wait consumes its Child on every outcome.
                 consumed.push(1);
                 let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                let deadline = deadline(arg(a, 2)?)?;
+                if deadline.is_some_and(
+                    |(clock, _)| !matches!(clock, Value::Handle { kind, .. } if kind == "MonotonicClock"),
+                ) {
+                    return Err(invalid("expected MonotonicClock"));
+                }
                 match canceled {
                     // A canceled wait drops the Child it took.
                     Some(cause) => {
                         report = self.close_child(child);
                         error(failure_value(ProcessFailure::Canceled(cause)))
+                    }
+                    // A scripted child takes no time: a reached deadline ends it at once,
+                    // without checking an Expect, as a kill does.
+                    None if deadline.is_some_and(|(_, ticks)| ticks <= self.monotonic_now()) => {
+                        self.grants.remove(&child);
+                        self.script_children.remove(&child);
+                        error(failure_value(ProcessFailure::TimedOut))
                     }
                     None => {
                         if open {
@@ -730,7 +743,12 @@ impl Simulation {
             }
             "child.kill" => {
                 let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
-                self.script_child(child)?.kill();
+                let signal = match arg(a, 2)? {
+                    Value::Variant { variant, .. } => Signal::of_ordinal(*variant),
+                    _ => None,
+                }
+                .ok_or_else(|| invalid("Signal representation"))?;
+                self.script_child(child)?.kill(signal);
                 Value::Unit
             }
             _ => return Err(invalid("unknown child operation")),

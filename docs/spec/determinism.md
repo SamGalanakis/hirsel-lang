@@ -305,8 +305,9 @@ below its deadline.
 
 A streaming child is recorded at the stream API, as a network stream is: `proc.spawn` (the
 `Proc` handle and the command; the `Child` handle or the error), each `child.write` (every byte; success or the error), each read (the stream and
-`max`; exactly the bytes it delivered, end of stream or the error), `close_stdin`, `kill`,
-`wait` (the `ExitStatus` or the error) and the close of a dropped `Child`. The bytes `wait`
+`max`; exactly the bytes it delivered, end of stream or the error), `close_stdin`, `kill`
+(the signal), `wait` (the deadline's clock handle and ticks or none; the `ExitStatus` or
+the error, `TimedOut()` included) and the close of a dropped `Child`. The bytes `wait`
 discards are never recorded. Reads, writes and waits park and are readied as recorded.
 
 Replay returns the recorded completions without spawning, reading or writing anything, and

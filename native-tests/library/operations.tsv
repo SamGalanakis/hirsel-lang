@@ -77,10 +77,10 @@ channel.send	1af845bd79e436af77dfc498bebc2a072c2e18e6687b1f07966841bb6b1aa386	0:
 char.from_u32	327bf26e864a8a95cf96ca21b9e1f1455438f2028a925c37d6fe90732f6915c7	0:b:n->n
 char.to_u32	c6a01b7e6bf62e0222da44960aca15842cbb2a20338bcb52ddb4d63720658fbf	0:b:n->n
 child.close_stdin	19dcc1e359c9e3345459bff72c0bf2b6063b183cb3d326fef3384b8abf804c16	0:b:n;1:m:n->n
-child.kill	125233f6d4be18ea302019e1175df93038541968f649536dae5630faca7ae7f7	0:b:n;1:m:n->n
+child.kill	633c91a5057ba4caa53cdbf8e65844db58862e1634f1872377a0b3fcaab9d5b8	0:b:n;1:m:n;2:b:n->n
 child.read_stderr	1535a943150b07095e1174b386176720747603d75c289419aa3f612ae5e5f3e9	0:b:n;1:m:n;2:m:n;3:b:n->n
 child.read_stdout	e735614ab98afe16f041a385cb3e68064228d6fa22dce5dea74d3487eef33101	0:b:n;1:m:n;2:m:n;3:b:n->n
-child.wait	8d72ebe7b4338311ae0c5fce0a4884968d60a9903ddb5db7e5774fc52cdd2fd9	0:b:n;1:t:n->n
+child.wait	c716362b28087e78f9c07288adeebdcf719d2909b4a215632e1d0c223eb526e6	0:b:n;1:t:n;2:b:n->n
 child.write	6d1721eb7f83b560dbb922296993be1db41754e9a0fbc47980dad485a47a2bb1	0:b:n;1:m:n;2:b:n->n
 clock.monotonic	f34cd5be04b681f9ee9c465db634ef36e9b0cb94293d6c48b0c087bbfb696fe0	0:b:n->n
 clock.sleep_until	6bf0477c02309ab8c3c88085c89b72d8c5b9ad67cefbd28672ab1151601b88c2	0:b:n;1:b:n->n

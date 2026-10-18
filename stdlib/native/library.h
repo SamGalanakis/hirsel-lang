@@ -224,6 +224,6 @@ uint8_t hirsel_rt_v2_child_write(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_pa
 uint8_t hirsel_rt_v2_child_close_stdin(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
 uint8_t hirsel_rt_v2_child_read_stdout(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);
 uint8_t hirsel_rt_v2_child_read_stderr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);
-/* The Child word is transferred and zeroed. */
-uint8_t hirsel_rt_v2_child_wait(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_pair_result*, const uint64_t*, uint64_t*);
-uint8_t hirsel_rt_v2_child_kill(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
+/* The Child word is transferred and zeroed; the trailing operand is Option[Deadline]. */
+uint8_t hirsel_rt_v2_child_wait(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_pair_result*, const uint64_t*, uint64_t*, const void*);
+uint8_t hirsel_rt_v2_child_kill(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, const uint32_t*);

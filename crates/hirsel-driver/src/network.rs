@@ -778,10 +778,12 @@ impl HostLibrary {
             "child.wait" => R::ChildWait {
                 process,
                 child: self.id(&a[1])?,
+                deadline: self.deadline(&a[2])?,
             },
             "child.kill" => R::ChildKill {
                 process,
                 child: self.id(&a[1])?,
+                signal: hirsel_rt::process::Signal::of_ordinal(tag(&a[2])?).ok_or_else(invalid)?,
             },
             _ => return Err(Error::Unavailable(format!("host process {name}"))),
         };
@@ -876,16 +878,12 @@ impl HostLibrary {
             env,
         }))
     }
-    fn process_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
-        let Some(command) = self.command(&a[1])? else {
-            return Ok(OperationResult::returned(process_value(
-                ProcessOutcome::Error(ProcessFailure::InvalidInput),
-            )));
-        };
-        let deadline = match tag(&a[4])? {
+    /// An `Option[Deadline]` value: its clock handle and the Instant's ticks.
+    fn deadline(&self, v: &Value) -> Result<Option<hirsel_rt::process::Deadline>, Error> {
+        Ok(match tag(v)? {
             0 => None,
             _ => {
-                let deadline = fields(fields(&a[4])?[0])?;
+                let deadline = fields(fields(v)?[0])?;
                 let Value::Handle { kind, id: ticks } = deadline[1] else {
                     return Err(invalid());
                 };
@@ -897,7 +895,15 @@ impl HostLibrary {
                     ticks: *ticks,
                 })
             }
+        })
+    }
+    fn process_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
+        let Some(command) = self.command(&a[1])? else {
+            return Ok(OperationResult::returned(process_value(
+                ProcessOutcome::Error(ProcessFailure::InvalidInput),
+            )));
         };
+        let deadline = self.deadline(&a[4])?;
         let request = R::ProcessRun {
             process: self.id(&a[0])?,
             command,

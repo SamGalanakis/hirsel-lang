@@ -1178,14 +1178,14 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_child_wait",
         destination: true,
         result: Some((12, 4)),
-        parameters: &[Physical::Pointer, Physical::Pointer],
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         caller_site: false,
         symbol: "hirsel_rt_v2_child_kill",
         destination: false,
         result: None,
-        parameters: &[Physical::Pointer, Physical::Pointer],
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         caller_site: false,

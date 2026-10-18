@@ -154,6 +154,31 @@ fn script(v: &OpValue) -> Option<ProcessRun> {
 }
 
 impl Io {
+    /// An `Option[Deadline]` value as H's clock handle, the Instant's ticks, the clock's
+    /// reading now and the runtime model's clock handle; `Err` is the CAP-2 failure of an
+    /// unreadable clock.
+    #[allow(clippy::type_complexity)]
+    fn deadline(&mut self, v: &OpValue) -> Option<Result<Option<(u64, u64, u64, u64)>, OpOutcome>> {
+        Some(Ok(match variant(v)? {
+            (0, _) => None,
+            (1, OpValue::Aggregate(fields)) => match fields.as_slice() {
+                [OpValue::Handle(clock), OpValue::Handle(at)] => {
+                    let Some(now) = self.monotonic(*clock) else {
+                        return Some(Err(OpOutcome::Fail("CAP-2".into())));
+                    };
+                    self.network.observe_monotonic(now);
+                    let network = &mut self.network;
+                    let script = *self
+                        .script_clocks
+                        .entry(*clock)
+                        .or_insert_with(|| network.monotonic_clock());
+                    Some((*clock, *at, now, script))
+                }
+                _ => return None,
+            },
+            _ => return None,
+        }))
+    }
     /// A `Command` value. The model's Dir handles are H's own, so its Dir is checked here
     /// and not passed on: a scripted world does not consult it, and the model has no host
     /// world to start one in. `Err` is the CAP-2 failure of a value that is not a Dir.
@@ -216,24 +241,9 @@ impl Io {
             (Some("proc"), "run", [p, cmd, stdin, max, deadline]) => {
                 // The runtime's policy checks a deadline against the clock's reading, which
                 // H owns; a run that starts before it is reached races it.
-                let deadline = match variant(deadline)? {
-                    (0, _) => None,
-                    (1, OpValue::Aggregate(fields)) => match fields.as_slice() {
-                        [OpValue::Handle(clock), OpValue::Handle(at)] => {
-                            let Some(now) = self.monotonic(*clock) else {
-                                return Some(OpOutcome::Fail("CAP-2".into()));
-                            };
-                            self.network.observe_monotonic(now);
-                            let network = &mut self.network;
-                            let script = *self
-                                .script_clocks
-                                .entry(*clock)
-                                .or_insert_with(|| network.monotonic_clock());
-                            Some((*clock, *at, now, script))
-                        }
-                        _ => return None,
-                    },
-                    _ => return None,
+                let deadline = match self.deadline(deadline)? {
+                    Ok(deadline) => deadline,
+                    Err(fail) => return Some(fail),
                 };
                 let command = match self.command(cmd)? {
                     Ok(command) => command,
@@ -300,8 +310,50 @@ impl Io {
                         },
                         max: word(max)?,
                     },
-                    ("wait", []) => R::ChildWait { process, child },
-                    ("kill", []) => R::ChildKill { process, child },
+                    ("wait", [deadline]) => {
+                        let deadline = match self.deadline(deadline)? {
+                            Ok(deadline) => deadline,
+                            Err(fail) => return Some(fail),
+                        };
+                        let request = R::ChildWait {
+                            process,
+                            child,
+                            deadline: deadline.map(|(_, at, _, clock)| {
+                                hirsel_rt::process::Deadline { clock, ticks: at }
+                            }),
+                        };
+                        return Some(match self.child(name, args, request, cancellation) {
+                            // A wait that started before its deadline and found its child's
+                            // status races it, as a run does.
+                            OpOutcome::Complete {
+                                result: Ok(value),
+                                consumed,
+                            } if cancellation.is_none()
+                                && deadline.is_some_and(|(_, at, now, _)| at > now)
+                                && matches!(variant(&value), Some((0, _))) =>
+                            {
+                                let (clock, at, ..) = deadline.unwrap();
+                                OpOutcome::Deadline {
+                                    clock,
+                                    at,
+                                    completed: Box::new(OpOutcome::Complete {
+                                        result: Ok(value),
+                                        consumed: consumed.clone(),
+                                    }),
+                                    timed_out: Box::new(OpOutcome::Complete {
+                                        result: Ok(v(1, failure(ProcessFailure::TimedOut))),
+                                        consumed,
+                                    }),
+                                }
+                            }
+                            outcome => outcome,
+                        });
+                    }
+                    ("kill", [signal]) => R::ChildKill {
+                        process,
+                        child,
+                        signal: hirsel_rt::process::Signal::of_ordinal(variant(signal)?.0)?,
+                    },
                     _ => return None,
                 };
                 return Some(self.child(name, args, request, cancellation));

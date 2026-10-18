@@ -99,8 +99,8 @@ N fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessE
 N fn child.close_stdin(p: Proc, mut c: Child of p) -> ()
 fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
 fn child.read_stderr(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
-N fn child.wait(p: Proc, take c: Child of p) -> Result[ExitStatus, ProcessError]
-N fn child.kill(p: Proc, mut c: Child of p) -> ()
+N fn child.wait(p: Proc, take c: Child of p, deadline: Option[Deadline]) -> Result[ExitStatus, ProcessError]
+N fn child.kill(p: Proc, mut c: Child of p, signal: Signal) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R

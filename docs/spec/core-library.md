@@ -137,8 +137,8 @@ N fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessE
 N fn child.close_stdin(p: Proc, mut c: Child of p) -> ()
 fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
 fn child.read_stderr(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
-N fn child.wait(p: Proc, take c: Child of p) -> Result[ExitStatus, ProcessError]
-N fn child.kill(p: Proc, mut c: Child of p) -> ()
+N fn child.wait(p: Proc, take c: Child of p, deadline: Option[Deadline]) -> Result[ExitStatus, ProcessError]
+N fn child.kill(p: Proc, mut c: Child of p, signal: Signal) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
@@ -732,6 +732,7 @@ The process data types are root core types, with variant ordinals in the order w
 
 ```text
 ExitStatus    = Exited(i32) | Signaled(i32)
+Signal        = Interrupt() | Terminate() | Kill()
 ProcessOutput = { status: ExitStatus, stdout: Bytes, stderr: Bytes }
 ProcessError  = NotGranted() | InvalidInput() | NotFound() | PermissionDenied()
               | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause)
@@ -774,7 +775,8 @@ environment names bound what a child can see from either source, as an `Env` gra
 A missing executable is `NotFound()`, one the host refuses to execute `PermissionDenied()`,
 and any other spawn, stream or wait failure `Fault(code)`, a capability input like other
 fault codes. A child that exits has status `Exited(code)`, one ended by a signal
-`Signaled(number)`; a nonzero status is an ordinary `Ok`, not an error. The host provider
+`Signaled(number)`; a nonzero status is an ordinary `Ok`, not an error. A child starts with
+the default disposition of SIGINT and SIGTERM, whatever the launcher's. The host provider
 signals only the child itself, never processes it started.
 
 **One-shot runs.** `proc.run` writes `stdin` to the child's standard input, which is then
@@ -814,11 +816,18 @@ authority, whose operations take the same `Proc`
   `InvalidInput()`, and an error appends nothing. `child.read_stderr` is the same for
   standard error. A stream is a pipe of bounded host capacity: a child that fills one
   nobody reads waits until it is read.
-- `child.wait(p, take c)` closes standard input if it is open, reads and discards whatever
-  the child still writes to either stream until the child exits, reaps it and returns its
-  `ExitStatus`. It consumes the Child on every outcome.
-- `child.kill(p, mut c)` sends SIGKILL to the child; a later `wait` returns `Signaled(9)`
-  unless the child had already exited. Killing again has no effect.
+- `child.wait(p, take c, deadline)` closes standard input if it is open, reads and
+  discards whatever the child still writes to either stream until the child exits, reaps
+  it and returns its `ExitStatus`. With `deadline` `Some(d)` the wait must end by `d.at`,
+  as a `proc.run` deadline: when `d.clock` reaches it first (or has already reached it),
+  the child is sent SIGTERM, then SIGKILL if it has not exited one second later, and once
+  it is reaped the result is `TimedOut()`. It consumes the Child on every outcome.
+- `child.kill(p, mut c, signal)` sends the child `signal`: SIGINT for `Interrupt()`,
+  SIGTERM for `Terminate()`, SIGKILL for `Kill()`. A later `wait` returns `Signaled(n)`
+  with the signal's number (2, 15 or 9) unless the child handled or ignored it or had
+  already exited. Signalling an exited child has no effect. Stopping a child gracefully
+  within a grace period `g` is `child.kill(p, c, Terminate())` followed by a `wait` whose
+  deadline is `g` away.
 
 `child.write`, the reads and `child.wait` park their task until they can proceed. A write or
 read is a cancellation point only before it has an effect: a write before any byte is
@@ -861,8 +870,10 @@ its own (with none, `NotFound()`) and plays its steps in order:
 
 A read of a stream with no available bytes waits while the child is at an `Expect`, as a
 host read does, and so can leave a run Blocked ([CONC-8](concurrency.md#conc-8-global-quiescence)).
-Writes never wait. `child.kill` ends the script at once without checking an `Expect`, and a
-later `wait` returns `Signaled(9)`. Every scripted operation is recorded as the same request
+Writes never wait. `child.kill` with any signal ends the script at once without checking an
+`Expect`, and a later `wait` returns `Signaled(n)` with that signal's number. A scripted
+child takes no time: a `wait` deadline matters only when `d.clock` has already reached it,
+which ends the script the same way and returns `TimedOut()`. Every scripted operation is recorded as the same request
 and completion a host child produces, so a simulated run replays like a real one
 ([process recording](determinism.md#process-recording)).
 
