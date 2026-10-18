@@ -443,6 +443,23 @@ fn io_relative(root: &str, path: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 impl Io {
+    /// `request`'s completion from the runtime's scripted model. A source that cannot answer
+    /// yet (a stalled peer, a child at an `Expect`) leaves the model as it was and is
+    /// `Pending`: H suspends the task and re-issues the request at each poll.
+    fn script(
+        &mut self,
+        request: hirsel_rt::io::Request,
+    ) -> Result<hirsel_rt::io::Completion, OpOutcome> {
+        let before = self.network.clone();
+        match self.network.call(request) {
+            Ok(completion) => Ok(completion),
+            Err(hirsel_rt::io::AdapterError::Blocked) => {
+                self.network = before;
+                Err(OpOutcome::Pending)
+            }
+            Err(_) => Err(OpOutcome::Unsupported),
+        }
+    }
     fn grant(&mut self, grant: IoGrant) -> u64 {
         let id = self.next;
         self.next += 1;

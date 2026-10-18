@@ -376,6 +376,8 @@ reading (`Operations::monotonic`, `advance_monotonic`); H owns what waits for it
   yields first. A poll completes it when its task is canceled (the model's `canceled`
   outcome) or the reading reached its deadline (the operation is performed again); the task
   then runs the call again and takes that completion, its yield spent.
+- `OpOutcome::Pending`, a stalled scripted source, is suspended the same way with no
+  deadline (below).
 - A scope deadline is armed by `TaskScopeEnterUntil` (above).
 - `OpOutcome::Deadline` is an operation racing its own deadline (`proc.run` with
   `Some(deadline)`): it completes, or times out when the deadline fires first.
@@ -405,9 +407,14 @@ The driver's model grants a monotonic clock, and a Main launch's scripted proces
 clock is never granted. Its `proc.run` goes through the runtime's scripted policy
 (`hirsel_rt::io_net_script::ScriptIo`) with the deadline's reading, so a deadline already
 reached times the run out before it takes an entry, and a run that took one before its
-deadline is an `OpOutcome::Deadline` race. A host (non-scripted) process child, a Main
-launch's scripted network world, and a wait on a stalled scripted peer or child remain
-outside H's model: those operations are Unsupported.
+deadline is an `OpOutcome::Deadline` race. A scripted source that cannot answer yet (a
+stalled peer, a child at an `Expect`) leaves the model as it was and is `OpOutcome::Pending`:
+H suspends its task as it suspends a timer wait (it yields first), re-issues the request at
+each poll until the source answers, and completes it `Canceled` once its task is canceled. A
+pending wait is no event source, so with nothing else pending the run is Blocked. The two
+stalled-source controls in `tests/it/clock.rs` cover a scope deadline ending one (with a
+leak on that path and its fixed twin) and a run left Blocked. A host (non-scripted) process
+child remains outside H's model: its operations are Unsupported.
 
 `exec/channels.rs` is the runtime's channel table (CONC-6). Each queued message is a harness
 root, a send and a receive move it out of and into the bodies' `Option` slots, and the last

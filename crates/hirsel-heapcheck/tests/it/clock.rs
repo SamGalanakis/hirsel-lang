@@ -38,8 +38,9 @@ fn done(completed: bool) -> OpValue {
 }
 
 /// `sleep(clock, until) -> bool`: true once the reading reached `until`, false when canceled
-/// (a cancellation point). `run(clock, at) -> bool`: an instant run racing its deadline `at`,
-/// false when the deadline fires first. `print(u64)` as the fixtures print.
+/// (a cancellation point). `stall(clock, until) -> bool`: a stalled scripted source, false
+/// when canceled. `run(clock, at) -> bool`: an instant run racing its deadline `at`, false
+/// when the deadline fires first. `print(u64)` as the fixtures print.
 #[derive(Clone)]
 struct Clocked {
     now: u64,
@@ -59,7 +60,8 @@ impl Operations for Clocked {
         self.now = self.now.max(ticks);
     }
     fn canceled(&mut self, op: &OperationId, _: &[OpValue], _: u32) -> Option<OpOutcome> {
-        (op == &self::op("sleep")).then(|| OpOutcome::Value(done(false)))
+        (op == &self::op("sleep") || op == &self::op("stall"))
+            .then(|| OpOutcome::Value(done(false)))
     }
     fn call(&mut self, id: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome {
         let word = |v: &OpValue| match v {
@@ -75,6 +77,8 @@ impl Operations for Clocked {
                     OpOutcome::Wait { clock, until }
                 }
             }
+            // A scripted source that never answers.
+            [_, _] if id == &op("stall") => OpOutcome::Pending,
             [clock, at] if id == &op("run") => OpOutcome::Deadline {
                 clock: word(clock),
                 at: word(at),
@@ -98,6 +102,10 @@ enum Race {
     ScopeSleep,
     /// `run(deadline 100)`: the run times out when its deadline fires first.
     Run,
+    /// `task.scope_until(deadline 1000) { stall() }`: only the deadline ends the wait.
+    ScopeStall,
+    /// `stall()` with no deadline: nothing ends the wait.
+    Stall,
 }
 
 /// `let x = Box(1)`, then the race: when it completes, print x's value and release x;
@@ -110,7 +118,7 @@ fn race(kind: Race, fixed: bool) -> Program<Rc> {
     let mut f = F::<Rc>::new("main", c);
     let clock = f.int(CLOCK);
     let scope = match kind {
-        Race::ScopeSleep => {
+        Race::ScopeSleep | Race::ScopeStall => {
             let tasks = f.int(0);
             let at = f.int(1000);
             let k = f.b.construct(
@@ -138,7 +146,7 @@ fn race(kind: Race, fixed: bool) -> Program<Rc> {
             );
             Some(scope)
         }
-        Race::Run => None,
+        Race::Run | Race::Stall => None,
     };
     let one = f.int(1);
     let x = f.boxed(one);
@@ -147,6 +155,7 @@ fn race(kind: Race, fixed: bool) -> Program<Rc> {
     let callee = f.b.operation(op(match kind {
         Race::ScopeSleep => "sleep",
         Race::Run => "run",
+        Race::ScopeStall | Race::Stall => "stall",
     }));
     f.call(
         callee,
@@ -245,4 +254,27 @@ fn a_leak_where_a_scope_deadline_cancels_a_sleep_is_found_only_by_firing_it_earl
 #[test]
 fn a_leak_where_a_run_times_out_is_found_only_by_firing_its_deadline_early() {
     check(Race::Run);
+}
+
+#[test]
+fn a_stalled_source_parks_until_its_scope_deadline_cancels_it() {
+    // Only the deadline ends the wait, so the clean run takes the canceled path: the broken
+    // twin's leak is found there, and the fixed twin passes, its scope Expired.
+    let broken = campaign(Race::ScopeStall, false);
+    let (at, violation) = broken.first_violation().expect("the canceled path leaks");
+    assert_eq!(at, Perturbation::Clean);
+    assert_eq!(violation.kind, ViolationKind::LeakedCredit);
+    let fixed = campaign(Race::ScopeStall, true);
+    assert!(fixed.first_violation().is_none(), "{fixed:?}");
+    assert_eq!(fixed.clean.output, b"");
+    assert!(!fixed.clean.result.unwrap().observation.blocked);
+}
+
+#[test]
+fn a_stalled_source_with_no_deadline_leaves_the_run_blocked() {
+    // A stalled scripted source is no event source (CONC-8).
+    let run = campaign(Race::Stall, false);
+    assert!(run.first_violation().is_none(), "{run:?}");
+    assert!(run.clean.result.unwrap().observation.blocked);
+    assert_eq!(run.clean.choices, 0);
 }

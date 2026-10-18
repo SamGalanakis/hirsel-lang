@@ -7570,7 +7570,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 other => return fail(V::Unsupported, format!("operation operand {other:?}")),
             });
         }
-        let outcome = match self.timer_resumed()? {
+        let outcome = match self.resumed()? {
             Some(outcome) => outcome,
             None => {
                 self.timer_choice()?;
@@ -7584,7 +7584,13 @@ impl<'p, S: Stage> Machine<'p, S> {
                     OpOutcome::Wait { clock, until } => {
                         // The wait yields when it parks; its call runs again once it is over.
                         self.ops.yielded();
-                        self.timer_wait(clock, until, id, args)?;
+                        self.suspend(Some((clock, until)), id, args)?;
+                        return Ok(Control::Continue);
+                    }
+                    OpOutcome::Pending => {
+                        // A stalled scripted source: as a timer wait, with no deadline.
+                        self.ops.yielded();
+                        self.suspend(None, id, args)?;
                         return Ok(Control::Continue);
                     }
                     OpOutcome::Deadline {
@@ -7787,8 +7793,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
             }
             OpOutcome::Complete { .. } => unreachable!(),
-            OpOutcome::Wait { .. } | OpOutcome::Deadline { .. } => {
-                return fail(V::Malformed, "a nested timer outcome");
+            OpOutcome::Wait { .. } | OpOutcome::Pending | OpOutcome::Deadline { .. } => {
+                return fail(V::Malformed, "a nested suspended outcome");
             }
             OpOutcome::Updated { .. } => {
                 return fail(V::Malformed, "unexpected exclusive operation update");

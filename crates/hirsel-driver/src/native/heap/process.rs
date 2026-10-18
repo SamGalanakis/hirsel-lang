@@ -295,9 +295,9 @@ impl Io {
     }
     /// A process request's outcome from the runtime's process model.
     fn process_completion(&mut self, module: Option<&str>, request: R) -> OpOutcome {
-        let completion = match self.network.call(request) {
+        let completion = match self.script(request) {
             Ok(c) => c,
-            Err(_) => return OpOutcome::Unsupported,
+            Err(outcome) => return outcome,
         };
         if let C::Spawned(spawned) = completion {
             return OpOutcome::Value(match spawned {
@@ -336,9 +336,9 @@ impl Io {
     }
     /// A child operation's outcome; `child.wait` consumes its Child on every outcome.
     fn child(&mut self, name: &str, args: &[OpValue], request: R) -> OpOutcome {
-        let completion = match self.network.call(request) {
+        let completion = match self.script(request) {
             Ok(c) => c,
-            Err(_) => return OpOutcome::Unsupported,
+            Err(outcome) => return outcome,
         };
         let value = match completion {
             C::ChildUnit(Ok(())) if name == "write" => io_ok(OpValue::Unit),

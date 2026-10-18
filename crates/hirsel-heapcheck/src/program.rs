@@ -236,6 +236,10 @@ pub enum OpOutcome {
         clock: u64,
         until: u64,
     },
+    /// An operation whose scripted source cannot answer yet (a stalled peer, a child at an
+    /// `Expect`): its task suspends, and each poll performs it again until it completes, or it
+    /// completes `canceled` once its task is canceled. It is no event source (CONC-8).
+    Pending,
     /// An operation that races a deadline of monotonic clock `clock` at `at` (`proc.run`):
     /// it ends as `completed` unless the deadline fires first, then as `timed_out`.
     Deadline {

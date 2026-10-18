@@ -413,9 +413,9 @@ impl Io {
             },
             _ => return None,
         };
-        let completion = match self.network.call(request) {
+        let completion = match self.script(request) {
             Ok(c) => c,
-            Err(_) => return Some(OpOutcome::Unsupported),
+            Err(outcome) => return Some(outcome),
         };
         let value = match completion {
             C::Handle(r) if name == "net" => {

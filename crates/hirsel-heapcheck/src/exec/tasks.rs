@@ -14,7 +14,7 @@
 //! failure a child contributed. A child's closure is a harness root while the
 //! scheduler holds it, and its environment is released after its frame
 //! returns, as the runtime releases it.
-use super::clock::{CANCEL_DEADLINE, ScopeDeadline, Timer};
+use super::clock::{CANCEL_DEADLINE, ScopeDeadline, Suspended};
 use super::*;
 use std::collections::VecDeque;
 
@@ -49,9 +49,9 @@ pub(super) enum Wait {
     Detach(u32),
     /// A receive, parked until a poll found a message, a closed channel or a cancellation.
     Receive,
-    /// A timer wait, parked until a poll found it due or its task canceled; its completion is
-    /// the task's [`Timer`](super::clock::Timer).
-    Timer,
+    /// A suspended operation (a timer wait, or a wait on a stalled scripted source), parked
+    /// until a poll ended it; its completion is the task's [`Suspended`].
+    Suspended,
 }
 
 /// What a parked task waits for; its poll performs the wait's effect.
@@ -69,6 +69,8 @@ pub(super) enum Park {
     },
     /// A timer wait due at `until` (`clock.sleep_until`).
     Timer { until: u64 },
+    /// A wait on a stalled scripted peer or child, which only its source or a cancellation ends.
+    Pending,
 }
 
 /// A holding child's result: its slot, the slot's layout and its `None` image.
@@ -170,8 +172,8 @@ pub(super) struct Tasks {
     spawns: Vec<Option<Vec<u32>>>,
     /// The chain the last `task.isolate` caught, which its body reads.
     pub(super) isolated: Vec<(ObservedFailure, Vec<u32>)>,
-    /// Each task's suspended timer wait.
-    pub(super) timers: std::collections::BTreeMap<u32, Timer>,
+    /// Each task's suspended operation.
+    pub(super) suspended: std::collections::BTreeMap<u32, Suspended>,
     /// The live scopes' deadlines that have not fired, as (deadline, scope): by deadline, ties
     /// in entry order.
     armed: std::collections::BTreeSet<(u64, u32)>,
@@ -242,7 +244,7 @@ impl Tasks {
             channels: Default::default(),
             sync: Default::default(),
             isolated: Vec::new(),
-            timers: Default::default(),
+            suspended: Default::default(),
             armed: Default::default(),
             switch: None,
             spawns: Vec::new(),
@@ -1011,7 +1013,7 @@ impl<S: Stage> Machine<'_, S> {
                 State::Ready | State::Parked => Ok(false),
             },
             Some(Park::Exit(scope)) => Ok(s.settled(scope)),
-            Some(Park::Timer { .. }) => self.poll_timer(task),
+            Some(Park::Timer { .. } | Park::Pending) => self.poll_suspended(task),
             Some(Park::Receive {
                 channel,
                 slot,

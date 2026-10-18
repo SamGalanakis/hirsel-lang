@@ -26,12 +26,12 @@ pub(super) struct ScopeDeadline {
     pub(super) expired: bool,
 }
 
-/// A task's suspended timer wait: the operation to perform again once it is due, and its
-/// completion once a poll found it due or the task canceled.
+/// A task's suspended operation: a timer wait due at `deadline` (a clock and its ticks), or
+/// a wait on a stalled scripted source with none. Its completion is set by the poll that
+/// found it over: its task canceled, the reading reached its deadline, or the source answered.
 #[derive(Clone)]
-pub(super) struct Timer {
-    clock: u64,
-    pub(super) until: u64,
+pub(super) struct Suspended {
+    deadline: Option<(u64, u64)>,
     op: OperationId,
     args: Vec<OpValue>,
     completion: Option<OpOutcome>,
@@ -96,10 +96,10 @@ impl<S: Stage> Machine<'_, S> {
         let s = self.tasks.as_deref()?;
         let scope = s.armed().next().map(|(_, d)| (d.at, d.clock));
         let timer = s
-            .timers
+            .suspended
             .values()
             .filter(|t| t.completion.is_none())
-            .map(|t| (t.until, t.clock))
+            .filter_map(|t| t.deadline.map(|(clock, until)| (until, clock)))
             .min();
         scope.into_iter().chain(timer).min()
     }
@@ -173,76 +173,91 @@ impl<S: Stage> Machine<'_, S> {
         Ok(true)
     }
 
-    /// Suspend the running task in a timer wait until `until`: the operation yields first,
-    /// and its call runs again once a poll completed the wait.
-    pub(super) fn timer_wait(
+    /// Suspend the running task in operation `op`: a timer wait until `deadline`'s ticks, or
+    /// with none a wait on a stalled scripted source. The operation yields first, and its call
+    /// runs again once a poll completed the wait.
+    pub(super) fn suspend(
         &mut self,
-        clock: u64,
-        until: u64,
+        deadline: Option<(u64, u64)>,
         op: OperationId,
         args: Vec<OpValue>,
     ) -> Checked<()> {
-        if self.reading(clock)? >= until {
+        if let Some((clock, until)) = deadline
+            && self.reading(clock)? >= until
+        {
             return fail(V::Malformed, "a timer wait whose deadline already passed");
         }
         let s = self.scheduler();
         let current = s.current;
-        s.task(current)?.wait = Some(tasks::Wait::Timer);
-        s.timers.insert(
+        s.task(current)?.wait = Some(tasks::Wait::Suspended);
+        s.suspended.insert(
             current,
-            Timer {
-                clock,
-                until,
+            Suspended {
+                deadline,
                 op,
                 args,
                 completion: None,
             },
         );
-        self.park_until(tasks::Park::Timer { until }, true)
+        let park = match deadline {
+            Some((_, until)) => tasks::Park::Timer { until },
+            None => tasks::Park::Pending,
+        };
+        self.park_until(park, true)
     }
 
-    /// The completion of the running task's timer wait, when its call runs again after the
-    /// poll that ended it. The wait yielded when it parked, so the operation's yield is spent.
-    pub(super) fn timer_resumed(&mut self) -> Checked<Option<OpOutcome>> {
+    /// The completion of the running task's suspended operation, when its call runs again
+    /// after the poll that ended the wait, which yielded when it parked: the operation's yield
+    /// is spent.
+    pub(super) fn resumed(&mut self) -> Checked<Option<OpOutcome>> {
         let Some(s) = self.tasks.as_deref_mut() else {
             return Ok(None);
         };
         let current = s.current;
-        if s.task(current)?.wait != Some(tasks::Wait::Timer) {
+        if s.task(current)?.wait != Some(tasks::Wait::Suspended) {
             return Ok(None);
         }
         s.task(current)?.wait = None;
-        match s.timers.remove(&current).and_then(|t| t.completion) {
-            Some(OpOutcome::Wait { .. } | OpOutcome::Deadline { .. }) | None => {
-                fail(V::Malformed, "a timer wait resumed without its completion")
-            }
+        match s.suspended.remove(&current).and_then(|t| t.completion) {
+            Some(OpOutcome::Wait { .. } | OpOutcome::Pending | OpOutcome::Deadline { .. })
+            | None => fail(
+                V::Malformed,
+                "a suspended operation resumed without its completion",
+            ),
             Some(outcome) => Ok(Some(outcome)),
         }
     }
 
-    /// Whether parked `task`'s timer wait is over: its task canceled (the operation completes
-    /// `Canceled`), or the reading reached its deadline (the operation is performed again).
-    pub(super) fn poll_timer(&mut self, task: u32) -> Checked<bool> {
-        let timer = self
+    /// Whether parked `task`'s suspended operation is over: its task canceled (the operation
+    /// completes `Canceled`), its timer reached its deadline (the operation is performed
+    /// again), or, re-issued, its scripted source answered.
+    pub(super) fn poll_suspended(&mut self, task: u32) -> Checked<bool> {
+        let wait = self
             .scheduler()
-            .timers
+            .suspended
             .get(&task)
             .cloned()
-            .ok_or_else(|| err(V::Malformed, "a timer park without its wait"))?;
+            .ok_or_else(|| err(V::Malformed, "a park without its suspended operation"))?;
         let shielded = self.task_shielded(task)?;
         let completion = match self.scheduler().canceled_task(task, shielded)? {
             Some(cause) => self
                 .ops
-                .canceled(&timer.op, &timer.args, cause)
-                .ok_or_else(|| err(V::Malformed, "a timer wait that is no cancellation point"))?,
-            None if self.reading(timer.clock)? >= timer.until => {
-                self.ops.call(&timer.op, &timer.args, &mut self.output)
-            }
-            None => return Ok(false),
+                .canceled(&wait.op, &wait.args, cause)
+                .ok_or_else(|| err(V::Malformed, "a wait that is no cancellation point"))?,
+            None => match wait.deadline {
+                Some((clock, until)) if self.reading(clock)? < until => return Ok(false),
+                _ => match self.ops.call(&wait.op, &wait.args, &mut self.output) {
+                    OpOutcome::Pending => {
+                        self.ops.yielded();
+                        return Ok(false);
+                    }
+                    outcome => outcome,
+                },
+            },
         };
         // The wait yielded when it parked.
         self.ops.yielded();
-        if let Some(t) = self.scheduler().timers.get_mut(&task) {
+        if let Some(t) = self.scheduler().suspended.get_mut(&task) {
             t.completion = Some(completion);
         }
         Ok(true)
