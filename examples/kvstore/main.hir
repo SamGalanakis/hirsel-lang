@@ -57,17 +57,6 @@ fn parse_entries(take text: String) -> Result[Map[String, String], ServerError] 
   Ok(take entries)
 }
 
-// std@1 maps have no removal yet: rebuild without the key, keeping insertion order.
-fn without(entries: Map[String, String], key: String) -> Map[String, String] uses {} {
-  let mut kept: Map[String, String] = map.empty()
-  for (k, v) in entries {
-    if k != key {
-      map.insert(mut kept, unique k, unique v)
-    }
-  }
-  take kept
-}
-
 // ---- persistence ----
 fn load(dir: Dir) -> Result[Store, ServerError] {
   match file.read_bytes(dir, path.of(STATE)) {
@@ -133,15 +122,6 @@ fn changed(st: Store, status: u16) -> Reply uses {} {
   )
 }
 
-// map.get directly on the unique store would count as aliasing it at apply's
-// hand-back, so lookups borrow the entries in functions of their own.
-fn present(entries: Map[String, String], key: String) -> bool uses {} {
-  match map.get(entries, key) {
-    Some(_) => true,
-    None() => false,
-  }
-}
-
 fn read(entries: Map[String, String], key: String) -> Reply uses {} {
   match map.get(entries, key) {
     Some(value) => plain(200u16, value),
@@ -160,26 +140,21 @@ fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
     ),
     Read(key) => read(st.entries, key),
     Write(key, value) => {
-      let status = if present(st.entries, key) {
+      let status = if map.contains(st.entries, key) {
         200u16
       } else {
         201u16
       }
-      // Inserting a String key leaves a map aliased, so insert into a deep
-      // copy and store a unique copy back.
-      let mut entries = unique st.entries
-      map.insert(mut entries, unique key, unique value)
-      st.entries = unique entries
+      map.insert(mut st.entries, unique key, unique value)
       st.version += 1
       changed(st, status)
     },
-    Delete(key) => {
-      if !present(st.entries, key) {
-        return plain(404u16, "not found\n")
-      }
-      st.entries = unique without(st.entries, key)
-      st.version += 1
-      changed(st, 204u16)
+    Delete(key) => match take map.remove(mut st.entries, key) {
+      Some(_) => {
+        st.version += 1
+        changed(st, 204u16)
+      },
+      None() => plain(404u16, "not found\n"),
     },
   }
 }
