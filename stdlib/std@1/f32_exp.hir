@@ -1,0 +1,287 @@
+// exp, exp2, expm1, ln, log2, log10 and ln1p for binary32.
+// Ported from the Rust libm crate (rust-lang/compiler-builtins libm, MIT),
+// itself from musl and FreeBSD msun (Sun Microsystems permission notice;
+// David Schultz's BSD-2-Clause notice for exp2); third-party/NOTICES.md.
+// Each function is the crate's algorithm operation for operation, so every
+// engine computes the crate's bits.
+
+const LN2_HI: f32 = 6.9313812256e-01
+const LN2_LO: f32 = 9.0580006145e-06
+const INV_LN2: f32 = 1.4426950216e+00
+const LG1: f32 = 0.66666662693
+const LG2: f32 = 0.40000972152
+const LG3: f32 = 0.28498786688
+const LG4: f32 = 0.24279078841
+
+// FreeBSD e_expf.c; < 1 ulp.
+@noalloc
+pub fn exp(value: f32) -> f32 uses {} {
+  let mut x = value
+  let bits = core@1/f32.bits(x)
+  let sign: i32 = core@1/int.narrow(bits >> 31)
+  let hx = bits & 0x7fffffff
+  if hx >= 0x42aeac50 {
+    if hx > 0x7f800000 { return x }
+    if hx >= 0x42b17218 && sign == 0 { return x * core@1/f32.from_bits(0x7f000000) }
+    if sign != 0 && hx >= 0x42cff1b5 { return 0.0 }
+  }
+  let mut k: i32 = 0
+  let mut hi: f32 = 0.0
+  let mut lo: f32 = 0.0
+  if hx > 0x3eb17218 {
+    if hx > 0x3f851592 {
+      k = saturated_i32(INV_LN2 * x + if sign == 0 { 0.5 } else { -0.5 })
+    } else {
+      k = 1 - sign - sign
+    }
+    let kf = of_i32(k)
+    hi = x - kf * 6.9314575195e-01
+    lo = kf * 1.4286067653e-06
+    x = hi - lo
+  } else if hx > 0x39000000 {
+    hi = x
+  } else {
+    return 1.0 + x
+  }
+  let xx = x * x
+  let c = x - xx * (1.6666625440e-1 + xx * -2.7667332906e-3)
+  let y: f32 = 1.0 + (x * c / (2.0 - c) - lo + hi)
+  if k == 0 { y } else { scaled(y, k) }
+}
+
+// exp2(i/16) for i in [-8, 8), as binary64.
+const EXP2_TABLE: Array[u64] = [
+  0x3fe6a09e667f3bcd,
+  0x3fe7a11473eb0187,
+  0x3fe8ace5422aa0db,
+  0x3fe9c49182a3f090,
+  0x3feae89f995ad3ad,
+  0x3fec199bdd85529c,
+  0x3fed5818dcfba487,
+  0x3feea4afa2a490da,
+  0x3ff0000000000000,
+  0x3ff0b5586cf9890f,
+  0x3ff172b83c7d517b,
+  0x3ff2387a6e756238,
+  0x3ff306fe0a31b715,
+  0x3ff3dea64c123422,
+  0x3ff4bfdad5362a27,
+  0x3ff5ab07dd485429
+]
+
+// FreeBSD s_exp2f.c: a 16-entry table and a degree-4 polynomial in binary64; < 1 ulp.
+@noalloc
+pub fn exp2(value: f32) -> f32 uses {} {
+  let x = value
+  let redux = core@1/f32.from_bits(0x4b400000) / 16.0
+  let ui = core@1/f32.bits(x)
+  let ix = ui & 0x7fffffff
+  if ix > 0x42fc0000 {
+    if ix > 0x7f800000 { return x }
+    if ui >= 0x43000000 && ui < 0x80000000 { return x * core@1/f32.from_bits(0x7f000000) }
+    if ui >= 0xc3160000 { return 0.0 }
+  } else if ix <= 0x33000000 {
+    return 1.0 + x
+  }
+  let reduced = core@1/f32.bits(x + redux)
+  let i0 = reduced + 8
+  let k: u64 = core@1/int.widen(i0 / 16)
+  let ukf = core@1/f64.from_bits((0x3ff + k) << 52)
+  let index: u64 = core@1/int.widen(i0 & 15)
+  let uf = core@1/f32.from_bits(reduced) - redux
+  let z = core@1/f64.from_f32(x - uf)
+  let r = core@1/f64.from_bits(EXP2_TABLE[index])
+  let t = r * z
+  let p1 = core@1/f64.from_f32(core@1/f32.from_bits(0x3f317218))
+  let p2 = core@1/f64.from_f32(core@1/f32.from_bits(0x3e75fdf0))
+  let p3 = core@1/f64.from_f32(core@1/f32.from_bits(0x3d6359a4))
+  let p4 = core@1/f64.from_f32(core@1/f32.from_bits(0x3c1d964e))
+  let rr = r + t * (p1 + z * p2) + t * (z * z) * (p3 + z * p4)
+  core@1/f32.from_f64(rr * ukf)
+}
+
+// FreeBSD s_expm1f.c; < 1 ulp.
+@noalloc
+pub fn expm1(value: f32) -> f32 uses {} {
+  let mut x = value
+  let bits = core@1/f32.bits(x)
+  let negative = bits >> 31 != 0
+  let hx = bits & 0x7fffffff
+  if hx >= 0x4195b844 {
+    if hx > 0x7f800000 { return x }
+    if negative { return -1.0 }
+    if hx > 0x42b17217 { return x * core@1/f32.from_bits(0x7f000000) }
+  }
+  let mut k: i32 = 0
+  let mut c: f32 = 0.0
+  if hx > 0x3eb17218 {
+    let mut hi: f32 = 0.0
+    let mut lo: f32 = 0.0
+    if hx < 0x3f851592 {
+      if !negative {
+        hi = x - LN2_HI
+        lo = LN2_LO
+        k = 1
+      } else {
+        hi = x + LN2_HI
+        lo = -LN2_LO
+        k = -1
+      }
+    } else {
+      k = saturated_i32(INV_LN2 * x + if negative { -0.5 } else { 0.5 })
+      let t = of_i32(k)
+      hi = x - t * LN2_HI
+      lo = t * LN2_LO
+    }
+    x = hi - lo
+    c = (hi - x) - lo
+  } else if hx < 0x33000000 {
+    return x
+  }
+  let hfx: f32 = 0.5 * x
+  let hxs = x * hfx
+  let r1: f32 = 1.0 + hxs * (-3.3333212137e-2 + hxs * 1.5807170421e-3)
+  let t: f32 = 3.0 - r1 * hfx
+  let mut e = hxs * ((r1 - t) / (6.0 - x * t))
+  if k == 0 { return x - (x * e - hxs) }
+  e = x * (e - c) - c
+  e -= hxs
+  if k == -1 { return 0.5 * (x - e) - 0.5 }
+  if k == 1 {
+    if x < -0.25 { return -2.0 * (e - (x + 0.5)) }
+    return 1.0 + 2.0 * (x - e)
+  }
+  let up: u32 = core@1/int.narrow(0x7f + k)
+  let twopk = core@1/f32.from_bits(up << 23)
+  if k < 0 || k > 56 {
+    let mut y = x - e + 1.0
+    if k == 128 {
+      y = y * 2.0 * core@1/f32.from_bits(0x7f000000)
+    } else {
+      y = y * twopk
+    }
+    return y - 1.0
+  }
+  let down: u32 = core@1/int.narrow(0x7f - k)
+  let uf = core@1/f32.from_bits(down << 23)
+  if k < 23 { (x - e + (1.0 - uf)) * twopk } else { (x - (e + uf) + 1.0) * twopk }
+}
+
+// The reduction shared by ln, log2 and log10: (k, f, done, special), with
+// x = 2^k (1 + f), sqrt(2)/2 < 1 + f < sqrt(2); `special` is the result
+// when `done`.
+@noalloc
+fn log_reduce(value: f32) -> (i32, f32, bool, f32) uses {} {
+  let mut x = value
+  let mut ix = core@1/f32.bits(x)
+  let mut k: i32 = 0
+  if ix < 0x00800000 || ix >> 31 != 0 {
+    if ix << 1 == 0 { return (0, 0.0, true, -1.0 / (x * x)) }
+    if ix >> 31 != 0 { return (0, 0.0, true, (x - x) / 0.0) }
+    k -= 25
+    x *= core@1/f32.from_bits(0x4c000000)
+    ix = core@1/f32.bits(x)
+  } else if ix >= 0x7f800000 {
+    return (0, 0.0, true, x)
+  } else if ix == 0x3f800000 {
+    return (0, 0.0, true, 0.0)
+  }
+  ix += 0x3f800000 - 0x3f3504f3
+  let exponent: i32 = core@1/int.narrow(ix >> 23)
+  k += exponent - 0x7f
+  ix = (ix & 0x007fffff) + 0x3f3504f3
+  (k, core@1/f32.from_bits(ix) - 1.0, false, 0.0)
+}
+
+// (hfsq, s, R(s)) of the FreeBSD logf kernel.
+@noalloc
+fn log_series(f: f32) -> (f32, f32, f32) uses {} {
+  let s = f / (2.0 + f)
+  let z = s * s
+  let w = z * z
+  let t1 = w * (LG2 + w * LG4)
+  let t2 = z * (LG1 + w * LG3)
+  (0.5 * f * f, s, t2 + t1)
+}
+
+// FreeBSD e_logf.c; < 1 ulp.
+@noalloc
+pub fn ln(value: f32) -> f32 uses {} {
+  let (k, f, done, special) = log_reduce(value)
+  if done { return special }
+  let (hfsq, s, r) = log_series(f)
+  let dk = of_i32(k)
+  s * (hfsq + r) + dk * LN2_LO - hfsq + f + dk * LN2_HI
+}
+
+// f - hfsq split into a high part with 12 zero low bits and the rest.
+@noalloc
+fn log_split(f: f32, hfsq: f32, s: f32, r: f32) -> (f32, f32) uses {} {
+  let hi = core@1/f32.from_bits(core@1/f32.bits(f - hfsq) & 0xfffff000)
+  (hi, f - hi - hfsq + s * (hfsq + r))
+}
+
+// FreeBSD e_log2f.c; < 1 ulp.
+@noalloc
+pub fn log2(value: f32) -> f32 uses {} {
+  let (k, f, done, special) = log_reduce(value)
+  if done { return special }
+  let (hfsq, s, r) = log_series(f)
+  let (hi, lo) = log_split(f, hfsq, s, r)
+  let ivln2hi: f32 = 1.4428710938e+00
+  (lo + hi) * -1.7605285393e-04 + lo * ivln2hi + hi * ivln2hi + of_i32(k)
+}
+
+// FreeBSD e_log10f.c; < 1 ulp.
+@noalloc
+pub fn log10(value: f32) -> f32 uses {} {
+  let (k, f, done, special) = log_reduce(value)
+  if done { return special }
+  let (hfsq, s, r) = log_series(f)
+  let (hi, lo) = log_split(f, hfsq, s, r)
+  let ivln10hi: f32 = 4.3432617188e-01
+  let dk = of_i32(k)
+  dk * 7.9034151668e-07 + (lo + hi) * -3.1689971365e-05 + lo * ivln10hi + hi * ivln10hi + dk * 3.0102920532e-01
+}
+
+// FreeBSD s_log1pf.c; < 1 ulp.
+@noalloc
+pub fn ln1p(value: f32) -> f32 uses {} {
+  let x = value
+  let ix = core@1/f32.bits(x)
+  let mut k: i32 = 1
+  let mut c: f32 = 0.0
+  let mut f: f32 = 0.0
+  if ix < 0x3ed413d0 || ix >> 31 != 0 {
+    if ix >= 0xbf800000 {
+      if x == -1.0 { return x / 0.0 }
+      return (x - x) / 0.0
+    }
+    if ix << 1 < 0x33800000u32 << 1 { return x }
+    if ix <= 0xbe95f619 {
+      k = 0
+      c = 0.0
+      f = x
+    }
+  } else if ix >= 0x7f800000 {
+    return x
+  }
+  if k > 0 {
+    let u: f32 = 1.0 + x
+    let mut iu = core@1/f32.bits(u)
+    iu += 0x3f800000 - 0x3f3504f3
+    let exponent: i32 = core@1/int.narrow(iu >> 23)
+    k = exponent - 0x7f
+    if k < 25 {
+      c = if k >= 2 { 1.0 - (u - x) } else { x - (u - 1.0) }
+      c /= u
+    } else {
+      c = 0.0
+    }
+    iu = (iu & 0x007fffff) + 0x3f3504f3
+    f = core@1/f32.from_bits(iu) - 1.0
+  }
+  let (hfsq, s, r) = log_series(f)
+  let dk = of_i32(k)
+  s * (hfsq + r) + (dk * LN2_LO + c) - hfsq + f + dk * LN2_HI
+}

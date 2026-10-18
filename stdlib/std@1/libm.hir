@@ -1,0 +1,291 @@
+// The Payne-Hanek reduction of a large argument by pi/2, shared by f64 and
+// f32 trigonometry. Ported from the Rust libm crate's rem_pio2_large (MIT),
+// from musl and FreeBSD k_rem_pio2.c (Sun Microsystems permission notice);
+// third-party/NOTICES.md.
+
+// 2/pi in 24-bit chunks, the 66 words binary64 inputs reach.
+const IPIO2: Array[i32] = [
+  0xa2f983,
+  0x6e4e44,
+  0x1529fc,
+  0x2757d1,
+  0xf534dd,
+  0xc0db62,
+  0x95993c,
+  0x439041,
+  0xfe5163,
+  0xabdebb,
+  0xc561b7,
+  0x246e3a,
+  0x424dd2,
+  0xe00649,
+  0x2eea09,
+  0xd1921c,
+  0xfe1deb,
+  0x1cb129,
+  0xa73ee8,
+  0x8235f5,
+  0x2ebb44,
+  0x84e99c,
+  0x7026b4,
+  0x5f7e41,
+  0x3991d6,
+  0x398353,
+  0x39f49c,
+  0x845f8b,
+  0xbdf928,
+  0x3b1ff8,
+  0x97ffde,
+  0x05980f,
+  0xef2f11,
+  0x8b5a0a,
+  0x6d1f6d,
+  0x367ecf,
+  0x27cb09,
+  0xb74f46,
+  0x3f669e,
+  0x5fea2d,
+  0x7527ba,
+  0xc7ebe5,
+  0xf17b3d,
+  0x0739f7,
+  0x8a5292,
+  0xea6bfb,
+  0x5fb11f,
+  0x8d5d08,
+  0x560330,
+  0x46fc7b,
+  0x6babf0,
+  0xcfbc20,
+  0x9af436,
+  0x1da9e3,
+  0x91615e,
+  0xe61b08,
+  0x659985,
+  0x5f14a0,
+  0x68408d,
+  0xffd880,
+  0x4d7327,
+  0x310606,
+  0x1556ca,
+  0x73a8c9,
+  0x60e27b,
+  0xc08c6b
+]
+
+// pi/2 in 24-bit pieces.
+const PIO2: Array[f64] = [
+  1.57079625129699707031e+00,
+  7.54978941586159635335e-08,
+  5.39030252995776476554e-15,
+  3.28200341580791294123e-22,
+  1.27065575308067607349e-29,
+  1.22933308981111328932e-36,
+  2.73370053816464559624e-44,
+  2.16741683877804819444e-51
+]
+
+// 2^n. The reduction's scale exponents stay within the normal range, where
+// the crate's scalbn is this one exact product.
+@noalloc
+fn power_of_two(n: i32) -> f64 uses {} {
+  let biased: u64 = core@1/int.narrow(n + 1023)
+  core@1/f64.from_bits(biased << 52)
+}
+
+// Rust's `as i32`; every use here is in range.
+@noalloc
+fn truncated(value: f64) -> i32 uses {} {
+  match core@1/float.to_i32(value) {
+    Ok(n) => n,
+    Error(_) => if value != value {
+      0
+    } else if value > 0.0 {
+      2147483647
+    } else {
+      -2147483648
+    },
+  }
+}
+
+@noalloc
+fn index_of(n: i32) -> u64 uses {} { core@1/int.narrow(n) }
+
+@noalloc
+fn of_i32(n: i32) -> f64 uses {} { core@1/float.from_int(n) }
+
+// x = 2^e0 * (x[0] + x[1] 2^-24 + ...), its first `count` 24-bit chunks.
+// Returns n mod 8 with x - n pi/2 as y0 + y1: y0 alone when `prec` is 0
+// (binary32 callers), y0 + y1 when it is 1 (binary64).
+@noalloc
+pub fn rem_pio2_large(x: Inline[f64, 3], count: u64, e0: i32, prec: u64) -> (i32, f64, f64) uses {} {
+  let x1p24: f64 = 16777216.0
+  let x1p_24: f64 = 5.9604644775390625e-08
+  let mut f: Inline[f64, 20] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  let mut fq: Inline[f64, 20] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  let mut q: Inline[f64, 20] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  let mut iq: Inline[i32, 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  let jk: u64 = if prec == 0 { 3 } else { 4 }
+  let jx = count - 1
+  let mut jv_signed = (e0 - 3) / 24
+  if jv_signed < 0 { jv_signed = 0 }
+  let mut q0 = e0 - 24 * (jv_signed + 1)
+  let jv: u64 = core@1/int.narrow(jv_signed)
+  let jx_signed: i32 = core@1/int.narrow(jx)
+  let mut j = jv_signed - jx_signed
+  let mut i: u64 = 0
+  while i <= jx + jk {
+    f[i] = if j < 0 { 0.0 } else { of_i32(IPIO2[index_of(j)]) }
+    j += 1
+    i += 1
+  }
+  i = 0
+  while i <= jk {
+    let mut fw: f64 = 0.0
+    let mut k: u64 = 0
+    while k <= jx {
+      fw += x[k] * f[jx + i - k]
+      k += 1
+    }
+    q[i] = fw
+    i += 1
+  }
+  let mut jz = jk
+  let mut z: f64 = 0.0
+  let mut n: i32 = 0
+  let mut ih: i32 = 0
+  while true {
+    // Distill q[] into iq[] in reverse order.
+    z = q[jz]
+    let mut slot: u64 = 0
+    let mut k = jz
+    while k >= 1 {
+      let fw = of_i32(truncated(x1p_24 * z))
+      iq[slot] = truncated(z - x1p24 * fw)
+      z = q[k - 1] + fw
+      slot += 1
+      k -= 1
+    }
+    z = z * power_of_two(q0)
+    z -= 8.0 * f64.floor(z * 0.125)
+    n = truncated(z)
+    z -= of_i32(n)
+    ih = 0
+    if q0 > 0 {
+      let top = iq[jz - 1] >> (24 - q0)
+      n += top
+      iq[jz - 1] -= top << (24 - q0)
+      ih = iq[jz - 1] >> (23 - q0)
+    } else if q0 == 0 {
+      ih = iq[jz - 1] >> 23
+    } else if z >= 0.5 {
+      ih = 2
+    }
+    if ih > 0 {
+      n += 1
+      let mut carry: i32 = 0
+      k = 0
+      while k < jz {
+        let word = iq[k]
+        if carry == 0 {
+          if word != 0 {
+            carry = 1
+            iq[k] = 0x1000000 - word
+          }
+        } else {
+          iq[k] = 0xffffff - word
+        }
+        k += 1
+      }
+      if q0 == 1 {
+        iq[jz - 1] &= 0x7fffff
+      } else if q0 == 2 {
+        iq[jz - 1] &= 0x3fffff
+      }
+      if ih == 2 {
+        z = 1.0 - z
+        if carry != 0 { z -= power_of_two(q0) }
+      }
+    }
+    if z == 0.0 {
+      let mut any: i32 = 0
+      k = jk
+      while k + 1 <= jz {
+        any |= iq[k]
+        k += 1
+      }
+      if any == 0 {
+        // Recompute with more terms.
+        let mut more: u64 = 1
+        while iq[jk - more] == 0 { more += 1 }
+        i = jz + 1
+        while i <= jz + more {
+          f[jx + i] = of_i32(IPIO2[jv + i])
+          let mut fw: f64 = 0.0
+          k = 0
+          while k <= jx {
+            fw += x[k] * f[jx + i - k]
+            k += 1
+          }
+          q[i] = fw
+          i += 1
+        }
+        jz += more
+        continue
+      }
+    }
+    break
+  }
+  if z == 0.0 {
+    jz -= 1
+    q0 -= 24
+    while iq[jz] == 0 {
+      jz -= 1
+      q0 -= 24
+    }
+  } else {
+    z = z * power_of_two(-q0)
+    if z >= x1p24 {
+      let fw = of_i32(truncated(x1p_24 * z))
+      iq[jz] = truncated(z - x1p24 * fw)
+      jz += 1
+      q0 += 24
+      iq[jz] = truncated(fw)
+    } else {
+      iq[jz] = truncated(z)
+    }
+  }
+  let mut scale = power_of_two(q0)
+  i = jz + 1
+  while i > 0 {
+    i -= 1
+    q[i] = scale * of_i32(iq[i])
+    scale *= x1p_24
+  }
+  i = jz + 1
+  while i > 0 {
+    i -= 1
+    let mut fw: f64 = 0.0
+    let mut k: u64 = 0
+    while k <= jk && k <= jz - i {
+      fw += PIO2[k] * q[i + k]
+      k += 1
+    }
+    fq[jz - i] = fw
+  }
+  let mut fw: f64 = 0.0
+  i = jz + 1
+  while i > 0 {
+    i -= 1
+    fw += fq[i]
+  }
+  let y0 = if ih == 0 { fw } else { -fw }
+  if prec == 0 { return (n & 7, y0, 0.0) }
+  fw = fq[0] - fw
+  i = 1
+  while i <= jz {
+    fw += fq[i]
+    i += 1
+  }
+  (n & 7, y0, if ih == 0 { fw } else { -fw })
+}

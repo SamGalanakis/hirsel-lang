@@ -1,0 +1,315 @@
+// sin, cos, tan, asin, acos, atan and atan2 for binary32.
+// Ported from the Rust libm crate (rust-lang/compiler-builtins libm, MIT),
+// itself from musl and FreeBSD msun (Sun Microsystems permission notice);
+// third-party/NOTICES.md. The kernels evaluate in binary64 and round once,
+// as the crate does, so every engine computes the crate's bits.
+
+const FRAC_PI_2: f64 = 1.5707963267948966
+const TRIG_PI: f32 = 3.1415927410e+00
+const PIO2_HI: f32 = 1.5707962513e+00
+const PIO2_LO: f32 = 7.5497894159e-08
+
+@noalloc
+fn sin_kernel(x: f64) -> f32 uses {} {
+  let z = x * x
+  let w = z * z
+  let r: f64 = -0.000198393348360966317347 + z * 0.0000027183114939898219064
+  let s = z * x
+  core@1/f32.from_f64((x + s * (-0.166666666416265235595 + z * 0.0083333293858894631756)) + s * w * r)
+}
+
+@noalloc
+fn cos_kernel(x: f64) -> f32 uses {} {
+  let z = x * x
+  let w = z * z
+  let r: f64 = -0.00138867637746099294692 + z * 0.0000243904487962774090654
+  core@1/f32.from_f64(
+    ((1.0 + z * -0.499999997251031003120) + w * 0.0416666233237390631894) + (w * z) * r
+  )
+}
+
+// tan (odd false) or -1/tan (odd true) on [-pi/4, pi/4].
+@noalloc
+fn tan_kernel(x: f64, odd: bool) -> f32 uses {} {
+  let z = x * x
+  let mut r: f64 = 0.00297435743359967304927 + z * 0.00946564784943673166728
+  let t: f64 = 0.0533812378445670393523 + z * 0.0245283181166547278873
+  let w = z * z
+  let s = z * x
+  let u: f64 = 0.333331395030791399758 + z * 0.133392002712976742718
+  r = (x + s * u) + (s * w) * (t + w * r)
+  core@1/f32.from_f64(if odd { -1.0 / r } else { r })
+}
+
+// FreeBSD e_rem_pio2f.c: (n, x - n pi/2) in binary64.
+@noalloc
+fn reduce_pio2(x: f32) -> (i32, f64) uses {} {
+  let x64 = core@1/f64.from_f32(x)
+  let ix = core@1/f32.bits(x) & 0x7fffffff
+  if ix < 0x4dc90fdb {
+    let to_int: f64 = 6755399441055744.0
+    let tmp = x64 * 6.36619772367581382433e-01 + to_int
+    let f_n = tmp - to_int
+    // f_n is an integer below 2^28 here.
+    let n = match core@1/float.to_i32(f_n) {
+      Ok(n) => n,
+      Error(_) => 0,
+    }
+    return (n, x64 - f_n * 1.57079631090164184570e+00 - f_n * 1.58932547735281966916e-08)
+  }
+  if ix >= 0x7f800000 { return (0, x64 - x64) }
+  let e0 = (ix >> 23) - (0x7f + 23)
+  let mut tx: Inline[f64, 3] = [0.0, 0.0, 0.0]
+  tx[0] = core@1/f64.from_f32(core@1/f32.from_bits(ix - (e0 << 23)))
+  let exponent: i32 = core@1/int.narrow(e0)
+  let (n, y0, _) = internal.libm.rem_pio2_large(tx, 1, exponent, 0)
+  if core@1/f32.bits(x) >> 31 != 0 { (-n, -y0) } else { (n, y0) }
+}
+
+// < 1 ulp.
+@noalloc
+pub fn sin(value: f32) -> f32 uses {} {
+  let x = value
+  let x64 = core@1/f64.from_f32(x)
+  let negative = core@1/f32.bits(x) >> 31 != 0
+  let ix = core@1/f32.bits(x) & 0x7fffffff
+  if ix <= 0x3f490fda {
+    if ix < 0x39800000 { return x }
+    return sin_kernel(x64)
+  }
+  if ix <= 0x407b53d1 {
+    if ix <= 0x4016cbe3 {
+      if negative { return -cos_kernel(x64 + FRAC_PI_2) }
+      return cos_kernel(x64 - FRAC_PI_2)
+    }
+    return sin_kernel(if negative { -(x64 + 2.0 * FRAC_PI_2) } else { -(x64 - 2.0 * FRAC_PI_2) })
+  }
+  if ix <= 0x40e231d5 {
+    if ix <= 0x40afeddf {
+      if negative { return cos_kernel(x64 + 3.0 * FRAC_PI_2) }
+      return -cos_kernel(x64 - 3.0 * FRAC_PI_2)
+    }
+    return sin_kernel(if negative { x64 + 4.0 * FRAC_PI_2 } else { x64 - 4.0 * FRAC_PI_2 })
+  }
+  if ix >= 0x7f800000 { return x - x }
+  let (n, y) = reduce_pio2(x)
+  let quadrant = n & 3
+  if quadrant == 0 { return sin_kernel(y) }
+  if quadrant == 1 { return cos_kernel(y) }
+  if quadrant == 2 { return sin_kernel(-y) }
+  -cos_kernel(y)
+}
+
+// < 1 ulp.
+@noalloc
+pub fn cos(value: f32) -> f32 uses {} {
+  let x = value
+  let x64 = core@1/f64.from_f32(x)
+  let negative = core@1/f32.bits(x) >> 31 != 0
+  let ix = core@1/f32.bits(x) & 0x7fffffff
+  if ix <= 0x3f490fda {
+    if ix < 0x39800000 { return 1.0 }
+    return cos_kernel(x64)
+  }
+  if ix <= 0x407b53d1 {
+    if ix > 0x4016cbe3 {
+      return -cos_kernel(if negative { x64 + 2.0 * FRAC_PI_2 } else { x64 - 2.0 * FRAC_PI_2 })
+    }
+    if negative { return sin_kernel(x64 + FRAC_PI_2) }
+    return sin_kernel(FRAC_PI_2 - x64)
+  }
+  if ix <= 0x40e231d5 {
+    if ix > 0x40afeddf {
+      return cos_kernel(if negative { x64 + 4.0 * FRAC_PI_2 } else { x64 - 4.0 * FRAC_PI_2 })
+    }
+    if negative { return sin_kernel(-x64 - 3.0 * FRAC_PI_2) }
+    return sin_kernel(x64 - 3.0 * FRAC_PI_2)
+  }
+  if ix >= 0x7f800000 { return x - x }
+  let (n, y) = reduce_pio2(x)
+  let quadrant = n & 3
+  if quadrant == 0 { return cos_kernel(y) }
+  if quadrant == 1 { return sin_kernel(-y) }
+  if quadrant == 2 { return -cos_kernel(y) }
+  sin_kernel(y)
+}
+
+// < 1 ulp.
+@noalloc
+pub fn tan(value: f32) -> f32 uses {} {
+  let x = value
+  let x64 = core@1/f64.from_f32(x)
+  let negative = core@1/f32.bits(x) >> 31 != 0
+  let ix = core@1/f32.bits(x) & 0x7fffffff
+  if ix <= 0x3f490fda {
+    if ix < 0x39800000 { return x }
+    return tan_kernel(x64, false)
+  }
+  if ix <= 0x407b53d1 {
+    if ix <= 0x4016cbe3 {
+      return tan_kernel(if negative { x64 + FRAC_PI_2 } else { x64 - FRAC_PI_2 }, true)
+    }
+    return tan_kernel(if negative { x64 + 2.0 * FRAC_PI_2 } else { x64 - 2.0 * FRAC_PI_2 }, false)
+  }
+  if ix <= 0x40e231d5 {
+    if ix <= 0x40afeddf {
+      return tan_kernel(if negative { x64 + 3.0 * FRAC_PI_2 } else { x64 - 3.0 * FRAC_PI_2 }, true)
+    }
+    return tan_kernel(if negative { x64 + 4.0 * FRAC_PI_2 } else { x64 - 4.0 * FRAC_PI_2 }, false)
+  }
+  if ix >= 0x7f800000 { return x - x }
+  let (n, y) = reduce_pio2(x)
+  tan_kernel(y, n & 1 != 0)
+}
+
+// The rational approximation shared by asin and acos.
+@noalloc
+fn asin_ratio(z: f32) -> f32 uses {} {
+  let p = z * (1.6666586697e-01 + z * (-4.2743422091e-02 + z * -8.6563630030e-03))
+  let q: f32 = 1.0 + z * -7.0662963390e-01
+  p / q
+}
+
+// FreeBSD e_asinf.c; < 1 ulp. NaN outside [-1, 1].
+@noalloc
+pub fn asin(value: f32) -> f32 uses {} {
+  let x = value
+  let pio2: f64 = 1.570796326794896558e+00
+  let hx = core@1/f32.bits(x)
+  let ix = hx & 0x7fffffff
+  if ix >= 0x3f800000 {
+    if ix == 0x3f800000 {
+      return core@1/f32.from_f64(core@1/f64.from_f32(x) * pio2 + core@1/f64.from_bits(0x3870000000000000))
+    }
+    return 0.0 / (x - x)
+  }
+  if ix < 0x3f000000 {
+    if ix >= 0x00800000 && ix < 0x39800000 { return x }
+    return x + x * asin_ratio(x * x)
+  }
+  let z: f32 = (1.0 - abs(x)) * 0.5
+  let s = f64.sqrt(core@1/f64.from_f32(z))
+  let y = core@1/f32.from_f64(pio2 - 2.0 * (s + s * core@1/f64.from_f32(asin_ratio(z))))
+  if hx >> 31 != 0 { -y } else { y }
+}
+
+// FreeBSD e_acosf.c; < 1 ulp. NaN outside [-1, 1].
+@noalloc
+pub fn acos(value: f32) -> f32 uses {} {
+  let x = value
+  let tiny = core@1/f32.from_bits(0x03800000)
+  let hx = core@1/f32.bits(x)
+  let ix = hx & 0x7fffffff
+  if ix >= 0x3f800000 {
+    if ix == 0x3f800000 {
+      if hx >> 31 != 0 { return 2.0 * PIO2_HI + tiny }
+      return 0.0
+    }
+    return 0.0 / (x - x)
+  }
+  if ix < 0x3f000000 {
+    if ix <= 0x32800000 { return PIO2_HI + tiny }
+    return PIO2_HI - (x - (PIO2_LO - x * asin_ratio(x * x)))
+  }
+  if hx >> 31 != 0 {
+    let z: f32 = (1.0 + x) * 0.5
+    let s = sqrt(z)
+    let w = asin_ratio(z) * s - PIO2_LO
+    return 2.0 * (PIO2_HI - (s + w))
+  }
+  let z: f32 = (1.0 - x) * 0.5
+  let s = sqrt(z)
+  let df = core@1/f32.from_bits(core@1/f32.bits(s) & 0xfffff000)
+  let c = (z - df * df) / (s + df)
+  let w = asin_ratio(z) * s + c
+  2.0 * (df + w)
+}
+
+const ATAN_HI: Array[f32] = [4.6364760399e-01, 7.8539812565e-01, 9.8279368877e-01, 1.5707962513e+00]
+const ATAN_LO: Array[f32] = [5.0121582440e-09, 3.7748947079e-08, 3.4473217170e-08, 7.5497894159e-08]
+const ATAN_T: Array[f32] = [
+  3.3333328366e-01,
+  -1.9999158382e-01,
+  1.4253635705e-01,
+  -1.0648017377e-01,
+  6.1687607318e-02
+]
+
+// FreeBSD s_atanf.c; < 1 ulp.
+@noalloc
+pub fn atan(value: f32) -> f32 uses {} {
+  let mut x = value
+  let bits = core@1/f32.bits(x)
+  let negative = bits >> 31 != 0
+  let ix = bits & 0x7fffffff
+  if ix >= 0x4c800000 {
+    if x != x { return x }
+    let z = ATAN_HI[3] + core@1/f32.from_bits(0x03800000)
+    return if negative { -z } else { z }
+  }
+  let mut id: u64 = 4
+  if ix < 0x3ee00000 {
+    if ix < 0x39800000 { return x }
+  } else {
+    x = abs(x)
+    if ix < 0x3f980000 {
+      if ix < 0x3f300000 {
+        x = (2.0 * x - 1.0) / (2.0 + x)
+        id = 0
+      } else {
+        x = (x - 1.0) / (x + 1.0)
+        id = 1
+      }
+    } else if ix < 0x401c0000 {
+      x = (x - 1.5) / (1.0 + 1.5 * x)
+      id = 2
+    } else {
+      x = -1.0 / x
+      id = 3
+    }
+  }
+  let z = x * x
+  let w = z * z
+  let s1 = z * (ATAN_T[0] + w * (ATAN_T[2] + w * ATAN_T[4]))
+  let s2 = w * (ATAN_T[1] + w * ATAN_T[3])
+  if id == 4 { return x - x * (s1 + s2) }
+  let r = ATAN_HI[id] - ((x * (s1 + s2) - ATAN_LO[id]) - x)
+  if negative { -r } else { r }
+}
+
+// FreeBSD e_atan2f.c: the angle of (x, y), in [-pi, pi]; < 2 ulp.
+@noalloc
+pub fn atan2(y: f32, x: f32) -> f32 uses {} {
+  if x != x || y != y { return x + y }
+  let mut ix = core@1/f32.bits(x)
+  let mut iy = core@1/f32.bits(y)
+  if ix == 0x3f800000 { return atan(y) }
+  let m = ((iy >> 31) & 1) | ((ix >> 30) & 2)
+  ix &= 0x7fffffff
+  iy &= 0x7fffffff
+  if iy == 0 {
+    if m <= 1 { return y }
+    return if m == 2 { TRIG_PI } else { -TRIG_PI }
+  }
+  if ix == 0 { return if m & 1 != 0 { -TRIG_PI / 2.0 } else { TRIG_PI / 2.0 } }
+  if ix == 0x7f800000 {
+    if iy == 0x7f800000 {
+      if m == 0 { return TRIG_PI / 4.0 }
+      if m == 1 { return -TRIG_PI / 4.0 }
+      if m == 2 { return 3.0 * TRIG_PI / 4.0 }
+      return -3.0 * TRIG_PI / 4.0
+    }
+    if m == 0 { return 0.0 }
+    if m == 1 { return -0.0 }
+    if m == 2 { return TRIG_PI }
+    return -TRIG_PI
+  }
+  if ix + (26u32 << 23) < iy || iy == 0x7f800000 {
+    return if m & 1 != 0 { -TRIG_PI / 2.0 } else { TRIG_PI / 2.0 }
+  }
+  let z: f32 = if m & 2 != 0 && iy + (26u32 << 23) < ix { 0.0 } else { atan(abs(y / x)) }
+  if m == 0 { return z }
+  if m == 1 { return -z }
+  if m == 2 { return TRIG_PI - (z - -8.7422776573e-08) }
+  (z - -8.7422776573e-08) - TRIG_PI
+}

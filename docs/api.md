@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-835 exported definitions; 266 variants.
+895 exported definitions; 266 variants.
 
 ## Types and roots
 
@@ -2243,9 +2243,63 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Duration`](#
 
 ## f32
 
+<a id="def-std_401_2ff32_2fabs"></a>
+
+- `@noalloc pub fn f32.abs(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2facos"></a>
+
+- `@noalloc pub fn f32.acos(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2facosh"></a>
+
+- `@noalloc pub fn f32.acosh(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fasin"></a>
+
+- `@noalloc pub fn f32.asin(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fasinh"></a>
+
+- `@noalloc pub fn f32.asinh(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fatan"></a>
+
+- `@noalloc pub fn f32.atan(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fatan2"></a>
+
+- `@noalloc pub fn f32.atan2(y: f32, x: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fatanh"></a>
+
+- `@noalloc pub fn f32.atanh(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
 <a id="def-core_401_2ff32_2fbits"></a>
 
 - `@noalloc fn f32.bits(value: f32) -> u32`
+
+<a id="def-std_401_2ff32_2fcbrt"></a>
+
+- `@noalloc pub fn f32.cbrt(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
 
 <a id="def-std_401_2ff32_2fceil"></a>
 
@@ -2253,9 +2307,51 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Duration`](#
 
 References: [`core@1/f32`](#def-core_401_2ff32)
 
+<a id="def-std_401_2ff32_2fcopysign"></a>
+
+- `@noalloc pub fn f32.copysign(magnitude: f32, sign: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fcos"></a>
+
+- `@noalloc pub fn f32.cos(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fcosh"></a>
+
+- `@noalloc pub fn f32.cosh(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fexp"></a>
+
+- `@noalloc pub fn f32.exp(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fexp2"></a>
+
+- `@noalloc pub fn f32.exp2(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fexpm1"></a>
+
+- `@noalloc pub fn f32.expm1(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
 <a id="def-std_401_2ff32_2ffloor"></a>
 
 - `@noalloc pub fn f32.floor(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2ffma"></a>
+
+- `@noalloc pub fn f32.fma(a: f32, b: f32, c: f32) -> f32 uses {}`
 
 References: [`core@1/f32`](#def-core_401_2ff32)
 
@@ -2277,9 +2373,49 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/f32`](#def-core_401_
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401_2fchar), [`core@1/f32`](#def-core_401_2ff32), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
 
+<a id="def-std_401_2ff32_2ffract"></a>
+
+- `@noalloc pub fn f32.fract(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
 <a id="def-core_401_2ff32_2ffrom_5fbits"></a>
 
 - `@noalloc fn f32.from_bits(value: u32) -> f32`
+
+<a id="def-core_401_2ff32_2ffrom_5ff64"></a>
+
+- `@noalloc fn f32.from_f64(value: f64) -> f32`
+
+<a id="def-std_401_2ff32_2fhypot"></a>
+
+- `@noalloc pub fn f32.hypot(x: f32, y: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fln"></a>
+
+- `@noalloc pub fn f32.ln(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fln1p"></a>
+
+- `@noalloc pub fn f32.ln1p(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2flog10"></a>
+
+- `@noalloc pub fn f32.log10(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2flog2"></a>
+
+- `@noalloc pub fn f32.log2(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
 
 <a id="def-std_401_2ff32_2fparse"></a>
 
@@ -2287,9 +2423,33 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f32`](#def-core_401_2ff32), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
 
+<a id="def-std_401_2ff32_2fpow"></a>
+
+- `@noalloc pub fn f32.pow(x: f32, y: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fpowi"></a>
+
+- `@noalloc pub fn f32.powi(base: f32, exponent: i32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32), [`core@1/i32`](#def-core_401_2fi32)
+
 <a id="def-std_401_2ff32_2fround"></a>
 
 - `@noalloc pub fn f32.round(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fsin"></a>
+
+- `@noalloc pub fn f32.sin(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2fsinh"></a>
+
+- `@noalloc pub fn f32.sinh(value: f32) -> f32 uses {}`
 
 References: [`core@1/f32`](#def-core_401_2ff32)
 
@@ -2311,18 +2471,90 @@ References: [`core@1/Array`](#def-core_401_2fArray), [`core@1/f32`](#def-core_40
 
 References: [`core@1/Array`](#def-core_401_2fArray), [`core@1/f32`](#def-core_401_2ff32)
 
+<a id="def-std_401_2ff32_2ftan"></a>
+
+- `@noalloc pub fn f32.tan(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
+<a id="def-std_401_2ff32_2ftanh"></a>
+
+- `@noalloc pub fn f32.tanh(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
 <a id="def-std_401_2ff32_2fto_5fstring"></a>
 
 - `pub fn f32.to_string(value: f32) -> unique String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/f32`](#def-core_401_2ff32)
 
+<a id="def-std_401_2ff32_2ftrunc"></a>
+
+- `@noalloc pub fn f32.trunc(value: f32) -> f32 uses {}`
+
+References: [`core@1/f32`](#def-core_401_2ff32)
+
 
 ## f64
+
+<a id="def-std_401_2ff64_2fabs"></a>
+
+- `@noalloc pub fn f64.abs(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2facos"></a>
+
+- `@noalloc pub fn f64.acos(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2facosh"></a>
+
+- `@noalloc pub fn f64.acosh(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fasin"></a>
+
+- `@noalloc pub fn f64.asin(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fasinh"></a>
+
+- `@noalloc pub fn f64.asinh(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fatan"></a>
+
+- `@noalloc pub fn f64.atan(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fatan2"></a>
+
+- `@noalloc pub fn f64.atan2(y: f64, x: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fatanh"></a>
+
+- `@noalloc pub fn f64.atanh(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
 
 <a id="def-core_401_2ff64_2fbits"></a>
 
 - `@noalloc fn f64.bits(value: f64) -> u64`
+
+<a id="def-std_401_2ff64_2fcbrt"></a>
+
+- `@noalloc pub fn f64.cbrt(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
 
 <a id="def-std_401_2ff64_2fceil"></a>
 
@@ -2330,9 +2562,51 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/f32`](#def-core_
 
 References: [`core@1/f64`](#def-core_401_2ff64)
 
+<a id="def-std_401_2ff64_2fcopysign"></a>
+
+- `@noalloc pub fn f64.copysign(magnitude: f64, sign: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fcos"></a>
+
+- `@noalloc pub fn f64.cos(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fcosh"></a>
+
+- `@noalloc pub fn f64.cosh(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fexp"></a>
+
+- `@noalloc pub fn f64.exp(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fexp2"></a>
+
+- `@noalloc pub fn f64.exp2(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fexpm1"></a>
+
+- `@noalloc pub fn f64.expm1(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
 <a id="def-std_401_2ff64_2ffloor"></a>
 
 - `@noalloc pub fn f64.floor(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2ffma"></a>
+
+- `@noalloc pub fn f64.fma(a: f64, b: f64, c: f64) -> f64 uses {}`
 
 References: [`core@1/f64`](#def-core_401_2ff64)
 
@@ -2354,9 +2628,49 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/f64`](#def-core_401_
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401_2fchar), [`core@1/f64`](#def-core_401_2ff64), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
 
+<a id="def-std_401_2ff64_2ffract"></a>
+
+- `@noalloc pub fn f64.fract(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
 <a id="def-core_401_2ff64_2ffrom_5fbits"></a>
 
 - `@noalloc fn f64.from_bits(value: u64) -> f64`
+
+<a id="def-core_401_2ff64_2ffrom_5ff32"></a>
+
+- `@noalloc fn f64.from_f32(value: f32) -> f64`
+
+<a id="def-std_401_2ff64_2fhypot"></a>
+
+- `@noalloc pub fn f64.hypot(x: f64, y: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fln"></a>
+
+- `@noalloc pub fn f64.ln(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fln1p"></a>
+
+- `@noalloc pub fn f64.ln1p(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2flog10"></a>
+
+- `@noalloc pub fn f64.log10(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2flog2"></a>
+
+- `@noalloc pub fn f64.log2(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
 
 <a id="def-std_401_2ff64_2fparse"></a>
 
@@ -2364,9 +2678,33 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_401_2ff64), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
 
+<a id="def-std_401_2ff64_2fpow"></a>
+
+- `@noalloc pub fn f64.pow(x: f64, y: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fpowi"></a>
+
+- `@noalloc pub fn f64.powi(base: f64, exponent: i32) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64), [`core@1/i32`](#def-core_401_2fi32)
+
 <a id="def-std_401_2ff64_2fround"></a>
 
 - `@noalloc pub fn f64.round(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fsin"></a>
+
+- `@noalloc pub fn f64.sin(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2fsinh"></a>
+
+- `@noalloc pub fn f64.sinh(value: f64) -> f64 uses {}`
 
 References: [`core@1/f64`](#def-core_401_2ff64)
 
@@ -2388,11 +2726,29 @@ References: [`core@1/Array`](#def-core_401_2fArray), [`core@1/f64`](#def-core_40
 
 References: [`core@1/Array`](#def-core_401_2fArray), [`core@1/f64`](#def-core_401_2ff64)
 
+<a id="def-std_401_2ff64_2ftan"></a>
+
+- `@noalloc pub fn f64.tan(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2ftanh"></a>
+
+- `@noalloc pub fn f64.tanh(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
 <a id="def-std_401_2ff64_2fto_5fstring"></a>
 
 - `pub fn f64.to_string(value: f64) -> unique String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ff64_2ftrunc"></a>
+
+- `@noalloc pub fn f64.trunc(value: f64) -> f64 uses {}`
+
+References: [`core@1/f64`](#def-core_401_2ff64)
 
 
 ## failure

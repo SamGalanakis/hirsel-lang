@@ -1,0 +1,533 @@
+// pow, cbrt and hypot for binary64.
+// Ported from the Rust libm crate (rust-lang/compiler-builtins libm, MIT):
+// pow from musl and FreeBSD e_pow.c (Sun Microsystems permission notice),
+// cbrt and hypot from CORE-MATH (Alexei Sibidanov, MIT), correctly rounded;
+// third-party/NOTICES.md. Each is the crate's algorithm operation for
+// operation, so every engine computes the crate's bits.
+
+const POW_BP: Array[f64] = [1.0, 1.5]
+const POW_DP_H: Array[f64] = [0.0, 5.84962487220764160156e-01]
+const POW_DP_L: Array[f64] = [0.0, 1.35003920212974897128e-08]
+const POW_HUGE: f64 = 1.0e300
+const POW_TINY: f64 = 1.0e-300
+const POW_LG2: f64 = 6.93147180559945286227e-01
+const POW_IVLN2: f64 = 1.44269504088896338700e+00
+
+@noalloc
+fn with_low_word(x: f64, low: u32) -> f64 uses {} {
+  let wide: u64 = core@1/int.widen(low)
+  core@1/f64.from_bits((core@1/f64.bits(x) & 0xffffffff00000000) | wide)
+}
+
+@noalloc
+fn with_high_word(x: f64, high: u32) -> f64 uses {} {
+  let wide: u64 = core@1/int.widen(high)
+  core@1/f64.from_bits((core@1/f64.bits(x) & 0xffffffff) | (wide << 32))
+}
+
+@noalloc
+fn signed_high_word(x: f64) -> i32 uses {} { core@1/int.truncate(core@1/f64.bits(x) >> 32) }
+
+// FreeBSD e_pow.c: log2(x) in extra precision, times y, then 2^(y log2 x);
+// < 1 ulp (0.9 ulp measured upstream). x^0 and 1^y are 1 even for NaN.
+@noalloc
+pub fn pow(x: f64, y: f64) -> f64 uses {} {
+  let hx = signed_high_word(x)
+  let lx = low_word(x)
+  let hy = signed_high_word(y)
+  let ly = low_word(y)
+  let mut ix: i32 = hx & 0x7fffffff
+  let iy: i32 = hy & 0x7fffffff
+  let iy_word: u32 = core@1/int.truncate(iy)
+  if iy_word | ly == 0 { return 1.0 }
+  if hx == 0x3ff00000 && lx == 0 { return 1.0 }
+  if ix > 0x7ff00000 || (ix == 0x7ff00000 && lx != 0) || iy > 0x7ff00000 || (
+    iy == 0x7ff00000 && ly != 0
+  ) {
+    return x + y
+  }
+  // yisint: 0 when y is not an odd or even integer, 1 when odd, 2 when even.
+  let mut yisint: i32 = 0
+  if hx < 0 {
+    if iy >= 0x43400000 {
+      yisint = 2
+    } else if iy >= 0x3ff00000 {
+      let k = (iy >> 20) - 0x3ff
+      if k > 20 {
+        let shift: u32 = core@1/int.narrow(52 - k)
+        let j: i32 = core@1/int.truncate(ly >> shift)
+        let ly_signed: i32 = core@1/int.truncate(ly)
+        if j << (52 - k) == ly_signed { yisint = 2 - (j & 1) }
+      } else if ly == 0 {
+        let j = iy >> (20 - k)
+        if j << (20 - k) == iy { yisint = 2 - (j & 1) }
+      }
+    }
+  }
+  if ly == 0 {
+    if iy == 0x7ff00000 {
+      let lx_signed: i32 = core@1/int.truncate(lx)
+      if (ix - 0x3ff00000) | lx_signed == 0 { return 1.0 }
+      if ix >= 0x3ff00000 { return if hy >= 0 { y } else { 0.0 } }
+      return if hy >= 0 { 0.0 } else { -y }
+    }
+    if iy == 0x3ff00000 { return if hy >= 0 { x } else { 1.0 / x } }
+    if hy == 0x40000000 { return x * x }
+    if hy == 0x3fe00000 && hx >= 0 { return sqrt(x) }
+  }
+  let mut ax = abs(x)
+  if lx == 0 && (ix == 0x7ff00000 || ix == 0 || ix == 0x3ff00000) {
+    let mut z = ax
+    if hy < 0 { z = 1.0 / z }
+    if hx < 0 {
+      if (ix - 0x3ff00000) | yisint == 0 {
+        z = (z - z) / (z - z)
+      } else if yisint == 1 {
+        z = -z
+      }
+    }
+    return z
+  }
+  let mut s: f64 = 1.0
+  if hx < 0 {
+    if yisint == 0 { return (x - x) / (x - x) }
+    if yisint == 1 { s = -1.0 }
+  }
+  let mut t1: f64 = 0.0
+  let mut t2: f64 = 0.0
+  if iy > 0x41e00000 {
+    if iy > 0x43f00000 {
+      if ix <= 0x3fefffff {
+        return if hy < 0 { POW_HUGE * POW_HUGE } else { POW_TINY * POW_TINY }
+      }
+      if ix >= 0x3ff00000 {
+        return if hy > 0 { POW_HUGE * POW_HUGE } else { POW_TINY * POW_TINY }
+      }
+    }
+    if ix < 0x3fefffff {
+      return if hy < 0 { s * POW_HUGE * POW_HUGE } else { s * POW_TINY * POW_TINY }
+    }
+    if ix > 0x3ff00000 {
+      return if hy > 0 { s * POW_HUGE * POW_HUGE } else { s * POW_TINY * POW_TINY }
+    }
+    let t = ax - 1.0
+    let w = (t * t) * (0.5 - t * (0.3333333333333333333333 - t * 0.25))
+    let u: f64 = 1.44269502162933349609e+00 * t
+    let v = t * 1.92596299112661746887e-08 - w * POW_IVLN2
+    t1 = with_low_word(u + v, 0)
+    t2 = v - (t1 - u)
+  } else {
+    let mut n: i32 = 0
+    if ix < 0x00100000 {
+      ax *= 9007199254740992.0
+      n -= 53
+      ix = signed_high_word(ax)
+    }
+    n += (ix >> 20) - 0x3ff
+    let j = ix & 0x000fffff
+    ix = j | 0x3ff00000
+    let mut k: u64 = 0
+    if j <= 0x3988e {
+      k = 0
+    } else if j < 0xbb67a {
+      k = 1
+    } else {
+      n += 1
+      ix -= 0x00100000
+    }
+    let ix_word: u32 = core@1/int.narrow(ix)
+    ax = with_high_word(ax, ix_word)
+    let u = ax - POW_BP[k]
+    let v: f64 = 1.0 / (ax + POW_BP[k])
+    let ss = u * v
+    let s_h = with_low_word(ss, 0)
+    let k_word: u32 = core@1/int.narrow(k)
+    let t_h = with_high_word(0.0, ((ix_word >> 1) | 0x20000000) + 0x00080000 + (k_word << 18))
+    let t_l = ax - (t_h - POW_BP[k])
+    let s_l = v * ((u - s_h * t_h) - s_h * t_l)
+    let s2 = ss * ss
+    let mut r = s2 * s2 * (
+      5.99999999999994648725e-01 + s2 * (
+        4.28571428578550184252e-01 + s2 * (
+          3.33333329818377432918e-01 + s2 * (
+            2.72728123808534006489e-01 + s2 * (
+              2.30660745775561754067e-01 + s2 * 2.06975017800338417784e-01
+            )
+          )
+        )
+      )
+    )
+    r += s_l * (s_h + ss)
+    let s2h = s_h * s_h
+    let t_h2: f64 = with_low_word(3.0 + s2h + r, 0)
+    let t_l2 = r - ((t_h2 - 3.0) - s2h)
+    let u2 = s_h * t_h2
+    let v2 = s_l * t_h2 + t_l2 * ss
+    let p_h = with_low_word(u2 + v2, 0)
+    let p_l = v2 - (p_h - u2)
+    let z_h: f64 = 9.61796700954437255859e-01 * p_h
+    let z_l: f64 = -7.02846165095275826516e-09 * p_h + p_l * 9.61796693925975554329e-01 + POW_DP_L[k]
+    let t = of_i32(n)
+    t1 = with_low_word(((z_h + z_l) + POW_DP_H[k]) + t, 0)
+    t2 = z_l - (((t1 - t) - POW_DP_H[k]) - z_h)
+  }
+  // y * log2(x) as p_h + p_l, then 2^that.
+  let y1 = with_low_word(y, 0)
+  let p_l = (y - y1) * t1 + y * t2
+  let mut p_h = y1 * t1
+  let z = p_l + p_h
+  let mut j = signed_high_word(z)
+  let i: i32 = core@1/int.truncate(core@1/f64.bits(z))
+  if j >= 0x40900000 {
+    if (j - 0x40900000) | i != 0 { return s * POW_HUGE * POW_HUGE }
+    if p_l + 8.0085662595372944372e-017 > z - p_h { return s * POW_HUGE * POW_HUGE }
+  } else if j & 0x7fffffff >= 0x4090cc00 {
+    let j_word: u32 = core@1/int.truncate(j)
+    let i_word: u32 = core@1/int.truncate(i)
+    if (j_word - 0xc090cc00) | i_word != 0 { return s * POW_TINY * POW_TINY }
+    if p_l <= z - p_h { return s * POW_TINY * POW_TINY }
+  }
+  let magnitude = j & 0x7fffffff
+  let mut k = (magnitude >> 20) - 0x3ff
+  let mut n: i32 = 0
+  if magnitude > 0x3fe00000 {
+    n = j + (0x00100000 >> (k + 1))
+    k = ((n & 0x7fffffff) >> 20) - 0x3ff
+    let high: u32 = core@1/int.truncate(n & ~(0x000fffff >> k))
+    let t = with_high_word(0.0, high)
+    n = ((n & 0x000fffff) | 0x00100000) >> (20 - k)
+    if j < 0 { n = -n }
+    p_h -= t
+  }
+  let t = with_low_word(p_l + p_h, 0)
+  let u = t * 6.93147182464599609375e-01
+  let v = (p_l - (t - p_h)) * POW_LG2 + t * -1.90465429995776804525e-09
+  let mut zz = u + v
+  let w = v - (zz - u)
+  let tt = zz * zz
+  let t1b = zz - tt * (
+    1.66666666666666019037e-01 + tt * (
+      -2.77777777770155933842e-03 + tt * (
+        6.61375632143793436117e-05 + tt * (
+          -1.65339022054652515390e-06 + tt * 4.13813679705723846039e-08
+        )
+      )
+    )
+  )
+  let r = (zz * t1b) / (t1b - 2.0) - (w + zz * w)
+  zz = 1.0 - (r - zz)
+  j = signed_high_word(zz)
+  j += n << 20
+  if j >> 20 <= 0 {
+    zz = scaled(zz, n)
+  } else {
+    zz = with_high_word(zz, core@1/int.truncate(j))
+  }
+  s * zz
+}
+
+@noalloc
+fn unsigned_word(n: i64) -> u64 uses {} { core@1/int.truncate(n) }
+
+@noalloc
+fn leading_zeros(value: u64) -> u64 uses {} {
+  if value == 0 { return 64 }
+  let mut count: u64 = 0
+  while value & (0x8000000000000000 >> count) == 0 { count += 1 }
+  count
+}
+
+// The f64 truncation of a nonnegative finite value below 2^64, as Rust's `as u64`.
+@noalloc
+fn truncated_u64(value: f64) -> u64 uses {} {
+  let bits = core@1/f64.bits(value)
+  let exponent = bits >> 52
+  if exponent < 1023 { return 0 }
+  let mantissa = (bits & 0xfffffffffffff) | (1u64 << 52)
+  if exponent >= 1075 { mantissa << (exponent - 1075) } else { mantissa >> (1075 - exponent) }
+}
+
+const CBRT_ESCALE: Array[u64] = [0x3ff0000000000000, 0x3ff428a2f98d728b, 0x3ff965fea53d6e3d]
+const CBRT_RSC: Array[f64] = [1.0, -1.0, 0.5, -0.5, 0.25, -0.25]
+
+// CORE-MATH cbrt: a cubic approximation, a cubic-Newton step and an exact-
+// product Newton step, with exact-case rounding; correctly rounded.
+@noalloc
+pub fn cbrt(value: f64) -> f64 uses {} {
+  let x = value
+  let u0 = core@1/f64.from_bits(0x3fd5555555555555)
+  let u1 = core@1/f64.from_bits(0x3fcc71c71c71c71c)
+  let off = core@1/f64.from_bits(0x3ca0000000000000)
+  let hx: u64 = core@1/f64.bits(x)
+  let mut mant: u64 = hx & 0xfffffffffffff
+  let sign: u64 = hx >> 63
+  let mut e: u32 = core@1/int.truncate((hx >> 52) & 0x7ff)
+  if (e + 1) & 0x7ff < 2 {
+    let ix: u64 = hx & 0x7fffffffffffffff
+    if e == 0x7ff || ix == 0 { return x + x }
+    let nz = leading_zeros(ix) - 11
+    mant <<= nz
+    mant &= 0xfffffffffffff
+    let shift: u32 = core@1/int.narrow(nz - 1)
+    e = 3072 - shift
+  } else {
+    e += 3072
+  }
+  let cvt1: u64 = mant | (0x3ffu64 << 52)
+  let et: u32 = e / 3
+  let it: u32 = e % 3
+  let it_wide: u64 = core@1/int.widen(it)
+  let cvt5: u64 = (cvt1 + (it_wide << 52)) | (sign << 63)
+  let zz = core@1/f64.from_bits(cvt5)
+  let cvt2: u64 = CBRT_ESCALE[it_wide] | (sign << 63)
+  let z = core@1/f64.from_bits(cvt1)
+  let r: f64 = 1.0 / z
+  let rr = r * CBRT_RSC[(it_wide << 1) | sign]
+  let z2 = z * z
+  let c0 = core@1/f64.from_bits(0x3fe1b0babccfef9c) + z * core@1/f64.from_bits(0x3fe2c9a3e94d1da5)
+  let c2 = core@1/f64.from_bits(0xbfc4dc30b1a1ddba) + z * core@1/f64.from_bits(0x3f97a8d3e4ec9b07)
+  let mut y = c0 + z2 * c2
+  let mut y2 = y * y
+  let mut h = y2 * (y * r) - 1.0
+  y -= (h * y) * (u0 - u1 * h)
+  y *= core@1/f64.from_bits(cvt2)
+  y2 = y * y
+  let mut y2l = core@1/float.mul_add(y, y, -y2)
+  let mut y3 = y2 * y
+  let mut y3l = core@1/float.mul_add(y, y2, -y3) + y * y2l
+  h = ((y3 - zz) + y3l) * rr
+  let mut dy = h * (y * u0)
+  let mut y1 = y - dy
+  dy = (y - y1) - dy
+  let mut ady = abs(dy)
+  let mut ady0 = abs(ady - off)
+  let mut ady1 = abs(ady - (core@1/f64.from_bits(0x3cb0000000000000) + off))
+  let limit75 = core@1/f64.from_bits(0x3b40000000000000)
+  if ady0 < limit75 || ady1 < limit75 {
+    y2 = y1 * y1
+    y2l = core@1/float.mul_add(y1, y1, -y2)
+    y3 = y2 * y1
+    y3l = core@1/float.mul_add(y1, y2, -y3) + y1 * y2l
+    h = ((y3 - zz) + y3l) * rr
+    dy = h * (y1 * u0)
+    y = y1 - dy
+    dy = (y1 - y) - dy
+    y1 = y
+    ady = abs(dy)
+    ady0 = abs(ady - off)
+    ady1 = abs(ady - (core@1/f64.from_bits(0x3cb0000000000000) + off))
+    let limit98 = core@1/f64.from_bits(0x39d0000000000000)
+    if ady0 < limit98 || ady1 < limit98 {
+      let azz = abs(zz)
+      if azz == core@1/f64.from_bits(0x4009b78223aa307c) {
+        y1 = copysign(core@1/f64.from_bits(0x3ff79d15d0e8d59c), zz)
+      }
+      if azz == core@1/f64.from_bits(0x401a202bfc89ddff) {
+        y1 = copysign(core@1/f64.from_bits(0x3ffde87aa837820f), zz)
+      }
+    }
+  }
+  let et_wide: i64 = core@1/int.widen(et)
+  let delta: u64 = core@1/int.truncate(et_wide - 342 - 1023)
+  let mut cvt3: u64 = core@1/int.wrapping_add(core@1/f64.bits(y1), delta << 52)
+  let m0: u64 = cvt3 << 30
+  let m1 = m0 >> 63
+  if m0 ^ m1 <= 1u64 << 30 {
+    let cvt4: u64 = (core@1/f64.bits(y1) + (164 << 15)) & 0xffffffffffff0000
+    if abs((core@1/f64.from_bits(cvt4) - y1) - dy) < core@1/f64.from_bits(
+      0x3c30000000000000
+    ) || abs(zz) == 1.0 {
+      cvt3 = (cvt3 + (1u64 << 15)) & 0xffffffffffff0000
+    }
+  }
+  core@1/f64.from_bits(cvt3)
+}
+
+// CORE-MATH hypot: sqrt(x^2 + y^2) from exact squares with a 128-bit
+// integer fallback for hard cases; correctly rounded. hypot(±inf, NaN) is +inf.
+@noalloc
+pub fn hypot(x: f64, y: f64) -> f64 uses {} {
+  let xi = core@1/f64.bits(x)
+  let yi = core@1/f64.bits(y)
+  let emsk: u64 = 0x7ffu64 << 52
+  let mut ex: u64 = xi & emsk
+  let mut ey: u64 = yi & emsk
+  let mut ax = abs(x)
+  let mut ay = abs(y)
+  if ex == emsk || ey == emsk {
+    let wm: u64 = emsk << 1
+    let one_inf = (xi << 1 == wm) != (yi << 1 == wm)
+    let one_nan = (ax != ax) != (ay != ay)
+    if one_inf && one_nan { return core@1/f64.from_bits(0x7ff0000000000000) }
+    return ax + ay
+  }
+  let u = if ax >= ay { ax } else { ay }
+  let v = if ax >= ay { ay } else { ax }
+  let mut xd: u64 = core@1/f64.bits(u)
+  let mut yd: u64 = core@1/f64.bits(v)
+  ey = yd
+  if ey >> 52 == 0 {
+    if yd == 0 { return core@1/f64.from_bits(xd) }
+    ex = xd
+    if ex >> 52 == 0 {
+      if ex == 0 { return 0.0 }
+      return hypot_denormal(ex, ey)
+    }
+    let nz = leading_zeros(ey)
+    ey <<= nz - 11
+    ey &= 0xfffffffffffff
+    ey = u64.wrapping_sub(ey, (nz - 12) << 52)
+    yd = ey
+  }
+  let de: u64 = u64.wrapping_sub(xd, yd)
+  if de > 27u64 << 52 {
+    return core@1/float.mul_add(core@1/f64.from_bits(0x3e40000000000000), v, u)
+  }
+  let off: u64 = u64.wrapping_sub(0x3ffu64 << 52, xd & emsk)
+  xd = core@1/int.wrapping_add(xd, off)
+  yd = core@1/int.wrapping_add(yd, off)
+  ax = core@1/f64.from_bits(xd)
+  ay = core@1/f64.from_bits(yd)
+  let x2 = ax * ax
+  let dx2 = core@1/float.mul_add(ax, ax, -x2)
+  let y2 = ay * ay
+  let dy2 = core@1/float.mul_add(ay, ay, -y2)
+  let r2 = x2 + y2
+  let ir2: f64 = 0.5 / r2
+  let dr2 = ((x2 - r2) + y2) + (dx2 + dy2)
+  let mut th = sqrt(r2)
+  let rsqrt = th * ir2
+  let dz = dr2 - core@1/float.mul_add(th, th, -r2)
+  let tl0 = rsqrt * dz
+  let twosum = th + tl0
+  let tl = tl0 - (twosum - th)
+  th = twosum
+  let mut thd: u64 = core@1/f64.bits(th)
+  ex = thd & (0x7ffu64 << 52)
+  ey = core@1/f64.bits(abs(tl))
+  let aidr: u64 = u64.wrapping_sub(core@1/int.wrapping_add(ey, 0x3feu64 << 52), ex)
+  let mid: u64 = core@1/int.wrapping_add(u64.wrapping_sub(aidr, 0x3c90000000000000), 16) >> 5
+  if mid == 0 || aidr < 0x39b0000000000000 || aidr > 0x3c9fffffffffff80 {
+    thd = core@1/f64.bits(hypot_hard(ax, ay))
+  }
+  thd = u64.wrapping_sub(thd, off)
+  if thd >= 0x7ffu64 << 52 { return core@1/f64.from_bits(0x7ff0000000000000) }
+  core@1/f64.from_bits(thd)
+}
+
+// Newton refinement against the exact x^2 + y^2 in 128-bit integers. The
+// crate's directed-rounding branches are unreachable under round-to-nearest.
+@noalloc
+fn hypot_hard(x: f64, y: f64) -> f64 uses {} {
+  let xi: u64 = core@1/f64.bits(x)
+  let yi: u64 = core@1/f64.bits(y)
+  let mut bm: u64 = (xi & 0xfffffffffffff) | (1u64 << 52)
+  let mut lm: u64 = (yi & 0xfffffffffffff) | (1u64 << 52)
+  let be: i32 = core@1/int.narrow(xi >> 52)
+  let le: i32 = core@1/int.narrow(yi >> 52)
+  let ri: u64 = core@1/f64.bits(sqrt(x * x + y * y))
+  let bs: i32 = 2
+  let mut rm: u64 = (ri & 0xfffffffffffff) | (1u64 << 52)
+  let ri_exponent: i32 = core@1/int.narrow(ri >> 52)
+  let mut re: i32 = ri_exponent - 0x3ff
+  let mut step: u64 = 0
+  while step < 3 {
+    if rm == 1u64 << 52 {
+      rm = 0x1fffffffffffff
+      re -= 1
+    } else {
+      rm -= 1
+    }
+    step += 1
+  }
+  bm <<= 2
+  let mut m2: u64 = u64.wrapping_mul(bm, bm)
+  let de: i32 = be - le
+  let mut ls: i32 = bs - de
+  if ls >= 0 {
+    let ls_count: u64 = core@1/int.narrow(ls)
+    lm <<= ls_count
+    m2 = core@1/int.wrapping_add(m2, u64.wrapping_mul(lm, lm))
+  } else {
+    let lm_wide: u128 = core@1/int.widen(lm)
+    let lm2: u128 = lm_wide * lm_wide
+    ls *= 2
+    let down: u128 = core@1/int.narrow(-ls)
+    m2 = core@1/int.wrapping_add(m2, core@1/int.truncate(lm2 >> down))
+    let up: u128 = core@1/int.narrow(128 + ls)
+    if lm2 << up != 0 { m2 |= 1 }
+  }
+  let k: i32 = bs + re
+  let k_count: u64 = core@1/int.narrow(k)
+  let mut d: i64 = 0
+  while true {
+    rm += if rm >= 1u64 << 53 { 2 } else { 1 }
+    let tm: u64 = rm << k_count
+    let rm2: u64 = u64.wrapping_mul(tm, tm)
+    let m2_signed: i64 = core@1/int.truncate(m2)
+    let rm2_signed: i64 = core@1/int.truncate(rm2)
+    d = i64.wrapping_sub(m2_signed, rm2_signed)
+    if d <= 0 { break }
+  }
+  if d != 0 {
+    let low: u64 = if rm <= 1u64 << 53 { 1 } else { 0 }
+    let tm: u64 = (rm << k_count) - (1u64 << (k_count - low))
+    let m2_signed: i64 = core@1/int.truncate(m2)
+    let tm2_signed: i64 = core@1/int.truncate(u64.wrapping_mul(tm, tm))
+    d = i64.wrapping_sub(m2_signed, tm2_signed)
+    if d == 0 {
+      rm -= rm & 1
+    } else {
+      rm = core@1/int.wrapping_add(rm, unsigned_word(d >> 63))
+    }
+  }
+  if rm >= 1u64 << 53 {
+    rm >>= 1
+    re += 1
+  }
+  let e: u64 = core@1/int.narrow(be - 1 + re)
+  core@1/f64.from_bits((e << 52) + rm)
+}
+
+// Both operands subnormal: an integer square root of a^2 + b^2 by
+// difference steps. The crate's directed-rounding branches are unreachable
+// under round-to-nearest.
+@noalloc
+fn hypot_denormal(a_in: u64, b_in: u64) -> f64 uses {} {
+  let af: f64 = core@1/float.from_int(a_in)
+  let bf: f64 = core@1/float.from_int(b_in)
+  let a = a_in << 1
+  let b = b_in << 1
+  let mut rm: u64 = truncated_u64(sqrt(af * af + bf * bf))
+  let tm: u64 = rm << 1
+  let aa: i64 = core@1/int.truncate(u64.wrapping_mul(a, a))
+  let tt: i64 = core@1/int.truncate(u64.wrapping_mul(tm, tm))
+  let bb: i64 = core@1/int.truncate(u64.wrapping_mul(b, b))
+  let mut d: i64 = core@1/int.wrapping_add(i64.wrapping_sub(aa, tt), bb)
+  let sd: i64 = d >> 63
+  let rm_signed: i64 = core@1/int.truncate(rm)
+  let um: i64 = (rm_signed ^ sd) - sd
+  let mut drm: i64 = sd + 1
+  let mut dd: i64 = (um << 3) + 4
+  let mut p_d: i64 = 0
+  rm -= unsigned_word(drm)
+  drm += sd
+  while true {
+    p_d = d
+    rm = core@1/int.wrapping_add(rm, unsigned_word(drm))
+    d = i64.wrapping_sub(d, dd)
+    dd = core@1/int.wrapping_add(dd, 8)
+    if d ^ p_d <= 0 { break }
+  }
+  p_d = (sd & d) + (~sd & p_d)
+  if p_d != 0 {
+    let rm_word: i64 = core@1/int.truncate(u64.wrapping_mul(4, rm))
+    let excess: i64 = i64.wrapping_sub(i64.wrapping_sub(p_d, rm_word), 1)
+    if excess != 0 {
+      rm = core@1/int.wrapping_add(rm, unsigned_word(core@1/int.wrapping_add(excess >> 63, 1)))
+    } else {
+      rm += rm & 1
+    }
+  }
+  core@1/f64.from_bits(rm)
+}

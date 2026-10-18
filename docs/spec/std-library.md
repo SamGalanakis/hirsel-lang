@@ -380,6 +380,62 @@ to even, handles subnormals, preserves either zero and positive infinity, and
 returns canonical NaN for negative nonzero input. The portable baseline uses bit
 decomposition and integer arithmetic without a platform math call.
 
+Each float module also declares this math library, shown for `f64`; `f32` declares the
+same functions over `f32`:
+
+```text
+N fn f64.trunc(value: f64) -> f64 uses {}
+N fn f64.fract(value: f64) -> f64 uses {}
+N fn f64.abs(value: f64) -> f64 uses {}
+N fn f64.copysign(magnitude: f64, sign: f64) -> f64 uses {}
+N fn f64.fma(a: f64, b: f64, c: f64) -> f64 uses {}
+N fn f64.powi(base: f64, exponent: i32) -> f64 uses {}
+N fn f64.exp(value: f64) -> f64 uses {}
+N fn f64.exp2(value: f64) -> f64 uses {}
+N fn f64.expm1(value: f64) -> f64 uses {}
+N fn f64.ln(value: f64) -> f64 uses {}
+N fn f64.log2(value: f64) -> f64 uses {}
+N fn f64.log10(value: f64) -> f64 uses {}
+N fn f64.ln1p(value: f64) -> f64 uses {}
+N fn f64.pow(x: f64, y: f64) -> f64 uses {}
+N fn f64.cbrt(value: f64) -> f64 uses {}
+N fn f64.hypot(x: f64, y: f64) -> f64 uses {}
+N fn f64.sin(value: f64) -> f64 uses {}
+N fn f64.cos(value: f64) -> f64 uses {}
+N fn f64.tan(value: f64) -> f64 uses {}
+N fn f64.asin(value: f64) -> f64 uses {}
+N fn f64.acos(value: f64) -> f64 uses {}
+N fn f64.atan(value: f64) -> f64 uses {}
+N fn f64.atan2(y: f64, x: f64) -> f64 uses {}
+N fn f64.sinh(value: f64) -> f64 uses {}
+N fn f64.cosh(value: f64) -> f64 uses {}
+N fn f64.tanh(value: f64) -> f64 uses {}
+N fn f64.asinh(value: f64) -> f64 uses {}
+N fn f64.acosh(value: f64) -> f64 uses {}
+N fn f64.atanh(value: f64) -> f64 uses {}
+```
+
+`trunc` rounds toward zero, `fract` is `value - trunc(value)`, `abs` clears the sign,
+`copysign` gives `magnitude` the sign of `sign`, and `fma` is `float.mul_add`; these are
+exact. `powi` multiplies by repeated squaring, then takes the reciprocal for a negative
+exponent, as Rust's `powi` does; its rounding errors compound, so use `pow` when the error
+matters. `ln` is the natural logarithm and `ln1p(x)` is `ln(1 + x)`, as `expm1(x)` is
+`exp(x) - 1`, both accurate near zero. `atan2(y, x)` is the angle of the point `(x, y)`,
+in [-π, π].
+
+The functions are ports of the Rust libm crate (from musl, FreeBSD's msun and
+CORE-MATH), the same operations in the same order, so every engine and target computes
+the crate's bits. Each result is within the stated number of units in the last place of
+the correctly rounded result, the crate's bound tested against MPFR: 0 (correctly
+rounded) for `f64.cbrt`, `f64.hypot` and `f32.cbrt`; 1 for exp, exp2, expm1, ln, log2,
+log10, ln1p, pow, `f32.hypot`, sin, cos, tan, asin, acos, atan and cosh; 2 for atan2,
+sinh, tanh, asinh and atanh; and 4 for acosh. Domain errors give the NaN; poles give
+a signed infinity (`ln(0)` is -inf, `atanh(1)` is inf); overflow gives infinity and
+underflow zero or a subnormal. `pow` follows IEEE 754 `pow` on special operands:
+`pow(x, ±0)` and `pow(1, y)` are 1 even for a NaN operand, and a negative base needs an
+integral exponent. `hypot(±inf, NaN)` is inf. `f32` functions may compute in `f64`
+internally and round once.
+
 `@noalloc f32.sum(xs: Array[f32]) -> f32` and `f64.sum(xs: Array[f64]) -> f64`, and
 `f32.sum_exact` and `f64.sum_exact` with the same types and allocation allowed, implement the
 reductions of [the core library](core-library.md#numeric-and-string-details).

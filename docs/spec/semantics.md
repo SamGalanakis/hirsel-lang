@@ -33,8 +33,9 @@ observable NaN. `float.min` and `float.max` are IEEE 754-2019 `minimum` and `max
 propagates, −0 < +0); `float.min_number` and `float.max_number` ignore NaN.
 `f32.sum` and `f64.sum` use the fixed reduction tree of the
 [core library](core-library.md#numeric-and-string-details); `f32.sum_exact` and
-`f64.sum_exact` are correctly rounded. Math functions are correctly rounded library
-definitions. `float.to_i32` returns a `Result`; `float.total_order` is for sorting. A finite
+`f64.sum_exact` are correctly rounded. Math functions are ordinary std source with a stated
+error bound ([floats](std-library.md#scalars)), so every engine computes the same bits.
+`float.to_i32` returns a `Result`; `float.total_order` is for sorting. A finite
 literal spelling outside its type's finite range rounds to infinity.
 
 ### SEM-3: Strings

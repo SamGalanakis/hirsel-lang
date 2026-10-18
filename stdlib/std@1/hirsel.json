@@ -266,6 +266,30 @@
       ]
     },
     {
+      "path": "f32_exp.hir",
+      "module": [
+        "f32"
+      ]
+    },
+    {
+      "path": "f32_power.hir",
+      "module": [
+        "f32"
+      ]
+    },
+    {
+      "path": "f32_trig.hir",
+      "module": [
+        "f32"
+      ]
+    },
+    {
+      "path": "f32_hyperbolic.hir",
+      "module": [
+        "f32"
+      ]
+    },
+    {
       "path": "f64.hir",
       "module": [
         "f64"
@@ -275,6 +299,37 @@
       "path": "f64_math.hir",
       "module": [
         "f64"
+      ]
+    },
+    {
+      "path": "f64_exp.hir",
+      "module": [
+        "f64"
+      ]
+    },
+    {
+      "path": "f64_power.hir",
+      "module": [
+        "f64"
+      ]
+    },
+    {
+      "path": "f64_trig.hir",
+      "module": [
+        "f64"
+      ]
+    },
+    {
+      "path": "f64_hyperbolic.hir",
+      "module": [
+        "f64"
+      ]
+    },
+    {
+      "path": "libm.hir",
+      "module": [
+        "internal",
+        "libm"
       ]
     },
     {

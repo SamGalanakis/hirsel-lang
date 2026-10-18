@@ -1,0 +1,42 @@
+// rule: SEM-2
+// expect: run
+// The MPFR-derived expected values of libm-test's case_list.rs (expf, asinhf):
+// each result is the Rust libm crate's bits (rust-lang/compiler-builtins
+// f6c1107f, MIT) and lies within one ulp of the correctly rounded value.
+// Same-signed finite encodings at most one representable step apart.
+@noalloc
+fn within_one(a: u32, b: u32) -> bool {
+  if a >> 31 != b >> 31 {
+    return false
+  }
+  if a >= b {
+    a - b <= 1
+  } else {
+    b - a <= 1
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let exp_cases: Array[(u32, u32, u32)] = [
+    (0xbb96922du32, 0x3f7ed38cu32, 0x3f7ed38cu32),
+    (0x3c6d8dbdu32, 0x3f81de92u32, 0x3f81de91u32),
+    (0xc26e0afeu32, 0x148d7374u32, 0x148d7373u32)
+  ]
+  for exp_case in exp_cases {
+    let (x, want, exact) = exp_case
+    let got = core@1/f32.bits(f32.exp(core@1/f32.from_bits(x)))
+    failure.check(got == want, Bounds())
+    failure.check(within_one(got, exact), Bounds())
+  }
+  let asinh_cases: Array[(u32, u32, u32)] = [
+    (0xbebf2196u32, 0xbebaf304u32, 0xbebaf304u32),
+    (0xbed7995fu32, 0xbed1b020u32, 0xbed1b01fu32)
+  ]
+  for asinh_case in asinh_cases {
+    let (x, want, exact) = asinh_case
+    let got = core@1/f32.bits(f32.asinh(core@1/f32.from_bits(x)))
+    failure.check(got == want, Bounds())
+    failure.check(within_one(got, exact), Bounds())
+  }
+  Ok(())
+}

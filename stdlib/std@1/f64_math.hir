@@ -2,8 +2,10 @@
 // Go math/floor.go and math/sqrt.go portable kernels.
 // Copyright 2009 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
 // sqrt preserves the Sun Microsystems permission notice recorded there.
+// copysign and scaled follow the Rust libm crate's generic copysign and
+// scalbn, powi compiler-builtins' float/pow.rs (MIT; third-party/NOTICES.md).
 @noalloc
-fn truncated(value: f64) -> f64 uses {} {
+pub fn trunc(value: f64) -> f64 uses {} {
   let bits: u64 = core@1/int.widen(core@1/f64.bits(value))
   let exponent = (bits >> 52) & 2047u64
   if exponent < 1023 { return core@1/f64.from_bits(core@1/int.narrow(bits & 9223372036854775808u64)) }
@@ -14,7 +16,7 @@ fn truncated(value: f64) -> f64 uses {} {
 
 @noalloc
 pub fn floor(value: f64) -> f64 uses {} {
-  let integer = truncated(value)
+  let integer = trunc(value)
   if value < integer { integer - 1f64 } else { integer }
 }
 
@@ -23,7 +25,7 @@ pub fn ceil(value: f64) -> f64 uses {} { -floor(-value) }
 
 @noalloc
 pub fn round(value: f64) -> f64 uses {} {
-  let integer = truncated(value)
+  let integer = trunc(value)
   let fraction = value - integer
   if fraction >= 0.5f64 { return integer + 1f64 }
   if fraction <= -0.5f64 { return integer - 1f64 }
@@ -67,3 +69,79 @@ pub fn sqrt(value: f64) -> f64 uses {} {
   let result_bits = (q >> 1) + (result_exponent << 52)
   core@1/f64.from_bits(core@1/int.narrow(result_bits))
 }
+
+@noalloc
+pub fn fract(value: f64) -> f64 uses {} { value - trunc(value) }
+
+@noalloc
+pub fn abs(value: f64) -> f64 uses {} {
+  core@1/f64.from_bits(core@1/f64.bits(value) & 9223372036854775807u64)
+}
+
+@noalloc
+pub fn copysign(magnitude: f64, sign: f64) -> f64 uses {} {
+  let bits = core@1/f64.bits(magnitude) & 9223372036854775807u64
+  core@1/f64.from_bits(bits | (core@1/f64.bits(sign) & 9223372036854775808u64))
+}
+
+@noalloc
+pub fn fma(a: f64, b: f64, c: f64) -> f64 uses {} { core@1/float.mul_add(a, b, c) }
+
+@noalloc
+pub fn powi(base: f64, exponent: i32) -> f64 uses {} {
+  let wide: i64 = core@1/int.widen(exponent)
+  let mut count: u32 = core@1/int.narrow(if wide < 0 { -wide } else { wide })
+  let mut a = base
+  let mut product: f64 = 1f64
+  while true {
+    if count & 1 != 0 { product *= a }
+    count >>= 1
+    if count == 0 { break }
+    a *= a
+  }
+  if exponent < 0 { 1f64 / product } else { product }
+}
+
+// x * 2^n without intermediate overflow or double rounding.
+@noalloc
+fn scaled(value: f64, exponent: i32) -> f64 uses {} {
+  let mut x = value
+  let mut n = exponent
+  if n > 1023 {
+    x *= core@1/f64.from_bits(9214364837600034816u64)
+    n -= 1023
+    if n > 1023 {
+      x *= core@1/f64.from_bits(9214364837600034816u64)
+      n -= 1023
+      if n > 1023 { n = 1023 }
+    }
+  } else if n < -1022 {
+    x *= core@1/f64.from_bits(243194379878006784u64)
+    n += 969
+    if n < -1022 {
+      x *= core@1/f64.from_bits(243194379878006784u64)
+      n += 969
+      if n < -1022 { n = -1022 }
+    }
+  }
+  let biased: u64 = core@1/int.narrow(n + 1023)
+  x * core@1/f64.from_bits(biased << 52)
+}
+
+// Rust's saturating `as i32`: NaN is zero and out-of-range values clamp.
+@noalloc
+fn saturated_i32(value: f64) -> i32 uses {} {
+  match core@1/float.to_i32(value) {
+    Ok(n) => n,
+    Error(_) => if value != value {
+      0
+    } else if value > 0f64 {
+      2147483647
+    } else {
+      -2147483648
+    },
+  }
+}
+
+@noalloc
+fn of_i32(n: i32) -> f64 uses {} { core@1/float.from_int(n) }

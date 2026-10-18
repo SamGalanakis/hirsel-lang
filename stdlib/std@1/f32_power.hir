@@ -1,0 +1,244 @@
+// pow, cbrt and hypot for binary32.
+// Ported from the Rust libm crate (rust-lang/compiler-builtins libm, MIT),
+// itself from musl and FreeBSD msun (Sun Microsystems permission notice);
+// third-party/NOTICES.md. Each function is the crate's algorithm operation
+// for operation, so every engine computes the crate's bits.
+
+const POW_BP: Array[f32] = [1.0, 1.5]
+const POW_DP_H: Array[f32] = [0.0, 5.84960938e-01]
+const POW_DP_L: Array[f32] = [0.0, 1.56322085e-06]
+const POW_HUGE: f32 = 1.0e30
+const POW_TINY: f32 = 1.0e-30
+
+@noalloc
+fn signed_bits(x: f32) -> i32 uses {} { core@1/int.truncate(core@1/f32.bits(x)) }
+
+// x with only the encoding bits in `mask` kept.
+@noalloc
+fn masked(x: f32, mask: u32) -> f32 uses {} { core@1/f32.from_bits(core@1/f32.bits(x) & mask) }
+
+@noalloc
+fn of_signed_bits(n: i32) -> f32 uses {} { core@1/f32.from_bits(core@1/int.truncate(n)) }
+
+// FreeBSD e_powf.c: log2(x) in extra precision, times y, then 2^(y log2 x);
+// < 1 ulp. x^0 and 1^y are 1 even for NaN.
+@noalloc
+pub fn pow(x: f32, y: f32) -> f32 uses {} {
+  let hx = signed_bits(x)
+  let hy = signed_bits(y)
+  let mut ix = hx & 0x7fffffff
+  let iy = hy & 0x7fffffff
+  if iy == 0 { return 1.0 }
+  if hx == 0x3f800000 { return 1.0 }
+  if ix > 0x7f800000 || iy > 0x7f800000 { return x + y }
+  // yisint: 0 when y is not an odd or even integer, 1 when odd, 2 when even.
+  let mut yisint: i32 = 0
+  if hx < 0 {
+    if iy >= 0x4b800000 {
+      yisint = 2
+    } else if iy >= 0x3f800000 {
+      let k = (iy >> 23) - 0x7f
+      let j = iy >> (23 - k)
+      if j << (23 - k) == iy { yisint = 2 - (j & 1) }
+    }
+  }
+  if iy == 0x7f800000 {
+    if ix == 0x3f800000 { return 1.0 }
+    if ix > 0x3f800000 { return if hy >= 0 { y } else { 0.0 } }
+    return if hy >= 0 { 0.0 } else { -y }
+  }
+  if iy == 0x3f800000 { return if hy >= 0 { x } else { 1.0 / x } }
+  if hy == 0x40000000 { return x * x }
+  if hy == 0x3f000000 && hx >= 0 { return sqrt(x) }
+  let mut ax = abs(x)
+  if ix == 0x7f800000 || ix == 0 || ix == 0x3f800000 {
+    let mut z = ax
+    if hy < 0 { z = 1.0 / z }
+    if hx < 0 {
+      if (ix - 0x3f800000) | yisint == 0 {
+        z = (z - z) / (z - z)
+      } else if yisint == 1 {
+        z = -z
+      }
+    }
+    return z
+  }
+  let mut sn: f32 = 1.0
+  if hx < 0 {
+    if yisint == 0 { return (x - x) / (x - x) }
+    if yisint == 1 { sn = -1.0 }
+  }
+  let mut t1: f32 = 0.0
+  let mut t2: f32 = 0.0
+  if iy > 0x4d000000 {
+    if ix < 0x3f7ffff8 {
+      return if hy < 0 { sn * POW_HUGE * POW_HUGE } else { sn * POW_TINY * POW_TINY }
+    }
+    if ix > 0x3f800007 {
+      return if hy > 0 { sn * POW_HUGE * POW_HUGE } else { sn * POW_TINY * POW_TINY }
+    }
+    let t = ax - 1.0
+    let w = (t * t) * (0.5 - t * (0.333333333333 - t * 0.25))
+    let u: f32 = 1.4426879883e+00 * t
+    let v = t * 7.0526075433e-06 - w * 1.4426950216e+00
+    t1 = masked(u + v, 0xfffff000)
+    t2 = v - (t1 - u)
+  } else {
+    let mut n: i32 = 0
+    if ix < 0x00800000 {
+      ax *= 16777216.0
+      n -= 24
+      ix = signed_bits(ax)
+    }
+    n += (ix >> 23) - 0x7f
+    let j = ix & 0x007fffff
+    ix = j | 0x3f800000
+    let mut k: u64 = 0
+    if j <= 0x1cc471 {
+      k = 0
+    } else if j < 0x5db3d7 {
+      k = 1
+    } else {
+      n += 1
+      ix -= 0x00800000
+    }
+    ax = of_signed_bits(ix)
+    let u = ax - POW_BP[k]
+    let v: f32 = 1.0 / (ax + POW_BP[k])
+    let s = u * v
+    let s_h = masked(s, 0xfffff000)
+    let ix_word: u32 = core@1/int.truncate(ix)
+    let k_word: u32 = core@1/int.narrow(k)
+    let t_h = core@1/f32.from_bits((((ix_word >> 1) & 0xfffff000) | 0x20000000) + 0x00400000 + (k_word << 21))
+    let t_l = ax - (t_h - POW_BP[k])
+    let s_l = v * ((u - s_h * t_h) - s_h * t_l)
+    let s2 = s * s
+    let mut r = s2 * s2 * (
+      6.0000002384e-01 + s2 * (
+        4.2857143283e-01 + s2 * (
+          3.3333334327e-01 + s2 * (
+            2.7272811532e-01 + s2 * (2.3066075146e-01 + s2 * 2.0697501302e-01)
+          )
+        )
+      )
+    )
+    r += s_l * (s_h + s)
+    let s2h = s_h * s_h
+    let t_h2: f32 = masked(3.0 + s2h + r, 0xfffff000)
+    let t_l2 = r - ((t_h2 - 3.0) - s2h)
+    let u2 = s_h * t_h2
+    let v2 = s_l * t_h2 + t_l2 * s
+    let p_h = masked(u2 + v2, 0xfffff000)
+    let p_l = v2 - (p_h - u2)
+    let z_h: f32 = 9.6191406250e-01 * p_h
+    let z_l: f32 = -1.1736857402e-04 * p_h + p_l * 9.6179670095e-01 + POW_DP_L[k]
+    let t = of_i32(n)
+    t1 = masked(((z_h + z_l) + POW_DP_H[k]) + t, 0xfffff000)
+    t2 = z_l - (((t1 - t) - POW_DP_H[k]) - z_h)
+  }
+  // y * log2(x) as p_h + p_l, then 2^that.
+  let y1 = masked(y, 0xfffff000)
+  let p_l = (y - y1) * t1 + y * t2
+  let mut p_h = y1 * t1
+  let z = p_l + p_h
+  let mut j = signed_bits(z)
+  if j > 0x43000000 { return sn * POW_HUGE * POW_HUGE }
+  if j == 0x43000000 {
+    if p_l + 4.2995665694e-08 > z - p_h { return sn * POW_HUGE * POW_HUGE }
+  } else if j & 0x7fffffff > 0x43160000 {
+    return sn * POW_TINY * POW_TINY
+  } else if core@1/f32.bits(z) == 0xc3160000 && p_l <= z - p_h {
+    return sn * POW_TINY * POW_TINY
+  }
+  let magnitude = j & 0x7fffffff
+  let mut k = (magnitude >> 23) - 0x7f
+  let mut n: i32 = 0
+  if magnitude > 0x3f000000 {
+    n = j + (0x00800000 >> (k + 1))
+    k = ((n & 0x7fffffff) >> 23) - 0x7f
+    let n_word: u32 = core@1/int.truncate(n)
+    let k_count: u32 = core@1/int.narrow(k)
+    let t = core@1/f32.from_bits(n_word & ~(0x007fffffu32 >> k_count))
+    n = ((n & 0x007fffff) | 0x00800000) >> (23 - k)
+    if j < 0 { n = -n }
+    p_h -= t
+  }
+  let t = masked(p_l + p_h, 0xffff8000)
+  let u: f32 = t * 6.93145752e-01
+  let v = (p_l - (t - p_h)) * 6.9314718246e-01 + t * 1.42860654e-06
+  let mut zz = u + v
+  let w = v - (zz - u)
+  let tt = zz * zz
+  let t1b = zz - tt * (
+    1.6666667163e-01 + tt * (
+      -2.7777778450e-03 + tt * (6.6137559770e-05 + tt * (-1.6533901999e-06 + tt * 4.1381369442e-08))
+    )
+  )
+  let r = (zz * t1b) / (t1b - 2.0) - (w + zz * w)
+  zz = 1.0 - (r - zz)
+  j = signed_bits(zz)
+  j += n << 23
+  if j >> 23 <= 0 {
+    zz = scaled(zz, n)
+  } else {
+    zz = of_signed_bits(j)
+  }
+  sn * zz
+}
+
+// FreeBSD s_cbrtf.c: a bit-hack estimate and two Halley steps in binary64; < 1 ulp.
+@noalloc
+pub fn cbrt(value: f32) -> f32 uses {} {
+  let x = value
+  let mut ui = core@1/f32.bits(x)
+  let mut hx = ui & 0x7fffffff
+  if hx >= 0x7f800000 { return x + x }
+  if hx < 0x00800000 {
+    if hx == 0 { return x }
+    ui = core@1/f32.bits(x * core@1/f32.from_bits(0x4b800000))
+    hx = ui & 0x7fffffff
+    hx = hx / 3 + 642849266
+  } else {
+    hx = hx / 3 + 709958130
+  }
+  ui &= 0x80000000
+  ui |= hx
+  let wide = core@1/f64.from_f32(x)
+  let mut t = core@1/f64.from_f32(core@1/f32.from_bits(ui))
+  let mut r = t * t * t
+  t = t * (wide + wide + r) / (wide + r + r)
+  r = t * t * t
+  t = t * (wide + wide + r) / (wide + r + r)
+  core@1/f32.from_f64(t)
+}
+
+// musl hypotf.c: the squares summed in binary64; < 1 ulp.
+@noalloc
+pub fn hypot(x: f32, y: f32) -> f32 uses {} {
+  let mut uxi = core@1/f32.bits(x) & 0x7fffffff
+  let mut uyi = core@1/f32.bits(y) & 0x7fffffff
+  if uxi < uyi {
+    let swap = uxi
+    uxi = uyi
+    uyi = swap
+  }
+  let mut ax = core@1/f32.from_bits(uxi)
+  let mut ay = core@1/f32.from_bits(uyi)
+  if uyi == 0xffu32 << 23 { return ay }
+  if uxi >= 0xffu32 << 23 || uyi == 0 || uxi - uyi >= 25u32 << 23 { return ax + ay }
+  let mut z: f32 = 1.0
+  let up = core@1/f32.from_bits(0x6c800000)
+  let down = core@1/f32.from_bits(0x12800000)
+  if uxi >= (0x7fu32 + 60) << 23 {
+    z = up
+    ax *= down
+    ay *= down
+  } else if uyi < (0x7fu32 - 60) << 23 {
+    z = down
+    ax *= up
+    ay *= up
+  }
+  let wx = core@1/f64.from_f32(ax)
+  let wy = core@1/f64.from_f32(ay)
+  z * sqrt(core@1/f32.from_f64(wx * wx + wy * wy))
+}

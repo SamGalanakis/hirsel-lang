@@ -1,0 +1,120 @@
+// sinh, cosh, tanh, asinh, acosh and atanh for binary32.
+// Ported from the Rust libm crate (rust-lang/compiler-builtins libm, MIT),
+// itself from musl (MIT); third-party/NOTICES.md. Each function is the
+// crate's algorithm operation for operation, so every engine computes the
+// crate's bits.
+
+const HYPERBOLIC_LN2: f32 = 0.693147180559945309417232121458176568
+
+// exp(x) / 2 for x >= ln(MAX): exp(x - k ln2) * 2^(k - 1), k = 235.
+@noalloc
+fn half_exp_large(x: f32) -> f32 uses {} {
+  let scale = core@1/f32.from_bits(0x7a000000)
+  exp(x - core@1/f32.from_bits(0x4322e3bc)) * scale * scale
+}
+
+// musl sinhf.c; < 2 ulp.
+@noalloc
+pub fn sinh(value: f32) -> f32 uses {} {
+  let x = value
+  let bits = core@1/f32.bits(x)
+  let h: f32 = if bits >> 31 != 0 { -0.5 } else { 0.5 }
+  let w = bits & 0x7fffffff
+  let absx = core@1/f32.from_bits(w)
+  if w < 0x42b17217 {
+    let t = expm1(absx)
+    if w < 0x3f800000 {
+      if w < 0x3f800000 - (12u32 << 23) { return x }
+      return h * (2.0 * t - t * t / (t + 1.0))
+    }
+    return h * (t + t / (t + 1.0))
+  }
+  2.0 * h * half_exp_large(absx)
+}
+
+// musl coshf.c; < 2 ulp.
+@noalloc
+pub fn cosh(value: f32) -> f32 uses {} {
+  let w = core@1/f32.bits(value) & 0x7fffffff
+  let x = core@1/f32.from_bits(w)
+  if w < 0x3f317217 {
+    if w < 0x3f800000 - (12u32 << 23) { return 1.0 }
+    let t = expm1(x)
+    return 1.0 + t * t / (2.0 * (1.0 + t))
+  }
+  if w < 0x42b17217 {
+    let t = exp(x)
+    return 0.5 * (t + 1.0 / t)
+  }
+  half_exp_large(x)
+}
+
+// musl tanhf.c; < 2 ulp.
+@noalloc
+pub fn tanh(value: f32) -> f32 uses {} {
+  let bits = core@1/f32.bits(value)
+  let negative = bits >> 31 != 0
+  let w = bits & 0x7fffffff
+  let x = core@1/f32.from_bits(w)
+  let mut t: f32 = x
+  if w > 0x3f0c9f54 {
+    if w > 0x41200000 {
+      t = 1.0 + 0.0 / x
+    } else {
+      t = expm1(2.0 * x)
+      t = 1.0 - 2.0 / (t + 2.0)
+    }
+  } else if w > 0x3e82c578 {
+    t = expm1(2.0 * x)
+    t = t / (t + 2.0)
+  } else if w >= 0x00800000 {
+    t = expm1(-2.0 * x)
+    t = -t / (t + 2.0)
+  }
+  if negative { -t } else { t }
+}
+
+// musl asinhf.c; < 2 ulp.
+@noalloc
+pub fn asinh(value: f32) -> f32 uses {} {
+  let bits = core@1/f32.bits(value)
+  let i = bits & 0x7fffffff
+  let negative = bits >> 31 != 0
+  let mut x = core@1/f32.from_bits(i)
+  if i >= 0x3f800000 + (12u32 << 23) {
+    x = ln(x) + HYPERBOLIC_LN2
+  } else if i >= 0x3f800000 + (1u32 << 23) {
+    x = ln(2.0 * x + 1.0 / (sqrt(x * x + 1.0) + x))
+  } else if i >= 0x3f800000 - (12u32 << 23) {
+    x = ln1p(x + x * x / (sqrt(x * x + 1.0) + 1.0))
+  }
+  if negative { -x } else { x }
+}
+
+// musl acoshf.c; < 2 ulp. NaN below 1.
+@noalloc
+pub fn acosh(value: f32) -> f32 uses {} {
+  let x = value
+  let ux = core@1/f32.bits(x)
+  if ux & 0x7fffffff < 0x40000000 {
+    let x_1: f32 = x - 1.0
+    return ln1p(x_1 + sqrt(x_1 * x_1 + 2.0 * x_1))
+  }
+  if ux < 0x45800000 { return ln(2.0 * x - 1.0 / (x + sqrt(x * x - 1.0))) }
+  ln(x) + HYPERBOLIC_LN2
+}
+
+// musl atanhf.c; < 2 ulp. NaN outside [-1, 1], infinities at ±1.
+@noalloc
+pub fn atanh(value: f32) -> f32 uses {} {
+  let bits = core@1/f32.bits(value)
+  let negative = bits >> 31 != 0
+  let u = bits & 0x7fffffff
+  let mut x = core@1/f32.from_bits(u)
+  if u < 0x3f800000 - (1u32 << 23) {
+    if u >= 0x3f800000 - (32u32 << 23) { x = 0.5 * ln1p(2.0 * x + 2.0 * x * x / (1.0 - x)) }
+  } else {
+    x = 0.5 * ln1p(2.0 * (x / (1.0 - x)))
+  }
+  if negative { -x } else { x }
+}
