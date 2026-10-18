@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: run
+// A unique payload moves through option.map and option.unwrap_or without
+// sharing: both are parametric calls.
+fn keep(take value: unique Bytes) -> unique Bytes {
+  take value
+}
+
+pub fn main() -> Result[(), ()] {
+  let source: Option[unique Bytes] = Some(bytes.from_list([1u8, 2u8, 3u8]))
+  let mapped: Option[unique Bytes] = option.map(take source, keep)
+  let value: unique Bytes = option.unwrap_or(take mapped, bytes.from_list([]))
+  failure.check(value == bytes.from_list([1u8, 2u8, 3u8]), Bounds())
+  keep(take value)
+  Ok(())
+}

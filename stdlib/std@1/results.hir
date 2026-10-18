@@ -18,6 +18,7 @@ pub fn is_error[T, E](value: Result[T, E]) -> bool uses {} {
 }
 
 // Keeps the success payload and discards any error.
+@preserves_unique(value)
 pub fn ok[T, E](take value: Result[T, E]) -> Option[T] uses {value} {
   match take value {
     Ok(item) => Some(take item),
@@ -26,6 +27,7 @@ pub fn ok[T, E](take value: Result[T, E]) -> Option[T] uses {value} {
 }
 
 // Keeps the error payload and discards any success.
+@preserves_unique(value)
 pub fn error[T, E](take value: Result[T, E]) -> Option[E] uses {value} {
   match take value {
     Ok(_) => None,

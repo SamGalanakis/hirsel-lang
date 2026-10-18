@@ -2514,6 +2514,56 @@ impl Checker<'_> {
             });
         promised && self.callee_definition(callee).is_some()
     }
+    /// MODE-2: a direct generic call whose result holds only values of type
+    /// parameters it cannot copy returns a unique result when every argument
+    /// that may supply them is unique.
+    fn parametric_unique(
+        &self,
+        state: &State,
+        callee: ExprId,
+        arguments: &[hirsel_syntax::Argument],
+        requirements: &[Option<super::cfg::Requirement>],
+    ) -> bool {
+        if self.callee_definition(callee).is_none() {
+            return false;
+        }
+        let Some(TypeKind::Function(function)) = self
+            .ty(callee)
+            .and_then(|ty| self.body.types.get(ty))
+            .map(|row| &row.kind)
+        else {
+            return false;
+        };
+        let mut lookup = |path: &hirsel_syntax::DefPath| Ok(self.signatures.cached(path));
+        let Some(inputs) = parametric_inputs(&self.body.types, function, &mut lookup) else {
+            return false;
+        };
+        arguments
+            .iter()
+            .zip(requirements)
+            .all(|(argument, requirement)| {
+                let Some(requirement) = requirement else {
+                    return false;
+                };
+                match inputs.get(requirement.parameter) {
+                    Some(ParametricInput::Free) => true,
+                    Some(ParametricInput::Unique) => {
+                        self.property(argument.value)
+                            .is_some_and(|p| p.plain || p.shared)
+                            || self.value(state, argument.value).modes.uniqueness
+                                == Uniqueness::Unique
+                    }
+                    Some(ParametricInput::UniqueResult) => self
+                        .ty(argument.value)
+                        .and_then(|ty| match &self.body.types.get(ty)?.kind {
+                            TypeKind::Function(f) => self.body.types.get(f.result),
+                            _ => None,
+                        })
+                        .is_some_and(|result| result.modes.uniqueness == Uniqueness::Unique),
+                    None => false,
+                }
+            })
+    }
     /// A borrowed parameter a bodyless core promise reads and stores nothing of.
     fn callee_unretained(&self, callee: ExprId, ordinal: usize) -> bool {
         self.ty(callee)
@@ -6077,6 +6127,7 @@ impl Checker<'_> {
                                 && self.value(state, arg.value).modes.uniqueness
                                     == Uniqueness::Unique
                     });
+                let parametric = self.parametric_unique(state, *callee, arguments, requirements);
                 // The selected `mut` argument itself must be unique.
                 let unique_arguments: BTreeSet<ExprId> = arguments
                     .iter()
@@ -6194,6 +6245,11 @@ impl Checker<'_> {
                             && self.callee_preserves_unique(*callee, r.parameter)
                     })
                 {
+                    value.modes.uniqueness = Uniqueness::Unique;
+                }
+                // MODE-2: a parametric result holds only values its unique
+                // inputs supply (`parametric_inputs`).
+                if parametric {
                     value.modes.uniqueness = Uniqueness::Unique;
                 }
                 state.values.insert(*expression, value);

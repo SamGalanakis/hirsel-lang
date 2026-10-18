@@ -96,7 +96,9 @@ signatures and the rules in this part.
 
 `option` and `results` adapt Rust core Option/Result helpers. Queries borrow;
 consuming helpers take the carrier and callbacks, and `filter` borrows its payload
-for the predicate. Rust `is_err` / `err` / `map_err` use `is_error` / `error` /
+for the predicate. The consuming helpers are parametric calls
+([MODE-2](ownership.md#mode-2-uniqueness)), so a unique payload stays unique through them,
+except `filter`, which lends its payload to the predicate. Rust `is_err` / `err` / `map_err` use `is_error` / `error` /
 `map_error`. The module is `results` because `result` is reserved. Panicking
 `unwrap` / `expect` are omitted; Rust `Option::take` (`option.remove`) awaits an
 ownership-transfer operation for `mut` storage.

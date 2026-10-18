@@ -1,0 +1,30 @@
+// rule: MODE-2
+// expect: run
+// A generic combinator that cannot copy U or E only moves their values, so
+// map's result holds just the unique payload keep returns, and unwrap_or
+// hands it back unique with no promise. Twin of
+// MODE-2-parametric-copyable-bound-bad and MODE-2-parametric-aliased-callback-bad.
+fn unwrap_or[T, E](take value: Result[T, E], take fallback: T) -> T uses {} {
+  match take value {
+    Ok(item) => take item,
+    Error(_) => take fallback,
+  }
+}
+
+fn map[T, U, E](take value: Result[T, E], take f: fn(take T) -> U) -> Result[U, E] uses {f} {
+  match take value {
+    Ok(item) => Ok(f(take item)),
+    Error(item) => Error(take item),
+  }
+}
+
+fn keep(take b: unique Bytes) -> unique Bytes uses {} {
+  take b
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let x: Result[unique Bytes, ()] = Ok(core@1/bytes.from_list([1u8]))
+  let y: Result[unique Bytes, ()] = map(take x, keep)
+  let b: unique Bytes = unwrap_or(take y, core@1/bytes.from_list([]))
+  Ok(())
+}

@@ -4172,6 +4172,49 @@ impl Checker<'_> {
                     && super::format_association(signature, self.signatures))
         })
     }
+    /// MODE-2: a direct generic call whose result holds only values of type
+    /// parameters it cannot copy returns a unique result when every argument
+    /// that may supply them is unique (`parametric_inputs`).
+    fn parametric_unique(
+        &self,
+        state: &State,
+        callee: &Callee,
+        arguments: &[CallArgument],
+    ) -> bool {
+        let Callee::Definition { path, .. } = callee else {
+            return false;
+        };
+        let Some(signature) = self.signatures.get(path) else {
+            return false;
+        };
+        let SignatureKind::Function(function) = &signature.kind else {
+            return false;
+        };
+        let mut lookup =
+            |path: &DefPath| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new));
+        let Some(inputs) = hirsel_types::parametric_inputs(&signature.types, function, &mut lookup)
+        else {
+            return false;
+        };
+        let types = &self.definition.types;
+        arguments.iter().all(|a| {
+            let ty = self.place_type(a.value.place);
+            match inputs.get(a.parameter.0 as usize) {
+                Some(hirsel_types::ParametricInput::Free) => true,
+                Some(hirsel_types::ParametricInput::Unique) => {
+                    !needs_release(self, ty, types)
+                        || super::handle_root(types, ty)
+                        || self.operand_unique(state, &a.value)
+                }
+                Some(hirsel_types::ParametricInput::UniqueResult) => {
+                    matches!(&types.get(ty).unwrap().kind, TypeKind::Function(f)
+                        if types.get(f.result).unwrap().modes.uniqueness
+                            == hirsel_types::Uniqueness::Unique)
+                }
+                None => false,
+            }
+        })
+    }
     /// A borrowed parameter a bodyless core promise reads and stores nothing of.
     fn callee_unretained(&self, callee: &Callee, ordinal: hirsel_types::ParamId) -> bool {
         let Callee::Definition { path, .. } = callee else {
@@ -5573,6 +5616,7 @@ impl Checker<'_> {
                         )
                         || !borrowed && self.operand_unique(state, &a.value)
                 });
+                let parametric = self.parametric_unique(state, callee, arguments);
                 let unique_arguments: Vec<bool> = arguments
                     .iter()
                     .map(|a| self.operand_unique(state, &a.value))
@@ -5762,6 +5806,7 @@ impl Checker<'_> {
                     state,
                     destination,
                     promised
+                        || parametric
                         || self
                             .definition
                             .types

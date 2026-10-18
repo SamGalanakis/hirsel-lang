@@ -820,3 +820,87 @@ fn a_bare_generic_result_holds_its_declared_modes() {
         "{kinds:?}"
     );
 }
+
+/// `fn main(take xs: List[String]) -> unique String` returning
+/// `first[String](take xs)`, where `fn first[T](take value: List[T]) -> T`
+/// cannot copy `T`; `xs` is declared unique when `unique`.
+fn parametric_call(unique: bool) -> Fixture {
+    let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
+    let result = f.body().result;
+    let mut row = f.definition.types.get(result).unwrap().clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    let row = f.definition.types.push(row);
+    f.body().result = row;
+    f.body().locals[0].ty = row;
+    f.body().places[0].ty = row;
+    let string = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::String)));
+    let xs = param(
+        &mut f,
+        TypeKind::Builtin {
+            kind: BuiltinType::List,
+            arguments: vec![GenericArgument::Type(string)].into(),
+        },
+    );
+    if unique {
+        let old = f.body().places[xs as usize].ty;
+        let mut row = f.definition.types.get(old).unwrap().clone();
+        row.modes.uniqueness = Uniqueness::Unique;
+        let row = f.definition.types.push(row);
+        f.body().locals[xs as usize].ty = row;
+        f.body().places[xs as usize].ty = row;
+    }
+    let Terminator::Call {
+        callee: Callee::Definition {
+            arguments: generics,
+            ..
+        },
+        arguments,
+        ..
+    } = &mut f.body().blocks[0].terminator
+    else {
+        panic!()
+    };
+    *generics = vec![GenericArgument::Type(string)];
+    arguments.push(CallArgument {
+        parameter: ParamId(0),
+        value: take(xs),
+    });
+    owner_sig(&mut f, &[PassingMode::Take]);
+    let mut callee = function_signature(
+        "callee",
+        vec![],
+        TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
+    );
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    let list = callee.types.push(ty(TypeKind::Builtin {
+        kind: BuiltinType::List,
+        arguments: vec![GenericArgument::Type(fun.result)].into(),
+    }));
+    fun.parameters = vec![Parameter {
+        name: None,
+        label: None,
+        passing: PassingMode::Take,
+        ty: list,
+    }]
+    .into();
+    fun.generics = vec![GenericParameter::Type {
+        name: "T".into(),
+        bounds: vec![].into(),
+    }]
+    .into();
+    f.signatures.insert(callee.definition.clone(), callee);
+    f
+}
+
+#[test]
+fn a_parametric_result_is_unique_only_from_unique_inputs() {
+    // `first` can only move a `T` out of its unique list.
+    parametric_call(true).valid();
+    // An aliased list may share its elements: the unique result is forged.
+    assert!(!parametric_call(false).kinds().is_empty());
+}

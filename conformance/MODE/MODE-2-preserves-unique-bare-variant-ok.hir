@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: accept
+// A bare nullary variant is a fresh construction, so an arm producing None
+// keeps the promise. Twin is MODE-2-preserves-unique-named-constant-bad.
+@preserves_unique(x)
+fn wrap[T](take x: Option[T]) -> Option[T] uses {} {
+  match take x {
+    Some(v) => Some(take v),
+    None => None,
+  }
+}

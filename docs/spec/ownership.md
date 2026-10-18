@@ -194,12 +194,28 @@ currently unique hands the selected `mut` argument back unique, or returns a uni
 for a selected `take` parameter. Other `mut` arguments need not be unique, since the body
 is proved with them aliased (a bodyless core declaration, proved by nothing, needs them
 unique too), so `bufio.read_until(mut reader, mut stream, .., mut out, ..)` hands a fresh
-`out` back unique whatever the reader. Any other call is an ordinary call, whose result
-holds its declared modes: a result declared as a bare type parameter `T` is aliased even
-when a `unique` payload instantiates `T`, so `unwrap(t, make())` with
-`make() -> Result[unique Bytes, ()]` yields an aliased `Bytes`. So
-`list.push`, which declares it, keeps a list built from a literal and unique elements
-unique, while a list copied first, or given an aliased element, stays aliased.
+`out` back unique whatever the reader. So `list.push`, which declares it, keeps a list built
+from a literal and unique elements unique, while a list copied first, or given an aliased
+element, stays aliased.
+
+A call is **parametric** when it directly calls a generic function whose owned result holds
+no counted content except values of type parameters it has no copying permission for
+([GEN-1](generics.md#gen-1-bounds)). Such a body only moves those values, so the result
+holds exactly values its arguments supplied, and it is unique when every possible supplier
+is. The suppliers are each taken or `mut` argument whose type names such a parameter, which
+must be currently unique, and each function argument that receives them only by `take`,
+whose instantiated result must be declared `unique`. Some arguments would hide where a
+value goes, so they make the call ordinary:
+- a borrowed argument that names such a parameter;
+- a callback lent such a value, which could keep it in its environment;
+- a handle, iterator or function that holds such a value inside a non-function argument.
+
+Any other call is an ordinary call, whose result holds its declared modes: a result declared
+as a bare type parameter `T` is aliased even when a `unique` payload instantiates `T`.
+Parametric calls let `results.unwrap_or(results.map(take x, keep), ..)`, with
+`keep: fn(take unique Bytes) -> unique Bytes`, hand a unique payload through unchanged. But
+`unwrap(t, make())`, with `make() -> Result[unique Bytes, ()]`, yields an aliased `Bytes`,
+because `make`'s result is not itself unique.
 
 Uniqueness describes actual owned contents, independently of how fields are declared.
 Taking or destructuring a currently unique owner keeps uniqueness on what it yields

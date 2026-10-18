@@ -934,7 +934,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `pub fn option.and_then[T, U](take value: Option[T], take f: once fn(take T) -> Option[U]) -> Option[ U ] uses {value, f}` — Chains a transformation that may itself return None. <!-- std@1/option/and_then -->
 - `pub fn option.filter[T](take value: Option[T], take predicate: once fn(T) -> bool) -> Option[T] uses {value, predicate}` — Borrows the payload for the predicate and retains it only on success. <!-- std@1/option/filter -->
-- `pub fn option.flatten[T](take value: Option[Option[T]]) -> Option[T] uses {value}` — Removes exactly one level of nesting. <!-- std@1/option/flatten -->
+- `@preserves_unique(value) pub fn option.flatten[T](take value: Option[Option[T]]) -> Option[T] uses {value}` — Removes exactly one level of nesting. <!-- std@1/option/flatten -->
 - `@noalloc pub fn option.is_none[T](value: Option[T]) -> bool uses {}` — Tests whether a value is absent without consuming it. <!-- std@1/option/is_none -->
 - `@noalloc pub fn option.is_some[T](value: Option[T]) -> bool uses {}` — Adapted from Rust core::option, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f. <!-- std@1/option/is_some -->
 - `pub fn option.map[T, U](take value: Option[T], take f: once fn(take T) -> U) -> Option[U] uses {value, f}` — Transforms a present payload, consuming it. <!-- std@1/option/map -->
@@ -943,7 +943,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn option.or_else[T](take value: Option[T], take fallback: once fn() -> Option[T]) -> Option[ T ] uses {value, fallback}` — Computes another option only when no payload is present. <!-- std@1/option/or_else -->
 - `@preserves_unique(value) pub fn option.unwrap_or[T](take value: Option[T], take fallback: T) -> T uses {value, fallback}` — Returns the payload or the eagerly evaluated fallback. <!-- std@1/option/unwrap_or -->
 - `pub fn option.unwrap_or_else[T](take value: Option[T], take fallback: once fn() -> T) -> T uses {value, fallback}` — Computes the fallback only when no payload is present. <!-- std@1/option/unwrap_or_else -->
-- `pub fn option.zip[T, U](take left: Option[T], take right: Option[U]) -> Option[(T, U)] uses {left, right}` — Pairs two present payloads; otherwise discards both inputs. <!-- std@1/option/zip -->
+- `@preserves_unique(left) pub fn option.zip[T, U](take left: Option[T], take right: Option[U]) -> Option[(T, U)] uses {left, right}` — Pairs two present payloads; otherwise discards both inputs. <!-- std@1/option/zip -->
 
 ## out
 
@@ -1022,13 +1022,13 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## results
 
 - `pub fn results.and_then[T, U, E]( take value: Result[T, E], take f: once fn(take T) -> Result[U, E] ) -> Result[U, E] uses {value, f}` — Chains a fallible success transformation. <!-- std@1/results/and_then -->
-- `pub fn results.error[T, E](take value: Result[T, E]) -> Option[E] uses {value}` — Keeps the error payload and discards any success. <!-- std@1/results/error -->
+- `@preserves_unique(value) pub fn results.error[T, E](take value: Result[T, E]) -> Option[E] uses {value}` — Keeps the error payload and discards any success. <!-- std@1/results/error -->
 - `@preserves_unique(value) pub fn results.flatten[T, E](take value: Result[Result[T, E], E]) -> Result[T, E] uses {value}` — Removes exactly one level of nesting, retaining either error. <!-- std@1/results/flatten -->
 - `@noalloc pub fn results.is_error[T, E](value: Result[T, E]) -> bool uses {}` — Tests for an error without consuming the result. <!-- std@1/results/is_error -->
 - `@noalloc pub fn results.is_ok[T, E](value: Result[T, E]) -> bool uses {}` — Rust's Result helpers, adapted from core::result, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f. <!-- std@1/results/is_ok -->
 - `pub fn results.map[T, U, E](take value: Result[T, E], take f: once fn(take T) -> U) -> Result[ U, E ] uses {value, f}` — Transforms the success payload, passing errors through unchanged. <!-- std@1/results/map -->
 - `pub fn results.map_error[T, E, F](take value: Result[T, E], take f: once fn(take E) -> F) -> Result[ T, F ] uses {value, f}` — Transforms the error payload, passing successes through unchanged. <!-- std@1/results/map_error -->
-- `pub fn results.ok[T, E](take value: Result[T, E]) -> Option[T] uses {value}` — Keeps the success payload and discards any error. <!-- std@1/results/ok -->
+- `@preserves_unique(value) pub fn results.ok[T, E](take value: Result[T, E]) -> Option[T] uses {value}` — Keeps the success payload and discards any error. <!-- std@1/results/ok -->
 - `pub fn results.or_else[T, E, F]( take value: Result[T, E], take f: once fn(take E) -> Result[T, F] ) -> Result[T, F] uses {value, f}` — Recovers from an error with another result. <!-- std@1/results/or_else -->
 - `@preserves_unique(value) pub fn results.unwrap_or[T, E](take value: Result[T, E], take fallback: T) -> T uses {value, fallback}` — Returns the success payload or the eagerly evaluated fallback. <!-- std@1/results/unwrap_or -->
 - `pub fn results.unwrap_or_else[T, E]( take value: Result[T, E], take fallback: once fn(take E) -> T ) -> T uses {value, fallback}` — Computes the fallback from the error only on failure. <!-- std@1/results/unwrap_or_else -->

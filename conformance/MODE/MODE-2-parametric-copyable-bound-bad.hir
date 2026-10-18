@@ -1,0 +1,32 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 30
+// With a copyable bound, map may copy a U value and keep it, so its result
+// is aliased and unwrap_or cannot hand back unique. Twin is
+// MODE-2-parametric-map-unwrap-run.
+fn unwrap_or[T, E](take value: Result[T, E], take fallback: T) -> T uses {} {
+  match take value {
+    Ok(item) => take item,
+    Error(_) => take fallback,
+  }
+}
+
+fn map[T, U: copyable, E](take value: Result[T, E], take f: fn(take T) -> U) -> Result[
+  U,
+  E
+] uses {f} {
+  match take value {
+    Ok(item) => Ok(f(take item)),
+    Error(item) => Error(take item),
+  }
+}
+
+fn keep(take b: unique Bytes) -> unique Bytes uses {} {
+  take b
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let x: Result[unique Bytes, ()] = Ok(core@1/bytes.from_list([1u8]))
+  let y: Result[unique Bytes, ()] = map(take x, keep)
+  let b: unique Bytes = unwrap_or(take y, core@1/bytes.from_list([]))
+  Ok(())
+}

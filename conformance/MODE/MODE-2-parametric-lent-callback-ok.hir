@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: accept
+// A callback lent only a u64 sees no U value, so tap hands its taken value
+// back unique. Twin is MODE-2-parametric-lent-callback-bad.
+fn tap[U](take u: U, f: fn(count: u64) -> ()) -> U uses {f} {
+  f(1u64)
+  take u
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let b: unique Bytes = tap(
+    take fresh,
+    fn(n: u64) uses {} {
+      let _ = n + 1u64
+    }
+  )
+  Ok(())
+}

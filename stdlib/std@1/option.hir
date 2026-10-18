@@ -95,6 +95,7 @@ pub fn ok_or_else[T, E](take value: Option[T], take error: once fn() -> E) -> Re
 }
 
 // Pairs two present payloads; otherwise discards both inputs.
+@preserves_unique(left)
 pub fn zip[T, U](take left: Option[T], take right: Option[U]) -> Option[(T, U)] uses {left, right} {
   match take left {
     Some(a) => match take right {
@@ -106,6 +107,7 @@ pub fn zip[T, U](take left: Option[T], take right: Option[U]) -> Option[(T, U)] 
 }
 
 // Removes exactly one level of nesting.
+@preserves_unique(value)
 pub fn flatten[T](take value: Option[Option[T]]) -> Option[T] uses {value} {
   match take value {
     Some(inner) => take inner,

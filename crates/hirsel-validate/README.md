@@ -379,7 +379,9 @@ parameter is held to the same exits and a selected `take` parameter's returned v
 must be unique. Only its "preserved unique
 hand-back" violations are kept. A call result declared as a bare type parameter is
 expected with the declared root modes (aliased unless written `unique`), whatever
-contract argument instantiates it, as the checker publishes it. Hand-built controls are in
+contract argument instantiates it, as the checker publishes it. A parametric call
+(`parametric_unique`, from `hirsel_types::parametric_inputs`) makes its destination
+current-unique when every argument that may supply its result is. Hand-built controls are in
 `tests/it/unique_handback_controls.rs`.
 
 Projected writes affect current uniqueness only when their contents belong to

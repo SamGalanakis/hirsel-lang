@@ -331,6 +331,12 @@ normalization canonicalizes a written Unique qualifier to Aliased while preservi
 locality, placement and payload contracts. Atomic sole-holder ownership is checked
 by runtime thaw. Deep aggregate uniqueness still stops at Shared boundaries.
 
+`parametric_inputs` reads MODE-2 parametricity off a generic signature: when the
+owned result holds only values of type parameters without copying permission
+(GEN-1), it says, per parameter, whether the argument is free, must be unique, or
+is a callback whose instantiated result must be unique. Borrowed inputs, lent
+callbacks and non-data holders of those parameters disqualify the signature.
+
 `compatible_view_type_in` applies the existing non-writing view comparison with
 Parameter or Value root policy. Readonly/taken payloads can forget nested Unique
 evidence along owned edges; Value still preserves arena lifetime requirements.

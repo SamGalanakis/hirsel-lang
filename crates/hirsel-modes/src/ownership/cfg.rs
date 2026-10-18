@@ -390,6 +390,16 @@ pub(super) fn build(
         let mut leaving: BTreeSet<ExprId> = BTreeSet::new();
         let mut ending: BTreeMap<ExprId, (ExprId, ExprId)> = BTreeMap::new();
         let mut statements = Statements::default();
+        // A bare nullary variant is a fresh construction, as a literal is.
+        let nullary: BTreeSet<ExprId> = body
+            .resolution
+            .contextual
+            .iter()
+            .filter_map(|(site, name)| match (site, name) {
+                (NameSite::Expression(id), ContextualName::Variant { .. }) => Some(*id),
+                _ => None,
+            })
+            .collect();
         let mut jobs = vec![Job::Expr {
             entry,
             expression: root,
@@ -1245,7 +1255,9 @@ pub(super) fn build(
                             expression,
                             context,
                             children: vec![],
-                            fresh: matches!(expr.kind, ExprKind::Literal(_) | ExprKind::Heap),
+                            fresh: matches!(expr.kind, ExprKind::Literal(_) | ExprKind::Heap)
+                                || matches!(expr.kind, ExprKind::Path(_))
+                                    && nullary.contains(&expression),
                         },
                     };
                     // A call whose result is Never has no normal successor

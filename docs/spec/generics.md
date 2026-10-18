@@ -70,6 +70,16 @@ input occurrence discharges its own requirement. A generic parameter without cop
 permission cannot acquire it from a local nested declaration or from another binder's
 obligation without meeting the corresponding call obligation.
 
+**Moving without copying.** Inside its definition, a type parameter without copying
+permission is linear. The body cannot `copy` one of its values, cannot return a borrowed one
+as owned, and has no constant or global of its type. So every value of it the body holds
+was moved in from an argument or returned by a callback, and every value it gives out is
+moved out. Nesting keeps this: a List, Map, Set, Array, tuple, box, record or variant
+holding such a parameter is copyable only when the parameter is, so the body can move parts
+in and out of it but never duplicate one. A closure that captures such a value either takes
+it, moving it once, or borrows it, and a borrowed capture cannot leave as owned.
+[MODE-2](ownership.md#mode-2-uniqueness) relies on this to make parametric results unique.
+
 Failed generic bounds are prerequisites of the parameter defaults that depend on them
 ([diagnostics](diagnostics.md#expression-obligations)): a `sendable` bound failure reports
 MODE-4, `inert` CAP-2, and every other bound GEN-1.
