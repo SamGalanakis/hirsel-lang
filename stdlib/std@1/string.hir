@@ -224,3 +224,61 @@ pub fn join(parts: List[String], separator: String) -> String uses {} {
   }
   finish_valid(take builder)
 }
+
+@noalloc
+pub fn contains(s: String, pattern: String) -> bool uses {} {
+  match find(s, pattern) {
+    Some(_) => true,
+    None() => false,
+  }
+}
+
+// Rust str::lines: only LF and CRLF terminate lines; omit a final empty line.
+pub fn lines(take s: String) -> List[String] uses {} {
+  let data = core@1/string.as_bytes(s)
+  let len = core@1/bytes.len(data)
+  let mut out: List[String] = []
+  let mut begin: u64 = 0
+  let mut i: u64 = 0
+  while i < len {
+    if data[i] == 10 {
+      let end = if i > begin && data[i - 1] == 13 {
+        i - 1
+      } else {
+        i
+      }
+      core@1/list.push(mut out, piece(s, begin, end))
+      begin = i + 1
+    }
+    i += 1
+  }
+  if begin < len {
+    core@1/list.push(mut out, piece(s, begin, len))
+  }
+  take out
+}
+
+pub fn replace(s: String, old: String, new: String) -> String uses {} {
+  let source = core@1/string.as_bytes(s)
+  let needle = core@1/string.as_bytes(old)
+  let width = core@1/bytes.len(needle)
+  let len = core@1/bytes.len(source)
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  if width == 0 {
+    text.append(mut out, new)
+  }
+  while i < len {
+    if width > 0 && matches_at(source, needle, i) {
+      text.append(mut out, new)
+      i += width
+    } else {
+      core@1/list.push(mut out, source[i])
+      i += 1
+      if width == 0 && (i == len || source[i] < 128 || source[i] >= 192) {
+        text.append(mut out, new)
+      }
+    }
+  }
+  finish_valid(take out)
+}

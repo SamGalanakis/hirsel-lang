@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+// Rust str::lines/contains/replace vectors, including empty scalar-boundary insertion.
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    string.contains("abc", "") && string.contains("é→ü", "→"),
+    TextInvariant()
+  )
+  failure.check(
+    !string.contains("abc", "abcd") && !string.contains("abc", "z"),
+    TextInvariant()
+  )
+  failure.check(string.lines("") == [], TextInvariant())
+  failure.check(string.lines("\n") == [""], TextInvariant())
+  failure.check(string.lines("a\n\nb\n") == ["a", "", "b"], TextInvariant())
+  failure.check(string.lines("a\r\nb\r\n") == ["a", "b"], TextInvariant())
+  failure.check(string.lines("a\rb\r") == ["a\rb\r"], TextInvariant())
+  failure.check(string.lines("\r\n\r\n") == ["", ""], TextInvariant())
+  failure.check(string.lines("é\nü") == ["é", "ü"], TextInvariant())
+  failure.check(string.replace("aaa", "aa", "b") == "ba", TextInvariant())
+  failure.check(string.replace("abc", "z", "b") == "abc", TextInvariant())
+  failure.check(string.replace("a→a→", "→", "ü") == "aüaü", TextInvariant())
+  failure.check(string.replace("abc", "b", "") == "ac", TextInvariant())
+  failure.check(string.replace("", "", "x") == "x", TextInvariant())
+  failure.check(string.replace("é😀", "", "|") == "|é|😀|", TextInvariant())
+  failure.check(string.replace("abc", "", "-") == "-a-b-c-", TextInvariant())
+  failure.check(string.replace("abc", "abcd", "x") == "abc", TextInvariant())
+  failure.check(
+    string.replace(" test test ", "test", "toast") == " toast toast ",
+    TextInvariant()
+  )
+  failure.check(string.replace(" test test ", "test", "") == "   ", TextInvariant())
+  failure.check(
+    string.replace("ประเทศไทย中华", "ประเ", "دولة الكويت") == "دولة الكويتทศไทย中华",
+    TextInvariant()
+  )
+  failure.check(
+    string.replace("ประเทศไทย中华", "中华", "دولة الكويت") == "ประเทศไทยدولة الكويت",
+    TextInvariant()
+  )
+  failure.check(string.contains("ประเทศไทย中华Việt Nam", "ะเ"), TextInvariant())
+  failure.check(!string.contains("ประเทศไทย中华Việt Nam", "ไท华"), TextInvariant())
+  failure.check(string.lines("Text\n\r") == ["Text", "\r"], TextInvariant())
+  failure.check(
+    string.lines("\nMäry häd ä little lämb\n\r\nLittle lämb\n") == [
+      "",
+      "Märy häd ä little lämb",
+      "",
+      "Little lämb"
+    ],
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -483,6 +483,18 @@ sequential listen/accept loop. A server maps malformed requests to a 400 respons
 invoking application handling. No routing, concurrency or persistent-connection framework
 is implied.
 
+## Common string helpers
+
+`string.contains(s: String, pattern: String) -> bool uses {}` delegates to
+`find`; the empty pattern matches every string. `string.lines(take s: String)
+-> List[String] uses {}` returns owned LF/CRLF-separated lines without their
+terminators, preserves interior empty lines, and omits an extra trailing empty
+line. Empty input has no lines; a bare CR remains data.
+`string.replace(s: String, old: String, new: String) -> String uses {}` borrows
+inputs and returns owned text, replacing nonoverlapping matches left to right.
+An empty pattern inserts `new` at every UTF-8 scalar boundary, including both
+ends (once for an empty input). All three helpers are ordinary source.
+
 ## UTF-8 construction and lossy conversion
 
 `std@1/utf8.append_scalar(mut out: List[u8], scalar: u32) -> Result[(),

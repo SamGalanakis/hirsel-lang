@@ -54,3 +54,8 @@ fn base64_is_ordinary_source() {
 fn utf8_is_ordinary_source() {
     source_codec("utf8", "utf8", &["append_scalar", "decode_lossy"]);
 }
+
+#[test]
+fn common_strings_are_ordinary_source() {
+    source_codec("string-common", "string", &["contains", "lines", "replace"]);
+}
