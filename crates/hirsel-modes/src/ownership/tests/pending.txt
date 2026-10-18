@@ -1,8 +1,11 @@
 CLO/CLO-2-allocation-join-bad.hir # outside ownership operative-rule scope
-CLO/CLO-2-annotation-nested-uses-part-bad.hir # dependency-owned J: written annotation contract (CLO-4)
+CLO/CLO-2-annotation-nested-uses-part-bad.hir # dependency-owned J: CLO-4 line 17
 CLO/CLO-2-annotation-open-uses-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-builtin-argument-callable-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-call-authority-join-bad.hir # outside ownership operative-rule scope
+CLO/CLO-2-callback-forward-bad.hir # outside ownership operative-rule scope
+CLO/CLO-2-callback-forward-local-bad.hir # outside ownership operative-rule scope
+CLO/CLO-2-callback-forward-unselected-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-iter-mut-handback-unsendable-inferred-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-mut-handback-erased-state-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-mut-handback-erased-state-inferred-bad.hir # outside ownership operative-rule scope
@@ -14,21 +17,61 @@ CLO/CLO-2-nested-uses-parameter-narrowed-bad.hir # outside ownership operative-r
 CLO/CLO-2-nested-uses-result-widened-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-nominal-argument-callable-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-seal-raw-authority-bad.hir # outside ownership operative-rule scope
+CLO/CLO-2-std-option-and-then-run.hir # dependency-owned resolver: LANG-4 line 5
+CLO/CLO-2-std-option-filter-run.hir # dependency-owned resolver: LANG-4 line 10
+CLO/CLO-2-std-option-flatten-run.hir # dependency-owned resolver: LANG-4 line 8
+CLO/CLO-2-std-option-is-none-run.hir # dependency-owned resolver: LANG-4 line 7
+CLO/CLO-2-std-option-is-some-run.hir # dependency-owned resolver: LANG-4 line 7
+CLO/CLO-2-std-option-map-run.hir # dependency-owned resolver: LANG-4 line 10
+CLO/CLO-2-std-option-ok-or-else-run.hir # dependency-owned resolver: LANG-4 line 7
+CLO/CLO-2-std-option-ok-or-run.hir # dependency-owned resolver: LANG-4 line 6
+CLO/CLO-2-std-option-or-else-run.hir # dependency-owned resolver: LANG-4 line 15
+CLO/CLO-2-std-option-unwrap-or-else-run.hir # dependency-owned resolver: LANG-4 line 8
+CLO/CLO-2-std-option-unwrap-or-run.hir # dependency-owned resolver: LANG-4 line 6
+CLO/CLO-2-std-option-zip-run.hir # dependency-owned resolver: LANG-4 line 6
+CLO/CLO-2-std-result-and-then-file-run.hir # dependency-owned resolver: LANG-4 line 8
+CLO/CLO-2-std-result-and-then-run.hir # dependency-owned resolver: LANG-4 line 5
+CLO/CLO-2-std-result-error-run.hir # dependency-owned resolver: LANG-4 line 7
+CLO/CLO-2-std-result-flatten-run.hir # dependency-owned resolver: LANG-4 line 8
+CLO/CLO-2-std-result-is-error-run.hir # dependency-owned resolver: LANG-4 line 7
+CLO/CLO-2-std-result-is-ok-run.hir # dependency-owned resolver: LANG-4 line 7
+CLO/CLO-2-std-result-map-error-run.hir # dependency-owned body checker: SEM-3 line 5: f-strings format through std@1, which this program does not select (std@1/text/append is unavailable); add std@1 to its manifest's dependencies
+CLO/CLO-2-std-result-map-run.hir # dependency-owned resolver: LANG-4 line 6
+CLO/CLO-2-std-result-ok-run.hir # dependency-owned resolver: LANG-4 line 7
+CLO/CLO-2-std-result-or-else-run.hir # dependency-owned resolver: LANG-4 line 18
+CLO/CLO-2-std-result-unwrap-or-else-run.hir # dependency-owned resolver: LANG-4 line 11
+CLO/CLO-2-std-result-unwrap-or-run.hir # dependency-owned resolver: LANG-4 line 7
 CLO/CLO-2-unknown-authority-bad.hir # outside ownership operative-rule scope
+CLO/CLO-3-child-counted-capture-bad.hir # outside ownership operative-rule scope
 CLO/CLO-3-child-not-sendable-bad.hir # outside ownership operative-rule scope
 CLO/CLO-3-counted-child-borrow-bad.hir # outside ownership operative-rule scope
 CLO/CLO-3-isolate-counted-borrow-bad.hir # outside ownership operative-rule scope
 CLO/CLO-3-local-receiver-capture-bad.hir # outside ownership operative-rule scope
 CLO/CLO-3-receiver-capture-bad.hir # outside ownership operative-rule scope
-CLO/CLO-4-annotated-tuple-callable-return-bad.hir # dependency-owned J: written annotation contract (CLO-4)
-CLO/CLO-4-capture-authority-declared-bad.hir # dependency-owned J: declared escaping authority (CLO-4)
-CLO/CLO-4-contract6-held-selection-bad.hir # dependency-owned J: written annotation contract (CLO-4)
+CLO/CLO-4-annotated-tuple-callable-return-bad.hir # dependency-owned J: CLO-4 line 16
+CLO/CLO-4-capture-authority-declared-bad.hir # dependency-owned J: CLO-4 line 6
+CLO/CLO-4-contract6-held-selection-bad.hir # dependency-owned J: CLO-4 line 6
+CLO/CLO-4-generic-callable-uses-bad.hir # dependency-owned J: CLO-4 line 8
 CLO/CLO-4-selected-callback-bad.hir # outside ownership operative-rule scope
 CLO/CLO-4-selected-callback-forward-bad.hir # outside ownership operative-rule scope
+CLO/CLO-4-std-iter-fused-run.hir # dependency-owned resolver: LANG-4 line 25
+CLO/CLO-4-std-iter-run.hir # dependency-owned resolver: LANG-4 line 23
 DROP/DROP-1-user-drop-bad.hir # outside ownership operative-rule scope
 DROP/DROP-2-destructure-opaque-run.hir # dependency-owned body checker: LANG-7 line 7: field is unavailable on this type
+DROP/DROP-2-expect-ok-error-drop-fail.hir # dependency-owned resolver: LANG-4 line 13
+DROP/DROP-2-expect-ok-error-fail.hir # dependency-owned resolver: LANG-4 line 13
 DROP/DROP-2-nfc-cleanup-fail.hir # dependency-owned resolver: LANG-4 line 10
 DROP/DROP-2-nfc-cleanup-run.hir # dependency-owned resolver: LANG-4 line 10
+DROP/DROP-2-replace-resource-run.hir # dependency-owned resolver: LANG-4 line 30
+DROP/DROP-2-std-deque-run.hir # dependency-owned resolver: LANG-4 line 16
+DROP/DROP-2-std-iter-fold-run.hir # dependency-owned resolver: LANG-4 line 63
+DROP/DROP-2-std-iter-predicate-fail.hir # dependency-owned resolver: LANG-4 line 36
+DROP/DROP-2-std-iter-predicate-run.hir # dependency-owned resolver: LANG-4 line 36
+DROP/DROP-2-std-iter-resource-run.hir # dependency-owned resolver: LANG-4 line 37
+DROP/DROP-2-std-iter-zip-run.hir # dependency-owned resolver: LANG-4 line 51
+DROP/DROP-2-std-option-owned-run.hir # dependency-owned resolver: LANG-4 line 22
+DROP/DROP-2-std-priority-queue-run.hir # dependency-owned resolver: LANG-4 line 29
+DROP/DROP-2-std-results-owned-run.hir # dependency-owned resolver: LANG-4 line 23
 DROP/DROP-2-testhelpers-expect-error-ok-drop-fail.hir # dependency-owned resolver: LANG-4 line 15
 DROP/DROP-2-wave1-callback-failure.hir # dependency-owned resolver: LANG-4 line 25
 DROP/DROP-2-wave1-callback-success.hir # dependency-owned resolver: LANG-4 line 28
@@ -36,40 +79,56 @@ DROP/DROP-2-wave1-fold-resource-fail.hir # dependency-owned resolver: LANG-4 lin
 DROP/DROP-2-wave1-fold-resource-run.hir # dependency-owned resolver: LANG-4 line 21
 DROP/DROP-2-wave1-resource-run.hir # dependency-owned resolver: LANG-4 line 63
 DROP/DROP-2-wave1-short-circuit-run.hir # dependency-owned resolver: LANG-4 line 26
-DROP/DROP-2-wave2-bytes-replace-fail.hir # dependency-owned body checker: LANG-7 line 19: field is unavailable on this type
-DROP/DROP-2-wave2-bytes-replace-run.hir # dependency-owned body checker: LANG-7 line 19: field is unavailable on this type
 DROP/DROP-3-propagated-error-bad.hir # outside ownership operative-rule scope
 DROP/DROP-3-resurrection-bad.hir # outside ownership operative-rule scope
 DROP/DROP-3-unit-result-bad.hir # outside ownership operative-rule scope
+DROP/DROP-4-external-forget-bad.hir # outside ownership operative-rule scope
+DROP/DROP-4-external-forget-ok.hir # dependency-owned signature: NotImplemented
 DROP/DROP-4-package-module-forget-bad.hir # outside ownership operative-rule scope
 DROP/DROP-4-package-module-forget-ok.hir # dependency-owned signature: NotImplemented
 MODE/MODE-1-borrow-global-annotation-bad.hir # outside ownership operative-rule scope
 MODE/MODE-1-environment-closure-result-non-plain-parameter-bad.hir # dependency-owned body checker: MODE-1 line 6: `in env` alone cannot cover the non-Plain parameter x: write `in {env, x}` or `in x`
 MODE/MODE-1-environment-relation-on-binding-bad.hir # dependency-owned body checker: MODE-1 line 6: `env` is a closure or function type's environment: a binding is not related to it
 MODE/MODE-1-environment-result-non-plain-parameter-bad.hir # dependency-owned signature: Diagnostics([Diagnostic { rule: RuleId("MODE-1"), severity: Error, message: "`in env` alone cannot cover the non-Plain parameter x: write `in {env, x}` or `in x`", primary: Span { file: FileId(0), start: 234, end: 240 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
-MODE/MODE-1-fresh-local-receiver-run.hir # dependency-owned body checker: LANG-7 line 17: field is unavailable on this type
+MODE/MODE-1-generic-callable-relation-bad.hir # dependency-owned J: MODE-1 line 8
 MODE/MODE-1-local-function-bare-local-result-bad.hir # dependency-owned body checker: MODE-1 line 5: a named function has no environment: its local result names its sources, `in x`
 MODE/MODE-1-mut-global-annotation-bad.hir # outside ownership operative-rule scope
 MODE/MODE-1-named-bare-local-result-bad.hir # dependency-owned signature: Diagnostics([Diagnostic { rule: RuleId("MODE-1"), severity: Error, message: "a named function has no environment: its local result names its sources, `in x`", primary: Span { file: FileId(0), start: 154, end: 166 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
 MODE/MODE-1-nested-borrow-global-bad.hir # outside ownership operative-rule scope
+MODE/MODE-1-trim-split-copy-bad.hir # dependency-owned resolver: LANG-4 line 4
+MODE/MODE-1-trim-split-unique-run.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-1-view-return-direct-bad.hir # dependency-owned body checker: LANG-7 line 15: opaque type cannot be constructed here
 MODE/MODE-1-view-return-direct-result-bad.hir # dependency-owned body checker: LANG-7 line 15: opaque type cannot be constructed here
 MODE/MODE-1-view-return-graphemes-bad.hir # dependency-owned resolver: LANG-4 line 11
 MODE/MODE-1-view-return-opaque-bad.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-1-view-return-source-bad.hir # dependency-owned body checker: LANG-7 line 15: opaque type cannot be constructed here
-MODE/MODE-1-wave1-byte-share-bad.hir # dependency-owned body checker: LANG-7 line 6: field is unavailable on this type
-MODE/MODE-1-wave1-byte-share-ok.hir # dependency-owned body checker: LANG-7 line 5: field is unavailable on this type
 MODE/MODE-1-wave1-map-output-bad.hir # dependency-owned resolver: LANG-4 line 8
 MODE/MODE-1-wave1-map-output-ok.hir # dependency-owned resolver: LANG-4 line 8
 MODE/MODE-1-wave2-trim-accept.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-1-wave2-trim-reject.hir # dependency-owned resolver: LANG-4 line 4
-MODE/MODE-2-callable-parameter-unique-bad.hir # dependency-owned J: instantiated callable header (MODE-2)
+MODE/MODE-2-callable-annotation-header-bad.hir # dependency-owned J: MODE-2 line 6
+MODE/MODE-2-callable-parameter-unique-bad.hir # dependency-owned J: MODE-2 line 11
 MODE/MODE-2-deep-receipt-sendable-bad.hir # outside ownership operative-rule scope
 MODE/MODE-2-deep-receipt-shared-boundary-bad.hir # outside ownership operative-rule scope
-MODE/MODE-2-nested-view-copy-kept-bad.hir # dependency-owned J: nested receiving contract (MODE-2)
-MODE/MODE-2-nested-view-mut-bad.hir # dependency-owned J: nested receiving contract (MODE-2)
-MODE/MODE-2-nested-view-phantom-bad.hir # dependency-owned J: nested receiving contract (MODE-2)
-MODE/MODE-2-nested-view-strengthen-bad.hir # dependency-owned J: nested receiving contract (MODE-2)
+MODE/MODE-2-equality-operand-drops-unique-mismatch-bad.hir # outside ownership operative-rule scope
+MODE/MODE-2-generic-callable-unique-bad.hir # dependency-owned J: MODE-2 line 6
+MODE/MODE-2-io-readers-return-unique-ok.hir # dependency-owned signature: NotImplemented
+MODE/MODE-2-nested-view-copy-kept-bad.hir # dependency-owned J: MODE-2 line 7
+MODE/MODE-2-nested-view-mut-bad.hir # dependency-owned J: MODE-2 line 8
+MODE/MODE-2-nested-view-phantom-bad.hir # dependency-owned J: MODE-2 line 6
+MODE/MODE-2-nested-view-strengthen-bad.hir # dependency-owned J: MODE-2 line 8
+MODE/MODE-2-ordering-operand-keeps-kind-bad.hir # outside ownership operative-rule scope
+MODE/MODE-2-replace-unique-run.hir # dependency-owned resolver: LANG-4 line 15
+MODE/MODE-2-std-decode-lossy-copied-bad.hir # dependency-owned resolver: LANG-4 line 4
+MODE/MODE-2-std-decode-lossy-unique-ok.hir # dependency-owned resolver: LANG-4 line 4
+MODE/MODE-2-std-deque-push-bad.hir # dependency-owned resolver: LANG-4 line 5
+MODE/MODE-2-std-deque-push-ok.hir # dependency-owned resolver: LANG-4 line 5
+MODE/MODE-2-std-fresh-string-unique-ok.hir # dependency-owned signature: NotImplemented
+MODE/MODE-2-std-option-unique-run.hir # dependency-owned resolver: LANG-4 line 11
+MODE/MODE-2-std-priority-queue-push-bad.hir # dependency-owned resolver: LANG-4 line 10
+MODE/MODE-2-std-priority-queue-push-ok.hir # dependency-owned resolver: LANG-4 line 10
+MODE/MODE-2-std-result-unique-run.hir # dependency-owned resolver: LANG-4 line 11
+MODE/MODE-2-unique-field-push-pop-ok.hir # dependency-owned body checker: LANG-7 line 19: field is unavailable on this type
 MODE/MODE-2-wave1-reverse-bad.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-2-wave1-reverse-ok.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-2-wave1-rotate-bad.hir # dependency-owned resolver: LANG-4 line 4
@@ -77,7 +136,7 @@ MODE/MODE-2-wave1-rotate-ok.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-2-wave1-sort-bad.hir # dependency-owned resolver: LANG-4 line 9
 MODE/MODE-2-wave1-sort-ok.hir # dependency-owned resolver: LANG-4 line 9
 MODE/MODE-3-generic-once-annotation-bad.hir # dependency-owned signature: Diagnostics([Diagnostic { rule: RuleId("MODE-3"), severity: Error, message: "once requires a function type", primary: Span { file: FileId(0), start: 74, end: 80 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
-MODE/MODE-3-mut-callable-multiplicity-bad.hir # dependency-owned J: invariant mutable callable contract (MODE-3)
+MODE/MODE-3-mut-callable-multiplicity-bad.hir # dependency-owned J: MODE-3 line 10
 MODE/MODE-3-nested-once-annotation-bad.hir # dependency-owned body checker: MODE-3 line 4: once requires a function type
 MODE/MODE-3-scalar-once-annotation-bad.hir # dependency-owned signature: Diagnostics([Diagnostic { rule: RuleId("MODE-3"), severity: Error, message: "once requires a function type", primary: Span { file: FileId(0), start: 71, end: 79 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
 MODE/MODE-4-arena-bad.hir # outside ownership operative-rule scope
@@ -87,6 +146,9 @@ MODE/MODE-4-counted-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-counted-copy-capture-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-counted-list-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-error-mapper-occurrence-bad.hir # outside ownership operative-rule scope
+MODE/MODE-4-external-opaque-sendable-bad.hir # outside ownership operative-rule scope
+MODE/MODE-4-external-opaque-sendable-ok.hir # dependency-owned signature: NotImplemented
+MODE/MODE-4-generic-callable-sendable-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-header-parameter-callable-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-iter-mut-handback-sendable-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-iterator-state-bad.hir # outside ownership operative-rule scope
@@ -98,9 +160,11 @@ MODE/MODE-4-mut-handback-plain-storage-bad.hir # outside ownership operative-rul
 MODE/MODE-4-mut-handback-sendable-storage-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-mut-parameter-write-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-nested-generic-bound-bad.hir # outside ownership operative-rule scope
+MODE/MODE-4-parametric-result-send-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-receiver-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-record-field-callable-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-scope-bad.hir # outside ownership operative-rule scope
+MODE/MODE-4-send-related-holder-live-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-take-parameter-callable-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-task-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-test-bad.hir # outside ownership operative-rule scope
@@ -153,7 +217,6 @@ MODE/MODE-4-written-loop-loss-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-mut-data-contract-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-mut-data-reverse-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-mut-failure-handback-bad.hir # outside ownership operative-rule scope
-MODE/MODE-4-written-mut-failure-handback-ok.hir # dependency-owned body checker: LANG-7 line 7: field is unavailable on this type
 MODE/MODE-4-written-mut-iteration-replacement-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-mut-list-element-share-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-nested-binder-bad.hir # outside ownership operative-rule scope
@@ -181,7 +244,7 @@ MODE/MODE-4-written-sharing-put-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-slots-instantiated-result-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-variant-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-wrapped-jobs-bad.hir # outside ownership operative-rule scope
-MODE/MODE-5-authority-union-bad.hir # dependency-owned J: declared escaping authority (CLO-4)
+MODE/MODE-5-authority-union-bad.hir # dependency-owned J: CLO-4 line 6
 MODE/MODE-5-sendability-capture-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-arena-return-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-escaping-capture-bad.hir # outside ownership operative-rule scope
@@ -228,4 +291,5 @@ OWN/OWN-2-wave2-starts_with-accept.hir # dependency-owned resolver: LANG-4 line 
 OWN/OWN-2-wave2-starts_with-reject.hir # dependency-owned resolver: LANG-4 line 4
 OWN/OWN-2-wave2-trim-accept.hir # dependency-owned resolver: LANG-4 line 4
 OWN/OWN-2-wave2-trim-reject.hir # dependency-owned resolver: LANG-4 line 4
+OWN/OWN-3-option-remove-run.hir # dependency-owned resolver: LANG-4 line 15
 OWN/OWN-6-counted-child-borrow-bad.hir # outside ownership operative-rule scope
