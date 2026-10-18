@@ -1,0 +1,33 @@
+// rule: LANG-2
+// expect: run
+type Callback {
+  call: fn(take u64) -> u64 uses {},
+}
+
+fn apply(f: fn(take u64) -> u64 uses {}, value: u64) -> u64 {
+  f(value)
+}
+
+fn callback(early: bool) -> fn(take u64) -> u64 uses {} {
+  fn identity[T](take value: T) -> T {
+    value
+  }
+  if early {
+    return identity
+  }
+  identity
+}
+
+pub fn main() -> Result[(), String] {
+  fn identity[T](take value: T) -> T {
+    value
+  }
+  let record = Callback(call: identity)
+  failure.check(apply(identity, 5) == 5 && record.call(7) == 7, Bounds())
+  let f = callback(true)
+  let g = callback(false)
+  failure.check(f(11) == 11 && g(13) == 13, Bounds())
+  let owned: fn(take String) -> String uses {} = identity
+  failure.check(owned("hello") == "hello", Bounds())
+  Ok(())
+}

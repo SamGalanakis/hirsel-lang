@@ -1,0 +1,19 @@
+// rule: LANG-2
+// expect: run
+fn invoke[T: plain, n: size](values: Inline[T, n], f: fn(Inline[T, n]) -> u64 uses {}) -> u64 {
+  f(values)
+}
+
+fn outer[T: plain, n: size](values: Inline[T, n], base: u64) -> u64 {
+  fn measure[U: plain, k: size](value: Inline[U, k]) -> u64 {
+    n + k + base
+  }
+  let bytes: Inline[u8, 2] = [1u8, 2u8]
+  invoke(values, measure) + invoke(bytes, measure)
+}
+
+pub fn main() -> Result[(), String] {
+  let values: Inline[u32, 3] = [1u32, 2u32, 3u32]
+  failure.check(outer(values, 10) == 31, Bounds())
+  Ok(())
+}

@@ -1,0 +1,14 @@
+// rule: LANG-2
+// expect: run
+fn example(value: String) -> String in value {
+  fn view[T: copyable](item: T) -> T in item {
+    copy item
+  }
+  let f: fn(item: String) -> String in item uses {} = view
+  f(value)
+}
+
+pub fn main() -> Result[(), String] {
+  failure.check(example("kept") == "kept", Bounds())
+  Ok(())
+}

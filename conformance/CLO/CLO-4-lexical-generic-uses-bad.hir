@@ -1,0 +1,8 @@
+// rule: CLO-4
+// expect: reject CLO-4 at line 7
+fn example() {
+  fn effect[T](io: Io, take value: T) -> T uses {io} {
+    value
+  }
+  let f: fn(Io, take u64) -> u64 uses {} = effect
+}

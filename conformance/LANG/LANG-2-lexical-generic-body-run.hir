@@ -1,0 +1,27 @@
+// rule: LANG-2
+// expect: run
+pub fn main() -> Result[(), String] {
+  fn count[T: plain](value: T, text: String) -> u64 {
+    let mut total = 0u64
+    for scalar in string.scalars(text) {
+      total = total + 1
+    }
+    fn same[U](take item: U) -> U {
+      item
+    }
+    let inner: fn(take u64) -> u64 uses {} = same
+    inner(total)
+  }
+  fn exchange[T: plain](mut left: T, mut right: T) {
+    let previous = left
+    left = right
+    right = previous
+  }
+  let f: fn(u8, String) -> u64 uses {} = count
+  let swap: fn(mut u64, mut u64) uses {} = exchange
+  let mut left = 17u64
+  let mut right = 19u64
+  swap(mut left, mut right)
+  failure.check(left == 19 && right == 17 && f(1u8, "aλ") == 2, Bounds())
+  Ok(())
+}

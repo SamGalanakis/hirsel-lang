@@ -1,0 +1,8 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 7
+fn example() {
+  fn view[T: copyable](value: T) -> T in value {
+    copy value
+  }
+  let f: fn(value: String) -> String uses {} = view
+}

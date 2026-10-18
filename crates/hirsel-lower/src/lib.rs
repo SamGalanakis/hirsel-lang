@@ -10,6 +10,7 @@ mod decisions;
 mod expression;
 mod iteration;
 mod last_use;
+mod lexical;
 mod literal;
 mod live;
 mod loans;
@@ -132,26 +133,33 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
         builder.return_value(value, span, &mut bodies)?;
     }
     bodies[0] = Some(builder.finish()?);
-    let contracts = input
-        .plans
-        .contracts
-        .iter()
-        .enumerate()
-        .map(|(ordinal, clause)| {
-            let body = bodies
-                .iter()
-                .position(|b| {
-                    b.as_ref().is_some_and(|b| {
-                        b.parameter_scope == NameSite::Expression(clause.expression)
-                    })
-                })
-                .ok_or_else(|| LowerError {
-                    site: Span::default(),
-                    message: "missing executable clause body".into(),
-                })?;
-            Ok((ordinal as u32, hirsel_tir::BodyId(body as u32)))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut contracts = vec![];
+    let mut caller_contracts = vec![];
+    for clause in &input.plans.contracts {
+        let mut found = false;
+        for (index, body) in bodies.iter().enumerate() {
+            if body.as_ref().is_some_and(|body| {
+                let mut scope = body.parameter_scope;
+                while let Some(original) = decisions.cloned_scopes.borrow().get(&scope) {
+                    scope = *original;
+                }
+                scope == NameSite::Expression(clause.expression)
+            }) {
+                found = true;
+                let body = hirsel_tir::BodyId(index as u32);
+                contracts.push((contracts.len() as u32, body));
+                if clause.owner == input.owner {
+                    caller_contracts.push(body);
+                }
+            }
+        }
+        if !found {
+            return Err(LowerError {
+                site: Span::default(),
+                message: "missing executable clause body".into(),
+            });
+        }
+    }
     let mut protocol_associations = Vec::new();
     for cursor in &input.plans.cursors {
         let Some(association) = &cursor.association else {
@@ -177,24 +185,17 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
                 });
             }
         }
-        if protocol_associations.len() != before + 1 {
+        if protocol_associations.len() == before {
             return Err(LowerError {
                 site: span,
-                message: "missing or ambiguous borrowed protocol call receipt".into(),
+                message: "missing borrowed protocol call receipt".into(),
             });
         }
     }
     let definition = Definition {
         caller_bodies: if input.track_caller {
             let mut bodies = vec![entry_body()];
-            bodies.extend(
-                contracts
-                    .iter()
-                    .filter(|(ordinal, _)| {
-                        input.plans.contracts[*ordinal as usize].owner == input.owner
-                    })
-                    .map(|(_, body)| *body),
-            );
+            bodies.extend(caller_contracts);
             bodies.sort_unstable_by_key(|body| body.0);
             bodies.dedup();
             bodies

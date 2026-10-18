@@ -519,7 +519,12 @@ pub(super) fn build(
                     }
                     let expr = &tree.expressions[expression.0 as usize];
                     nodes[entry].span = expr.origin.span;
-                    if place(body, expression, rows).is_some()
+                    let lexical_value = matches!(expr.kind, ExprKind::Path(_))
+                        && rows.expression(expression).is_some_and(|i| {
+                            !body.expressions[i].instantiated_arguments.is_empty()
+                        });
+                    if !lexical_value
+                        && place(body, expression, rows).is_some()
                         && !matches!(expr.kind, ExprKind::Unary { .. })
                     {
                         let context = if matches!(context, Context::Read | Context::View)
@@ -1219,6 +1224,22 @@ pub(super) fn build(
                                 expression,
                                 escaping,
                                 owning,
+                            }
+                        }
+                        ExprKind::Path(_) if lexical_value => {
+                            let captures = rows
+                                .closure(expression)
+                                .map(|i| body.closures[i].captures.as_slice())
+                                .unwrap_or_default();
+                            let context = capture_modes.first(expression).map(|c| c.context);
+                            Op::Capture {
+                                expression,
+                                escaping: captures.is_empty()
+                                    || context.map_or(escaping, |c| {
+                                        matches!(c, CaptureContext::Escaping | CaptureContext::Task)
+                                    }),
+                                owning: context
+                                    .map_or(owning, |c| c == CaptureContext::OwningScoped),
                             }
                         }
                         ExprKind::Call { callee, arguments } => {

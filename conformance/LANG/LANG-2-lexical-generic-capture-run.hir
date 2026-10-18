@@ -1,0 +1,29 @@
+// rule: LANG-2
+// expect: run
+fn apply_byte(n: u64, f: fn(u8, u64) -> u64 uses {}) -> u64 {
+  f(1u8, n)
+}
+
+fn apply_bool(n: u64, f: fn(bool, u64) -> u64 uses {}) -> u64 {
+  f(true, n)
+}
+
+fn example(base: u64) -> u64 {
+  fn add[T: plain](value: T, n: u64) -> u64 {
+    base + n
+  }
+  apply_byte(2, add) + apply_bool(3, add)
+}
+
+fn counted(base: String) -> u64 {
+  fn add[T: plain](value: T, n: u64) -> u64 {
+    string.byte_len(base) + n
+  }
+  apply_byte(2, add)
+}
+
+pub fn main() -> Result[(), String] {
+  failure.check(example(10) == 25, Bounds())
+  failure.check(counted("kept") == 6, Bounds())
+  Ok(())
+}

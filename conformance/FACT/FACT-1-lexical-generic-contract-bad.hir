@@ -1,0 +1,11 @@
+// rule: FACT-1
+// expect: fail FACT-1 at line 5
+pub fn main() -> Result[(), String] {
+  fn positive[T: plain](value: T, n: u64) -> u64
+    requires n > 0 {
+    n
+  }
+  let f: fn(u8, u64) -> u64 uses {} = positive
+  let _ = f(1u8, 0)
+  Ok(())
+}

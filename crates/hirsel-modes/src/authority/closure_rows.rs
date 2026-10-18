@@ -78,6 +78,9 @@ impl ClosureRows {
         self.types.entry(value.ty).or_default().insert(sequence);
         self.rows.insert(key, value);
     }
+    pub fn get(&self, key: &ExprId) -> Option<&ClosureInfo> {
+        self.rows.get(key)
+    }
     pub fn get_mut(&mut self, key: &ExprId) -> Option<ClosureEdit<'_>> {
         let ty = self.rows.get(key)?.ty;
         Some(ClosureEdit {

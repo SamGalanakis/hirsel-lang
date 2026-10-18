@@ -67,33 +67,51 @@ impl Checker<'_> {
     }
     /// H inferred these actuals from the complete receiving header. Rebuild
     /// the declaration with J's authority evidence before checking receipt.
-    fn instantiate_function_reference(&mut self, e: ExprId) {
-        let Some(instance) = self
+    pub(super) fn instantiate_function_reference(&mut self, e: ExprId) {
+        let (declared, source, arguments) = if let Some(instance) = self
             .out
             .body
             .instantiations
             .iter()
             .find(|row| row.expression == e)
             .cloned()
-        else {
-            return;
-        };
-        let Some(signature) = self.read(&instance.callee) else {
-            return;
-        };
-        let SignatureKind::Function(declared) = &signature.kind else {
-            return;
+        {
+            let Some(signature) = self.read(&instance.callee) else {
+                return;
+            };
+            let SignatureKind::Function(declared) = &signature.kind else {
+                return;
+            };
+            (
+                declared.clone(),
+                signature.types.clone(),
+                instance.arguments,
+            )
+        } else {
+            let arguments = self
+                .elaborations
+                .get(&e)
+                .map(|i| self.out.body.expressions[*i].instantiated_arguments.clone())
+                .unwrap_or_default();
+            if arguments.is_empty() {
+                return;
+            }
+            let Some(ty) = self.ty(e) else { return };
+            let TypeKind::Function(declared) = self.out.body.types.get(ty).unwrap().kind.clone()
+            else {
+                return;
+            };
+            (declared, self.out.body.types.clone(), arguments)
         };
         let Some(ty) = self.ty(e) else { return };
-        let authorities: Vec<_> = instance
-            .arguments
+        let authorities: Vec<_> = arguments
             .iter()
             .map(|argument| match argument {
                 GenericArgument::Type(ty) => self.authority(*ty),
                 GenericArgument::Size(_) => AuthoritySummary::inert(),
             })
             .collect();
-        for (parameter, argument) in declared.generics.iter().zip(&instance.arguments) {
+        for (parameter, argument) in declared.generics.iter().zip(&arguments) {
             if let (GenericParameter::Type { bounds, .. }, GenericArgument::Type(actual)) =
                 (parameter, argument)
             {
@@ -121,21 +139,21 @@ impl Checker<'_> {
         }
         let mut function = declared.clone();
         for parameter in &mut function.parameters {
-            parameter.ty = import_type(&signature.types, parameter.ty, &mut self.out.body.types)
+            parameter.ty = import_type(&source, parameter.ty, &mut self.out.body.types)
                 .expect("checked function reference parameter");
             parameter.ty = self
-                .substitute(parameter.ty, &instance.arguments, &authorities)
+                .substitute(parameter.ty, &arguments, &authorities)
                 .expect("checked function reference instantiation");
         }
-        let result = import_type(&signature.types, function.result, &mut self.out.body.types)
+        let result = import_type(&source, function.result, &mut self.out.body.types)
             .expect("checked function reference result");
         function.result = self
-            .substitute(result, &instance.arguments, &authorities)
+            .substitute(result, &arguments, &authorities)
             .expect("checked function reference result instantiation");
         function.error = result_error(
             &self.out.body.types,
             function.result,
-            &signature.metadata.roles,
+            &self.signature.metadata.roles,
         );
         let parameters: Vec<_> = (0..function.parameters.len())
             .map(|ordinal| {
@@ -167,7 +185,6 @@ impl Checker<'_> {
     /// states that call, so its result is typed here, at the value's own
     /// parameters, and published as the closure's body result.
     pub(super) fn forwarding_closure(&mut self, e: ExprId) {
-        self.instantiate_function_reference(e);
         let Some(ty) = self.ty(e) else { return };
         let TypeKind::Function(f) = self.out.body.types.get(ty).unwrap().kind.clone() else {
             return;
@@ -243,15 +260,25 @@ impl Checker<'_> {
             &BTreeMap::new(),
         );
 
-        self.closures.insert(
-            e,
-            ClosureInfo {
-                result_evidence: Some(result),
-                expression: e,
-                captures: vec![],
-                ty,
-            },
-        );
+        if !matches!(self.resolved.get(&e), Some(ResolvedName::Definition(_))) {
+            let formal = bind_parameter_scopes(&mut self.out.body.types, f.result, &[scope])
+                .expect("checked forwarding result scope");
+            self.out.result_types.push((scope, formal));
+        }
+        if let Some(mut closure) = self.closures.get_mut(&e) {
+            closure.result_evidence = Some(result);
+            closure.ty = ty;
+        } else {
+            self.closures.insert(
+                e,
+                ClosureInfo {
+                    result_evidence: Some(result),
+                    expression: e,
+                    captures: vec![],
+                    ty,
+                },
+            );
+        }
     }
     /// Instantiate a declared graph already in the body store with a call's
     /// generic arguments. Substituted nominal rows take their canonical plain
@@ -2585,6 +2612,27 @@ impl Checker<'_> {
     pub(super) fn expression_children(&self, e: ExprId) -> Vec<ExprId> {
         crate::expression_children(self.tree, e)
     }
+    /// A static lexical name with no environment can be reconstructed wherever
+    /// it is referenced; it is not a borrowed value of the enclosing frame.
+    pub(super) fn capture_free_generic(&self, e: ExprId) -> bool {
+        let Some(binding) = self.binding(e) else {
+            return false;
+        };
+        if !matches!(self.out.body.types.get(binding.ty).map(|row| &row.kind), Some(TypeKind::Function(f)) if !f.generics.is_empty())
+        {
+            return false;
+        }
+        let NameSite::Statement(statement) = binding.site else {
+            return false;
+        };
+        let StmtKind::Function { body, .. } = self.tree.statements[statement.0 as usize].kind
+        else {
+            return false;
+        };
+        self.closures
+            .get(&body)
+            .is_some_and(|closure| closure.captures.is_empty())
+    }
     fn free_uses(&self, owner: NameSite, body: ExprId) -> Vec<FreeUse> {
         let mut owners = BTreeSet::from([owner.clone()]);
         let mut stack = vec![body];
@@ -2619,6 +2667,14 @@ impl Checker<'_> {
                 } => (self.transparent_value(value), true),
                 _ => (e, false),
             };
+            if self.elaborations.get(&reference).is_some_and(|i| {
+                !self.out.body.expressions[*i]
+                    .instantiated_arguments
+                    .is_empty()
+            }) && self.capture_free_generic(reference)
+            {
+                continue;
+            }
             let Some(mut b) = self.binding(reference) else {
                 continue;
             };
@@ -3090,6 +3146,14 @@ impl Checker<'_> {
                 authority: authority.clone(),
             },
         );
+        // A lexical instantiation has an existing checked static body. Its
+        // generated forwarding call needs capture creation and a formal result,
+        // but must not walk the name again as a source body.
+        if matches!(self.tree.expressions[e.0 as usize].kind, ExprKind::Path(_)) {
+            self.forwarding_closure(e);
+            self.facts.insert(e, authority);
+            return;
+        }
         let before_types = self.binding_types.clone();
         let before_views = self.capture_views.clone();
         for (key, view, _) in &views {

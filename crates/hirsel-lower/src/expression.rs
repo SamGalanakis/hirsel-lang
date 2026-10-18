@@ -302,6 +302,9 @@ impl Builder<'_, '_> {
                 {
                     self.function_reference(id, path.clone(), row.ty)?
                 } else {
+                    if !row.instantiated_arguments.is_empty() {
+                        return self.lexical_function_value(id, bodies).map(Some);
+                    }
                     let base = self.resolved_place(id)?;
                     let mut path = self.body.places[base.0 as usize].projection.clone();
                     let source = self.source_place(id)?;

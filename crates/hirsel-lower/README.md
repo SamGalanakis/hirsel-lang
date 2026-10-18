@@ -389,3 +389,14 @@ Labelled exits select an enclosing Loop entry, end its exited scopes with existi
 
 `Input.track_caller` transports declaration metadata into TIR. Internal contract
 invocations inherit attribution; source function-value calls retain their boundary.
+
+Lexical generic function values closure-convert to an ordinary monomorphic Closure
+with a Call carrying the inferred actuals. Capturing names borrow their existing
+scoped environment. Capture-free names reconstruct the static body tree with fresh
+body IDs and parameter namespaces, preserving TIR's single-producer invariant.
+J/I supply capture creation modes and formal results. Cloned executable clauses and
+borrowed-loop associations retain their independent validation receipts. The existing native lexical
+instance expansion specializes the static body independently for each actual list;
+the interpreter binds those same actuals at the generated call. No TIR/LIR form or
+signature encoding is added. Callable comptime materialization stays CT-2: the
+materialized named-reference representation has no generic actuals.

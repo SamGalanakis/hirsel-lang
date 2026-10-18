@@ -1241,6 +1241,33 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                if self.direct_callee != Some(e)
+                    && self.elaborations.get(&e).is_some_and(|i| {
+                        !self.out.body.expressions[*i]
+                            .instantiated_arguments
+                            .is_empty()
+                    })
+                {
+                    let capture_free = self.capture_free_generic(e);
+                    self.instantiate_function_reference(e);
+                    if capture_free {
+                        let ty = self.ty(e).unwrap();
+                        let mut row = self.out.body.types.get(ty).unwrap().clone();
+                        row.modes.relation = Relation::global();
+                        row.modes.sendability = Sendability::Sendable;
+                        let ty = self.out.body.types.push(row);
+                        self.set_ty(e, ty);
+                        self.forwarding_closure(e);
+                    } else {
+                        self.closure(
+                            e,
+                            e,
+                            context.map(|(_, expected, rule)| {
+                                (CaptureContext::Scoped, expected, rule)
+                            }),
+                        );
+                    }
+                }
                 used = if matches!(self.resolved.get(&e), Some(ResolvedName::Definition(_)))
                     && self.ty(e).is_some_and(|t| {
                         matches!(
@@ -1251,6 +1278,7 @@ impl<'a> Checker<'a> {
                     // A direct callee names its definition; only a value
                     // use is a closure.
                     if self.direct_callee != Some(e) {
+                        self.instantiate_function_reference(e);
                         self.forwarding_closure(e);
                     }
                     AuthoritySummary::inert()

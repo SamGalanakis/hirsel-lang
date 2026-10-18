@@ -375,7 +375,9 @@ Each function frame retains its active loop statements. Labelled exits require a
 
 Generic named function values infer every type/size actual from the immediate complete
 monomorphic callable expectation. H checks structural bounds and records the
-instantiation at the name for GEN-5 and existing FunctionReference lowering. It
+instantiation at the name for GEN-5 and existing FunctionReference lowering. Lexical
+references publish their actuals on the expression elaboration and preserve their
+capture-bearing source row. It
 substitutes the declared callable contract rather than copying receiving promises.
 Missing context or an undetermined parameter reports LANG-2 naming the parameter.
 Callable binding annotations keep the declared parameter/result header, including

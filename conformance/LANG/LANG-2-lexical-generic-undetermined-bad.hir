@@ -1,0 +1,8 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 7
+fn example() {
+  fn identity[T](take value: T) -> T {
+    value
+  }
+  let f = identity
+}

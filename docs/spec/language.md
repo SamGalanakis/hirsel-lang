@@ -40,12 +40,12 @@ unambiguous expected type`.
 
 `let n = 3` with no annotation, no suffix and no other operand is LANG-2 at the literal.
 
-A top-level or imported generic function name may be used as a value when its immediate,
+A generic function name, including a lexical function with captures, may be used as a value when its immediate,
 complete expected monomorphic callable type uniquely determines every type and size
 argument from the declared signature. This includes annotated bindings, arguments, record
 fields and returns. No later statement or implementation body participates. Without that context,
 or with an undetermined argument, report LANG-2 at the name and name the undetermined
-parameter. Lexical generic functions remain direct-callee-only. The instantiated callable
+parameter. Lexical instantiations follow ordinary closure capture rules. The instantiated callable
 retains its declared modes, `uses`, allocation and relation contracts
 ([GEN-1](generics.md#gen-1-bounds)); ordinary callable receipt checks still apply. An
 error-mapper path under [LANG-8](#lang-8-errors) is instantiated from the error it maps.

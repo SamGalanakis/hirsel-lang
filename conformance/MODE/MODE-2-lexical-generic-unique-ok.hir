@@ -1,0 +1,6 @@
+// rule: MODE-2
+// expect: accept
+fn example() {
+  fn consume[T](take value: unique T) {}
+  let f: fn(take unique String) uses {} = consume
+}

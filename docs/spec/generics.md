@@ -84,14 +84,19 @@ Failed generic bounds are prerequisites of the parameter defaults that depend on
 ([diagnostics](diagnostics.md#expression-obligations)): a `sendable` bound failure reports
 MODE-4, `inert` CAP-2, and every other bound GEN-1.
 
-A top-level or imported generic function used as a monomorphic callable value is
+A generic function, including a lexical function with captures, used as a monomorphic callable value is
 instantiated from its immediate complete expected callable type ([LANG-2](language.md#lang-2-prefix-law)).
 Both parameter and result types can determine type and size arguments; every argument
 must be uniquely determined, including parameters absent from the signature's value
 types. The actuals must satisfy the same bounds as a direct call. Substitution preserves
 the declared parameter conventions, modes, authority, allocation and result relations;
 an expected type cannot strengthen those promises. `@preserves_unique` remains a
-direct-call promise ([MODE-2](ownership.md#mode-2-uniqueness)).
+direct-call promise ([MODE-2](ownership.md#mode-2-uniqueness)). Lexical function values
+with captures borrow their existing scoped environment and require a compatible
+scoped callable context, such as a borrowed function parameter, as nongeneric
+lexical references do. Capture-free lexical
+functions can become ordinary global callable values. No owning environment is
+re-created at instantiation. Each instantiation executes the static lexical body with its determined arguments.
 
 ```hirsel
 fn identity[T](take value: T) -> T { value }

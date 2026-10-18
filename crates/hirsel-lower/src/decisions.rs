@@ -23,6 +23,7 @@ impl<'a, K: Ord, V> Table<'a, K, V> {
     }
 }
 pub(super) struct Decisions<'a> {
+    pub cloned_scopes: std::cell::RefCell<BTreeMap<NameSite, NameSite>>,
     pub resource_patterns: Table<'a, PatternId, (PatternId, Vec<TypeId>)>,
     pub literals:
         Table<'a, hirsel_syntax::PatternId, (hirsel_syntax::PatternId, hirsel_syntax::Literal)>,
@@ -62,6 +63,7 @@ impl<'a> Decisions<'a> {
     pub fn new(input: &Input<'a>) -> Self {
         let checked = input.checked;
         Self {
+            cloned_scopes: Default::default(),
             resource_patterns: Table::new(&input.plans.resource_patterns, |row| row.0),
             literals: Table::new(&input.plans.pattern_literals, |row| row.0),
             entries: Table::new(&input.plans.entry_checks, |row| row.0),

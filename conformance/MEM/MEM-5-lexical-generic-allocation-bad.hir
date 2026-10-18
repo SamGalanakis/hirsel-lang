@@ -1,0 +1,8 @@
+// rule: MEM-5
+// expect: reject MEM-5 at line 7
+fn example() {
+  fn identity[T: noalloc_drop](take value: T) -> T {
+    value
+  }
+  let f: @noalloc fn(take u64) -> u64 uses {} = identity
+}

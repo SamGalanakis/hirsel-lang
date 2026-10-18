@@ -81,6 +81,7 @@ fn check_inner(
         source_places: BTreeMap::new(),
         frames: vec![],
         work: vec![],
+        function_value_arguments: BTreeMap::new(),
         values: BTreeMap::new(),
         diagnostics: vec![],
         dependencies: BTreeMap::new(),
@@ -285,6 +286,7 @@ struct Checker<'a, 'p> {
     source_places: BTreeMap<ast::ExprId, SourcePlace>,
     frames: Vec<Frame>,
     work: Vec<Work>,
+    function_value_arguments: BTreeMap<ast::ExprId, Vec<GenericArgument>>,
     values: BTreeMap<ast::ExprId, TypeId>,
     diagnostics: Vec<Diagnostic>,
     dependencies: BTreeMap<ast::DefPath, ast::ContentHash>,
@@ -749,7 +751,10 @@ impl Checker<'_, '_> {
             expression: id,
             ty,
             usage,
-            instantiated_arguments: vec![],
+            instantiated_arguments: self
+                .function_value_arguments
+                .remove(&id)
+                .unwrap_or_default(),
         });
         Ok(())
     }
@@ -1227,7 +1232,7 @@ impl Checker<'_, '_> {
                 if let TypeKind::Function(f) = self.kind(ty)
                     && !f.generics.is_empty()
                 {
-                    self.instantiate_function_value(id, f, expected)?
+                    self.instantiate_function_value(id, ty, f, expected)?
                 } else {
                     ty
                 }

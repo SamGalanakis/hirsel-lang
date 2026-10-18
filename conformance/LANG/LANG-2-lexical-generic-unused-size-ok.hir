@@ -1,0 +1,6 @@
+// rule: LANG-2
+// expect: accept
+fn example() {
+  fn discard[T, n: size](take value: Inline[T, n]) {}
+  let f: fn(take Inline[u64, 2]) uses {} = discard
+}

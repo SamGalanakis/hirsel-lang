@@ -115,6 +115,8 @@ conformance/CAP/CAP-2-generic-callable-inert-ok.hir
 conformance/CAP/CAP-2-inert-data.hir
 conformance/CAP/CAP-2-key-inert-bad.hir
 conformance/CAP/CAP-2-key-inert-ok.hir
+conformance/CAP/CAP-2-lexical-generic-inert-bad.hir
+conformance/CAP/CAP-2-lexical-generic-inert-ok.hir
 conformance/CAP/CAP-2-nested-generic-bound-bad.hir
 conformance/CAP/CAP-2-nested-generic-bound-ok.hir
 conformance/CAP/CAP-2-nested-generic-captured-wrapper-inert-bad.hir
@@ -255,6 +257,8 @@ conformance/CLO/CLO-1-environment-noalloc.hir
 conformance/CLO/CLO-1-finalizer-capture-ok.hir
 conformance/CLO/CLO-1-generic-capture-copy-ok.hir
 conformance/CLO/CLO-1-iterator-literal-from.hir
+conformance/CLO/CLO-1-lexical-generic-environment-bad.hir
+conformance/CLO/CLO-1-lexical-generic-environment-ok.hir
 conformance/CLO/CLO-1-library-callback-forms.hir
 conformance/CLO/CLO-1-local-result-still-scoped-bad.hir
 conformance/CLO/CLO-1-local-result-still-scoped-ok.hir
@@ -414,6 +418,8 @@ conformance/CLO/CLO-4-generic-callable-uses-ok.hir
 conformance/CLO/CLO-4-global-function-share-ok.hir
 conformance/CLO/CLO-4-iter-called-closure-part-run.hir
 conformance/CLO/CLO-4-kept-heap-capture-run.hir
+conformance/CLO/CLO-4-lexical-generic-uses-bad.hir
+conformance/CLO/CLO-4-lexical-generic-uses-ok.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-bad.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-ok.hir
 conformance/CLO/CLO-4-parameter-authority.hir
@@ -593,6 +599,8 @@ conformance/CT/CT-2-keyed-materialization-nested-map-key.hir
 conformance/CT/CT-2-keyed-materialization-nested-set-key.hir
 conformance/CT/CT-2-keyed-materialization-resource-bad.hir
 conformance/CT/CT-2-keyed-materialization-set-order-duplicate.hir
+conformance/CT/CT-2-lexical-generic-comptime-data-run.hir
+conformance/CT/CT-2-lexical-generic-materialize-bad.hir
 conformance/CT/CT-2-materialised-constant.hir
 conformance/CT/CT-2-nested-closure-constant-bad.hir
 conformance/CT/CT-2-nested-closure-constant-ok.hir
@@ -745,6 +753,9 @@ conformance/FACT/FACT-1-ensures-true.hir
 conformance/FACT/FACT-1-entry-before-body.hir
 conformance/FACT/FACT-1-impure-contract-bad.hir
 conformance/FACT/FACT-1-impure-contract-ok.hir
+conformance/FACT/FACT-1-lexical-generic-contract-bad.hir
+conformance/FACT/FACT-1-lexical-generic-contract-direct-ok.hir
+conformance/FACT/FACT-1-lexical-generic-contract-ok.hir
 conformance/FACT/FACT-1-owned-contract-copy-run.hir
 conformance/FACT/FACT-1-readonly-mut-parameter-bad.hir
 conformance/FACT/FACT-1-readonly-mut-parameter-ok.hir
@@ -911,6 +922,8 @@ conformance/GEN/GEN-1-key-nested-float-bad.hir
 conformance/GEN/GEN-1-key-nested-float-ok.hir
 conformance/GEN/GEN-1-keyed-read-key-bound-bad.hir
 conformance/GEN/GEN-1-keyed-read-key-bound-ok.hir
+conformance/GEN/GEN-1-lexical-generic-bound-bad.hir
+conformance/GEN/GEN-1-lexical-generic-bound-ok.hir
 conformance/GEN/GEN-1-local-copy-result-summary.hir
 conformance/GEN/GEN-1-local-result-getter-run.hir
 conformance/GEN/GEN-1-local-result-outer-proof-bad.hir
@@ -1330,8 +1343,8 @@ conformance/LANG/LANG-2-generic-callable-ambiguous-bad.hir
 conformance/LANG/LANG-2-generic-callable-ambiguous-ok.hir
 conformance/LANG/LANG-2-generic-callable-borrow-run.hir
 conformance/LANG/LANG-2-generic-callable-context-run.hir
-conformance/LANG/LANG-2-generic-callable-lexical-bad.hir
 conformance/LANG/LANG-2-generic-callable-lexical-ok.hir
+conformance/LANG/LANG-2-generic-callable-lexical-value-ok.hir
 conformance/LANG/LANG-2-generic-callable-owned-run.hir
 conformance/LANG/LANG-2-generic-callable-result-error-run.hir
 conformance/LANG/LANG-2-generic-callable-result-nested-run.hir
@@ -1351,6 +1364,17 @@ conformance/LANG/LANG-2-later-parameter-bad.hir
 conformance/LANG/LANG-2-later-parameter-ok.hir
 conformance/LANG/LANG-2-let-else-scope-bad.hir
 conformance/LANG/LANG-2-let-else-scope-ok.hir
+conformance/LANG/LANG-2-lexical-generic-body-run.hir
+conformance/LANG/LANG-2-lexical-generic-borrow-run.hir
+conformance/LANG/LANG-2-lexical-generic-capture-run.hir
+conformance/LANG/LANG-2-lexical-generic-context-run.hir
+conformance/LANG/LANG-2-lexical-generic-result-error-run.hir
+conformance/LANG/LANG-2-lexical-generic-size-run.hir
+conformance/LANG/LANG-2-lexical-generic-undetermined-bad.hir
+conformance/LANG/LANG-2-lexical-generic-undetermined-ok.hir
+conformance/LANG/LANG-2-lexical-generic-unused-size-bad.hir
+conformance/LANG/LANG-2-lexical-generic-unused-size-ok.hir
+conformance/LANG/LANG-2-lexical-generic-value-run.hir
 conformance/LANG/LANG-2-nested-call-failure-site.hir
 conformance/LANG/LANG-2-nested-call-recursive-cycle-run.hir
 conformance/LANG/LANG-2-nested-call-size-capture-run.hir
@@ -1542,6 +1566,8 @@ conformance/LANG/LANG-7-label-unknown-break-bad.hir
 conformance/LANG/LANG-7-label-unknown-break-ok.hir
 conformance/LANG/LANG-7-label-unknown-continue-bad.hir
 conformance/LANG/LANG-7-label-unknown-continue-ok.hir
+conformance/LANG/LANG-7-lexical-generic-passing-bad.hir
+conformance/LANG/LANG-7-lexical-generic-passing-ok.hir
 conformance/LANG/LANG-7-map-key-capability-field-bad.hir
 conformance/LANG/LANG-7-map-key-capability-field-run.hir
 conformance/LANG/LANG-7-match-exhaustive-bad.hir
@@ -1989,6 +2015,8 @@ conformance/MEM/MEM-5-json-stringify-accept.hir
 conformance/MEM/MEM-5-json-stringify-reject.hir
 conformance/MEM/MEM-5-json-write-accept.hir
 conformance/MEM/MEM-5-json-write-reject.hir
+conformance/MEM/MEM-5-lexical-generic-allocation-bad.hir
+conformance/MEM/MEM-5-lexical-generic-allocation-ok.hir
 conformance/MEM/MEM-5-list-bad.hir
 conformance/MEM/MEM-5-list-ok.hir
 conformance/MEM/MEM-5-local-binding-ok.hir
@@ -2320,6 +2348,8 @@ conformance/MODE/MODE-1-last-use-view-dead-before-mut-ok.hir
 conformance/MODE/MODE-1-last-use-view-used-after-mut-bad.hir
 conformance/MODE/MODE-1-let-relation-record-element-run.hir
 conformance/MODE/MODE-1-let-relation-record-element-unwritten-run.hir
+conformance/MODE/MODE-1-lexical-generic-relation-bad.hir
+conformance/MODE/MODE-1-lexical-generic-relation-ok.hir
 conformance/MODE/MODE-1-local-comparison-run.hir
 conformance/MODE/MODE-1-local-cursor-item-borrow-bad.hir
 conformance/MODE/MODE-1-local-cursor-item-copy-ok.hir
@@ -2613,6 +2643,8 @@ conformance/MODE/MODE-2-inferred-tuple-explicit-bad.hir
 conformance/MODE/MODE-2-inferred-tuple-field-ok.hir
 conformance/MODE/MODE-2-inferred-tuple-generic-flat-ok.hir
 conformance/MODE/MODE-2-inferred-tuple-local-copy-ok.hir
+conformance/MODE/MODE-2-lexical-generic-unique-bad.hir
+conformance/MODE/MODE-2-lexical-generic-unique-ok.hir
 conformance/MODE/MODE-2-local-result-flat-ok.hir
 conformance/MODE/MODE-2-local-result-shared-ok.hir
 conformance/MODE/MODE-2-local-result-unique-bad.hir
@@ -2810,6 +2842,8 @@ conformance/MODE/MODE-4-let-relation-iter-map-run.hir
 conformance/MODE/MODE-4-let-relation-iter-mut-binding-run.hir
 conformance/MODE/MODE-4-let-relation-iter-state-run.hir
 conformance/MODE/MODE-4-let-relation-mut-callback-run.hir
+conformance/MODE/MODE-4-lexical-generic-sendable-bad.hir
+conformance/MODE/MODE-4-lexical-generic-sendable-ok.hir
 conformance/MODE/MODE-4-list-element-callable-bad.hir
 conformance/MODE/MODE-4-list-element-callable-run.hir
 conformance/MODE/MODE-4-local-flat-bad.hir
@@ -4495,6 +4529,8 @@ conformance/SER/SER-1-generic-schema-bad.hir
 conformance/SER/SER-1-generic-schema-ok.hir
 conformance/SER/SER-1-instant-bad.hir
 conformance/SER/SER-1-instant-ok.hir
+conformance/SER/SER-1-lexical-generic-bound-bad.hir
+conformance/SER/SER-1-lexical-generic-bound-ok.hir
 conformance/SER/SER-1-local-annotation-bad.hir
 conformance/SER/SER-1-local-annotation-ok.hir
 conformance/SER/SER-1-opaque-opt-in-bad.hir

@@ -21,17 +21,10 @@ impl Checker<'_, '_> {
     pub(super) fn instantiate_function_value(
         &mut self,
         id: ast::ExprId,
+        source: TypeId,
         mut function: FunctionType,
         expected: Option<TypeId>,
     ) -> Result<TypeId, QueryError> {
-        if !matches!(self.input_name(id), Some((_, ResolvedName::Definition(_)))) {
-            self.report(
-                const { RuleId::of("LANG-2") },
-                self.span(id),
-                "a local generic function can only be used as a direct callee",
-            );
-            return Ok(self.error());
-        }
         let mut inferred = vec![None; function.generics.len()];
         if let Some(TypeKind::Function(wanted)) = expected.map(|ty| self.kind(ty))
             && wanted.generics.is_empty()
@@ -102,10 +95,15 @@ impl Checker<'_, '_> {
             self.body.instantiations.push(Instantiation {
                 expression: id,
                 callee: callee.clone(),
-                arguments,
+                arguments: arguments.clone(),
             });
+            Ok(self.named_function(function))
+        } else {
+            self.function_value_arguments.insert(id, arguments);
+            let mut row = self.body.types.get(source).unwrap().clone();
+            row.kind = TypeKind::Function(function);
+            Ok(self.body.types.push(row))
         }
-        Ok(self.named_function(function))
     }
     /// A borrowed callable parameter's Environment is its access view,
     /// not part of the concrete type argument shared with another occurrence.

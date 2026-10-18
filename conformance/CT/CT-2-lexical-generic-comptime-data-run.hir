@@ -1,0 +1,14 @@
+// rule: CT-2
+// expect: run
+const NUMBER: u64 = comptime {
+  fn identity[T: plain](value: T) -> T {
+    value
+  }
+  let f: fn(u64) -> u64 uses {} = identity
+  f(47)
+}
+
+pub fn main() -> Result[(), String] {
+  failure.check(NUMBER == 47, Bounds())
+  Ok(())
+}

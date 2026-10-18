@@ -955,3 +955,9 @@ Diagnostic repairs with a known mechanical edit carry `Diagnostic.fix`: last-use
 ownership inserts `take`, a counted part leaving its owner's block inserts `copy`,
 and a redundant last-use copy is replaced by its local binding. Insertions retain
 the original expression text, including qualification, labels and comments.
+
+Lexical generic function values use the same contextual instantiation and capture
+creation rules as closure literals. J reconstructs the declaration from its lexical
+binding, checks crossing/authority bounds, and publishes a capture table and formal
+forwarding result. I checks its construction through the existing Capture operation;
+the lexical generic body's own frame remains checked at its declaration.
