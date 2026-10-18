@@ -1,0 +1,29 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 25
+// A result built from a part of the lent Store shares that part, so the body
+// cannot prove its declared unique result. Twin is
+// MODE-2-parametric-mutex-result-run.
+pub type Store {
+  version: u64,
+  name: String,
+}
+
+pub type Snapshot {
+  version: u64,
+  text: unique String,
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let store: unique Store = Store(version: 0u64, name: unique "kv")
+  let state = mutex.create(tasks, take store)
+  let snapshot = mutex.with(
+    tasks,
+    state,
+    fn(mut st: unique Store) -> unique Snapshot uses {} {
+      st.version += 1u64
+      Snapshot(version: st.version, text: st.name)
+    }
+  )
+  Ok(())
+}

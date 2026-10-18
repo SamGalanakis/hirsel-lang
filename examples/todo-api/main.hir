@@ -381,20 +381,19 @@ fn handle(
   let mut reply = mutex.with(
     tasks,
     state,
-    fn(mut store: unique Store) -> Reply uses {} {
+    fn(mut store: unique Store) -> unique Reply uses {} {
       apply(mut store, action)
     }
   )
   let Some((version, snapshot)) = option.remove(mut reply.save) else {
     return take reply
   }
-  let text = unique take snapshot
   let (done_tx, done_rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
   let mut done = take done_rx
   let saved = match channel.send(
     tasks,
     mut saves,
-    SaveJob(version: version, text: take text, reply: take done_tx)
+    SaveJob(version: version, text: take snapshot, reply: take done_tx)
   ) {
     Ok(()) => match channel.receive(tasks, mut done) {
       Ok(ok) => ok,

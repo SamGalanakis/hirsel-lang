@@ -2151,6 +2151,34 @@ impl Checker<'_> {
         )
         .unwrap_or(Sendability::NotSendable)
     }
+    /// MODE-4: a global construction whose every part currently crosses
+    /// crosses too, as V proves a construction field by field. The typed row
+    /// knows only the parts' declared rows, so a part unique by flow evidence
+    /// alone (a parametric or `@preserves_unique` result) beside a handle part,
+    /// which keeps the aggregate aliased, would otherwise lose its proof.
+    fn parts_sendable(
+        &self,
+        state: &State,
+        aggregate: ExprId,
+        value: &Value,
+        parts: &[ExprId],
+    ) -> bool {
+        let Some(root) = expression_type(self.body, aggregate, self.source_rows) else {
+            return false;
+        };
+        if !self.arenas.global(&value.modes.relation)
+            || self
+                .arenas
+                .placed(&self.body.types.get(root).unwrap().modes.relation)
+        {
+            return false;
+        }
+        parts.iter().all(|part| {
+            self.property(*part).is_some_and(|p| p.plain)
+                || self.captured_sendability(*part, &self.value(state, *part))
+                    == Sendability::Sendable
+        })
+    }
     fn value(&self, state: &State, expression: ExprId) -> Value {
         state.values.get(&expression).cloned().unwrap_or_else(|| {
             Value::new(
@@ -4673,6 +4701,9 @@ impl Checker<'_> {
                                 );
                             }
                             value.install_content(retained);
+                            if self.parts_sendable(state, *expression, &value, children) {
+                                value.modes.sendability = Sendability::Sendable;
+                            }
                         }
                         ExprKind::Field { .. } | ExprKind::Index { .. } => {
                             if let Some(base) = children.first() {
@@ -4724,6 +4755,9 @@ impl Checker<'_> {
                                 value
                                     .crossing_parts
                                     .install(&[Projection::Field(0)], &part.crossing_parts);
+                                if self.parts_sendable(state, *expression, &value, &[*child]) {
+                                    value.modes.sendability = Sendability::Sendable;
+                                }
                             }
                         }
                         _ => {}
@@ -6155,6 +6189,10 @@ impl Checker<'_> {
                             part.modes.uniqueness = Uniqueness::Unique;
                         }
                         value.join(&part);
+                    }
+                    let parts: Vec<_> = arguments.iter().map(|arg| arg.value).collect();
+                    if !failed && self.parts_sendable(state, *expression, &value, &parts) {
+                        value.modes.sendability = Sendability::Sendable;
                     }
                     if let Some(call) = self
                         .source_rows

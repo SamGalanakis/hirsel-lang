@@ -31,7 +31,7 @@ const STATE: String = "kv.json"
 const MAX_VALUE: u64 = 65536
 
 // ---- JSON ----
-fn entries_json(entries: Map[String, String]) -> String uses {} {
+fn entries_json(entries: Map[String, String]) -> unique String uses {} {
   let mut fields: Map[String, json.Value] = map.empty()
   for (key, value) in entries {
     map.insert(mut fields, unique key, Text(unique value))
@@ -104,12 +104,12 @@ fn write_loop(tasks: Tasks, dir: Dir, take receiver: Receiver[SaveJob]) -> () {
 }
 
 // ---- routing ----
-fn plain(status: u16, body: String) -> Reply uses {} {
+fn plain(status: u16, body: String) -> unique Reply uses {} {
   Reply(status: status, body: unique body, json: false, allow: "", save: None())
 }
 
 // The caller has already bumped the version; the snapshot goes to the writer task.
-fn changed(st: Store, status: u16) -> Reply uses {} {
+fn changed(st: Store, status: u16) -> unique Reply uses {} {
   Reply(
     status: status,
     body: "",
@@ -119,7 +119,7 @@ fn changed(st: Store, status: u16) -> Reply uses {} {
   )
 }
 
-fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
+fn apply(mut st: unique Store, action: Action) -> unique Reply uses {} {
   match action {
     List() => Reply(
       status: 200u16,
@@ -250,17 +250,16 @@ fn handle(
   let mut reply = mutex.with(
     tasks,
     state,
-    fn(mut store: unique Store) -> Reply uses {} {
-      unique apply(mut store, action)
+    fn(mut store: unique Store) -> unique Reply uses {} {
+      apply(mut store, action)
     }
   )
   let Some((version, snapshot)) = option.remove(mut reply.save) else {
     return take reply
   }
-  let text = unique take snapshot
   let (done_tx, done_rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
   let mut done = take done_rx
-  let saved = if queue(tasks, mut saves, version, take text, take done_tx) {
+  let saved = if queue(tasks, mut saves, version, take snapshot, take done_tx) {
     match channel.receive(tasks, mut done) {
       Ok(ok) => ok,
       Error(_) => false,

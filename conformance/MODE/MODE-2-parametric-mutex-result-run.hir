@@ -1,0 +1,64 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// mutex.with lends its body the guarded Store (a T) and returns the body's R.
+// The body's declared `unique` result is proved by the body, and the call
+// holds no other R, so the snapshot is unique without a copy: its text, unique
+// by that evidence alone, can be sent beside a Sender. Twins are
+// MODE-2-parametric-mutex-aliased-result-bad,
+// MODE-2-parametric-mutex-lent-part-bad and
+// MODE-1-mutex-body-returns-lent-value-bad.
+pub type Store {
+  version: u64,
+  name: String,
+}
+
+pub type Snapshot {
+  version: u64,
+  text: String,
+}
+
+pub type Job {
+  text: unique String,
+  reply: Sender[bool],
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let store: unique Store = Store(version: 0u64, name: unique "kv")
+  let state = mutex.create(tasks, take store)
+  let snapshot = mutex.with(
+    tasks,
+    state,
+    fn(mut st: unique Store) -> unique Snapshot uses {} {
+      st.version += 1u64
+      Snapshot(version: st.version, text: unique st.name)
+    }
+  )
+  let Snapshot(version: version, text: text) = take snapshot
+  let (jobs, inbox): (Sender[Job], Receiver[Job]) = channel.open(tasks)
+  let (done, _): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let mut out_jobs = take jobs
+  let mut in_jobs = take inbox
+  let sent = match channel.send(
+    tasks,
+    mut out_jobs,
+    Job(text: take text, reply: take done)
+  ) {
+    Ok(()) => true,
+    Error(_) => false,
+  }
+  let length = match channel.receive(tasks, mut in_jobs) {
+    Ok(job) => string.byte_len(job.text),
+    Error(_) => 0u64,
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if sent && version == 1u64 && length == 2u64 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

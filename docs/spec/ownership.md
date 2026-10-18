@@ -208,8 +208,13 @@ no counted content except values of type parameters it has no copying permission
 holds exactly values its arguments supplied, and it is unique when every possible supplier
 is. The suppliers are each taken or `mut` argument whose type names such a parameter, which
 must be currently unique, and each function argument that receives them only by `take`,
-whose instantiated result must be declared `unique`. Some arguments would hide where a
-value goes, so they make the call ordinary:
+whose instantiated result must be declared `unique`. Such a function argument may be lent
+values of other parameters: the callee cannot hand it a held value, so the held values the
+call returns are still exactly what it returned, each proved unique by its own body.
+`mutex.with[T, R]` lends its body the guarded `T` and returns its `R`, so a body declared
+`-> unique R` makes the call's result unique, and a body that builds that result from a
+part of the lent `T` fails its own proof. Some arguments would hide where a value goes, so
+they make the call ordinary:
 - a borrowed argument that names such a parameter;
 - a callback lent such a value, which could keep it in its environment;
 - a handle, iterator or function that holds such a value inside a non-function argument.

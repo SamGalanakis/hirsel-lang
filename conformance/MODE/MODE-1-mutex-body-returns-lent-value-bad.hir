@@ -1,0 +1,30 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 26
+// With R = T, a body that returns the lent Store itself would share it with
+// the mutex: the Store is the mutex's storage, so it cannot leave as a global
+// result. Twin is
+// MODE-2-parametric-mutex-result-run.
+pub type Store {
+  version: u64,
+  name: String,
+}
+
+pub type Snapshot {
+  version: u64,
+  text: String,
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let store: unique Store = Store(version: 0u64, name: unique "kv")
+  let state = mutex.create(tasks, take store)
+  let back = mutex.with(
+    tasks,
+    state,
+    fn(mut st: unique Store) -> unique Store uses {} {
+      st.version += 1u64
+      st
+    }
+  )
+  Ok(())
+}

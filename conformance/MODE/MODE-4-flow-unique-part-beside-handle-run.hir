@@ -1,0 +1,42 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// `text` is unique only by flow evidence (a parametric result), and the Sender
+// beside it keeps each aggregate aliased: a record, a tuple and a box are
+// still sendable because every part currently is. Twin is
+// MODE-4-flow-unique-part-beside-handle-bad.
+pub type Job {
+  text: String,
+  reply: Sender[bool],
+}
+
+fn pass[U](take value: U) -> U {
+  value
+}
+
+fn send[T: sendable](take value: T) -> T {
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let (a, _ra): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let (b, _rb): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let (c, _rc): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let one = pass(unique "one")
+  let two = pass(unique "two")
+  let three = pass(unique "three")
+  let job = send(Job(text: take one, reply: take a))
+  let (second, _) = send((take two, take b))
+  let _boxed = send(box (take three, take c))
+  let ok = job.text == "one" && second == "two"
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

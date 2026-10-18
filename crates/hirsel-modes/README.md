@@ -203,7 +203,10 @@ were unique (`sendable_when_unique`), and nested rows are compared as written.
 I checks every `unique` requirement, a sendable root and a taken task capture
 (CLO-3) with flow evidence, and a core operation's own rule names its failed
 argument requirement (`intrinsic_owner`): MEM-11 for `shared.freeze`, CONC-5
-for `mutex.create`, CONC-6 for `channel.send`.
+for `mutex.create`, CONC-6 for `channel.send`. A construction (record, variant,
+tuple, sequence, box) is sendable when every part currently is
+(`parts_sendable`), as V proves it field by field, so a part unique only by flow
+evidence keeps its proof beside a handle part that leaves the aggregate aliased.
 
 `authority::check_file_with_clauses(file, item, signature, body, provider,
 intrinsics, loops, clauses)` consumes the checked body and returns `AuthorityOutput`.

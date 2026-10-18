@@ -1,0 +1,26 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 24
+// `copy text` shares counted storage, so the parametric result it supplies is
+// aliased and the record holding it beside a Sender cannot be sent. Twin is
+// MODE-4-flow-unique-part-beside-handle-run.
+pub type Job {
+  text: String,
+  reply: Sender[bool],
+}
+
+fn pass[U](take value: U) -> U {
+  value
+}
+
+fn send[T: sendable](take value: T) -> T {
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let (a, _ra): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let text: String = unique "one"
+  let one = pass(copy text)
+  let job = send(Job(text: take one, reply: take a))
+  Ok(())
+}
