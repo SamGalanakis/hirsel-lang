@@ -1,0 +1,6 @@
+// rule: CAP-1
+// expect: accept
+fn exercise(d: Dir) -> Result[(), FileError] uses {d} {
+  let m = file.map(d, path.of("a"))?
+  Ok(())
+}

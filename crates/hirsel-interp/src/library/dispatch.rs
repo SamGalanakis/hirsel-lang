@@ -991,6 +991,25 @@ impl Library {
                     },
                 )))
             }
+            "file.map" => match self.simulation.file_bytes(tree, &p).map(|b| b.len() as u64) {
+                Err(error) => Ok(file_error(error)),
+                Ok(length) => {
+                    let identity = self
+                        .simulation
+                        .file_identity(tree, &p)
+                        .expect("mapped identity");
+                    Ok(ok(self.simulation.handle(
+                        "Mapped",
+                        Grant::Mapped {
+                            tree,
+                            dir,
+                            identity,
+                            length,
+                            truncated: false,
+                        },
+                    )))
+                }
+            },
             "file.size" => Ok(self
                 .simulation
                 .file_bytes(tree, &p)
@@ -1453,6 +1472,18 @@ impl Operations for Library {
             )?;
             return Ok(());
         }
+        if kind == "Mapped" {
+            if self.simulation.grants.remove(&id).is_some() {
+                self.simulation.record(
+                    "Dir",
+                    "mapped.close",
+                    id.to_le_bytes().to_vec(),
+                    vec![],
+                    context,
+                )?;
+            }
+            return Ok(());
+        }
         if !matches!(kind, "File" | "AtomicFile") {
             return Ok(());
         }
@@ -1578,10 +1609,17 @@ primary_operations! { self, call, context, name, a, value;
         return super::shared::call(name, a, &mut self.next_shared).map(Some);
     },
     Primitive: "shared.with" => { return self.shared_with(a).map(Some); },
+    Capability: "mapped.with" => {
+        // A rejected replay never publishes the view.
+        let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+        let result = self.mapped_with(a, context);
+        if result.is_err() && let Some(saved) = saved { self.simulation = saved; }
+        return result.map(Some);
+    },
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();
@@ -1616,6 +1654,7 @@ primary_operations! { self, call, context, name, a, value;
         return self.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
+    Unavailable: "$intrinsic.MappedView" | "$intrinsic.MappedCheck" => { return Err(Error::Unavailable(format!("{name} is an entry of mapped.with's compiled body; the reference executes mapped.with"))); },
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),
     Primitive: "runner.entry_path" => match arg(a, 0)? {

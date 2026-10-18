@@ -217,3 +217,10 @@ A hit schedules a mutable value callback with an explicit field writeback,
 which preserves its mutations on success, failure and abandonment. A missing
 upsert initializes and appends a copied key; a missing update returns false.
 Bounded-arena growth and shared-entry copies charge before scheduling.
+
+`file.map` opens a `Mapped` grant over the path's identity like `file.open`.
+`mapped.with` records `mapped.view` (the identity's current bytes, zero past the
+mapped length), calls its body with that view and, on resume, records
+`mapped.check`: `Truncated()` once the identity is shorter than the mapping, sticky,
+and then the body's result is released after publication. Both yield like other
+capability operations; neither is a cancellation point.

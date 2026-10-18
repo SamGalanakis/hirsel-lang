@@ -23,6 +23,7 @@ pub mod iter;
 pub mod length;
 pub mod list;
 pub mod map;
+pub mod mapped;
 pub mod net;
 pub mod owners;
 pub mod shared;
@@ -139,6 +140,8 @@ pub const BODIES: &[&LibraryBody] = &[
     &tasks::AWAIT_AT,
     &tasks::MAIN,
     &tasks::CHECK_CANCELED,
+    // mapped (fs-watch-mmap): mapped.with over its view and check entries.
+    &mapped::WITH,
     &isolate::ISOLATE,
     &channels::SEND,
     &channels::RECEIVE,

@@ -259,6 +259,7 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Err(IoError::NotDirectory) => "NotDirectory".into(),
             Err(IoError::DirectoryNotEmpty) => "DirectoryNotEmpty".into(),
             Err(IoError::CrossDevice) => "CrossDevice".into(),
+            Err(IoError::Truncated) => "Truncated".into(),
         }
     }
     let mut text = format!("{TAPE_HEADER}\n");
@@ -284,6 +285,11 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Request::Create { directory, path } => {
                 format!("create {directory} {}", hex(path.as_bytes()))
             }
+            Request::Map { directory, path } => {
+                format!("map {directory} {}", hex(path.as_bytes()))
+            }
+            Request::MapView { directory, mapped } => format!("map_view {directory} {mapped}"),
+            Request::MapCheck { directory, mapped } => format!("map_check {directory} {mapped}"),
             Request::FileRead {
                 directory,
                 file,
@@ -446,6 +452,13 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             ),
             Completion::Checked(v) => format!("checked {}", u8::from(*v)),
             Completion::Refused(id) => format!("refused {id}"),
+            Completion::View(view) => format!(
+                "view {}",
+                hex(view
+                    .bytes
+                    .as_ref()
+                    .ok_or("a mapped view whose bytes were not captured")?)
+            ),
             completion => crate::host_io_tape::render_completion(completion)
                 .unwrap_or_else(|| crate::net::tape::render_completion(completion)),
         };
@@ -463,6 +476,7 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 IoError::NotDirectory => format!(" ! NotDirectory 0 {}", f.partial),
                 IoError::DirectoryNotEmpty => format!(" ! DirectoryNotEmpty 0 {}", f.partial),
                 IoError::CrossDevice => format!(" ! CrossDevice 0 {}", f.partial),
+                IoError::Truncated => format!(" ! Truncated 0 {}", f.partial),
             })
             .unwrap_or_default();
         let _ = writeln!(text, "{request} -> {completion}{fault}");
@@ -509,6 +523,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
             ["NotDirectory"] => Ok(Err(IoError::NotDirectory)),
             ["DirectoryNotEmpty"] => Ok(Err(IoError::DirectoryNotEmpty)),
             ["CrossDevice"] => Ok(Err(IoError::CrossDevice)),
+            ["Truncated"] => Ok(Err(IoError::Truncated)),
             ["fault", code] => Ok(Err(IoError::Fault(number(code)?))),
             ["canceled", code] => Ok(Err(IoError::Canceled(number(code)?))),
             _ => Err("bad tape result".into()),
@@ -539,6 +554,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                                 "NotDirectory" if *code == "0" => IoError::NotDirectory,
                                 "DirectoryNotEmpty" if *code == "0" => IoError::DirectoryNotEmpty,
                                 "CrossDevice" if *code == "0" => IoError::CrossDevice,
+                                "Truncated" if *code == "0" => IoError::Truncated,
                                 _ => return Err("bad tape fault".into()),
                             },
                             partial: number(partial)?,
@@ -585,6 +601,18 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["create", d, p] => Request::Create {
                     directory: number(d)?,
                     path: string(p)?,
+                },
+                ["map", d, p] => Request::Map {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["map_view", d, m] => Request::MapView {
+                    directory: number(d)?,
+                    mapped: number(m)?,
+                },
+                ["map_check", d, m] => Request::MapCheck {
+                    directory: number(d)?,
+                    mapped: number(m)?,
                 },
                 ["file_read", d, f, n] => Request::FileRead {
                     directory: number(d)?,
@@ -779,6 +807,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 })?),
                 ["checked", v] => Completion::Checked(boolean(v)?),
                 ["refused", id] => Completion::Refused(number(id)?),
+                ["view", b] => Completion::View(crate::io::MapView::of(bytes(b)?)),
                 words => match crate::host_io_tape::parse_completion(words)?
                     .or(crate::net::tape::parse_completion(words)?)
                 {

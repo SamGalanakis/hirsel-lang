@@ -37,6 +37,12 @@ pub(super) enum Pending {
     },
     /// `shared.with`: the body's result is the operation's.
     Read,
+    /// `mapped.with`: the body's result is `Ok`, unless the check after it finds the
+    /// mapped file truncated.
+    Mapped {
+        mapping: u64,
+        input: Vec<u8>,
+    },
 }
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
@@ -121,6 +127,53 @@ impl Library {
         };
         let view = root.view()?;
         Ok(self.schedule(Pending::Read, body.clone(), vec![view], vec![], vec![]))
+    }
+    /// `mapped.with(d, m, body)`: record the view, the mapped identity's current bytes and
+    /// zeros past their end, and call `body` with it; the check follows on resume.
+    pub(super) fn mapped_with(
+        &mut self,
+        args: &[Value],
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        use super::simulation::Grant;
+        let [d, m, body] = args else {
+            return Err(invalid("mapped.with arguments"));
+        };
+        self.tasks.yield_now = true;
+        let (tree, _, dir) = self.simulation.directory(d)?;
+        let mapping = self.simulation.id(m, "Mapped")?;
+        let Some(Grant::Mapped {
+            tree: owner_tree,
+            dir: owner,
+            identity,
+            length,
+            ..
+        }) = self.simulation.grants.get(&mapping).cloned()
+        else {
+            return Err(invalid("mapped.with grant"));
+        };
+        if owner_tree != tree || owner != dir {
+            return Err(invalid("mapped.with directory"));
+        }
+        let contents = &self.simulation.file_contents[&identity];
+        let mut view = contents[..contents.len().min(length as usize)].to_vec();
+        view.resize(length as usize, 0);
+        let view = Value::Bytes(view);
+        let input = super::dispatch::encode_arguments(&args[..2]);
+        self.simulation.record(
+            "Dir",
+            "mapped.view",
+            input.clone(),
+            super::dispatch::encode_value(&view),
+            context,
+        )?;
+        Ok(self.schedule(
+            Pending::Mapped { mapping, input },
+            body.clone(),
+            vec![view],
+            vec![],
+            vec![],
+        ))
     }
     pub(super) fn next_iterator(&mut self, mut it: Value) -> Result<OperationResult, Error> {
         let mut maps = vec![];
@@ -415,7 +468,7 @@ impl Library {
         token: u64,
         result: OperationResult,
         arguments: &mut [Value],
-        _context: &mut OperationContext<'_>,
+        context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         let pending = self
             .callbacks
@@ -474,6 +527,53 @@ impl Library {
                     crate::value::KeyKind::Map,
                 );
                 Ok(OperationResult::returned(Value::Unit))
+            }
+            Pending::Mapped { mapping, input } => {
+                let OperationResult::Complete {
+                    value,
+                    mut released,
+                    ..
+                } = result
+                else {
+                    return Ok(result);
+                };
+                self.tasks.yield_now = true;
+                let Some(super::simulation::Grant::Mapped {
+                    identity,
+                    length,
+                    truncated,
+                    ..
+                }) = self.simulation.grants.get_mut(&mapping)
+                else {
+                    return Err(invalid("mapped.with grant"));
+                };
+                *truncated |= (self.simulation.file_contents[identity].len() as u64) < *length;
+                let check = if *truncated {
+                    super::dispatch::error(super::dispatch::variant(10, vec![]))
+                } else {
+                    super::dispatch::ok(Value::Unit)
+                };
+                self.simulation.record(
+                    "Dir",
+                    "mapped.check",
+                    input,
+                    super::dispatch::encode_value(&check),
+                    context,
+                )?;
+                // A truncated mapping's body result is dropped after the check.
+                let value = match check {
+                    Value::Variant { variant: 0, .. } => super::dispatch::ok(value),
+                    error => {
+                        released.push(value);
+                        error
+                    }
+                };
+                Ok(OperationResult::Complete {
+                    value,
+                    arguments: vec![],
+                    consumed: vec![],
+                    released,
+                })
             }
             Pending::Read => match result {
                 OperationResult::Complete {

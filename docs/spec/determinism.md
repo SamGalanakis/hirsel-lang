@@ -439,6 +439,15 @@ continuation: continuation is refused, since no provider supports reacquisition.
 directory's last synchronized listing, and the last unsynced write survives as a prefix
 chosen by the crash seed when everything before it in its file is durable.
 
+### Mapped file recording
+
+`file.map` is recorded like `file.open`: the Dir and path, and the Mapped handle or the
+error. Each `mapped.with` records its view (exactly the bytes the body was lent) and its
+check (`Ok(())` or `Truncated()`); the body's own operations are recorded between them.
+Replay lends the recorded bytes and returns the recorded check without mapping anything,
+so a truncation or in-place change by another process replays exactly. A host run that
+records copies each view into the recording; an unrecorded run copies nothing.
+
 ### Network recording
 
 Network operations are recorded at the core API: the request (operation, handles, host,

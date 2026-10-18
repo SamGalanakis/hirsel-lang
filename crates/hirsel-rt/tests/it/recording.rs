@@ -356,3 +356,78 @@ fn bound_runs_round_trip_and_refuse_a_header_that_disagrees() {
     assert!(parse_recording(&text.replace("admitted_at -5\n", "")).is_err());
     assert!(parse_recording(&text.replace("admitted_at -5\n", "admitted_at -05\n")).is_err());
 }
+
+/// A host mapping lends the file's bytes in place. When another writer truncates the file,
+/// reads past the new end see zeros instead of SIGBUS and the check reports Truncated,
+/// sticky across a regrowth. The tape keeps each view's bytes and the truncation, so
+/// replay over the original snapshot returns every completion, and the text tape
+/// round-trips.
+#[test]
+fn mapping_views_and_an_outside_truncation_replay_from_the_tape() {
+    use hirsel_rt::io::{IoError, MapView};
+    let root = scratch("map");
+    let original: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(root.join("m"), &original).unwrap();
+    let mut io = RealIo::grant(&root).unwrap();
+    let Completion::Handle(Ok(directory)) = io
+        .call(Request::Directory {
+            io: 1,
+            path: ".".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let Completion::Handle(Ok(mapped)) = io
+        .call(Request::Map {
+            directory,
+            path: "m".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let view = Request::MapView { directory, mapped };
+    let check = Request::MapCheck { directory, mapped };
+    assert_eq!(
+        io.call(view.clone()).unwrap(),
+        Completion::View(MapView::of(original.clone()))
+    );
+    assert_eq!(io.call(check.clone()).unwrap(), Completion::Unit(Ok(())));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.join("m"))
+        .unwrap()
+        .set_len(10)
+        .unwrap();
+    let mut cut = original[..10].to_vec();
+    cut.resize(original.len(), 0);
+    assert_eq!(
+        io.call(view.clone()).unwrap(),
+        Completion::View(MapView::of(cut))
+    );
+    assert_eq!(
+        io.call(check.clone()).unwrap(),
+        Completion::Unit(Err(IoError::Truncated))
+    );
+    std::fs::write(root.join("m"), &original).unwrap();
+    assert_eq!(
+        io.call(check).unwrap(),
+        Completion::Unit(Err(IoError::Truncated))
+    );
+    assert_eq!(
+        io.call(Request::Close { handle: mapped }).unwrap(),
+        Completion::Unit(Ok(()))
+    );
+    let mut record = header();
+    record.tree = Tree::new(BTreeMap::from([("m".into(), original)])).unwrap();
+    record.events = io.tape().to_vec();
+    let text = hirsel_rt::launch::render_recording(&record).unwrap();
+    assert_eq!(parse_recording(&text).unwrap(), record);
+    let mut sim = SimIo::new(record.tree.clone(), record.events.clone());
+    for event in &record.events {
+        assert_eq!(sim.call(event.request.clone()).unwrap(), event.completion);
+    }
+    sim.finish().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

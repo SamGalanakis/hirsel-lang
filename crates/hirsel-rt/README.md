@@ -1243,6 +1243,18 @@ names the requests in doubt. The issuer of each request comes from `Adapter::iss
 The trailer preserves the shared run outcome, including parked waits, complete failure
 chains and interpreter diagnostics.
 
+File mappings (`mapping.rs`): `file.map` maps a regular file read-only behind one
+anonymous page that holds a static `Bytes` block (extent, immortal header, count and
+capacity words), so `hirsel_rt_v2_mapped_view` lends the mapped bytes as a slice of that
+block with no copy; dups and releases of it never write. One process-wide SIGBUS handler,
+installed with the first mapping, answers a fault inside a live mapping range (a fixed
+table of 4096) with a zero page and marks the range; any other SIGBUS goes to the earlier
+disposition. `hirsel_rt_v2_mapped_check` reports truncation, sticky in the `Mapped` grant,
+when the range was marked or `fstat` finds the file shorter than the mapping. Test trees
+and replay serve views from the mapped identity's contents, zero past their end; a host
+view copies its bytes only for a tape that keeps them (`State::capture_views`), and replay
+lends the recorded view bytes as a metadata input is lent.
+
 ### Cooperative parallelism profile
 
 In a `measurement` runtime archive, also set `HIRSEL_RT_MC_PROFILE=1` and

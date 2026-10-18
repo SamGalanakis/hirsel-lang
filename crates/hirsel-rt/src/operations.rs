@@ -125,6 +125,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "atomic.store"
             | "task.isolate"
             | "task.check_canceled"
+            | "mapped.with"
     ) || MAP_BODIES.contains(&name.as_str())
     {
         row.dispositions.native = Disposition::Body;
@@ -160,6 +161,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "file.narrow"
         | "file.create_atomic"
         | "file.commit"
+        | "file.map"
         | "file.size"
         | "file.read_dir"
         | "file.metadata"
@@ -260,6 +262,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.TaskFinish" => Some("hirsel_rt_v2_task_finish".into()),
         "$intrinsic.TaskJoin" => Some("hirsel_rt_v2_task_join".into()),
         "$intrinsic.TaskCanceled" => Some("hirsel_rt_v2_task_canceled".into()),
+        // `mapped.with`'s compiled body lends its body this view, then checks the file.
+        "$intrinsic.MappedView" => Some("hirsel_rt_v2_mapped_view".into()),
+        "$intrinsic.MappedCheck" => Some("hirsel_rt_v2_mapped_check".into()),
         "task.cancel" | "task.detach" | "task.set" | "task.add" | "task.await_any"
         | "task.cancel_all" | "task.detach_all" => {
             Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
@@ -364,6 +369,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "file.walk"
             | "file.sync"
             | "file.put_new"
+            | "file.map"
+            | "$intrinsic.MappedView"
+            | "$intrinsic.MappedCheck"
     ) || NET_EXPORTS.contains(&name.as_str())
         || name == "$intrinsic.NetReadInto"
     {
@@ -1521,6 +1529,27 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_file_map",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_mapped_view",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_mapped_check",
+        destination: false,
+        result: Some((4, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_file_narrow",
         destination: true,
         result: Some((16, 8)),
@@ -1859,6 +1888,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.AtomicLoad",
     "$intrinsic.AtomicStore",
     "$intrinsic.TaskCanceled",
+    "$intrinsic.MappedView",
+    "$intrinsic.MappedCheck",
     "$intrinsic.IsolateBegin",
     "$intrinsic.IsolateCount",
     "$intrinsic.IsolateKind",
@@ -1913,6 +1944,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "dir.read_only",
     "file.append",
     "file.commit",
+    "file.map",
+    "mapped.with",
     "file.create",
     "file.create_atomic",
     "file.narrow",

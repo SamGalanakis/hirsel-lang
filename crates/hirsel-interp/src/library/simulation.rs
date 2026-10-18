@@ -213,6 +213,15 @@ pub(crate) enum Grant {
     },
     /// A runner: its place and the authority its callees run under (RUN-1, RUN-2).
     Runner(Box<super::runners::RunnerGrant>),
+    /// A read-only mapping of `length` bytes of an opened identity; `truncated` once a
+    /// check found the identity shorter, after which every check reports it.
+    Mapped {
+        tree: u64,
+        dir: u64,
+        identity: u64,
+        length: u64,
+        truncated: bool,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct Simulation {
@@ -307,6 +316,12 @@ pub enum ObservedGrant {
         destination: String,
         directory: u64,
     },
+    Mapped {
+        tree: u64,
+        directory: u64,
+        length: u64,
+        truncated: bool,
+    },
 }
 impl Simulation {
     /// Supply the next provider chunk without changing any grant or replay state.
@@ -373,6 +388,18 @@ impl Simulation {
                         Grant::Runner(runner) => ObservedGrant::Runner {
                             name: runner.entry.name.clone(),
                             definitions: runner.definitions.clone(),
+                        },
+                        Grant::Mapped {
+                            tree,
+                            dir,
+                            length,
+                            truncated,
+                            ..
+                        } => ObservedGrant::Mapped {
+                            tree: *tree,
+                            directory: *dir,
+                            length: *length,
+                            truncated: *truncated,
                         },
                     },
                 )
@@ -887,6 +914,7 @@ impl Simulation {
                 Some(Grant::File { .. }) => kind == "File",
                 Some(Grant::Atomic { .. }) => kind == "AtomicFile",
                 Some(Grant::Runner(_)) => kind == "Runner",
+                Some(Grant::Mapped { .. }) => kind == "Mapped",
                 None => false,
             }
         {

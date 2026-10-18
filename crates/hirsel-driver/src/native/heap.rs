@@ -173,7 +173,7 @@ impl Operations for Io {
             };
         }
         match self.grants.remove(&handle) {
-            Some(IoGrant::File { .. }) => Ok(None),
+            Some(IoGrant::File { .. } | IoGrant::Mapped { .. }) => Ok(None),
             Some(IoGrant::Atomic {
                 tree,
                 temporary,
@@ -257,6 +257,8 @@ impl Operations for Io {
                     }),
                 }),
             },
+            // `mapped.with`'s entries are no cancellation points.
+            (Some("$intrinsic"), "MappedView" | "MappedCheck", _) => return None,
             (Some("net" | "udp" | "tls" | "$intrinsic"), _, _) => {
                 self.yielded = true;
                 let outcome = self.net(module, &path.name, args, Some(cause));
@@ -432,6 +434,15 @@ enum IoGrant {
         destination: String,
         identity: std::sync::Arc<()>,
     },
+    /// A `file.map` mapping: its identity's current contents, the mapped length, and
+    /// whether a check found the identity shorter.
+    Mapped {
+        directory: u64,
+        contents: Vec<u8>,
+        length: u64,
+        truncated: bool,
+        identity: std::sync::Arc<()>,
+    },
 }
 /// The pure Instant operations: no capability, no scheduling point.
 fn instant(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpValue> {
@@ -551,6 +562,11 @@ impl Io {
     fn update_files(&mut self, identity: &std::sync::Arc<()>, bytes: &[u8], append: bool) {
         for grant in self.grants.values_mut() {
             if let IoGrant::File {
+                identity: opened,
+                contents,
+                ..
+            }
+            | IoGrant::Mapped {
                 identity: opened,
                 contents,
                 ..
@@ -1091,6 +1107,38 @@ impl Io {
                 self.update_files(&identity, bytes, true);
                 io_ok(OpValue::Unit)
             }
+            // `mapped.with`'s view: the identity's current bytes, zero past their end;
+            // its check: 1 once the identity is found shorter than the mapping.
+            (
+                Some("$intrinsic"),
+                view @ ("MappedView" | "MappedCheck"),
+                [OpValue::Handle(directory), OpValue::Handle(mapped)],
+            ) => {
+                let Some(IoGrant::Mapped {
+                    directory: owner,
+                    contents,
+                    length,
+                    truncated,
+                    ..
+                }) = self.grants.get_mut(mapped)
+                else {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                };
+                if owner != directory {
+                    return Some(OpOutcome::Fail("CAP-2".into()));
+                }
+                if view == "MappedView" {
+                    let mut bytes = contents[..contents.len().min(*length as usize)].to_vec();
+                    bytes.resize(*length as usize, 0);
+                    OpValue::ByteSequence(bytes)
+                } else {
+                    *truncated |= (contents.len() as u64) < *length;
+                    OpValue::Bits {
+                        scalar: ScalarKind::U32,
+                        bits: u128::from(*truncated),
+                    }
+                }
+            }
             (Some("file"), "walk", [OpValue::Handle(directory)]) => {
                 let Some(IoGrant::Dir { tree, root, .. }) = self.grants.get(directory) else {
                     return Some(OpOutcome::Fail("CAP-2".into()));
@@ -1115,7 +1163,7 @@ impl Io {
             (
                 Some("file"),
                 kind @ ("open" | "create" | "size" | "read_bytes" | "write_bytes" | "remove"
-                | "create_atomic" | "put_new"),
+                | "create_atomic" | "put_new" | "map"),
                 [OpValue::Handle(directory), OpValue::Handle(path), rest @ ..],
             ) => {
                 let Some(IoGrant::Dir { tree, root, access }) = self.grants.get(directory).cloned()
@@ -1171,6 +1219,16 @@ impl Io {
                             contents: self.trees[&tree].1[&path].clone(),
                             tree,
                             path: logical,
+                        })))
+                    }
+                    "map" if self.trees[&tree].1.contains_key(&path) => {
+                        let contents = self.trees[&tree].1[&path].clone();
+                        io_ok(OpValue::OpenHandle(self.grant(IoGrant::Mapped {
+                            identity: self.files[&(tree, path.clone())].clone(),
+                            directory: *directory,
+                            length: contents.len() as u64,
+                            truncated: false,
+                            contents,
                         })))
                     }
                     "create" => {

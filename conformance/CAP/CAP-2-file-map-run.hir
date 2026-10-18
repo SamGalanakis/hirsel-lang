@@ -1,0 +1,136 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// A mapping lends its bytes to each mapped.with body. A truncation of the mapped file,
+// even one followed by regrowth, makes every later mapped.with return Truncated();
+// a replacement publishes a new file, so the mapping keeps the old one.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(
+    t,
+    [(path.of("data"), b"hello"), (path.of("empty"), b""), (path.of("dir/x"), b"")]
+  )
+  let m = file.map(d, path.of("data"))?
+  test.check(
+    t,
+    mapped.with(
+      d,
+      m,
+      fn(view: Bytes) -> u64 {
+        bytes.len(view)
+      }
+    )? == 5u64
+  )
+  test.check(
+    t,
+    mapped.with(
+      d,
+      m,
+      fn(view: Bytes) -> bool {
+        view == b"hello"
+      }
+    )?
+  )
+  let copied = mapped.with(
+    d,
+    m,
+    fn(view: Bytes) -> Bytes {
+      unique view
+    }
+  )?
+  test.check(t, copied == b"hello")
+  let e = file.map(d, path.of("empty"))?
+  test.check(
+    t,
+    mapped.with(
+      d,
+      e,
+      fn(view: Bytes) -> u64 {
+        bytes.len(view)
+      }
+    )? == 0u64
+  )
+  test.check(
+    t,
+    match file.map(d, path.of("missing")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.map(d, path.of("dir")) {
+      Error(IsDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.map(d, path.of("../escape")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  file.write_bytes(d, path.of("data"), b"other")?
+  test.check(
+    t,
+    mapped.with(
+      d,
+      m,
+      fn(view: Bytes) -> bool {
+        view == b"hello"
+      }
+    )?
+  )
+  let r = file.map(d, path.of("data"))?
+  let mut f = file.create(d, path.of("data"))?
+  file.append(d, mut f, b"ot")?
+  test.check(
+    t,
+    match mapped.with(
+      d,
+      r,
+      fn(view: Bytes) -> Bytes {
+        unique view
+      }
+    ) {
+      Error(Truncated()) => true,
+      _ => false,
+    }
+  )
+  file.append(d, mut f, b"her!")?
+  test.check(
+    t,
+    match mapped.with(
+      d,
+      r,
+      fn(view: Bytes) -> u64 {
+        bytes.len(view)
+      }
+    ) {
+      Error(Truncated()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    mapped.with(
+      d,
+      m,
+      fn(view: Bytes) -> bool {
+        view == b"hello"
+      }
+    )?
+  )
+  let grown = file.map(d, path.of("data"))?
+  test.check(
+    t,
+    mapped.with(
+      d,
+      grown,
+      fn(view: Bytes) -> bool {
+        view == b"other!"
+      }
+    )?
+  )
+  Ok(())
+}

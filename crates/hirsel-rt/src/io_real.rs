@@ -160,6 +160,7 @@ impl RealIo {
                 partial: None,
                 next_write: 1,
                 prepared: BTreeMap::new(),
+                maps: BTreeMap::new(),
             },
             tape: vec![],
             fault: None,
@@ -718,6 +719,7 @@ impl RealIo {
                 .get_or_insert_with(|| crate::readiness::Readiness::virtual_clock(0));
         }
         let fake = self.state.is_fake_request(&request);
+        self.state.capture_views = self.journal.records() || self.retain_history;
         let mut fault = if self.state.preflight(&request)?.is_some()
             || self.state.denied_projection(&request)
             || crate::net::is_net_request(&request)
@@ -1012,6 +1014,8 @@ struct Disk {
     partial: Option<(IoError, usize)>,
     next_write: u64,
     prepared: BTreeMap<(u64, String), File>,
+    /// Live `file.map` mappings by Mapped handle.
+    maps: BTreeMap<u64, crate::mapping::Mapping>,
 }
 fn error(e: std::io::Error) -> IoError {
     // Portable conditions, never expose host errno as language data.
@@ -1584,6 +1588,30 @@ impl Storage for Disk {
         } else {
             Ok(())
         }
+    }
+    fn map_file(&mut self, path: &str, id: u64) -> Result<u64, IoError> {
+        let fd = self.open(path, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        let meta = fd.metadata().map_err(error)?;
+        if !meta.is_file() {
+            return Err(IoError::IsDirectory);
+        }
+        let mapping = crate::mapping::Mapping::new(fd, meta.len())?;
+        self.maps.insert(id, mapping);
+        Ok(meta.len())
+    }
+    fn map_view(&mut self, id: u64, length: u64, capture: bool) -> MapView {
+        let block = self.maps[&id].block();
+        MapView {
+            length,
+            bytes: capture.then(|| crate::mapping::contents(block, length)),
+            block,
+        }
+    }
+    fn map_truncated(&mut self, id: u64, _length: u64) -> bool {
+        self.maps[&id].truncated()
+    }
+    fn unmap(&mut self, id: u64) {
+        self.maps.remove(&id);
     }
     fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError> {
         let (parent, name) = self.parent(path)?;

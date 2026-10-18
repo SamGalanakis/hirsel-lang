@@ -101,6 +101,9 @@ typedef struct { uint32_t tag, padding; hirsel_rt_v2_handle_result value; } hirs
 extern const hirsel_rt_v2_layout hirsel_rt_v2_file_walk_descriptor;
 uint8_t hirsel_rt_v2_file_read_bytes(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_bytes_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_random_bytes(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_bytes_result*, const uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_file_map(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_mapped_view(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_mapped_check(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_walk(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_walk_result*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_walk_step(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*, void*, hirsel_rt_v2_walk_option*);
 typedef struct { hirsel_rt_v2_slice view; uint64_t position; } hirsel_rt_v2_view_cursor;

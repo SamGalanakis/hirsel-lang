@@ -917,6 +917,72 @@ fn filesystem_breadth_source_replays_across_backends_without_following_outside_l
     }
 }
 
+/// A host mapping lends the file's pages in place; truncating the file under it makes the
+/// mapped.with that reads past the new end see zeros instead of SIGBUS and return
+/// Truncated(). Each backend's tape keeps the lent bytes, so every backend replays it
+/// with the file gone.
+#[test]
+fn file_map_truncation_records_and_replays_across_backends() {
+    let fixture = Fixture::new("file-map");
+    std::fs::write(
+        fixture.source(),
+        include_str!("../../../../conformance/CAP/CAP-2-file-map-host-run.hir"),
+    )
+    .unwrap();
+    let data = fixture.0.join("data");
+    let grants = fixture.0.join("map-grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::json!({"io":{"dirs":[{"path":"","host":data,"access":"read_write"}]}})
+            .to_string(),
+    )
+    .unwrap();
+    let mut tapes = vec![];
+    for backend in [None, Some("llvm"), Some("cranelift")] {
+        std::fs::create_dir_all(&data).unwrap();
+        let tape = fixture.tape(&format!("map-{}.tape", backend.unwrap_or("interp")));
+        let mut command = hirsel(
+            backend.is_some(),
+            &fixture.source(),
+            &[
+                "--grants".as_ref(),
+                grants.as_os_str(),
+                "--record".as_ref(),
+                tape.as_os_str(),
+            ],
+        );
+        if let Some(backend) = backend {
+            command.args(["--backend", backend]);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "{backend:?}: {output:?}"
+        );
+        assert!(!data.join("mapped").exists());
+        tapes.push(tape);
+    }
+    std::fs::remove_dir_all(&data).unwrap();
+    for tape in tapes {
+        for backend in [None, Some("llvm"), Some("cranelift")] {
+            let mut command = hirsel(
+                backend.is_some(),
+                &fixture.source(),
+                &["--replay".as_ref(), tape.as_os_str()],
+            );
+            if let Some(backend) = backend {
+                command.args(["--backend", backend]);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success() && output.stderr.is_empty(),
+                "{} {backend:?}: {output:?}",
+                tape.display()
+            );
+        }
+    }
+}
+
 #[test]
 fn a_host_pipeline_reports_every_status_and_replays_without_spawning() {
     let root = process_root("replay-pipeline");

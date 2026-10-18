@@ -185,6 +185,9 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         Commit { directory: n.wrapping_add(7), file: n.wrapping_add(9) },
         Sync { directory: n.wrapping_add(7), file: n.wrapping_add(9) },
         PutNew { directory: n.wrapping_add(7), path: text.clone(), bytes: bytes.clone(), durable: n % 2 == 0 },
+        Map { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
+        MapView { directory: n.wrapping_add(7), mapped: n.wrapping_add(9) },
+        MapCheck { directory: n.wrapping_add(7), mapped: n.wrapping_add(9) },
         Close { handle: n.wrapping_add(11) },
         NetNarrow { net: n.wrapping_add(17), rules: vec![NetRule { address: if n == 0 { String::new() } else { format!("{text}#address") }, port: n.wrapping_add(21) as u16, operation: NetOperation::Connect }] },
         Resolve { net: n.wrapping_add(17), host: if n == 0 { String::new() } else { format!("{text}#host") }, port: n.wrapping_add(21) as u16 },
@@ -267,6 +270,7 @@ fn completions(n: u64) -> Vec<Completion> {
         Completion::Unit(result!((), io_error.clone())),
         Completion::Size(result!(n, io_error.clone())),
         Completion::Bytes(result!(bytes.clone(), io_error.clone())),
+        Completion::View(MapView::of(bytes.clone())),
         Completion::Paths(result!(vec![String::new(), text.clone()], io_error.clone())),
         Completion::Entries(result!(
             vec![DirEntry {
@@ -383,6 +387,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::ChildExit(_) => (),
             Completion::GroupExit(_) => (),
             Completion::Runner(_) => (),
+            Completion::View(_) => (),
             Completion::Blocked { .. } => (),
             Completion::Ready => (),
         }

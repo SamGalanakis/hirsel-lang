@@ -124,7 +124,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "FileError",
             "",
-            "FileFault(u32)|Canceled(CancelCause)|NotGranted()|NotFound()|PermissionDenied()|AlreadyExists()|IsDirectory()|NotDirectory()|DirectoryNotEmpty()|CrossDevice()",
+            "FileFault(u32)|Canceled(CancelCause)|NotGranted()|NotFound()|PermissionDenied()|AlreadyExists()|IsDirectory()|NotDirectory()|DirectoryNotEmpty()|CrossDevice()|Truncated()",
         ),
         ("FileKind", "", "Regular()|Directory()|Symlink()|Other()"),
         ("Durability", "", "Durable()|Volatile()"),
@@ -368,7 +368,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "NotRun(NotRunReason)|InDoubt(InDoubtReason)|Failed(E)|Faulted(Failure)|Canceled(CancelCause)",
         &mut out,
     );
-    for (name, fields) in [("File", ""), ("AtomicFile", "dir: Dir,tmp: Path,dst: Path")] {
+    for (name, fields) in [
+        ("File", ""),
+        ("AtomicFile", "dir: Dir,tmp: Path,dst: Path"),
+        ("Mapped", ""),
+    ] {
         let mut b = Builder::new("").with_declarations(&out);
         let repr = (!fields.is_empty()).then(|| b.record(fields));
         let mut t = type_definition(vec![], repr);
@@ -756,6 +760,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ),
         // 0, or 1 + the running task's `CancelCause` ordinal (CONC-3).
         ("", "$intrinsic.TaskCanceled", "s: Scope", "u32"),
+        // `mapped.with`'s compiled body: the view it lends its body, then 0, or 1 when the
+        // mapped file was truncated since the mapping was made.
+        (
+            "",
+            "$intrinsic.MappedView",
+            "d: Dir, m: Mapped of d",
+            "Bytes",
+        ),
+        (
+            "",
+            "$intrinsic.MappedCheck",
+            "d: Dir, m: Mapped of d",
+            "u32",
+        ),
         // `task.isolate`'s caught chain, read record by record to build its `Failure` (FAIL-2).
         ("", "$intrinsic.IsolateBegin", "tasks: Tasks", "u64"),
         ("", "$intrinsic.IsolateCount", "tasks: Tasks", "u64"),

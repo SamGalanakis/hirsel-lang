@@ -1,0 +1,41 @@
+// rule: CAP-2
+// expect: run
+// entry: main
+// On a host directory the bytes stay where they are mapped. Truncating the mapped file
+// under its mapping makes a read past the new end see zeros instead of raising SIGBUS,
+// and mapped.with returns Truncated() rather than its body's result.
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let d = io.dir(rt, path.of(""))?
+  let mut list: List[u8] = []
+  for i in 0u64..8200u64 {
+    list.push(mut list, int.truncate(i))
+  }
+  let data = bytes.from_list(take list)
+  file.write_bytes(d, path.of("mapped"), copy data)?
+  let m = file.map(d, path.of("mapped"))?
+  failure.check(
+    mapped.with(
+      d,
+      m,
+      fn(view: Bytes) -> bool {
+        view == data
+      }
+    )?,
+    TextInvariant()
+  )
+  let mut f = file.create(d, path.of("mapped"))?
+  file.append(d, mut f, b"ab")?
+  let truncated = match mapped.with(
+    d,
+    m,
+    fn(view: Bytes) -> u64 {
+      int.widen(view[1]) + int.widen(view[5000]) + int.widen(view[8199])
+    }
+  ) {
+    Error(Truncated()) => true,
+    _ => false,
+  }
+  failure.check(truncated, TextInvariant())
+  file.remove(d, path.of("mapped"))?
+  Ok(())
+}

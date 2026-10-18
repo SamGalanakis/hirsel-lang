@@ -23,6 +23,8 @@ $intrinsic.MapInsertionOrder_advance	8fd895efaede4395d7767f160142f1e382451c47336
 $intrinsic.MapInsertionOrder_len	23a2c0b369dce3fdb95b9460400d813344f61ca74da5e349efc2080801b5fe02	0:b:[0,1]->n
 $intrinsic.MapInsertionOrder_next	25c60f987fadb68453e37137aeba9ae83a9ab69db2b2846d6c0541f50f62ef54	0:m:[0,1]->[0,1]
 $intrinsic.MapInsertionOrder_open	7922f8d820b0cb7775764f91125856b8388d6b5c5a304440c1259c6181d1c314	0:t:[0,1]->[0,1]
+$intrinsic.MappedCheck	b31506aca3e3cd8b1b2b1bf262da11e92ab3b1ba2d3af725d67045dab169be90	0:b:n;1:b:n->n
+$intrinsic.MappedView	a5a7280f75d5e942e77549e0daf3fd8e803e0f7aa3585192a7551a12e8527584	0:b:n;1:b:n->n
 $intrinsic.MutexCause	6943281f7b54ec4de7ec6af16ec1545a1a2acd2ea5a230a8335838e1cf9b80b9	0:b:[0]->n
 $intrinsic.MutexCreate	81217a674eb6bb80db7613308512acf352a9814d12c1e8d1032101758485f7b8	0:m:[0]->[0]
 $intrinsic.MutexKill	fc1acd41b22bae2e1026965a5f5e2b678ffff244bbc9051ffc199f2e900b9224	0:b:[0]->n
@@ -107,6 +109,7 @@ file.append	88cab5ea6cceaba2069cfadf8c584b45bcf399883046b68e3cac0456a08775e4	0:b
 file.commit	0d3e9ea837e514165008f0bea006518904d407dc7bcbaba1b327775138d9af45	0:b:n;1:t:n->n
 file.create	fdd960350d6b3b2e9755ec02936ee364b9255b3d147b88d858697682277c8693	0:b:n;1:b:n->n
 file.create_atomic	838cf3a2101fdc75d26da30371e6b52e0305752e605726641d06b3c713b7e00d	0:b:n;1:b:n->n
+file.map	41d10010fab70578814a02e6e456d0630e394bd26fb6b7bfa7df454a2bbbadd5	0:b:n;1:b:n->n
 file.metadata	dfb7cd8f4981fe2861e269f6417facc00c46e0e9064402ecd175de4b1d169fff	0:b:n;1:b:n->n
 file.mkdir	4cf25ca5e7eef003f3dd85903c3997c2ce29f393d4fdedb0eb257a7e65368bf4	0:b:n;1:b:n->n
 file.narrow	ae5b604912af5870cde8592e7bbafd1a96a2f694beba4cc579d6d4811e51a393	0:b:n;1:t:n->n
@@ -179,6 +182,7 @@ map.len	75f638f6f8149dd43c9ec63c5fcf42965f27b7414c1144383c659be9be809baa	0:b:[0,
 map.remove	cdd0197e6a09685b9bab591339ffbb340f3d7af3f4821b910e1a5cd2cd4f1c28	0:m:[0,1];1:b:[0]->[1]
 map.update_with	34e6da32a3922d515118f9c5407ce2b22bcdfee20e6757ce1ba4f38a1d546f79	0:m:[0,1];1:b:[0];2:b:a->n
 map.upsert_with	630c5b65a0df606d328a537990a991dd0f173e6c35ce4537ead0c78c3310fdac	0:m:[0,1];1:b:[0];2:b:a;3:b:a->n
+mapped.with	4b9cb7cc77608ca40d2c3cff4bf0a74d7e93939755ecaa05c0fbe1f83648a846	0:b:n;1:b:n;2:b:a->[0]
 mutex.create	87a18052f3d607fe698ffdf0e682212c2e84ceb4ccbc0f3ab685fc42d09f7dd8	0:b:n;1:t:[0]->[0]
 mutex.with	2b03112fd4510e7979a87b535df4ddc5fb94e2881eb8ffd4a59b6295d5eca7f3	0:b:n;1:b:[0];2:b:a->[1]
 net.accept	52238a75d33b2f73fee539fd0cd03687f41630a0cd7186590840c2ccb5cc03bc	0:b:n;1:m:n->n

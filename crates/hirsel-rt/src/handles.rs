@@ -74,6 +74,13 @@ pub enum Grant {
         destination: String,
         directory: u64,
     },
+    /// A read-only mapping of `length` bytes, branded by its Dir; `truncated` once a check
+    /// found the file shorter than the mapping, after which every check reports it.
+    Mapped {
+        directory: u64,
+        length: u64,
+        truncated: bool,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Handles {

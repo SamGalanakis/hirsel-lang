@@ -294,7 +294,11 @@ pub fn replay_interpreter_with_fixture(
                 | Request::WriteAll { .. }
                 | Request::Commit { .. }
                 | Request::Sync { .. }
-                | Request::PutNew { .. }) => file_arguments(request).unwrap(),
+                | Request::PutNew { .. }
+                | Request::Map { .. }) => file_arguments(request).unwrap(),
+                Request::MapView { .. } | Request::MapCheck { .. } => {
+                    panic!("mapped.with runs its body: conformance records and replays it")
+                }
                 Request::UdpBind { .. }
                 | Request::UdpSend { .. }
                 | Request::UdpRecv { .. }
@@ -326,6 +330,7 @@ pub fn replay_interpreter_with_fixture(
                         ObservedGrant::Stream { .. } => "Stream",
                         ObservedGrant::Listener { .. } => "Listener",
                         ObservedGrant::UdpSocket { .. } => "UdpSocket",
+                        ObservedGrant::Mapped { .. } => "Mapped",
                         _ => panic!("unsupported closed handle: {grant:?}"),
                     };
                     library
@@ -382,6 +387,7 @@ pub fn replay_interpreter_with_fixture(
                         error: reference::simulation::FileError::NotDirectory,
                         partial: fault.partial,
                     },
+                    IoError::Truncated => panic!("a truncation is mapped.with's check input"),
                 };
                 library
                     .simulation
@@ -552,6 +558,16 @@ pub fn replay_interpreter_with_fixture(
                             destination: destination.clone(),
                             directory: *directory,
                         },
+                        hirsel_rt::handles::Grant::Mapped {
+                            directory,
+                            length,
+                            truncated,
+                        } => ObservedGrant::Mapped {
+                            tree: 0,
+                            directory: *directory,
+                            length: *length,
+                            truncated: *truncated,
+                        },
                     },
                 )
             })
@@ -588,6 +604,7 @@ pub(crate) fn decode(schema: &Completion, value: hirsel_interp::Value) -> Comple
                     7 => IoError::NotDirectory,
                     8 => IoError::DirectoryNotEmpty,
                     9 => IoError::CrossDevice,
+                    10 => IoError::Truncated,
                     _ => panic!("invalid nullary file error"),
                 });
             }
@@ -950,6 +967,10 @@ pub(crate) fn file_arguments(
                     fields: vec![],
                 },
             ],
+        ),
+        Request::Map { directory, path } => (
+            "file.map",
+            vec![handle("Dir", *directory), reference::path(path)],
         ),
         _ => return None,
     })

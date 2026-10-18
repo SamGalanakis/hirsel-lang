@@ -35,6 +35,7 @@ pub mod isolate;
 pub mod journal;
 pub mod kernels;
 pub mod launch;
+mod mapping;
 pub mod net;
 pub mod net_abi;
 pub mod net_host;

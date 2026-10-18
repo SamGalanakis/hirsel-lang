@@ -25,6 +25,8 @@ conformance/CAP/CAP-1-file-copy-authority-bad.hir
 conformance/CAP/CAP-1-file-copy-authority-ok.hir
 conformance/CAP/CAP-1-file-list-recursive-authority-bad.hir
 conformance/CAP/CAP-1-file-list-recursive-authority-ok.hir
+conformance/CAP/CAP-1-file-map-authority-bad.hir
+conformance/CAP/CAP-1-file-map-authority-ok.hir
 conformance/CAP/CAP-1-file-put-new-authority-bad.hir
 conformance/CAP/CAP-1-file-put-new-authority-ok.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-bad.hir
@@ -160,6 +162,8 @@ conformance/CAP/CAP-2-file-errors-not-found-run.hir
 conformance/CAP/CAP-2-file-errors-permission-denied-run.hir
 conformance/CAP/CAP-2-file-lexical-parent-run.hir
 conformance/CAP/CAP-2-file-list-recursive-run.hir
+conformance/CAP/CAP-2-file-map-host-run.hir
+conformance/CAP/CAP-2-file-map-run.hir
 conformance/CAP/CAP-2-file-operation-authority-bad.hir
 conformance/CAP/CAP-2-file-operation-authority-ok.hir
 conformance/CAP/CAP-2-file-permissions-run.hir
@@ -2786,6 +2790,8 @@ conformance/MODE/MODE-1-local-taken-parameter-bad.hir
 conformance/MODE/MODE-1-local-taken-parameter-ok.hir
 conformance/MODE/MODE-1-map-get-result-live-mutation-bad.hir
 conformance/MODE/MODE-1-map-get-result-live-mutation-ok.hir
+conformance/MODE/MODE-1-mapped-view-escape-bad.hir
+conformance/MODE/MODE-1-mapped-view-escape-ok.hir
 conformance/MODE/MODE-1-moved-storage-local-write-bad.hir
 conformance/MODE/MODE-1-moved-storage-local-write-ok.hir
 conformance/MODE/MODE-1-mut-global-annotation-bad.hir

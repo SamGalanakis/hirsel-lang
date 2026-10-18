@@ -113,6 +113,8 @@ fn file.write_all(d: Dir, mut f: AtomicFile of d, data: Bytes) -> Result[(), Fil
 fn file.commit(d: Dir, take f: AtomicFile of d) -> Result[(), FileError]
 fn file.sync(d: Dir, mut f: File of d) -> Result[(), FileError]
 fn file.put_new(d: Dir, p: Path, take data: Bytes, mode: Durability) -> Result[(), FileError]
+fn file.map(d: Dir, p: Path) -> Result[Mapped of d, FileError]
+fn mapped.with[R](d: Dir, m: Mapped of d, body: fn(view: Bytes) -> R) -> Result[R, FileError]
 
 // CAP-1/2/3, PROV-1/3, DROP-2/3/4, CONC-3/8, DET-1
 fn net.narrow(n: Net, rules: List[NetRule]) -> Result[Net, NetError]
@@ -295,7 +297,7 @@ holds its written unknown captures.
 
 `Io`, `Args`, `Env`, `Unsafe` and the global projections, `Runner`
 ([runners](runners.md)) included, are plain capabilities; `Path` is
-an inert, plain, immutable path value. `File` and `AtomicFile` carry `Dir` authority, task
+an inert, plain, immutable path value. `File`, `AtomicFile` and `Mapped` carry `Dir` authority, task
 handles `Scope`, and `Mutex`, `Atomic` and channel handles `Tasks`. The latter use run-time
 scheduling-domain affinity, not an implicit static `of tasks` brand; an operation with
 another domain fails [CAP-2](capabilities.md#cap-2-charged-at-use) before any effect. The
@@ -308,7 +310,7 @@ CancelCause   = Requested | Parent | ChildFailed | DeadlineExceeded
 CancelError   = Canceled(CancelCause)
 ChannelError  = Closed | Canceled(CancelCause)
 GrantError    = NotGranted()
-type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()
+type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice() | Truncated()
 InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
 ClockError    = Unavailable() | OutOfRange()
@@ -441,6 +443,36 @@ listed come back empty; permission bits survive with their entry. Every `File` a
 `file.commit` return `FileFault(1)` and `file.narrow` returns `None()`; seeking and dropping
 still succeed. A `Dir` outside every `test.dir` tree fails LANG-9 with no effect. The crash is
 recorded like any other Test operation and replays to the same tree.
+
+### Mapped files
+
+`file.map` maps the regular file at a path read-only and returns a `Mapped of d`, a
+noncopyable resource with `Dir` authority whose `@noalloc` finalizer unmaps it. It is a
+read under the Dir's ordinary rights and confinement, a cancellation point like
+`file.open`, and fails as `file.open` does (`NotFound`, `IsDirectory`, `FileFault` for a
+path outside the grant). The mapping's length is the file's length when it is mapped.
+Like an opened `File`, a mapping keeps the file it mapped: unlinking or replacing the
+path (`file.write_bytes`, `file.commit`) does not change what it reads.
+
+`mapped.with(d, m, body)` calls `body` once with a borrowed `Bytes` view of the mapping's
+length, read in place with no copy. The view is the body's borrowed parameter, so MODE-1
+keeps it, and any slice of it, inside the body: a body cannot return it, store it or
+capture it in an escaping closure, and the view cannot outlive the mapping.
+`unique view` copies the bytes out. After the body returns, `mapped.with` checks the file:
+`Ok(r)` returns the body's result, and if the file is now shorter than the mapping, or was
+found shorter at any earlier check of this mapping, the body's result is dropped and
+`mapped.with` returns `Error(Truncated())`. Truncation is sticky: a later regrowth does not
+clear it. `mapped.with` is not a cancellation point and returns no other error.
+
+The view shows the file's current bytes. Bytes past the end of a file truncated while it
+is mapped (by the program, through `file.create`, or by another process) read as zero,
+never as a fault: on a host the runtime answers such a read with a zero page instead of
+SIGBUS, and the enclosing `mapped.with` returns `Truncated()`. Bytes another process
+changes in place while a body runs are outside DET-1, as other concurrent host
+modifications are: the body may see old or new bytes. So are the program's own writes to
+the mapped file while a body runs (from the body or another task): a host view shows
+them in place and a simulated view keeps the bytes it lent; a truncation still makes
+`mapped.with` return `Truncated()`. Writes made before `mapped.with` starts always show.
 
 ## Network types
 

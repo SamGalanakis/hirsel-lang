@@ -295,6 +295,10 @@ impl Adapter for SimIo {
                 Completion::Metadata(Ok(meta)) => Some(meta.clone()),
                 _ => None,
             },
+            view_input: match &event.completion {
+                Completion::View(view) => view.bytes.clone(),
+                _ => None,
+            },
             read_limit: match (&request, &event.completion) {
                 (Request::FileRead { .. }, Completion::Bytes(Ok(b))) => Some(b.len() as u64),
                 _ => None,
@@ -521,6 +525,22 @@ impl Storage for MemoryTree<'_> {
             self.identities.durable.wrote(identity, 0, bytes);
         }
         Ok(())
+    }
+    fn map_file(&mut self, path: &str, id: u64) -> Result<u64, IoError> {
+        self.open_file(path, id)?;
+        Ok(self.identities.contents[&self.identities.opened[&id]].len() as u64)
+    }
+    fn map_view(&mut self, id: u64, length: u64, _capture: bool) -> MapView {
+        let contents = &self.identities.contents[&self.identities.opened[&id]];
+        let mut bytes = contents[..contents.len().min(length as usize)].to_vec();
+        bytes.resize(length as usize, 0);
+        MapView::of(bytes)
+    }
+    fn map_truncated(&mut self, id: u64, length: u64) -> bool {
+        (self.identities.contents[&self.identities.opened[&id]].len() as u64) < length
+    }
+    fn unmap(&mut self, id: u64) {
+        self.identities.opened.remove(&id);
     }
     fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
         let mut meta = self.metadata(path)?;
@@ -943,6 +963,8 @@ pub(crate) struct LinkedTree<'a> {
     active_id: u64,
     detached: &'a mut std::collections::BTreeSet<u64>,
     metadata_input: Option<Metadata>,
+    /// A recorded `mapped.with` view: a host input, like recorded metadata.
+    view_input: Option<Vec<u8>>,
     read_limit: Option<u64>,
     write_limit: Option<u64>,
     tree: &'a mut Tree,
@@ -966,6 +988,7 @@ impl<'a> LinkedTree<'a> {
             identities,
             active: Default::default(),
             metadata_input: None,
+            view_input: None,
             read_limit: None,
             write_limit: None,
         }
@@ -1125,6 +1148,25 @@ impl Storage for LinkedTree<'_> {
             return Err(IoError::IsDirectory);
         }
         self.memory().open_file(&path, id)
+    }
+    fn map_file(&mut self, path: &str, id: u64) -> Result<u64, IoError> {
+        let path = self.path(path, true)?;
+        if self.detached() {
+            return Err(IoError::IsDirectory);
+        }
+        self.memory().map_file(&path, id)
+    }
+    fn map_view(&mut self, id: u64, length: u64, capture: bool) -> MapView {
+        match self.view_input.take() {
+            Some(bytes) if bytes.len() as u64 == length => MapView::of(bytes),
+            _ => self.memory().map_view(id, length, capture),
+        }
+    }
+    fn map_truncated(&mut self, id: u64, length: u64) -> bool {
+        self.memory().map_truncated(id, length)
+    }
+    fn unmap(&mut self, id: u64) {
+        self.memory().unmap(id);
     }
     fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
         let path = self.path(path, true)?;

@@ -167,6 +167,7 @@ fn file_error(e: hirsel_rt::io::IoError) -> Value {
         IoError::NotDirectory => variant(7, vec![]),
         IoError::DirectoryNotEmpty => variant(8, vec![]),
         IoError::CrossDevice => variant(9, vec![]),
+        IoError::Truncated => variant(10, vec![]),
     })
 }
 fn clock_error(e: hirsel_rt::io::ClockError) -> Value {
@@ -289,6 +290,9 @@ pub(crate) struct HostLibrary {
     cancellations: u64,
     yield_now: bool,
     runners: runners::HostRunners,
+    /// The host `mapped.with` calls whose bodies run, by continuation: Dir and Mapped.
+    mapped: BTreeMap<u64, (u64, u64)>,
+    next_continuation: u64,
 }
 struct HostWait {
     name: String,
@@ -351,6 +355,29 @@ impl HostLibrary {
             echoed: (0, 0),
             handles: BTreeMap::new(),
             next: 1 << 63,
+            mapped: BTreeMap::new(),
+            next_continuation: 1 << 61,
+        })
+    }
+    /// `mapped.with` over a host mapping: the view, then the body, then (`resume`) the check.
+    fn host_mapped_with(&mut self, a: &[Value]) -> Result<OperationResult, Error> {
+        self.yield_now = true;
+        let (directory, mapped) = (self.id(&a[0])?, self.id(&a[1])?);
+        let C::View(view) = self.host(R::MapView { directory, mapped })? else {
+            return Err(invalid());
+        };
+        let continuation = self.next_continuation;
+        self.next_continuation += 1;
+        self.mapped.insert(continuation, (directory, mapped));
+        Ok(OperationResult::Call {
+            callee: a[2].clone(),
+            arguments: vec![Value::Bytes(view.contents())],
+            mut_arguments: vec![],
+            writebacks: vec![],
+            updates: vec![],
+            owned: vec![],
+            consumed: vec![],
+            continuation,
         })
     }
     /// Every host request goes through here. A provider that would block parks the
@@ -1197,6 +1224,10 @@ impl HostLibrary {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
             },
+            "file.map" => R::Map {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
             "file.write_all" => R::WriteAll {
                 directory: self.id(&a[0])?,
                 file: self.id(&a[1])?,
@@ -1235,6 +1266,7 @@ impl HostLibrary {
                     match name {
                         "file.open" | "file.create" => "File",
                         "file.create_atomic" => "AtomicFile",
+                        "file.map" => "Mapped",
                         _ => "Dir",
                     },
                 )),
@@ -1728,6 +1760,43 @@ impl HostLibrary {
     }
 }
 impl hirsel_interp::OperationsAdapter for HostLibrary {
+    fn resume(
+        &mut self,
+        continuation: u64,
+        result: OperationResult,
+        arguments: &mut [Value],
+        context: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let Some((directory, mapped)) = self.mapped.remove(&continuation) else {
+            return self
+                .library
+                .resume(continuation, result, arguments, context);
+        };
+        let OperationResult::Complete {
+            value,
+            mut released,
+            ..
+        } = result
+        else {
+            return Ok(result);
+        };
+        self.yield_now = true;
+        // A truncated mapping's body result is dropped after the check.
+        let value = match self.host(R::MapCheck { directory, mapped })? {
+            C::Unit(Ok(())) => ok(value),
+            C::Unit(Err(e)) => {
+                released.push(value);
+                file_error(e)
+            }
+            _ => return Err(invalid()),
+        };
+        Ok(OperationResult::Complete {
+            value,
+            arguments: vec![],
+            consumed: vec![],
+            released,
+        })
+    }
     fn entry_returned(
         &mut self,
         value: &Value,
@@ -2031,6 +2100,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
                 return self.storage(&name, call.arguments).map(Some);
             }
+            if name == "mapped.with" && call.arguments.first().is_some_and(|v| self.id(v).is_ok()) {
+                return self.host_mapped_with(call.arguments).map(Some);
+            }
             if (name.starts_with("file.")
                 || name == "dir.narrow"
                 || name == "dir.read_only"
@@ -2100,6 +2172,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         if matches!(
             kind,
             "Stream" | "Listener" | "UdpSocket" | "File" | "AtomicFile" | "Child" | "ChildGroup"
+                | "Mapped"
         ) && let Some(handle) = self.handles.remove(&id)
         {
             // Dropping a scripted child closes its input, which can leave an Expect unmet.

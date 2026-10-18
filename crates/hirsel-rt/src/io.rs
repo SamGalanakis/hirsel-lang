@@ -46,6 +46,8 @@ pub enum IoError {
     DirectoryNotEmpty,
     CrossDevice,
     NotGranted,
+    /// A mapped file is now shorter than its mapping (`mapped.with`).
+    Truncated,
 }
 /// Ordinals follow core InputError; host errno is translated to the existing fault input.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -381,6 +383,21 @@ pub enum Request {
         bytes: Vec<u8>,
         durable: bool,
     },
+    /// `file.map`: a read-only mapping of the regular file's current contents.
+    Map {
+        directory: u64,
+        path: String,
+    },
+    /// `mapped.with`'s view of the mapping's bytes, before its body runs.
+    MapView {
+        directory: u64,
+        mapped: u64,
+    },
+    /// `mapped.with`'s check, after its body returns: is the file still at least as long?
+    MapCheck {
+        directory: u64,
+        mapped: u64,
+    },
     Close {
         handle: u64,
     },
@@ -642,7 +659,40 @@ pub enum Completion {
     Ready,
     /// A runner call's outcome.
     Runner(hirsel_run_config::RunnerCompletion),
+    /// `mapped.with`'s view.
+    View(MapView),
 }
+/// The bytes a mapping lends `mapped.with`'s body. A host mapping that nothing records
+/// keeps them where they are mapped: `block` is then the address of the static block in
+/// front of them (`crate::mapping`), and `bytes` is absent. Equality compares the bytes.
+#[derive(Clone, Debug)]
+pub struct MapView {
+    pub length: u64,
+    pub bytes: Option<Vec<u8>>,
+    pub(crate) block: usize,
+}
+impl MapView {
+    pub fn of(bytes: Vec<u8>) -> Self {
+        Self {
+            length: bytes.len() as u64,
+            bytes: Some(bytes),
+            block: 0,
+        }
+    }
+    /// A copy of the viewed bytes, read before the mapping that lends them is closed.
+    pub fn contents(&self) -> Vec<u8> {
+        match &self.bytes {
+            Some(bytes) => bytes.clone(),
+            None => crate::mapping::contents(self.block, self.length),
+        }
+    }
+}
+impl PartialEq for MapView {
+    fn eq(&self, other: &Self) -> bool {
+        self.length == other.length && self.bytes == other.bytes
+    }
+}
+impl Eq for MapView {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fault {
     pub error: IoError,
@@ -813,6 +863,15 @@ pub(crate) trait Storage {
         false
     }
     fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError>;
+    /// Map the regular file at `path` read-only as mapping `id`; its length.
+    fn map_file(&mut self, path: &str, id: u64) -> Result<u64, IoError>;
+    /// The `length` bytes of mapping `id`, as `mapped.with` lends them: the file's current
+    /// bytes, zero past its end. `capture` copies host bytes for the tape.
+    fn map_view(&mut self, id: u64, length: u64, capture: bool) -> MapView;
+    /// Whether mapping `id`'s file is now shorter than `length`, or a read past its end
+    /// was answered with zeros.
+    fn map_truncated(&mut self, id: u64, length: u64) -> bool;
+    fn unmap(&mut self, id: u64);
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError>;
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
     fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError>;
@@ -858,6 +917,8 @@ pub(crate) struct State {
     pub script_children: BTreeMap<u64, hirsel_run_config::ScriptChild>,
     /// Spawned scripted pipelines, keyed by ChildGroup handle.
     pub script_groups: BTreeMap<u64, hirsel_run_config::ScriptGroup>,
+    /// Whether a host mapping's view copies its bytes, for a tape that keeps them.
+    pub(crate) capture_views: bool,
 }
 impl Default for State {
     fn default() -> Self {
@@ -891,6 +952,7 @@ impl Default for State {
             child_scripts: BTreeMap::new(),
             script_children: BTreeMap::new(),
             script_groups: BTreeMap::new(),
+            capture_views: true,
             projections: [
                 "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
             ]
@@ -1014,10 +1076,15 @@ impl State {
             | Request::Commit { directory, .. }
             | Request::Sync { directory, .. }
             | Request::PutNew { directory, .. } => *directory,
+            | Request::Map { directory, .. }
+            | Request::MapView { directory, .. }
+            | Request::MapCheck { directory, .. } => *directory,
             Request::Close { handle } => match self.handles.rows.get(handle) {
-                Some(Grant::File { directory, .. } | Grant::AtomicFile { directory, .. }) => {
-                    *directory
-                }
+                Some(
+                    Grant::File { directory, .. }
+                    | Grant::AtomicFile { directory, .. }
+                    | Grant::Mapped { directory, .. },
+                ) => *directory,
                 _ => return None,
             },
             _ => return None,
@@ -1088,6 +1155,7 @@ impl State {
                         | IoError::NotDirectory
                         | IoError::DirectoryNotEmpty
                         | IoError::CrossDevice
+                        | IoError::Truncated
                 )
             })
         {
@@ -1470,6 +1538,9 @@ impl State {
                 if matches!(grant, Grant::File { .. } | Grant::AtomicFile { .. }) {
                     self.handles.rows.remove(handle);
                     storage.transfer_file(*handle, None);
+                } else if matches!(grant, Grant::Mapped { .. }) {
+                    self.handles.rows.remove(handle);
+                    storage.unmap(*handle);
                 } else {
                     return Err(AdapterError::InvalidHandle(*handle));
                 }
@@ -1719,6 +1790,39 @@ impl State {
                 let result = error.map_or_else(|| storage.walk(&root), Err);
                 Ok(C::Paths(result))
             }
+            R::MapView { directory, mapped } | R::MapCheck { directory, mapped } => {
+                let capture = self.capture_views;
+                let root = self.directory(*directory)?;
+                storage.activate(*directory, &root);
+                let Some(Grant::Mapped {
+                    directory: owner,
+                    length,
+                    truncated,
+                }) = self.handles.rows.get_mut(mapped)
+                else {
+                    return Err(AdapterError::InvalidHandle(*mapped));
+                };
+                if owner != directory {
+                    return Err(AdapterError::InvalidHandle(*mapped));
+                }
+                if let R::MapView { .. } = request {
+                    if error.is_some() {
+                        return Err(AdapterError::InvalidCompletion);
+                    }
+                    return Ok(C::View(storage.map_view(*mapped, *length, capture)));
+                }
+                // A recorded truncation is a host input; a check that found none is derived.
+                *truncated = match error {
+                    Some(IoError::Truncated) => true,
+                    Some(_) => return Err(AdapterError::InvalidCompletion),
+                    None => *truncated || storage.map_truncated(*mapped, *length),
+                };
+                Ok(C::Unit(if *truncated {
+                    Err(IoError::Truncated)
+                } else {
+                    Ok(())
+                }))
+            }
             _ => {
                 let (directory, path) = match request {
                     R::Open { directory, path }
@@ -1741,6 +1845,7 @@ impl State {
                     | R::PutNew {
                         directory, path, ..
                     } => (*directory, path),
+                    | R::Map { directory, path } => (*directory, path),
                     _ => unreachable!(),
                 };
                 let root = self.directory(directory)?;
@@ -1762,6 +1867,18 @@ impl State {
                                 directory,
                                 position: 0,
                                 writable,
+                            }))
+                        })
+                    })),
+                    R::Map { .. } => Ok(C::Handle(if let Some(e) = error {
+                        Err(e)
+                    } else {
+                        path.and_then(|path| {
+                            let length = storage.map_file(&path, self.handles.next())?;
+                            Ok(self.handles.insert(Grant::Mapped {
+                                directory,
+                                length,
+                                truncated: false,
                             }))
                         })
                     })),
@@ -2248,6 +2365,7 @@ fn error_word(error: IoError) -> u64 {
         IoError::NotDirectory => 7,
         IoError::DirectoryNotEmpty => 8,
         IoError::CrossDevice => 9,
+        IoError::Truncated => 10,
     }
 }
 // Prints cannot park. Keep their borrowed bytes out of the owned wait protocol,
@@ -2450,6 +2568,68 @@ path_export!(
     HandleResult,
     HandleResult::of
 );
+path_export!(
+    hirsel_rt_v2_file_map,
+    Map,
+    directory,
+    Handle,
+    HandleResult,
+    HandleResult::of
+);
+/// `mapped.with`'s view: the static block over a host mapping, or new bytes.
+/// # Safety
+/// Context bound, directory and mapping borrowed, out writable for a Slice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_mapped_view(
+    ctx: *mut crate::TaskCtx,
+    _destination: *mut u8,
+    out: *mut crate::views::Slice,
+    directory: *const u64,
+    mapped: *const u64,
+) -> u8 {
+    let request = Request::MapView {
+        directory: unsafe { directory.read() },
+        mapped: unsafe { mapped.read() },
+    };
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::View(view) = completion else {
+        crate::fault("Io completion type mismatch");
+    };
+    let slice = match view.bytes {
+        _ if view.block != 0 => crate::mapping::view(view.block, view.length),
+        Some(bytes) => unsafe { crate::text::allocate_bytes(ctx, &bytes) },
+        None => crate::fault("a mapped view without its bytes"),
+    };
+    unsafe { out.write(slice) };
+    crate::STATUS_OK
+}
+/// `mapped.with`'s check: 0, or 1 when the mapped file was truncated.
+/// # Safety
+/// Context bound, directory and mapping borrowed, out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_mapped_check(
+    ctx: *mut crate::TaskCtx,
+    out: *mut u32,
+    directory: *const u64,
+    mapped: *const u64,
+) -> u8 {
+    let request = Request::MapCheck {
+        directory: unsafe { directory.read() },
+        mapped: unsafe { mapped.read() },
+    };
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let status = match completion {
+        Completion::Unit(Ok(())) => 0,
+        Completion::Unit(Err(IoError::Truncated)) => 1,
+        _ => crate::fault("Io completion type mismatch"),
+    };
+    unsafe { out.write(status) };
+    crate::STATUS_OK
+}
 path_export!(
     hirsel_rt_v2_file_size,
     Size,
@@ -4041,6 +4221,18 @@ mod filesystem_authority_tests {
             unreachable!()
         }
         fn remove_all(&mut self, _: &str, _: Option<usize>) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn map_file(&mut self, _: &str, _: u64) -> Result<u64, IoError> {
+            unreachable!()
+        }
+        fn map_view(&mut self, _: u64, _: u64, _: bool) -> MapView {
+            unreachable!()
+        }
+        fn map_truncated(&mut self, _: u64, _: u64) -> bool {
+            unreachable!()
+        }
+        fn unmap(&mut self, _: u64) {
             unreachable!()
         }
         fn metadata(&mut self, _: &str) -> Result<Metadata, IoError> {

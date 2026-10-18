@@ -24,6 +24,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Error(NotDirectory()) => require(false),
     Error(DirectoryNotEmpty()) => require(false),
     Error(CrossDevice()) => require(false),
+    Error(Truncated()) => require(false),
     Ok(_) => require(false),
   }
   match file.open(d, p) {
