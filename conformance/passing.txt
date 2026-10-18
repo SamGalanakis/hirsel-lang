@@ -410,6 +410,8 @@ conformance/CONC/CONC-2-nested-handle-capture-ok.hir
 conformance/CONC/CONC-2-nested-sender-capture-ok.hir
 conformance/CONC/CONC-2-scope-owned-capture.hir
 conformance/CONC/CONC-2-sizes-example.hir
+conformance/CONC/CONC-2-taken-block-sender-capture-run.hir
+conformance/CONC/CONC-2-taken-direct-sender-capture-run.hir
 conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
 conformance/CONC/CONC-2-unconsumed-handle-ok.hir
@@ -440,11 +442,16 @@ conformance/CONC/CONC-5-taken-body-capture-bad.hir
 conformance/CONC/CONC-5-taken-body-capture-ok.hir
 conformance/CONC/CONC-5-try-inner-receipt-bad.hir
 conformance/CONC/CONC-5-try-inner-receipt-ok.hir
+conformance/CONC/CONC-6-all-duplicated-senders-drop.hir
+conformance/CONC/CONC-6-buffer-drains.hir
 conformance/CONC/CONC-6-destructured-sender-bad.hir
 conformance/CONC/CONC-6-destructured-sender-ok.hir
 conformance/CONC/CONC-6-destructured-sender-record-ok.hir
+conformance/CONC/CONC-6-last-receiver-closes-send.hir
+conformance/CONC/CONC-6-last-sender-closes-receive.hir
 conformance/CONC/CONC-6-open-receiver-payload-bad.hir
 conformance/CONC/CONC-6-open-receiver-payload-ok.hir
+conformance/CONC/CONC-6-receiver-child-capture.hir
 conformance/CONC/CONC-6-receiver-copy-bad.hir
 conformance/CONC/CONC-6-receiver-copy-ok.hir
 conformance/CONC/CONC-6-sender-duplicate-bad.hir
@@ -460,8 +467,11 @@ conformance/CONC/CONC-7-scalar-annotation-ok.hir
 conformance/CONC/CONC-7-sequence-payload-bad.hir
 conformance/CONC/CONC-7-sequence-payload-ok.hir
 conformance/CONC/CONC-8-await-channel-cycle-blocked.hir
+conformance/CONC/CONC-8-await-channel-cycle-run.hir
 conformance/CONC/CONC-8-held-sender-blocked.hir
+conformance/CONC/CONC-8-held-sender-run.hir
 conformance/CONC/CONC-8-two-task-channel-blocked.hir
+conformance/CONC/CONC-8-two-task-channel-run.hir
 conformance/CT/CT-1-arithmetic-constant.hir
 conformance/CT/CT-1-conditional-constant.hir
 conformance/CT/CT-1-contract-failure-bad.hir

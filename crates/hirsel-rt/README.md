@@ -371,6 +371,19 @@ call the `$intrinsic.Task*` entries (`hirsel_rt_v2_task_*`). A result crosses as
 `task.cancel` and `task.detach` are runtime primitives. A detached child drops its result when
 it completes, or at the detach if it already has; only live children keep scope rows.
 
+`channels.rs` is the run's unbounded FIFO channels (CONC-6), behind `channel.open`,
+`sender.dup` and the compiled bodies of `channel.send` and `channel.receive`:
+
+- A message crosses as the block of a one-element `List[T]` in an `Option` slot, so the runtime
+  moves block references and never reads a payload's layout.
+- A send fails `Canceled` when the running task is canceled, else `Closed` when no receiver is
+  left.
+- A receive returns `Canceled`, else the oldest message, else `Closed` once no sender is left,
+  else parks; its poll performs the receive.
+- Sender and Receiver are run-local handle words with bit 63 set. Their drop's handle close
+  reaches the scheduler instead of the Io adapter, and the last receiver's close releases the
+  messages nobody received, oldest first.
+
 ## Launch and the Hirsel-ABI Io entries
 
 `hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds

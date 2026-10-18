@@ -14,6 +14,7 @@
 pub mod arena;
 pub mod builder;
 pub mod bytes;
+pub mod channels;
 pub mod codec;
 pub mod collection;
 pub mod failure;
@@ -122,6 +123,8 @@ pub const BODIES: &[&LibraryBody] = &[
     &tasks::ASYNC,
     &tasks::AWAIT,
     &tasks::MAIN,
+    &channels::SEND,
+    &channels::RECEIVE,
     // value: an operation used as a function value.
     &value::FORWARD,
     // views (lib-views): none; its cursor protocols are runtime primitives.
@@ -193,7 +196,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 12;
+pub const REVISION: u32 = 13;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

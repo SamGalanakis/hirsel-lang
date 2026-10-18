@@ -2192,7 +2192,11 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::Defuse { address }
             | Inst::FinalizeEnd { address, .. }
             | Inst::Replace { address, .. }
-            | Inst::BeginLoan { address, .. } => addr_use(address, &mut used),
+            | Inst::BeginLoan { address, .. }
+            // A sequence write writes the content its place holds.
+            | Inst::SeqReserve { address, .. }
+            | Inst::SeqSetLen { address, .. }
+            | Inst::SeqAppend { address, .. } => addr_use(address, &mut used),
             Inst::Store { address, .. } => match slot(address) {
                 Some((s, path)) if path.is_empty() => killed.push(s),
                 _ => addr_use(address, &mut used),

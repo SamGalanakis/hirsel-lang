@@ -35,6 +35,7 @@
 //! or foreign word is an invariant fault rather than another task's row.
 
 use std::collections::VecDeque;
+use std::ptr::NonNull;
 
 use crate::context::RunCtx;
 use crate::failure::{Chained, FailureState};
@@ -113,6 +114,11 @@ enum Wait {
     },
     /// A scope exit, until every child of `scope` holds its result or completed.
     Exit { scope: u32 },
+    /// A receive on `channel`, which moves a message into `slot` (CONC-6).
+    Receive {
+        channel: u32,
+        slot: *mut *mut Header,
+    },
 }
 
 /// A completed child's result slot, inside its parked frame.
@@ -140,6 +146,8 @@ struct Task {
     slot: Option<Slot>,
     /// What the task waits for while parked.
     wait: Option<Wait>,
+    /// The status a receive's poll produced.
+    status: u32,
     /// The task to resume directly when this one completes (a join or a discard ran it).
     handoff: Option<u32>,
     detached: bool,
@@ -164,6 +172,7 @@ pub(crate) struct Scheduler {
     runnable: VecDeque<u32>,
     /// Parked tasks, in park order.
     parked: Vec<u32>,
+    pub(crate) channels: crate::channels::Channels,
     idle_stacks: Vec<Stack>,
     /// The stack of a task that completed; the next task to run recycles it.
     retired: Option<Stack>,
@@ -215,11 +224,15 @@ impl Scheduler {
     }
     /// The running task's cancellation: its own, else its innermost canceled scope's.
     fn canceled(&mut self, ctx_shield: u32) -> Option<u32> {
-        if ctx_shield > 0 {
+        let current = self.current;
+        self.canceled_task(current, ctx_shield)
+    }
+    /// `task`'s cancellation, with `shield` its finalizer shield (the context's while it runs).
+    fn canceled_task(&mut self, task: u32, shield: u32) -> Option<u32> {
+        if shield > 0 {
             return None;
         }
-        let current = self.current;
-        let task = self.task(current);
+        let task = self.task(task);
         if let Some(cause) = task.canceled {
             return Some(cause);
         }
@@ -276,6 +289,7 @@ impl Task {
             code: None,
             slot: None,
             wait: None,
+            status: 0,
             handoff: None,
             detached: false,
             failure: None,
@@ -395,6 +409,17 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32) -> bool {
             State::Ready | State::Parked => false,
         },
         Some(Wait::Exit { scope }) => s.settled(scope),
+        Some(Wait::Receive { channel, slot }) => {
+            let shield = s.task(task).saved.shield;
+            // SAFETY: the slot is in the parked task's frame.
+            match unsafe { receive_ready(s, task, shield, channel, slot) } {
+                Some(status) => {
+                    s.task(task).status = status;
+                    true
+                }
+                None => false,
+            }
+        }
         None => fault("a parked task without a wait"),
     }
 }
@@ -875,4 +900,172 @@ pub(crate) unsafe fn canceled(ctx: *mut RunCtx) -> Option<u32> {
     // SAFETY: the context is live.
     let shield = unsafe { (*ctx).shield };
     unsafe { (*ctx).tasks.as_deref_mut() }.and_then(|s| s.canceled(shield))
+}
+
+/// A receive's outcome for `task`, unless it must wait: canceled, else the oldest message
+/// (moved into `slot`), else closed once no sender is left.
+///
+/// # Safety
+/// `slot` is a `None` message slot in `task`'s frame.
+unsafe fn receive_ready(
+    s: &mut Scheduler,
+    task: u32,
+    shield: u32,
+    channel: u32,
+    slot: *mut *mut Header,
+) -> Option<u32> {
+    if let Some(cause) = s.canceled_task(task, shield) {
+        return Some(crate::channels::CANCELED + cause);
+    }
+    match s.channels.receive(channel) {
+        Ok(Some(message)) => {
+            // SAFETY: caller contract.
+            unsafe { slot.write(message.as_ptr()) };
+            Some(crate::channels::DONE)
+        }
+        Ok(None) => None,
+        Err(status) => Some(status),
+    }
+}
+
+/// `channel.open(tasks) -> (Sender[T], Receiver[T])` (CONC-6).
+///
+/// # Safety
+/// `ctx` is live and `out` writable for two words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    _tasks: *const u64,
+) -> u8 {
+    let (sender, receiver) = scheduler(ctx).channels.open();
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(sender);
+        out.add(1).write(receiver);
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `sender.dup(tasks, s) -> Sender[T]`: another Sender of `s`'s channel.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `sender` an open Sender word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    _tasks: *const u64,
+    sender: *const u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    let word = scheduler(ctx).channels.dup(unsafe { sender.read() });
+    unsafe {
+        out.write(word);
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `$intrinsic.ChannelSend[T](mut s, mut message)`: queue the `Some` block of `message`,
+/// leaving `None`, unless the running task is canceled or no receiver is left; then the
+/// message stays and the status says why.
+///
+/// # Safety
+/// `ctx` is live, `out` writable, `sender` an open Sender word and `message` a `Some` slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
+    ctx: *mut RunCtx,
+    out: *mut u32,
+    sender: *mut u64,
+    message: *mut *mut Header,
+) -> u8 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let channel = s.channels.channel(unsafe { sender.read() }, true);
+    let shield = unsafe { (*ctx).shield };
+    let status = match s.canceled(shield) {
+        Some(cause) => crate::channels::CANCELED + cause,
+        None => {
+            // SAFETY: caller contract.
+            let block = NonNull::new(unsafe { message.read() })
+                .unwrap_or_else(|| fault("a send of an empty message slot"));
+            let status = s.channels.send(channel, block);
+            if status == crate::channels::DONE {
+                unsafe { message.write(std::ptr::null_mut()) };
+            }
+            status
+        }
+    };
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(status);
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `$intrinsic.ChannelReceive[T](mut r, mut message)`: move the oldest message into the
+/// `None` slot `message`, parking while the queue is empty and a sender is left.
+///
+/// # Safety
+/// `ctx` is live, `out` writable, `receiver` an open Receiver word and `message` a `None` slot
+/// in the running task's frame.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
+    ctx: *mut RunCtx,
+    out: *mut u32,
+    receiver: *mut u64,
+    message: *mut *mut Header,
+) -> u8 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let channel = s.channels.channel(unsafe { receiver.read() }, false);
+    let current = s.current;
+    let shield = unsafe { (*ctx).shield };
+    // SAFETY: caller contract.
+    let status = match unsafe { receive_ready(s, current, shield, channel, message) } {
+        Some(status) => {
+            // SAFETY: the context is live.
+            unsafe { yield_now(ctx) };
+            status
+        }
+        None => {
+            // SAFETY: the slot is in this task's frame, parked with it.
+            unsafe {
+                block(
+                    ctx,
+                    Wait::Receive {
+                        channel,
+                        slot: message,
+                    },
+                    true,
+                )
+            };
+            scheduler(ctx).task(current).status
+        }
+    };
+    // SAFETY: caller contract.
+    unsafe { out.write(status) };
+    STATUS_OK
+}
+
+/// Close the channel endpoint `word` (a dropped Sender or Receiver); a last receiver releases
+/// the messages nobody received, oldest first. Closing is not a yield.
+///
+/// # Safety
+/// `ctx` is live and `word` an open endpoint of its run.
+pub(crate) unsafe fn close_endpoint(ctx: *mut RunCtx, word: u64, anchor: u64) -> u8 {
+    let left = scheduler(ctx).channels.close(word);
+    let mut status = STATUS_OK;
+    for message in left {
+        // SAFETY: each queued message is one owned credit of its block.
+        status |= unsafe {
+            crate::release::release_block(&mut *ctx, message.as_ptr(), std::ptr::null(), anchor)
+        };
+    }
+    status
 }

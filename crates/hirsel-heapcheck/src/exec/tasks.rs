@@ -34,7 +34,7 @@ enum State {
 
 /// Where a task stopped inside a task operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Wait {
+pub(super) enum Wait {
     /// A join of `child`, parked until a poll found it finished.
     Join(u32),
     /// A join that handed off to holding `child`; it completes once the child completed,
@@ -46,15 +46,23 @@ enum Wait {
     Finish,
     /// A detach that handed off to a holding child.
     Detach(u32),
+    /// A receive, parked until a poll found a message, a closed channel or a cancellation.
+    Receive,
 }
 
 /// What a parked task waits for; its poll performs the wait's effect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Park {
+pub(super) enum Park {
     /// A join of `child`, which moves its result to `slot`.
     Join { child: u32, slot: Ptr },
     /// A scope exit, until every child of `scope` holds its result or completed.
     Exit(u32),
+    /// A receive on `channel`, which moves a message into `slot` (CONC-6).
+    Receive {
+        channel: u32,
+        slot: Ptr,
+        layout: LayoutId,
+    },
 }
 
 /// A holding child's result: its slot, the slot's layout and its `None` image.
@@ -66,7 +74,7 @@ struct Slot {
 }
 
 #[derive(Clone)]
-struct Task {
+pub(super) struct Task {
     generation: u32,
     stack: Vec<Activity>,
     failures: Vec<ObservedFailure>,
@@ -79,11 +87,13 @@ struct Task {
     spawned: u32,
     canceled: Option<u32>,
     scopes: Vec<u32>,
-    wait: Option<Wait>,
+    pub(super) wait: Option<Wait>,
     /// What the task waits for while parked, or once at the front (`parking`).
     park: Option<Park>,
     /// Queued after its operation's yield, to park when it reaches the front.
     parking: bool,
+    /// The status a receive's poll produced.
+    pub(super) status: u32,
     slot: Option<Slot>,
     handoff: Option<u32>,
     detached: bool,
@@ -113,6 +123,7 @@ impl Task {
             wait: None,
             park: None,
             parking: false,
+            status: 0,
             slot: None,
             handoff: None,
             detached: false,
@@ -136,10 +147,11 @@ pub(super) struct Tasks {
     tasks: Vec<Option<Task>>,
     scopes: Vec<Option<Scope>>,
     generation: u32,
-    current: u32,
+    pub(super) current: u32,
     runnable: VecDeque<u32>,
     /// Parked tasks, in park order.
     parked: Vec<u32>,
+    pub(super) channels: super::channels::Channels,
     /// The switch the running operation requested, and whether the running
     /// task completed (its stack is not kept).
     switch: Option<(u32, bool)>,
@@ -172,6 +184,10 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "$intrinsic.TaskJoin",
         "task.cancel",
         "task.detach",
+        "channel.open",
+        "sender.dup",
+        "$intrinsic.ChannelSend",
+        "$intrinsic.ChannelReceive",
     ]
     .into_iter()
     .find(|n| *n == name)
@@ -186,11 +202,12 @@ impl Tasks {
             current: 0,
             runnable: VecDeque::new(),
             parked: Vec::new(),
+            channels: Default::default(),
             switch: None,
             spawns: Vec::new(),
         }
     }
-    fn task(&mut self, index: u32) -> Checked<&mut Task> {
+    pub(super) fn task(&mut self, index: u32) -> Checked<&mut Task> {
         self.tasks
             .get_mut(index as usize)
             .and_then(Option::as_mut)
@@ -225,8 +242,17 @@ impl Tasks {
             ),
         }
     }
-    fn canceled(&self) -> Option<u32> {
-        let task = self.tasks[self.current as usize].as_ref()?;
+    pub(super) fn canceled(&self) -> Option<u32> {
+        self.canceled_of(self.current)
+    }
+    pub(super) fn canceled_task(&self, task: u32) -> Checked<Option<u32>> {
+        if self.tasks.get(task as usize).is_none_or(Option::is_none) {
+            return fail(V::Malformed, "a vacant task row");
+        }
+        Ok(self.canceled_of(task))
+    }
+    fn canceled_of(&self, task: u32) -> Option<u32> {
+        let task = self.tasks[task as usize].as_ref()?;
         task.canceled.or_else(|| {
             task.scopes
                 .iter()
@@ -284,12 +310,12 @@ impl Tasks {
 }
 
 impl<S: Stage> Machine<'_, S> {
-    fn scheduler(&mut self) -> &mut Tasks {
+    pub(super) fn scheduler(&mut self) -> &mut Tasks {
         self.tasks.get_or_insert_with(|| Box::new(Tasks::new()))
     }
 
     /// The handle word of a `Scope` or `Task` argument, by value or by address.
-    fn task_word(&mut self, f: &Frame, argument: &CallArgument) -> Checked<u64> {
+    pub(super) fn task_word(&mut self, f: &Frame, argument: &CallArgument) -> Checked<u64> {
         let val = match argument.value {
             ArgumentValue::Value(v) => self.read_use(f, v)?,
             ArgumentValue::Address { address, .. } => {
@@ -314,7 +340,7 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     /// The argument of declared parameter `ordinal`.
-    fn task_argument(arguments: &[CallArgument], ordinal: u32) -> Checked<CallArgument> {
+    pub(super) fn task_argument(arguments: &[CallArgument], ordinal: u32) -> Checked<CallArgument> {
         arguments
             .iter()
             .find(|a| a.parameter == ordinal)
@@ -323,7 +349,7 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     /// A `mut` argument's place, and the version its write-back defines.
-    fn task_slot(&mut self, f: &Frame, argument: &CallArgument) -> Checked<Resolved> {
+    pub(super) fn task_slot(&mut self, f: &Frame, argument: &CallArgument) -> Checked<Resolved> {
         let ArgumentValue::Address { address, .. } = argument.value else {
             return fail(V::Malformed, "a result slot passed by value");
         };
@@ -333,7 +359,7 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     /// Finish a task operation normally: its `mut` arguments' versions, its result.
-    fn task_return(
+    pub(super) fn task_return(
         &mut self,
         f: &mut Frame,
         arguments: &[CallArgument],
@@ -458,6 +484,12 @@ impl<S: Stage> Machine<'_, S> {
             .pool(site.arguments, &self.unit(f.unit).pools.call_arguments)?
             .to_vec();
         match name {
+            "channel.open"
+            | "sender.dup"
+            | "$intrinsic.ChannelSend"
+            | "$intrinsic.ChannelReceive" => {
+                self.channel_operation(f, site, name, &arguments, normal)
+            }
             "$intrinsic.TaskScopeEnter" => {
                 let s = self.scheduler();
                 let generation = s.fresh_generation();
@@ -787,6 +819,17 @@ impl<S: Stage> Machine<'_, S> {
                 State::Ready | State::Parked => Ok(false),
             },
             Some(Park::Exit(scope)) => Ok(s.settled(scope)),
+            Some(Park::Receive {
+                channel,
+                slot,
+                layout,
+            }) => match self.receive_ready(task, channel, slot, layout)? {
+                Some(status) => {
+                    self.scheduler().task(task)?.status = status;
+                    Ok(true)
+                }
+                None => Ok(false),
+            },
             None => fail(V::Malformed, "a parked task without a wait"),
         }
     }
@@ -841,7 +884,7 @@ impl<S: Stage> Machine<'_, S> {
     /// Wait for `park`; the operation runs again once a poll performed its
     /// effect. `yielded`: the operation yields first, and the task parks when
     /// it is next at the front.
-    fn park_until(&mut self, park: Park, yielded: bool) -> Checked<()> {
+    pub(super) fn park_until(&mut self, park: Park, yielded: bool) -> Checked<()> {
         if yielded {
             self.poll_parked()?;
             let s = self.scheduler();

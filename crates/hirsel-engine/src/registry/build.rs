@@ -553,6 +553,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "s: Scope, take h: Task[R] of s, mut slot: Option[R], size: u64",
             "()",
         ),
+        // A message crosses as a one-element list block the runtime queues and, unreceived,
+        // releases (CONC-6). The status is 0 sent or received, 1 closed, 2 + cause canceled.
+        (
+            "T",
+            "$intrinsic.ChannelSend",
+            "mut s: Sender[T], mut message: Option[List[T]]",
+            "u32",
+        ),
+        (
+            "T",
+            "$intrinsic.ChannelReceive",
+            "mut r: Receiver[T], mut message: Option[List[T]]",
+            "u32",
+        ),
     ] {
         let mut b = Builder::new(generics).with_declarations(&out);
         let f = b.function(params, result, false);

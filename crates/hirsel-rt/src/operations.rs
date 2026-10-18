@@ -111,6 +111,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "task.scope"
             | "task.async"
             | "task.await"
+            | "channel.send"
+            | "channel.receive"
     ) || MAP_BODIES.contains(&name.as_str())
     {
         row.dispositions.native = Disposition::Body;
@@ -161,6 +163,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.TaskFinish" => Some("hirsel_rt_v2_task_finish".into()),
         "$intrinsic.TaskJoin" => Some("hirsel_rt_v2_task_join".into()),
         "task.cancel" | "task.detach" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
+        // Channels (CONC-6), in the task runtime: the compiled send and receive bodies move a
+        // message's block through these entries.
+        "channel.open" | "sender.dup" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
+        "$intrinsic.ChannelSend" => Some("hirsel_rt_v2_channel_send".into()),
+        "$intrinsic.ChannelReceive" => Some("hirsel_rt_v2_channel_receive".into()),
         "$intrinsic.UnicodeScalars_open" => Some("hirsel_rt_v2_unicode_scalars_open".into()),
         "$intrinsic.UnicodeScalars_next" => Some("hirsel_rt_v2_unicode_scalars_next".into()),
         "$intrinsic.ScalarPositions_open" => Some("hirsel_rt_v2_scalar_positions_open".into()),
@@ -369,6 +376,30 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_task_detach",
         destination: false,
         result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_channel_open",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_sender_dup",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_channel_send",
+        destination: false,
+        result: Some((4, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_channel_receive",
+        destination: false,
+        result: Some((4, 4)),
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
@@ -1037,6 +1068,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.TaskSpawn",
     "$intrinsic.TaskFinish",
     "$intrinsic.TaskJoin",
+    "$intrinsic.ChannelSend",
+    "$intrinsic.ChannelReceive",
     "$intrinsic.OrderCompare_i128",
     "$intrinsic.OrderCompare_i16",
     "$intrinsic.OrderCompare_i32",

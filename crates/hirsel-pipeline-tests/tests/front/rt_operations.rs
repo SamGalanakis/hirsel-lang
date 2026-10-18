@@ -193,6 +193,8 @@ fn inventory_set_equality_and_digest_control() {
         "task.scope",
         "task.async",
         "task.await",
+        "channel.send",
+        "channel.receive",
     ] {
         assert_eq!(
             native
@@ -204,7 +206,7 @@ fn inventory_set_equality_and_digest_control() {
             Disposition::Body
         );
     }
-    for name in ["task.isolate", "channel.open", "mutex.with", "atomic.load"] {
+    for name in ["task.isolate", "mutex.with", "atomic.load"] {
         assert!(matches!(
             native
                 .rows()

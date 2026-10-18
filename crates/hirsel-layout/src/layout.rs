@@ -2679,11 +2679,11 @@ impl<'o> LayoutBuilder<'o> {
             // A run-local task-table word (CONC-2); a handle nobody awaited needs no drop:
             // its scope's exit joins the child.
             BuiltinType::Task => Ok(self.handle_record(key, false)),
-            BuiltinType::Region
-            | BuiltinType::Sender
-            | BuiltinType::Receiver
-            | BuiltinType::Mutex
-            | BuiltinType::Atomic => unavailable(None, format!("{} is M2", builtin_name(kind))),
+            // A run-local channel endpoint word (CONC-6), closed when dropped.
+            BuiltinType::Sender | BuiltinType::Receiver => Ok(self.handle_record(key, true)),
+            BuiltinType::Region | BuiltinType::Mutex | BuiltinType::Atomic => {
+                unavailable(None, format!("{} is M2", builtin_name(kind)))
+            }
         }
     }
 

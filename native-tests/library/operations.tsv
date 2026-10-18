@@ -2,6 +2,8 @@ copy_to	5311d8cb4bda2f9532931752d1e98cc3d6098dd2c3d3ab143d2ba765de1c95c5	0:b:n;1
 forget	c592913d30391818bea47b8d61f0e41a7f33967532702d30495fba395aa29e63	0:t:[0]->n
 $intrinsic.ArrayConsume_next	0c31dea92588ea31ba3c947525c9f4b6e2c73156e9f9b7d65287d56c37179372	0:m:[0]->[0]
 $intrinsic.ArrayConsume_open	1b987d85c85e27fe9d8362789231f306f9097baad73b9c1587c208b546289796	0:t:[0]->[0]
+$intrinsic.ChannelReceive	c6d2465b96654ce7529941af2be2f0216af06fdeeced89f7928fa115b5bcdcbf	0:m:[0];1:m:[0]->n
+$intrinsic.ChannelSend	0100e4489ee541da7fb0d8e89442401c506457b91673f1cf81e14dac915751b0	0:m:[0];1:m:[0]->n
 $intrinsic.InlineConsume_next	295cc2383b56d67815e4768ac2a2d51d537bad65f84b1329a5568a4da6bb0ebc	0:m:[0]->[0]
 $intrinsic.InlineConsume_open	cad13acbad9f41a24347126f74e127d15db2badebcb541f8759e6d0dc7552f31	0:t:[0]->[0]
 $intrinsic.ListConsume_next	857a17605340cb5d627719090f5bcb365f9d78cf7a373b2d3de6e7d4ee21f70b	0:m:[0]->[0]

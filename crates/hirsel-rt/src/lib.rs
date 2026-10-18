@@ -39,6 +39,7 @@ pub mod tls_abi;
 pub mod views;
 
 pub mod alloc;
+mod channels;
 pub mod codec;
 pub mod context;
 pub mod copy;

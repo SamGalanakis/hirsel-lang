@@ -53,8 +53,15 @@ pub(crate) unsafe fn run_finalizer(
 }
 
 /// Close the run-context `handle` through the Io adapter's close thunk, shielded like a
-/// finalizer. A handle drop without an adapter is an invariant fault.
+/// finalizer; a channel endpoint closes in the task scheduler instead. A handle drop without an
+/// adapter is an invariant fault.
 pub(crate) unsafe fn run_close(ctx: &mut RunCtx, handle: u64, anchor: u64) -> u8 {
+    if handle & crate::channels::ENDPOINT != 0 {
+        // SAFETY: the dropped value owned this endpoint of the run.
+        return shielded(ctx, |ctx| unsafe {
+            crate::tasks::close_endpoint(ctx, handle, anchor)
+        });
+    }
     let Some(close) = ctx.close_handle else {
         fault("a handle drop in a context without an Io adapter's close_handle");
     };

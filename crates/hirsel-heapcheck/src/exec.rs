@@ -29,6 +29,7 @@ mod compare;
 mod flat;
 mod fork;
 pub(crate) use fork::campaign as fork_campaign;
+mod channels;
 mod holders;
 mod tasks;
 mod vector;
@@ -8409,7 +8410,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                                     return fail(V::ForgedPointer, format!("unknown handle {h}"));
                                 }
                             }
-                            if let Some(rule) = self
+                            if h & channels::ENDPOINT != 0 {
+                                // A channel endpoint closes in the task scheduler (CONC-6).
+                                self.close_endpoint(h, &mut d.work)?;
+                            } else if let Some(rule) = self
                                 .ops
                                 .close_handle(h, &mut self.output)
                                 .map_err(|message| err(V::Malformed, message))?

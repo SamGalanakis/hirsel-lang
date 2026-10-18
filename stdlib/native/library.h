@@ -139,6 +139,13 @@ uint8_t hirsel_rt_v2_task_finish(hirsel_rt_v2_ctx*, uint8_t*, const uint8_t*, ui
 uint8_t hirsel_rt_v2_task_join(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_task_cancel(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_task_detach(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
+/* Channels (CONC-6). Sender and Receiver are run-local handle words; a message crosses as the
+   block of a one-element list, moved out of and into Option[List[T]] slots. The status is 0
+   sent or received, 1 closed, 2 + cause canceled. */
+uint8_t hirsel_rt_v2_channel_open(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_sender_dup(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_channel_send(hirsel_rt_v2_ctx*, uint32_t*, uint64_t*, hirsel_rt_v2_header**);
+uint8_t hirsel_rt_v2_channel_receive(hirsel_rt_v2_ctx*, uint32_t*, uint64_t*, hirsel_rt_v2_header**);
 #ifdef __cplusplus
 }
 #endif

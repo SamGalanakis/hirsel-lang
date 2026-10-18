@@ -50,16 +50,20 @@ pub static MAIN: LibraryBody = LibraryBody {
 
 /// A runtime entry under this body's actuals: its operation, its `FnAbi` and
 /// its callable type, a row of `store` (a copy of the body's store).
-struct Intrinsic {
+pub(super) struct Intrinsic {
     operation: OperationId,
-    abi: FnAbiId,
+    pub(super) abi: FnAbiId,
     /// The actuals the operation's declared ABI is derived under.
     arguments: Vec<OperationArgument>,
     store: hirsel_types::TypeStore,
     callable: TypeId,
 }
 
-fn intrinsic(cx: &mut Cx<'_>, name: &str, arguments: Vec<GenericArgument>) -> R<Intrinsic> {
+pub(super) fn intrinsic(
+    cx: &mut Cx<'_>,
+    name: &str,
+    arguments: Vec<GenericArgument>,
+) -> R<Intrinsic> {
     let path = DefPath::core(&format!("$intrinsic.{name}"));
     let operation = cx
         .program
@@ -115,7 +119,7 @@ fn parameter(store: &hirsel_types::TypeStore, callable: TypeId, ordinal: usize) 
 }
 
 /// `Option[R]` in the body's store, its layout and its storage bytes.
-fn option_of(cx: &mut Cx<'_>, result: TypeId) -> R<(LayoutId, u64)> {
+pub(super) fn option_of(cx: &mut Cx<'_>, result: TypeId) -> R<(LayoutId, u64)> {
     let ty = cx.store.push(Type::with_kind(TypeKind::Named {
         definition: DefPath::core("Option"),
         arguments: vec![GenericArgument::Type(result)].into(),
@@ -129,7 +133,7 @@ fn option_of(cx: &mut Cx<'_>, result: TypeId) -> R<(LayoutId, u64)> {
     Ok((layout, size))
 }
 
-fn argument(parameter: u32, passing: Passing, value: ValueId) -> CallArgument {
+pub(super) fn argument(parameter: u32, passing: Passing, value: ValueId) -> CallArgument {
     CallArgument {
         parameter,
         passing,
@@ -138,7 +142,7 @@ fn argument(parameter: u32, passing: Passing, value: ValueId) -> CallArgument {
 }
 
 /// A `mut` argument: the slot's new version is defined at the call.
-fn exclusive(
+pub(super) fn exclusive(
     b: &mut Body<'_, '_>,
     parameter: u32,
     slot: SlotId,
@@ -155,7 +159,7 @@ fn exclusive(
 
 /// Call `callee` and continue in a new block of kind `after`. Both outcomes
 /// end `loans`, in reverse; a failure then continues along `failure`'s edge.
-fn invoke(
+pub(super) fn invoke(
     b: &mut Body<'_, '_>,
     callee: (Callee, Vec<OperationArgument>),
     abi: FnAbiId,
@@ -206,7 +210,10 @@ fn invoke(
     result
 }
 
-fn operation(b: &mut Body<'_, '_>, entry: &Intrinsic) -> (Callee, Vec<OperationArgument>) {
+pub(super) fn operation(
+    b: &mut Body<'_, '_>,
+    entry: &Intrinsic,
+) -> (Callee, Vec<OperationArgument>) {
     let reference = OperationRef(b.ed.unit.tables.operations.len() as u32);
     b.ed.unit.tables.operations.push(entry.operation.clone());
     (Callee::Operation(reference), entry.arguments.clone())
@@ -503,7 +510,9 @@ fn join(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         slot,
         if_live: false,
     });
-    b.ret(Some(value));
+    // A unit result has no return value in the ABI.
+    let returned = b.cx.fn_abi().result.map(|_| value);
+    b.ret(returned);
     Ok(b.finish())
 }
 
