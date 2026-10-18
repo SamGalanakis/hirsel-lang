@@ -12,6 +12,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.inputs.failures.codes.get(BOUNDED_RULE).copied()
     }
 
+    /// Whether this program builds tracked arena blocks (MEM-6): only charges observe them,
+    /// so a program that opens no bounded arena builds none, and its pushes, writability
+    /// tests and growth read no tracked count.
+    pub(super) fn tracking(&self) -> bool {
+        self.bounded_code().is_some()
+    }
+
+    /// Whether the construction `site` builds a tracked arena block.
+    pub(super) fn tracks(&self, site: &ConstructSite) -> bool {
+        site.tracked && self.tracking()
+    }
+
     /// A block that records the arena `region`'s own `OutOfSpace` at `anchor`, disposes
     /// `failure`'s tokens and enters its cleanup.
     pub(super) fn exhausted_block(
@@ -110,6 +122,233 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let next = self.module.append_block(self.function);
         self.builder.cold_cond_br(failed, exhausted, next);
         self.builder.position(next);
+        Ok(())
+    }
+
+    /// The arena record of the tracked arena block `block` (runtime ABI 11).
+    pub(super) fn tracked_region(&self, block: Value<'m>) -> Value<'m> {
+        let address = self.builder.offset(
+            block,
+            self.const_u64(0u64.wrapping_sub(hirsel_lir::runtime_abi::TRACKED_REGION_BACK)),
+        );
+        self.builder.load(self.module.ptr_type(), address, 8)
+    }
+
+    /// `Share`: a semantic copy marks every unshared tracked arena block `value` holds at
+    /// inline depth shared. Only charges observe it, so a program that opens no bounded
+    /// arena emits nothing; a block a copy reaches through another one becomes shared when
+    /// that one is copied on its write, which dups it.
+    pub(super) fn share(&mut self, value: ValueId) -> Emitted {
+        if self.bounded_code().is_none() {
+            return Ok(());
+        }
+        let ty = self.value_type(value)?;
+        if ty.repr == ValueRepr::Block {
+            let block = self.get(value)?;
+            self.share_block(block);
+            return Ok(());
+        }
+        let shape = self.layout_shape(ty.layout)?;
+        let slot = self.stack(ty.layout)?;
+        let image = self.get(value)?;
+        self.store(shape, image, slot);
+        let record = self.layout(ty.layout)?;
+        let (align, steps) = (record.align, record.drop.clone());
+        self.share_steps(slot.ptr, align, &steps)
+    }
+
+    fn share_block(&self, block: Value<'m>) {
+        use hirsel_lir::runtime_abi::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_OFFSET};
+        let i32_ty = self.module.int_type(32);
+        let word = if COUNT_OFFSET == 0 {
+            block
+        } else {
+            self.builder.offset(block, self.const_u64(COUNT_OFFSET))
+        };
+        let count = self
+            .builder
+            .load_access(i32_ty, word, 4, crate::context::Access::Count);
+        let unshared = self.builder.icmp(
+            IntPredicate::Eq,
+            count,
+            self.module
+                .const_int(i32_ty, u128::from(COUNT_ARENA_UNIQUE)),
+        );
+        let (mark, done) = (
+            self.module.append_block(self.function),
+            self.module.append_block(self.function),
+        );
+        self.builder.cond_br(unshared, mark, done);
+        self.builder.position(mark);
+        self.builder.store(
+            self.module
+                .const_int(i32_ty, u128::from(COUNT_ARENA_SHARED)),
+            word,
+            4,
+        );
+        self.builder.br(done);
+        self.builder.position(done);
+    }
+
+    /// Mark the blocks the drop program `steps` over the inline value at `base` releases.
+    fn share_steps(&mut self, base: Value<'m>, align: u32, steps: &[DropStep]) -> Emitted {
+        let at = |this: &Self, offset: u64| {
+            if offset == 0 {
+                base
+            } else {
+                this.builder.offset(base, this.const_u64(offset))
+            }
+        };
+        for step in steps {
+            match step {
+                DropStep::Release { offset } => {
+                    let child = self.builder.load(
+                        self.module.ptr_type(),
+                        at(self, *offset),
+                        align.min(low_bit(*offset)).min(8),
+                    );
+                    self.share_block(child);
+                }
+                DropStep::Child { offset, layout } => {
+                    let steps = self.layout(*layout)?.drop.clone();
+                    let base = at(self, *offset);
+                    self.share_steps(base, align.min(low_bit(*offset)), &steps)?;
+                }
+                DropStep::RepeatReverse {
+                    offset,
+                    count,
+                    stride,
+                    element,
+                } => {
+                    let steps = self.layout(*element)?.drop.clone();
+                    for i in 0..*count {
+                        let offset = offset + i * stride;
+                        let base = at(self, offset);
+                        self.share_steps(base, align.min(low_bit(offset)), &steps)?;
+                    }
+                }
+                DropStep::ActiveVariant {
+                    tag_offset,
+                    form,
+                    variants,
+                } => {
+                    let i32_ty = self.module.int_type(32);
+                    let tag = load_tag(&self.builder, base, align, *tag_offset, *form, false);
+                    let join = self.module.append_block(self.function);
+                    for (variant, steps) in variants {
+                        if steps.is_empty() {
+                            continue;
+                        }
+                        let (yes, next) = (
+                            self.module.append_block(self.function),
+                            self.module.append_block(self.function),
+                        );
+                        let active = self.builder.icmp(
+                            IntPredicate::Eq,
+                            tag,
+                            self.module.const_int(i32_ty, u128::from(*variant)),
+                        );
+                        self.builder.cond_br(active, yes, next);
+                        self.builder.position(yes);
+                        self.share_steps(base, align, steps)?;
+                        self.builder.br(join);
+                        self.builder.position(next);
+                    }
+                    self.builder.br(join);
+                    self.builder.position(join);
+                }
+                // Finalizers, environments, handles and frozen roots hold no tracked block
+                // at inline depth; element loops are a sequence payload's.
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// `ArenaPush`: a tracked arena List at `address` is charged one element and given room
+    /// for it by the runtime, which may copy or relocate it within its arena (MEM-6). Any
+    /// other block passes one count test; its deferred length stays in its register.
+    pub(super) fn arena_push(&mut self, address: AddressId, failure: FailureId) -> Emitted {
+        use hirsel_lir::runtime_abi::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_OFFSET};
+        let place = self.place(address)?;
+        let Some(element) = self.sequence_element(place.layout)? else {
+            return self.invalid("an arena push of a place that holds no List block");
+        };
+        let (size, align) = (
+            self.fixed_size(element)?,
+            u64::from(self.layout(element)?.align),
+        );
+        if !self.tracking() {
+            return Ok(());
+        }
+        let block = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+        let (slow, done) = (
+            self.module.append_block(self.function),
+            self.module.append_block(self.function),
+        );
+        // A must-unique or must-untracked block is no tracked one: its push needs no
+        // count read, and one read finds the block untracked for every later push.
+        let state = self.sequence_state_at(place);
+        let i1 = self.module.int_type(1);
+        if let Some(state) = state {
+            let unique = self.builder.load(i1, state.unique, 1);
+            let untracked = self.builder.load(i1, state.untracked, 1);
+            let known = self.builder.binary(BinOp::Or, unique, untracked);
+            let test = self.module.append_block(self.function);
+            self.builder.cond_br(known, done, test);
+            self.builder.position(test);
+        }
+        let tracked = crate::runtime::is_tracked(&self.builder, block);
+        let untracked = self.module.append_block(self.function);
+        self.builder.cold_cond_br(tracked, slow, untracked);
+        self.builder.position(untracked);
+        if let Some(state) = state {
+            self.builder
+                .store(self.module.const_int(i1, 1), state.untracked, 1);
+        }
+        self.builder.br(done);
+        self.builder.position(slow);
+        // The runtime reads the count in the block and may move it.
+        if let Some(slot) = self.whole_slot(address) {
+            self.flush_length(slot.index())?;
+        }
+        // The block goes by value and comes back through a cell of its own, so the
+        // place's slot stays promotable; an exhausted push leaves the cell as it was.
+        let entry = self.runtime(RuntimeEntry::ArenaPush)?;
+        let out = self.prologue.alloca(self.module.ptr_type(), 8);
+        self.builder.store(block, out, 8);
+        let status = self.builder.call(
+            entry,
+            &[
+                self.context,
+                block,
+                self.const_u64(size),
+                self.const_u64(align),
+                out,
+            ],
+        );
+        let pushed = self.builder.load(self.module.ptr_type(), out, 8);
+        self.store(Shape::Scalar(ScalarKind::Pointer), pushed, place);
+        if let Some(state) = self.sequence_state_at(place) {
+            let no = self.module.const_zero(self.module.int_type(1));
+            self.builder.store(no, state.unique, 1);
+            self.builder.store(no, state.untracked, 1);
+        }
+        if let Some(code) = self.bounded_code() {
+            let zero = self.module.const_int(self.module.int_type(8), 0);
+            let failed = self.builder.icmp(IntPredicate::Ne, status, zero);
+            // An exhausted push changes nothing: the block still names its arena.
+            let over = self.module.append_block(self.function);
+            self.builder.cold_cond_br(failed, over, done);
+            self.builder.position(over);
+            let region = self.tracked_region(block);
+            let anchor = self.unit.tables.failures[failure.index()].anchor;
+            let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+            self.builder.br(exhausted);
+        } else {
+            self.builder.br(done);
+        }
+        self.builder.position(done);
         Ok(())
     }
 

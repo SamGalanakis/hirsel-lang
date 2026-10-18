@@ -575,7 +575,7 @@ fn uniqueness_tests(source: &str, unit: &str) -> usize {
             .map(|u| {
                 u.instructions
                     .iter()
-                    .filter(|i| matches!(i, hirsel_lir::ir::Inst::IsUnique { .. }))
+                    .filter(|i| matches!(i, hirsel_lir::ir::Inst::IsWritable { .. }))
                     .count()
             })
             .sum();

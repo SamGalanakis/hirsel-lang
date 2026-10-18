@@ -87,8 +87,13 @@ fn heap_fast_paths_are_inlined_after_optimization_on_either_target() {
                 assert!(ir.contains(exit), "{opt:?} {exit}: {ir}");
             }
             // The allocation joins from two blocks: the fast one writes the header, and only
-            // the slow one calls the runtime.
-            let joins: Vec<_> = ir
+            // the slow one calls the runtime. Optimization may inline `churn` into its
+            // function-reference thunk too, so only its own definition is counted.
+            let churn = ir
+                .split("\ndefine ")
+                .find(|f| f.contains("@_H17fixture104emit5churn"))
+                .unwrap_or_else(|| panic!("{opt:?}: no definition of churn: {ir}"));
+            let joins: Vec<_> = churn
                 .split("\n\n")
                 .filter(|b| b.contains("br label %hirsel.fast.alloc.0.exit"))
                 .collect();

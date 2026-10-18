@@ -243,6 +243,7 @@ pub fn replay_interpreter_with_fixture(
                         Value::Sequence {
                             kind: hirsel_types::BuiltinType::List,
                             elements: vec![],
+                            arena: None,
                         },
                         reference::u64_value(*max),
                     ],

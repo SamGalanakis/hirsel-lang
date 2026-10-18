@@ -1,6 +1,7 @@
 //! The integration tests of this crate, linked as one binary.
 mod abi;
 mod alloc;
+mod arena_lists;
 mod clocks;
 mod copy;
 mod count;

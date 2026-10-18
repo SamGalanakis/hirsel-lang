@@ -139,6 +139,7 @@ impl<S: Stage> UnitBuilder<S> {
         );
         self.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor,
             layout,
             fields,

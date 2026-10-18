@@ -41,6 +41,9 @@ Invariants:
   no deferred count stores, no uniqueness facts, no specialized release glue
   (`hirsel_rt_v2_release` with the header's descriptor), no adopted builder blocks.
   Arena blocks always call `hirsel_rt_v2_arena_alloc` after the bounded-arena charge.
+  In a program that opens a bounded arena, a List or Array an arena holds is a tracked
+  block (MEM-6, runtime ABI 11): every `ArenaPush` calls `hirsel_rt_v2_arena_push`,
+  `IsWritable` reads the count, and `Share` marks the tracked blocks a copy holds shared.
 - Library and inline-instance bodies are weak (`Preemptible`) in every object that
   references them, as are layout descriptors and the descriptor registry; source units
   are exported once. No `available_externally` copies: Cranelift does not inline.

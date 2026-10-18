@@ -22,6 +22,7 @@ mod revision26;
 mod revision29;
 mod revision3;
 mod revision31;
+mod revision32;
 mod revision4;
 mod revision6;
 mod revision7;

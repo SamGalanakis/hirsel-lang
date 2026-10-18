@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 6;
+pub const LAYOUT_VERSION: u32 = 7;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -54,6 +54,12 @@ pub const LOGICAL_UNSUPPORTED: u64 = u64::MAX;
 /// `Layout::flags`: the payload of a `Shared` root block (MEM-11). The blocks its value reaches
 /// are immortal while the root lives; its program begins with [`STEP_THAW`] when it holds any.
 pub const LAYOUT_FROZEN: u32 = 32;
+/// `Layout::flags` (version 7): a sequence's payload. A deep copy into an arena tracks a block
+/// of it (MEM-6) unless the copy reached it below a [`LAYOUT_UNTRACKED_BELOW`] block.
+pub const LAYOUT_SEQUENCE: u32 = 64;
+/// `Layout::flags` (version 7): a Map's, a Set's or an environment's payload, whose sequences a
+/// deep copy into an arena keeps untracked.
+pub const LAYOUT_UNTRACKED_BELOW: u32 = 128;
 
 /// Release the counted block reference stored at `offset`.
 pub const STEP_RELEASE: u32 = 1;
@@ -172,7 +178,9 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
             | LAYOUT_WIDE_CURSOR
             | LAYOUT_NO_EXTENT
             | LAYOUT_LOGICAL_PER_ELEMENT
-            | LAYOUT_FROZEN)
+            | LAYOUT_FROZEN
+            | LAYOUT_SEQUENCE
+            | LAYOUT_UNTRACKED_BELOW)
         != 0
     {
         fault("a layout descriptor has unknown flags");
@@ -506,7 +514,7 @@ unsafe fn consume_edge(ctx: &mut RunCtx, child: *mut Header) -> bool {
         if count == 1 {
             return true;
         }
-        if count != COUNT_IMMORTAL {
+        if count < crate::count::COUNT_ARENA_SHARED {
             (*child).count = count - 1;
         }
         false
@@ -1133,8 +1141,8 @@ pub(crate) unsafe fn release_block(
             ctx.heap.measurement.count_decrements += 1;
         }
         let count = (*block).count;
-        if count == COUNT_IMMORTAL {
-            // T04 DropImmortal — immortal blocks ignore releases.
+        if count >= crate::count::COUNT_ARENA_SHARED {
+            // T04 DropImmortal — immortal and tracked arena blocks ignore releases.
             return STATUS_OK;
         }
         if count > 1 {

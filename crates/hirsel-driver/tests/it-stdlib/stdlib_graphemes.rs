@@ -120,6 +120,7 @@ fn full_gate_every_unicode16_grapheme_break_case_over_full_and_nonzero_origin_sl
                         .iter()
                         .map(|(_, s, _)| Some(Value::String(s.clone())))
                         .collect(),
+                    arena: None,
                 }];
                 let mut library = Library::new(&configuration, Default::default()).unwrap();
                 let execution = hirsel_interp::run_with_runtime(
@@ -151,6 +152,7 @@ fn full_gate_every_unicode16_grapheme_break_case_over_full_and_nonzero_origin_sl
                     let Some(Value::Sequence {
                         kind: BuiltinType::List,
                         elements,
+                        ..
                     }) = actual
                     else {
                         panic!("{name} line {line}: {actual:?}");

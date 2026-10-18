@@ -26,7 +26,9 @@ use hirsel_lir::layout::payload_offset;
 use hirsel_lir::layout_types::{
     DropStep, FieldLayout, LayoutId, LayoutKind, LayoutRecord, LayoutTable, SizeSpec,
 };
-use hirsel_lir::runtime_abi::{COUNT_IMMORTAL, COUNT_OFFSET, COUNT_UNIQUE, LAYOUT_OFFSET};
+use hirsel_lir::runtime_abi::{
+    COUNT_ARENA_SHARED, COUNT_IMMORTAL, COUNT_OFFSET, COUNT_UNIQUE, LAYOUT_OFFSET,
+};
 
 use crate::context::{Access, BasicBlock, BinOp, Builder, Function, IntPredicate, Module, Value};
 use crate::emit::{load_tag, low_bit};
@@ -57,6 +59,8 @@ pub(crate) struct Runtime<'m> {
     /// `hirsel_rt_v2_close_handle`.
     pub(crate) close_handle: Function<'m>,
     pub(crate) measure_release: Option<Function<'m>>,
+    /// The program builds tracked arena blocks (MEM-6), which a release leaves alone.
+    pub(crate) tracking: bool,
 }
 
 /// A release function whose body is still to be generated, with its entry block.
@@ -202,14 +206,16 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
 /// The inline edge of the count word contract (`hirsel_lir::runtime_abi::COUNT_OFFSET`): one
 /// credit of `block` is consumed. T04 DropLast, T16 DropEdge — at `COUNT_UNIQUE` the block
 /// dies and the builder is left where the caller drops its fields and frees it. T04
-/// DropImmortal — an immortal count is not written. T04 Drop — any other count is stored one
-/// lower. Returns the block the last two continue in.
+/// DropImmortal — an immortal count, or a tracked arena block's (MEM-6, runtime ABI 11), is not
+/// written. T04 Drop — any other count is stored one lower. Returns the block the last two
+/// continue in.
 fn drop_edge<'m>(
     module: &'m Module<'m>,
     builder: &Builder<'m>,
     function: Function<'m>,
     block: Value<'m>,
     measurement: Option<(Function<'m>, Value<'m>)>,
+    tracking: bool,
 ) -> BasicBlock<'m> {
     let i64_ty = module.int_type(32);
     let int = |n: u64| module.const_int(i64_ty, u128::from(n));
@@ -226,7 +232,11 @@ fn drop_edge<'m>(
     if let Some((hook, context)) = measurement {
         builder.call(hook, &[context, block]);
     }
-    let immortal = builder.icmp(IntPredicate::Eq, count, int(COUNT_IMMORTAL));
+    let immortal = if tracking {
+        builder.icmp(IntPredicate::Uge, count, int(COUNT_ARENA_SHARED))
+    } else {
+        builder.icmp(IntPredicate::Eq, count, int(COUNT_IMMORTAL))
+    };
     builder.cond_br(immortal, done, lower);
     builder.position(lower);
     builder.store_access(
@@ -292,6 +302,7 @@ pub(crate) fn define<'m>(
             function,
             block,
             runtime.measure_release.map(|hook| (hook, context)),
+            runtime.tracking,
         );
         builder.cond_br(builder.icmp(IntPredicate::Eq, budget, int(0)), spent, drop);
         // The budget of nested glue frames is spent: the runtime's worklist drains the block.
@@ -409,6 +420,7 @@ impl<'m, 'g> Walk<'m, 'g> {
                 self.runtime
                     .measure_release
                     .map(|hook| (hook, self.context)),
+                self.runtime.tracking,
             );
             // The runtime accounts for this dying edge, exactly once.
             // The header's own descriptor also serves an erased environment.
@@ -451,6 +463,7 @@ impl<'m, 'g> Walk<'m, 'g> {
             self.runtime
                 .measure_release
                 .map(|hook| (hook, self.context)),
+            self.runtime.tracking,
         );
         if let Some(hook) = self.runtime.measure_release {
             self.builder.call(hook, &[self.context, block]);

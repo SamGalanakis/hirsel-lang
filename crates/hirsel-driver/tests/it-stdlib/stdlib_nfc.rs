@@ -167,6 +167,7 @@ fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize) -> usize {
                 .iter()
                 .map(|(_, _, input, _)| Some(Value::String(input.clone())))
                 .collect(),
+            arena: None,
         }];
         let mut library = Library::new(&configuration, Default::default()).unwrap();
         let execution = hirsel_interp::run_with_runtime(

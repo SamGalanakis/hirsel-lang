@@ -189,6 +189,25 @@ pub struct CallShape<'a> {
 
 /// `core@1/$native.<name>`: a helper or finalizer no registry row names.
 /// `$` cannot occur in a source identifier.
+/// Whether `ty` of `store` is a List or Array, not of `Packed` values whose
+/// storage is sequential (MEM-13): the blocks MEM-6 tracks in an arena.
+pub(crate) fn list_or_array(store: &hirsel_types::TypeStore, ty: TypeId) -> bool {
+    use hirsel_types::BuiltinType;
+    let Some(TypeKind::Builtin {
+        kind: BuiltinType::List | BuiltinType::Array,
+        arguments,
+    }) = store.get(ty).map(|t| &t.kind)
+    else {
+        return false;
+    };
+    !arguments.iter().any(|a| {
+        matches!(a, GenericArgument::Type(e) if matches!(
+            store.get(*e).map(|t| &t.kind),
+            Some(TypeKind::Builtin { kind: BuiltinType::Packed, .. })
+        ))
+    })
+}
+
 pub fn native_path(name: &str) -> DefPath {
     hirsel_syntax::DefPath::core(&format!("$native.{name}"))
 }

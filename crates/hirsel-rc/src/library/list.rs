@@ -72,6 +72,7 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let [list, value] = b.parameters[..] else {
         return Err(PassError::Malformed("list.push parameters".into()));
     };
+    arena_push(&mut b, list)?;
     let (view, loan) = b.borrow(list.address, false)?;
     let len = b.seq_len(view)?;
     let capacity = b.seq_capacity(view)?;
@@ -136,6 +137,25 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     Ok(b.finish())
 }
 
+/// A push's charge and room in an arena (MEM-6): before the push reads the
+/// List, so a tracked arena List it copies or relocates has room for the
+/// element and never takes the growth branch. Its own place, so P4 leaves the
+/// block to it. A List of SoA columns is never tracked, so it needs none.
+fn arena_push(b: &mut Body<'_, '_>, list: super::builder::Parameter) -> Result<(), PassError> {
+    let rows = b.cx.payload(list.layout).is_some_and(|p| {
+        matches!(
+            b.cx.record(p).kind,
+            hirsel_lir::layout_types::LayoutKind::Sequence { .. }
+        )
+    });
+    if !rows {
+        return Ok(());
+    }
+    let place = b.place(AddressBase::Slot(list.slot), &[], list.layout, None)?;
+    b.arena_push(place)?;
+    Ok(())
+}
+
 /// The append of `list.push` without its capacity read and growth branch:
 /// `spare_push` proved the count below the capacity at every call (FACT-3).
 /// P4 still detaches a shared list where the write address is prepared, and
@@ -145,6 +165,7 @@ fn push_spare(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let [list, value] = b.parameters[..] else {
         return Err(PassError::Malformed("list.push parameters".into()));
     };
+    arena_push(&mut b, list)?;
     let (view, loan) = b.borrow(list.address, false)?;
     let len = b.seq_len(view)?;
     b.end_loan(loan);
@@ -277,6 +298,7 @@ fn construct(
     let payload = b.cx.payload(layout).unwrap_or(layout);
     b.ed.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor,
         layout: payload,
         fields,

@@ -7,6 +7,7 @@
 //! charges every block of the copied value's tree at its length, independently of
 //! sharing, which the reference does not observe.
 use crate::aggregate::RuntimeTypes;
+use crate::value::ArenaStorage;
 use crate::{Error, Value, invalid};
 use hirsel_syntax::DefPath;
 use hirsel_tir::Constructor;
@@ -138,6 +139,198 @@ pub(crate) fn construction<'a>(
         })
     };
     charge().map_err(logical_error)
+}
+
+/// The logical bytes of one element of the List or Array type `ty`: what a push
+/// charges, and per element what a copy-on-write copy charges (MEM-6).
+pub(crate) fn element<'a>(
+    runtime: &'a RuntimeTypes,
+    store: &'a TypeStore,
+    ty: TypeId,
+) -> Result<u64, Error> {
+    let resolve = resolver(runtime);
+    let logical = Logical::new(&resolve);
+    let element = logical
+        .element(ty, &Scope::root(store))
+        .map_err(logical_error)?;
+    Ok(element.unwrap_or(0))
+}
+
+/// The arena storage of a sequence of `kind` built in `arena` (MEM-6): a List or
+/// Array, `None` for any other. Its per-element charge is read from `ty` only when the
+/// arena is bounded: an unbounded arena is never charged.
+pub(crate) fn storage<'a>(
+    runtime: &'a RuntimeTypes,
+    store: &'a TypeStore,
+    ty: TypeId,
+    kind: BuiltinType,
+    arena: u64,
+    bounded: bool,
+) -> Result<Option<ArenaStorage>, Error> {
+    if !matches!(kind, BuiltinType::List | BuiltinType::Array) {
+        return Ok(None);
+    }
+    let resolve = resolver(runtime);
+    if sequential(&Logical::new(&resolve), ty, &Scope::root(store)).map_err(logical_error)? {
+        return Ok(None);
+    }
+    let element = if bounded {
+        element(runtime, store, ty)?
+    } else {
+        0
+    };
+    Ok(Some(ArenaStorage::fresh(arena, element)))
+}
+
+/// Whether `ty` is a sequence of `Packed` values, whose storage is sequential
+/// (MEM-13) and untracked: MEM-6 does not charge its pushes.
+fn sequential<'a>(
+    logical: &Logical<'a, '_>,
+    ty: TypeId,
+    scope: &Scope<'a>,
+) -> Result<bool, LogicalError> {
+    let Resolved::Structural(row, scope) = logical.resolve(ty, scope)? else {
+        return Ok(false);
+    };
+    let TypeKind::Builtin { arguments, .. } = &row.kind else {
+        return Ok(false);
+    };
+    let Some(&element) = type_arguments(arguments).first() else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        logical.resolve(element, &scope)?,
+        Resolved::Structural(row, _)
+            if matches!(row.kind, TypeKind::Builtin { kind: BuiltinType::Packed, .. })
+    ))
+}
+
+/// Retag every List and Array block of `value`'s tree outside Maps and Sets as
+/// fresh storage of `arena`, or every one as heap storage when it is None: a
+/// deep copy (`copy_to`) builds every block anew, unshared. Element charges
+/// are read from `ty` only for a bounded arena.
+pub(crate) fn retag<'a>(
+    runtime: &'a RuntimeTypes,
+    store: &'a TypeStore,
+    ty: TypeId,
+    value: &mut Value,
+    arena: Option<(u64, bool)>,
+) -> Result<(), Error> {
+    let Some((arena, bounded)) = arena else {
+        let mut work = vec![value];
+        while let Some(value) = work.pop() {
+            if let Value::Sequence { arena, .. } = value {
+                *arena = None;
+            }
+            if let Some(fields) = value.fields_mut() {
+                work.extend(fields.iter_mut().flatten());
+            }
+        }
+        return Ok(());
+    };
+    if !bounded {
+        let mut work = vec![value];
+        while let Some(value) = work.pop() {
+            if let Value::Sequence {
+                kind: BuiltinType::List | BuiltinType::Array,
+                arena: tag,
+                ..
+            } = value
+            {
+                *tag = Some(ArenaStorage::fresh(arena, 0));
+            }
+            if matches!(value, Value::Map(_) | Value::Set(_)) {
+                continue;
+            }
+            if let Some(fields) = value.fields_mut() {
+                work.extend(fields.iter_mut().flatten());
+            }
+        }
+        return Ok(());
+    }
+    let resolve = resolver(runtime);
+    let logical = Logical::new(&resolve);
+    let mut work = vec![(value, ty, Scope::root(store))];
+    while let Some((value, ty, scope)) = work.pop() {
+        let Resolved::Structural(row, scope) =
+            logical.resolve(ty, &scope).map_err(logical_error)?
+        else {
+            continue;
+        };
+        let mismatch = || invalid("a copied value that does not match its type");
+        match (&row.kind, value) {
+            (TypeKind::Box(payload), Value::Box(fields)) => {
+                for field in fields.iter_mut().flatten() {
+                    work.push((field, *payload, scope.clone()));
+                }
+            }
+            (TypeKind::Builtin { kind, arguments }, value) => {
+                let types = type_arguments(arguments);
+                match (kind, types.as_slice(), value) {
+                    (
+                        BuiltinType::List | BuiltinType::Array,
+                        [element, ..],
+                        Value::Sequence {
+                            elements,
+                            arena: tag,
+                            ..
+                        },
+                    ) => {
+                        *tag = if sequential(&logical, ty, &scope).map_err(logical_error)? {
+                            None
+                        } else {
+                            let each = logical.size(*element, &scope).map_err(logical_error)?;
+                            Some(ArenaStorage::fresh(arena, each))
+                        };
+                        for element_value in elements.iter_mut().flatten() {
+                            work.push((element_value, *element, scope.clone()));
+                        }
+                    }
+                    // A Map or Set's storage is its own: the Lists it holds are untracked.
+                    (
+                        BuiltinType::Inline | BuiltinType::Simd,
+                        [element, ..],
+                        Value::Sequence { elements, .. },
+                    ) => {
+                        for element_value in elements.iter_mut().flatten() {
+                            work.push((element_value, *element, scope.clone()));
+                        }
+                    }
+                    (BuiltinType::Packed, [element, ..], value) => {
+                        work.push((value, *element, scope.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            (TypeKind::Tuple(items), Value::Tuple(fields)) => {
+                for (item, field) in items.iter().zip(fields.iter_mut()) {
+                    if let Some(field) = field {
+                        work.push((field, *item, scope.clone()));
+                    }
+                }
+            }
+            (
+                TypeKind::Record(declared),
+                Value::Record { fields, .. } | Value::Distinct { fields, .. },
+            ) => {
+                for (field, value) in declared.iter().zip(fields.iter_mut()) {
+                    if let Some(value) = value {
+                        work.push((value, field.ty, scope.clone()));
+                    }
+                }
+            }
+            (TypeKind::Variant(variants), Value::Variant { variant, fields }) => {
+                let declared = variants.get(*variant as usize).ok_or_else(mismatch)?;
+                for ((_, ty), value) in declared.fields.iter().zip(fields.iter_mut()) {
+                    if let Some(value) = value {
+                        work.push((value, *ty, scope.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// The charge of a closure environment of these capture types.

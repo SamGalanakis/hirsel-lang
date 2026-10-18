@@ -250,6 +250,7 @@ impl Lowering<'_> {
         let construct = ConstructId(self.ed.unit.tables.constructs.len() as u32);
         self.ed.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor: ConstructorKind::Sequence,
             layout: simd,
             fields,
@@ -537,6 +538,7 @@ impl Lowering<'_> {
         let construct = ConstructId(self.ed.unit.tables.constructs.len() as u32);
         self.ed.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor: ConstructorKind::Variant {
                 definition,
                 variant,

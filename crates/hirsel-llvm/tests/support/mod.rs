@@ -570,6 +570,7 @@ impl<'t> Unit<'t> {
         );
         self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor,
             layout,
             fields,
@@ -625,6 +626,7 @@ impl<'t> Unit<'t> {
         );
         self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor,
             layout: payload,
             fields,

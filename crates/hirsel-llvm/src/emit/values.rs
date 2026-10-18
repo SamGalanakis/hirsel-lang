@@ -39,6 +39,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             companion_slots: vec![false; unit.slots.len()],
             defer_params: vec![None; unit.slots.len()],
             fresh_detaches: BTreeSet::new(),
+            detach_untracked: BTreeMap::new(),
             known_count: None,
             at: (BlockId(0), 0),
             adopted: BTreeMap::new(),

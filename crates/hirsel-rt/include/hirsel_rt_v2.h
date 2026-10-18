@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 10
+#define HIRSEL_RT_V2_ABI_VERSION 11
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -42,6 +42,12 @@ extern "C" {
 #define HIRSEL_RT_V2_COUNT_OFFSET 0
 #define HIRSEL_RT_V2_COUNT_UNIQUE 1
 #define HIRSEL_RT_V2_COUNT_IMMORTAL UINT32_MAX
+/* A tracked arena block (a List or Array in an arena, MEM-6, ABI 11) counts ARENA_UNIQUE while
+ * unshared, which a write may change in place though it is never unique, and ARENA_SHARED once a
+ * dup shares it, which its next write copies within its arena. No count at or above ARENA_SHARED
+ * is ever released. */
+#define HIRSEL_RT_V2_COUNT_ARENA_UNIQUE 4294967294u
+#define HIRSEL_RT_V2_COUNT_ARENA_SHARED 4294967293u
 #define HIRSEL_RT_V2_LAYOUT_OFFSET 4
 
 /* Size classes: 16-byte steps to 256, then quarter-power-of-two steps to 4096. */
@@ -60,6 +66,12 @@ extern "C" {
 #define HIRSEL_RT_V2_LARGE_PREFIX_POINTER_BACK 8
 #define HIRSEL_RT_V2_LARGE_CAPACITY_OFFSET 32
 #define HIRSEL_RT_V2_IMMORTAL_CAPACITY_BACK 16
+/* A tracked arena block's arena record address, TRACKED_REGION_BACK bytes before its header:
+ * TRACKED_PREFIX_BYTES precede its payload in all, the header included (ABI 11). */
+#define HIRSEL_RT_V2_TRACKED_REGION_BACK 24
+#define HIRSEL_RT_V2_TRACKED_PREFIX_BYTES 32
+/* `flags` of arena_alloc and unique_copy: the block, or a deep copy's root, is tracked. */
+#define HIRSEL_RT_V2_ALLOC_TRACKED 1
 #define HIRSEL_RT_V2_LARGE_CLASS 255
 #define HIRSEL_RT_V2_CLASS_SIZES                                                                  \
     {16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256,                    \
@@ -109,7 +121,7 @@ extern "C" {
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 6
+#define HIRSEL_RT_V2_LAYOUT_VERSION 7
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -122,6 +134,10 @@ extern "C" {
 /* The payload of a Shared root block (MEM-11): the blocks its value reaches are frozen while the
  * root lives, and a deep copy reaching such a block adds a root instead. */
 #define HIRSEL_RT_V2_LAYOUT_FROZEN 32
+/* A sequence's payload: a deep copy into an arena tracks a block of it unless it lies below an
+ * UNTRACKED_BELOW block (a Map's, a Set's, an environment's), whose sequences stay untracked. */
+#define HIRSEL_RT_V2_LAYOUT_SEQUENCE 64
+#define HIRSEL_RT_V2_LAYOUT_UNTRACKED_BELOW 128
 #define HIRSEL_RT_V2_INDEX_MASK 0x1fffffffu
 #define HIRSEL_RT_V2_KIND_SHIFT 29
 #define HIRSEL_RT_V2_KIND_SMALL 0
@@ -427,15 +443,18 @@ uint8_t hirsel_rt_v2_reuse(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token, ui
 void hirsel_rt_v2_dispose(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *token);
 
 /* Deep unique copy. Into a bounded arena (MEM-6) the whole tree is charged first, every block once
- * per reference; STATUS_EXHAUSTED when that exceeds the arena's remaining budget. */
-uint8_t hirsel_rt_v2_unique_copy(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, hirsel_rt_v2_region *region, uint64_t site,
-                                 hirsel_rt_v2_header **out_block);
+ * per reference; STATUS_EXHAUSTED when that exceeds the arena's remaining budget. Into an arena,
+ * its sequence blocks are tracked, the root when `flags` has ALLOC_TRACKED. */
+uint8_t hirsel_rt_v2_unique_copy(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, hirsel_rt_v2_region *region,
+                                 uint32_t flags, uint64_t site, hirsel_rt_v2_header **out_block);
 
 /* Deep unique copy of an inline value: its holder slots rewritten to copies in place. */
 uint8_t hirsel_rt_v2_unique_copy_value(hirsel_rt_v2_ctx *ctx, uint32_t index,
                                        uint8_t *value, hirsel_rt_v2_region *region, uint64_t site);
 
-/* Copy-on-write detach: the block alone, its counted children shared. */
+/* Copy-on-write detach: the block alone, its counted children shared. A tracked arena block is
+ * copied within its arena, charged its count (MEM-6): STATUS_EXHAUSTED, with nothing copied,
+ * when that exceeds the arena's remaining budget. */
 uint8_t hirsel_rt_v2_detach(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t site,
                             hirsel_rt_v2_header **out_block);
 
@@ -466,7 +485,16 @@ uint8_t hirsel_rt_v2_region_exit(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *reg
  * is its eight-byte header and payload; every other block also has its extent before the header.
  * Every region reservation ends on a word, so the cursor is always eight-byte aligned. */
 hirsel_rt_v2_header *hirsel_rt_v2_arena_alloc(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region,
-                                              uint32_t index, uint64_t extent, uint64_t align);
+                                              uint32_t index, uint64_t extent, uint64_t align, uint32_t flags);
+/* Prepare one list.push to the List block `block`, of elements of `element_size` bytes at
+ * `element_align` (MEM-6, ABI 11). A tracked arena block is
+ * charged its element's logical size, copied within its arena when shared (charged its count),
+ * and relocated there to max(4, 2 * count) elements when full; `out_block` then holds an unshared
+ * block with room for one more element. Any other block is left alone and written back. Returns
+ * STATUS_EXHAUSTED, with nothing changed or written, when a charge exceeds the arena's remaining
+ * budget. */
+uint8_t hirsel_rt_v2_arena_push(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t element_size,
+                                uint64_t element_align, hirsel_rt_v2_header **out_block);
 /* Enter an arena's region, seeding its cursor and limit from an idle pooled segment if any. */
 void hirsel_rt_v2_arena_enter(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region);
 /* Bounded arenas (MEM-6). Bound an entered arena to `capacity` logical bytes. */

@@ -553,7 +553,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
             call: OperationCall<'_>,
             _: &mut OperationContext<'_>,
         ) -> Result<Option<OperationResult>, Error> {
-            let Value::Sequence { kind, elements } = &call.arguments[0] else {
+            let Value::Sequence { kind, elements, .. } = &call.arguments[0] else {
                 panic!()
             };
             let item = elements[0].as_ref().unwrap().clone();
@@ -567,6 +567,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                     Value::Sequence {
                         kind: *kind,
                         elements: vec![None],
+                        arena: None,
                     },
                 )],
                 owned: vec![item],
@@ -736,6 +737,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                     definition: path("Item"),
                     fields: vec![],
                 })],
+                arena: None,
             }],
             Limits {
                 steps: Some(100),

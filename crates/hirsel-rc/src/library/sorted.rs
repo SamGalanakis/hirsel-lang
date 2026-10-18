@@ -131,6 +131,7 @@ fn construct(
     let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
     b.ed.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor,
         layout: b.cx.payload(layout).unwrap_or(layout),
         fields,

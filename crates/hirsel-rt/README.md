@@ -279,11 +279,11 @@ never a physical layout, and no header, extent, slab, segment or padding is char
 | a closure environment | the sum of its captures |
 | `copy_to(a, x)` | every block of `x`'s tree at its length, one charge before anything is copied |
 
-A copy charges each reference to a shared block again, so sharing is unobservable. A growable
-list's capacity is charged when it is allocated in the arena: the requested capacity times its
-element, growth doubling from four elements. No growth allocates in an arena yet: pushing to an
-arena list detaches it onto the counted heap, so the bound does not cover list growth. A
-callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
+A copy charges each reference to a shared block again, so sharing is unobservable. A `List`
+or `Array` block in an arena grows there (runtime ABI 11): a push charges its element before
+consuming it, and a copy-on-write copy of a shared one is charged its length. Spare capacity
+and abandoned storage are never charged, so a List's storage stays within four times its
+charged bytes plus four elements. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
 cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
 reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
 `hirsel_types::logical`; H and native execution charge from layouts

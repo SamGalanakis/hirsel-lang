@@ -453,7 +453,9 @@ fn token_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<ValueId> {
         | Inst::Freeze { value, .. }
         | Inst::Thaw { value, .. }
         | Inst::Dup { value }
+        | Inst::Share { value }
         | Inst::IsUnique { value, .. }
+        | Inst::IsWritable { value, .. }
         | Inst::Weaken { value, .. }
         | Inst::SeqLen { value, .. }
         | Inst::SeqCapacity { value, .. }

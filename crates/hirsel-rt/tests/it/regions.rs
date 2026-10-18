@@ -293,7 +293,7 @@ fn an_arena_enters_warm_from_a_pooled_segment() {
         // The pool is empty: nothing to seed, so the first block takes a segment.
         let mut cold = arena(&ctx);
         assert!(cold.segment.is_null() && cold.cursor.is_null() && cold.end.is_null());
-        unsafe { hirsel_rt_v2_arena_alloc(ctx.0, &mut *cold, layout_index, 16, 8) };
+        unsafe { hirsel_rt_v2_arena_alloc(ctx.0, &mut *cold, layout_index, 16, 8, 0) };
         assert_eq!(exit(&ctx, &mut cold), 0);
         let backing = ctx.stats().backing_allocations;
         let mut warm = arena(&ctx);
@@ -301,7 +301,7 @@ fn an_arena_enters_warm_from_a_pooled_segment() {
         assert_eq!(warm.end.is_null(), diagnostic);
         assert_eq!(warm.cursor as usize % 8, 0);
         let seeded = warm.cursor;
-        let block = unsafe { hirsel_rt_v2_arena_alloc(ctx.0, &mut *warm, layout_index, 16, 8) };
+        let block = unsafe { hirsel_rt_v2_arena_alloc(ctx.0, &mut *warm, layout_index, 16, 8, 0) };
         // An extent record (16 bytes) precedes the header of a layout without LAYOUT_NO_EXTENT.
         assert_eq!(block as usize, seeded as usize + 16);
         assert_eq!(ctx.stats().region_active_bytes, SEGMENT_SIZE as u64);

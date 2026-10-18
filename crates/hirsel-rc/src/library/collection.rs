@@ -136,6 +136,7 @@ fn option(b: &mut Body<'_, '_>, value: Option<ValueId>) -> ValueId {
     let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
     b.ed.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor: ConstructorKind::Variant {
             definition,
             variant: u32::from(value.is_some()),

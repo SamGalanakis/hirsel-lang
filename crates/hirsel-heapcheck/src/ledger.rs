@@ -366,6 +366,11 @@ pub enum Count {
     /// A block of a frozen graph: one holder, its parent, and no count
     /// operation or write while a root of the graph lives.
     Frozen,
+    /// A tracked arena List block (MEM-6, runtime ABI 11): never released,
+    /// and shared, stickily, from its first dup or `Share`.
+    Arena {
+        shared: bool,
+    },
 }
 
 impl Count {
@@ -374,7 +379,7 @@ impl Count {
         match self {
             Count::Finite(n) | Count::Root(n) => Some(n),
             Count::Frozen => Some(1),
-            Count::Immortal => None,
+            Count::Immortal | Count::Arena { .. } => None,
         }
     }
 }

@@ -5,13 +5,13 @@
     (ScalarAlignments 1 2 4 8 16 4 8 8 16)
     (SysV64)
     (Elf) "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-    (ArtifactVersions 31 3 1 10 0))
-  (LayoutTable #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 3 1
+    (ArtifactVersions 32 3 1 11 0))
+  (LayoutTable #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 3 1
     (list
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 3)
+          (none) #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 3)
         (Scalar
           (U64))
         (Fixed 8) 8
@@ -32,7 +32,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 3)
+          (none) #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 3)
         (Scalar
           (Bool))
         (Fixed 1) 1
@@ -53,7 +53,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 3)
+          (none) #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 3)
         (Aggregate)
         (Fixed 8) 8
         (list
@@ -72,7 +72,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 3)
+          (none) #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 3)
         (Block 2)
         (Fixed 8) 8
         (list)
@@ -92,7 +92,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 3)
+          (none) #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 3)
         (Aggregate)
         (Fixed 8) 8
         (list
@@ -113,7 +113,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 3)
+          (none) #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 3)
         (Block 4)
         (Fixed 8) 8
         (list)
@@ -141,11 +141,11 @@
   (list
     (LirUnit
       (UnitHeader
-        (Rc) 31
+        (Rc) 32
         (Source)
         (InputIdentity 11 #129a1e7efb7f261960cd22cf61a43afb3602da1616b6a941a635e4327915a243)
         (DefPath "fixture" "0"
-          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 #e8c5a18c5e231c0171ed419a01010aaaf9dce6bed683057568c1c60628b6b0eb 0)
+          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 #2e23deb3de802e25557fc91a93e00e79dddd6e1be0048e035cb338398b3eb8b8 0)
       (list
         (LirType
           (Scalar
@@ -229,7 +229,7 @@
               (Heap))
             (Effects "reads" "writes" "owns" "may_fail" "allocates" "observable" "barrier") 0))
         (list
-          (ConstructSite 0
+          (ConstructSite 0 0
             (Tuple) 3
             (range 0 1)
             (Heap)
@@ -318,11 +318,11 @@
         (list)))
     (LirUnit
       (UnitHeader
-        (Rc) 31
+        (Rc) 32
         (Source)
         (InputIdentity 11 #129a1e7efb7f261960cd22cf61a43afb3602da1616b6a941a635e4327915a243)
         (DefPath "fixture" "0"
-          (list "heap") "keep") #27c4f98481552ebc3865f1dbf5d9f04017c0c147e7fba91d5919fd75c82257cb #27c4f98481552ebc3865f1dbf5d9f04017c0c147e7fba91d5919fd75c82257cb #431f6e4d2e72158978e7ab0ad8f5e27209f5eb57350a085ce74089b580737c80 #e8c5a18c5e231c0171ed419a01010aaaf9dce6bed683057568c1c60628b6b0eb 0)
+          (list "heap") "keep") #27c4f98481552ebc3865f1dbf5d9f04017c0c147e7fba91d5919fd75c82257cb #27c4f98481552ebc3865f1dbf5d9f04017c0c147e7fba91d5919fd75c82257cb #0c03001e6f79c3fc6863710646008daa26cdaf770789de787443b7c27cccc967 #2e23deb3de802e25557fc91a93e00e79dddd6e1be0048e035cb338398b3eb8b8 0)
       (list
         (LirType
           (Block) 3)
@@ -358,7 +358,7 @@
       (SideTables
         (list)
         (list
-          (ConstructSite 0
+          (ConstructSite 0 0
             (Tuple) 5
             (range 0 1)
             (Heap)

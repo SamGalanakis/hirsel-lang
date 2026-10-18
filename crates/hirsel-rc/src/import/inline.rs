@@ -22,6 +22,7 @@ impl Inline for Importer<'_, '_> {
         let anchor = self.anchor_here();
         self.out.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor,
             layout: payload,
             fields,

@@ -51,6 +51,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             | Inst::Forget { .. }
             | Inst::Weaken { .. }
             | Inst::IsUnique { .. }
+            | Inst::IsWritable { .. }
+            | Inst::Share { .. }
+            | Inst::ArenaPush { .. }
             | Inst::SeqCapacity { .. }
             | Inst::SeqSetLen { .. }
             | Inst::Dup { .. }
@@ -154,6 +157,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.builder.position(test);
                     let tested = crate::runtime::is_unique(&self.builder, self.get(value)?);
                     self.builder.store(tested, state.unique, 1);
+                    self.mark_untracked(state, tested);
                     self.builder.br(done);
                     self.builder.position(done);
                     let unique = self.builder.phi(self.module.int_type(1));
@@ -165,6 +169,48 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 self.define(result, unique)
             }
+            // A must-unique fact is a writable block's; a test that fails it caches
+            // whether the block is unique.
+            Inst::IsWritable { result, value } => {
+                let state =
+                    self.read_roots[value.index()].and_then(|s| self.sequence_states[s.index()]);
+                let writable = if let Some(state) = state {
+                    let known = self.builder.load(self.module.int_type(1), state.unique, 1);
+                    let here = self.builder.current();
+                    let test = self.module.append_block(self.function);
+                    let done = self.module.append_block(self.function);
+                    self.builder.cond_br(known, done, test);
+                    self.builder.position(test);
+                    let block = self.get(value)?;
+                    // An untracked block is writable exactly when it is unique.
+                    let untracked = if self.tracking() {
+                        self.builder
+                            .load(self.module.int_type(1), state.untracked, 1)
+                    } else {
+                        self.module.const_int(self.module.int_type(1), 1)
+                    };
+                    let unique = crate::runtime::is_unique(&self.builder, block);
+                    self.builder.store(unique, state.unique, 1);
+                    self.mark_untracked(state, unique);
+                    let writable = crate::runtime::is_writable(&self.builder, block);
+                    let tested = self.builder.select(untracked, unique, writable);
+                    self.builder.br(done);
+                    self.builder.position(done);
+                    let writable = self.builder.phi(self.module.int_type(1));
+                    self.builder.add_incoming(writable, known, here);
+                    self.builder.add_incoming(writable, tested, test);
+                    writable
+                } else if self.tracking() {
+                    crate::runtime::is_writable(&self.builder, self.get(value)?)
+                } else {
+                    crate::runtime::is_unique(&self.builder, self.get(value)?)
+                };
+                self.define(result, writable)
+            }
+            Inst::Share { value } => self.share(value),
+            Inst::ArenaPush {
+                address, failure, ..
+            } => self.arena_push(address, failure),
             Inst::Unary {
                 result,
                 op,
@@ -334,6 +380,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.builder.store(
                         self.module.const_zero(self.module.int_type(1)),
                         state.unique,
+                        1,
+                    );
+                    self.builder.store(
+                        self.module.const_zero(self.module.int_type(1)),
+                        state.untracked,
                         1,
                     );
                 }
@@ -548,6 +599,30 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 if ty.repr != ValueRepr::Block {
                     return self.invalid("a unique copy of a value that is not a block");
                 }
+                // Whether the copy is no tracked arena block (MEM-6): a deep copy's root is
+                // tracked only when its site says so and it lands in an arena; a detach is as
+                // tracked as its original, read before the call.
+                let untracked = if !self.tracking() || deep && !self.tracks(site) {
+                    self.module.const_int(self.module.int_type(1), 1)
+                } else if deep {
+                    self.builder.icmp(
+                        IntPredicate::Eq,
+                        destination,
+                        self.module.const_zero(self.module.ptr_type()),
+                    )
+                } else {
+                    let known = match self.read_roots[value.index()]
+                        .and_then(|s| self.sequence_states[s.index()])
+                    {
+                        Some(state) => {
+                            self.builder
+                                .load(self.module.int_type(1), state.untracked, 1)
+                        }
+                        None => self.module.const_zero(self.module.int_type(1)),
+                    };
+                    self.untracked(known, self.get(value)?)
+                };
+                self.detach_untracked.insert(result, untracked);
                 // A shallow detach preserves the entire sequence payload. Save
                 // the old length in SSA before the opaque allocation call.
                 let old_length = if !deep {
@@ -586,28 +661,63 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 })?;
                 let out = self.prologue.alloca(self.module.ptr_type(), 8);
                 let anchor = site.anchor;
+                let flags = if self.tracks(site) {
+                    hirsel_lir::runtime_abi::ALLOC_TRACKED
+                } else {
+                    0
+                };
                 let site = self.const_u64(self.anchor_code(anchor)?);
                 let arguments = if deep {
-                    vec![self.context, self.get(value)?, destination, site, out]
+                    let flags = self
+                        .module
+                        .const_int(self.module.int_type(32), u128::from(flags));
+                    vec![
+                        self.context,
+                        self.get(value)?,
+                        destination,
+                        flags,
+                        site,
+                        out,
+                    ]
                 } else {
                     vec![self.context, self.get(value)?, site, out]
                 };
                 let status = self.builder.call(entry, &arguments);
                 if deep {
                     self.copy_status(status, destination, anchor, failure)?;
+                } else if let Some(code) = self.bounded_code() {
+                    // A tracked arena block is copied within its arena, charged (MEM-6):
+                    // over its budget, the arena it names records its own OutOfSpace.
+                    let zero = self.module.const_int(self.module.int_type(8), 0);
+                    let failed = self.builder.icmp(IntPredicate::Ne, status, zero);
+                    let (over, next) = (
+                        self.module.append_block(self.function),
+                        self.module.append_block(self.function),
+                    );
+                    self.builder.cold_cond_br(failed, over, next);
+                    self.builder.position(over);
+                    let region = self.tracked_region(self.get(value)?);
+                    let exhausted = self.exhausted_block(code, region, anchor, failure)?;
+                    self.builder.br(exhausted);
+                    self.builder.position(next);
                 } else {
                     self.status_guard(status, failure)?;
                 }
                 let copy = self.builder.load(self.module.ptr_type(), out, 8);
                 if !deep {
-                    // copy.rs::hirsel_rt_v2_detach allocates count-one storage,
-                    // copies the payload verbatim and only increments children.
+                    // copy.rs::hirsel_rt_v2_detach allocates count-one storage, or
+                    // an unshared tracked block within an arena (MEM-6), copies the
+                    // payload verbatim and only increments children.
                     // Its result joins through local storage-version tokens,
                     // not LLVM pointer/length phis, so direct SSA forwarding
                     // cannot represent the postconditions at those joins here.
                     // These assumptions apply only after successful detach;
                     // Dup and ordinary writes invalidate the tagged loads.
-                    let unique = crate::runtime::is_unique(&self.builder, copy);
+                    let unique = if self.tracking() {
+                        crate::runtime::is_writable(&self.builder, copy)
+                    } else {
+                        crate::runtime::is_unique(&self.builder, copy)
+                    };
                     self.builder
                         .assume(unique)
                         .map_err(|what| CodegenError::Invalid {
@@ -868,6 +978,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 );
                 let reserve = self.runtime(RuntimeEntry::SeqReserve)?;
                 let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+                // Read before the call, which may free `old`.
+                let kept = self
+                    .sequence_state_at(place)
+                    .map(|state| self.grown_facts(state, old));
                 let grown = self.builder.call(
                     reserve,
                     &[
@@ -879,14 +993,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     ],
                 );
                 self.store(Shape::Scalar(ScalarKind::Pointer), grown, place);
-                // Growth either retains the unique input or allocates count-one
-                // storage. It preserves length on both paths.
-                if let Some(state) = self.sequence_state_at(place) {
-                    self.builder.store(
-                        self.module.const_int(self.module.int_type(1), 1),
-                        state.unique,
-                        1,
-                    );
+                // Growth retains the unique input, allocates count-one storage, or
+                // leaves a tracked arena block (MEM-6), which is never unique. It
+                // preserves length on every path.
+                if let (Some(state), Some((unique, untracked))) =
+                    (self.sequence_state_at(place), kept)
+                {
+                    self.builder.store(unique, state.unique, 1);
+                    self.builder.store(untracked, state.untracked, 1);
                 }
                 Ok(())
             }

@@ -423,7 +423,8 @@ arena blocks, and blocks inside a `Shared`, carry no count. Published region and
 blocks are never mutated; the unpublished builder phase
 ([MEM-10](memory.md#mem-10-regions)) and the unique arena builder root
 ([MEM-4](memory.md#mem-4-arenas)) are the only construction exceptions. Mutating a nested
-arena block still detaches it to the heap.
+arena block still detaches it to the heap, except a List, which
+[MEM-6](memory.md#mem-6-bounded-arenas) copies within its arena.
 
 ### OWN-8: Parts
 

@@ -112,6 +112,7 @@ pub(crate) fn construct(
             Value::Sequence {
                 kind: *kind,
                 elements: values,
+                arena: None,
             }
         }
         Constructor::Map => {

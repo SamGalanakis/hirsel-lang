@@ -6,7 +6,11 @@ pub fn sequence(kind: BuiltinType, values: impl IntoIterator<Item = Value>) -> V
     match kind {
         BuiltinType::Map => Value::Map(elements),
         BuiltinType::Set => Value::Set(elements),
-        _ => Value::Sequence { kind, elements },
+        _ => Value::Sequence {
+            kind,
+            elements,
+            arena: None,
+        },
     }
 }
 pub fn elements(value: &Value, kind: BuiltinType) -> Result<Vec<Value>, Error> {
@@ -14,7 +18,12 @@ pub fn elements(value: &Value, kind: BuiltinType) -> Result<Vec<Value>, Error> {
         (Value::Map(elements), BuiltinType::Map) | (Value::Set(elements), BuiltinType::Set) => {
             elements
         }
-        (Value::Sequence { kind: k, elements }, _) if *k == kind => elements,
+        (
+            Value::Sequence {
+                kind: k, elements, ..
+            },
+            _,
+        ) if *k == kind => elements,
         _ => return Err(invalid("wrong collection kind")),
     };
     elements
@@ -62,6 +71,7 @@ pub fn push(mut value: Value, item: Value) -> Result<Mutation, Error> {
     if let Value::Sequence {
         kind: BuiltinType::List,
         elements,
+        ..
     } = &mut value
     {
         elements.push(Some(item));
@@ -130,6 +140,8 @@ pub fn insert(mut value: Value, key: Value, item: Value) -> Result<Mutation, Key
             released: vec![old, key],
         });
     }
+    // The borrowed key is copied into the map: a share of its arena Lists (MEM-6).
+    key.share_arena_storage();
     elements.push(Some(Value::Tuple(vec![Some(key), Some(item)])));
     Ok(Mutation {
         value,
@@ -159,9 +171,10 @@ pub fn get(map: &Value, key: &Value) -> Result<Option<Value>, KeyedError> {
     let Some(Value::Tuple(pair)) = &elements[index] else {
         return Err(invalid("invalid map entry").into());
     };
-    Ok(Some(
-        pair[1].clone().ok_or_else(|| invalid("dead map value"))?,
-    ))
+    let value = pair[1].clone().ok_or_else(|| invalid("dead map value"))?;
+    // A counted local result shares the stored value's arena Lists (MEM-6).
+    value.share_arena_storage();
+    Ok(Some(value))
 }
 pub fn contains(set: &Value, value: &Value) -> Result<bool, KeyedError> {
     let Value::Set(elements) = set else {
@@ -216,10 +229,12 @@ pub fn data_equal(a: &Value, b: &Value) -> bool {
             Value::Sequence {
                 kind: a,
                 elements: x,
+                ..
             },
             Value::Sequence {
                 kind: b,
                 elements: y,
+                ..
             },
         ) if a == b => {
             if *a == BuiltinType::Set {

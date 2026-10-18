@@ -609,6 +609,7 @@ fn failure_value(chain: &[FailureRecord], context: &OperationContext<'_>) -> Res
                         .iter()
                         .map(|i| Some(u64_value(*i as u64)))
                         .collect(),
+                    arena: None,
                 },
                 cause,
             ],

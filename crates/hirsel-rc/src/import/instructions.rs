@@ -812,7 +812,21 @@ impl Importer<'_, '_> {
                     tir::Constructor::Map | tir::Constructor::Set => unreachable!("handled above"),
                     tir::Constructor::Box => ConstructorKind::Box,
                 };
-                self.construct(constructor, layout, values, destination, ty)?
+                let site = self.out.tables.constructs.len();
+                let sequence = constructor == ConstructorKind::Sequence;
+                let value = self.construct(constructor, layout, values, destination, ty)?;
+                // A List or Array literal's block is tracked in an arena (MEM-6);
+                // a static empty sequence is no construction.
+                if sequence
+                    && self.out.tables.constructs.len() > site
+                    && matches!(
+                        self.layouts.record(layout).kind,
+                        LayoutKind::Sequence { .. }
+                    )
+                {
+                    self.out.tables.constructs[site].tracked = true;
+                }
+                value
             }
             V::Closure {
                 body,
@@ -945,9 +959,16 @@ impl Importer<'_, '_> {
             _ => self.layout_of(ty),
         };
         let anchor = self.anchor_here();
+        // A copy of a List or Array of rows in an arena is tracked there (MEM-6).
+        let tracked = self.list_or_array(self.body.places[value.place.0 as usize].ty)?
+            && matches!(
+                self.layouts.record(layout).kind,
+                LayoutKind::Sequence { .. }
+            );
         let construct = hirsel_lir::ir::ConstructId(self.out.tables.constructs.len() as u32);
         self.out.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked,
             constructor: ConstructorKind::Tuple,
             layout,
             fields: PoolRange::EMPTY,
@@ -1067,6 +1088,7 @@ impl Importer<'_, '_> {
         let construct = hirsel_lir::ir::ConstructId(self.out.tables.constructs.len() as u32);
         self.out.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor,
             layout,
             fields,

@@ -235,7 +235,7 @@ impl ObservedValue {
                     ..
                 } => (A::ResourceVariant(definition.clone(), *variant), fields),
                 Value::Variant { variant, fields } => (A::Variant(*variant), fields),
-                Value::Sequence { kind, elements } => (A::Sequence(*kind), elements),
+                Value::Sequence { kind, elements, .. } => (A::Sequence(*kind), elements),
             };
             let fields = fields
                 .iter()

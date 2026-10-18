@@ -180,6 +180,7 @@ unit descend params (v0, v1)
     a3 := v2 as v3
     StorageLive { slot: SlotId(1) }
     v4 = copy a4 @v1 fail -> b9
+    Share { value: ValueId(4) }
     a0 := v4 as v5
     jump b2(v3, v5)
   b9 FailureCleanup:

@@ -528,7 +528,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// A block at an arena token: a counted heap block when the
     /// token is null (`heap`), else an immortal block bump-allocated in that arena. An `Arena`
     /// value can be the inert heap token as well as an open arena record.
-    /// `nullable` controls whether this destination admits the heap token.
+    /// `nullable` controls whether this destination admits the heap token. A tracked site's
+    /// arena block (a List or Array, MEM-6) is unshared and has its arena's record before
+    /// its extent.
     pub(super) fn arena_block(
         &mut self,
         token: Value<'m>,
@@ -617,7 +619,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             _ => {
                 // Worst-case payload padding after the immortal prefix. No inbounds GEP
                 // or overflowing request reaches a store.
-                let overhead = IMMORTAL_PREFIX_BYTES + physical - 8;
+                let prefix = if self.tracks(site) {
+                    hirsel_lir::runtime_abi::TRACKED_PREFIX_BYTES
+                } else {
+                    IMMORTAL_PREFIX_BYTES
+                };
+                let overhead = prefix + physical - 8;
                 let request = self
                     .builder
                     .binary(BinOp::Add, capacity, self.const_u64(overhead));
@@ -634,11 +641,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let fits = self.builder.binary(BinOp::And, fits, bounded);
                 self.builder.cond_br(fits, fast, slow);
                 self.builder.position(fast);
-                let payload = self.builder.binary(
-                    BinOp::Add,
-                    cursor,
-                    self.const_u64(IMMORTAL_PREFIX_BYTES + physical - 1),
-                );
+                let payload =
+                    self.builder
+                        .binary(BinOp::Add, cursor, self.const_u64(prefix + physical - 1));
                 let payload =
                     self.builder
                         .binary(BinOp::And, payload, self.const_u64(!(physical - 1)));
@@ -656,6 +661,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     .offset(at, self.const_u64(0u64.wrapping_sub(8)));
                 self.builder
                     .store(self.const_u64(physical), align_address, 8);
+                if self.tracks(site) {
+                    let region_address = self.builder.offset(
+                        at,
+                        self.const_u64(
+                            0u64.wrapping_sub(hirsel_lir::runtime_abi::TRACKED_REGION_BACK),
+                        ),
+                    );
+                    self.builder.store(token, region_address, 8);
+                }
                 (block, next)
             }
         };
@@ -663,11 +677,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.store(next, cursor_address, 8);
         let block = self.builder.cast(Cast::IntToPtr, block, ptr);
         let i32_ty = self.module.int_type(32);
-        self.builder.store(
-            self.module.const_int(i32_ty, u128::from(COUNT_IMMORTAL)),
-            block,
-            8,
-        );
+        let count = if self.tracks(site) {
+            hirsel_lir::runtime_abi::COUNT_ARENA_UNIQUE
+        } else {
+            COUNT_IMMORTAL
+        };
+        self.builder
+            .store(self.module.const_int(i32_ty, u128::from(count)), block, 8);
         let descriptor = self.descriptor(site.layout)?;
         let kind = self.module.const_int(
             i32_ty,
@@ -681,6 +697,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.position(slow);
         let descriptor = self.descriptor(site.layout)?;
         let alloc = self.runtime(RuntimeEntry::ArenaAlloc)?;
+        let flags = if self.tracks(site) {
+            hirsel_lir::runtime_abi::ALLOC_TRACKED
+        } else {
+            0
+        };
         let block = self.builder.call(
             alloc,
             &[
@@ -689,6 +710,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 descriptor,
                 capacity,
                 self.const_u64(u64::from(align)),
+                self.module.const_int(i32_ty, u128::from(flags)),
             ],
         );
         self.builder.store(block, out, 8);
@@ -700,13 +722,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// After an arena block's payload is filled: when the token names an arena and the
     /// payload holds a heap credit (a counted child that is not immortal, or any owned
     /// content other than counted children), the arena schedules the payload's drop program
-    /// for its close (MEM-4). A payload of arena children schedules nothing.
+    /// for its close (MEM-4). A payload of arena children schedules nothing. A tracked
+    /// block (MEM-6) with a drop program is always scheduled: pushes may move heap credits
+    /// into it.
     pub(super) fn arena_hold(
         &mut self,
         token: Value<'m>,
         nullable: bool,
         payload: Place<'m>,
         layout: LayoutId,
+        tracked: bool,
         failure: FailureId,
     ) -> Emitted {
         let record = self.layout(layout)?;
@@ -735,7 +760,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.cond_br(heap, done, walk);
             self.builder.position(walk);
         }
-        self.arena_credits(payload.ptr, payload.align, &steps, flag)?;
+        if tracked {
+            self.builder
+                .store(self.module.const_int(flag_ty, 1), flag, 1);
+        } else {
+            self.arena_credits(payload.ptr, payload.align, &steps, flag)?;
+        }
         let holds = self.builder.load(flag_ty, flag, 1);
         self.builder.cond_br(holds, schedule, done);
         self.builder.position(schedule);
@@ -784,11 +814,23 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                             .offset(child, self.const_u64(hirsel_lir::runtime_abi::COUNT_OFFSET))
                     };
                     let count = self.builder.load(i32_ty, word, 4);
-                    let counted = self.builder.icmp(
-                        IntPredicate::Ne,
-                        count,
-                        self.module.const_int(i32_ty, u128::from(COUNT_IMMORTAL)),
-                    );
+                    // Immortal and tracked arena blocks (MEM-6) hold no credit.
+                    let counted = if self.tracking() {
+                        self.builder.icmp(
+                            IntPredicate::Ult,
+                            count,
+                            self.module.const_int(
+                                i32_ty,
+                                u128::from(hirsel_lir::runtime_abi::COUNT_ARENA_SHARED),
+                            ),
+                        )
+                    } else {
+                        self.builder.icmp(
+                            IntPredicate::Ne,
+                            count,
+                            self.module.const_int(i32_ty, u128::from(COUNT_IMMORTAL)),
+                        )
+                    };
                     let old = self.builder.load(flag_ty, flag, 1);
                     self.builder
                         .store(self.builder.binary(BinOp::Or, old, counted), flag, 1);
@@ -1009,8 +1051,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         let skip: Vec<u32> = kept.iter().map(|f| f.ordinal).collect();
         self.fill(payload, site, &skip)?;
-        if let Some((token, nullable)) = arena.filter(|_| !site.arena_no_drop) {
-            self.arena_hold(token, nullable, payload, site.layout, failure)?;
+        if let Some((token, nullable)) = arena.filter(|_| !site.arena_no_drop || self.tracks(site))
+        {
+            self.arena_hold(
+                token,
+                nullable,
+                payload,
+                site.layout,
+                self.tracks(site),
+                failure,
+            )?;
         }
         if let (Some(token), false) = (token, kept.is_empty()) {
             let null = self.module.const_zero(self.module.ptr_type());

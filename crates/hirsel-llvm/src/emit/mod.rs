@@ -569,6 +569,7 @@ fn define_root_adapter<'m>(
                 length,
                 module.const_zero(module.int_type(1)),
                 module.const_zero(module.int_type(1)),
+                module.const_zero(module.int_type(1)),
             ]);
         }
     }
@@ -606,7 +607,7 @@ const REGION_RECORD_BYTES: u64 = hirsel_lir::runtime_abi::REGION_RECORD_BYTES;
 /// The name suffix of a library body's private root-value entry. It changes with that
 /// entry's signature, so a `linkonce_odr` body of an older signature never merges
 /// with a caller of this one.
-const ROOTS_SUFFIX: &str = ".roots8";
+const ROOTS_SUFFIX: &str = ".roots9";
 
 /// The private descriptor of the empty environment a function reference carries.
 
@@ -730,7 +731,12 @@ pub(crate) fn load_tag<'m>(
 /// `unique` is a must fact: false asks for a real count test, never claims sharedness.
 #[derive(Clone, Copy)]
 struct SequenceState<'m> {
+    /// Must-unique: the slot's block has one holder, so it is writable and no tracked
+    /// arena block.
     unique: Value<'m>,
+    /// Must-untracked: the slot's block is no tracked arena block (MEM-6), so a push needs
+    /// no charge. Growth and a detach keep it; only a new block in the slot loses it.
+    untracked: Value<'m>,
     length: Value<'m>,
     /// The slot holds a live block whose count word may lag `length`: a
     /// `SeqSetLen` here, or a private root call or entry, deferred its store.
@@ -778,6 +784,8 @@ struct FnEmitter<'m, 'a> {
     /// count in the block, so a `SeqSetLen` stores it and the return flushes.
     defer_params: Vec<Option<Value<'m>>>,
     fresh_detaches: BTreeSet<ValueId>,
+    /// Whether a detach's copy is no tracked arena block (MEM-6), computed at the detach.
+    detach_untracked: BTreeMap<ValueId, Value<'m>>,
     /// The preserved length of the view an address is projected from, for its
     /// first step: an index into it bounds by that length, not the count word.
     known_count: Option<Value<'m>>,

@@ -77,12 +77,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
             let state = SequenceState {
                 unique: self.prologue.alloca(self.module.int_type(1), 1),
+                untracked: self.prologue.alloca(self.module.int_type(1), 1),
                 length: self.prologue.alloca(self.module.int_type(64), 8),
                 dirty: self.prologue.alloca(self.module.int_type(1), 1),
             };
             self.prologue.store(
                 self.module.const_zero(self.module.int_type(1)),
                 state.unique,
+                1,
+            );
+            self.prologue.store(
+                self.module.const_zero(self.module.int_type(1)),
+                state.untracked,
                 1,
             );
             self.prologue.store(self.const_u64(0), state.length, 8);
@@ -101,11 +107,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let first = self.signature.companions[field].expect("sequence inputs");
                 self.builder
                     .store(self.module.parameter(self.function, first), state.length, 8);
-                self.builder.store(
-                    self.module.parameter(self.function, first + 1),
-                    state.unique,
-                    1,
-                );
+                let unique = self.module.parameter(self.function, first + 1);
+                self.builder.store(unique, state.unique, 1);
+                let untracked = self.module.parameter(self.function, first + 3);
+                self.builder.store(untracked, state.untracked, 1);
                 // A deferring caller hands over a length its block may lag.
                 let defer = self.module.parameter(self.function, first + 2);
                 self.builder.store(defer, state.dirty, 1);
@@ -346,6 +351,46 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
     }
 
+    /// A test found the slot's block unique: then it is no tracked arena block either.
+    pub(super) fn mark_untracked(&self, state: SequenceState<'m>, unique: Value<'m>) {
+        let i1 = self.module.int_type(1);
+        let known = self.builder.load(i1, state.untracked, 1);
+        let untracked = self.builder.binary(BinOp::Or, known, unique);
+        self.builder.store(untracked, state.untracked, 1);
+    }
+
+    /// Whether `block` is no tracked arena block, given the fact `known` that says so: its
+    /// count is read only when the fact is unknown, and a static block's read folds.
+    pub(super) fn untracked(&self, known: Value<'m>, block: Value<'m>) -> Value<'m> {
+        let tracked = crate::runtime::is_tracked(&self.builder, block);
+        let untracked = self.builder.binary(
+            BinOp::Xor,
+            tracked,
+            self.module.const_int(self.module.int_type(1), 1),
+        );
+        self.builder.select(known, known, untracked)
+    }
+
+    /// The facts of `state` after growing its block `old` (read before the growth, which
+    /// may free it): growth hands back count-one storage for any block but a tracked arena
+    /// block, which it leaves alone (MEM-6), so the block stays as tracked as it was.
+    pub(super) fn grown_facts(
+        &self,
+        state: SequenceState<'m>,
+        old: Value<'m>,
+    ) -> (Value<'m>, Value<'m>) {
+        let i1 = self.module.int_type(1);
+        if !self.tracking() {
+            let yes = self.module.const_int(i1, 1);
+            return (yes, yes);
+        }
+        let unique = self.builder.load(i1, state.unique, 1);
+        let untracked = self.builder.load(i1, state.untracked, 1);
+        let known = self.builder.binary(BinOp::Or, unique, untracked);
+        let grown = self.untracked(known, old);
+        (grown, grown)
+    }
+
     pub(super) fn store_sequence_state(&self, address: AddressId, value: ValueId) -> Emitted {
         let Some(slot) = self.whole_slot(address) else {
             return Ok(());
@@ -360,13 +405,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.store(length, state.length, 8);
         // A detach result goes straight into its new owning root; if another use
         // can increase its count, retain the actual test instead of a must fact.
-        let fresh = self.fresh_detaches.contains(&value);
-        self.builder.store(
-            self.module
-                .const_int(self.module.int_type(1), u128::from(fresh)),
-            state.unique,
-            1,
-        );
+        // A tracked arena block's detach is unshared but never unique (MEM-6).
+        let unique = if !self.fresh_detaches.contains(&value) {
+            self.module.const_zero(self.module.int_type(1))
+        } else if let Some(&untracked) = self.detach_untracked.get(&value) {
+            untracked
+        } else {
+            crate::runtime::is_unique(&self.builder, self.get(value)?)
+        };
+        self.builder.store(unique, state.unique, 1);
+        self.builder.store(unique, state.untracked, 1);
         Ok(())
     }
 }

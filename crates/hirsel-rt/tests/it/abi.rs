@@ -49,6 +49,17 @@ fn header_constants_match_the_runtime() {
         ("CONFIG_DIAGNOSTIC", CONFIG_DIAGNOSTIC as u64),
         ("HEADER_SIZE", HEADER_SIZE as u64),
         ("COUNT_IMMORTAL", COUNT_IMMORTAL as u64),
+        ("COUNT_ARENA_UNIQUE", COUNT_ARENA_UNIQUE as u64),
+        ("COUNT_ARENA_SHARED", COUNT_ARENA_SHARED as u64),
+        (
+            "TRACKED_REGION_BACK",
+            hirsel_rt::region::TRACKED_REGION_BACK,
+        ),
+        (
+            "TRACKED_PREFIX_BYTES",
+            hirsel_rt::region::TRACKED_PREFIX_BYTES,
+        ),
+        ("ALLOC_TRACKED", hirsel_rt::region::ALLOC_TRACKED as u64),
         ("CLASS_COUNT", CLASS_COUNT as u64),
         ("SMALL_MAX", SMALL_MAX),
         ("SMALL_ALIGN_MAX", SMALL_ALIGN_MAX),
@@ -70,6 +81,8 @@ fn header_constants_match_the_runtime() {
         ("LAYOUT_UNSAFE_FFI", LAYOUT_UNSAFE_FFI as u64),
         ("LAYOUT_DYNAMIC", LAYOUT_DYNAMIC as u64),
         ("LAYOUT_NO_EXTENT", LAYOUT_NO_EXTENT as u64),
+        ("LAYOUT_SEQUENCE", LAYOUT_SEQUENCE as u64),
+        ("LAYOUT_UNTRACKED_BELOW", LAYOUT_UNTRACKED_BELOW as u64),
         ("STEP_RELEASE", STEP_RELEASE as u64),
         ("STEP_FINALIZE", STEP_FINALIZE as u64),
         ("STEP_CLOSE_HANDLE", STEP_CLOSE_HANDLE as u64),
@@ -436,7 +449,7 @@ fn launch_rejects_another_abi_version_and_unknown_flags() {
         LAUNCH_OK
     );
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
-    assert_eq!(hirsel_rt_v2_abi_version(), 10);
+    assert_eq!(hirsel_rt_v2_abi_version(), 11);
 }
 
 #[test]

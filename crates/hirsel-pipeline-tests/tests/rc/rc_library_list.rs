@@ -336,7 +336,7 @@ fn list_push_body_writes_through_slots_and_p4_detaches_it() {
             .any(|i| matches!(i, Inst::SeqReserve { .. }))
     }));
     assert!(insts.iter().any(|i| matches!(i, Inst::SeqSetLen { .. })));
-    assert!(insts.iter().any(|i| matches!(i, Inst::IsUnique { .. })));
+    assert!(insts.iter().any(|i| matches!(i, Inst::IsWritable { .. })));
     assert!(
         probe
             .pools

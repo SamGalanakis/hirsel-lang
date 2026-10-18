@@ -1375,6 +1375,7 @@ fn stdin_replay_rejects_oversized_chunks_and_invalid_errors_before_publication()
     let buffer = Value::Sequence {
         kind: BuiltinType::List,
         elements: vec![Some(Value::Integer(n(Primitive::U8, 7)))],
+        arena: None,
     };
     recorded.value("stdin.read", vec![input, buffer.clone(), u64_value(2)]);
     let tape = recorded.library.simulation.events.clone();

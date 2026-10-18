@@ -864,6 +864,21 @@ impl<'c, 'a> Body<'c, 'a> {
         Ok(version)
     }
 
+    /// Prepare one push to the List block at `address` (MEM-6, LIR schema
+    /// revision 32): a tracked arena List is charged and, when shared or
+    /// full, copied or relocated within its arena. A write that P4 leaves to
+    /// it, so `address` should be its own.
+    pub fn arena_push(&mut self, address: AddressId) -> R<ValueId> {
+        let version = self.write(address)?;
+        let failure = self.failure(None);
+        self.push(Inst::ArenaPush {
+            address,
+            version,
+            failure,
+        });
+        Ok(version)
+    }
+
     /// Append the owned Packed `value` to the sequential sequence block at
     /// `address` (MEM-13). A write: P4 makes the block unique first.
     pub fn seq_append(&mut self, address: AddressId, value: ValueId) -> R<ValueId> {

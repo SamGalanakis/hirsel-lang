@@ -287,6 +287,83 @@ impl Frame {
         }
         Ok(slot)
     }
+    /// MEM-6: a write at `id`, or a `mut` lend of it (`lend`), writes through every
+    /// arena List or Array on its path. One reached through another block is
+    /// shared first, since that block's run-time count is not a semantic fact; a
+    /// shared one is copied within its arena before the write, charged its length,
+    /// and the place holds the unshared copy. A lent value reached through a block
+    /// is shared too, so the callee's first write copies it. Returns the arena
+    /// whose budget a copy exceeded. A path that does not resolve is left to the
+    /// access that follows, which reports it.
+    pub fn arena_write(
+        &mut self,
+        id: PlaceId,
+        lend: bool,
+        mut charge: impl FnMut(u64, u64) -> Result<(), u64>,
+    ) -> Result<Option<u64>, AccessError> {
+        let place = self.place(id)?.clone();
+        let Ok(steps) = self.indices(&place) else {
+            return Ok(None);
+        };
+        let Some(mut value) = self
+            .slots
+            .get_mut(place.root.0 as usize)
+            .and_then(Option::as_mut)
+        else {
+            return Ok(None);
+        };
+        let mut crossed = false;
+        for step in steps {
+            let index = match step {
+                AccessStep::Field(i) | AccessStep::Index(i) => i,
+                AccessStep::VariantField { variant, field } => {
+                    if !matches!(value, Value::Variant { variant: tag, .. } if *tag == variant) {
+                        return Ok(None);
+                    }
+                    field
+                }
+            };
+            if let Value::Sequence {
+                arena: Some(storage),
+                elements,
+                ..
+            } = value
+            {
+                if crossed {
+                    storage.share();
+                }
+                // An index out of range fails before the write copies anything.
+                if index >= elements.len() {
+                    return Ok(None);
+                }
+                if storage.shared() {
+                    let bytes = storage.element.saturating_mul(elements.len() as u64);
+                    if let Err(arena) = charge(storage.arena, bytes) {
+                        return Ok(Some(arena));
+                    }
+                    *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+                    // The original and the copy both hold every element.
+                    elements
+                        .iter()
+                        .flatten()
+                        .for_each(Value::share_arena_storage);
+                }
+            }
+            crossed |= value.is_block();
+            let Some(next) = value
+                .fields_mut()
+                .and_then(|fields| fields.get_mut(index))
+                .and_then(Option::as_mut)
+            else {
+                return Ok(None);
+            };
+            value = next;
+        }
+        if lend && crossed {
+            value.share_arena_storage();
+        }
+        Ok(None)
+    }
     /// Observe table patterns without extracting, copying, or changing live bits.
     pub fn pattern_matches(&self, table: &MatchTable, root: MatchPatternId) -> Result<bool, Error> {
         let mut pending = vec![root];
@@ -370,6 +447,7 @@ impl Frame {
         let value = self.extract(operand)?;
         if operand.usage == UseKind::Copy {
             shadow.share();
+            value.share_arena_storage();
         }
         let shadow = shadow.for_value(&value);
         Ok((value, shadow))

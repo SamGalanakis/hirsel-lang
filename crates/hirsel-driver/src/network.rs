@@ -92,6 +92,7 @@ fn sequence(kind: BuiltinType, items: impl IntoIterator<Item = Value>) -> Value 
     Value::Sequence {
         kind,
         elements: items.into_iter().map(Some).collect(),
+        arena: None,
     }
 }
 fn address(a: SocketAddr) -> Value {

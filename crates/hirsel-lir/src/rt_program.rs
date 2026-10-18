@@ -273,6 +273,19 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
             } else {
                 0
             }
+            | if matches!(record.kind, LayoutKind::Sequence { .. }) {
+                crate::runtime_abi::LAYOUT_SEQUENCE
+            } else {
+                0
+            }
+            | if matches!(
+                record.kind,
+                LayoutKind::Opaque { .. } | LayoutKind::Environment { .. }
+            ) {
+                crate::runtime_abi::LAYOUT_UNTRACKED_BELOW
+            } else {
+                0
+            }
             | if lower
                 .steps
                 .iter()

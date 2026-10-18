@@ -248,7 +248,13 @@ fn full_u32_bound_and_invalid_configuration_are_explicit() {
     let ctx = Ctx::new(&[&leaf], false);
     let block = ctx.alloc(0, 0, 8);
     unsafe {
-        (*block).count = u32::MAX - 1;
+        // The full width stops below the tracked arena counts (runtime ABI 11).
+        (*block).count = crate::count::finite_count_max(0);
+        assert_eq!((*block).count, crate::count::COUNT_ARENA_SHARED - 1);
+        assert_eq!(
+            crate::count::finite_count_max(u32::MAX as u64),
+            crate::count::COUNT_ARENA_SHARED - 1
+        );
         hirsel_rt_v2_dup(ctx.0, block);
         assert_eq!((*block).count, u32::MAX);
         hirsel_rt_v2_dup(ctx.0, block);

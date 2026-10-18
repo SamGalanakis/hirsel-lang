@@ -6,6 +6,10 @@
 //! tests unique and ignores later dups and releases. Uncounted storage (region and arena) has
 //! no header and never reaches these operations; `Shared` interiors keep their headers, made
 //! immortal while frozen (`shared`). Transitions cite the model's IDs: T03 dup, T04 release.
+//!
+//! A tracked arena block (a List or Array in an arena, MEM-6) is uncounted too, but says whether
+//! it is shared: [`COUNT_ARENA_UNIQUE`] until a dup makes it [`COUNT_ARENA_SHARED`], which is
+//! sticky. Releases ignore both, and neither tests unique; finite counts stay below them.
 
 use crate::alloc::{Header, STATE_LIVE};
 use crate::context::RunCtx;
@@ -15,12 +19,16 @@ use crate::fault;
 pub const COUNT_IMMORTAL: u32 = u32::MAX;
 /// The count of a block with one holder: its next release kills it.
 pub const COUNT_UNIQUE: u32 = 1;
+/// An unshared tracked arena block: a write may change it in place (runtime ABI 11).
+pub const COUNT_ARENA_UNIQUE: u32 = u32::MAX - 1;
+/// A shared tracked arena block: its next write copies it within its arena.
+pub const COUNT_ARENA_SHARED: u32 = u32::MAX - 2;
 
 /// The largest finite count under the bound `max` (`Config::count_max`; 0 selects the full
-/// width, whose all-ones word is the sentinel).
+/// width, below the sentinels).
 pub const fn finite_count_max(max: u64) -> u32 {
-    if max == 0 {
-        u32::MAX - 1
+    if max == 0 || max - 1 >= COUNT_ARENA_SHARED as u64 {
+        COUNT_ARENA_SHARED - 1
     } else {
         (max - 1) as u32
     }
@@ -68,6 +76,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_dup(ctx: *mut RunCtx, block: *mut Header) 
         }
         let count = (*block).count;
         if count == COUNT_IMMORTAL {
+            return;
+        }
+        if count == COUNT_ARENA_UNIQUE || count == COUNT_ARENA_SHARED {
+            (*block).count = COUNT_ARENA_SHARED;
             return;
         }
         if count >= ctx.count_max {

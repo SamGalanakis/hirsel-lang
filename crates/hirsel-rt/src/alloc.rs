@@ -1756,6 +1756,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
 /// the original is given back (none to give for an immortal block). A dead block and a size
 /// that overflows are invariant faults; host exhaustion terminates environmentally.
 ///
+/// A tracked arena block (MEM-6, runtime ABI 11) is returned unchanged: `list.reserve` is only
+/// a hint there, and its pushes make their own room (`hirsel_rt_v2_arena_push`).
+///
 /// # Safety
 /// `ctx` is a live run context and `block` is a live sequence block whose
 /// payload layout has this element size and alignment, of which the caller holds one credit.
@@ -1769,6 +1772,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
 ) -> *mut Header {
     // SAFETY: caller contract.
     unsafe {
+        if crate::region::is_tracked(block) {
+            return block;
+        }
         if (*block).count != 1 || (*block).domain() != DOMAIN_HEAP {
             return detach_reserved(ctx, block, element_size, element_align, capacity);
         }

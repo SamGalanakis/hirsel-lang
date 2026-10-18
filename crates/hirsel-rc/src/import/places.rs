@@ -702,6 +702,9 @@ impl Importer<'_, '_> {
         }
         let ty = place.ty;
         let reaching = self.reaching(place.slot)?;
+        // A source copy shares the arena Lists the value holds (MEM-6); a
+        // take this lowers as a copy is no source copy.
+        let semantic_copy = usage == UseKind::Copy;
         // The caller keeps what it lends: taking from a borrowed parameter
         // (a copyable capability, `take s` of `s: Dir`) copies it.
         let usage = if usage == UseKind::Take && self.borrowed_storage(place.slot) {
@@ -754,6 +757,13 @@ impl Importer<'_, '_> {
                     reaching,
                     failure,
                 });
+                let row = &self.out.types[ty.index()];
+                if semantic_copy
+                    && (row.repr == ValueRepr::Block
+                        || !self.layouts.record(row.layout).drop.is_empty())
+                {
+                    self.push(Inst::Share { value: result });
+                }
                 if self.holds(result) {
                     self.failure.pending.push(result);
                 }

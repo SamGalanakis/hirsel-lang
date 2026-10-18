@@ -16,12 +16,20 @@ use std::ptr;
 
 use crate::alloc::{FREE_POISON, Header, check_request};
 use crate::context::RunCtx;
+use crate::count::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE};
 use crate::finalize::{Cleanup, finalize_item};
 #[cfg(feature = "memcheck")]
 use crate::memcheck;
 use crate::memcheck::REGION_REDZONE;
 use crate::release::{LAYOUT_NO_EXTENT, drain, push, release_block};
 use crate::{STATUS_OK, environmental, fault};
+
+/// `hirsel_rt_v2_arena_alloc`'s flag of a tracked arena block (runtime ABI 11).
+pub const ALLOC_TRACKED: u32 = 1;
+/// Bytes before a tracked arena block's header that hold its arena's record.
+pub const TRACKED_REGION_BACK: u64 = 24;
+/// Bytes before a tracked arena block's payload: its region word, its extent, its header.
+pub const TRACKED_PREFIX_BYTES: u64 = 32;
 
 /// Bytes of a standard region segment.
 pub const SEGMENT_SIZE: usize = 64 * 1024;
@@ -167,7 +175,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_owner(
 /// `index`, then the payload, which the caller fills. The immutable extent record precedes
 /// the header unless the layout is [`LAYOUT_NO_EXTENT`], whose extent is its size.
 /// It has no count, so its drop program never runs from a release; the caller schedules the
-/// payload with `hirsel_rt_v2_region_schedule` when it moves a heap credit in. Returns the
+/// payload with `hirsel_rt_v2_region_schedule` when it moves a heap credit in. With
+/// [`ALLOC_TRACKED`] in `flags` (runtime ABI 11) the block is a tracked arena block instead: an
+/// unshared [`COUNT_ARENA_UNIQUE`] count, and its arena's record before the extent. Returns the
 /// block. It cannot fail: backing exhaustion terminates environmentally (runtime ABI 3).
 ///
 /// # Safety
@@ -179,6 +189,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
     index: u32,
     extent: u64,
     align: u64,
+    flags: u32,
 ) -> *mut Header {
     unsafe {
         check_request(extent, align);
@@ -186,6 +197,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
         check_active(region);
         let layout = &*ctx.descriptor(index);
         let bare = layout.flags & LAYOUT_NO_EXTENT != 0;
+        let tracked = flags & ALLOC_TRACKED != 0;
+        if flags & !ALLOC_TRACKED != 0 || (tracked && bare) {
+            fault("an arena allocation has unknown flags or tracks a fixed layout");
+        }
         if bare && (extent != layout.size || align != layout.align) {
             fault("a fixed-layout arena block is not its layout's size and alignment");
         }
@@ -193,9 +208,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
             fault("an arena block extent is smaller than its layout size");
         }
         let physical = align.max(8);
-        // The payload follows the header (after the 16-byte extent unless bare), at `physical`
-        // alignment.
-        let prefix = if bare { 8 } else { 24 };
+        // The payload follows the header (after the 16-byte extent unless bare, and the
+        // region word when tracked), at `physical` alignment.
+        let prefix = if bare {
+            8
+        } else if tracked {
+            TRACKED_PREFIX_BYTES
+        } else {
+            24
+        };
         let start = reserve_in(ctx, region, prefix + extent + (physical - 8), 8, true);
         let payload = start.add(prefix as usize);
         let payload = payload.add(payload.align_offset(physical as usize));
@@ -223,11 +244,214 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
                     align: physical,
                 });
         }
+        if tracked {
+            block
+                .cast::<u8>()
+                .sub(TRACKED_REGION_BACK as usize)
+                .cast::<*mut Region>()
+                .write(region);
+        }
         block.write(Header {
-            count: crate::COUNT_IMMORTAL,
+            count: if tracked {
+                COUNT_ARENA_UNIQUE
+            } else {
+                crate::COUNT_IMMORTAL
+            },
             descriptor: index | (crate::alloc::KIND_REGION << crate::alloc::KIND_SHIFT),
         });
         block
+    }
+}
+
+/// Whether `block` is a tracked arena block (MEM-6, runtime ABI 11): a List or Array whose
+/// count says whether it is shared.
+///
+/// # Safety
+/// `block` is a live block.
+pub(crate) unsafe fn is_tracked(block: *const Header) -> bool {
+    // SAFETY: caller contract.
+    let count = unsafe { (*block).count };
+    count == COUNT_ARENA_UNIQUE || count == COUNT_ARENA_SHARED
+}
+
+/// The arena record of the tracked arena block `block`.
+///
+/// # Safety
+/// `block` is a live tracked arena block.
+pub(crate) unsafe fn tracked_region(block: *const Header) -> *mut Region {
+    // SAFETY: a tracked block's prefix holds its arena's record.
+    unsafe {
+        block
+            .cast::<u8>()
+            .sub(TRACKED_REGION_BACK as usize)
+            .cast::<*mut Region>()
+            .read()
+    }
+}
+
+/// Take `bytes` from the budget of the arena `region` (MEM-6); false, with nothing taken, when
+/// they exceed it. An unbounded arena is never charged.
+///
+/// # Safety
+/// `region` is an active arena record.
+pub(crate) unsafe fn charge_arena(region: *mut Region, bytes: u64) -> bool {
+    // SAFETY: caller contract.
+    unsafe {
+        let region = &mut *region;
+        if region.bound == 0 {
+            return true;
+        }
+        match region.remaining.checked_sub(bytes) {
+            Some(left) => {
+                region.remaining = left;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// The logical bytes one element of the tracked block `block`'s layout charges (MEM-6).
+///
+/// # Safety
+/// `block` is a live tracked arena block of `ctx`.
+pub(crate) unsafe fn element_charge(ctx: &RunCtx, block: *const Header) -> u64 {
+    // SAFETY: caller contract.
+    unsafe {
+        let layout = &*ctx.descriptor((*block).index());
+        if layout.logical == crate::LOGICAL_UNSUPPORTED
+            || layout.flags & crate::LAYOUT_LOGICAL_PER_ELEMENT == 0
+        {
+            fault("a tracked arena block has no per-element logical size");
+        }
+        layout.logical
+    }
+}
+
+/// Move the tracked arena sequence block at `slot` into fresh storage of its arena holding
+/// `slots` elements of `element_size` bytes at `element_align`, uncharged, and return the new
+/// block, which `slot` then holds. An unshared block moves: the old storage is abandoned, its
+/// count zeroed so its scheduled drop program releases nothing. A shared one is copied: the old
+/// block keeps its other holders, each counted element gains one, and the copy is `count`
+/// ([`COUNT_ARENA_UNIQUE`] or [`COUNT_ARENA_SHARED`]). A layout with a drop program has the new
+/// payload scheduled for the arena's exit.
+///
+/// # Safety
+/// `ctx` is live, `slot` holds a live tracked arena sequence block of this element size and
+/// alignment, and `slots` is at least its count.
+pub(crate) unsafe fn tracked_move(
+    ctx: *mut RunCtx,
+    slot: *mut *mut Header,
+    slots: u64,
+    element_size: u64,
+    element_align: u64,
+    count: u32,
+) -> *mut Header {
+    // SAFETY: caller contract.
+    unsafe {
+        let raw = ctx;
+        let block = slot.read();
+        let region = tracked_region(block);
+        let shared = (*block).count == COUNT_ARENA_SHARED;
+        let index = (*block).index();
+        let elements = crate::alloc::sequence_elements_offset(element_align);
+        let len = crate::alloc::payload(block).cast::<u64>().read();
+        let extent = slots
+            .checked_mul(element_size)
+            .and_then(|bytes| bytes.checked_add(elements))
+            .unwrap_or_else(|| fault("a sequence capacity overflows its extent"));
+        let fresh = hirsel_rt_v2_arena_alloc(
+            raw,
+            region,
+            index,
+            extent,
+            element_align.max(8),
+            ALLOC_TRACKED,
+        );
+        ptr::copy_nonoverlapping(
+            crate::alloc::payload(block),
+            crate::alloc::payload(fresh),
+            (elements + len * element_size) as usize,
+        );
+        crate::alloc::set_sequence_capacity(fresh, slots);
+        (*fresh).count = count;
+        let ctx = &mut *raw;
+        let layout = ctx.descriptor(index);
+        if (*layout).step_count != 0 {
+            if shared {
+                crate::copy::holders(layout, crate::alloc::payload(fresh), &mut |held| {
+                    crate::count::hirsel_rt_v2_dup(
+                        raw,
+                        held.cast::<*mut Header>().read_unaligned(),
+                    );
+                });
+            } else {
+                crate::alloc::payload(block).cast::<u64>().write(0);
+            }
+            hirsel_rt_v2_region_schedule(raw, region, index, crate::alloc::payload(fresh));
+        }
+        slot.write(fresh);
+        fresh
+    }
+}
+
+/// Prepare one `list.push` to the List block `block` (MEM-6, runtime ABI 11). A tracked arena
+/// block is charged its element's logical size and, when shared, its count of them; then a
+/// shared block is copied within its arena and a full one relocated there, each to
+/// `max(4, 2 * count)` elements, so the block written to `out_block` is unshared with room for
+/// one more element. Any other block is left alone and written back. Returns
+/// [`STATUS_EXHAUSTED`], with nothing charged, changed or written, when the charge exceeds the
+/// arena's budget; the caller records the arena's own `OutOfSpace`. Spare capacity and
+/// abandoned storage are never charged, so after `n` pushes to an unshared List its storage is
+/// at most `4n + 4` elements.
+///
+/// # Safety
+/// `ctx` is live, `block` is a live List block of elements of `element_size` bytes at
+/// `element_align` of which the caller holds the credit, and `out_block` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arena_push(
+    ctx: *mut RunCtx,
+    block: *mut Header,
+    element_size: u64,
+    element_align: u64,
+    out_block: *mut *mut Header,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        if !is_tracked(block) {
+            out_block.write(block);
+            return STATUS_OK;
+        }
+        let region = tracked_region(block);
+        check_active(region);
+        let shared = (*block).count == COUNT_ARENA_SHARED;
+        let len = crate::alloc::payload(block).cast::<u64>().read();
+        let each = element_charge(&*ctx, block);
+        let copied = if shared { each.saturating_mul(len) } else { 0 };
+        if !charge_arena(region, each.saturating_add(copied)) {
+            return crate::STATUS_EXHAUSTED;
+        }
+        let capacity = crate::alloc::payload(block)
+            .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
+            .cast::<u64>()
+            .read();
+        let mut slot = block;
+        if shared || len >= capacity {
+            let slots = len
+                .checked_mul(2)
+                .unwrap_or_else(|| fault("a sequence capacity overflows its extent"))
+                .max(4);
+            tracked_move(
+                ctx,
+                &raw mut slot,
+                slots,
+                element_size,
+                element_align,
+                COUNT_ARENA_UNIQUE,
+            );
+        }
+        out_block.write(slot);
+        STATUS_OK
     }
 }
 

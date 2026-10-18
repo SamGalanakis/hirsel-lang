@@ -192,6 +192,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             free: self.runtime(RuntimeEntry::Free)?,
             close_handle: self.runtime(RuntimeEntry::CloseHandle)?,
             measure_release,
+            tracking: self.tracking(),
         };
         let i8_ty = self.module.int_type(8);
         let status = self.prologue.alloca(i8_ty, 1);

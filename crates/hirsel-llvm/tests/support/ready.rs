@@ -150,6 +150,7 @@ impl Unit<'_> {
         );
         self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor,
             layout: payload,
             fields,
@@ -1227,6 +1228,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     );
     u.builder.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor: ConstructorKind::Record(rec2_symbol),
         layout: rec2_l,
         fields: PoolRange::EMPTY,
@@ -1489,6 +1491,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     );
     u.builder.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor: ConstructorKind::Record(symbol),
         layout: res_l,
         fields,
@@ -1642,6 +1645,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
     let gt = u.compare(ENTRY, CompareOp::Gt, some, none, box_opt_l, failure);
     u.builder.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor: variant(1),
         layout: opt_l,
         fields: PoolRange::EMPTY,

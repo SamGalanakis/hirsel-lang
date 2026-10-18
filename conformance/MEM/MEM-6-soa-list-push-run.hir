@@ -1,0 +1,88 @@
+// rule: MEM-6
+// expect: run
+// stdout: soa 4
+// stdout: soa copy 3
+// A List of an `@soa` record built in a bounded arena keeps its columns as it grows:
+// pushes and a copy into the arena read back every field of every row.
+fn output_error[E](take e: E) -> () {}
+
+@soa
+type Row {
+  small: u8,
+  x: u64,
+  flag: bool,
+}
+
+fn row(n: u64) -> Row {
+  Row(small: 7, x: n, flag: n % 2u64 == 0u64)
+}
+
+fn good(xs: List[Row]) -> bool {
+  let mut i = 0u64
+  let mut ok = true
+  while i < list.len(xs) {
+    let r = xs[i]
+    ok = ok && r.small == 7 && r.x == i + 1u64 && r.flag == (r.x % 2u64 == 0u64)
+    i = i + 1u64
+  }
+  ok
+}
+
+fn pushed() -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    4096u64,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[Row] in a = [row(1u64)]
+      list.push(mut xs, row(2u64))
+      list.push(mut xs, row(3u64))
+      list.push(mut xs, row(4u64))
+      if good(xs) {
+        list.len(xs)
+      } else {
+        0u64
+      }
+    }
+  )
+}
+
+fn copied() -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    4096u64,
+    fn(a: Arena) -> u64 {
+      let rows: List[Row] = [row(1u64), row(2u64)]
+      let mut xs: List[Row] = copy_to(a, rows)
+      list.push(mut xs, row(3u64))
+      if good(xs) {
+        list.len(xs)
+      } else {
+        0u64
+      }
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  out.print(
+    stdout,
+    if pushed() == Ok(4u64) {
+      "soa 4\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  out.print(
+    stdout,
+    if copied() == Ok(3u64) {
+      "soa copy 3\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

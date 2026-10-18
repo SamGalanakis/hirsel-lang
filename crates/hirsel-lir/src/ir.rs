@@ -628,6 +628,20 @@ pub enum Inst {
         capacity: ValueId,
         version: ValueId,
     },
+    /// Prepare one push to the sequence block at `address` (MEM-6, LIR
+    /// schema revision 32). A tracked arena List is charged its element's
+    /// logical size against its bounded arena; then, when shared, it is
+    /// copied within its arena as a new unshared List, charged its count;
+    /// then, when full, it relocates within its arena to `max(4, 2 * count)`
+    /// elements, uncharged. Afterwards it is unshared with room for one more
+    /// element. A heap, static or untracked block is left alone. A write:
+    /// `version` is the root's new reaching value. Fails with the arena's
+    /// `OutOfSpace`. Library units only.
+    ArenaPush {
+        address: AddressId,
+        version: ValueId,
+        failure: FailureId,
+    },
     /// Set the count of the sequence block at `address` to `len`,
     /// `len <= capacity`. It moves no element and runs no drop: the unit
     /// must already have initialised every slot below `len` and emptied
@@ -857,6 +871,23 @@ pub enum Inst {
     /// count never is): a Plain bool. Read-only; it cannot fail.
     IsUnique {
         result: ValueId,
+        value: ValueId,
+    },
+    /// Whether a write may change the borrowed block in place: its count is
+    /// exactly one, or it is an unshared arena List or Array (MEM-6,
+    /// `runtime_abi::COUNT_ARENA_UNIQUE`): a Plain bool. Copy-on-write tests
+    /// it; unlike `IsUnique` it never licenses freeing or reusing the block.
+    /// Read-only; it cannot fail (LIR schema revision 32).
+    IsWritable {
+        result: ValueId,
+        value: ValueId,
+    },
+    /// A semantic copy of `value` (MEM-6, LIR schema revision 32): every
+    /// unshared arena List or Array block it holds at inline depth (the block
+    /// itself for a block reference, else each holder slot of its layout's
+    /// drop program) becomes shared, so its next write copies it. Reads
+    /// `value`, which keeps its credits; never allocates or fails.
+    Share {
         value: ValueId,
     },
     /// Consume one credit; may run finalizers at `anchor`.
@@ -1136,6 +1167,10 @@ pub struct ConstructSite {
     /// or local region.
     /// No child-credit walk or payload drop is scheduled for this construction.
     pub arena_no_drop: bool,
+    /// The construction builds a List or Array (MEM-6, LIR schema revision
+    /// 28): placed in an arena, its block is tracked and starts unshared; a
+    /// deep copy tracks the List and Array blocks it copies there.
+    pub tracked: bool,
     pub constructor: ConstructorKind,
     pub layout: LayoutId,
     pub fields: PoolRange<FieldValue>,
@@ -1606,6 +1641,7 @@ impl Inst {
             | Inst::Binary { result, .. }
             | Inst::Compare { result, .. }
             | Inst::IsUnique { result, .. }
+            | Inst::IsWritable { result, .. }
             | Inst::Weaken { result, .. }
             | Inst::Read { result, .. }
             | Inst::Copy { result, .. }
@@ -1638,6 +1674,7 @@ impl Inst {
             Inst::MulAdd { result, .. } => vec![result],
             Inst::Store { version, .. }
             | Inst::SeqReserve { version, .. }
+            | Inst::ArenaPush { version, .. }
             | Inst::SeqSetLen { version, .. }
             | Inst::SeqAppend { version, .. }
             | Inst::FlatAppend { version, .. }
@@ -1660,6 +1697,7 @@ impl Inst {
             | Inst::EndOrigin { .. }
             | Inst::Drop { .. }
             | Inst::Dup { .. }
+            | Inst::Share { .. }
             | Inst::Release { .. }
             | Inst::Dispose { .. }
             | Inst::RegionPublish { .. }
@@ -1686,6 +1724,7 @@ impl Inst {
             | Inst::Copy { failure, .. }
             | Inst::FlatCopy { failure, .. }
             | Inst::UniqueCopy { failure, .. }
+            | Inst::ArenaPush { failure, .. }
             | Inst::Replace { failure, .. }
             | Inst::Construct { failure, .. }
             | Inst::Closure { failure, .. }
@@ -1731,7 +1770,9 @@ impl Inst {
             | Inst::BindFields { .. }
             | Inst::EndOrigin { .. }
             | Inst::Dup { .. }
+            | Inst::Share { .. }
             | Inst::IsUnique { .. }
+            | Inst::IsWritable { .. }
             | Inst::Dispose { .. }
             | Inst::TokenNone { .. }
             | Inst::RegionEnter { .. }
@@ -1759,6 +1800,7 @@ impl Inst {
             | Inst::Copy { failure, .. }
             | Inst::FlatCopy { failure, .. }
             | Inst::UniqueCopy { failure, .. }
+            | Inst::ArenaPush { failure, .. }
             | Inst::Replace { failure, .. }
             | Inst::Construct { failure, .. }
             | Inst::Closure { failure, .. }
@@ -1804,7 +1846,9 @@ impl Inst {
             | Inst::BindFields { .. }
             | Inst::EndOrigin { .. }
             | Inst::Dup { .. }
+            | Inst::Share { .. }
             | Inst::IsUnique { .. }
+            | Inst::IsWritable { .. }
             | Inst::Dispose { .. }
             | Inst::TokenNone { .. }
             | Inst::RegionEnter { .. }
@@ -1908,6 +1952,7 @@ impl Inst {
                 f(R::Value(addend));
             }
             Self::IsUnique { result, value }
+            | Self::IsWritable { result, value }
             | Self::Weaken { result, value }
             | Self::SeqLen { result, value }
             | Self::SeqCapacity { result, value }
@@ -2003,6 +2048,15 @@ impl Inst {
                 f(R::Address(address));
                 f(R::Value(value));
                 f(R::Value(version));
+            }
+            Self::ArenaPush {
+                address,
+                version,
+                failure,
+            } => {
+                f(R::Address(address));
+                f(R::Value(version));
+                f(R::Failure(failure));
             }
             Self::FlatAppend {
                 address,
@@ -2142,6 +2196,7 @@ impl Inst {
                 f(R::Failure(failure));
             }
             Self::Dup { value }
+            | Self::Share { value }
             | Self::Forget { value }
             | Self::RegionPublish { value }
             | Self::Dispose { token: value }
@@ -2792,6 +2847,7 @@ snapshot_enum!(Inst {
     SeqReserve { address, capacity, version },
     SeqSetLen { address, len, version },
     SeqAppend { address, value, version },
+    ArenaPush { address, version, failure },
     FlatAppend { address, construct, version },
     FlatField { address, field, op, version },
     FlatClose { address, construct, field, version },
@@ -2816,6 +2872,8 @@ snapshot_enum!(Inst {
     Drop { address, if_live, anchor, failure },
     Dup { value },
     IsUnique { result, value },
+    IsWritable { result, value },
+    Share { value },
     Release { value, layout, live, anchor, failure },
     Reset { result, value, layout, live, anchor, failure },
     Reuse { result, token, construct, kept, failure },
@@ -2903,6 +2961,7 @@ snapshot_enum!(ConstructorKind {
 snapshot_struct!(FieldValue { field, value });
 snapshot_struct!(ConstructSite {
     arena_no_drop,
+    tracked,
     constructor,
     layout,
     fields,

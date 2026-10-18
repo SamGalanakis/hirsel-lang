@@ -283,7 +283,8 @@ fn proved_arena_children_emit_neither_count_loads_nor_scheduling() {
                 "{ir}"
             );
             // Heap-token branches also load the allocator's slab live count.
-            // A holder read is identified by its immortal-count comparison.
+            // A holder read is identified by its comparison with the immortal count, or
+            // with the tracked arena counts below it (MEM-6).
             let holder_load = ir
                 .lines()
                 .filter_map(|line| {
@@ -291,7 +292,10 @@ fn proved_arena_children_emit_neither_count_loads_nor_scheduling() {
                         .split_once(" = load i32, ptr")
                         .map(|(value, _)| value)
                 })
-                .any(|value| ir.contains(&format!("icmp ne i32 {value}, -1")));
+                .any(|value| {
+                    ir.contains(&format!("icmp ne i32 {value}, -1"))
+                        || ir.contains(&format!("icmp ult i32 {value}, -3"))
+                });
             assert_eq!(holder_load, !elided, "{ir}");
             emit_object(&p.units(), &inputs).unwrap();
         }

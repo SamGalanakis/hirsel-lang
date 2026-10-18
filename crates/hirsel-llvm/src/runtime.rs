@@ -80,6 +80,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::RegionEnter
         | R::RegionReserve
         | R::ArenaAlloc
+        | R::ArenaPush
         | R::ArenaEnter
         | R::RegionOwner
         | R::RegionHold
@@ -104,7 +105,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
     let cells: &[u32] = match entry {
         R::CtxStats | R::BuilderGrow | R::BuilderPublish => &[1],
         R::Reuse => &[5],
-        R::UniqueCopy => &[4],
+        R::UniqueCopy => &[5],
+        R::ArenaPush => &[4],
         R::Detach => &[3],
         R::UniqueCopyValue => &[2],
         R::RegionReserve | R::BuilderBegin => &[4],
@@ -165,6 +167,57 @@ pub(crate) fn is_unique<'m>(
         count,
         module.const_int(ty, COUNT_UNIQUE.into()),
     )
+}
+
+/// Whether a write may change `block` in place (`Inst::IsWritable`, MEM-6): its count is one,
+/// or it is an unshared tracked arena block.
+pub(crate) fn is_writable<'m>(
+    builder: &crate::context::Builder<'m>,
+    block: crate::context::Value<'m>,
+) -> crate::context::Value<'m> {
+    use crate::context::{Access, BinOp, IntPredicate};
+    use hirsel_lir::runtime_abi::{COUNT_ARENA_UNIQUE, COUNT_OFFSET, COUNT_UNIQUE};
+    let module = builder.module();
+    let word = builder.offset(
+        block,
+        module.const_int(module.int_type(64), COUNT_OFFSET.into()),
+    );
+    let ty = module.int_type(32);
+    let count = builder.load_access(ty, word, 4, Access::Count);
+    let unique = builder.icmp(
+        IntPredicate::Eq,
+        count,
+        module.const_int(ty, COUNT_UNIQUE.into()),
+    );
+    let unshared = builder.icmp(
+        IntPredicate::Eq,
+        count,
+        module.const_int(ty, COUNT_ARENA_UNIQUE.into()),
+    );
+    builder.binary(BinOp::Or, unique, unshared)
+}
+
+/// Whether `block` is a tracked arena block (MEM-6, runtime ABI 11): its count is one of the
+/// two tracked arena counts.
+pub(crate) fn is_tracked<'m>(
+    builder: &crate::context::Builder<'m>,
+    block: crate::context::Value<'m>,
+) -> crate::context::Value<'m> {
+    use crate::context::{Access, BinOp, IntPredicate};
+    use hirsel_lir::runtime_abi::{COUNT_ARENA_SHARED, COUNT_OFFSET};
+    let module = builder.module();
+    let word = builder.offset(
+        block,
+        module.const_int(module.int_type(64), COUNT_OFFSET.into()),
+    );
+    let ty = module.int_type(32);
+    let count = builder.load_access(ty, word, 4, Access::Count);
+    let offset = builder.binary(
+        BinOp::Sub,
+        count,
+        module.const_int(ty, COUNT_ARENA_SHARED.into()),
+    );
+    builder.icmp(IntPredicate::Ult, offset, module.const_int(ty, 2))
 }
 
 /// Metadata-only capacity query. Each path reads exactly the metadata its

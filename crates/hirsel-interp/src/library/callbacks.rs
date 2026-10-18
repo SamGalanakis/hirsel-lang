@@ -218,6 +218,8 @@ impl Library {
         hi: usize,
     ) -> Result<OperationResult, Error> {
         if lo == hi {
+            // The borrowed key is copied into the map: a share of its arena Lists (MEM-6).
+            key.share_arena_storage();
             entries.insert(lo, Value::Tuple(vec![Some(key), Some(value)]));
             return Ok(OperationResult::Complete {
                 consumed: vec![2, 3],

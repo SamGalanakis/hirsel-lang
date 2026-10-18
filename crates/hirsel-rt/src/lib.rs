@@ -69,19 +69,20 @@ pub use alloc::{
 #[cfg(any(feature = "diagnostic", feature = "measurement"))]
 pub use context::Stats;
 pub use context::{Audit, Config, RunCtx};
-pub use count::{COUNT_IMMORTAL, finite_count_max};
+pub use count::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_IMMORTAL, finite_count_max};
 pub use failure::FailureRecord;
 pub use finalize::{Cleanup, CloseThunk, DropThunk};
 pub use region::{Builder, REGION_POOL_IDLE_CAP, Region, SEGMENT_SIZE};
 pub use release::{
     LAYOUT_DYNAMIC, LAYOUT_FROZEN, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_MAGIC, LAYOUT_NO_EXTENT,
-    LAYOUT_UNSAFE_FFI, LAYOUT_VERSION, LOGICAL_UNSUPPORTED, Layout, NO_OFFSET, STEP_CLOSE_HANDLE,
-    STEP_COLUMN, STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL,
-    STEP_RELEASE, STEP_TAG, STEP_THAW, Step, WHOLE_VALUE,
+    LAYOUT_SEQUENCE, LAYOUT_UNSAFE_FFI, LAYOUT_UNTRACKED_BELOW, LAYOUT_VERSION,
+    LOGICAL_UNSUPPORTED, Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_CURSOR_BITS,
+    STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE, STEP_TAG, STEP_THAW, Step,
+    WHOLE_VALUE,
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 10;
+pub const ABI_VERSION: u32 = 11;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

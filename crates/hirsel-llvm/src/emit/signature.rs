@@ -25,10 +25,13 @@ pub(super) struct Signature<'m, 'a> {
     /// Internal library roots travel by value and return on both status outcomes.
     pub(super) roots: Vec<usize>,
     pub(super) sequence_roots: Vec<bool>,
-    /// Private sequence inputs: full length and must-unique.
+    /// Private sequence inputs: full length, must-unique, defer and must-untracked.
     pub(super) companions: Vec<Option<u32>>,
     /// Per root, the returned `i1` field holding its must-unique fact (sequence roots).
     pub(super) uniques: Vec<Option<u32>>,
+    /// Per root, the returned `i1` field holding its must-untracked fact (sequence roots,
+    /// MEM-6): its block is no tracked arena block.
+    pub(super) untrackeds: Vec<Option<u32>>,
     /// The returned field holding the status.
     pub(super) status_field: u32,
     /// The plain scalar result returned in a register word instead of through a
@@ -125,6 +128,7 @@ impl<'m, 'a> Signature<'m, 'a> {
             sequence_roots: Vec::new(),
             companions: Vec::new(),
             uniques: Vec::new(),
+            untrackeds: Vec::new(),
             status_field: if value.is_some() {
                 PairField::Status.index()
             } else {
@@ -171,12 +175,14 @@ impl<'m, 'a> Signature<'m, 'a> {
             .iter()
             .map(|&sequence| {
                 sequence.then(|| {
-                    // Length, must-unique, and whether the caller defers this root's
+                    // Length, must-unique, whether the caller defers this root's
                     // count store (`SequenceState::dirty`): a caller without a
-                    // sequence state for it passes false, and gets the count stored.
+                    // sequence state for it passes false, and gets the count stored;
+                    // and must-untracked (MEM-6).
                     let first = self.types.len() as u32;
                     self.types.extend([
                         module.int_type(64),
+                        module.int_type(1),
                         module.int_type(1),
                         module.int_type(1),
                     ]);
@@ -207,6 +213,10 @@ impl<'m, 'a> Signature<'m, 'a> {
             };
             let sequences = self.sequence_roots.clone();
             self.uniques = sequences
+                .iter()
+                .map(|&sequence| sequence.then(|| extra(module.int_type(1))))
+                .collect();
+            self.untrackeds = sequences
                 .iter()
                 .map(|&sequence| sequence.then(|| extra(module.int_type(1))))
                 .collect();
@@ -244,6 +254,20 @@ impl<'m, 'a> Signature<'m, 'a> {
             returned,
             self.uniques[field].expect("a sequence root's must-unique word"),
         )
+    }
+
+    /// A returned sequence root's must-untracked fact, or its must-unique one where the
+    /// signature has none.
+    pub(super) fn root_untracked(
+        &self,
+        builder: &Builder<'m>,
+        returned: Value<'m>,
+        field: usize,
+    ) -> Value<'m> {
+        match self.untrackeds.get(field).copied().flatten() {
+            Some(index) => builder.extract(returned, index),
+            None => self.root_unique(builder, returned, field),
+        }
     }
 
     /// The `u8` status a call of this signature returned.

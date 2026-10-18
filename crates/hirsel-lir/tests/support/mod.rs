@@ -1166,6 +1166,7 @@ impl<S: Stage> Lir<S> {
         );
         self.builder.unit.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor,
             layout,
             fields,

@@ -1,0 +1,47 @@
+// rule: MEM-6
+// expect: run
+// stdout: 32 fits
+// stdout: 31 out of space
+// A List lent `mut` through another block is shared, so each push through `adj[0]`
+// copies it within the arena first. The outer literal charges 8, the first push 8 and a
+// copy of nothing, the second push 8 and a copy of one element, 8.
+fn output_error[E](take e: E) -> () {}
+
+fn nested(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let inner: List[u64] in a = []
+      let mut adj: List[List[u64]] in a = [inner]
+      list.push(mut adj[0], 1u64)
+      list.push(mut adj[0], 2u64)
+      list.len(adj[0])
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  out.print(
+    stdout,
+    if nested(32u64) == Ok(2u64) {
+      "32 fits\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  out.print(
+    stdout,
+    if nested(31u64) == Error(OutOfSpace()) {
+      "31 out of space\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -47,7 +47,8 @@ global, inert, plain allocator token, not a scoped grant. `arena.with(fn(a: Aren
 opens a named arena, freed at scope end; arenas are scoped capabilities
 ([MODE-6](ownership.md#mode-6-scoped-capabilities)) and hold no resources. Arena values
 are built bottom-up and are immutable once built, except that a `unique` builder mutates
-its root block in place; mutating a nested arena block detaches it onto the heap. Arena
+its root block in place; mutating a nested arena block detaches it onto the heap, except a
+List, which [MEM-6](#mem-6-bounded-arenas) copies within its arena. Arena
 blocks carry no count; the heap blocks they hold are released when the arena closes.
 `copy_to(heap, x)` deep-copies out of an arena (an allocation site).
 
@@ -123,9 +124,28 @@ proven, and an inferred closure literal carries the evidence its body proves.
 ### MEM-6: Bounded arenas
 
 `arena.bounded(cap, body) -> Result[R, OutOfSpace]`: each constructor into that arena
-charges a logical size; standard containers grow by doubling from capacity 4, charging the
-requested capacity; exceeding `cap` is a failure that unwinds to this call, which returns
-`Error(OutOfSpace)`. The logical size table is in the Bounded arenas section of [the runtime README](../../crates/hirsel-rt/README.md).
+charges a logical size, and each `list.push` to a List in it charges its element's logical
+size before it consumes its argument; exceeding `cap` is a failure that unwinds to this
+call, which returns `Error(OutOfSpace)`. Spare capacity, growth relocation and abandoned
+storage are not charged, so the charge is the same on every engine. The logical size table
+is in the Bounded arenas section of [the runtime README](../../crates/hirsel-rt/README.md).
+
+A List or Array built in an arena (a literal, `copy_to` or a copy made by this rule) is
+**unshared**. It becomes **shared** for good when it or a value holding it is copied
+(`copy`, a capture by copy, an owned read of a part, a counted local result such as
+`map.get`'s), and when it is written or lent `mut` through another block (a box payload, a
+sequence element, a map entry), since that block's holders are not tracked. The first
+write to a shared arena List or Array (a push, an element store, `pop`, `remove` or `swap`
+that moves an element) copies it into the same arena as a new unshared one, charged its
+copied length, whose elements are then held twice and so shared, then the write proceeds;
+a write that fails its bounds check copies nothing, and `list.reserve` is only a hint
+there. Neither a List of `Packed` values ([MEM-13](#mem-13-packed-variants)), whose
+storage is sequential, nor a List inside a Map or Set that `copy_to` copies into an arena
+is tracked: a write to one is not charged. An unshared List grows in place, relocating
+within its arena by doubling from four elements when full, so its storage is at most four
+times its charged bytes plus four elements. Consequently a push through a nested place
+(`list.push(mut adj[i], x)` in an arena) copies the inner List each time, charged; a List
+held by a binding or an inline record field grows in amortized constant time.
 
 ### MEM-7: Layout
 

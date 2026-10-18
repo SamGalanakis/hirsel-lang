@@ -3023,6 +3023,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_get(
 }
 
 /// Append initialized bytes to an exclusive physical List slot through ordinary COW growth.
+/// A tracked arena List grows within its arena, uncharged, and stays as shared as it was: a
+/// read appends no element MEM-6 charges.
 /// # Safety
 /// Context is live; buffer is an exclusive address of a live List[u8].
 pub(crate) unsafe fn append_byte_list(
@@ -3037,7 +3039,22 @@ pub(crate) unsafe fn append_byte_list(
             let total = count
                 .checked_add(bytes.len() as u64)
                 .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
-            let block = crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, total);
+            let block = if crate::region::is_tracked(block) {
+                let capacity = crate::alloc::payload(block)
+                    .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
+                    .cast::<u64>()
+                    .read();
+                let shared = (*block).count == crate::COUNT_ARENA_SHARED;
+                if shared || capacity < total {
+                    let slots = total.max(count.saturating_mul(2)).max(4);
+                    let count = (*block).count;
+                    crate::region::tracked_move(ctx, buffer, slots, 1, 1, count)
+                } else {
+                    block
+                }
+            } else {
+                crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, total)
+            };
             let payload = crate::alloc::payload(block);
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),

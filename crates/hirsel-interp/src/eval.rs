@@ -1429,14 +1429,18 @@ fn execute_frames(
                     Ok(_) => Err(invalid("check needs bool").into()),
                     Err(e) => Err(e.into()),
                 },
-                InstructionKind::Drop { place, if_live } => frame
-                    .access(place, "drop")
-                    .and_then(|_| frame.slot(place))
-                    .map(|slot| Action::Drop {
-                        value: slot.take(),
-                        if_live,
+                InstructionKind::Drop { place, if_live } => {
+                    arena_write(frame, place, false, &mut budgets).and_then(|()| {
+                        frame
+                            .access(place, "drop")
+                            .and_then(|_| frame.slot(place))
+                            .map(|slot| Action::Drop {
+                                value: slot.take(),
+                                if_live,
+                            })
+                            .map_err(EvalError::from)
                     })
-                    .map_err(EvalError::from),
+                }
                 InstructionKind::RunCleanup(id) => Ok(Action::Cleanup(id)),
                 kind => execute_instruction(
                     frame,
@@ -1458,7 +1462,7 @@ fn execute_frames(
                     site,
                 });
             }
-            execute_terminator(frame, terminator, runtime)
+            execute_terminator(frame, terminator, runtime, &mut budgets)
         };
         match result {
             Err(EvalError::Scalar(ScalarError::InvalidOperation)) => {
@@ -1716,18 +1720,18 @@ fn execute_frames(
                                 }),
                         };
                         let types = call_types.as_ref().unwrap_or(&frame.definition.types);
-                        // MEM-6: a copy into a bounded arena charges its whole tree first.
-                        let exhausted = match arguments.as_slice() {
-                            [Value::Handle { kind, id }, value]
-                                if path == hirsel_syntax::DefPath::core("copy_to")
-                                    && kind == crate::checked::ARENA_HANDLE
-                                    && budgets.bounded(*id) =>
-                            {
-                                let bytes =
-                                    crate::bounded::copy(runtime, types, result_type, value)?;
-                                budgets.charge(*id, bytes).err()
-                            }
-                            _ => None,
+                        // MEM-6: a copy into a bounded arena charges its whole tree first,
+                        // and builds every List and Array of it unshared there.
+                        let exhausted = if path == hirsel_syntax::DefPath::core("copy_to") {
+                            copy_to_arena(
+                                runtime,
+                                types,
+                                result_type,
+                                &mut arguments,
+                                &mut budgets,
+                            )?
+                        } else {
+                            list_write(&path, &mut arguments, &mut budgets)
                         };
                         let result = if let Some(arena) = exhausted {
                             budgets.exhausted(arena, execution.failures.len());
@@ -2161,10 +2165,11 @@ fn rvalue(
             }
             // Value copies traverse owned fields; Shared roots clone their
             // handle identity and retain their existing contents as a boundary.
-            let (value, bound) = frame.operand_shadow(&value)?;
+            let (mut value, bound) = frame.operand_shadow(&value)?;
             if let Some(check) = &frame.check {
                 shadow = bound.fresh_copy(&check.state.borrow());
             }
+            value.fresh_arena_storage();
             value
         }
         Rvalue::Unary { op, value } => scalar::unary(op, frame.operand(&value)?)?,
@@ -2277,7 +2282,24 @@ fn rvalue(
             } else {
                 vec![]
             };
-            let value = crate::aggregate::construct(constructor, values, kind, runtime, sizes)?;
+            let mut value = crate::aggregate::construct(constructor, values, kind, runtime, sizes)?;
+            // MEM-6: a List or Array built in an arena is unshared storage there.
+            if let Destination::Arena(origin) = &placement
+                && let Some(arena) = frame.arena_of(origin)
+                && let Value::Sequence {
+                    kind, arena: tag, ..
+                } = &mut value
+            {
+                let arena = u64::from(arena);
+                *tag = crate::bounded::storage(
+                    runtime,
+                    &frame.definition.types,
+                    frame.place(destination)?.ty,
+                    *kind,
+                    arena,
+                    budgets.bounded(arena),
+                )?;
+            }
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, true);
             }
@@ -2371,6 +2393,103 @@ fn rvalue(
         shadow.for_value(&value)
     };
     Ok((value, shadow))
+}
+/// MEM-6: `copy_to(a, x)` charges a bounded arena `x`'s whole tree, then retags the
+/// copied value's Lists and Arrays as fresh storage of `a` (of the heap for
+/// `heap`). Returns the arena whose budget the copy exceeds.
+fn copy_to_arena(
+    runtime: &crate::aggregate::RuntimeTypes,
+    types: &hirsel_types::TypeStore,
+    ty: hirsel_types::TypeId,
+    arguments: &mut [Value],
+    budgets: &mut crate::bounded::Budgets,
+) -> Result<Option<u64>, Error> {
+    let [Value::Handle { kind, id }, value] = arguments else {
+        return Ok(None);
+    };
+    let arena = (kind == crate::checked::ARENA_HANDLE).then_some(*id);
+    if let Some(arena) = arena
+        && budgets.bounded(arena)
+    {
+        let bytes = crate::bounded::copy(runtime, types, ty, value)?;
+        if let Err(arena) = budgets.charge(arena, bytes) {
+            return Ok(Some(arena));
+        }
+    }
+    let arena = arena.map(|arena| (arena, budgets.bounded(arena)));
+    crate::bounded::retag(runtime, types, ty, value, arena)?;
+    Ok(None)
+}
+
+/// MEM-6: a push to an arena List charges its element before it consumes its
+/// argument; a write to a shared arena List (`push`, `pop`, `remove`, `swap`)
+/// first copies it within its arena, charged its length, and the operation
+/// writes the unshared copy. A call that fails its bounds check or moves no
+/// element (`pop` of an empty List, `swap(xs, i, i)`) writes nothing, and
+/// `reserve` is only a hint there. Returns the arena whose budget is exceeded.
+fn list_write(
+    path: &hirsel_syntax::DefPath,
+    arguments: &mut [Value],
+    budgets: &mut crate::bounded::Budgets,
+) -> Option<u64> {
+    let name = ["list.push", "list.pop", "list.remove", "list.swap"]
+        .into_iter()
+        .find(|name| *path == hirsel_syntax::DefPath::core(name))?;
+    let index = |at: usize| match arguments.get(at) {
+        Some(Value::Integer(i)) => Some(i.bits()),
+        _ => None,
+    };
+    let (a, c) = (index(1), index(2));
+    let Some(Value::Sequence {
+        kind: hirsel_types::BuiltinType::List,
+        elements,
+        arena: Some(storage),
+    }) = arguments.first_mut()
+    else {
+        return None;
+    };
+    let len = elements.len() as u128;
+    let writes = match name {
+        "list.push" => true,
+        "list.pop" => len > 0,
+        "list.remove" => a.is_some_and(|a| a < len),
+        _ => matches!((a, c), (Some(a), Some(c)) if a < len && c < len && a != c),
+    };
+    if !writes {
+        return None;
+    }
+    if name == "list.push"
+        && let Err(arena) = budgets.charge(storage.arena, storage.element)
+    {
+        return Some(arena);
+    }
+    if storage.shared() {
+        let bytes = storage.element.saturating_mul(elements.len() as u64);
+        if let Err(arena) = budgets.charge(storage.arena, bytes) {
+            return Some(arena);
+        }
+        *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+        // The original and the copy both hold every element.
+        elements
+            .iter()
+            .flatten()
+            .for_each(crate::value::Value::share_arena_storage);
+    }
+    None
+}
+
+/// MEM-6: copy the shared arena Lists and Arrays a write or `mut` lend at `place`
+/// writes through, charging each its copied length.
+fn arena_write(
+    frame: &mut Frame,
+    place: PlaceId,
+    lend: bool,
+    budgets: &mut crate::bounded::Budgets,
+) -> Result<(), EvalError> {
+    match frame.arena_write(place, lend, |arena, bytes| budgets.charge(arena, bytes))? {
+        Some(arena) => Err(EvalError::OutOfSpace(arena)),
+        None => Ok(()),
+    }
 }
 /// The bounded arena a construction's destination names, if any.
 fn bounded_destination(
@@ -2566,6 +2685,7 @@ fn execute_instruction(
                 .into());
             }
             let (value, shadow) = frame.operand_shadow(&value)?;
+            arena_write(frame, destination, false, budgets)?;
             frame.write_access(destination)?;
             let old_shadow = frame.shadow_of(destination)?;
             let old = frame.slot(destination)?.replace(value);
@@ -2604,6 +2724,7 @@ fn execute_instruction(
                     );
                 }
             }
+            arena_write(frame, destination, false, budgets)?;
             frame.write_access(destination)?;
             frame.assign_shadow(destination, value, shadow)?;
         }
@@ -2643,6 +2764,7 @@ fn execute_terminator(
     frame: &mut Frame,
     terminator: Terminator,
     runtime: &crate::aggregate::RuntimeTypes,
+    budgets: &mut crate::bounded::Budgets,
 ) -> Result<Action, EvalError> {
     Ok(match terminator {
         Terminator::Match { table, from } => {
@@ -2814,6 +2936,7 @@ fn execute_terminator(
             for argument in arguments {
                 let mut operand = argument.value.clone();
                 if operand.usage == hirsel_types::UseKind::Mut {
+                    arena_write(frame, operand.place, true, budgets)?;
                     operand.usage = hirsel_types::UseKind::Take;
                 }
                 let (value, shadow) = frame.operand_shadow(&operand)?;

@@ -146,7 +146,7 @@ Invariants:
   zero-extended by emitted code and never assumed; on failure it is zero. x86-64 returns
   the pair in AL and RDX, AArch64 in W0 and X1: the C struct `{ uint8_t status;
   uint64_t value; }` (or `void *value`). Definitions, function-reference thunks, closure
-  and iterator bodies all follow it, so direct, private (`.roots8`, as one more word after
+  and iterator bodies all follow it, so direct, private (`.roots9`, as one more word after
   the roots) and indirect calls agree and an erased call keeps no result cell. 128-bit and
   aggregate results, and runtime primitives, keep their result pointer. Every return of
   such an entry branches to one return block where status and word meet in scalar phis
@@ -448,8 +448,11 @@ The emitted count edges retain their existing measurement hooks.
 small and large classes.
 Other single Block/Box roots use an intact pointer word and a status word,
 so headerless regional payloads need no extra alignment for return transport.
-Private entries use `.roots8`: sequence roots also receive their current full
-length, must-unique bit and a `defer` bit by value, and hand the length back. A
+Private entries use `.roots9`: sequence roots also receive their current full
+length, must-unique bit, a `defer` bit and a must-untracked bit by value, and hand
+the length and both facts back. Must-untracked (MEM-6) says the block is no tracked
+arena block, so `ArenaPush` reads no count; growth and a detach keep it, and the
+first push that finds a block untracked sets it. A
 caller with a sequence state for the root passes `defer` true and takes the
 length back without a store; a caller without one (a list passed by address, as
 expr-compiler's `insert`) and the public adapter pass false, so the body stores

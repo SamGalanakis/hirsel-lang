@@ -329,6 +329,15 @@ fn tracked(repr: ValueRepr) -> bool {
     )
 }
 
+/// A count a write may pass: one holder, or an unshared tracked arena block
+/// (`IsWritable`, LIR schema revision 32).
+fn writable(count: Option<Count>) -> bool {
+    matches!(
+        count,
+        Some(Count::Finite(1) | Count::Arena { shared: false })
+    )
+}
+
 fn mask_bit(mask: &Option<Vec<bool>>, i: usize) -> bool {
     mask.as_ref()
         .is_none_or(|m| m.get(i).copied().unwrap_or(false))
@@ -629,14 +638,15 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     /// A block a write through an address must find unique: a counted one,
-    /// or a block of a frozen graph, which no write may reach (MEM-11).
+    /// a tracked arena block (MEM-6), or a block of a frozen graph, which no
+    /// write may reach (MEM-11).
     fn guarded_target(&self, p: Ptr) -> bool {
         self.counted_target(p)
             || self
                 .ledger
                 .allocations
                 .get(p.alloc.0 as usize)
-                .is_some_and(|a| a.count == Some(Count::Frozen))
+                .is_some_and(|a| matches!(a.count, Some(Count::Frozen | Count::Arena { .. })))
     }
 
     fn define(&mut self, f: &mut Frame, v: ValueId, held: Held) -> Checked<()> {
@@ -1575,9 +1585,13 @@ impl<'p, S: Stage> Machine<'p, S> {
         Ok((r, block, element))
     }
 
-    /// A block written in place must be a unique heap block.
+    /// A block written in place must be a unique heap block or an unshared
+    /// tracked arena block (MEM-6).
     fn check_private(&self, block: Ptr) -> Checked<()> {
         let a = self.ledger.check(block)?;
+        if a.count == Some(Count::Arena { shared: false }) && !a.published {
+            return Ok(());
+        }
         if a.count != Some(Count::Finite(1)) {
             return fail(
                 V::WriteShared,
@@ -1707,7 +1721,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     fn check_writable(&self, r: &Resolved) -> Checked<()> {
         for alloc in &r.path {
             let a = self.ledger.get(*alloc);
-            if a.count != Some(Count::Finite(1)) {
+            if !writable(a.count) {
                 return fail(
                     V::WriteShared,
                     format!("write through {alloc:?} whose count is {:?}", a.count),
@@ -2395,6 +2409,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                 alloc: ptr.alloc,
                 count: None,
             }),
+            // A second holder of a tracked arena block shares it for good.
+            Some(Count::Arena { .. }) => {
+                a.count = Some(Count::Arena { shared: true });
+                self.ledger.trace.push(Event::Dup {
+                    alloc: ptr.alloc,
+                    count: None,
+                });
+            }
             Some(Count::Frozen) => {
                 return fail(
                     V::WriteShared,
@@ -2450,7 +2472,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 });
                 Ok(n == 1)
             }
-            Some(Count::Immortal) => {
+            Some(Count::Immortal | Count::Arena { .. }) => {
                 self.ledger.trace.push(Event::Release {
                     alloc: ptr.alloc,
                     count: None,
@@ -3507,6 +3529,56 @@ impl<'p, S: Stage> Machine<'p, S> {
                     },
                 )?;
             }
+            // The runtime's write test (LIR schema revision 32): one holder, or
+            // an unshared tracked arena block, which a write keeps in its arena.
+            Inst::IsWritable { result, value } => {
+                let Val::Ptr(p) = self.read_use(f, value)? else {
+                    return fail(V::TypeConfusion, "is_writable of a non-block");
+                };
+                let count = self.ledger.check(p)?.count;
+                let writable = writable(count) || count == Some(Count::Root(1));
+                self.define_fresh(
+                    f,
+                    result,
+                    Val::Bits {
+                        scalar: ScalarKind::Bool,
+                        bits: u128::from(writable),
+                    },
+                )?;
+            }
+            // A semantic copy shares the tracked arena blocks its value holds
+            // at inline depth (MEM-6).
+            Inst::Share { value } => {
+                let held: Vec<Ptr> = match self.read_use(f, value)? {
+                    Val::Ptr(p) => vec![p],
+                    Val::Image(image) => image
+                        .cells
+                        .values()
+                        .filter_map(|c| self.holder_target(c))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for p in held {
+                    let a = self.ledger.get_mut(p.alloc);
+                    if matches!(a.count, Some(Count::Arena { .. })) {
+                        a.count = Some(Count::Arena { shared: true });
+                    }
+                }
+            }
+            Inst::ArenaPush {
+                address,
+                version,
+                failure,
+            } => {
+                let (r, block, element) = self.sequence_place(f, address, false)?;
+                if let Some(region) = self.arena_push(&r, block, element)? {
+                    return self.exhaust(f, failure, region);
+                }
+                if let Some(s) = r.root_slot {
+                    f.versions[s.index()] = Some(version);
+                }
+                self.define_version(f, version)?;
+            }
             Inst::Weaken { result, value } => {
                 let m = self.take_value(f, value)?;
                 if !matches!(m.val, Val::Callable { .. }) {
@@ -3975,7 +4047,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let a = self.ledger.check(block)?;
                 let private =
                     a.count == Some(Count::Finite(1)) && !a.published && a.owner == Owner::Heap;
-                if !private {
+                if matches!(a.count, Some(Count::Arena { .. })) {
+                    // A tracked arena block's reservation is a hint (MEM-6):
+                    // only a push grows it, charged.
+                } else if !private {
                     // Shared, published or static: detached once, at the
                     // requested capacity, and the place's credit of the
                     // original given back.
@@ -4415,8 +4490,22 @@ impl<'p, S: Stage> Machine<'p, S> {
                         return self.exhaust(f, failure, region);
                     }
                 }
+                if !deep
+                    && let Val::Ptr(p) = val
+                    && let Some(region) = self.tracked_region(p)?
+                {
+                    // A tracked arena block is copied within its arena,
+                    // charged its count (MEM-6).
+                    let len = self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64;
+                    let layout = self.ledger.get(p.alloc).layout.expect("live");
+                    let bytes = self.block_charge(layout, len)?;
+                    if !self.charge(region, bytes) {
+                        return self.exhaust(f, failure, region);
+                    }
+                }
                 let val = if deep {
-                    self.deep_copy(f, site.placement, val)?
+                    let layout = self.value_type(unit, value)?.layout;
+                    self.deep_copy(f, site.placement, site.tracked, layout, val)?
                 } else {
                     self.detach(val)?
                 };
@@ -5558,6 +5647,130 @@ impl<'p, S: Stage> Machine<'p, S> {
             .fold(0u64, |total, r| total.saturating_add(charges[&r.alloc])))
     }
 
+    /// Whether no block below one of `layout` is tracked: a Map's, Set's or
+    /// environment's (`LAYOUT_UNTRACKED_BELOW`, MEM-6).
+    fn untracked_below(&self, layout: LayoutId) -> Checked<bool> {
+        Ok(matches!(
+            self.record(layout)?.kind,
+            LayoutKind::Opaque { .. } | LayoutKind::Environment { .. }
+        ))
+    }
+
+    /// The arena of the tracked arena block `p` names, if it is one (MEM-6).
+    fn tracked_region(&self, p: Ptr) -> Checked<Option<usize>> {
+        let a = self.ledger.check(p)?;
+        match (a.count, a.owner) {
+            (Some(Count::Arena { .. }), Owner::Region(region)) => Ok(Some(region)),
+            (Some(Count::Arena { .. }), owner) => fail(
+                V::Malformed,
+                format!("a tracked arena block {:?} owned by {owner:?}", p.alloc),
+            ),
+            _ => Ok(None),
+        }
+    }
+
+    /// `hirsel_rt_v2_arena_push` (runtime ABI 11) on the List block `block`
+    /// the place `r` holds: a tracked arena block is charged its element and,
+    /// when shared, its count of them, then a shared block is copied and a
+    /// full one relocated within its arena to `max(4, 2 * count)` elements.
+    /// Returns the arena when the charge exceeds its budget, nothing changed.
+    fn arena_push(
+        &mut self,
+        r: &Resolved,
+        block: Ptr,
+        element: LayoutId,
+    ) -> Checked<Option<usize>> {
+        let Some(region) = self.tracked_region(block)? else {
+            return Ok(None);
+        };
+        let a = self.ledger.get(block.alloc);
+        let (shared, layout) = (
+            a.count == Some(Count::Arena { shared: true }),
+            a.layout.expect("live"),
+        );
+        let len = u64::try_from(self.read_scalar(block, 8)?)
+            .map_err(|_| err(V::Malformed, "a sequence count beyond u64"))?;
+        let each = self.block_charge(layout, 1)?;
+        let copied = if shared { each.saturating_mul(len) } else { 0 };
+        if !self.charge(region, each.saturating_add(copied)) {
+            return Ok(Some(region));
+        }
+        if shared || len >= self.sequence_capacity_word(block, element)? {
+            let slots = len
+                .checked_mul(2)
+                .ok_or_else(|| err(V::Malformed, "a sequence capacity beyond u64"))?
+                .max(4);
+            self.tracked_move(r, block, element, region, slots, shared)?;
+        }
+        Ok(None)
+    }
+
+    /// Move the tracked arena List `block` at the place `r` into fresh storage
+    /// of `region` holding `slots` elements, unshared. A shared block is
+    /// copied, each child gaining a holder; an unshared one moves, its old
+    /// storage abandoned empty, so the arena's exit drops nothing there.
+    fn tracked_move(
+        &mut self,
+        r: &Resolved,
+        block: Ptr,
+        element: LayoutId,
+        region: usize,
+        slots: u64,
+        shared: bool,
+    ) -> Checked<()> {
+        let (start, stride) = self.sequence_shape(element)?;
+        let len = u64::try_from(self.read_scalar(block, 8)?)
+            .map_err(|_| err(V::Malformed, "a sequence count beyond u64"))?;
+        let used = start + len * stride;
+        let size = slots
+            .checked_mul(stride)
+            .and_then(|n| n.checked_add(start))
+            .ok_or_else(|| err(V::Malformed, "a sequence capacity beyond u64"))?;
+        let a = self.ledger.check(block)?;
+        if !a.extent.resources.is_empty() {
+            return fail(V::TypeConfusion, "an arena push to a List of resources");
+        }
+        let (layout, held) = (a.layout.expect("live"), a.extent.len());
+        let image = if shared {
+            a.extent.copy(block.offset, used, None)
+        } else {
+            let whole = self
+                .ledger
+                .get_mut(block.alloc)
+                .extent
+                .take(0, held, FREE_POISON, None);
+            whole.copy(block.offset, used, None)
+        };
+        let children: Vec<Ptr> = image
+            .cells
+            .values()
+            .filter_map(|c| self.holder_target(c))
+            .collect();
+        let fresh = self.arena_alloc(region, layout, size)?;
+        self.ledger.get_mut(fresh.alloc).count = Some(Count::Arena { shared: false });
+        self.ledger.get_mut(fresh.alloc).extent.place(0, image);
+        self.exact_capacity(fresh, element)?;
+        if shared {
+            for child in children {
+                self.dup(child)?;
+            }
+        }
+        let Cell::Data { counted, .. } = self.read_cell(r.ptr)? else {
+            return fail(V::TypeConfusion, "a sequence place holding a code word");
+        };
+        let word = self.word;
+        self.ledger.get_mut(r.ptr.alloc).extent.put_cell(
+            r.ptr.offset,
+            word,
+            Cell::Data {
+                ptr: fresh,
+                counted,
+                borrow: None,
+            },
+        );
+        Ok(())
+    }
+
     fn arena_alloc(&mut self, region: usize, layout: LayoutId, size: u64) -> Checked<Ptr> {
         let record = self.record(layout)?;
         let (flat, align) = (record.kind == LayoutKind::Flat, record.align);
@@ -5665,12 +5878,24 @@ impl<'p, S: Stage> Machine<'p, S> {
                 if site.arena_no_drop {
                     self.arena_no_drop.set(target.alloc.0 as usize, ());
                 }
-                // An arena block is immutable once built (MEM-4).
+                // An arena block is immutable once built (MEM-4), but a tracked
+                // List or Array block stays writable while unshared (MEM-6).
                 if matches!(
                     site.placement,
                     Some(Placement::Fixed(StorageOwner::Arena(_)))
                 ) {
-                    self.ledger.get_mut(target.alloc).published = true;
+                    let bounded = matches!(self.ledger.get(target.alloc).owner,
+                        Owner::Region(region) if self.ledger.regions[region].budget.is_some());
+                    let a = self.ledger.get_mut(target.alloc);
+                    if site.tracked
+                        && reuse.is_none()
+                        && bounded
+                        && a.count == Some(Count::Immortal)
+                    {
+                        a.count = Some(Count::Arena { shared: false });
+                    } else {
+                        a.published = true;
+                    }
                 }
                 Ok(Val::Ptr(target))
             }
@@ -6265,8 +6490,11 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     /// The detach of `root`'s block into a fresh heap block of at least
-    /// `size` bytes (a reserve's), its children sharing one more holder.
+    /// `size` bytes (a reserve's), its children sharing one more holder. A
+    /// tracked arena block is copied within its arena, unshared (MEM-6); the
+    /// caller charged it.
     fn detach_block(&mut self, root: Ptr, size: u64) -> Checked<Ptr> {
+        let region = self.tracked_region(root)?;
         let a = self.ledger.check(root)?;
         if !a.extent.resources.is_empty() {
             return fail(V::TypeConfusion, "a detach of a resource");
@@ -6290,7 +6518,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                 },
             );
         }
-        let copy = self.heap_alloc(layout, held.max(size), align)?;
+        let copy = match region {
+            Some(region) => {
+                let copy = self.arena_alloc(region, layout, held.max(size))?;
+                self.ledger.get_mut(copy.alloc).count = Some(Count::Arena { shared: false });
+                copy
+            }
+            None => self.heap_alloc(layout, held.max(size), align)?,
+        };
         self.ledger.get_mut(copy.alloc).extent.place(0, image);
         for (_, child) in children {
             self.dup(child)?;
@@ -6376,7 +6611,26 @@ impl<'p, S: Stage> Machine<'p, S> {
     ///
     /// An inline value (`Val::Image`) is copied in place: its holder cells
     /// name deep copies with a credit each, sharing kept across the value.
-    fn deep_copy(&mut self, f: &Frame, placement: Option<Placement>, val: Val) -> Checked<Val> {
+    ///
+    /// Into an arena, the root copy is a tracked arena block when `tracked`
+    /// says so, and every other List or Array block copy is unless a Map, Set
+    /// or environment holds it, directly or not, on the path that first
+    /// reached it (MEM-6, `copy.rs::copy_graph`); `layout` is `val`'s.
+    fn deep_copy(
+        &mut self,
+        f: &Frame,
+        placement: Option<Placement>,
+        tracked: bool,
+        layout: LayoutId,
+        val: Val,
+    ) -> Checked<Val> {
+        // Only a bounded arena tracks its Lists, as the runtime's copies do.
+        let arena = match placement {
+            Some(Placement::Fixed(StorageOwner::Arena(arena))) => self
+                .arena_of(f, arena)?
+                .is_some_and(|region| self.ledger.regions[region].budget.is_some()),
+            _ => false,
+        };
         let mut callable = None;
         let (root, mut image) = match val {
             Val::Callable {
@@ -6399,11 +6653,23 @@ impl<'p, S: Stage> Machine<'p, S> {
         // `Shared` roots the graph reaches, which gain a root per new holder
         // instead of a copy: copying never traverses a frozen graph (MEM-11).
         let mut kept: std::collections::BTreeSet<AllocId> = Default::default();
-        let mut pending: Vec<Ptr> = root.into_iter().collect();
+        // Each block to copy, whether the sequences it reaches are tracked,
+        // and whether it is tracked itself.
+        let mut pending: Vec<(Ptr, bool, Option<bool>)> = root
+            .into_iter()
+            .map(|p| (p, arena, Some(tracked && arena)))
+            .collect();
         if let Some(image) = &image {
-            pending.extend(image.cells.values().filter_map(|c| self.block_target(c)));
+            let below = arena && !self.untracked_below(layout)?;
+            pending.extend(
+                image
+                    .cells
+                    .values()
+                    .filter_map(|c| self.block_target(c))
+                    .map(|p| (p, below, None)),
+            );
         }
-        while let Some(p) = pending.pop() {
+        while let Some((p, below, track)) = pending.pop() {
             if copies.contains_key(&p.alloc) {
                 continue;
             }
@@ -6418,9 +6684,24 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             let (layout, size) = (a.layout.expect("live"), a.extent.len());
             let image = a.extent.copy(0, size, None);
-            pending.extend(image.cells.values().filter_map(|c| self.holder_target(c)));
+            let sequence = matches!(self.record(layout)?.kind, LayoutKind::Sequence { .. });
+            let tracks = below && !self.untracked_below(layout)?;
+            pending.extend(
+                image
+                    .cells
+                    .values()
+                    .filter_map(|c| self.holder_target(c))
+                    .map(|c| (c, tracks, None)),
+            );
             let copy = self.place_sized(f, placement, layout, size)?;
             self.ledger.get_mut(copy.alloc).extent.place(0, image);
+            if track.unwrap_or(below && sequence) {
+                let a = self.ledger.get_mut(copy.alloc);
+                if a.count != Some(Count::Immortal) || !matches!(a.owner, Owner::Region(_)) {
+                    return fail(V::Malformed, "a tracked copy outside an arena");
+                }
+                a.count = Some(Count::Arena { shared: false });
+            }
             copies.insert(p.alloc, copy);
         }
         // Every holder cell of a copy names the copy of its target with a

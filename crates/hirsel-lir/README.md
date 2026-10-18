@@ -568,3 +568,19 @@ twin. Runtime ABI 10 adds the `isolate_catch` entry.
 Sequence length, capacity, reserve, length commits and library Slot projections
 also admit SoA payloads. Their element layout remains the ordinary row layout;
 physical consumers gather and scatter its fields using stored column capacity.
+
+LIR revision 32 (MEM-6) keeps a List's budget in a bounded arena. A List or Array
+construction whose `ConstructSite::tracked` is set, placed in an arena, builds a
+tracked arena block: its count is `COUNT_ARENA_UNIQUE` until a dup or `Share`
+makes it `COUNT_ARENA_SHARED`, stickily, and a release never changes it.
+`IsWritable { result, value }` (RC onward) is copy-on-write's test, true for one
+holder or an unshared tracked block; P4 emits it where it emitted `IsUnique`.
+`Share { value }` follows a semantic copy and marks the tracked blocks the value
+holds at inline depth shared. `ArenaPush { address, version, failure }` is
+library-only and begins `list.push`: a tracked block is charged one element (and
+its length when shared), then copied or relocated within its arena, or the
+arena's own `OutOfSpace` is raised on `failure`. `tests/it/revision32.rs` pairs
+each rule with its valid twin. Runtime ABI 11 adds `hirsel_rt_v2_arena_push`, a
+`flags` argument to `arena_alloc` and `unique_copy` (`ALLOC_TRACKED`), and the
+tracked block's 32-byte prefix, which names its arena; layout descriptor version 7
+adds `LAYOUT_SEQUENCE` and `LAYOUT_UNTRACKED_BELOW`.

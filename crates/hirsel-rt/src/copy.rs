@@ -23,6 +23,11 @@
 //! of the tree once per reference to it, independently of sharing, at its descriptor's
 //! `logical` size (per element: times its u64 count). A copy the budget does not cover
 //! returns [`STATUS_EXHAUSTED`] and copies nothing; the caller records the failure.
+//!
+//! Into a bounded arena, every copied sequence block ([`LAYOUT_SEQUENCE`]) is a tracked arena
+//! block, unshared, except below a Map, Set or environment ([`LAYOUT_UNTRACKED_BELOW`]); the
+//! root is tracked when the caller says so. A detach of a tracked arena block copies it within
+//! its arena, charged its count.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -31,7 +36,10 @@ use std::ptr;
 use crate::alloc::{DOMAIN_HEAP, Header, payload};
 use crate::context::RunCtx;
 use crate::count::check_live_block;
-use crate::release::{LAYOUT_LOGICAL_PER_ELEMENT, LOGICAL_UNSUPPORTED};
+use crate::region::{ALLOC_TRACKED, Region, is_tracked, tracked_region};
+use crate::release::{
+    LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_SEQUENCE, LAYOUT_UNTRACKED_BELOW, LOGICAL_UNSUPPORTED,
+};
 use crate::release::{
     Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
     STEP_NONNULL, STEP_RELEASE, STEP_TAG, STEP_THAW, Step, variant_inactive,
@@ -39,11 +47,12 @@ use crate::release::{
 use crate::{STATUS_EXHAUSTED, STATUS_OK, fault};
 
 /// A new block of `original`'s layout, capacity and alignment holding its bytes, with one
-/// holder.
+/// holder: in `destination`, a tracked arena block when `tracked`.
 unsafe fn clone_block(
     ctx: &mut RunCtx,
     original: *mut Header,
-    destination: *mut crate::region::Region,
+    destination: *mut Region,
+    tracked: bool,
 ) -> *mut Header {
     // SAFETY: `original` is a live headered block; the copy holds all its payload data.
     unsafe {
@@ -82,6 +91,7 @@ unsafe fn clone_block(
                 (*original).index(),
                 capacity,
                 align,
+                if tracked { ALLOC_TRACKED } else { 0 },
             )
         };
         ptr::copy_nonoverlapping(payload(original), payload(copy), capacity as usize);
@@ -184,10 +194,16 @@ pub(crate) unsafe fn holders(
 
 /// The deep copy walk: each slot of `root` naming a counted block is rewritten to that
 /// block's copy (made once), and then every copy's slots in turn. A block reached again gains
-/// one holder instead of a second copy, so sharing inside the graph is kept.
+/// one holder instead of a second copy, so sharing inside the graph is kept. Into a bounded
+/// arena, the first block copied is tracked when `first` says so; every other sequence block
+/// is unless an untracked-below block holds it, directly or not, or `track` is false for the
+/// root's. A tracked copy whose layout has a drop program is scheduled for the arena's exit,
+/// since pushes may move heap credits into it.
 unsafe fn copy_graph(
     raw: *mut RunCtx,
-    destination: *mut crate::region::Region,
+    destination: *mut Region,
+    first: Option<bool>,
+    track: bool,
     root: impl FnOnce(&mut dyn FnMut(*mut u8)),
 ) {
     // SAFETY: caller contract of the entries below.
@@ -200,7 +216,12 @@ unsafe fn copy_graph(
         }
         let diagnostic = ctx.heap.diagnostic;
         let mut copies: HashMap<*mut Header, *mut Header> = HashMap::new();
-        let pending: RefCell<Vec<*mut Header>> = RefCell::new(Vec::new());
+        // Each copy still to walk, and whether the sequences below it are tracked.
+        let pending: RefCell<Vec<(*mut Header, bool)>> = RefCell::new(Vec::new());
+        // Only a bounded arena's charges observe tracking (MEM-6).
+        let arena = !destination.is_null() && (*destination).bound != 0;
+        let below = std::cell::Cell::new(track && arena);
+        let mut first = first;
         let mut redirect = |slot: *mut u8| {
             let child = slot.cast::<*mut Header>().read_unaligned();
             if diagnostic {
@@ -218,9 +239,23 @@ unsafe fn copy_graph(
                     target
                 }
                 None => {
-                    let target = clone_block(&mut *raw, child, destination);
+                    let flags = (*(*raw).descriptor((*child).index())).flags;
+                    let tracked = match first.take() {
+                        Some(root) => root && arena,
+                        None => below.get() && flags & LAYOUT_SEQUENCE != 0,
+                    };
+                    let target = clone_block(&mut *raw, child, destination, tracked);
+                    if tracked && (*(*raw).descriptor((*target).index())).step_count != 0 {
+                        crate::region::hirsel_rt_v2_region_schedule(
+                            raw,
+                            destination,
+                            (*target).index(),
+                            payload(target),
+                        );
+                    }
                     copies.insert(child, target);
-                    pending.borrow_mut().push(target);
+                    let tracks = below.get() && flags & LAYOUT_UNTRACKED_BELOW == 0;
+                    pending.borrow_mut().push((target, tracks));
                     target
                 }
             };
@@ -228,9 +263,10 @@ unsafe fn copy_graph(
         };
         root(&mut redirect);
         loop {
-            let Some(copy) = pending.borrow_mut().pop() else {
+            let Some((copy, tracks)) = pending.borrow_mut().pop() else {
                 break;
             };
+            below.set(tracks);
             holders(
                 (*ctx).descriptor((*copy).index()),
                 payload(copy),
@@ -305,7 +341,7 @@ unsafe fn tree_charge(ctx: &RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) 
 /// Take a deep copy's charge from a bounded destination; false when it exceeds the budget.
 unsafe fn charge_copy(
     ctx: &RunCtx,
-    destination: *mut crate::region::Region,
+    destination: *mut Region,
     root: impl FnOnce(&mut dyn FnMut(*mut u8)),
 ) -> bool {
     // SAFETY: `destination` is null or an active arena record.
@@ -339,7 +375,8 @@ unsafe fn charge_copy(
 pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
     ctx: *mut RunCtx,
     block: *mut Header,
-    destination: *mut crate::region::Region,
+    destination: *mut Region,
+    flags: u32,
     _site: u64,
     out_block: *mut *mut Header,
 ) -> u8 {
@@ -355,12 +392,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy(
         if !charged {
             return STATUS_EXHAUSTED;
         }
+        if flags & !ALLOC_TRACKED != 0 {
+            fault("a unique copy has unknown flags");
+        }
+        // The root is tracked as the caller says; the sequences below it always are.
+        let root_tracked = flags & ALLOC_TRACKED != 0;
         let mut root: *mut Header = ptr::null_mut();
-        copy_graph(ctx, destination, |redirect| {
+        let walk = |redirect: &mut dyn FnMut(*mut u8)| {
             let slot = (&raw mut root).cast::<u8>();
             slot.cast::<*mut Header>().write_unaligned(block);
             redirect(slot);
-        });
+        };
+        copy_graph(ctx, destination, Some(root_tracked), true, walk);
         out_block.write(root);
         STATUS_OK
     }
@@ -381,7 +424,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
     ctx: *mut RunCtx,
     index: u32,
     value: *mut u8,
-    destination: *mut crate::region::Region,
+    destination: *mut Region,
     _site: u64,
 ) -> u8 {
     // SAFETY: caller contract.
@@ -390,7 +433,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_unique_copy_value(
         if !charge_copy(&*ctx, destination, |visit| holders(layout, value, visit)) {
             return STATUS_EXHAUSTED;
         }
-        copy_graph(ctx, destination, |redirect| {
+        let below = (*layout).flags & LAYOUT_UNTRACKED_BELOW == 0;
+        copy_graph(ctx, destination, None, below, |redirect| {
             holders(layout, value, redirect)
         });
         STATUS_OK
@@ -462,8 +506,11 @@ pub(crate) unsafe fn detach_sized(
 /// A copy-on-write detach (OWN-4): a new heap block of `block`'s layout, capacity and bytes
 /// with one holder, written to `out_block`; each counted child the copy holds gains one
 /// holder, so the original and the copy share every child. A static or immortal block is
-/// copied too, since the caller writes the copy. Returns 0; host exhaustion terminates
-/// environmentally. `site` is reserved, as for `unique_copy`.
+/// copied too, since the caller writes the copy. A tracked arena block is copied within its
+/// arena instead, as an unshared tracked block charged its count (MEM-6), scheduled for the
+/// arena's exit when its layout has a drop program; [`STATUS_EXHAUSTED`], with nothing
+/// copied, when the charge exceeds the arena's budget. Otherwise returns 0; host exhaustion
+/// terminates environmentally. `site` is reserved, as for `unique_copy`.
 ///
 /// # Safety
 /// `ctx` is live, `block` a live block the caller can read (it keeps its own credit), and
@@ -487,7 +534,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_detach(
         if ctx.heap.diagnostic {
             check_live_block(&*ctx, block);
         }
-        let copy = clone_block(ctx, block, ptr::null_mut());
+        let tracked = is_tracked(block);
+        let region = if tracked {
+            tracked_region(block)
+        } else {
+            ptr::null_mut()
+        };
+        if tracked && !crate::region::charge_arena(region, block_charge(ctx, block)) {
+            return STATUS_EXHAUSTED;
+        }
+        let copy = clone_block(ctx, block, region, tracked);
         let diagnostic = ctx.heap.diagnostic;
         holders(
             ctx.descriptor((*copy).index()),
@@ -500,6 +556,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_detach(
                 crate::count::hirsel_rt_v2_dup(raw, child);
             },
         );
+        let index = (*copy).index();
+        if tracked && (*ctx.descriptor(index)).step_count != 0 {
+            crate::region::hirsel_rt_v2_region_schedule(raw, region, index, payload(copy));
+        }
         out_block.write(copy);
         STATUS_OK
     }

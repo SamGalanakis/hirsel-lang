@@ -562,6 +562,7 @@ impl Importer<'_, '_> {
             let construct = hirsel_lir::ir::ConstructId(this.out.tables.constructs.len() as u32);
             this.out.tables.constructs.push(ConstructSite {
                 arena_no_drop: false,
+                tracked: false,
                 constructor,
                 layout,
                 fields: pooled,

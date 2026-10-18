@@ -1983,6 +1983,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.create(site, st, cr, result);
             }
             Inst::IsUnique { result, value }
+            | Inst::IsWritable { result, value }
             | Inst::SeqLen { result, value }
             | Inst::SeqCapacity { result, value }
             | Inst::Hash { result, value, .. }
@@ -2038,6 +2039,13 @@ impl<S: Stage> Walker<'_, '_, S> {
                 }
                 self.write_block(site, st, address, version);
             }
+            // A push's preparation may copy or relocate the block at the
+            // place (LIR schema revision 32): a write, as a reserve's.
+            Inst::ArenaPush {
+                address, version, ..
+            } => self.write_block(site, st, address, version),
+            // A semantic copy's mark reads the value, which keeps its credits.
+            Inst::Share { value } => self.borrow(site, st, cr, value),
             // A write of a builder's open element reads its operand (LIR
             // schema revision 24).
             Inst::FlatField {

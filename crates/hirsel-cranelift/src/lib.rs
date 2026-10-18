@@ -10,6 +10,7 @@
 //! Ready operation it does not lower is `CodegenError::Unsupported` naming it, never a
 //! placeholder.
 
+mod bounded;
 mod compare;
 mod construction;
 mod data;

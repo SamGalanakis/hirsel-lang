@@ -1,0 +1,63 @@
+// rule: MEM-6
+// expect: run
+// stdout: 64 loop out of space
+// stdout: 64 callee out of space
+// A List's growth stays within its bounded arena's budget: a thousand pushes of u64 overrun
+// 64 bytes, whether the callback pushes or a callee does through `mut`.
+fn output_error[E](take e: E) -> () {}
+
+fn fill(mut xs: List[u64]) -> () {
+  for i in 0u64..1000u64 {
+    list.push(mut xs, i)
+  }
+}
+
+fn looped() -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    64u64,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[u64] in a = []
+      for i in 0u64..1000u64 {
+        list.push(mut xs, i)
+      }
+      list.len(xs)
+    }
+  )
+}
+
+fn called() -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    64u64,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[u64] in a = []
+      fill(mut xs)
+      list.len(xs)
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  out.print(
+    stdout,
+    if looped() == Error(OutOfSpace()) {
+      "64 loop out of space\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  out.print(
+    stdout,
+    if called() == Error(OutOfSpace()) {
+      "64 callee out of space\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

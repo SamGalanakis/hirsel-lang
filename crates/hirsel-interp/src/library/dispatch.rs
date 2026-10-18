@@ -57,6 +57,7 @@ impl Library {
         let Value::Sequence {
             kind: BuiltinType::List,
             elements,
+            ..
         } = &mut buffer
         else {
             return Err(invalid("stdin.read expects List[u8]"));
@@ -1422,7 +1423,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "list.len" | "array.len" => u64_value(collection::len(arg(a, 0)?)?),
     Primitive: "list.pop" | "list.remove" | "list.swap" | "list.reserve" => {
         let mut list = arg(a, 0)?.clone();
-        let Value::Sequence { kind: BuiltinType::List, elements } = &mut list else {
+        let Value::Sequence { kind: BuiltinType::List, elements, .. } = &mut list else {
             return Err(invalid("list primitive requires List"));
         };
         let len = elements.len();
@@ -1875,7 +1876,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 path(&mut out, definition);
                 fields(&mut out, &mut work, items);
             }
-            Value::Sequence { kind, elements } => {
+            Value::Sequence { kind, elements, .. } => {
                 out.extend_from_slice(&[8, kind_tag(*kind)]);
                 fields(&mut out, &mut work, elements);
             }

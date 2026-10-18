@@ -64,13 +64,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     what: "missing returned root slot".into(),
                 })?;
             let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), slot);
-            let (unique, length) = if let Some(state) = self.sequence_state_at(slot) {
+            let (unique, untracked, length) = if let Some(state) = self.sequence_state_at(slot) {
                 (
                     self.builder.load(self.module.int_type(1), state.unique, 1),
+                    self.builder
+                        .load(self.module.int_type(1), state.untracked, 1),
                     self.builder.load(self.module.int_type(64), state.length, 8),
                 )
             } else {
                 (
+                    self.module.const_zero(self.module.int_type(1)),
                     self.module.const_zero(self.module.int_type(1)),
                     if self.sequence_element(slot.layout)?.is_some() {
                         self.sequence_length(pointer, slot.layout)?
@@ -89,6 +92,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 continue;
             };
             returned = self.builder.insert(returned, unique, index);
+            if let Some(index) = self.signature.untrackeds.get(field).copied().flatten() {
+                returned = self.builder.insert(returned, untracked, index);
+            }
             returned = self.builder.insert(returned, length, field as u32 * 2 + 1);
         }
         if self.signature.sequence_roots[0] {
@@ -459,26 +465,40 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 _ => return self.invalid("an argument passed against its parameter's convention"),
             }
         }
+        // list_grow's SeqReserve hands back unique storage unless it was given a tracked
+        // arena block (MEM-6), which it leaves alone: known before the call, or read from it.
+        let reserved = matches!(site.callee, Callee::Direct(symbol)
+            if self.unit.tables.symbols[symbol.index()].definition.is_core("$native.list_grow"));
+        let mut kept_unique = vec![None; root_places.len()];
+        for (field, place) in root_places.iter().copied().enumerate() {
+            if reserved && let Some(state) = self.sequence_state_at(place) {
+                let old = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+                kept_unique[field] = Some(self.grown_facts(state, old).0);
+            }
+        }
         for (field, place) in root_places.iter().copied().enumerate() {
             if signature.companions[field].is_some() {
                 let i1 = self.module.int_type(1);
                 // A place with a sequence state defers the count store; any other keeps
                 // its count in its block, so the callee stores what it sets.
-                let (length, unique, defer) = if let Some(state) = self.sequence_state_at(place) {
-                    (
-                        self.builder.load(self.module.int_type(64), state.length, 8),
-                        self.builder.load(i1, state.unique, 1),
-                        self.module.const_int(i1, 1),
-                    )
-                } else {
-                    let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
-                    (
-                        self.sequence_length(pointer, place.layout)?,
-                        self.module.const_zero(i1),
-                        self.module.const_zero(i1),
-                    )
-                };
-                args.extend([length, unique, defer]);
+                let (length, unique, defer, untracked) =
+                    if let Some(state) = self.sequence_state_at(place) {
+                        (
+                            self.builder.load(self.module.int_type(64), state.length, 8),
+                            self.builder.load(i1, state.unique, 1),
+                            self.module.const_int(i1, 1),
+                            self.builder.load(i1, state.untracked, 1),
+                        )
+                    } else {
+                        let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+                        (
+                            self.sequence_length(pointer, place.layout)?,
+                            self.module.const_zero(i1),
+                            self.module.const_zero(i1),
+                            self.module.const_zero(i1),
+                        )
+                    };
+                args.extend([length, unique, defer, untracked]);
             }
         }
         // A must-unique fact names a block with one holder, this frame's
@@ -574,14 +594,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     // list_grow's SeqReserve hands back unique storage. Its
                     // cold body stays out of line, so LLVM cannot recover this
                     // fact from the tagged aggregate return at the call site.
-                    let reserved = matches!(site.callee, Callee::Direct(symbol)
-                        if self.unit.tables.symbols[symbol.index()].definition.is_core("$native.list_grow"));
-                    let unique = if reserved {
-                        succeeded
+                    let (unique, untracked) = if let Some(kept) = kept_unique[field] {
+                        (self.builder.binary(BinOp::And, succeeded, kept), kept)
                     } else {
-                        signature.root_unique(&self.builder, returned, field)
+                        (
+                            signature.root_unique(&self.builder, returned, field),
+                            signature.root_untracked(&self.builder, returned, field),
+                        )
                     };
                     self.builder.store(unique, state.unique, 1);
+                    self.builder.store(untracked, state.untracked, 1);
                 }
             }
         }

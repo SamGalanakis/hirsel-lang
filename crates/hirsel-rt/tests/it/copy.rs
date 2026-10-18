@@ -20,7 +20,7 @@ use support::*;
 fn copy(ctx: *mut RunCtx, block: *mut Header) -> *mut Header {
     let mut out = ptr::null_mut();
     assert_eq!(
-        unsafe { hirsel_rt_v2_unique_copy(ctx, block, ptr::null_mut(), 0, &mut out) },
+        unsafe { hirsel_rt_v2_unique_copy(ctx, block, ptr::null_mut(), 0, 0, &mut out) },
         0
     );
     out
@@ -449,12 +449,12 @@ fn graph_copies_use_the_destination_and_outlive_source_arenas() {
             hirsel_rt_v2_region_enter(ctx.0, inner.as_mut_ptr());
             let mut first = ptr::null_mut();
             assert_eq!(
-                hirsel_rt_v2_unique_copy(ctx.0, root, outer.as_mut_ptr(), 0, &mut first),
+                hirsel_rt_v2_unique_copy(ctx.0, root, outer.as_mut_ptr(), 0, 0, &mut first),
                 0
             );
             let mut second = ptr::null_mut();
             assert_eq!(
-                hirsel_rt_v2_unique_copy(ctx.0, first, inner.as_mut_ptr(), 0, &mut second),
+                hirsel_rt_v2_unique_copy(ctx.0, first, inner.as_mut_ptr(), 0, 0, &mut second),
                 0
             );
             assert_eq!(count(first), COUNT_IMMORTAL);
@@ -514,7 +514,7 @@ fn a_bounded_copy_charges_every_reference_before_copying() {
             hirsel_rt_v2_arena_enter(ctx.0, arena.as_mut_ptr());
             hirsel_rt_v2_arena_bound(ctx.0, arena.as_mut_ptr(), cap);
             let mut out = ptr::null_mut();
-            let status = hirsel_rt_v2_unique_copy(ctx.0, root, arena.as_mut_ptr(), 0, &mut out);
+            let status = hirsel_rt_v2_unique_copy(ctx.0, root, arena.as_mut_ptr(), 0, 0, &mut out);
             let remaining = (*arena.as_ptr()).remaining;
             if copied {
                 assert_eq!((status, remaining), (0, 0));

@@ -10,7 +10,7 @@ use crate::PassError;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
-use hirsel_lir::layout_types::LayoutId;
+use hirsel_lir::layout_types::{LayoutId, LayoutKind};
 use hirsel_lir::stage::Value;
 use hirsel_types::TypeKind;
 
@@ -200,6 +200,7 @@ pub(super) fn variant(
     let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
     b.ed.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor: ConstructorKind::Variant {
             definition,
             variant,
@@ -242,9 +243,15 @@ fn copy_to(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let (value, loan) = b.borrow(source.address, false)?;
     let result = b.fresh(source.layout);
     let layout = b.cx.payload(source.layout).unwrap_or(source.layout);
+    // A List or Array of rows copied into an arena is tracked there (MEM-6).
+    let tracked = matches!(
+        b.cx.arguments.first(),
+        Some(hirsel_types::GenericArgument::Type(t)) if super::list_or_array(&b.cx.store, *t)
+    ) && matches!(b.cx.record(layout).kind, LayoutKind::Sequence { .. });
     let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
     b.ed.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
+        tracked,
         constructor: ConstructorKind::Tuple,
         layout,
         fields: PoolRange::EMPTY,

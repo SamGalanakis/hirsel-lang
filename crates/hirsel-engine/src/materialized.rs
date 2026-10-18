@@ -248,7 +248,7 @@ impl QueryEngine {
                             )
                         }
                         (
-                            Value::Sequence { kind, elements },
+                            Value::Sequence { kind, elements, .. },
                             TypeKind::Builtin {
                                 kind: expected,
                                 arguments,

@@ -49,6 +49,15 @@ impl FnEmitter<'_, '_, '_> {
                 let unique = self.is_unique(block);
                 self.define1(result, unique)
             }
+            Inst::IsWritable { result, value } => {
+                let block = self.get1(value)?;
+                let writable = self.is_writable(block);
+                self.define1(result, writable)
+            }
+            Inst::Share { value } => self.share(value),
+            Inst::ArenaPush {
+                address, failure, ..
+            } => self.arena_push(address, failure),
             Inst::Unary {
                 result,
                 op,
@@ -919,19 +928,30 @@ impl FnEmitter<'_, '_, '_> {
         }
         let out = self.out_word();
         let anchor = site.anchor;
+        let flags = if self.tracks(site) {
+            hirsel_lir::runtime_abi::ALLOC_TRACKED
+        } else {
+            0
+        };
         let site = self.anchor_code(anchor)?;
         let site = self.u64c(site);
         let block = self.get1(value)?;
         let context = self.context;
         if deep {
+            let flags = self.b.ins().iconst(types::I32, i64::from(flags));
             let status = self.rt1(
                 RuntimeEntry::UniqueCopy,
-                &[context, block, destination, site, out],
+                &[context, block, destination, flags, site, out],
             )?;
             self.copy_status(status, destination, anchor, failure)?;
         } else {
             let status = self.rt1(RuntimeEntry::Detach, &[context, block, site, out])?;
-            self.status_guard(status, failure)?;
+            // A tracked arena block is copied within its arena, charged (MEM-6): over its
+            // budget, the arena it names records its own OutOfSpace.
+            match self.bounded_code() {
+                Some(code) => self.tracked_exhaustion(status, code, block, anchor, failure)?,
+                None => self.status_guard(status, failure)?,
+            }
         }
         let copy = self.load_ptr(out);
         self.define1(result, copy)

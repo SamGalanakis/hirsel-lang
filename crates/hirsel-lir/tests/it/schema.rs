@@ -588,6 +588,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     .enumerate()
     .map(|(i, constructor)| ConstructSite {
         arena_no_drop: false,
+        tracked: false,
         constructor,
         layout: LayoutId(2),
         fields: construct_fields,
@@ -1087,6 +1088,17 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         result: v(65),
         value: v(64),
         codec: CodecId(0),
+    });
+    // LIR schema revision 32.
+    insts.push(Inst::IsWritable {
+        result: v(46),
+        value: v(2),
+    });
+    insts.push(Inst::Share { value: v(2) });
+    insts.push(Inst::ArenaPush {
+        address: a(0),
+        version: v(59),
+        failure: f,
     });
     for feature in [
         UnavailableFeature::Shared,
@@ -1892,6 +1904,23 @@ fn runtime_declarations_match_the_landed_c_header() {
     );
     define("HEADER_SIZE", &runtime_abi::HEADER_SIZE.to_string());
     define("COUNT_IMMORTAL", "UINT32_MAX");
+    define(
+        "COUNT_ARENA_UNIQUE",
+        &format!("{}u", runtime_abi::COUNT_ARENA_UNIQUE),
+    );
+    define(
+        "COUNT_ARENA_SHARED",
+        &format!("{}u", runtime_abi::COUNT_ARENA_SHARED),
+    );
+    define(
+        "TRACKED_REGION_BACK",
+        &runtime_abi::TRACKED_REGION_BACK.to_string(),
+    );
+    define(
+        "TRACKED_PREFIX_BYTES",
+        &runtime_abi::TRACKED_PREFIX_BYTES.to_string(),
+    );
+    define("ALLOC_TRACKED", &runtime_abi::ALLOC_TRACKED.to_string());
     // The count word contract of compiled drop glue: one offset, width and pair of values.
     define("COUNT_OFFSET", &runtime_abi::COUNT_OFFSET.to_string());
     define("COUNT_UNIQUE", &runtime_abi::COUNT_UNIQUE.to_string());

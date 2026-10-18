@@ -41,7 +41,7 @@ fn a_shared_pair_copy_reset_and_reuse_has_exact_counts() {
     unsafe {
         assert_eq!(hirsel_rt_v2_detach(ctx.0, parent, 0, &mut detached), 0);
         assert_eq!(
-            hirsel_rt_v2_unique_copy(ctx.0, parent, ptr::null_mut(), 0, &mut copied),
+            hirsel_rt_v2_unique_copy(ctx.0, parent, ptr::null_mut(), 0, 0, &mut copied),
             0
         );
         assert_eq!(

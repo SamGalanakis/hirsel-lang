@@ -661,6 +661,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             match *inst {
                 Inst::Store { version, .. }
                 | Inst::SeqReserve { version, .. }
+                | Inst::ArenaPush { version, .. }
                 | Inst::SeqSetLen { version, .. }
                 | Inst::SeqAppend { version, .. }
                 | Inst::FlatAppend { version, .. }

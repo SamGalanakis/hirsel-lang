@@ -1,0 +1,56 @@
+// rule: MEM-6
+// expect: run
+// stdout: 0 out of space
+// stdout: 31 out of space
+// A push charges its element before it consumes its argument, so a push to an empty
+// arena List with a zero cap is OutOfSpace, and a fourth element does not fit 31 bytes.
+fn output_error[E](take e: E) -> () {}
+
+fn first(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[u64] in a = []
+      list.push(mut xs, 1u64)
+      list.len(xs)
+    }
+  )
+}
+
+fn pushed(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[u64] in a = [1u64, 2u64]
+      list.push(mut xs, 3u64)
+      list.push(mut xs, 4u64)
+      list.len(xs)
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  out.print(
+    stdout,
+    if first(0u64) == Error(OutOfSpace()) {
+      "0 out of space\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  out.print(
+    stdout,
+    if pushed(31u64) == Error(OutOfSpace()) {
+      "31 out of space\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

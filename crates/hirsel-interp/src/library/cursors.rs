@@ -171,6 +171,11 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
             if !elements.iter().all(Option::is_some) || matches!(kind, BuiltinType::Map | BuiltinType::SortedMap) && !elements.iter().all(|e| matches!(e, Some(Value::Tuple(pair)) if pair.len()==2 && pair.iter().all(Option::is_some))) {
                 return Err(invalid("owning cursor source"));
             }
+            // MEM-6: an arena List is never unique, so consuming it copies each element
+            // out, which the List still holds too.
+            if let Value::Sequence { arena: Some(_), .. } = argument {
+                argument.share_arena_storage();
+            }
             Ok(Some(
                 OperationResult::returned(Value::Closure {
                     invoked: Default::default(),
@@ -266,11 +271,12 @@ fn source_elements(source: &Value, kind: BuiltinType) -> Result<&[Option<Value>]
                 Some(Value::Sequence {
                     kind: BuiltinType::Array,
                     elements,
+                    ..
                 }) => Ok(elements),
                 _ => Err(invalid("SortedMap entry storage")),
             }
         }
-        (expected, Value::Sequence { kind, elements }) if expected == *kind => Ok(elements),
+        (expected, Value::Sequence { kind, elements, .. }) if expected == *kind => Ok(elements),
         _ => Err(invalid("owning cursor source layout")),
     }
 }
@@ -289,6 +295,7 @@ fn owned_elements(source: &mut Value, kind: BuiltinType) -> Result<&mut Vec<Opti
             Some(Value::Sequence {
                 kind: BuiltinType::Array,
                 elements,
+                ..
             }) => Ok(elements),
             _ => Err(invalid("SortedMap entry storage")),
         };
@@ -298,6 +305,7 @@ fn owned_elements(source: &mut Value, kind: BuiltinType) -> Result<&mut Vec<Opti
         Value::Sequence {
             kind: actual,
             elements,
+            ..
         } if kind == *actual => Ok(elements),
         _ => Err(invalid("owning cursor source layout")),
     }

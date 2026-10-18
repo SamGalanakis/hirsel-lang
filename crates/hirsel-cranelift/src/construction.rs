@@ -679,9 +679,15 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let descriptor = self.descriptor_value(site.layout)?;
         let align = self.u64c(u64::from(align));
         let context = self.context;
+        let flags = if self.tracks(site) {
+            hirsel_lir::runtime_abi::ALLOC_TRACKED
+        } else {
+            0
+        };
+        let flags = self.b.ins().iconst(types::I32, i64::from(flags));
         let arena = self.rt1(
             RuntimeEntry::ArenaAlloc,
-            &[context, token, descriptor, capacity, align],
+            &[context, token, descriptor, capacity, align, flags],
         )?;
         self.b.ins().jump(done, &[arena.into()]);
         self.b.switch_to_block(done);
@@ -728,12 +734,14 @@ impl<'a> FnEmitter<'_, 'a, '_> {
 
     /// After an arena block's payload is filled: when the token names an arena and the
     /// payload holds a heap credit, the arena schedules the payload's drop program for its
-    /// close (MEM-4).
+    /// close (MEM-4). A tracked block (MEM-6) with a drop program is always scheduled:
+    /// pushes may move heap credits into it.
     fn arena_hold(
         &mut self,
         token: Value,
         payload: Place,
         layout: LayoutId,
+        tracked: bool,
         failure: FailureId,
     ) -> Emitted {
         let record = self.layout(layout)?;
@@ -755,7 +763,12 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let heap = self.b.ins().icmp_imm_s(IntCC::Equal, token, 0);
         self.b.ins().brif(heap, done, &[], walk, &[]);
         self.b.switch_to_block(walk);
-        self.arena_credits(payload.ptr, payload.align, steps, flag)?;
+        if tracked {
+            let one = self.b.ins().iconst(types::I8, 1);
+            self.store_at(one, flag, 0);
+        } else {
+            self.arena_credits(payload.ptr, payload.align, steps, flag)?;
+        }
         let holds = self.load_ty(types::I8, flag, 0);
         self.b.ins().brif(holds, schedule, &[], done, &[]);
         self.b.switch_to_block(schedule);
@@ -790,10 +803,18 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                 DropStep::Release { offset } => {
                     let child = self.load_ty(PTR, base, *offset);
                     let count = self.load_ty(types::I32, child, COUNT_OFFSET);
-                    let counted =
+                    // Immortal and tracked arena blocks (MEM-6) hold no credit.
+                    let counted = if self.tracking() {
+                        self.b.ins().icmp_imm_s(
+                            IntCC::UnsignedLessThan,
+                            count,
+                            hirsel_lir::runtime_abi::COUNT_ARENA_SHARED as i64,
+                        )
+                    } else {
                         self.b
                             .ins()
-                            .icmp_imm_s(IntCC::NotEqual, count, COUNT_IMMORTAL as i64);
+                            .icmp_imm_s(IntCC::NotEqual, count, COUNT_IMMORTAL as i64)
+                    };
                     let old = self.load_ty(types::I8, flag, 0);
                     let new = self.b.ins().bor(old, counted);
                     self.store_at(new, flag, 0);
@@ -1044,8 +1065,9 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         }
         let skip: Vec<u32> = kept.iter().map(|f| f.ordinal).collect();
         self.fill(payload, site, &skip)?;
-        if let Some(token) = arena.filter(|_| !site.arena_no_drop) {
-            self.arena_hold(token, payload, site.layout, failure)?;
+        if let Some(token) = arena.filter(|_| !site.arena_no_drop || self.tracks(site)) {
+            let tracked = self.tracks(site);
+            self.arena_hold(token, payload, site.layout, tracked, failure)?;
         }
         if let (Some(token), false) = (token, kept.is_empty()) {
             let (store, done) = (self.b.create_block(), self.b.create_block());

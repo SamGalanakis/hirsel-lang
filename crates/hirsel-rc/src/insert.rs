@@ -538,6 +538,9 @@ impl Facts {
                     Inst::SeqReserve {
                         address, version, ..
                     }
+                    | Inst::ArenaPush {
+                        address, version, ..
+                    }
                     | Inst::SeqSetLen {
                         address, version, ..
                     }
@@ -1771,6 +1774,7 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::Binary { result, .. }
             | Inst::Compare { result, .. }
             | Inst::IsUnique { result, .. }
+            | Inst::IsWritable { result, .. }
             | Inst::UpdateMask { result, .. }
             | Inst::FlatCopy { result, .. }
             | Inst::FlatView { result, .. }
@@ -1941,6 +1945,9 @@ impl<S: Stage> Flow<'_, S> {
             Inst::SeqReserve {
                 address, version, ..
             }
+            | Inst::ArenaPush {
+                address, version, ..
+            }
             | Inst::SeqSetLen {
                 address, version, ..
             }
@@ -2085,6 +2092,8 @@ impl<S: Stage> Flow<'_, S> {
                 }
             }
             Inst::Dup { value } => *st.credits.entry(value).or_insert(0) += 1,
+            // A semantic copy's mark reads its value (MEM-6).
+            Inst::Share { .. } => {}
             Inst::Release { value, .. }
             | Inst::Forget { value }
             | Inst::Dispose { token: value } => take_credit(&mut st.credits, value),
@@ -3447,10 +3456,12 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             }
             Inst::UniqueCopy { result, value, .. }
             | Inst::IsUnique { result, value }
+            | Inst::IsWritable { result, value }
             | Inst::Weaken { result, value } => {
                 *result = map(*result);
                 *value = map(*value);
             }
+            Inst::ArenaPush { version, .. } => *version = map(*version),
             Inst::Store { value, version, .. } => {
                 *value = map(*value);
                 *version = map(*version);
@@ -3472,6 +3483,7 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *m = map(*m);
             }
             Inst::Dup { value }
+            | Inst::Share { value }
             | Inst::Forget { value }
             | Inst::RegionPublish { value }
             | Inst::Dispose { token: value } => *value = map(*value),
@@ -3833,6 +3845,29 @@ struct Write {
     /// The write changes the block the place holds (`SeqReserve`,
     /// `SeqSetLen`, `SeqAppend`), which is detached after the blocks the path crosses.
     holding: bool,
+    /// A `mut` argument: when its path crosses a block, the List it lends is
+    /// shared (MEM-6), since that block's holders are not tracked.
+    lend: bool,
+}
+
+/// Whether the place `steps` of `slot` holds a List or Array block: the
+/// blocks MEM-6 tracks in an arena.
+fn holds_sequence<S>(
+    unit: &LirUnit<S>,
+    lay: Lay<'_>,
+    slot: SlotId,
+    steps: &[ProjectionStep],
+) -> bool {
+    let mut layout = unit.types[unit.slots[slot.index()].ty.index()].layout;
+    for step in steps {
+        match child_layout(lay, layout, step) {
+            Some(child) => layout = child,
+            None => return false,
+        }
+    }
+    lay.payload(layout)
+        .and_then(|p| lay.get(p))
+        .is_some_and(|r| matches!(r.kind, LayoutKind::Sequence { .. }))
 }
 
 /// Before an address that a write, a mutable loan or a `mut` argument uses
@@ -3860,11 +3895,14 @@ pub(crate) fn copy_on_write(
     // capacity (`hirsel_rt_v2_seq_grow`), so the static empty sequence of
     // `[]` and a shared list are each copied once, not copied then grown.
     let mut holding = BTreeSet::new();
+    // `ArenaPush` copies or relocates a tracked arena List itself, and
+    // leaves any other block to the push's append (MEM-6, LIR schema
+    // revision 32).
     let mut relocated: BTreeSet<AddressId> = unit
         .instructions
         .iter()
         .filter_map(|inst| match *inst {
-            Inst::SeqReserve { address, .. } => Some(address),
+            Inst::SeqReserve { address, .. } | Inst::ArenaPush { address, .. } => Some(address),
             _ => None,
         })
         .collect();
@@ -3920,6 +3958,7 @@ pub(crate) fn copy_on_write(
                 written.insert(address);
             }
             Inst::SeqReserve { address, .. }
+            | Inst::ArenaPush { address, .. }
             | Inst::SeqSetLen { address, .. }
             | Inst::SeqAppend { address, .. }
             | Inst::FlatAppend { address, .. }
@@ -3933,11 +3972,15 @@ pub(crate) fn copy_on_write(
             _ => {}
         }
     }
+    let mut lent = BTreeSet::new();
     for term in &unit.terminators {
         if let Terminator::Call { call, .. } = *term {
             for a in call_arguments(&unit, call) {
                 if let ArgumentValue::Address { address, .. } = a.value {
                     written.insert(address);
+                    if a.passing == Passing::Mut {
+                        lent.insert(address);
+                    }
                 }
             }
         }
@@ -3978,6 +4021,7 @@ pub(crate) fn copy_on_write(
                     index: i,
                     address,
                     holding: holding.contains(&address),
+                    lend: lent.contains(&address),
                 });
             }
         }
@@ -4014,6 +4058,19 @@ pub(crate) fn copy_on_write(
             )?;
             version = joined;
             at = (next, 0);
+        }
+        if let Some(steps) = &t.lend {
+            share_held(
+                &mut ed,
+                lay,
+                &mut facts,
+                t.slot,
+                steps,
+                version,
+                at,
+                t.failure.clone(),
+                &mut ruled,
+            )?;
         }
     }
     fill_pending(&mut ed, lay, &mut facts)?;
@@ -4095,6 +4152,7 @@ fn viewed(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]) -> Vec
                     index: i,
                     address,
                     holding: false,
+                    lend: false,
                 });
             }
         }
@@ -4115,6 +4173,9 @@ struct Target {
     /// The write's preparation failure when the detach sits right before
     /// it, else that failure's rule.
     failure: Result<FailureId, Option<String>>,
+    /// The place of a List a `mut` argument lends through another block,
+    /// shared after the detaches (MEM-6).
+    lend: Option<Vec<ProjectionStep>>,
 }
 
 /// The detaches the writes need. A block whose place an active mutable loan
@@ -4175,12 +4236,19 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
                 None => prefixes.push((prefix, None)),
             }
         }
-        if prefixes.is_empty() {
+        let crosses = facts.places[w.address.index()]
+            .as_ref()
+            .is_some_and(|p| !p.crossings.is_empty());
+        let lend = (w.lend && !w.holding && crosses && holds_sequence(&ed.unit, lay, slot, &steps))
+            .then(|| steps.clone());
+        if prefixes.is_empty() && lend.is_none() {
             continue;
         }
         let used: BTreeSet<ValueId> = prefixes
             .iter()
-            .flat_map(|(p, _)| p.iter())
+            .map(|(p, _)| p)
+            .chain(&lend)
+            .flat_map(|p| p.iter())
             .flat_map(|s| match *s {
                 ProjectionStep::Index(v) | ProjectionStep::Slot(v) => vec![v],
                 ProjectionStep::FlatAt { index, offset } => vec![index, offset],
@@ -4202,6 +4270,7 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
                     | Inst::Drop { address, .. }
                     | Inst::BeginLoan { address, .. }
                     | Inst::SeqReserve { address, .. }
+                    | Inst::ArenaPush { address, .. }
                     | Inst::SeqSetLen { address, .. }
                     | Inst::SeqAppend { address, .. }
                     | Inst::FlatAppend { address, .. }
@@ -4269,6 +4338,7 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
             prefixes,
             version,
             failure,
+            lend,
         });
     }
     // Each lending loan detaches its own block where it begins.
@@ -4296,6 +4366,7 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
                     prefixes: vec![(prefix.clone(), Some(address))],
                     version,
                     failure: Err(None),
+                    lend: None,
                 });
             }
         }
@@ -4323,13 +4394,19 @@ fn detach(
 ) -> Result<(ValueId, BlockId), PassError> {
     let slot_ty = ed.unit.slots[slot.index()].ty;
     let mut layout = ed.unit.types[slot_ty.index()].layout;
+    // Whether the path reaches this block through another one.
+    let mut nested = false;
     for step in prefix {
+        nested |= lay.payload(layout).is_some();
         layout = child_layout(lay, layout, step)
             .ok_or_else(|| PassError::Malformed("a projection outside its layout".into()))?;
     }
     let payload = lay
         .payload(layout)
         .ok_or_else(|| PassError::Malformed("a crossing without a block".into()))?;
+    // MEM-6: a List written through another block is shared, since that
+    // block's holders are not tracked, so the write copies it.
+    let share = nested && holds_sequence(&ed.unit, lay, slot, prefix);
     let block_ty = type_of(&mut ed.unit, ValueRepr::Block, layout);
     let (b, i) = at;
     let anchor = ed.unit.blocks[b.index()].anchor;
@@ -4396,7 +4473,11 @@ fn detach(
         reaching: version,
         mode: ReadMode::Borrow,
     });
-    code.push(Inst::IsUnique {
+    if share {
+        code.push(Inst::Share { value: view });
+    }
+    // An unshared arena List is writable in place though never unique.
+    code.push(Inst::IsWritable {
         result: unique,
         value: view,
     });
@@ -4423,6 +4504,7 @@ fn detach(
         .constructs
         .push(hirsel_lir::ir::ConstructSite {
             arena_no_drop: false,
+            tracked: false,
             constructor: hirsel_lir::ir::ConstructorKind::Tuple,
             layout: payload,
             fields: PoolRange::EMPTY,
@@ -4514,6 +4596,81 @@ fn detach(
     // reaching version together with the reads and transports it will replace.
     rename_version(ed, rest, version, joined, targets);
     Ok((joined, rest))
+}
+
+/// Share the List at `slot`'s place `steps`, which a `mut` argument lends
+/// through another block (MEM-6), at position `at`: prepare the place, view
+/// it and mark it, so the callee's first write copies it.
+#[allow(clippy::too_many_arguments)]
+fn share_held(
+    ed: &mut Editor<Rc>,
+    lay: Lay<'_>,
+    facts: &mut Facts,
+    slot: SlotId,
+    steps: &[ProjectionStep],
+    version: ValueId,
+    at: (BlockId, usize),
+    prepare_failure: Result<FailureId, Option<String>>,
+    ruled: &mut Vec<(AddressId, Option<String>)>,
+) -> Result<(), PassError> {
+    let slot_ty = ed.unit.slots[slot.index()].ty;
+    let mut layout = ed.unit.types[slot_ty.index()].layout;
+    for step in steps {
+        layout = child_layout(lay, layout, step)
+            .ok_or_else(|| PassError::Malformed("a projection outside its layout".into()))?;
+    }
+    let block_ty = type_of(&mut ed.unit, ValueRepr::Block, layout);
+    let place = AddressId(ed.unit.addresses.len() as u32);
+    let projection = PoolRange::push(&mut ed.unit.pools.projections, steps.iter().copied());
+    ed.unit.addresses.push(AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
+        base: AddressBase::Slot(slot),
+        projection,
+        ty: block_ty,
+    });
+    facts.places.push(place_of(&ed.unit, lay, place));
+    let failure = match prepare_failure {
+        Ok(f) => copy_failure(ed, f),
+        Err(rule) => {
+            ruled.push((place, rule));
+            PENDING_FAILURE
+        }
+    };
+    let loan = new_loan(ed, facts, place, slot);
+    let view = ed.value(block_ty, Holding::Borrowed(loan));
+    if facts.backing.len() < ed.unit.values.len() {
+        facts.version_of.resize(ed.unit.values.len(), None);
+        facts.backing.resize(ed.unit.values.len(), None);
+        facts.statics.resize(ed.unit.values.len(), false);
+    }
+    facts.backing[view.index()] = Some(slot);
+    let code = [
+        Inst::Address {
+            address: place,
+            failure,
+        },
+        Inst::BeginLoan {
+            loan,
+            address: place,
+            mutable: false,
+            if_inactive: false,
+        },
+        Inst::Read {
+            result: view,
+            address: place,
+            reaching: version,
+            mode: ReadMode::Borrow,
+        },
+        Inst::Share { value: view },
+        Inst::EndLoan {
+            loan,
+            if_active: false,
+        },
+    ];
+    let (b, i) = at;
+    ed.code[b.index()].splice(i..i, code);
+    Ok(())
 }
 
 fn new_loan(ed: &mut Editor<Rc>, facts: &mut Facts, address: AddressId, slot: SlotId) -> LoanId {
@@ -4771,6 +4928,7 @@ mod tests {
             prefixes: Vec::new(),
             version: from,
             failure: Err(None),
+            lend: None,
         }];
         rename_version(&mut ed, rest, from, to, &mut targets);
         assert_eq!(targets[0].version, to);

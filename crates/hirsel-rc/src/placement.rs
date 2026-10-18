@@ -444,7 +444,10 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
                         define_foreign(v);
                     }
                     for v in crate::liveness::inst_uses(&unit, inst) {
-                        if !matches!(inst, Inst::Drop { .. } | Inst::RegionPublish { .. }) {
+                        if !matches!(
+                            inst,
+                            Inst::Drop { .. } | Inst::RegionPublish { .. } | Inst::Share { .. }
+                        ) {
                             escaped.insert(Node::Value(v));
                         }
                     }
@@ -687,6 +690,8 @@ fn rewrite(
                 }
                 // Region contents end with the region.
                 Inst::Drop { address, .. } if whole_local(&facts, address) => {}
+                // A region block is never an arena List's (MEM-6).
+                Inst::Share { value } if local_values[value.index()] => {}
                 // A copy of an uncounted reference is a plain read.
                 Inst::Copy {
                     result,

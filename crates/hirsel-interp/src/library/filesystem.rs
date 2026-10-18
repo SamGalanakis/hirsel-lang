@@ -205,6 +205,7 @@ impl Library {
                     return Ok(ok(Value::Sequence {
                         kind: BuiltinType::List,
                         elements: vec![],
+                        arena: None,
                     }));
                 }
                 _ => {}
@@ -243,6 +244,7 @@ impl Library {
                             ))
                         })
                         .collect(),
+                    arena: None,
                 }
             }),
             _ if logical == root => Err(FileError::Fault(self.simulation.config.invalid_path_code)),

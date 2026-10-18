@@ -113,6 +113,40 @@ impl PartialEq for SharedRoot {
 }
 impl Eq for SharedRoot {}
 
+/// The storage of a List or Array block placed in an arena (MEM-6): the arena's
+/// handle id, its element's logical size and whether the storage is shared. Every clone of one value shares the
+/// cell, so a copy marks both holders. It is unobservable: equality ignores it.
+#[derive(Clone, Debug)]
+pub struct ArenaStorage {
+    pub arena: u64,
+    /// The logical bytes of one element: a push's charge (0 in an unbounded arena).
+    pub element: u64,
+    shared: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl ArenaStorage {
+    /// Unshared storage built in `arena`.
+    pub fn fresh(arena: u64, element: u64) -> Self {
+        Self {
+            arena,
+            element,
+            shared: Default::default(),
+        }
+    }
+    pub fn shared(&self) -> bool {
+        self.shared.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    pub fn share(&self) {
+        self.shared
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+impl PartialEq for ArenaStorage {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for ArenaStorage {}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum Value {
     FunctionReference(NamedFunction),
@@ -139,6 +173,8 @@ pub enum Value {
     Sequence {
         kind: BuiltinType,
         elements: Vec<Option<Value>>,
+        /// A List or Array block placed in an arena (MEM-6); None elsewhere.
+        arena: Option<ArenaStorage>,
     },
     Box(Vec<Option<Value>>),
     Distinct {
@@ -359,9 +395,14 @@ impl Clone for Value {
                     variant: *variant,
                     fields: vec![None; fields.len()],
                 },
-                Value::Sequence { kind, elements } => Value::Sequence {
+                Value::Sequence {
+                    kind,
+                    elements,
+                    arena,
+                } => Value::Sequence {
                     kind: *kind,
                     elements: vec![None; elements.len()],
+                    arena: arena.clone(),
                 },
                 Value::Closure {
                     invoked,
@@ -457,6 +498,62 @@ impl Value {
 }
 
 impl Value {
+    /// A sequence value outside any arena.
+    pub fn sequence(kind: BuiltinType, elements: Vec<Option<Value>>) -> Self {
+        Self::Sequence {
+            kind,
+            elements,
+            arena: None,
+        }
+    }
+    /// MEM-6: a semantic copy of this value shares every arena List or Array of
+    /// its tree. Native code marks only the blocks it holds at inline depth, but
+    /// a block behind another one cannot be written or moved out until that one
+    /// is, and copying that one on its write gives each child a second holder.
+    pub(crate) fn share_arena_storage(&self) {
+        let mut work = vec![self];
+        while let Some(v) = work.pop() {
+            if let Self::Sequence {
+                arena: Some(arena), ..
+            } = v
+            {
+                arena.share();
+            }
+            if let Some(fields) = v.fields() {
+                work.extend(fields.iter().flatten());
+            }
+        }
+    }
+    /// MEM-6: a deep copy (`unique x`) builds every block anew where its source
+    /// lives, so each arena List or Array of it is fresh, unshared storage there.
+    pub(crate) fn fresh_arena_storage(&mut self) {
+        let mut work = vec![self];
+        while let Some(v) = work.pop() {
+            if let Self::Sequence {
+                arena: Some(storage),
+                ..
+            } = v
+            {
+                *storage = ArenaStorage::fresh(storage.arena, storage.element);
+            }
+            if let Some(fields) = v.fields_mut() {
+                work.extend(fields.iter_mut().flatten());
+            }
+        }
+    }
+    /// Whether this value is a block reference rather than inline storage.
+    pub(crate) fn is_block(&self) -> bool {
+        match self {
+            Self::Sequence { kind, .. } => !matches!(kind, BuiltinType::Inline | BuiltinType::Simd),
+            Self::Box(_)
+            | Self::Map(_)
+            | Self::Set(_)
+            | Self::Closure { .. }
+            | Self::String(_)
+            | Self::Bytes(_) => true,
+            _ => false,
+        }
+    }
     pub(crate) fn inline_bits(&self) -> bool {
         let mut work = vec![self];
         while let Some(v) = work.pop() {

@@ -30,11 +30,13 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<OperationResult, Error>
         return Ok(OperationResult::returned(Value::Sequence {
             kind: BuiltinType::Slots,
             elements: vec![],
+            arena: None,
         }));
     }
     let Value::Sequence {
         kind: BuiltinType::Slots,
         elements,
+        ..
     } = &args[0]
     else {
         return Err(invalid("Slots representation"));
@@ -69,6 +71,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<OperationResult, Error>
                 Value::Sequence {
                     kind: BuiltinType::Slots,
                     elements,
+                    arena: None,
                 },
             )],
             consumed: vec![1],
@@ -85,6 +88,8 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<OperationResult, Error>
     };
     let value = found.map(|(_, v)| v.clone()).unwrap_or_else(none);
     if name == "slots.get" {
+        // A counted local result shares the stored value's arena Lists (MEM-6).
+        value.share_arena_storage();
         return Ok(OperationResult::returned(value));
     }
     let mut elements = elements.clone();
@@ -99,6 +104,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<OperationResult, Error>
             Value::Sequence {
                 kind: BuiltinType::Slots,
                 elements,
+                arena: None,
             },
         )],
         consumed: vec![],
@@ -115,6 +121,7 @@ mod tests {
         let slots = Value::Sequence {
             kind: BuiltinType::Slots,
             elements: vec![Some(tuple(u64_value(u64::MAX - 1), some(u64_value(7))))],
+            arena: None,
         };
         let stale = tuple(u64_value(0), u64_value(u64::MAX - 1));
         let OperationResult::Complete {

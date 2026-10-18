@@ -94,6 +94,7 @@ impl Library {
             let Value::Sequence {
                 kind: BuiltinType::List,
                 elements,
+                ..
             } = &mut buffer
             else {
                 return Err(invalid("file read buffer"));

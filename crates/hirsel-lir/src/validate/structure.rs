@@ -1445,6 +1445,27 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
                 self.fresh_holding(site, result);
             }
+            // Copy-on-write's test (LIR schema revision 32).
+            Inst::IsWritable { result, value } => {
+                if self.ty(value).repr != ValueRepr::Block {
+                    self.add(site, K::Type("writability test of an uncounted value"));
+                }
+                if self.scalar(result) != Some(ScalarKind::Bool) {
+                    self.add(site, K::Type("writability test result"));
+                }
+                self.fresh_holding(site, result);
+            }
+            // A semantic copy marks the arena blocks the value holds at
+            // inline depth (MEM-6, LIR schema revision 32).
+            Inst::Share { value } => {
+                let holds = self.ty(value).repr == ValueRepr::Block
+                    || layouts
+                        .get(self.layout_of(value))
+                        .is_some_and(|r| !r.drop.is_empty());
+                if !holds {
+                    self.add(site, K::Type("share of a value that holds no block"));
+                }
+            }
             Inst::Weaken { result, value } => {
                 let callable = |v: ValueId| match layouts.get(self.layout_of(v)) {
                     Some(LayoutRecord {
@@ -1789,6 +1810,27 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
                 if self.flat_variable(facts, address) {
                     self.add(site, K::Type("write into a variable part of a flat value"));
+                }
+            }
+            // One push's preparation of a List block (MEM-6, LIR schema
+            // revision 32): `list.push`'s, never a sequential one's.
+            Inst::ArenaPush {
+                address, version, ..
+            } => {
+                self.library_only(site, inst.opcode());
+                let sequence = self
+                    .address_layout(facts, address)
+                    .and_then(|l| layouts.payload(l))
+                    .and_then(|p| layouts.get(p))
+                    .is_some_and(|r| matches!(r.kind, LayoutKind::Sequence { .. }));
+                if !sequence {
+                    self.add(
+                        site,
+                        K::Type("arena push of a place that holds no List block"),
+                    );
+                }
+                if let Some(slot) = self.slot_root(site, facts, address) {
+                    self.version_type(site, slot, version, "store version");
                 }
             }
             // An owned Packed element appended to a sequential sequence block
@@ -2361,7 +2403,8 @@ impl<S: Stage> Checker<'_, '_, S> {
     }
 
     /// Only a unit built by the library may use `op` this way (LIR schema
-    /// revision 7): a `Slot` step, `SeqReserve`, `SeqSetLen`, `SeqAppend` or `Recast`.
+    /// revision 7): a `Slot` step, `SeqReserve`, `SeqSetLen`, `SeqAppend`, `Recast`
+    /// or `ArenaPush`.
     fn library_only(&mut self, site: Site, op: Opcode) {
         if self.cx.unit.header.origin != UnitOrigin::Library {
             self.add(site, K::Vocabulary(op));
@@ -3088,6 +3131,9 @@ impl<S: Stage> Checker<'_, '_, S> {
                     address, version, ..
                 }
                 | Inst::SeqReserve {
+                    address, version, ..
+                }
+                | Inst::ArenaPush {
                     address, version, ..
                 }
                 | Inst::SeqSetLen {
@@ -4228,7 +4274,9 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
         | Inst::Store { value, .. }
         | Inst::Replace { value, .. }
         | Inst::Dup { value }
+        | Inst::Share { value }
         | Inst::IsUnique { value, .. }
+        | Inst::IsWritable { value, .. }
         | Inst::Weaken { value, .. }
         | Inst::SeqLen { value, .. }
         | Inst::SeqCapacity { value, .. }
@@ -4390,6 +4438,7 @@ pub(super) fn inst_addresses<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<AddressId> {
         | Inst::FlatLength { address, .. }
         | Inst::FlatNext { address, .. }
         | Inst::SeqReserve { address, .. }
+        | Inst::ArenaPush { address, .. }
         | Inst::SeqSetLen { address, .. }
         | Inst::SeqAppend { address, .. }
         | Inst::FlatAppend { address, .. }

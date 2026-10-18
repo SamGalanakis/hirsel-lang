@@ -48,7 +48,7 @@ impl StageKind {
 
     /// The opcode vocabulary of each stage. Value LIR has semantic Copy/Drop and
     /// no counts and may open arenas; Placed adds compiler-local regions and
-    /// lowers arena openings to them; Rc adds Dup/Release/IsUnique; Reuse
+    /// lowers arena openings to them; Rc adds Dup/Release/IsUnique/IsWritable; Reuse
     /// adds tokens; Ready removes semantic Drop and unavailable placeholders.
     /// `Copy` stays: at Ready it is the primitive copy of a place whose layout
     /// recipe is Dup or Fields (a load plus one increment per counted leaf; it
@@ -68,7 +68,9 @@ impl StageKind {
             | Opcode::ArenaToken => rank >= StageKind::Placed as u8,
             // Placement lowers an arena opening to its region's entry and token.
             Opcode::ArenaOpen => rank == StageKind::Value as u8,
-            Opcode::Dup | Opcode::Release | Opcode::IsUnique => rank >= StageKind::Rc as u8,
+            Opcode::Dup | Opcode::Release | Opcode::IsUnique | Opcode::IsWritable => {
+                rank >= StageKind::Rc as u8
+            }
             Opcode::FinalizeBegin | Opcode::FinalizeEnd => rank == StageKind::Ready as u8,
             Opcode::Reset | Opcode::Reuse | Opcode::Dispose | Opcode::TokenNone => {
                 rank >= StageKind::Reuse as u8
@@ -98,6 +100,8 @@ impl StageKind {
             | Opcode::SeqReserve
             | Opcode::SeqSetLen
             | Opcode::SeqAppend
+            | Opcode::ArenaPush
+            | Opcode::Share
             | Opcode::FlatAppend
             | Opcode::FlatField
             | Opcode::FlatClose

@@ -422,7 +422,7 @@ pub(crate) fn holds_storage(value: &Value) -> bool {
                     return true;
                 }
             }
-            Value::Sequence { kind, elements } => {
+            Value::Sequence { kind, elements, .. } => {
                 if !matches!(
                     kind,
                     hirsel_types::BuiltinType::Inline | hirsel_types::BuiltinType::Simd
@@ -471,6 +471,7 @@ pub(crate) fn inline_fields(value: &Value) -> Option<usize> {
         Value::Sequence {
             kind: hirsel_types::BuiltinType::Inline | hirsel_types::BuiltinType::Simd,
             elements,
+            ..
         } => Some(elements.len()),
         _ => None,
     }

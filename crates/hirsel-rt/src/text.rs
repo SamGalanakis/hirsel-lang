@@ -29,7 +29,7 @@ pub static hirsel_rt_v2_bytes_descriptor: BytesDescriptor = BytesDescriptor(Layo
     steps: std::ptr::null(),
     step_count: 0,
     field_count: 0,
-    flags: LAYOUT_DYNAMIC | crate::LAYOUT_LOGICAL_PER_ELEMENT,
+    flags: LAYOUT_DYNAMIC | crate::LAYOUT_LOGICAL_PER_ELEMENT | crate::LAYOUT_SEQUENCE,
     logical: 1,
 });
 

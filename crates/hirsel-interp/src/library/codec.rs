@@ -339,6 +339,7 @@ fn from_wire(
                     SchemaNode::Builtin { kind, .. } => Value::Sequence {
                         kind: *kind,
                         elements: fs,
+                        arena: None,
                     },
                     _ => return Err(invalid("codec finish schema")),
                 };

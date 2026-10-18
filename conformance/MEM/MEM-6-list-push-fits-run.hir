@@ -1,0 +1,58 @@
+// rule: MEM-6
+// expect: run
+// stdout: 32 fits
+// stdout: 0 fits
+// "each `list.push` to a List in it charges its element's logical size". A literal of
+// two u64 elements charges 16 bytes and each push 8 more, so four elements fit 32 bytes
+// exactly; growth and spare capacity are not charged. Pushes to a heap List charge nothing.
+fn output_error[E](take e: E) -> () {}
+
+fn pushed(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[u64] in a = [1u64, 2u64]
+      list.push(mut xs, 3u64)
+      list.push(mut xs, 4u64)
+      list.len(xs)
+    }
+  )
+}
+
+fn on_heap(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[u64] = []
+      list.push(mut xs, 1u64)
+      list.push(mut xs, 2u64)
+      list.len(xs)
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  out.print(
+    stdout,
+    if pushed(32u64) == Ok(4u64) {
+      "32 fits\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  out.print(
+    stdout,
+    if on_heap(0u64) == Ok(2u64) {
+      "0 fits\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
