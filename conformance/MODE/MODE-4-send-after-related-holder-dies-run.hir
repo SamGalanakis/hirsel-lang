@@ -1,0 +1,33 @@
+// rule: MODE-4
+// expect: run
+// stdout: ok
+// `kept` holds a copy of a result related to `xs` only until its block ends,
+// so `xs` is unique, and sendable, again when it is sent. Twin is
+// MODE-4-send-related-holder-live-bad.
+fn view(x: List[u64]) -> List[u64] in x {
+  x
+}
+
+fn send[T: sendable](take value: T) -> T {
+  value
+}
+
+fn pass(take xs: unique List[u64]) -> List[u64] {
+  {
+    let kept = (copy view(xs),)
+  }
+  send(take xs)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let ok = list.len(pass(unique [1u64, 2u64])) == 2u64
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

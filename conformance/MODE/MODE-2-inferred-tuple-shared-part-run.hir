@@ -1,0 +1,26 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// `x` is shared with `y`, so the inferred tuple holds an aliased part where
+// its operand row says unique. The tuple is valid; only a receiver that needs
+// that part unique rejects it. Twin is
+// MODE-2-inferred-tuple-shared-part-bad.
+fn pair(take x: unique List[u64]) -> (List[u64], List[u64]) {
+  let y = copy x
+  let t = (take x, take y)
+  t
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let (a, b) = pair(unique [1u64, 2u64])
+  let ok = list.len(a) == 2u64 && list.len(b) == 2u64
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

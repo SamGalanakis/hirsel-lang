@@ -1476,61 +1476,6 @@ impl Checker<'_> {
                 }
             }
         }
-        // MODE-2: a counted local result may retain parts of its selected
-        // borrowed sources. The share survives the result's evaluation loan.
-        let shared_result = matches!(
-            self.out.body.types.get(result).unwrap().kind,
-            TypeKind::Builtin {
-                kind: BuiltinType::Shared,
-                ..
-            }
-        );
-        if !shared_result
-            && !self.property(result, Bound::Plain)
-            && !self.property(result, Bound::Flat)
-        {
-            let lifetime = self.signature_lifetime(
-                &f,
-                &self.out.body.types.get(f.result).unwrap().modes.relation,
-            );
-            if let Some(sources) = lifetime.named_parameters() {
-                for source in &sources {
-                    match source {
-                        ParameterRef::Bound {
-                            depth: 0,
-                            parameter,
-                        } => {
-                            if let Some((_, argument)) = ordered
-                                .iter()
-                                .find(|(ordinal, _)| *ordinal == parameter.0 as usize)
-                            {
-                                self.weaken(argument.value);
-                            }
-                        }
-                        ParameterRef::Body { scope, parameter } => {
-                            if let Some(binding) = self
-                                .out
-                                .body
-                                .bindings
-                                .iter()
-                                .find(|b| {
-                                    b.owner == *scope
-                                        && b.binding == ResolvedName::Parameter(*parameter)
-                                })
-                                .cloned()
-                            {
-                                self.weaken_binding(&binding);
-                            }
-                        }
-                        _ => (),
-                    }
-                }
-            }
-            // A counted result of calling a closure may share what its
-            // environment borrows, whatever its relation, so its borrowed
-            // captures stop being unique as ownership judges (#80).
-            self.weaken(callee);
-        }
         // Preserve nominal provider attempts and their failure policy.
         let _ = self.authority(result);
         self.facts.insert(e, used.join(required));
@@ -1968,10 +1913,10 @@ impl Checker<'_> {
                     };
                     actual = self.complete_value_type(actual);
                     let mut valid = true;
-                    for index in path {
+                    for index in &path {
                         if let Some(child) =
                             evidence_children(&self.out.body.types.get(actual).unwrap().kind)
-                                .get(index)
+                                .get(*index)
                         {
                             actual = *child
                         } else {
@@ -1998,7 +1943,13 @@ impl Checker<'_> {
                         }
                         _ => const { RuleId::of("MODE-4") },
                     };
-                    if bounds.contains(&Bound::Sendable) && !self.sendable(actual) {
+                    // An argument's own root is I's to judge (MODE-2).
+                    let sendable = if path.is_empty() {
+                        self.sendable_when_unique(actual)
+                    } else {
+                        self.sendable(actual)
+                    };
+                    if bounds.contains(&Bound::Sendable) && !sendable {
                         self.explained(
                             owner,
                             primary,
@@ -2085,7 +2036,7 @@ impl Checker<'_> {
             }
             Some(Intrinsic::MutexCreate) => {
                 if let Some(t) = args.get(1) {
-                    if !self.sendable(*t) {
+                    if !self.sendable_when_unique(*t) {
                         self.explained(
                             const { RuleId::of("CONC-5") },
                             span,
@@ -2102,7 +2053,7 @@ impl Checker<'_> {
             }
             Some(Intrinsic::ChannelSend) => {
                 if let Some(t) = args.get(2) {
-                    if !self.sendable(*t) {
+                    if !self.sendable_when_unique(*t) {
                         self.explained(const { RuleId::of("CONC-6") }, span, "channel payload must be sendable; Receivers cross only by task capture",
                             self.payload_explanation(e, 2, Cause::NotSendable, Requirement::Sendable));
                     }
@@ -2994,7 +2945,13 @@ impl Checker<'_> {
                 if b.mutable
                     || matches!(usage, UseKind::Borrow | UseKind::Mut)
                     || (receiver && usage != UseKind::Take)
-                    || (!receiver && !self.sendable(capture_type_id))
+                    // A taken capture's current uniqueness is I's (CLO-3).
+                    || (!receiver
+                        && !if usage == UseKind::Take {
+                            self.sendable_when_unique(capture_type_id)
+                        } else {
+                            self.sendable(capture_type_id)
+                        })
                     // The Receiver exception waives sendability, not
                     // locality: a local value cannot cross into a task.
                     || (receiver && !self.lifetime(&capture_type.modes.relation).is_global())
@@ -3300,29 +3257,6 @@ impl Checker<'_> {
         self.binding_types = before_types;
         self.capture_views = before_views;
         self.invalid = before_invalid;
-        // Capture creation happens in the caller even though body evaluation has
-        // its own flow snapshot. Counted copies also weaken the retained source.
-        for capture in &captures {
-            if capture.usage != UseKind::Copy
-                || self.property(capture.ty, Bound::Plain)
-                || self.property(capture.ty, Bound::Flat)
-            {
-                continue;
-            }
-            if let Some(binding) = self.out.body.bindings.iter().find(|b| {
-                work::count(Counter::AuthoritySourceRows);
-                b.owner == capture.owner && b.binding == capture.binding
-            }) {
-                let key = binding_key(binding);
-                if let Some(ty) = self.binding_types.get(&key).copied() {
-                    let mut row = self.out.body.types.get(ty).unwrap().clone();
-                    row.modes.uniqueness = Uniqueness::Aliased;
-                    row.modes.sendability = Sendability::NotSendable;
-                    let ty = self.out.body.types.push(row);
-                    self.binding_types.insert(key, ty);
-                }
-            }
-        }
         self.facts.insert(e, authority);
     }
 }

@@ -55,6 +55,86 @@ impl PartialEq for Content {
 }
 impl Eq for Content {}
 
+/// MODE-2: the parts of a value whose content is currently aliased, though
+/// the row of an inferred construction that holds them may claim them
+/// unique (J types an inferred part by its operand). The root's own
+/// uniqueness stays `Modes::uniqueness`, which joins its parts. Paths travel
+/// with values; I checks nested `unique` contracts and publishes rows by them.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct SharedParts(Arc<Vec<(Vec<Projection>, ExprId)>>);
+impl SharedParts {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn paths(&self) -> impl Iterator<Item = &[Projection]> {
+        self.0.iter().map(|(path, _)| path.as_slice())
+    }
+    fn covers(&self, path: &[Projection]) -> bool {
+        self.paths().any(|p| path.starts_with(p))
+    }
+    /// `path` holds aliased content; `site` is the operand that put it there.
+    fn insert(&mut self, path: Vec<Projection>, site: ExprId) {
+        if self.covers(&path) {
+            return;
+        }
+        let entries = Arc::make_mut(&mut self.0);
+        entries.retain(|(p, _)| !p.starts_with(&path));
+        entries.push((path, site));
+        entries.sort_by_key(|(p, site)| (p.iter().map(projection_key).collect::<Vec<_>>(), *site));
+    }
+    fn install(&mut self, path: &[Projection], incoming: &Self) {
+        for (p, site) in incoming.0.iter() {
+            let mut installed = path.to_vec();
+            installed.extend(p.iter().cloned());
+            self.insert(installed, *site);
+        }
+    }
+    /// A projected part keeps the shared parts below it; one that is itself
+    /// shared is aliased at its root, as the joined root already is.
+    fn project(&mut self, path: &[Projection]) {
+        let mut parts = Self::default();
+        for (p, site) in self.0.iter() {
+            if p.len() > path.len() && p.starts_with(path) {
+                parts.insert(p[path.len()..].to_vec(), *site);
+            }
+        }
+        *self = parts;
+    }
+    /// Replaces the parts at `path` with `incoming`'s.
+    fn replace(&mut self, path: &[Projection], incoming: &Self) {
+        if self.paths().any(|p| p.starts_with(path)) {
+            Arc::make_mut(&mut self.0).retain(|(p, _)| !p.starts_with(path));
+        }
+        self.install(path, incoming);
+    }
+    fn join(&mut self, other: &Self) {
+        if self == other {
+            return;
+        }
+        for (p, site) in other.0.iter() {
+            self.insert(p.clone(), *site);
+        }
+    }
+    /// Past `depth`, a shared part covers its whole prefix.
+    fn truncate(&mut self, depth: usize) {
+        if self.paths().any(|p| p.len() > depth) {
+            let entries = self.0.as_ref().clone();
+            let mut parts = Self::default();
+            for (p, site) in entries {
+                parts.insert(p[..p.len().min(depth)].to_vec(), site);
+            }
+            *self = parts;
+        }
+    }
+}
+fn projection_key(p: &Projection) -> (u8, u32, u32) {
+    match p {
+        Projection::Field(f) => (0, *f, 0),
+        Projection::VariantField { variant, field } => (1, *variant, *field),
+        Projection::Elements => (2, 0, 0),
+    }
+}
+
 /// Current part evidence overrides physical declarations after a share or
 /// replacement. Paths travel with values; defaults never repair a lost proof.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -162,6 +242,7 @@ struct Value {
     loans: LoanSet,
     content: Content,
     crossing_parts: CrossingParts,
+    shared_parts: SharedParts,
     crossing_borrows: Arc<Vec<CrossingBorrow>>,
     invalid: bool,
     deep_copy: bool,
@@ -194,6 +275,7 @@ impl Value {
             loans: LoanSet::default(),
             content: Content::default(),
             crossing_parts: CrossingParts::default(),
+            shared_parts: SharedParts::default(),
             crossing_borrows: Arc::new(Vec::new()),
             invalid: false,
             deep_copy: false,
@@ -229,6 +311,7 @@ impl Value {
     /// discard deep positive evidence and retain negative obligations at their
     /// prefix. A containment dependency at that prefix applies to any child.
     fn restrict_crossing_paths(&mut self, depth: usize) {
+        self.shared_parts.truncate(depth);
         if self
             .crossing_parts
             .0
@@ -396,6 +479,7 @@ impl Value {
             return;
         }
         self.crossing_parts.project(path);
+        self.shared_parts.project(path);
         self.crossing_borrows = Arc::new(
             self.crossing_borrows
                 .iter()
@@ -452,6 +536,7 @@ impl Value {
             self.bound_by(super::cfg::LifetimeScopes::FRAME, Site::Frame);
         } else if self.deep_copy {
             self.crossing_parts = CrossingParts::default();
+            self.shared_parts = SharedParts::default();
             self.content = Content::default();
             self.modes.relation = Relation::global();
         }
@@ -524,6 +609,7 @@ impl Value {
         self.envelope = creation::join([self.envelope.clone(), other.envelope.clone()]);
         self.fresh_receipt &= other.fresh_receipt;
         self.crossing_parts.join(&other.crossing_parts);
+        self.shared_parts.join(&other.shared_parts);
         for borrow in other.crossing_borrows.iter() {
             if !self.crossing_borrows.contains(borrow) {
                 Arc::make_mut(&mut self.crossing_borrows).push(borrow.clone());
@@ -1094,6 +1180,10 @@ struct Checker<'a> {
     /// on one of several paths (a branch, an arm).
     forwarded: BTreeMap<ExprId, UseKind>,
     binding_modes: BTreeMap<usize, Modes>,
+    /// The currently aliased parts of each published expression and binding
+    /// value, whose rows are published with those parts aliased.
+    shared_parts: BTreeMap<ExprId, SharedParts>,
+    binding_parts: BTreeMap<usize, SharedParts>,
     pattern_modes: BTreeMap<hirsel_syntax::PatternId, Modes>,
     physical_modes: BTreeMap<ExprId, Modes>,
     capture_physical_modes: BTreeMap<usize, Modes>,
@@ -1220,6 +1310,69 @@ fn publish_row(
     ty.modes = modes;
     properties.push(properties[root.index()]);
     body.types.push(ty)
+}
+
+/// MODE-2: `root`'s row with each of `parts` aliased where the row claims
+/// it unique, as an inferred construction's row may.
+fn shared_parts_row(
+    body: &mut CheckedBody,
+    properties: &mut Vec<Properties>,
+    root: TypeId,
+    parts: &SharedParts,
+) -> TypeId {
+    parts.paths().fold(root, |root, path| {
+        shared_part_row(body, properties, root, path)
+    })
+}
+fn shared_part_row(
+    body: &mut CheckedBody,
+    properties: &mut Vec<Properties>,
+    ty: TypeId,
+    path: &[Projection],
+) -> TypeId {
+    let Some(mut row) = body.types.get(ty).cloned() else {
+        return ty;
+    };
+    let Some(property) = properties.get(ty.index()).copied() else {
+        return ty;
+    };
+    match path.split_first() {
+        None => {
+            if row.modes.uniqueness != Uniqueness::Unique || property.plain || property.shared {
+                return ty;
+            }
+            row.modes.uniqueness = Uniqueness::Aliased;
+            if !property.sendable_aliased {
+                row.modes.sendability = Sendability::NotSendable;
+            }
+        }
+        Some((Projection::Field(index), rest)) => {
+            let index = *index as usize;
+            match &row.kind {
+                TypeKind::Tuple(parts) if index < parts.len() => {
+                    let part = shared_part_row(body, properties, parts[index], rest);
+                    if part == parts[index] {
+                        return ty;
+                    }
+                    let mut parts = parts.to_vec();
+                    parts[index] = part;
+                    row.kind = TypeKind::Tuple(parts.into());
+                }
+                TypeKind::Box(part) if index == 0 => {
+                    let part = *part;
+                    let weakened = shared_part_row(body, properties, part, rest);
+                    if weakened == part {
+                        return ty;
+                    }
+                    row.kind = TypeKind::Box(weakened);
+                }
+                _ => return ty,
+            }
+        }
+        Some(_) => return ty,
+    }
+    properties.push(property);
+    body.types.push(row)
 }
 
 fn fold_part_locality(
@@ -1451,6 +1604,8 @@ pub(super) fn check(
         modes: BTreeMap::new(),
         forwarded: BTreeMap::new(),
         binding_modes: BTreeMap::new(),
+        shared_parts: BTreeMap::new(),
+        binding_parts: BTreeMap::new(),
         pattern_modes: BTreeMap::new(),
         physical_modes: BTreeMap::new(),
         capture_physical_modes,
@@ -1553,6 +1708,10 @@ pub(super) fn check(
                 checker.environment_results.contains(&expression),
                 &checker.arenas,
             );
+            let ty = match checker.shared_parts.get(&expression) {
+                Some(parts) => shared_parts_row(checker.body, checker.properties, ty, parts),
+                None => ty,
+            };
             // An expression publishes current evidence. Its source's written
             // root requirement belongs to that storage, not to a new receipt.
             // Owned part contracts remain in the graph.
@@ -1622,6 +1781,10 @@ pub(super) fn check(
             checker.environment_bindings.contains(&binding),
             &checker.arenas,
         );
+        let ty = match checker.binding_parts.get(&binding) {
+            Some(parts) => shared_parts_row(checker.body, checker.properties, ty, parts),
+            None => ty,
+        };
         let row = &mut checker.body.bindings[binding];
         row.ty = ty;
         if ty != previous {
@@ -2298,6 +2461,12 @@ impl Checker<'_> {
                     *m = v.modes;
                 })
                 .or_insert_with(|| value.modes.clone());
+            if !value.shared_parts.is_empty() {
+                self.shared_parts
+                    .entry(expression)
+                    .or_default()
+                    .join(&value.shared_parts);
+            }
         }
     }
     fn usage(&mut self, expression: ExprId, usage: UseKind) {
@@ -2609,7 +2778,8 @@ impl Checker<'_> {
     /// The declaration a call names directly, if any.
     /// The rule that owns a core operation's argument requirements, with the
     /// general rules it specialises there: freezing needs a unique root
-    /// (MEM-11) and a mutex a unique, sendable payload (CONC-5).
+    /// (MEM-11), a mutex a unique, sendable payload (CONC-5) and a channel a
+    /// sendable one (CONC-6).
     fn intrinsic_owner(&self, callee: ExprId) -> Option<(RuleId, &'static [&'static str])> {
         use hirsel_types::core_roles::{Intrinsic, intrinsic_roles};
         let path = self.callee_definition(callee)?;
@@ -2617,6 +2787,7 @@ impl Checker<'_> {
         match role {
             Intrinsic::SharedFreeze => Some((const { RuleId::of("MEM-11") }, &["MODE-2"])),
             Intrinsic::MutexCreate => Some((const { RuleId::of("CONC-5") }, &["MODE-2", "MODE-4"])),
+            Intrinsic::ChannelSend => Some((const { RuleId::of("CONC-6") }, &["MODE-4"])),
             _ => None,
         }
     }
@@ -3175,6 +3346,38 @@ impl Checker<'_> {
                             state,
                             &part,
                             Fact::new(Requirement::TakeIntoClosure, closure, &[]),
+                        )
+                    },
+                );
+                continue;
+            }
+            // CLO-3: a taken task capture crosses with its current content.
+            // J judges the captured type; whether a share since made it
+            // unsendable is I's.
+            let receiver = matches!(
+                self.body.types.get(ty).map(|row| &row.kind),
+                Some(TypeKind::Builtin {
+                    kind: BuiltinType::Receiver,
+                    ..
+                })
+            );
+            if take
+                && metadata.is_some_and(|m| m.context == CaptureContext::Task)
+                && !plain
+                && !flat
+                && !receiver
+                && !self.properties[ty.index()].shared
+                && part.modes.sendability == Sendability::NotSendable
+            {
+                self.report(
+                    const { RuleId::of("CLO-3") },
+                    closure,
+                    "task captures must copy or take sendable values; Receivers must be taken",
+                    |c| {
+                        c.binding_explanation(
+                            index,
+                            Some(Cause::NotSendable),
+                            Fact::new(Requirement::TaskCapture, closure, &[]),
                         )
                     },
                 );
@@ -4419,6 +4622,7 @@ impl Checker<'_> {
                             );
                             let mut retained = Vec::new();
                             value.crossing_parts = CrossingParts::default();
+                            value.shared_parts = SharedParts::default();
                             value.crossing_borrows = Arc::new(Vec::new());
                             for (index, child) in children.iter().enumerate() {
                                 let projection = if sequence {
@@ -4427,6 +4631,7 @@ impl Checker<'_> {
                                     Projection::Field(index as u32)
                                 };
                                 let part = self.value(state, *child);
+                                self.construction_part(&mut value, &projection, *child, &part);
 
                                 value
                                     .crossing_parts
@@ -4479,6 +4684,13 @@ impl Checker<'_> {
                                 let part = self.value(state, *child);
 
                                 value.crossing_parts = CrossingParts::default();
+                                value.shared_parts = SharedParts::default();
+                                self.construction_part(
+                                    &mut value,
+                                    &Projection::Field(0),
+                                    *child,
+                                    &part,
+                                );
                                 value.crossing_borrows = Arc::new(Vec::new());
                                 value.install_crossing_borrows(&[Projection::Field(0)], &part);
                                 value
@@ -4678,6 +4890,7 @@ impl Checker<'_> {
                     .and_then(|row| row.annotation.map(|written| (written, row.ty)));
                 if !test {
                     if let Some((written, declared)) = annotation {
+                        let annotated = declared;
                         let row = self.body.types.get(declared).unwrap();
                         let crossing = matches!(
                             row.kind,
@@ -4700,14 +4913,10 @@ impl Checker<'_> {
                             pattern_node.origin.span,
                             &[&name],
                         );
-                        self.required(
-                            state,
-                            &value,
-                            &modes,
-                            source,
-                            self.tree.expressions[source.0 as usize].origin.span,
-                            context,
-                        );
+                        let site = self.tree.expressions[source.0 as usize].origin.span;
+                        if self.required(state, &value, &modes, source, site, context) {
+                            self.required_shared_parts(&value, annotated, source, site);
+                        }
                     }
                 }
                 let root_pattern = *pattern;
@@ -5106,6 +5315,12 @@ impl Checker<'_> {
                         if self.emit && !test {
                             self.body.bindings[site.unwrap_or(index)].usage = usage;
                             self.binding_modes.insert(index, storage_modes.clone());
+                            if !part.shared_parts.is_empty() {
+                                self.binding_parts
+                                    .entry(index)
+                                    .or_default()
+                                    .join(&part.shared_parts);
+                            }
                             if part.environment_local() {
                                 self.environment_bindings.insert(index);
                                 self.environment_patterns.insert(pattern);
@@ -5322,6 +5537,17 @@ impl Checker<'_> {
                     );
                 }
                 if !place.projections.is_empty() {
+                    let mut shared = SharedParts::default();
+                    if value.modes.uniqueness != Uniqueness::Unique
+                        && !self.property(*rhs).is_some_and(|p| p.plain || p.shared)
+                    {
+                        shared.insert(vec![], *rhs);
+                    }
+                    shared.install(&[], &value.shared_parts);
+                    state.slots[place.binding]
+                        .value
+                        .shared_parts
+                        .replace(&place.projections, &shared);
                     state.slots[place.binding]
                         .value
                         .crossing_parts
@@ -5754,6 +5980,12 @@ impl Checker<'_> {
                                     *expression,
                                     *callee,
                                     requirement.parameter,
+                                    arg.value,
+                                    call_site,
+                                )
+                                && self.required_shared_parts(
+                                    &actual,
+                                    requirement.ty,
                                     arg.value,
                                     call_site,
                                 );
@@ -6485,7 +6717,9 @@ impl Checker<'_> {
                     let requirement = self.result_requirement(result);
                     let result_site = requirement.span;
                     if let Some(root) = self.graph.result_ty {
-                        self.required_nested_crossing(&actual, root, *value, site);
+                        if self.required_nested_crossing(&actual, root, *value, site) {
+                            self.required_shared_parts(&actual, root, *value, site);
+                        }
                     }
                     if actual.aliased().is_some()
                         && !self.property(*value).is_some_and(|p| p.copyable)
@@ -6947,9 +7181,17 @@ impl Checker<'_> {
         };
         required.relation = Relation::environment();
         required.sendability = crossing_requirement(self.body.types.get(part).unwrap());
+        // MODE-2: J types an inferred part by its operand's row, which is
+        // evidence, not a contract: the part's current uniqueness is the
+        // operand's, kept in `shared_parts`. A part typed by an expected type
+        // is a contract.
+        let inferred = self.ty(value) == Some(part);
+        if inferred {
+            required.uniqueness = Uniqueness::Aliased;
+        }
         let actual = self.value(state, value);
         let span = self.tree.expressions[aggregate.0 as usize].origin.span;
-        self.required(
+        let satisfied = self.required(
             state,
             &actual,
             &required,
@@ -6957,6 +7199,100 @@ impl Checker<'_> {
             span,
             Fact::new(Requirement::Part, span, &[]),
         );
+        if satisfied && !inferred {
+            self.required_shared_parts(&actual, part, value, span);
+        }
+    }
+    /// An aggregate's part at `projection` holds `part`, the value of `child`.
+    fn construction_part(
+        &self,
+        aggregate: &mut Value,
+        projection: &Projection,
+        child: ExprId,
+        part: &Value,
+    ) {
+        if part.modes.uniqueness != Uniqueness::Unique
+            && !self.property(child).is_some_and(|p| p.plain || p.shared)
+        {
+            aggregate
+                .shared_parts
+                .insert(vec![projection.clone()], child);
+        }
+        aggregate
+            .shared_parts
+            .install(std::slice::from_ref(projection), &part.shared_parts);
+    }
+    /// MODE-2: a nested `unique` contract of the receiving type cannot hold a
+    /// part that is currently aliased. J compares the rows; this is the part
+    /// whose row claims more than its content holds.
+    fn required_shared_parts(
+        &mut self,
+        actual: &Value,
+        root: TypeId,
+        expression: ExprId,
+        site: Span,
+    ) -> bool {
+        let row = self.ty(expression);
+        let Some(&(_, cause)) = actual.shared_parts.0.iter().find(|(path, _)| {
+            self.unique_contract_on(root, path)
+                && row.is_none_or(|row| self.unique_contract_on(row, path))
+        }) else {
+            return true;
+        };
+        let operand = self.span_of(cause);
+        self.report(
+            const { RuleId::of("MODE-2") },
+            operand,
+            "the receiving type cannot change this nested uniqueness contract",
+            |_| {
+                Explanation::default()
+                    .provided(Fact::new(Cause::Aliased, operand, &[]))
+                    .required(Fact::new(Requirement::Unique, site, &[]))
+                    .into()
+            },
+        );
+        false
+    }
+    /// Whether a row on `path` below `root` promises unique counted content.
+    fn unique_contract_on(&self, root: TypeId, path: &[Projection]) -> bool {
+        let mut ty = root;
+        for projection in path {
+            let Some(row) = self.body.types.get(ty) else {
+                return false;
+            };
+            let child = match (&row.kind, projection) {
+                (TypeKind::Tuple(parts), Projection::Field(i)) => parts.get(*i as usize).copied(),
+                (TypeKind::Box(part), Projection::Field(0)) => Some(*part),
+                (TypeKind::Record(fields), Projection::Field(i)) => {
+                    fields.get(*i as usize).map(|field| field.ty)
+                }
+                (TypeKind::Builtin { arguments, .. }, Projection::Elements) => {
+                    match arguments.first() {
+                        Some(hirsel_types::GenericArgument::Type(element)) => Some(*element),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            let Some(child) = child else {
+                return false;
+            };
+            ty = child;
+            let unique = self
+                .body
+                .types
+                .get(ty)
+                .is_some_and(|row| row.modes.uniqueness == Uniqueness::Unique);
+            if unique
+                && !self
+                    .properties
+                    .get(ty.index())
+                    .is_some_and(|p| p.plain || p.shared)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// CLO-1: only the rows that hold a closure local to its environment

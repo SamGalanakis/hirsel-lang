@@ -1,0 +1,17 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 16
+// `xs` is aliased, so the parametric result it supplies is aliased and cannot
+// be sent. Twin is MODE-4-parametric-result-send-run.
+fn id[T](take value: T) -> T {
+  value
+}
+
+fn send[T: sendable](take value: T) -> T {
+  value
+}
+
+fn pass(take xs: List[u64]) -> List[u64] {
+  let ys = id(take xs)
+  let n = list.len(ys)
+  send(take ys)
+}

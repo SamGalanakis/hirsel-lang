@@ -1429,7 +1429,6 @@ impl<'a> Checker<'a> {
                                 });
                                 let t = self.out.body.types.push(ty);
                                 self.set_ty(e, t);
-                                self.weaken(value);
                             }
                         }
                     }

@@ -192,10 +192,15 @@ payload and of the enclosing Result. Its uniqueness is I's: the failure edge
 (`Op::MapError`) needs the Result currently unique for a `unique` mapper parameter
 unless the payload is Plain or Shared.
 
-I alone judges current uniqueness. J checks the structural parts of the freeze,
-mutex and channel requirements; I checks every `unique` requirement with flow
-evidence, and a core operation's own rule names its failed argument requirement
-(`intrinsic_owner`): MEM-11 for `shared.freeze`, CONC-5 for `mutex.create`.
+I alone judges current uniqueness. J's binding rows keep what they received:
+no copy, related call or closure call weakens them, since only flow knows when
+the holder of a share dies. J checks structure: a sendable bound, channel or
+mutex payload and a taken task capture are judged as if the argument's root
+were unique (`sendable_when_unique`), and nested rows are compared as written.
+I checks every `unique` requirement, a sendable root and a taken task capture
+(CLO-3) with flow evidence, and a core operation's own rule names its failed
+argument requirement (`intrinsic_owner`): MEM-11 for `shared.freeze`, CONC-5
+for `mutex.create`, CONC-6 for `channel.send`.
 
 `authority::check_file_with_clauses(file, item, signature, body, provider,
 intrinsics, loops, clauses)` consumes the checked body and returns `AuthorityOutput`.
@@ -594,6 +599,13 @@ Fresh boxes, records, variants, tuples and sequences publish deep uniqueness bef
 generic and receiving checks when their actual operands are owned unique values,
 Plain bits, independent flat copies or Shared boundaries. A unique borrowed or
 projected counted source does not supply that evidence through an implicit share.
+J types an inferred tuple or box part by its operand's row, which is evidence,
+not a contract: I keeps each currently aliased part of a value in
+`SharedParts`, with the operand that put it there. It is set at the
+construction, follows the value through moves, projections, joins and part
+writes, rejects a nested `unique` contract the row claims but the content
+lacks (MODE-2, at that operand), and is published: the expression and binding
+rows that hold such a part get it aliased (`shared_parts_row`).
 
 Comptime wrappers retain their child's complete refined occurrence after J,
 including substituted call origins and nested types. O uses that checked row as

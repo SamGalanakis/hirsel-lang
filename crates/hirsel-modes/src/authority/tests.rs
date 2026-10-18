@@ -147,12 +147,18 @@ fn brand_families_share_the_same_rule_and_keep_field_paths() {
         rejected(&f.finish(root), "PROV-1");
     }
 }
+/// A root's current uniqueness is I's (MODE-2); J checks every occurrence's
+/// structure, so a Receiver, which never crosses, fails the second.
 #[test]
 fn every_repeated_generic_occurrence_is_checked_before_weakening() {
     for second_unique in [false, true] {
         let mut f = Fixture::new();
         let bytes = f.ty(TypeKind::Primitive(Primitive::Bytes));
         let unique = f.adjusted(bytes, |t| t.modes.uniqueness = Uniqueness::Unique);
+        let receiver = f.ty(TypeKind::Builtin {
+            kind: BuiltinType::Receiver,
+            arguments: vec![GenericArgument::Type(unique)].into(),
+        });
         let t = f.ty(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))));
         let first = f.binding(
             ResolvedName::Parameter(ParamId(0)),
@@ -163,7 +169,7 @@ fn every_repeated_generic_occurrence_is_checked_before_weakening() {
         );
         let second = f.binding(
             ResolvedName::Parameter(ParamId(1)),
-            if second_unique { unique } else { bytes },
+            if second_unique { unique } else { receiver },
             NameSite::Item(ItemId(0)),
             UseKind::Take,
             false,

@@ -181,7 +181,6 @@ CLO/CLO-2-seal-raw-authority-ok.hir
 CLO/CLO-2-spec-map.hir
 CLO/CLO-2-unknown-authority-bad.hir
 CLO/CLO-2-unknown-authority-ok.hir
-CLO/CLO-3-child-not-sendable-bad.hir
 CLO/CLO-3-child-not-sendable-ok.hir
 CLO/CLO-3-counted-child-borrow-bad.hir
 CLO/CLO-3-counted-child-borrow-ok.hir
@@ -245,7 +244,6 @@ CONC/CONC-3-canceled-pure-child.hir
 CONC/CONC-3-child-local-scope.hir
 CONC/CONC-3-explicit-cancellation-check.hir
 CONC/CONC-5-channel-in-body-ok.hir
-CONC/CONC-5-create-unique-payload-bad.hir
 CONC/CONC-5-create-unique-payload-ok.hir
 CONC/CONC-5-io-in-body-bad.hir
 CONC/CONC-5-io-in-body-ok.hir
@@ -267,10 +265,8 @@ MODE/MODE-4-borrowed-parameter-callable-bad.hir
 MODE/MODE-4-borrowed-parameter-callable-run.hir
 MODE/MODE-4-contextual-sendable-part-bad.hir
 MODE/MODE-4-contextual-sendable-part-run.hir
-MODE/MODE-4-counted-bad.hir
 MODE/MODE-4-counted-copy-capture-bad.hir
 MODE/MODE-4-counted-copy-capture-ok.hir
-MODE/MODE-4-counted-list-bad.hir
 MODE/MODE-4-counted-list-ok.hir
 MODE/MODE-4-counted-ok.hir
 MODE/MODE-4-flat-copy.hir
@@ -291,7 +287,6 @@ MODE/MODE-4-list-element-callable-bad.hir
 MODE/MODE-4-list-element-callable-run.hir
 MODE/MODE-4-local-flat-bad.hir
 MODE/MODE-4-local-flat-ok.hir
-MODE/MODE-4-local-result-send-bad.hir
 MODE/MODE-4-local-result-send-ok.hir
 MODE/MODE-4-local-sendable-storage-bad.hir
 MODE/MODE-4-local-sendable-storage-run.hir
@@ -386,7 +381,6 @@ MODE/MODE-4-written-borrow-forward-ok.hir
 MODE/MODE-4-written-borrowed-return-copy-bad.hir
 MODE/MODE-4-written-borrowed-return-copy-ok.hir
 MODE/MODE-4-written-box-ok.hir
-MODE/MODE-4-written-callable-owner-share-bad.hir
 MODE/MODE-4-written-callable-owner-share-ok.hir
 MODE/MODE-4-written-callable-payload-bad.hir
 MODE/MODE-4-written-callable-payload-ok.hir
@@ -396,7 +390,6 @@ MODE/MODE-4-written-counted-copy-bad.hir
 MODE/MODE-4-written-counted-copy-ok.hir
 MODE/MODE-4-written-counted-deep-copy-ok.hir
 MODE/MODE-4-written-counted-move-ok.hir
-MODE/MODE-4-written-counted-source-share-bad.hir
 MODE/MODE-4-written-counted-source-share-ok.hir
 MODE/MODE-4-written-data-sharing-put-bad.hir
 MODE/MODE-4-written-data-sharing-put-ok.hir
@@ -444,7 +437,6 @@ MODE/MODE-4-written-iter-contract-bad.hir
 MODE/MODE-4-written-iter-parameter-bad.hir
 MODE/MODE-4-written-iterator-state-contract-bad.hir
 MODE/MODE-4-written-iterator-state-contract-ok.hir
-MODE/MODE-4-written-join-loss-bad.hir
 MODE/MODE-4-written-join-loss-ok.hir
 MODE/MODE-4-written-key-sharing-put-bad.hir
 MODE/MODE-4-written-key-sharing-put-ok.hir
@@ -454,7 +446,6 @@ MODE/MODE-4-written-let-result-ok.hir
 MODE/MODE-4-written-local-flat-borrow-ok.hir
 MODE/MODE-4-written-local-flat-ok.hir
 MODE/MODE-4-written-local-getter-ok.hir
-MODE/MODE-4-written-loop-loss-bad.hir
 MODE/MODE-4-written-loop-loss-ok.hir
 MODE/MODE-4-written-mut-data-contract-bad.hir
 MODE/MODE-4-written-mut-data-contract-ok.hir
@@ -475,7 +466,6 @@ MODE/MODE-4-written-parent-share-ok.hir
 MODE/MODE-4-written-partial-refill-ok.hir
 MODE/MODE-4-written-partial-replacement-bad.hir
 MODE/MODE-4-written-partial-replacement-ok.hir
-MODE/MODE-4-written-plain-copy-bad.hir
 MODE/MODE-4-written-plain-copy-ok.hir
 MODE/MODE-4-written-qualified-capture-share-ok.hir
 MODE/MODE-4-written-qualified-copy-result-bad.hir

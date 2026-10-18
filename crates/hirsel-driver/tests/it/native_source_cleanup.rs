@@ -63,7 +63,7 @@ fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_ope
                 } else if action.starts_with("let frozen") {
                     view.starts_with('{').then_some("MEM-11")
                 } else {
-                    Some("MODE-4")
+                    view.starts_with('{').then_some("MODE-4")
                 };
                 assert_eq!(
                     output.diagnostics.first().map(|d| d.rule.as_str()),

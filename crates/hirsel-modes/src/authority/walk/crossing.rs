@@ -381,6 +381,29 @@ impl Checker<'_> {
     pub(super) fn sendable(&mut self, id: TypeId) -> bool {
         self.property(id, Bound::Sendable)
     }
+    /// MODE-4 apart from the root's current uniqueness, which I judges from
+    /// flow: whether the value crosses once its root is unique.
+    pub(super) fn sendable_when_unique(&mut self, id: TypeId) -> bool {
+        if self.sendable(id) {
+            return true;
+        }
+        let row = self.out.body.types.get(id).unwrap().clone();
+        if row.modes.uniqueness == Uniqueness::Unique || self.property(id, Bound::Plain) {
+            return false;
+        }
+        let mut store = self.out.body.types.clone();
+        let mut row = row;
+        row.modes.uniqueness = Uniqueness::Unique;
+        let unique = store.push(row.clone());
+        let declarations = self.declarations();
+        row.modes.sendability =
+            structural_sendability(&store, unique, &declarations, &mut |path| {
+                Ok(self.read(path))
+            })
+            .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
+        let root = store.push(row);
+        self.property_in(store, root, Bound::Sendable, None)
+    }
     /// Whether a row's sendability is evidence about what it captures
     /// (MODE-4: "computed where it is built and is part of its type") rather
     /// than a summary of its parts.

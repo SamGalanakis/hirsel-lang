@@ -1,0 +1,16 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 15
+// `kept` still holds a copy of a result related to `xs` when `xs` is sent.
+// Twin is MODE-4-send-after-related-holder-dies-run.
+fn view(x: List[u64]) -> List[u64] in x {
+  x
+}
+
+fn send[T: sendable](take value: T) -> T {
+  value
+}
+
+fn pass(take xs: unique List[u64]) -> List[u64] {
+  let kept = (copy view(xs),)
+  send(take xs)
+}
