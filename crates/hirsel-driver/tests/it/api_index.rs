@@ -18,6 +18,15 @@ fn published_index_matches_every_core_and_std_export() {
                 .declaration,
             "@preserves_unique(s) fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s"
         );
+        // A record field's brand names its sibling field (PROV-5).
+        assert!(
+            entries
+                .iter()
+                .find(|e| e.identity == "core@1/Deadline")
+                .unwrap()
+                .declaration
+                .ends_with("= { clock: MonotonicClock, at: Instant of .clock }")
+        );
         let actual: BTreeSet<_> = entries.iter().map(|e| e.identity.clone()).collect();
         assert_eq!(actual.len(), entries.len(), "duplicate index row");
         let mut exports = BTreeSet::new();

@@ -52,7 +52,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `OutOfRange() -> ClockError` — Variant of ClockError. <!-- core@1/ClockError#OutOfRange -->
 - `Unavailable() -> ClockError` — Variant of ClockError. <!-- core@1/ClockError#Unavailable -->
 - `@capability(global) opaque type Db: plain + copyable + sendable + noalloc_drop uses {Db}` <!-- core@1/Db -->
-- `type Deadline: plain + copyable + sendable + noalloc_drop uses {MonotonicClock} = { clock: MonotonicClock, at: Instant }` <!-- core@1/Deadline -->
+- `type Deadline: plain + copyable + sendable + noalloc_drop uses {MonotonicClock} = { clock: MonotonicClock, at: Instant of .clock }` <!-- core@1/Deadline -->
 - `type DecodeError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Version() | SchemaMismatch() | Truncated() | Trailing() | Scalar() | Utf8() | Tag() | Length() | Duplicate() | Order()` <!-- core@1/DecodeError -->
 - `Duplicate() -> DecodeError` — Variant of DecodeError. <!-- core@1/DecodeError#Duplicate -->
 - `Length() -> DecodeError` — Variant of DecodeError. <!-- core@1/DecodeError#Length -->

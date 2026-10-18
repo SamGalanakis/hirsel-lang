@@ -68,6 +68,7 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
         let printer = CorePrinter {
             signature: s,
             generics: s.generics(),
+            parameters: Vec::new(),
         };
         let declaration = match &s.kind {
             SignatureKind::Function(f) => ledger.get(name.as_str()).cloned().unwrap_or_else(|| {
@@ -460,6 +461,8 @@ pub fn render(entries: &[Entry]) -> String {
 struct CorePrinter<'a> {
     signature: &'a Signature,
     generics: &'a [GenericParameter],
+    /// The parameter names of the function being printed, which brands name (PROV-1).
+    parameters: Vec<String>,
 }
 impl CorePrinter<'_> {
     fn generic_name(&self, n: usize) -> &str {
@@ -531,6 +534,11 @@ impl CorePrinter<'_> {
             } else {
                 &f.generics
             },
+            parameters: f
+                .parameters
+                .iter()
+                .map(|p| p.name.clone().unwrap_or_default())
+                .collect(),
         };
         format!(
             "({}) -> {}{}",
@@ -562,7 +570,45 @@ impl CorePrinter<'_> {
         )
     }
     fn ty(&self, id: TypeId) -> String {
+        self.branded(id, &[])
+    }
+    /// The type with its brand, `siblings` naming the fields of the record it is a field of
+    /// (PROV-5).
+    fn branded(&self, id: TypeId, siblings: &[String]) -> String {
         let t = self.signature.types.get(id).unwrap();
+        let base = self.unbranded(t);
+        if t.brand.alternatives.is_empty() {
+            return base;
+        }
+        let origins = t
+            .brand
+            .alternatives
+            .iter()
+            .map(|origin| {
+                let root = match &origin.root {
+                    OriginRoot::Sibling(field) => {
+                        siblings.get(field.0 as usize).map(|n| format!(".{n}"))
+                    }
+                    OriginRoot::Parameter(ParameterRef::Bound {
+                        depth: 0,
+                        parameter,
+                    }) => self
+                        .parameters
+                        .get(parameter.0 as usize)
+                        .filter(|n| !n.is_empty())
+                        .cloned(),
+                    _ => None,
+                };
+                match root {
+                    Some(root) if origin.fields.is_empty() => root,
+                    _ => panic!("a core brand origin with no spelling: {origin:?}"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        format!("{base} of {origins}")
+    }
+    fn unbranded(&self, t: &Type) -> String {
         match &t.kind {
             TypeKind::Primitive(p) => match p {
                 Primitive::String | Primitive::Bytes | Primitive::Never => format!("{p:?}"),
@@ -583,19 +629,22 @@ impl CorePrinter<'_> {
             } => self.applied(&short(definition), arguments),
             TypeKind::Builtin { kind, arguments } => self.applied(&format!("{kind:?}"), arguments),
             TypeKind::Box(id) => format!("box {}", self.ty(*id)),
-            TypeKind::Record(fields) => format!(
-                "{{ {} }}",
-                fields
-                    .iter()
-                    .map(|f| format!(
-                        "{}{}: {}",
-                        if f.growable { "growable " } else { "" },
-                        f.name,
-                        self.ty(f.ty)
-                    ))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            TypeKind::Record(fields) => {
+                let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+                format!(
+                    "{{ {} }}",
+                    fields
+                        .iter()
+                        .map(|f| format!(
+                            "{}{}: {}",
+                            if f.growable { "growable " } else { "" },
+                            f.name,
+                            self.branded(f.ty, &names)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
             TypeKind::Variant(variants) => variants
                 .iter()
                 .map(|v| format!("{}{}", v.name, self.payload(v)))
