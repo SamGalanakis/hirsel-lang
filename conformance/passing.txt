@@ -3425,6 +3425,14 @@ conformance/PROG/PROG-4-extern-string-bad.hir
 conformance/PROG/PROG-4-extern-string-ok.hir
 conformance/PROG/PROG-4-extern-take-bytes-bad.hir
 conformance/PROG/PROG-4-extern-take-bytes-ok.hir
+conformance/PROG/PROG-4-ffi-null-annotation-bad.hir
+conformance/PROG/PROG-4-ffi-null-annotation-ok.hir
+conformance/PROG/PROG-4-ffi-null-api-ok.hir
+conformance/PROG/PROG-4-ffi-null-call-bad.hir
+conformance/PROG/PROG-4-ffi-null-call-ok.hir
+conformance/PROG/PROG-4-ffi-null-layout-run.hir
+conformance/PROG/PROG-4-ffi-null-nested-bad.hir
+conformance/PROG/PROG-4-ffi-null-nested-ok.hir
 conformance/PROV/PROV-1-alias-branch-else-exit-ok.hir
 conformance/PROV/PROV-1-alias-branch-if-exit-ok.hir
 conformance/PROV/PROV-1-alias-branch-if-live-bad.hir

@@ -535,11 +535,11 @@ fn extern_abis_take_no_context_and_return_a_scalar_or_nothing() {
         (Box::new(|a| a.context = true), "no extern does"),
         (
             Box::new(|a| a.destination = true),
-            "an extern returns a scalar",
+            "an extern returns a C scalar",
         ),
         (
             Box::new(move |a| a.result.as_mut().unwrap().layout = aggregate),
-            "an extern returns a scalar",
+            "an extern returns a C scalar",
         ),
     ];
     for (i, (mutate, rule)) in mutations.iter().enumerate() {
@@ -552,5 +552,52 @@ fn extern_abis_take_no_context_and_return_a_scalar_or_nothing() {
                 .any(|v| v.obligation == Obligation::Abi && v.detail.contains(rule)),
             "mutation {i}: {violations:#?}"
         );
+    }
+}
+
+/// Hand-built physical control: nullable pointer results are valid, but a
+/// two-word record or nested option cannot use a C pointer's result register.
+#[test]
+fn foreign_results_admit_one_pointer_niche_without_admitting_aggregates() {
+    for target in TargetSpec::executed() {
+        let mut owners = Owners::default();
+        owner(&mut owners, "Optional", "pointer", Layout::default(), |t| {
+            let byte = t.p(Primitive::U8);
+            let pointer = t.builtin(BuiltinType::Ptr, vec![GenericArgument::Type(byte)]);
+            t.variant(&[&[], &[pointer]])
+        });
+        let mut b = LayoutBuilder::new(&target, &owners);
+        let mut t = Ty::default();
+        let byte = t.p(Primitive::U8);
+        let pointer = t.builtin(BuiltinType::Ptr, vec![GenericArgument::Type(byte)]);
+        let option = t.named(&path("Optional"), vec![]);
+        let nested = t.variant(&[&[], &[option]]);
+        let pair = t.record(&[pointer, pointer]);
+        let nested = b.layout(&t.store, nested).unwrap();
+        let pair = b.layout(&t.store, pair).unwrap();
+        let plain = t.function(&[], option, Multiplicity::Many, 0);
+        let row = t.store.get(plain).unwrap().clone();
+        let TypeKind::Function(mut function) = row.kind else {
+            panic!()
+        };
+        function.foreign = Some(ForeignContract {
+            abi: "c".into(),
+            blocking: false,
+            aliasing_contract: "Returns NULL or a stable C pointer.".into(),
+        });
+        let foreign = t.add_with(TypeKind::Function(function), row.modes);
+        let id = b.fn_abi(&t.store, foreign, CallableShape::Foreign).unwrap();
+        let table = checked(b);
+        for layout in [nested, pair] {
+            let mut malformed = table.clone();
+            malformed.fn_abis[id.0 as usize]
+                .result
+                .as_mut()
+                .unwrap()
+                .layout = layout;
+            let rejected =
+                validate_table(&malformed, &target).expect_err("a C result is one register");
+            assert!(rejected.iter().any(|v| v.obligation == Obligation::Abi));
+        }
     }
 }

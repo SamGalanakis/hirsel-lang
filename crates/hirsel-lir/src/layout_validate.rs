@@ -951,7 +951,7 @@ impl<'a> Validator<'a> {
 
     /// A null-pointer niche (layout version 2): an ordinary in-memory variant
     /// of two variants, `nullary` without fields and `dataful` with an aligned
-    /// counted block reference field at the tag offset, which is never null.
+    /// non-null pointer field at the tag offset (block, Ptr or FnPtr).
     fn niche(
         &mut self,
         s: &Subject,
@@ -998,14 +998,16 @@ impl<'a> Validator<'a> {
             !f.unaligned
                 && matches!(
                     self.get(f.layout).kind,
-                    LayoutKind::Block { .. } | LayoutKind::Box { .. }
+                    LayoutKind::Block { .. }
+                        | LayoutKind::Box { .. }
+                        | LayoutKind::Scalar(ScalarKind::Pointer)
                 )
         });
         if !pointer {
             self.fail(
                 s.clone(),
                 Obligation::Tag,
-                "the niche word is not an aligned counted block reference of the other variant",
+                "the niche word is not an aligned non-null pointer of the other variant",
             );
         }
     }
@@ -1642,13 +1644,13 @@ impl<'a> Validator<'a> {
             && (abi.destination
                 || abi.result.as_ref().is_some_and(|r| {
                     !self.in_range(r.layout)
-                        || !matches!(self.get(r.layout).kind, LayoutKind::Scalar(_))
+                        || crate::abi::foreign_scalar(self.table, r.layout).is_none()
                 }))
         {
             self.fail(
                 s.clone(),
                 Obligation::Abi,
-                "an extern returns a scalar or unit, with no destination",
+                "an extern returns a C scalar, nullable pointer or unit, with no destination",
             );
         }
         let pointer = PhysicalSlot {

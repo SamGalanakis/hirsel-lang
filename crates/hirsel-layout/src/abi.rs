@@ -154,7 +154,11 @@ impl<'o> LayoutBuilder<'o> {
                 slots: vec![pointer],
             })
         };
-        let destination = result.is_some() && self.may_hold_blocks(store, function.result, 0)?;
+        // C returns its admitted scalar/nullable pointer in a register. A
+        // nominal Option does not acquire Hirsel's conservative block destination.
+        let destination = shape != CallableShape::Foreign
+            && result.is_some()
+            && self.may_hold_blocks(store, function.result, 0)?;
         let abi = FnAbi {
             key: FnAbiKey {
                 callable: callable_key,

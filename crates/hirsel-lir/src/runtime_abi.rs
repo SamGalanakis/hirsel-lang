@@ -12,7 +12,10 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 17;
+pub const ABI_VERSION: u32 = 18;
+/// Caller-owned previous foreign context/site storage (two 64-bit words).
+pub const FOREIGN_SCOPE_BYTES: u64 = 16;
+pub const FOREIGN_SCOPE_ALIGN: u32 = 8;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -428,8 +431,12 @@ pub enum RuntimeEntry {
     IsolateCatch,
     InvariantFault,
     DiagPanic,
-    /// Before an extern call: the calling thread's run context, for callbacks.
+    /// Before an extern call: push its thread's run context and source site.
     ForeignEnter,
+    /// After an extern call: restore its enclosing context and source site.
+    ForeignLeave,
+    /// A null violated a foreign contract: report the site and end the process.
+    ForeignViolation,
     /// In a C callback thunk: the run context of its thread's extern call.
     CallbackContext,
     /// A callback failed: the process ends (PROG-4).
@@ -505,7 +512,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 63] = [
+    pub const ALL: [RuntimeEntry; 65] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -566,6 +573,8 @@ impl RuntimeEntry {
         Self::InvariantFault,
         Self::DiagPanic,
         Self::ForeignEnter,
+        Self::ForeignLeave,
+        Self::ForeignViolation,
         Self::CallbackContext,
         Self::CallbackFailed,
         Self::ExitReport,
@@ -945,7 +954,21 @@ impl RuntimeEntry {
             ),
             Self::InvariantFault => ("hirsel_rt_v2_invariant_fault", VOID, const { &[] }),
             Self::DiagPanic => ("hirsel_rt_v2_diag_panic", VOID, const { &[] }),
-            Self::ForeignEnter => ("hirsel_rt_v2_foreign_enter", VOID, const { &[CTX] }),
+            Self::ForeignEnter => (
+                "hirsel_rt_v2_foreign_enter",
+                VOID,
+                const { &[CTX, p("site", U64), p("previous", ptr(N::Void, 1))] },
+            ),
+            Self::ForeignLeave => (
+                "hirsel_rt_v2_foreign_leave",
+                VOID,
+                const { &[p("previous", cptr(N::Void))] },
+            ),
+            Self::ForeignViolation => (
+                "hirsel_rt_v2_foreign_violation",
+                VOID,
+                const { &[p("site", U64)] },
+            ),
             Self::CallbackContext => (
                 "hirsel_rt_v2_callback_context",
                 ptr(N::Ctx, 1),
@@ -1075,6 +1098,8 @@ snapshot_enum!(RuntimeEntry {
     InvariantFault,
     DiagPanic,
     ForeignEnter,
+    ForeignLeave,
+    ForeignViolation,
     CallbackContext,
     CallbackFailed,
     ExitReport,

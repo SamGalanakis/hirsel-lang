@@ -94,9 +94,12 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::InvariantFault
         | R::DiagPanic
         | R::CallbackFailed
+        | R::ForeignViolation
         | R::ExitReport => (MemoryEffects::ReadWrite, false, &[]),
         // The calling thread's foreign context cell: no block memory, no callbacks.
-        R::ForeignEnter | R::CallbackContext => (MemoryEffects::ReadWrite, true, &[]),
+        R::ForeignEnter | R::ForeignLeave | R::CallbackContext => {
+            (MemoryEffects::ReadWrite, true, &[])
+        }
     };
     module.add_attribute(function, AttributeSlot::Function, Attribute::Memory(memory));
     if returns {

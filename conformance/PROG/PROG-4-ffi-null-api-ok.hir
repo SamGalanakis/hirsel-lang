@@ -1,0 +1,230 @@
+// rule: PROG-4
+// expect: accept
+type NullContext {
+  calls: i32,
+}
+
+/// Returns the stable C byte when present is nonzero, otherwise NULL.
+extern "c" fn nullable_pointer(u: Unsafe, present: i32) -> Option[Ptr[u8]]
+
+/// Returns the stable C byte when present is nonzero; NULL violates the contract.
+extern "c" fn required_pointer(u: Unsafe, present: i32) -> Ptr[u8]
+
+/// Returns a C callback pointer when present is nonzero, otherwise NULL.
+extern "c" fn nullable_function(u: Unsafe, present: i32) -> Option[
+  FnPtr[fn(mut state_0: unique NullContext) -> i32]
+]
+
+/// Returns a C callback pointer when present is nonzero; NULL violates the contract.
+extern "c" fn required_function(u: Unsafe, present: i32) -> FnPtr[
+  fn(mut state_1: unique NullContext) -> i32
+]
+
+/// Compares the pointer with the stable C byte, without dereferencing or retaining it.
+extern "c" fn pointer_present(u: Unsafe, value: Option[Ptr[u8]]) -> i32
+
+/// Calls a non-null function on ctx and returns -1 for NULL; retains neither.
+extern "c" fn function_value(
+  u: Unsafe,
+  mut ctx: unique NullContext,
+  value: Option[FnPtr[fn(mut state_2: unique NullContext) -> i32]]
+) -> i32
+
+/// Writes a nullable byte pointer and callback, retaining no addresses.
+extern "c" fn nullable_out(
+  u: Unsafe,
+  present: i32,
+  mut pointer: Option[Ptr[u8]],
+  mut function: Option[FnPtr[fn(mut state_3: unique NullContext) -> i32]]
+) -> ()
+
+/// Writes a byte pointer; NULL violates the declared non-null contract.
+extern "c" fn required_out(u: Unsafe, present: i32, mut pointer: Ptr[u8]) -> ()
+
+/// Writes a callback pointer; NULL violates the declared non-null contract.
+extern "c" fn required_function_out(
+  u: Unsafe,
+  present: i32,
+  mut function: FnPtr[fn(mut state_4: unique NullContext) -> i32]
+) -> ()
+
+/// Calls f with NULL and non-NULL byte and function pointers; retains nothing.
+extern "c" fn nullable_visit(
+  u: Unsafe,
+  mut ctx: unique NullContext,
+  f: FnPtr[
+    fn(
+      mut state_5: unique NullContext,
+      take pointer: Option[Ptr[u8]],
+      take function: Option[FnPtr[fn(mut state_6: unique NullContext) -> i32]]
+    ) -> Option[Ptr[u8]]
+  ]
+) -> i32
+
+/// Calls f with a NULL byte pointer, which violates its callback contract.
+extern "c" fn required_visit(
+  u: Unsafe,
+  mut ctx: unique NullContext,
+  f: FnPtr[fn(mut state_7: unique NullContext, pointer: Ptr[u8]) -> ()],
+  present: i32
+) -> ()
+
+/// Calls f with a NULL callback pointer, which violates its callback contract.
+extern "c" fn required_function_visit(
+  u: Unsafe,
+  mut ctx: unique NullContext,
+  f: FnPtr[
+    fn(
+      mut state_8: unique NullContext,
+      function: FnPtr[fn(mut state_9: unique NullContext) -> i32]
+    ) -> ()
+  ],
+  present: i32
+) -> ()
+
+fn echo_nullable(
+  mut ctx: NullContext,
+  take pointer: Option[Ptr[u8]],
+  take function: Option[FnPtr[fn(mut state_10: unique NullContext) -> i32]]
+) -> Option[Ptr[u8]] {
+  ctx.calls += match function {
+    None() => 1,
+    Some(_) => 10,
+  }
+  pointer
+}
+
+fn ignore_pointer(mut ctx: NullContext, pointer: Ptr[u8]) -> () {
+  ctx.calls += 1
+}
+
+fn ignore_function(
+  mut ctx: NullContext,
+  function: FnPtr[fn(mut state_11: unique NullContext) -> i32]
+) -> () {
+  ctx.calls += 1
+}
+
+fn named_callback(mut ctx: NullContext) -> i32 {
+  ctx.calls += 1
+  42
+}
+
+pub fn null_roundtrips(u: Unsafe) -> bool {
+  let mut ctx = NullContext(calls: 0)
+  let absent = nullable_pointer(u, 0)
+  let present = nullable_pointer(u, 1)
+  if pointer_present(u, absent) != 0 || pointer_present(u, present) != 1 {
+    return false
+  }
+  if pointer_taken(u, None()) != 0 || pointer_taken(u, present) != 1 {
+    return false
+  }
+  if function_taken(u, mut ctx, None()) != -1 || function_taken(
+    u,
+    mut ctx,
+    nullable_function(u, 1)
+  ) != 17 {
+    return false
+  }
+  let pointer = required_pointer(u, 1)
+  if pointer_present(u, Some(pointer)) != 1 {
+    return false
+  }
+  if function_value(u, mut ctx, nullable_function(u, 0)) != -1 {
+    return false
+  }
+  if function_value(u, mut ctx, nullable_function(u, 1)) != 17 {
+    return false
+  }
+  let callback = required_function(u, 1)
+  if function_value(u, mut ctx, Some(callback)) != 17 {
+    return false
+  }
+  let named: FnPtr[fn(mut state_12: unique NullContext) -> i32] = named_callback
+  if function_value(u, mut ctx, Some(named)) != 42 || ctx.calls != 1 {
+    return false
+  }
+  let mut out_pointer: Option[Ptr[u8]] = None()
+  let mut out_function: Option[FnPtr[fn(mut state_13: unique NullContext) -> i32]] = None()
+  nullable_out(u, 1, mut out_pointer, mut out_function)
+  if pointer_present(u, out_pointer) != 1 || function_value(u, mut ctx, out_function) != 17 {
+    return false
+  }
+  nullable_out(u, 0, mut out_pointer, mut out_function)
+  if pointer_present(u, out_pointer) != 0 || function_value(u, mut ctx, out_function) != -1 {
+    return false
+  }
+  let mut out_required = pointer
+  required_out(u, 1, mut out_required)
+  let mut function_required = callback
+  required_function_out(u, 1, mut function_required)
+  if pointer_present(u, Some(out_required)) != 1 || function_value(
+    u,
+    mut ctx,
+    Some(function_required)
+  ) != 17 {
+    return false
+  }
+  required_visit(u, mut ctx, ignore_pointer, 1)
+  required_function_visit(u, mut ctx, ignore_function, 1)
+  nullable_visit(u, mut ctx, echo_nullable) == 1 && ctx.calls == 14
+}
+
+pub fn null_result(u: Unsafe) -> () {
+  let _ = required_pointer(u, 0)
+}
+
+pub fn null_function_result(u: Unsafe) -> () {
+  let _ = required_function(u, 0)
+}
+
+pub fn null_out(u: Unsafe) -> () {
+  let mut pointer = required_pointer(u, 1)
+  required_out(u, 0, mut pointer)
+}
+
+pub fn null_function_out(u: Unsafe) -> () {
+  let mut function = required_function(u, 1)
+  required_function_out(u, 0, mut function)
+}
+
+pub fn null_callback(u: Unsafe) -> () {
+  let mut ctx = NullContext(calls: 0)
+  required_visit(u, mut ctx, ignore_pointer, 0)
+}
+
+pub fn null_function_callback(u: Unsafe) -> () {
+  let mut ctx = NullContext(calls: 0)
+  required_function_visit(u, mut ctx, ignore_function, 0)
+}
+
+type NestedContext {
+  u: Unsafe,
+}
+
+/// Calls f twice, first with a byte pointer and then NULL; retains nothing.
+extern "c" fn nested_visit(
+  u: Unsafe,
+  mut ctx: unique NestedContext,
+  f: FnPtr[fn(mut nested_state: unique NestedContext, pointer: Ptr[u8]) -> ()]
+) -> ()
+
+fn nested_callback(mut ctx: NestedContext, pointer: Ptr[u8]) -> () {
+  let _ = nullable_pointer(ctx.u, 1)
+}
+
+pub fn nested_null_callback(u: Unsafe) -> () {
+  let mut ctx = NestedContext(u: u)
+  nested_visit(u, mut ctx, nested_callback)
+}
+
+/// Reads the transferred pointer value, retaining no storage.
+extern "c" fn pointer_taken(u: Unsafe, take value: Option[Ptr[u8]]) -> i32
+
+/// Calls the transferred callback during this call, retaining no storage.
+extern "c" fn function_taken(
+  u: Unsafe,
+  mut ctx: unique NullContext,
+  take value: Option[FnPtr[fn(mut taken_state: unique NullContext) -> i32]]
+) -> i32

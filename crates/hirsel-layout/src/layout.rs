@@ -2042,8 +2042,8 @@ impl<'o> LayoutBuilder<'o> {
     }
 
     /// The null-pointer niche (layout version 2): a non-`@packed` variant of
-    /// exactly two variants, one without fields and one with a counted block
-    /// reference field, which is never null. It has no tag word: the first
+    /// exactly two variants, one without fields and one with a non-null pointer
+    /// field (a counted block reference, Ptr or FnPtr). It has no tag word: the first
     /// such field's word is null exactly when the fieldless variant is active,
     /// so `Leaf | Node(Box[T], Box[T])` is two words. Returns the fieldless
     /// ordinal, the other ordinal and the index of its niche field.
@@ -2062,7 +2062,9 @@ impl<'o> LayoutBuilder<'o> {
         let field = pieces.iter().position(|p| {
             matches!(
                 self.record(p.layout).kind,
-                LayoutKind::Block { .. } | LayoutKind::Box { .. }
+                LayoutKind::Block { .. }
+                    | LayoutKind::Box { .. }
+                    | LayoutKind::Scalar(ScalarKind::Pointer)
             )
         })?;
         Some((nullary, dataful, field))

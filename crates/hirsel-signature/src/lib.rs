@@ -2437,6 +2437,22 @@ impl Normalizer<'_, '_> {
                 [GenericArgument::Type(f)] if self.ffi_callback(*f) => Some(FfiClass::Pointer),
                 _ => None,
             },
+            TypeKind::Named {
+                definition,
+                arguments,
+            } if definition.package_is("core", "1")
+                && definition.0.modules.is_empty()
+                && definition.0.name == "Option" =>
+            {
+                match arguments.as_ref() {
+                    [GenericArgument::Type(inner)]
+                        if self.ffi_class(*inner) == Some(FfiClass::Pointer) =>
+                    {
+                        Some(FfiClass::NullablePointer)
+                    }
+                    _ => None,
+                }
+            }
             TypeKind::Named { definition, .. } => match &self.snapshots.get(definition)?.kind {
                 SignatureKind::Type(d) if d.layout.flat => Some(FfiClass::Record),
                 SignatureKind::Type(d) if d.layout.c && implies(&d.bounds, Bound::Data) => {
@@ -2472,7 +2488,7 @@ impl Normalizer<'_, '_> {
                 p.passing != PassingMode::Mut
                     && matches!(
                         self.ffi_class(p.ty),
-                        Some(FfiClass::Numeric | FfiClass::Pointer)
+                        Some(FfiClass::Numeric | FfiClass::Pointer | FfiClass::NullablePointer)
                     )
             })
             && self.ffi_class(f.result).is_some_and(FfiClass::result)
@@ -2485,6 +2501,8 @@ enum FfiClass {
     Numeric,
     /// `Ptr[T]` or a callback `FnPtr`.
     Pointer,
+    /// An Option of a pointer: zero is None, otherwise the pointer.
+    NullablePointer,
     /// A byte view: a pointer and a length.
     Bytes,
     /// A `@layout(c)` or flat record, passed by address.
@@ -2497,12 +2515,20 @@ impl FfiClass {
     fn permits(self, passing: PassingMode) -> bool {
         match passing {
             PassingMode::Borrow => self != Self::Unit,
-            PassingMode::Take => matches!(self, Self::Numeric | Self::Pointer),
-            PassingMode::Mut => matches!(self, Self::Numeric | Self::Pointer | Self::Record),
+            PassingMode::Take => {
+                matches!(self, Self::Numeric | Self::Pointer | Self::NullablePointer)
+            }
+            PassingMode::Mut => matches!(
+                self,
+                Self::Numeric | Self::Pointer | Self::NullablePointer | Self::Record
+            ),
         }
     }
     fn result(self) -> bool {
-        matches!(self, Self::Numeric | Self::Pointer | Self::Unit)
+        matches!(
+            self,
+            Self::Numeric | Self::Pointer | Self::NullablePointer | Self::Unit
+        )
     }
 }
 fn implies(bs: &[Bound], b: Bound) -> bool {

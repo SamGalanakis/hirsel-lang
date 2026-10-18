@@ -1,0 +1,26 @@
+// rule: PROG-4
+// expect: run
+type State {
+  value: i32,
+}
+
+pub fn main() -> Result[(), ()] {
+  let pointer: Option[Ptr[u8]] = None()
+  match pointer {
+    None() => (),
+    Some(_) => return Error(()),
+  }
+  let nullable: Option[FnPtr[fn(mut state: unique State) -> i32]] = None()
+  let mut nested: Option[Option[FnPtr[fn(mut state: unique State) -> i32]]] = Some(
+    nullable
+  )
+  match nested {
+    Some(None()) => (),
+    _ => return Error(()),
+  }
+  nested = None()
+  match nested {
+    None() => Ok(()),
+    Some(_) => Error(()),
+  }
+}

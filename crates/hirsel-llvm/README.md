@@ -130,13 +130,17 @@ Invariants:
   a borrowed record as a read-only copy's address and a `mut` parameter as its place's
   address. The import is an `ObjectSymbolKind::Foreign` symbol; the call is `nounwind`,
   returns its scalar or `void`, and afterwards no cached length or uniqueness survives.
-  Before the call, `hirsel_rt_v2_foreign_enter` records the run context for callbacks.
+  Before the call, `hirsel_rt_v2_foreign_enter` records the run context and source site for callbacks;
+  `foreign_leave` restores the enclosing call. Results and writable pointer words
+  declared non-null are guarded even when discarded; zero ends the process with
+  PROG-4 at the call site. Nullable pointer options pass their niche word by value.
 - C callbacks: a `FunctionRef` at a pointer scalar is the address of the definition's
   `callback_thunk_name` thunk, emitted wherever its target is defined when
   `EmitInputs::callbacks` names it. Library and inlined targets deduplicate their
   thunks with `linkonce_odr`; source owners export theirs. Each thunk calls the
   declared entry, including a library root adapter: `R thunk(void *ctx, ...)` takes the run context from
-  `hirsel_rt_v2_callback_context`, calls the entry with `ctx` as its `mut` context address
+  `hirsel_rt_v2_callback_context`, checks non-null pointer parameters, adapts nullable
+  pointer parameters/results through their niche storage, and calls the entry with `ctx` as its `mut` context address
   and the scalars, and returns the register result, or ends the process through
   `hirsel_rt_v2_callback_failed` on a failure status.
 - Register results: a Hirsel entry whose result is a plain scalar of at most 64 bits (an

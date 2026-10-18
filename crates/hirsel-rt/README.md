@@ -17,6 +17,11 @@ Invariants and boundary:
   are faults that abort with a message; host exhaustion is environmental and terminates. Neither
   is ever reported as a language failure.
 - The run context is passed explicitly and shares nothing with other contexts (OWN-6).
+- Foreign calls push their context and source site on the calling thread, then restore
+  the enclosing call when they return. Callback thunks reject null context/Ptr/FnPtr
+  arguments before invoking Hirsel. A non-null boundary violation ends the process
+  through `foreign_violation`, reporting PROG-4 and the active extern's source site;
+  nullable pointer options use zero as None and require no guard.
 - Blocks have one eight-byte `repr(C, align(8))` header: a u32 count and a u32
   descriptor word (29 index bits, two storage-kind bits, one dead-wide-cursor bit).
   Every reference points eight bytes before its payload, including over-aligned blocks.
@@ -624,11 +629,18 @@ against identical raw C writes; neither mode claims durability.
 
 ## Foreign calls
 
-An extern call (PROG-4) first calls `hirsel_rt_v2_foreign_enter(ctx)`, which records the
-run context for its thread. A C callback thunk reads it back with
+An extern call (PROG-4) first calls `hirsel_rt_v2_foreign_enter(ctx, site, previous)`,
+which records its context and source site on the thread and saves the enclosing
+scope in 16 bytes of caller-owned stack storage at alignment 8. This never allocates;
+`hirsel_rt_v2_foreign_leave(previous)` restores that scope after C returns. A C callback
+thunk reads the current context back with
 `hirsel_rt_v2_callback_context`, which ends the process when the thread has none, and a
 callback that fails calls `hirsel_rt_v2_callback_failed`, which ends the process: the C
-frames between the callback and the extern call cannot run cleanup. The launchers strip
+frames between the callback and the extern call cannot run cleanup. Non-null pointer
+results, callback arguments and writable pointer words are guarded by both backends;
+zero calls `hirsel_rt_v2_foreign_violation(site)`, which reports PROG-4 and the source
+location before terminating. A callback passes site zero to select the active extern.
+Nullable pointer Options use zero as None without a guard. The launchers strip
 the `standalone::UNREPLAYABLE` bit from the compiled root mask and refuse a recording or a
 replay when it is set.
 

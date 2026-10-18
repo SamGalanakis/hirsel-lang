@@ -17,7 +17,9 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 17
+#define HIRSEL_RT_V2_ABI_VERSION 18
+#define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
+#define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -584,7 +586,11 @@ void hirsel_rt_v2_diag_panic(void);
 
 /* PROG-4: an extern call records its thread's run context for C callback thunks; a
    failing callback ends the process. */
-void hirsel_rt_v2_foreign_enter(hirsel_rt_v2_ctx *ctx);
+/* previous is caller-owned storage of FOREIGN_SCOPE_BYTES at FOREIGN_SCOPE_ALIGN,
+   live until the matching leave. This scope bookkeeping never allocates. */
+void hirsel_rt_v2_foreign_enter(hirsel_rt_v2_ctx *ctx, uint64_t site, void *previous);
+void hirsel_rt_v2_foreign_leave(const void *previous);
+void hirsel_rt_v2_foreign_violation(uint64_t site);
 hirsel_rt_v2_ctx *hirsel_rt_v2_callback_context(void);
 void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
 

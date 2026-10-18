@@ -2504,3 +2504,46 @@ fn a_sequence_payload_holds_its_count_and_capacity_before_its_elements() {
     m.layouts[p].fields.pop();
     rejects(&m, Obligation::Offset);
 }
+
+/// C-facing nullable pointers use the same niche as Option<NonNull<T>> and
+/// Option<extern fn> in Rust. A numeric word is still not a sound niche.
+#[test]
+fn foreign_pointer_options_use_one_word_without_nested_option_collapse() {
+    for target in TargetSpec::executed() {
+        let owners = Owners::default();
+        let mut t = Ty::default();
+        let byte = t.p(Primitive::U8);
+        let mut b = LayoutBuilder::new(&target, &owners);
+        for kind in [BuiltinType::Ptr, BuiltinType::FnPtr] {
+            let pointer = t.builtin(kind, vec![GenericArgument::Type(byte)]);
+            let option = t.variant(&[&[], &[pointer]]);
+            let nested = t.variant(&[&[], &[option]]);
+            let pointer = b.layout(&t.store, pointer).unwrap();
+            let option = b.layout(&t.store, option).unwrap();
+            let nested = b.layout(&t.store, nested).unwrap();
+            assert_eq!(b.record(option).size, SizeSpec::Fixed(8));
+            assert_eq!(b.record(option).align, 8);
+            assert!(matches!(
+                b.record(option).tag.as_ref().unwrap().form,
+                TagForm::Niche {
+                    nullary: 0,
+                    dataful: 1
+                }
+            ));
+            assert_eq!(
+                b.record(nested).tag.as_ref().unwrap().form,
+                TagForm::Ordinal
+            );
+            assert_eq!(
+                hirsel_lir::abi::foreign_scalar(b.table(), option),
+                Some(ScalarKind::Pointer)
+            );
+            assert_eq!(
+                hirsel_lir::abi::foreign_nonnull_offsets(b.table(), pointer),
+                [0]
+            );
+            assert!(hirsel_lir::abi::foreign_nonnull_offsets(b.table(), option).is_empty());
+        }
+        checked(b);
+    }
+}

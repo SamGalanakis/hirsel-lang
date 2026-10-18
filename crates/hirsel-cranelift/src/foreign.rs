@@ -13,7 +13,7 @@ use hirsel_lir::stage::ObjectSymbolKind;
 use hirsel_syntax::DefPath;
 
 use crate::CodegenError;
-use crate::function::{FnEmitter, TRAP};
+use crate::function::{FnEmitter, Shape, TRAP, V};
 use crate::module::{Emitted, Emitter, Hidden, PTR, Sig, scalar_type};
 
 fn aarch64_narrow(kind: ScalarKind, convention: CConvention) -> Option<bool> {
@@ -59,6 +59,7 @@ impl FnEmitter<'_, '_, '_> {
         let mut sig = ir::Signature::new(self.em.call_conv);
         let mut args = Vec::new();
         let mut column_returns = Vec::new();
+        let mut written = Vec::new();
         for parameter in &abi.parameters {
             let Some(argument) = arguments.iter().find(|a| a.parameter == parameter.source) else {
                 return self.invalid("a call without an argument for a parameter");
@@ -104,6 +105,21 @@ impl FnEmitter<'_, '_, '_> {
                     args.extend([data, length]);
                 }
                 (
+                    ParameterPassing::ReadOnlyAddress | ParameterPassing::TransferAddress,
+                    ArgumentValue::Value(value),
+                    _,
+                ) if hirsel_lir::abi::foreign_scalar(self.em.inputs.layouts, parameter.layout)
+                    .is_some() =>
+                {
+                    let place = self.stack(parameter.layout)?;
+                    let shape = self.value_shape(value)?;
+                    let value = self.get(value)?;
+                    self.store(shape, value, place)?;
+                    let pointer = self.load_ptr(place.ptr);
+                    sig.params.push(AbiParam::new(PTR));
+                    args.push(pointer);
+                }
+                (
                     ParameterPassing::ReadOnlyAddress | ParameterPassing::PointerLength,
                     ArgumentValue::Value(value),
                     _,
@@ -123,13 +139,21 @@ impl FnEmitter<'_, '_, '_> {
                         column_returns.push((place, passed));
                     }
                     args.push(passed.ptr);
+                    for offset in hirsel_lir::abi::foreign_nonnull_offsets(
+                        self.em.inputs.layouts,
+                        parameter.layout,
+                    ) {
+                        written.push((passed.ptr, offset));
+                    }
                 }
                 _ => return self.invalid("an extern argument outside the C convention"),
             }
         }
         if let Some(result) = &abi.result {
-            let LayoutKind::Scalar(scalar) = self.layout(result.layout)?.kind else {
-                return self.invalid("an extern result that is not a scalar");
+            let Some(scalar) =
+                hirsel_lir::abi::foreign_scalar(self.em.inputs.layouts, result.layout)
+            else {
+                return self.invalid("an extern result that is not a C scalar");
             };
             sig.returns.push(extended(
                 if aarch64_narrow(scalar, self.em.inputs.target.c_convention).is_some() {
@@ -148,8 +172,31 @@ impl FnEmitter<'_, '_, '_> {
             Some(abi),
         );
         let function = self.em.import_function(name, &sig)?;
-        self.rt(RuntimeEntry::ForeignEnter, &[self.context])?;
+        let call_site = self.anchor_code(site.anchor)?;
+        let site_value = self.u64c(call_site);
+        let (previous, _) = self.stack_bytes(
+            hirsel_lir::runtime_abi::FOREIGN_SCOPE_BYTES,
+            hirsel_lir::runtime_abi::FOREIGN_SCOPE_ALIGN,
+        );
+        self.rt(
+            RuntimeEntry::ForeignEnter,
+            &[self.context, site_value, previous],
+        )?;
         let returned = self.call(function, &args);
+        for (ptr, offset) in written {
+            let pointer = self.load_ty(PTR, ptr, offset);
+            self.foreign_nonnull(pointer, site_value)?;
+        }
+        if abi.result.as_ref().is_some_and(|r| {
+            self.em
+                .inputs
+                .layouts
+                .layout(r.layout)
+                .is_some_and(|r| r.kind == LayoutKind::Scalar(ScalarKind::Pointer))
+        }) {
+            self.foreign_nonnull(returned[0], site_value)?;
+        }
+        self.rt(RuntimeEntry::ForeignLeave, &[previous])?;
         for (destination, temporary) in column_returns {
             let shape = self.layout_shape(destination.layout)?;
             let value = self.load(shape, temporary);
@@ -159,19 +206,54 @@ impl FnEmitter<'_, '_, '_> {
             let Some(&returned) = returned.first() else {
                 return self.invalid("a call result without an extern result");
             };
-            let kind = self.scalar_kind(value)?;
+            let kind = abi
+                .result
+                .as_ref()
+                .and_then(|r| hirsel_lir::abi::foreign_scalar(self.em.inputs.layouts, r.layout))
+                .expect("an extern C scalar result");
             let returned = if aarch64_narrow(kind, self.em.inputs.target.c_convention).is_some() {
                 self.b.ins().ireduce(scalar_type(kind), returned)
             } else {
                 returned
             };
-            self.define1(value, returned)?;
+            let shape = self.value_shape(value)?;
+            let returned = if matches!(shape, Shape::Bytes { .. }) {
+                let place = self.stack(self.value_type(value)?.layout)?;
+                self.store_at(returned, place.ptr, 0);
+                self.load(shape, place)
+            } else {
+                V::One(returned)
+            };
+            self.define(value, returned)?;
         }
         let Some(normal) = normal else {
             return self.invalid("an extern call without a normal edge");
         };
         self.jump(normal)
     }
+
+    fn foreign_nonnull(&mut self, pointer: ir::Value, site: ir::Value) -> Emitted {
+        let violation = self.em.runtime(RuntimeEntry::ForeignViolation)?;
+        let violation = self.em.module.declare_func_in_func(violation, self.b.func);
+        nonnull(&mut self.b, pointer, violation, site);
+        Ok(())
+    }
+}
+
+fn nonnull(
+    b: &mut FunctionBuilder<'_>,
+    pointer: ir::Value,
+    violation: ir::FuncRef,
+    site: ir::Value,
+) {
+    let bad = b.create_block();
+    let next = b.create_block();
+    let is_null = b.ins().icmp_imm_s(ir::condcodes::IntCC::Equal, pointer, 0);
+    b.ins().brif(is_null, bad, &[], next, &[]);
+    b.switch_to_block(bad);
+    b.ins().call(violation, &[site]);
+    b.ins().trap(TRAP);
+    b.switch_to_block(next);
 }
 
 impl Emitter<'_> {
@@ -200,27 +282,34 @@ impl Emitter<'_> {
         }
         let mut c_sig = ir::Signature::new(self.call_conv);
         c_sig.params.push(AbiParam::new(PTR));
-        for (index, parameter) in rest.iter().enumerate() {
-            if parameter.passing != ParameterPassing::ByValue || parameter.slots.len() != 1 {
-                return Err(unsupported("parameter that is not one scalar"));
+        for parameter in rest {
+            if !matches!(
+                parameter.passing,
+                ParameterPassing::ByValue
+                    | ParameterPassing::ReadOnlyAddress
+                    | ParameterPassing::TransferAddress
+            ) || parameter.slots.len() != 1
+            {
+                return Err(unsupported("parameter that is not one C scalar"));
             }
-            let kind = self
-                .inputs
-                .layouts
-                .layout(parameter.layout)
-                .map(|l| &l.kind);
-            let narrow = matches!(kind, Some(LayoutKind::Scalar(kind)) if aarch64_narrow(*kind, self.inputs.target.c_convention).is_some());
+            let kind = hirsel_lir::abi::foreign_scalar(self.inputs.layouts, parameter.layout)
+                .ok_or_else(|| unsupported("parameter that is not one C scalar"))?;
+            let narrow = aarch64_narrow(kind, self.inputs.target.c_convention).is_some();
             c_sig.params.push(extended(
                 if narrow {
                     ir::types::I64
                 } else {
-                    sig.ir.params[sig.first[index + 1]].value_type
+                    scalar_type(kind)
                 },
                 parameter.extension,
                 self.inputs.target.c_convention,
             ));
         }
-        if let Some(kind) = sig.value {
+        let c_result = abi
+            .result
+            .as_ref()
+            .and_then(|r| hirsel_lir::abi::foreign_scalar(self.inputs.layouts, r.layout));
+        if let Some(kind) = c_result {
             c_sig.returns.push(extended(
                 if aarch64_narrow(kind, self.inputs.target.c_convention).is_some() {
                     ir::types::I64
@@ -234,6 +323,7 @@ impl Emitter<'_> {
         let id = self.declare_function(name, linkage, &c_sig)?;
         let enter = self.runtime(RuntimeEntry::CallbackContext)?;
         let failed = self.runtime(RuntimeEntry::CallbackFailed)?;
+        let violation = self.runtime(RuntimeEntry::ForeignViolation)?;
         let mut ctx = Context::new();
         ctx.func = ir::Function::with_name_signature(ir::UserFuncName::default(), c_sig);
         let mut bc = FunctionBuilderContext::new();
@@ -246,38 +336,75 @@ impl Emitter<'_> {
             let enter = self.module.declare_func_in_func(enter, b.func);
             let call = b.ins().call(enter, &[]);
             let run = b.inst_results(call)[0];
+            let violation = self.module.declare_func_in_func(violation, b.func);
+            let site = b.ins().iconst(ir::types::I64, 0);
+            nonnull(&mut b, params[0], violation, site);
             let mut args = Vec::new();
+            let mut result_storage = None;
             for hidden in &sig.hidden {
                 args.push(match hidden {
                     Hidden::Context => run,
                     Hidden::Destination => b.ins().iconst(PTR, 0),
                     Hidden::Result => {
-                        if !abi
+                        let (size, align) = if c_result == Some(ScalarKind::Pointer) {
+                            (8, 3)
+                        } else if abi
                             .result
                             .as_ref()
                             .and_then(|r| self.inputs.layouts.layout(r.layout))
                             .is_some_and(|l| l.kind == LayoutKind::Unit)
                         {
-                            return Err(unsupported("result that is not a scalar"));
-                        }
+                            (1, 0)
+                        } else {
+                            return Err(unsupported("result that is not a C scalar"));
+                        };
                         let slot = b.create_sized_stack_slot(ir::StackSlotData::new(
                             ir::StackSlotKind::ExplicitSlot,
-                            1,
-                            0,
+                            size,
+                            align,
                         ));
-                        b.ins().stack_addr(PTR, slot, 0)
+                        let storage = b.ins().stack_addr(PTR, slot, 0);
+                        if c_result.is_some() {
+                            result_storage = Some(storage);
+                        }
+                        storage
                     }
                     Hidden::Environment => return Err(unsupported("with an environment")),
                 });
             }
             args.push(params[0]);
-            for (index, _) in rest.iter().enumerate() {
+            for (index, parameter) in rest.iter().enumerate() {
                 let raw = params[index + 1];
-                let ty = sig.ir.params[sig.first[index + 1]].value_type;
+                let kind = hirsel_lir::abi::foreign_scalar(self.inputs.layouts, parameter.layout)
+                    .expect("a C scalar parameter");
+                let ty = scalar_type(kind);
                 let value = if b.func.dfg.value_type(raw) != ty {
                     b.ins().ireduce(ty, raw)
                 } else {
                     raw
+                };
+                if self
+                    .inputs
+                    .layouts
+                    .layout(parameter.layout)
+                    .is_some_and(|r| r.kind == LayoutKind::Scalar(ScalarKind::Pointer))
+                {
+                    nonnull(&mut b, value, violation, site);
+                }
+                let value = if matches!(
+                    parameter.passing,
+                    ParameterPassing::ReadOnlyAddress | ParameterPassing::TransferAddress
+                ) {
+                    let slot = b.create_sized_stack_slot(ir::StackSlotData::new(
+                        ir::StackSlotKind::ExplicitSlot,
+                        8,
+                        3,
+                    ));
+                    let storage = b.ins().stack_addr(PTR, slot, 0);
+                    b.ins().store(ir::MemFlagsData::new(), value, storage, 0);
+                    storage
+                } else {
+                    value
                 };
                 args.push(value);
             }
@@ -315,6 +442,9 @@ impl Emitter<'_> {
                     v
                 };
                 b.ins().return_(&[v]);
+            } else if let Some(storage) = result_storage {
+                let value = b.ins().load(PTR, ir::MemFlagsData::new(), storage, 0);
+                b.ins().return_(&[value]);
             } else {
                 b.ins().return_(&[]);
             }

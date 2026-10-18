@@ -1865,7 +1865,8 @@ fn runtime_declarations_match_the_landed_c_header() {
                 .or_else(|| item.find("(void)"))
                 .or_else(|| item.find("(const hirsel_rt_v2_config"))
                 .or_else(|| item.find("(hirsel_rt_v2_header"))
-                .or_else(|| item.find("(uint64_t state"))?;
+                .or_else(|| item.find("(uint64_t "))
+                .or_else(|| item.find("(const void *previous"))?;
             let name = item[..open].rsplit([' ', '*']).next()?;
             name.starts_with("hirsel_rt_v2_").then(|| name.to_string())
         })
@@ -1896,6 +1897,14 @@ fn runtime_declarations_match_the_landed_c_header() {
         )
     };
     define("ABI_VERSION", &runtime_abi::ABI_VERSION.to_string());
+    define(
+        "FOREIGN_SCOPE_BYTES",
+        &runtime_abi::FOREIGN_SCOPE_BYTES.to_string(),
+    );
+    define(
+        "FOREIGN_SCOPE_ALIGN",
+        &runtime_abi::FOREIGN_SCOPE_ALIGN.to_string(),
+    );
     define("STATUS_OK", &runtime_abi::STATUS_OK.to_string());
     define("STATUS_FAILURE", &runtime_abi::STATUS_FAILURE.to_string());
     define("LAUNCH_OK", &runtime_abi::LAUNCH_OK.to_string());

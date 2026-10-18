@@ -101,13 +101,17 @@ Invariants:
   Allocation facts (capacity and physical alignment) live in slab/prefix/extent metadata; the header contains count and descriptor index/storage kind.
 - Variants carry an explicit u32 ordinal tag, except a null-pointer niche
   (layout version 2): a non-`@packed` variant of exactly two variants, one
-  without fields and one with a counted block reference field, has no tag
-  word; the first such field's word is null exactly when the fieldless
+  without fields and one with a non-null pointer field (a counted block
+  reference, Ptr or FnPtr; pointer scalars since layout version 4), has no tag word; the first such field's word is null exactly when the fieldless
   variant is active (`TagForm::Niche`). Every tag reader goes through the
   form; `rt_program` lowers the niche's arm to `STEP_NONNULL`.
 - Externs have the `Foreign` FnAbi shape and only they do (PROG-4): no run context,
-  environment or destination, and a scalar result or none. `Ptr` and `FnPtr` are pointer
-  scalars, and a `FunctionRef` at a pointer scalar is a definition's C callback address.
+  environment or destination, and a C scalar/nullable-pointer result or none.
+  `Ptr` and `FnPtr` are non-null pointer scalars; their Options use the existing
+  null-pointer niche and one C pointer register. The internal aggregate ABI stays
+  unchanged. A `FunctionRef` at a pointer scalar is a definition's C callback address.
+  Runtime ABI 18 adds foreign source sites, caller-owned scope save storage,
+  ForeignLeave and ForeignViolation; no instruction or TIR form is added.
 - Unavailable, never guessed. Open attribute combinations (#47), C interop
   beyond plain `@layout(c)` records (#6) and M2 builtins return
   `LayoutError::Unavailable` with their issue. A dynamic extent (Packed,

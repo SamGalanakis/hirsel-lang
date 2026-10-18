@@ -18,7 +18,8 @@ children, and inline cycles fail. The independent validator stays in hirsel-lir.
 Instance identity retains complete type structure, binders, size actuals,
 callable convention and environment layout, excluding implementation revisions.
 Operation schema tags convert exhaustively in both directions and preserve the
-canonical snapshot bytes. No layout, ABI or snapshot version changes.
+canonical snapshot bytes. Nullable Ptr/FnPtr options use the null-pointer niche (layout version 4); the
+internal aggregate ABI remains unchanged, while C adapters use one pointer word.
 
 Flat Lists of zero-size elements store a u64 count after the byte-extent
 prefix, just as variable-element Lists do. Their elements remain fixed-size.

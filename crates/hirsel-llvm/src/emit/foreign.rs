@@ -1,6 +1,6 @@
 //! Calls of `extern "c"` functions (PROG-4): a direct call of the C symbol in
-//! the platform convention, outside the Hirsel status protocol. A foreign call
-//! cannot fail in Hirsel terms, so it always continues on its normal edge.
+//! the platform convention, outside the Hirsel status protocol. Foreign
+//! contract violations terminate before invalid pointers can enter Hirsel.
 use super::*;
 use hirsel_lir::layout_types::CConvention;
 
@@ -38,6 +38,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let mut types = Vec::new();
         let mut args = Vec::new();
         let mut extensions = Vec::new();
+        let mut written = Vec::new();
         for parameter in &abi.parameters {
             let Some(argument) = arguments.iter().find(|a| a.parameter == parameter.source) else {
                 return self.invalid("a call without an argument for a parameter");
@@ -83,6 +84,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     types.extend([pointer, self.module.int_type(64)]);
                     args.extend([data, length]);
                 }
+                // Option[Ptr/FnPtr] is an aggregate internally, one pointer in C.
+                (
+                    ParameterPassing::ReadOnlyAddress | ParameterPassing::TransferAddress,
+                    ArgumentValue::Value(value),
+                    _,
+                ) if hirsel_lir::abi::foreign_scalar(self.inputs.layouts, parameter.layout)
+                    .is_some() =>
+                {
+                    let place = self.stack(parameter.layout)?;
+                    self.store(self.value_shape(value)?, self.get(value)?, place);
+                    types.push(pointer);
+                    args.push(self.builder.load(pointer, place.ptr, place.align));
+                }
                 // A borrowed record: the address of a copy C only reads.
                 (
                     ParameterPassing::ReadOnlyAddress | ParameterPassing::PointerLength,
@@ -97,16 +111,28 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 // `mut`: the address of the caller's storage, valid for the call.
                 (ParameterPassing::ExclusiveAddress, ArgumentValue::Address { address, .. }, _) => {
                     types.push(pointer);
-                    args.push(self.place(address)?.ptr);
+                    let place = self.place(address)?;
+                    args.push(place.ptr);
+                    for offset in hirsel_lir::abi::foreign_nonnull_offsets(
+                        self.inputs.layouts,
+                        parameter.layout,
+                    ) {
+                        let at = self.field_place(place, offset, parameter.layout, true)?;
+                        written.push(at);
+                    }
                 }
                 _ => return self.invalid("an extern argument outside the C convention"),
             }
         }
         let result = match &abi.result {
-            Some(result) => match self.layout(result.layout)?.kind {
-                LayoutKind::Scalar(scalar) => Some(scalar),
-                _ => return self.invalid("an extern result that is not a scalar"),
-            },
+            Some(result) => Some(
+                hirsel_lir::abi::foreign_scalar(self.inputs.layouts, result.layout).ok_or_else(
+                    || CodegenError::Invalid {
+                        definition: self.definition().clone(),
+                        what: "an extern result that is not a C scalar".into(),
+                    },
+                )?,
+            ),
             None => None,
         };
         let returns = match result {
@@ -139,7 +165,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.invalidate_uniqueness();
         // A callback C makes during the call finds this thread's run context.
         let enter = self.runtime(RuntimeEntry::ForeignEnter)?;
-        self.builder.call(enter, &[self.context]);
+        let call_site = self.anchor_code(site.anchor)?;
+        let previous = self.prologue.alloca(
+            self.module.array_type(
+                self.module.int_type(8),
+                hirsel_lir::runtime_abi::FOREIGN_SCOPE_BYTES,
+            ),
+            hirsel_lir::runtime_abi::FOREIGN_SCOPE_ALIGN,
+        );
+        self.builder
+            .call(enter, &[self.context, self.const_u64(call_site), previous]);
         let returned = self.builder.call(function, &args);
         self.module
             .add_call_attribute(returned, AttributeSlot::Function, Attribute::NoUnwind);
@@ -164,6 +199,20 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 ),
             }
         }
+        for place in written {
+            let pointer = self.builder.load(pointer, place.ptr, place.align);
+            self.foreign_nonnull(pointer, call_site)?;
+        }
+        if abi.result.as_ref().is_some_and(|r| {
+            self.inputs
+                .layouts
+                .layout(r.layout)
+                .is_some_and(|r| r.kind == LayoutKind::Scalar(ScalarKind::Pointer))
+        }) {
+            self.foreign_nonnull(returned, call_site)?;
+        }
+        let leave = self.runtime(RuntimeEntry::ForeignLeave)?;
+        self.builder.call(leave, &[previous]);
         if let Some(value) = site.result {
             if result.is_none() {
                 return self.invalid("a call result without an extern result");
@@ -179,6 +228,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             } else {
                 returned
             };
+            let shape = self.value_shape(value)?;
+            let returned = if matches!(shape, Shape::Bytes { .. }) {
+                let place = self.stack(self.value_type(value)?.layout)?;
+                self.builder.store(returned, place.ptr, place.align);
+                self.load(shape, place)
+            } else {
+                returned
+            };
             self.define(value, returned)?;
         }
         let Some(normal) = normal else {
@@ -186,6 +243,38 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         self.jump(normal)
     }
+
+    fn foreign_nonnull(&mut self, pointer: Value<'m>, site: u64) -> Emitted {
+        let violation = self.runtime(RuntimeEntry::ForeignViolation)?;
+        nonnull(
+            &self.builder,
+            self.function,
+            pointer,
+            violation,
+            self.const_u64(site),
+        );
+        Ok(())
+    }
+}
+
+/// Check a C-owned pointer before any use as a Hirsel non-null value.
+fn nonnull<'m>(
+    builder: &Builder<'m>,
+    function: Function<'m>,
+    pointer: Value<'m>,
+    violation: Function<'m>,
+    site: Value<'m>,
+) {
+    let module = builder.module();
+    let bad = module.append_block(function);
+    let next = module.append_block(function);
+    let zero = module.const_zero(module.ptr_type());
+    let is_null = builder.icmp(IntPredicate::Eq, pointer, zero);
+    builder.cold_cond_br(is_null, bad, next);
+    builder.position(bad);
+    builder.call(violation, &[site]);
+    builder.unreachable();
+    builder.position(next);
 }
 
 /// Declares the runtime entry `entry` for module-level code and records its import.
@@ -234,23 +323,35 @@ pub(super) fn define_callback_thunk<'m>(
         return Err(unsupported("whose context is not a `mut` address"));
     }
     let ptr = module.ptr_type();
+    let pointer_align = context.slots[0].align;
+    let builder = Builder::new(module);
     let mut types = vec![ptr];
-    for (index, parameter) in rest.iter().enumerate() {
-        if parameter.passing != ParameterPassing::ByValue || parameter.slots.len() != 1 {
-            return Err(unsupported("parameter that is not one scalar"));
+    for parameter in rest {
+        if !matches!(
+            parameter.passing,
+            ParameterPassing::ByValue
+                | ParameterPassing::ReadOnlyAddress
+                | ParameterPassing::TransferAddress
+        ) || parameter.slots.len() != 1
+        {
+            return Err(unsupported("parameter that is not one C scalar"));
         }
-        let kind = layouts.layout(parameter.layout).map(|l| &l.kind);
-        let narrow = matches!(kind, Some(LayoutKind::Scalar(kind)) if aarch64_narrow(*kind, convention).is_some());
+        let kind = hirsel_lir::abi::foreign_scalar(layouts, parameter.layout)
+            .ok_or_else(|| unsupported("parameter that is not one C scalar"))?;
+        let narrow = aarch64_narrow(kind, convention).is_some();
         types.push(if narrow {
             module.int_type(64)
         } else {
-            signature.types[signature.first[index + 1] as usize]
+            scalar::scalar_type(&builder, kind)
         });
     }
-    let builder = Builder::new(module);
-    let returns = match signature.value {
-        Some((kind, _)) if aarch64_narrow(kind, convention).is_some() => module.int_type(64),
-        Some((kind, _)) => scalar::scalar_type(&builder, kind),
+    let c_result = abi
+        .result
+        .as_ref()
+        .and_then(|r| hirsel_lir::abi::foreign_scalar(layouts, r.layout));
+    let returns = match c_result {
+        Some(kind) if aarch64_narrow(kind, convention).is_some() => module.int_type(64),
+        Some(kind) => scalar::scalar_type(&builder, kind),
         None => module.void_type(),
     };
     let thunk = module
@@ -272,9 +373,16 @@ pub(super) fn define_callback_thunk<'m>(
         RuntimeEntry::CallbackFailed,
         module.function_type(module.void_type(), &[ptr]),
     );
+    let violation = runtime_function(
+        module,
+        manifested,
+        RuntimeEntry::ForeignViolation,
+        module.function_type(module.void_type(), &[module.int_type(64)]),
+    );
     builder.position(module.append_block(thunk));
     let run = builder.call(enter, &[]);
     let mut arguments = Vec::new();
+    let mut result_storage = None;
     for hidden in &signature.hidden {
         match hidden {
             Hidden::Context => arguments.push(run),
@@ -284,11 +392,24 @@ pub(super) fn define_callback_thunk<'m>(
                 Some(layout) if layout.kind == LayoutKind::Unit => {
                     arguments.push(builder.alloca(module.int_type(8), 1))
                 }
+                Some(_) if c_result == Some(ScalarKind::Pointer) => {
+                    let storage = builder.alloca(ptr, pointer_align);
+                    arguments.push(storage);
+                    result_storage = Some(storage);
+                }
                 _ => return Err(unsupported("result that is not a scalar")),
             },
             Hidden::Environment => return Err(unsupported("with an environment")),
         }
     }
+    let callback_site = module.const_int(module.int_type(64), 0);
+    nonnull(
+        &builder,
+        thunk,
+        module.parameter(thunk, 0),
+        violation,
+        callback_site,
+    );
     arguments.push(module.parameter(thunk, 0));
     for (index, parameter) in rest.iter().enumerate() {
         let raw = module.parameter(thunk, index as u32 + 1);
@@ -299,6 +420,19 @@ pub(super) fn define_callback_thunk<'m>(
             builder.cast(Cast::Trunc, raw, scalar::scalar_type(&builder, *kind))
         } else {
             raw
+        };
+        if matches!(kind, Some(LayoutKind::Scalar(ScalarKind::Pointer))) {
+            nonnull(&builder, thunk, value, violation, callback_site);
+        }
+        let value = if matches!(
+            parameter.passing,
+            ParameterPassing::ReadOnlyAddress | ParameterPassing::TransferAddress
+        ) {
+            let storage = builder.alloca(ptr, pointer_align);
+            builder.store(value, storage, pointer_align);
+            storage
+        } else {
+            value
         };
         arguments.push(value);
     }
@@ -334,7 +468,10 @@ pub(super) fn define_callback_thunk<'m>(
             };
             builder.ret(value);
         }
-        None => builder.ret_void(),
+        None => match result_storage {
+            Some(storage) => builder.ret(builder.load(ptr, storage, pointer_align)),
+            None => builder.ret_void(),
+        },
     }
     Ok(thunk)
 }

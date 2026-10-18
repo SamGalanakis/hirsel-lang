@@ -74,3 +74,9 @@ addresses and section offsets relocate through cranelift-object's object writer
 on both x86-64 and AArch64. Without sources, no debug sections are emitted.
 
 `named_launch_object` uses an explicit exported dispatcher symbol, allowing a package test executable to contain one launch adapter per test.
+
+Foreign pointer boundaries match LLVM: Ptr/FnPtr results, callback arguments and
+writable pointer words are guarded before entering Hirsel, including unused results.
+Nullable pointer options use one C pointer word and ordinary niche storage inside
+Hirsel. Foreign contract violations terminate with PROG-4 at the active extern call's
+site; nested calls restore the enclosing callback context and site.

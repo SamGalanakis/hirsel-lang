@@ -397,26 +397,6 @@ fn native_demo_target(
     backend: native::Backend,
     target: native::TargetSpec,
 ) -> (PathBuf, PathBuf, PathBuf) {
-    use std::process::Command;
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("foreign-{name}"));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("lib")).unwrap();
-    let tools = native::Toolchain::in_tree(&root.join("runtime"), &[&target]).unwrap();
-    std::fs::write(root.join("lib/demo.c"), DEMO_C).unwrap();
-    let cc = if target.triple.starts_with("aarch64") {
-        &tools.aarch64_cc
-    } else {
-        &tools.clang
-    };
-    let compiled = Command::new(cc)
-        .args(["-c", "-O1", "-fPIC"])
-        .arg(root.join("lib/demo.c"))
-        .arg("-o")
-        .arg(root.join("lib/demo.o"))
-        .output()
-        .unwrap();
-    assert!(compiled.status.success(), "{compiled:?}");
-    std::fs::write(root.join("lib/lib.hir"), DEMO_HIR).unwrap();
     let wrappers: Vec<_> = [
         "add",
         "sum",
@@ -435,6 +415,38 @@ fn native_demo_target(
             .map(|name| json!({"module":[],"name":name,"kind":"handle","model":"none"})),
     )
     .collect();
+    native_c_fixture(name, main, backend, target, DEMO_C, DEMO_HIR, wrappers)
+}
+
+fn native_c_fixture(
+    name: &str,
+    main: &str,
+    backend: native::Backend,
+    target: native::TargetSpec,
+    c: &str,
+    library: &str,
+    wrappers: Vec<serde_json::Value>,
+) -> (PathBuf, PathBuf, PathBuf) {
+    use std::process::Command;
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("foreign-{name}"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    let tools = native::Toolchain::in_tree(&root.join("runtime"), &[&target]).unwrap();
+    std::fs::write(root.join("lib/demo.c"), c).unwrap();
+    let cc = if target.triple.starts_with("aarch64") {
+        &tools.aarch64_cc
+    } else {
+        &tools.clang
+    };
+    let compiled = Command::new(cc)
+        .args(["-c", "-O1", "-fPIC"])
+        .arg(root.join("lib/demo.c"))
+        .arg("-o")
+        .arg(root.join("lib/demo.o"))
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    std::fs::write(root.join("lib/lib.hir"), library).unwrap();
     let lib = json!({"schema":1,"package":{"name":"lib","version":"1"},
         "sources":[{"path":"lib.hir","module":[]}],"dependencies":[],
         "unsafe_ffi":{"link":["demo.o"],"headers_checked":false,"wrappers":wrappers}});
@@ -697,6 +709,127 @@ fn cranelift_calls_c_and_c_callbacks_with_the_same_observations_as_llvm() {
                         .contains("a callback failed; the process ends"),
                     "{backend:?}: {ran:?}"
                 );
+            }
+        }
+    });
+}
+
+/// Source conformance cannot execute C. This fixture tests the actual C ABI,
+/// including zero bits at each inward pointer boundary and both target ABIs.
+#[test]
+fn native_null_pointer_boundaries_match_on_both_backends() {
+    with_compiler_stack(|| {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let c = std::fs::read_to_string(repo.join("native-tests/foreign/null.c")).unwrap();
+        let library =
+            std::fs::read_to_string(repo.join("conformance/PROG/PROG-4-ffi-null-api-ok.hir"))
+                .unwrap();
+        let cases = [
+            ("null_roundtrips", None),
+            ("null_result", Some("required_pointer")),
+            ("null_function_result", Some("required_function")),
+            ("null_out", Some("required_out")),
+            ("null_function_out", Some("required_function_out")),
+            ("null_callback", Some("required_visit")),
+            ("null_function_callback", Some("required_function_visit")),
+            ("nested_null_callback", Some("nested_visit")),
+        ];
+        let mut main = String::from(
+            "pub fn main(u: Unsafe, args: Args) -> Result[(), ()] {\n  match arg.count(args) {\n",
+        );
+        for (index, (function, violation)) in cases.iter().enumerate() {
+            if violation.is_none() {
+                main.push_str(&format!(
+                    "    {index} => if lib.{function}(u) {{ Ok(()) }} else {{ Error(()) }},\n"
+                ));
+            } else {
+                main.push_str(&format!(
+                    "    {index} => {{ lib.{function}(u); Ok(()) }},\n"
+                ));
+            }
+        }
+        main.push_str("    _ => Error(()),\n  }\n}\n");
+        for target in native::TargetSpec::executed() {
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                let wrappers = cases
+                    .iter()
+                    .map(|(name, _)| {
+                        json!({
+                            "module":[], "name":name, "kind":"pure", "model":"none"
+                        })
+                    })
+                    .collect();
+                let (root, _, executable) = native_c_fixture(
+                    &format!("ffi-null-{backend:?}-{}", target.triple),
+                    &main,
+                    backend,
+                    target.clone(),
+                    &c,
+                    &library,
+                    wrappers,
+                );
+                for (index, (function, violation)) in cases.iter().enumerate() {
+                    // Standalone launch takes Args from trailing process arguments.
+                    let mut command = if target.triple.starts_with("aarch64") {
+                        let mut command = std::process::Command::new(
+                            std::env::var_os("HIRSEL_QEMU_AARCH64").unwrap(),
+                        );
+                        command
+                            .arg("-L")
+                            .arg(std::env::var_os("HIRSEL_AARCH64_SYSROOT").unwrap())
+                            .arg(&executable);
+                        command
+                    } else {
+                        std::process::Command::new(&executable)
+                    };
+                    let ran = command
+                        .arg("--hirsel-grants")
+                        .arg(root.join("grants.json"))
+                        .args(std::iter::repeat_n("case", index))
+                        .output()
+                        .unwrap();
+                    let stderr = String::from_utf8_lossy(&ran.stderr);
+                    if let Some(extern_name) = violation {
+                        assert!(
+                            !ran.status.success(),
+                            "{function}/{backend:?}/{}: {ran:?}",
+                            target.triple
+                        );
+                        assert!(
+                            stderr.contains("PROG-4: null at a non-null foreign boundary"),
+                            "{function}/{backend:?}: {stderr}"
+                        );
+                        // Attribution is the exact extern call expression, including callbacks.
+                        let function_start = library
+                            .lines()
+                            .position(|line| line.starts_with(&format!("pub fn {function}(")))
+                            .unwrap();
+                        let line = library
+                            .lines()
+                            .enumerate()
+                            .skip(function_start)
+                            .find_map(|(index, line)| {
+                                (line.trim_start().starts_with(&format!("{extern_name}(u,"))
+                                    || line.contains(&format!("= {extern_name}(u, 0)")))
+                                .then_some(index)
+                            })
+                            .unwrap()
+                            + 1;
+                        assert!(stderr.contains(&format!("lib@1/{function}")), "{stderr}");
+                        assert!(
+                            stderr.contains(&format!("lib.hir:{line}:")),
+                            "expected line {line}: {stderr}"
+                        );
+                    } else {
+                        assert_eq!(
+                            ran.status.code(),
+                            Some(0),
+                            "{function}/{backend:?}/{}: {ran:?}",
+                            target.triple
+                        );
+                    }
+                }
+                std::fs::remove_dir_all(root).unwrap();
             }
         }
     });

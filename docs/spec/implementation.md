@@ -153,7 +153,16 @@ an address whose contents transfer at entry. The physical shape is computed once
 specialized declared callable type, so changing the unit partition never changes a
 published shape ([PROG-5](programs.md#prog-5-topology)). No attribute grants the backend
 aliasing, non-null, alignment or dereferenceability facts beyond independently checked
-lifetime and access evidence. C-facing exports are monomorphic wrappers.
+lifetime and access evidence. C-facing callback thunks are monomorphic wrappers. `Ptr` and `FnPtr` use one
+non-null pointer word. `Option[Ptr[T]]` and `Option[FnPtr[F]]` use that word's
+null-pointer niche: zero is `None`, nonzero is `Some`. Their C ABI is one pointer,
+including callback parameters/results and writable arguments. Both native backends
+check non-null extern results (including discarded results), callback arguments and
+pointer words written by C before admitting them to Hirsel. Zero is a PROG-4 foreign
+contract violation that terminates the process at the extern call's site. Nested
+extern calls restore the enclosing callback context and site when they return.
+C-origin `FnPtr` values are opaque pass-back values; Hirsel cannot call them
+([PROG-4](programs.md#prog-4-interop)).
 
 ### Failure and cleanup
 
