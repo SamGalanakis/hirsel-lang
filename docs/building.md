@@ -338,7 +338,9 @@ HIRSEL_MEMORY_LIMIT=2G tools/capped --timeout 60 target/debug/hirsel check app/m
 It runs the command in a systemd user scope with `MemoryMax` of
 `$HIRSEL_MEMORY_LIMIT` (bytes or a `K`, `M`, `G` or `T` count; default `4G`), no
 swap, a `CPUQuota` of `$HIRSEL_JOBS` CPUs (default 2) and a timeout (`--timeout`,
-default 300 s), and passes both variables on to the command. A second run waits
+default 300 s), and passes both variables on to the command. Without a reachable
+systemd user manager it falls back to process limits (`RLIMIT_DATA` at the cap, a
+thread limit and CPU affinity to `$HIRSEL_JOBS` CPUs) and says so. A second run waits
 for the first. At exit it prints the scope's peak memory, wall time and exit
 status. A run that reaches the cap or the timeout is a finding: report the program
 and its peak rather than raising the cap. Runs over many programs (a directory, a

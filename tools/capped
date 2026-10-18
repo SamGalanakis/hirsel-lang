@@ -7,7 +7,10 @@ The sanctioned way to run anything outside Buck2 on a shared host (a built
 `hirsel`, `hirsel-conformance`, a probe): the command runs in a systemd user
 scope with `MemoryMax=$HIRSEL_MEMORY_LIMIT` (default 4G), `MemorySwapMax=0`
 and `CPUQuota` of `$HIRSEL_JOBS` CPUs (default 2), under a timeout (default
-300 s). The command sees the same HIRSEL_MEMORY_LIMIT and HIRSEL_JOBS, so a
+300 s). Where no user manager is reachable (a sandbox without its bus), it
+falls back to process limits: RLIMIT_DATA at the cap, RLIMIT_NPROC near the
+user's current process count, and CPU affinity to $HIRSEL_JOBS CPUs; the
+report names the mechanism that applied. The command sees the same HIRSEL_MEMORY_LIMIT and HIRSEL_JOBS, so a
 hirsel binary's own guard (crates/hirsel-guard) caps itself identically.
 Runs take turns: a second one waits for the first. At exit it prints the
 scope's peak memory, wall time and exit status to stderr. A run that reaches
@@ -20,6 +23,7 @@ import fcntl
 import os
 from pathlib import Path
 import re
+import resource
 import signal
 import subprocess
 import sys
@@ -31,6 +35,15 @@ DEFAULT_TIMEOUT = 300
 # The scope's processes get this long to exit after the timeout's SIGTERM.
 GRACE = 10
 LIMIT = re.compile(r'[1-9][0-9]*[KMGT]?')
+UNITS = {'K': 1 << 10, 'M': 1 << 20, 'G': 1 << 30, 'T': 1 << 40}
+# Processes the fallback lets the command add to the user's current count.
+SPARE_PROCESSES = 1024
+
+
+def limit_bytes(text: str) -> int:
+    """HIRSEL_MEMORY_LIMIT's bytes, read as systemd's MemoryMax and
+    crates/hirsel-guard read it: digits with an optional binary K, M, G or T."""
+    return int(text[:-1]) * UNITS[text[-1]] if text[-1] in UNITS else int(text)
 
 
 def mib(count: int) -> str:
@@ -47,11 +60,13 @@ def own_cgroup() -> Path | None:
     return None
 
 
-def inside(timeout: int, limit: str, command: list[str]) -> int:
-    """Inside the scope: run the command in its own process group under the
-    timeout, then report the scope's peak memory and whether it hit the cap."""
+def inside(timeout: int, limit: str, command: list[str], limits=None) -> int:
+    """Run the command in its own process group under the timeout, then report
+    the peak memory and whether it hit the cap: the scope's when inside one,
+    otherwise the largest child's under `limits` (process limits applied in
+    the child before it runs the command)."""
     start = time.monotonic()
-    child = subprocess.Popen(command, start_new_session=True)
+    child = subprocess.Popen(command, start_new_session=True, preexec_fn=limits)
     timed_out = False
     try:
         status = child.wait(timeout)
@@ -71,10 +86,12 @@ def inside(timeout: int, limit: str, command: list[str]) -> int:
     if status < 0:
         status = 128 - status
     wall = time.monotonic() - start
-    cgroup = own_cgroup()
+    cgroup = None if limits else own_cgroup()
     peak = 'unknown'
     oom = False
-    if cgroup:
+    if limits:
+        peak = mib(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024) + ' RSS'
+    elif cgroup:
         try:
             peak = mib(int((cgroup / 'memory.peak').read_text()))
         except (OSError, ValueError):
@@ -90,7 +107,8 @@ def inside(timeout: int, limit: str, command: list[str]) -> int:
     if timed_out:
         notes.append(f'timed out after {timeout} s')
     note = ''.join(f'; {n}' for n in notes)
-    print(f'capped: peak {peak} of {limit}, {wall:.1f} s, exit {status}{note}', file=sys.stderr)
+    mechanism = 'process limits' if limits else 'systemd scope'
+    print(f'capped: peak {peak} of {limit} ({mechanism}), {wall:.1f} s, exit {status}{note}', file=sys.stderr)
     return status
 
 
@@ -124,6 +142,10 @@ def main() -> int:
         except BlockingIOError:
             print(f'capped: waiting for the run holding {lock_path}', file=sys.stderr)
             fcntl.flock(lock, fcntl.LOCK_EX)
+        if not scope_available(env):
+            print('capped: no systemd user manager is reachable; using process limits', file=sys.stderr)
+            os.environ.update(HIRSEL_MEMORY_LIMIT=limit, HIRSEL_JOBS=jobs)
+            return inside(args.timeout, limit, command, process_limits(limit_bytes(limit), int(jobs)))
         scope = ['systemd-run', '--user', '--scope', '--quiet', '--collect',
                  '-p', f'MemoryMax={limit}', '-p', 'MemorySwapMax=0', '-p', 'OOMPolicy=continue',
                  '-p', f'CPUQuota={int(jobs) * 100}%',
@@ -133,10 +155,40 @@ def main() -> int:
             return subprocess.run(scope, env=env).returncode
         except KeyboardInterrupt:
             return 130
-        except FileNotFoundError:
-            print('capped: systemd-run is not installed', file=sys.stderr)
-            return 127
 
+
+def scope_available(env) -> bool:
+    """Whether systemd-run can start a user scope here."""
+    try:
+        return subprocess.run(['systemd-run', '--user', '--scope', '--quiet', '--collect', '--', 'true'],
+                              env=env, capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def process_limits(limit: int, jobs: int):
+    """The fallback's limits, applied in the child: data at the cap (what
+    crates/hirsel-guard sets too; an address-space cap would also count the
+    reservations a compiler leaves unused), threads near the user's current
+    count, and `jobs` CPUs of the allowed set, chosen by pid to spread runs."""
+    # RLIMIT_NPROC counts the user's threads, in every process.
+    uid = str(os.getuid())
+    processes = 0
+    for status in Path('/proc').glob('[0-9]*/status'):
+        try:
+            fields = dict(line.split(':', 1) for line in status.read_text().splitlines() if ':' in line)
+        except OSError:
+            continue
+        if fields.get('Uid', '').split()[:1] == [uid]:
+            processes += int(fields.get('Threads', '1'))
+    allowed = sorted(os.sched_getaffinity(0))
+
+    def apply():
+        resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
+        resource.setrlimit(resource.RLIMIT_NPROC, (processes + SPARE_PROCESSES,) * 2)
+        offset = os.getpid() % len(allowed)
+        os.sched_setaffinity(0, [allowed[(offset + i) % len(allowed)] for i in range(min(jobs, len(allowed)))])
+    return apply
 
 if __name__ == '__main__':
     sys.exit(main())
