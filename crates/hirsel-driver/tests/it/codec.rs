@@ -41,7 +41,7 @@ fn rust_vectors_cross_source_in_both_directions() {
             ),
         ] {
             let source = format!(
-                "@serializable\npub type Row {{x:u8,y:bool}}\n@serializable\npub type Choice=Empty()|Item(u8)\npub fn value()->{ty}{{{expr}}}\nfn encode_value[T:serializable](x:T)->Bytes{{let thunk=fn(){{codec.encode(x)}};thunk()}}\npub fn encode()->Bytes{{encode_value(value())}}\npub fn decode(data:Bytes)->Result[Bytes,DecodeError]{{let decoded:Result[{ty},DecodeError]=codec.decode(data);match take decoded{{Ok(x)=>Ok(codec.encode(x)),Error(e)=>Error(e)}}}}\n"
+                "@serializable\npub type Row {{x:u8,y:bool}}\n@serializable\npub type Choice=Empty()|Item(u8)\npub fn value()->{ty}{{{expr}}}\nfn encode_value[T:serializable](x:T)->Bytes{{let thunk=fn(){{codec.encode(x)}};thunk()}}\npub fn encode()->Bytes{{encode_value(value())}}\npub fn decode(data:Bytes)->Result[Bytes,DecodeError]{{let decoded:{ty}=codec.decode(data)?;Ok(codec.encode(decoded))}}\n"
             );
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
             let context = default_context();

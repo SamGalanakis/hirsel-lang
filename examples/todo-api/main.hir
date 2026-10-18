@@ -390,25 +390,6 @@ fn send_reply(n: Net, mut stream: Stream of n, reply: Reply) -> Result[
   http.respond(n, mut stream, reply.status, headers, string.as_bytes(reply.body))
 }
 
-// A Sender destructured from channel.open is not yet provably sendable inside a
-// record; receiving it as a taken parameter is.
-fn queue(
-  tasks: Tasks,
-  mut saves: Sender[SaveJob],
-  version: u64,
-  take text: unique String,
-  take reply: Sender[bool]
-) -> bool {
-  match channel.send(
-    tasks,
-    mut saves,
-    SaveJob(version: version, text: take text, reply: take reply)
-  ) {
-    Ok(()) => true,
-    Error(_) => false,
-  }
-}
-
 fn handle(
   tasks: Tasks,
   state: Mutex[Store],
@@ -426,19 +407,22 @@ fn handle(
       unique apply(mut store, action)
     }
   )
-  let (version, text) = match reply.save {
+  let (version, text): (u64, unique String) = match reply.save {
     Some((v, t)) => (v, unique t),
     None() => return take reply,
   }
   let (done_tx, done_rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
   let mut done = take done_rx
-  let saved = if queue(tasks, mut saves, version, take text, take done_tx) {
-    match channel.receive(tasks, mut done) {
+  let saved = match channel.send(
+    tasks,
+    mut saves,
+    SaveJob(version: version, text: take text, reply: take done_tx)
+  ) {
+    Ok(()) => match channel.receive(tasks, mut done) {
       Ok(ok) => ok,
       Error(_) => false,
-    }
-  } else {
-    false
+    },
+    Error(_) => false,
   }
   if saved {
     take reply
@@ -484,8 +468,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let n = io.net(rt) ? Grant
   let tasks = io.tasks(rt) ? Grant
   let dir = io.dir(rt, path.of("data")) ? Files
-  // load's result is not provably unique through `?`; the deep copy makes it so.
   let store: unique Store = unique load(dir)?
+  let state: Mutex[Store] = mutex.create(tasks, take store)
+  let (saves, jobs): (Sender[SaveJob], Receiver[SaveJob]) = channel.open(tasks)
   let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network
   let bound = net.local_addr(n, listener) ? Network
   let output = io.stdout(rt) ? Grant
@@ -499,10 +484,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   task.scope(
     tasks,
     fn(s: Scope) -> Result[(), ServerError] {
-      // Created inside the scope: a child task using a Mutex or Sender that the
-      // scope body captured from outside currently fails IR validation (ExpiredLoan).
-      let state: Mutex[Store] = mutex.create(tasks, take store)
-      let (saves, jobs): (Sender[SaveJob], Receiver[SaveJob]) = channel.open(tasks)
       let writer = task.async(
         s,
         fn() -> () {
