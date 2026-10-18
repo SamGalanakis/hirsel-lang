@@ -2918,6 +2918,10 @@ impl<'a> Checker<'a> {
                         let mut receiving = store.get(expected_field).unwrap().clone();
                         receiving.sendability_requirement =
                             hirsel_types::SendabilityRequirement::None;
+                        // MODE-2: a `unique` part needs current uniqueness
+                        // evidence, such as a fresh call receipt's, which only
+                        // the flow's `constructor_origin_types` has.
+                        receiving.modes.uniqueness = Uniqueness::Aliased;
                         expected_field = store.push(receiving);
                         // Cleanup summaries remain exact. Placement uses the
                         // shared Value relation: heap values outlive arenas.

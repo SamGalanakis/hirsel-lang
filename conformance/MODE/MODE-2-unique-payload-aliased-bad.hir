@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 7
+// `kept` still shares `b`, so it cannot fill a `unique` payload. Twin is
+// MODE-2-unique-payload-fresh-receipt-ok.
+fn make(take b: Bytes) -> Result[unique Bytes, ()] uses {} {
+  let kept = copy b
+  Ok(take b)
+}

@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: accept
+// A fresh call receipt fills a `unique` payload or field directly. Twin is
+// MODE-2-unique-payload-aliased-bad.
+type Holder {
+  data: unique Bytes,
+}
+
+fn make() -> Result[unique Bytes, ()] uses {} {
+  Ok(bytes.from_list([1u8]))
+}
+
+fn hold() -> Holder uses {} {
+  Holder(data: bytes.from_list([1u8]))
+}

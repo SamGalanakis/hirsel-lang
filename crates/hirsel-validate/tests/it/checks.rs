@@ -219,9 +219,10 @@ fn constructor_fields_preserve_required_evidence_and_exact_cleanup() {
             _ => unreachable!(),
         }
         let mut fixture = string_field_constructor(actual, expected);
-        if mutation == 1 {
+        if mutation <= 1 {
+            // A fresh constant is a unique, sendable receipt (MODE-2, #80)...
             fixture.valid();
-            // An actual counted share loses the receipt proof on both holders.
+            // ...and an actual counted share loses that proof on both holders.
             let alias = fixture.slot(TypeKind::Primitive(Primitive::String), Storage::Temporary);
             fixture.assign(alias, Rvalue::Use(copy(1)), 0);
             let share = fixture.body().blocks[0].instructions.pop().unwrap();
@@ -8348,4 +8349,43 @@ fn closure_parameter_brands_use_the_installed_capture_identity() {
             .contains(&ViolationKind::InvalidOrigin(PlaceId(other))),
         "a same-typed capture cannot claim another owner's identity"
     );
+}
+
+/// `fn main(take s: String) -> (unique String,)` building its tuple from `s`,
+/// which is owned but not unique (MODE-2).
+fn aliased_unique_part() -> Fixture {
+    let mut f = Fixture::unit();
+    let s = param(&mut f, TypeKind::Primitive(Primitive::String));
+    let mut part = ty(TypeKind::Primitive(Primitive::String));
+    part.modes.uniqueness = Uniqueness::Unique;
+    let part = f.definition.types.push(part);
+    let tuple = f.slot(TypeKind::Tuple(vec![part].into()), Storage::Temporary);
+    let failure = f.cleanup(vec![drop(s)]);
+    f.assign(
+        tuple,
+        Rvalue::Construct {
+            constructor: Constructor::Tuple,
+            fields: vec![ConstructField {
+                field: 0,
+                value: take(s),
+            }],
+            destination: Destination::Inferred,
+        },
+        failure,
+    );
+    f.body().result = f.body().places[tuple as usize].ty;
+    f.body().blocks[0].terminator = ret(tuple, 0);
+    owner_signature(&mut f, PassingMode::Take);
+    f
+}
+#[test]
+fn a_unique_part_receives_a_currently_unique_value() {
+    // A fresh receipt is unique evidence for its declared `unique` part...
+    let mut part = ty(TypeKind::Primitive(Primitive::String));
+    part.modes.uniqueness = Uniqueness::Unique;
+    string_field_constructor(ty(TypeKind::Primitive(Primitive::String)), part).valid();
+    // ...an owned but aliased value is not.
+    aliased_unique_part().broken(vec![ViolationKind::TypeMismatch {
+        entity: "constructor field",
+    }]);
 }
