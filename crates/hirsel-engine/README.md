@@ -765,3 +765,8 @@ reference and publish its ordinary data result; callable constants remain exclud
 `Compiler::load_test_package` indexes an explicit manifest without requiring a
 launch entry. It retains the same package graph, source contexts and checking
 policy; test discovery selects ordinary functions after checking the package.
+
+`Compiler::load_package_declarations` loads the validated manifest graph for
+signature tools, including libraries without an entry. It parses/indexes source
+and resolves header paths through the selected dependency aliases and PROG-2
+access rules, without checking, lowering or evaluating bodies or loading prechecks.

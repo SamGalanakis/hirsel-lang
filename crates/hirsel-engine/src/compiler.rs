@@ -31,6 +31,14 @@ impl Compiler {
             .ok_or(ToolError::SourceTooLarge)?;
         Ok((engine, file))
     }
+    /// Index an explicit package and its dependency declarations without an entry
+    /// or any body checking, compile-time evaluation or precheck loading.
+    pub fn load_package_declarations(
+        &self,
+        manifest: &Path,
+    ) -> Result<PackageDeclarations, ToolError> {
+        crate::package::load_package_declarations(self, manifest)
+    }
     /// `.json` selects a launch manifest; `.hir` selects its exact `.hir.json`
     /// sidecar if present, otherwise the explicit standalone@0 context.
     pub fn load_program(&self, path: &Path) -> Result<LoadedProgram, ToolError> {

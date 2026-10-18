@@ -9,6 +9,110 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// A manifest-selected declaration graph, including libraries without an entry.
+/// Loading parses and indexes sources; it never checks or evaluates a body.
+pub struct PackageDeclarations {
+    pub package: PackageId,
+    pub engine: QueryEngine,
+    pub files: Vec<(FileId, FileContext)>,
+}
+impl PackageDeclarations {
+    /// Whether a declaration is visible from outside every selected package.
+    pub fn is_exported(&self, definition: &DefPath) -> bool {
+        let viewer = FileContext {
+            // This reserved spelling cannot name a source package.
+            package: PackageId {
+                name: "$doc".into(),
+                version: "0".into(),
+            },
+            modules: vec![],
+        };
+        self.engine
+            .adapters
+            .compiler_state
+            .as_ref()
+            .unwrap()
+            .borrow()
+            .index(self.package.clone())
+            .access(&viewer, definition)
+            .is_ok()
+    }
+    /// Resolve a header reference using the importing package's selected aliases
+    /// and the compiler's ordinary PROG-2 access rules.
+    pub fn lookup(
+        &self,
+        context: &FileContext,
+        path: &hirsel_syntax::Path,
+        symbols: &Interner,
+    ) -> Result<DefPath, hirsel_types::LookupError> {
+        let state = self
+            .engine
+            .adapters
+            .compiler_state
+            .as_ref()
+            .unwrap()
+            .borrow();
+        let index = state.index(context.package.clone());
+        match index.lookup(context, path, symbols) {
+            Err(hirsel_types::LookupError::Missing)
+                if path.package.is_none() && path.segments.len() == 1 =>
+            {
+                let definition = registry::BuiltinRegistry::new()
+                    .lookup_name(path, symbols)
+                    .ok_or(hirsel_types::LookupError::Missing)?;
+                index.access(context, &definition)
+            }
+            result => result,
+        }
+    }
+}
+
+pub(crate) fn load_package_declarations(
+    compiler: &Compiler,
+    manifest: &Path,
+) -> Result<PackageDeclarations, ToolError> {
+    let mut graph = Graph::default();
+    let package = graph.visit(manifest, None)?;
+    let mut engine = QueryEngine::new(default_environment(), compiler.adapters());
+    engine
+        .adapters
+        .compiler_state
+        .as_ref()
+        .unwrap()
+        .borrow_mut()
+        .package_exposures = graph
+        .packages
+        .iter()
+        .map(|(id, p)| (id.clone(), p.exposures.clone()))
+        .collect();
+    let mut files = Vec::new();
+    let mut assigned = BTreeSet::new();
+    for selected in graph.packages.values() {
+        for (source, context) in &selected.sources {
+            if !assigned.insert(source.clone()) {
+                return Err(invalid("one source path has more than one FileContext"));
+            }
+            let file = engine
+                .sources
+                .add(source, crate::tools::read_source(source)?)
+                .ok_or(ToolError::SourceTooLarge)?;
+            engine
+                .reparse_file(file, context)
+                .map_err(|error| ToolError::Query {
+                    error,
+                    phase: None,
+                    sources: engine.sources.clone(),
+                })?;
+            files.push((file, context.clone()));
+        }
+    }
+    Ok(PackageDeclarations {
+        package,
+        engine,
+        files,
+    })
+}
+
 /// A selected program, with every source indexed before any header is queried.
 pub struct LoadedProgram {
     pub engine: QueryEngine,
