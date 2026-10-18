@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1116 exported definitions; 308 variants.
+1125 exported definitions; 313 variants.
 
 ## Types and roots
 
@@ -7216,6 +7216,28 @@ References: [`std@1/date/format_into`](#def-std_401_2fdate_2fformat_5finto)
 
 References: [`std@1/date_time/format_into`](#def-std_401_2fdate_5ftime_2fformat_5finto), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
 
+<a id="def-std_401_2ftime_2fDisambiguation"></a>
+
+- `pub type time.Disambiguation = Earlier | Later | Reject`
+
+<a id="def-std_401_2ftime_2fDisambiguation_23Earlier"></a>
+
+- `Earlier -> time.Disambiguation`
+
+Variant of time.Disambiguation.
+
+<a id="def-std_401_2ftime_2fDisambiguation_23Later"></a>
+
+- `Later -> time.Disambiguation`
+
+Variant of time.Disambiguation.
+
+<a id="def-std_401_2ftime_2fDisambiguation_23Reject"></a>
+
+- `Reject -> time.Disambiguation`
+
+Variant of time.Disambiguation.
+
 <a id="def-std_401_2ftime_2fDuration"></a>
 
 - `@serializable pub type time.Duration { nanoseconds: i128, }`
@@ -7312,6 +7334,10 @@ Variant of time.TimeError.
 
 References: [`std@1/time_of_day/format_into`](#def-std_401_2ftime_5fof_5fday_2fformat_5finto)
 
+<a id="def-std_401_2ftime_2fTimeZone"></a>
+
+- `pub opaque type time.TimeZone: copyable + inert + noalloc_drop uses {}`
+
 <a id="def-std_401_2ftime_2fTimestamp"></a>
 
 - `@serializable pub type time.Timestamp { unix_nanoseconds: i128, }`
@@ -7363,6 +7389,22 @@ Variant of time.Weekday.
 - `Wednesday -> time.Weekday`
 
 Variant of time.Weekday.
+
+<a id="def-std_401_2ftime_2fZoneError"></a>
+
+- `pub type time.ZoneError = Gap | Fold`
+
+<a id="def-std_401_2ftime_2fZoneError_23Fold"></a>
+
+- `Fold -> time.ZoneError`
+
+Variant of time.ZoneError.
+
+<a id="def-std_401_2ftime_2fZoneError_23Gap"></a>
+
+- `Gap -> time.ZoneError`
+
+Variant of time.ZoneError.
 
 <a id="def-std_401_2ftime_2fbetween"></a>
 
@@ -7492,6 +7534,45 @@ References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/TimeOfDay`](#def-std
 - `pub fn time_of_day.to_string(value: time.TimeOfDay) -> unique String uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+
+## time_zone
+
+<a id="def-std_401_2ftime_5fzone_2ffixed"></a>
+
+- `pub fn time_zone.fixed(seconds: i32) -> Result[time.TimeZone, time.TimeError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/TimeZone`](#def-std_401_2ftime_2fTimeZone)
+
+<a id="def-std_401_2ftime_5fzone_2ffrom_5ftzif"></a>
+
+- `pub fn time_zone.from_tzif(data: Bytes) -> Result[time.TimeZone, scalar.ParseError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError), [`std@1/time/TimeZone`](#def-std_401_2ftime_2fTimeZone)
+
+<a id="def-std_401_2ftime_5fzone_2foffset"></a>
+
+- `@noalloc pub fn time_zone.offset(zone: time.TimeZone, value: time.Timestamp) -> i32 uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/TimeZone`](#def-std_401_2ftime_2fTimeZone), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2ftime_5fzone_2fto_5fdatetime"></a>
+
+- `@noalloc pub fn time_zone.to_datetime(zone: time.TimeZone, value: time.Timestamp) -> Result[ time.DateTime, time.TimeError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/TimeZone`](#def-std_401_2ftime_2fTimeZone), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2ftime_5fzone_2fto_5ftimestamp"></a>
+
+- `@noalloc pub fn time_zone.to_timestamp( zone: time.TimeZone, value: time.DateTime, disambiguation: time.Disambiguation ) -> Result[time.Timestamp, time.ZoneError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/Disambiguation`](#def-std_401_2ftime_2fDisambiguation), [`std@1/time/TimeZone`](#def-std_401_2ftime_2fTimeZone), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp), [`std@1/time/ZoneError`](#def-std_401_2ftime_2fZoneError)
+
+<a id="def-std_401_2ftime_5fzone_2futc"></a>
+
+- `pub fn time_zone.utc() -> time.TimeZone uses {}`
+
+References: [`std@1/time/TimeZone`](#def-std_401_2ftime_2fTimeZone)
 
 
 ## tls
