@@ -1,0 +1,35 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// Zig Io.Dir.Walker directory-only descent, empty directory and nested vectors.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("z"), b"z"), (path.of("a/b/value"), b"a")])
+  file.mkdir(d, path.of("a/empty"))?
+  let entries = file.list_recursive(d, path.of(""))?
+  test.check(t, list.len(entries) == 5)
+  test.check(t, path.text(entries[0].path) == "a")
+  test.check(t, path.text(entries[1].path) == "a/b")
+  test.check(t, path.text(entries[2].path) == "a/b/value")
+  test.check(t, path.text(entries[3].path) == "a/empty")
+  test.check(t, path.text(entries[4].path) == "z")
+  test.check(t, list.len(file.list_recursive(d, path.of("a/empty"))?) == 0)
+  let nested = dir.narrow(d, path.of("a"))?
+  let relative = file.list_recursive(nested, path.of("b"))?
+  test.check(t, list.len(relative) == 1)
+  test.check(t, path.text(relative[0].path) == "b/value")
+  test.check(
+    t,
+    match file.list_recursive(d, path.of("z")) {
+      Error(NotDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.list_recursive(d, path.of("../escape")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

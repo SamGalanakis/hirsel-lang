@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: accept
+fn allowed(d: Dir) -> Result[(), FileError] uses {d} {
+  file.copy_file(d, path.of("a"), path.of("b"))
+}

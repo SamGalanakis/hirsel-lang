@@ -1,0 +1,33 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("source"), b"abc"), (path.of("dest"), b"old")])
+  file.copy_file(d, path.of("source"), path.of("dest"))?
+  test.check(t, file.read_bytes(d, path.of("dest"))? == b"abc")
+  file.copy_file(d, path.of("source"), path.of("source"))?
+  test.check(t, file.read_bytes(d, path.of("source"))? == b"abc")
+  test.check(
+    t,
+    match file.copy_file(d, path.of("absent"), path.of("dest")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(t, file.read_bytes(d, path.of("dest"))? == b"abc")
+  test.check(t, list.len(file.read_dir(d, path.of(""))?) == 2)
+  let mut data: List[u8] = []
+  let mut i: u64 = 0
+  while i < 8193 {
+    list.push(mut data, 42)
+    i += 1
+  }
+  file.write_bytes(d, path.of("large"), bytes.from_list(take data))?
+  file.copy_file(d, path.of("large"), path.of("large-copy"))?
+  test.check(t, file.size(d, path.of("large-copy"))? == 8193)
+  test.check(
+    t,
+    file.read_bytes(d, path.of("large-copy"))? == file.read_bytes(d, path.of("large"))?
+  )
+  Ok(())
+}

@@ -1274,3 +1274,30 @@ creating anything; an empty or dot path checks the granted directory and succeed
 A later failure can leave earlier parents created. Read-only grants deny creation
 through the same core operation. Listing, metadata, same-grant rename and empty
 directory removal are [core operations](core-library.md#filesystem-lifecycle).
+
+
+## File copying and recursive listing
+
+```text
+fn file.copy_file(d: Dir, from: Path, to: Path) -> Result[(), FileError]
+fn file.list_recursive(d: Dir, p: Path) -> Result[unique List[DirEntry], FileError]
+```
+
+`copy_file` streams bytes in chunks of at most 8192 bytes through the existing file
+operations, with bounded working memory independent of file size. It acquires an
+atomic destination before opening the source, so a read-only Dir returns
+`NotGranted` before reading any source input. Success atomically replaces the
+destination; copying onto the source itself preserves its bytes. Errors abort the
+temporary and leave the old destination intact. Source permissions and timestamps
+are not copied. Source links use the existing confined `file.open` policy;
+destination links are replaced as entries by atomic commit. No durability is promised.
+
+`list_recursive` is an ordinary std walker over `file.read_dir`. It returns every
+descendant entry, including empty directories, symlinks and other entry kinds,
+in depth-first preorder with each directory's children sorted by UTF-8 bytes.
+Paths are relative to `d`, including the requested prefix; the starting directory
+itself is omitted. It descends only entries classified as `Directory`, never
+symlinks, and rejects a starting symlink or non-directory with `NotDirectory`.
+The first listing error is returned without a partial result. Listings are not a
+filesystem snapshot: concurrent changes can cause lookup errors or different
+entries, and all subsequent lookups retain the existing Dir confinement.

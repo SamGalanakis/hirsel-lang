@@ -36,3 +36,57 @@ pub fn mkdir_all(d: Dir, p: Path) -> Result[(), FileError] {
   }
   Ok(())
 }
+
+// Bounded streaming copy, with replacement published only after the final read.
+// Acquiring the temporary first checks write authority before reading the source.
+pub fn copy_file(d: Dir, from: Path, to: Path) -> Result[(), FileError] {
+  let mut destination = core@1/file.create_atomic(d, to)?
+  let mut source = core@1/file.open(d, from)?
+  while true {
+    let mut buffer: List[u8] = []
+    let count = core@1/file.read(d, mut source, mut buffer, 8192)?
+    if count == 0 {
+      break
+    }
+    let chunk = core@1/bytes.from_list(take buffer)
+    core@1/file.write_all(d, mut destination, chunk)?
+  }
+  core@1/file.commit(d, take destination)
+}
+
+// Zig Io.Dir.Walker's explicit depth-first stack, over confined sorted lists.
+// Only Directory entries are descended; symlinks remain entries in the result.
+pub fn list_recursive(d: Dir, p: Path) -> Result[unique List[DirEntry], FileError] {
+  let meta = core@1/file.metadata(d, p)?
+  match meta.kind {
+    Directory() => (),
+    _ => return Error(NotDirectory()),
+  }
+  let mut pending: List[DirEntry] = []
+  let initial = core@1/file.read_dir(d, p)?
+  let mut i = core@1/list.len(initial)
+  while i > 0 {
+    i -= 1
+    core@1/list.push(mut pending, copy initial[i])
+  }
+  let mut out: List[DirEntry] = []
+  while core@1/list.len(pending) > 0 {
+    let entry = match core@1/list.pop(mut pending) {
+      Some(value) => take value,
+      None() => break,
+    }
+    core@1/list.push(mut out, copy entry)
+    match entry.kind {
+      Directory() => {
+        let children = core@1/file.read_dir(d, entry.path)?
+        let mut j = core@1/list.len(children)
+        while j > 0 {
+          j -= 1
+          core@1/list.push(mut pending, copy children[j])
+        }
+      },
+      _ => (),
+    }
+  }
+  Ok(take out)
+}
