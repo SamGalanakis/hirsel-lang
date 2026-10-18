@@ -460,6 +460,26 @@ hirsel_precheck = rule(
     },
 )
 
+def _toolchain_bundle_impl(ctx):
+    # Copy the executable: a symlink would make current_exe resolve outside the
+    # bundle, away from the sibling precheck it discovers automatically.
+    bundle = ctx.actions.copied_dir("hirsel-toolchain", {
+        "hirsel": ctx.attrs.hirsel[DefaultInfo].default_outputs[0],
+        "hirsel-std.precheck": ctx.attrs.precheck[DefaultInfo].default_outputs[0],
+    })
+    return [
+        DefaultInfo(default_output = bundle),
+        RunInfo(args = cmd_args(bundle, format = "{}/hirsel")),
+    ]
+
+hirsel_toolchain_bundle = rule(
+    impl = _toolchain_bundle_impl,
+    attrs = {
+        "hirsel": attrs.dep(),
+        "precheck": attrs.dep(),
+    },
+)
+
 def _workspace_build_script_run_impl(ctx):
     # Lay the declared workspace files out at their repository paths, so the
     # script finds them from CARGO_MANIFEST_DIR as it does under Cargo.

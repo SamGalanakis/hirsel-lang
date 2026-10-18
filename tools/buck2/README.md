@@ -34,6 +34,7 @@ action on this host.
 
 ```sh
 export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
+.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-output # CLI and sibling std precheck
 .buck2/bin/buck2 build //:                        # every first-party target, dev profile, on the pool
 .buck2/bin/buck2 test //...                       # every test
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \

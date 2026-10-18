@@ -9,7 +9,7 @@ use hirsel_types::{ResolvedName, TypeId};
 use std::sync::Arc;
 
 /// A constant evaluation and the substitutions used to lower its source initializer.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct EvaluatedConstant {
     pub value: Materialized,
     pub substitutions: Vec<(ExprId, Materialized)>,
@@ -75,6 +75,9 @@ impl QueryEngine {
         path: &DefPath,
     ) -> Result<EvaluatedConstant, QueryError> {
         self.prepare_materialization_environment();
+        if let Some(value) = self.prechecked_constant(path)? {
+            return Ok(value);
+        }
         if self.comptime_stack.is_empty() {
             self.last_comptime_limit = None;
         }
@@ -93,6 +96,9 @@ impl QueryEngine {
         path: &DefPath,
         reference: Span,
     ) -> Result<EvaluatedConstant, QueryError> {
+        if let Some(value) = self.prechecked_constant(path)? {
+            return Ok(value);
+        }
         if let Some(value) = self.registry_dictionary_value(path)? {
             return Ok(EvaluatedConstant {
                 value,

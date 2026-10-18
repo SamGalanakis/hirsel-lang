@@ -1,7 +1,7 @@
 //! R9: per-definition completion of the source allocation audit, with the
 //! promises it enforced. V is not a body-effect verifier, so native passes check
 //! what they introduce against these records; import recomputes each record
-//! from current fully checked source rather than trusting a claimed bit.
+//! from current fully checked source or its matching toolchain precheck.
 use crate::*;
 use hirsel_syntax::ExprId;
 use hirsel_types::{
@@ -10,7 +10,7 @@ use hirsel_types::{
 };
 
 /// Storage whose destruction the audited body relies on.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CleanupSite {
     /// A taken parameter the body may drop.
     Parameter(ParamId),
@@ -20,7 +20,7 @@ pub enum CleanupSite {
     Fields,
 }
 /// The audit of one selected executable definition completed without errors.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SourceAudit {
     pub definition: DefPath,
     pub implementation_revision: ContentHash,
@@ -105,5 +105,55 @@ impl SourceAudit {
             closures,
             invocations: analyzed.call_allocations.clone(),
         }
+    }
+}
+
+/// The products of H and modes that native export needs, without their query state.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SourceAuditProducts {
+    pub audit: SourceAudit,
+    pub materialized: Vec<(ExprId, hirsel_tir::Materialized)>,
+}
+impl QueryEngine {
+    /// The completed allocation audit of an executable source definition.
+    pub fn source_audit(&mut self, path: &DefPath) -> Result<SourceAudit, QueryError> {
+        self.source_audit_products(path)
+            .map(|products| products.audit)
+    }
+
+    pub(crate) fn source_audit_products(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<SourceAuditProducts, QueryError> {
+        if let Some(products) = self.prechecked_audit_products(path)? {
+            return Ok(products);
+        }
+        let signature = self.item_signature(path)?.value;
+        let representation = if matches!(signature.kind, SignatureKind::Type(_)) {
+            match self.owner_representation(path, path) {
+                Ok(record) => Some(record),
+                Err(QueryError::NotImplemented) => None,
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
+        let mut analyzed = self.mode_definition(path)?;
+        if crate::queries::has_errors(&analyzed.diagnostics) {
+            return Err(QueryError::Diagnostics(analyzed.diagnostics));
+        }
+        let typed = &analyzed.value.typed;
+        let revision = typed.file.tree.items[typed.item.0 as usize].text_hash;
+        let audit = SourceAudit::completed(
+            &signature,
+            revision,
+            &analyzed.value,
+            representation.as_ref(),
+        );
+        self.prepare_comptime(&mut analyzed.value, &signature)?;
+        Ok(SourceAuditProducts {
+            audit,
+            materialized: analyzed.value.materialized,
+        })
     }
 }

@@ -150,11 +150,27 @@ record, including granted Env values, every byte read or written and every
 std is part of the toolchain, so it is checked once, when the toolchain is built,
 rather than by every program that uses it. `hirsel precheck` checks a package
 completely, as the only dependency of an empty program, and writes its *precheck*:
-each definition's lowered, validated TIR and semantic-revision node.
+each definition's lowered, validated TIR, semantic-revision node and completed
+native source audit, with compile-time substitutions and constant values. Native
+builds reuse these products without repeating H and modes for std.
+
+Build and install the release toolchain with Buck2 (from the repository root):
 
 ```sh
-hirsel precheck stdlib/std@1/hirsel.json -o "$(dirname "$(command -v hirsel)")/hirsel-std.precheck"
-.buck2/bin/buck2 build //:hirsel-std-precheck --show-output   # the same file, as tests use it
+bundle="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release \
+  //:hirsel-toolchain --show-full-simple-output)"
+install -d "$HOME/.local/bin"
+install -m 755 "$bundle/hirsel" "$HOME/.local/bin/hirsel"
+install -m 644 "$bundle/hirsel-std.precheck" "$HOME/.local/bin/hirsel-std.precheck"
+```
+
+`//:hirsel-toolchain` produces a directory containing both files. Its executable
+finds its sibling precheck immediately, including after installation. Plain
+`cargo build` users create that sibling with one command from the repository root
+(use `target/release/hirsel` after `cargo build --release`):
+
+```sh
+target/debug/hirsel precheck stdlib/std@1/hirsel.json -o target/debug/hirsel-std.precheck
 ```
 
 `hirsel` loads `$HIRSEL_PRECHECK`, or else `hirsel-std.precheck` beside its own

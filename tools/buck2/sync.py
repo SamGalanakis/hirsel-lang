@@ -591,7 +591,7 @@ def first_party(meta: dict) -> str:
     opt_levels = dev_opt_levels()
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
@@ -696,6 +696,8 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_precheck", name="hirsel-std-precheck", hirsel="//:hirsel-cli-bin-hirsel",
                             manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
                             visibility=["PUBLIC"]))
+    out.append("\n" + call("hirsel_toolchain_bundle", name="hirsel-toolchain", hirsel="//:hirsel-cli-bin-hirsel",
+                            precheck=PRECHECK, visibility=["PUBLIC"]))
     for name, script, data, archives in (
         ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
         ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),

@@ -100,12 +100,7 @@ impl QueryEngine {
                 };
                 representations.insert(path.clone(), record);
             }
-            let mut analyzed = self.mode_definition(&path)?;
-            if crate::queries::has_errors(&analyzed.diagnostics) {
-                return Err(QueryError::Diagnostics(analyzed.diagnostics));
-            }
-            let file = analyzed.value.typed.file.clone();
-            let item = analyzed.value.typed.item;
+            let (file, item) = self.parse_definition(&path)?.value;
             let source = &file.tree.items[item.0 as usize];
             let executable = matches!(
                 &source.kind,
@@ -127,17 +122,14 @@ impl QueryEngine {
                     return Err(QueryError::Diagnostics(lowered.diagnostics));
                 }
                 definitions.insert(path.clone(), lowered.value);
-                audits.insert(
-                    path.clone(),
-                    SourceAudit::completed(
-                        &signature.value,
-                        source.text_hash,
-                        &analyzed.value,
-                        representations.get(&path).and_then(Option::as_ref),
-                    ),
-                );
-                self.prepare_comptime(&mut analyzed.value, &signature.value)?;
-                materialized.insert(path.clone(), analyzed.value.materialized);
+                let products = self.source_audit_products(&path)?;
+                audits.insert(path.clone(), products.audit);
+                materialized.insert(path.clone(), products.materialized);
+            } else if !self.prechecked(&path.0.package) {
+                let analyzed = self.mode_definition(&path)?;
+                if crate::queries::has_errors(&analyzed.diagnostics) {
+                    return Err(QueryError::Diagnostics(analyzed.diagnostics));
+                }
             }
             if matches!(signature.value.kind, SignatureKind::Const(_)) {
                 constants.insert(path.clone(), self.materialize_value(&path)?);
@@ -155,14 +147,7 @@ impl QueryEngine {
                 definitions.insert(helper.clone(), self.lower_to_tir(&helper)?.value);
                 let (file, item) = self.parse_definition(&helper)?.value;
                 let revision = file.tree.items[item.0 as usize].text_hash;
-                let analyzed = self.mode_definition(&helper)?;
-                if crate::queries::has_errors(&analyzed.diagnostics) {
-                    return Err(QueryError::Diagnostics(analyzed.diagnostics));
-                }
-                audits.insert(
-                    helper.clone(),
-                    SourceAudit::completed(&signature.value, revision, &analyzed.value, None),
-                );
+                audits.insert(helper.clone(), self.source_audit(&helper)?);
                 signatures.insert(helper.clone(), signature.value);
                 source_owners.insert(
                     helper,

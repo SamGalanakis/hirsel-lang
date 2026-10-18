@@ -97,11 +97,12 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 fn prechecked_std_products_equal_fresh_ones() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        // `zzz` places std's sources first, `aaa` after the program's own.
-        let checked = f.program("zzz", STD_PROGRAM, &std_manifest(), "std");
-        let mut fresh = load(&checked, &PackageCache::disabled());
-        let bytes = fresh.precheck(&package("std")).unwrap();
-        let precheck = Arc::new(Precheck::decode(bytes).unwrap());
+        // Buck2 checks std once for all tests. Cargo users build the same artifact
+        // with the documented `hirsel precheck` command and set HIRSEL_PRECHECK.
+        let path = std::env::var_os("HIRSEL_PRECHECK")
+            .expect("set HIRSEL_PRECHECK to the toolchain's std precheck");
+        let precheck = Arc::new(Precheck::read(Path::new(&path)).unwrap());
+        // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
         let mut prechecked = load(&client, &PackageCache::prechecked(vec![precheck.clone()]));
         assert!(
@@ -129,24 +130,49 @@ fn prechecked_std_products_equal_fresh_ones() {
         for path in precheck.definitions() {
             assert_eq!(
                 prechecked.engine.semantic_program_revision(path).unwrap(),
-                fresh.engine.semantic_program_revision(path).unwrap(),
+                reference.engine.semantic_program_revision(path).unwrap(),
                 "{path}"
             );
-            let Ok(expected) = fresh.engine.lower_to_tir(path) else {
+            let Ok(expected) = reference.engine.lower_to_tir(path) else {
                 continue;
             };
             let actual = prechecked.engine.lower_to_tir(path).unwrap();
+            assert_eq!(
+                prechecked.engine.source_audit(path).unwrap(),
+                reference.engine.source_audit(path).unwrap(),
+                "{path}"
+            );
             // Spans name this program's FileIds; TypeId's Debug omits provenance.
-            let rebased = reference.engine.lower_to_tir(path).unwrap();
             assert_eq!(
                 format!("{:?}", actual.value),
-                format!("{:?}", rebased.value),
+                format!("{:?}", expected.value),
                 "{path}"
             );
             assert_eq!(actual.dependencies, expected.dependencies, "{path}");
             lowered += 1;
         }
         assert!(lowered > 100, "{lowered}");
+        let actual = prechecked.engine.export_native_input().unwrap();
+        let expected = reference.engine.export_native_input().unwrap();
+        assert_eq!(actual.audits, expected.audits);
+        assert_eq!(
+            format!("{:?}", actual.materialized),
+            format!("{:?}", expected.materialized)
+        );
+        assert_eq!(
+            format!("{:?}", actual.constants),
+            format!("{:?}", expected.constants)
+        );
+        prechecked.engine.import_native_input(actual).unwrap();
+        for path in precheck.definitions() {
+            for phase in [QueryKind::Check, QueryKind::Modes] {
+                assert_eq!(
+                    prechecked.engine.recompute_count(path, phase),
+                    0,
+                    "{path}: {phase:?}"
+                );
+            }
+        }
     });
 }
 
@@ -227,6 +253,85 @@ fn editing_a_prechecked_source_in_a_session_ends_its_precheck() {
         assert!(!program.engine.prechecked(&package("lib")));
         // The edited body is checked and run from source.
         assert!(program.check_for_execution().is_ok());
+    });
+}
+
+/// The cache must retain the source evidence and compile-time substitutions, not
+/// just a completion bit. Fresh import is the accepted control for both forgeries.
+#[test]
+fn prechecked_native_products_equal_fresh_and_reject_forged_audits() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let source = "const BASE: u64 = comptime 1\n@noalloc\npub fn value(x: u64) -> u64 {\n  x + comptime BASE\n}\n";
+        let precheck = library_precheck(&f, source).unwrap();
+        let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
+        let mut cached = load(&client, &PackageCache::prechecked(vec![precheck.clone()]));
+        let mut fresh = load(&client, &PackageCache::disabled());
+        cached.check_for_execution().unwrap();
+        fresh.check_for_execution().unwrap();
+        let actual = cached.engine.export_native_input().unwrap();
+        let expected = fresh.engine.export_native_input().unwrap();
+        assert_eq!(actual.audits, expected.audits);
+        assert_eq!(
+            format!("{:?}", actual.materialized),
+            format!("{:?}", expected.materialized)
+        );
+        assert_eq!(
+            format!("{:?}", actual.constants),
+            format!("{:?}", expected.constants)
+        );
+        for path in precheck.definitions() {
+            for phase in [QueryKind::Check, QueryKind::Modes] {
+                assert_eq!(
+                    cached.engine.recompute_count(path, phase),
+                    0,
+                    "{path}: {phase:?}"
+                );
+                assert!(
+                    fresh.engine.recompute_count(path, phase) > 0,
+                    "{path}: {phase:?}"
+                );
+            }
+        }
+        let path = actual
+            .audits
+            .keys()
+            .find(|path| path.0.package == package("lib") && path.0.name.as_str() == "value")
+            .unwrap()
+            .clone();
+        assert!(actual.audits[&path].noalloc);
+        cached.engine.import_native_input(actual.clone()).unwrap();
+        let mut forged = actual.clone();
+        forged.audits.get_mut(&path).unwrap().noalloc = false;
+        assert!(cached.engine.import_native_input(forged).is_err());
+        let mut missing = actual;
+        missing.audits.remove(&path);
+        assert!(cached.engine.import_native_input(missing).is_err());
+
+        let (file, context) = cached
+            .files
+            .iter()
+            .find(|(_, context)| context.package == package("lib"))
+            .cloned()
+            .unwrap();
+        let path = cached.engine.sources.file(file).unwrap().path.clone();
+        let file = cached
+            .engine
+            .sources
+            .add(&path, source.replace("comptime 1", "comptime 2"))
+            .unwrap();
+        cached.engine.parse_file(file, &context).unwrap();
+        assert!(!cached.engine.prechecked(&package("lib")));
+        cached.check_for_execution().unwrap();
+        let edited = cached.engine.export_native_input().unwrap();
+        assert_ne!(
+            format!("{:?}", edited.constants),
+            format!("{:?}", expected.constants)
+        );
+        assert_ne!(
+            format!("{:?}", edited.materialized),
+            format!("{:?}", expected.materialized)
+        );
     });
 }
 

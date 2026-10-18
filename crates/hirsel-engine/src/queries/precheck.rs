@@ -3,12 +3,13 @@
 //!
 //! A precheck holds what running a program needs of the package: each definition's
 //! semantic-revision node and, for executable definitions, its lowered and
-//! validated TIR with the execution reads that lowering adds to enclosing frames.
+//! validated TIR, completed source audit, compile-time substitutions and constants,
+//! with the execution reads that computing them adds to enclosing frames.
 //! It is keyed by the compiler identity and the package's complete checked input,
 //! and written only for a package that checks complete with no diagnostics and
 //! whose queries read nothing outside its closure. A program whose package
-//! matches skips checking it; every other query on its definitions still
-//! computes from source, so a precheck changes only how long a run takes.
+//! matches reuses these products; other queries still compute from source, so
+//! a precheck changes only how long a run takes.
 use super::*;
 use hirsel_syntax::PackageId;
 use hirsel_tir::Definition;
@@ -16,7 +17,7 @@ use hirsel_types::{DecodedTypes, EncodedTypes};
 use serde::{Deserialize, Serialize};
 use std::{ops::Range, path::Path, sync::Mutex};
 
-const MAGIC: &[u8; 8] = b"HIRPCHK1";
+const MAGIC: &[u8; 8] = b"HIRPCHK2";
 
 #[derive(Serialize, Deserialize)]
 struct Header {
@@ -45,6 +46,8 @@ struct PrecheckedLowering {
 pub(crate) struct PrecheckedDefinition {
     node: PrecheckedNode,
     lowering: Option<PrecheckedLowering>,
+    audit: Option<crate::native_audit::SourceAuditProducts>,
+    constant: Option<crate::comptime::EvaluatedConstant>,
 }
 
 /// A decoded precheck file. Records decode on first use and are shared by every
@@ -214,6 +217,26 @@ impl QueryEngine {
     ) -> Result<Option<PrecheckedNodeRef>, QueryError> {
         Ok(self.prechecked_definition(path)?.map(PrecheckedNodeRef))
     }
+    pub(crate) fn prechecked_audit_products(
+        &self,
+        path: &DefPath,
+    ) -> Result<Option<crate::native_audit::SourceAuditProducts>, QueryError> {
+        Ok(self
+            .prechecked_definition(path)?
+            .and_then(|record| record.audit.clone()))
+    }
+    pub(crate) fn prechecked_constant(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<Option<crate::comptime::EvaluatedConstant>, QueryError> {
+        let value = self
+            .prechecked_definition(path)?
+            .and_then(|record| record.constant.clone());
+        if let Some(value) = &value {
+            self.inherit_execution(&value.executed);
+        }
+        Ok(value)
+    }
     /// The prechecked lowering of `path`, with the execution reads computing it
     /// would have recorded in every enclosing frame.
     pub(super) fn prechecked_lowering(
@@ -285,6 +308,19 @@ impl QueryEngine {
                         | ItemKind::Type { drop: Some(_), .. }
                 )
             });
+            let audit = if executable {
+                Some(self.source_audit_products(&path)?)
+            } else {
+                None
+            };
+            let constant = if matches!(
+                self.item_signature(&path)?.value.kind,
+                hirsel_types::SignatureKind::Const(_)
+            ) {
+                Some(self.evaluate_constant(&path)?)
+            } else {
+                None
+            };
             let lowering = if executable {
                 self.execution_stack.push(ExecutionReads::default());
                 let lowered = self.lower_to_tir(&path);
@@ -325,6 +361,8 @@ impl QueryEngine {
                         dependencies,
                     },
                     lowering,
+                    audit,
+                    constant,
                 },
             ));
         }

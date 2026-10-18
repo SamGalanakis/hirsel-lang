@@ -348,17 +348,20 @@ toolchain build time, instead of by every program: `LoadedProgram::precheck`
 writes it after a complete check with no diagnostics, refusing a package whose
 queries read outside its closure. It holds, per definition, the semantic-revision
 node and the lowered, validated TIR (spans by manifest ordinal, TypeIds given
-fresh provenance on decode) with the execution reads lowering adds to enclosing
-frames, decoded on first use. Its key is the compiler identity, the package's
-checked-input revision and the compile-time limits. Only `PackageCache::shared`
+fresh provenance on decode), completed native source audit, compile-time
+substitutions and evaluated constant with its execution reads, decoded on first
+use. Native export reads these audit products instead of repeating H and modes;
+constant queries retain their original execution dependencies. Lowering replays
+the execution reads it adds to enclosing frames. Its key is the compiler
+identity, the package's checked-input revision and the compile-time limits. Only `PackageCache::shared`
 (the toolchain's `$HIRSEL_PRECHECK` or `hirsel-std.precheck` beside the
 executable) and `PackageCache::prechecked` caches adopt prechecks; disabled and
 other explicit caches check fresh. With a precheck adopted, `check` skips the
 package's files, GEN-5's program graph covers only the other bodies (a
 prechecked package reaches nothing outside its closure, so it closes no cycle
-through them), `lower_to_tir` and `semantic_program` take its products, and every
-other query still computes from source, so diagnostics, revisions and replay
-identity are unchanged. Re-indexing one of its files drops the precheck.
+through them), `lower_to_tir`, `semantic_program`, source audits and constant
+evaluation take its products, and other queries still compute from source, so
+diagnostics, revisions and replay identity are unchanged. Re-indexing one of its files drops the precheck.
 
 The single-threaded engine lives on a compiler thread. Use
 `with_compiler_stack(|| { ... })` to construct the engine and keep its complete
