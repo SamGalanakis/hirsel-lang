@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-782 exported definitions; 257 variants.
+783 exported definitions; 257 variants.
 
 ## Types and roots
 
@@ -4994,6 +4994,16 @@ References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/bool`](#def-core_401
 - `@preserves_unique(builder) pub fn text.append(mut builder: List[u8], text: String) -> () uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2ftext_2fdisplay_5fwidth"></a>
+
+- `@noalloc pub fn text.display_width(s: String) -> u64 uses {}`
+
+Estimated display cells over Unicode16 extended grapheme clusters.
+Each cluster's first scalar counts 2 for EAW W/F or a P1868R2 wide range,
+otherwise 1, including isolated combining marks and controls. Empty is 0.
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2ftext_2ffinish"></a>
 
