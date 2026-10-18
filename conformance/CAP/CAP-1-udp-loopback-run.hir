@@ -20,8 +20,8 @@ pub fn main(t: Test) -> Result[(), NetError] {
     t,
     [peer(9000u16), peer(9001u16)],
     [
-      NetListener(address: address(9000u16), clients: []),
-      NetListener(address: address(9001u16), clients: [])
+      NetListener(address: "127.0.0.1", port: address(9000u16).port, clients: []),
+      NetListener(address: "127.0.0.1", port: address(9001u16).port, clients: [])
     ]
   )
   let mut client = net.udp_bind(n, address(9000u16))?

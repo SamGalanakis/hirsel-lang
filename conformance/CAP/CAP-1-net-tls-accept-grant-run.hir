@@ -76,7 +76,7 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
         connections: [Open([]), Open([])]
       )
     ],
-    [NetListener(address: home(), clients: clients(5u16))]
+    [NetListener(address: "127.0.0.1", port: home().port, clients: clients(5u16))]
   )
   // ListenTls is the narrowing of Listen, never the reverse.
   let secure_only = net.narrow(

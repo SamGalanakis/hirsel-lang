@@ -1,5 +1,5 @@
 // rule: LANG-9
-// expect: fail LANG-9 at line 24
+// expect: fail LANG-9 at line 28
 // stdout: test failure: net client 0 of 127.0.0.1:8080 expected b"pong" but the program wrote b"pang"
 // entry: trial
 fn home() -> SocketAddr uses {} {
@@ -15,7 +15,11 @@ fn client() -> NetClient uses {} {
 }
 
 pub fn trial(t: Test) -> Result[(), NetError] {
-  let n = test.net(t, [], [NetListener(address: home(), clients: [client()])])
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "127.0.0.1", port: home().port, clients: [client()])]
+  )
   let mut listener = net.listen(n, home())?
   let mut (stream, _) = net.accept(n, mut listener)?
   let mut request: List[u8] = []

@@ -113,13 +113,12 @@ fn steps(v: &OpValue) -> Option<Vec<NetStep>> {
         .collect()
 }
 fn listener(v: &OpValue) -> Option<NetListener> {
-    let [address, clients] = fields(v)? else {
+    let [address, port, clients] = fields(v)? else {
         return None;
     };
-    let address = addr(address)?;
     Some(NetListener {
-        address: address.ip.to_string(),
-        port: address.port,
+        address: text(address)?,
+        port: u16::try_from(word(port)?).ok()?,
         clients: sequence(clients)?
             .iter()
             .map(|c| {

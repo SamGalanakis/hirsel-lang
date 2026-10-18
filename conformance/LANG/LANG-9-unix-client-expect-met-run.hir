@@ -1,0 +1,27 @@
+// rule: LANG-9
+// expect: run
+// entry: trial
+// The accepted twin of LANG-9-unix-client-unmet-close-fail: the client's Expect is met
+// before close, so the Unix listener's script passes.
+fn client() -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([0u8, 0u8, 0u8, 0u8]), port: 0u16),
+    tls: Plain(),
+    steps: [Send(b"ping"), Expect(b"pong")]
+  )
+}
+
+pub fn trial(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "/run/app.sock", port: 0u16, clients: [client()])]
+  )
+  let mut listener = net.unix_listen(n, path.of("/run/app.sock"))?
+  let mut (stream, _) = net.accept(n, mut listener)?
+  let mut request: List[u8] = []
+  net.read(n, mut stream, mut request, 4u64)?
+  net.write_all(n, mut stream, b"pong")?
+  net.close(n, take stream)
+  Ok(())
+}

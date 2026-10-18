@@ -44,7 +44,8 @@ pub fn main(t: Test) -> Result[(), ServerError] {
     [],
     [
       NetListener(
-        address: address,
+        address: "127.0.0.1",
+        port: address.port,
         clients: [
           client(50001u16, b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", hello()),
           client(

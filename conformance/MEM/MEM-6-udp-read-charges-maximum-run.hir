@@ -33,7 +33,7 @@ pub fn main(t: Test) -> Result[(), NetError] {
         connections: [Open([Send(b""), Send(b"x")])]
       )
     ],
-    [NetListener(address: address(9000u16), clients: [])]
+    [NetListener(address: "127.0.0.1", port: address(9000u16).port, clients: [])]
   )
   test.check(t, receive(n, 19u64) == Ok(3u64))
   test.check(t, receive(n, 17u64) == Error(OutOfSpace()))

@@ -18,12 +18,7 @@ pub fn exercise(t: Test) -> Result[(), ()] {
   let n = test.net(
     t,
     [],
-    [
-      NetListener(
-        address: SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16),
-        clients: []
-      )
-    ]
+    [NetListener(address: "127.0.0.1", port: 8080u16, clients: [])]
   )
   let listener = net.listen(
     n,

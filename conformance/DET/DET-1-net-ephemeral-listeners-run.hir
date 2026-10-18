@@ -26,9 +26,10 @@ pub fn trial(t: Test) -> Result[(), NetError] {
       )
     ],
     [
-      NetListener(address: home(49152u16), clients: []),
+      NetListener(address: "127.0.0.1", port: home(49152u16).port, clients: []),
       NetListener(
-        address: home(0u16),
+        address: "127.0.0.1",
+        port: home(0u16).port,
         clients: [NetClient(from: home(40001u16), tls: Plain(), steps: [Expect(b"ok")])]
       )
     ]
@@ -50,7 +51,11 @@ pub fn trial(t: Test) -> Result[(), NetError] {
   allocated(t, narrowed, 49154u16)?
   allocated(t, n, 49155u16)?
   allocated(t, n, 49157u16)?
-  let independent = test.net(t, [], [NetListener(address: home(0u16), clients: [])])
+  let independent = test.net(
+    t,
+    [],
+    [NetListener(address: "127.0.0.1", port: home(0u16).port, clients: [])]
+  )
   allocated(t, independent, 49152u16)?
   Ok(())
 }

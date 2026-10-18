@@ -101,6 +101,7 @@ conformance/CAP/CAP-1-udp-loopback-run.hir
 conformance/CAP/CAP-1-udp-roundtrip-run.hir
 conformance/CAP/CAP-1-unix-listen-run.hir
 conformance/CAP/CAP-1-unix-peer-run.hir
+conformance/CAP/CAP-1-unix-scripted-listen-run.hir
 conformance/CAP/CAP-1-unsafe-parameter.hir
 conformance/CAP/CAP-2-aggregate-summary-bad.hir
 conformance/CAP/CAP-2-aggregate-summary-ok.hir
@@ -1883,6 +1884,8 @@ conformance/LANG/LANG-9-track-caller-equal-fail.hir
 conformance/LANG/LANG-9-track-caller-equal-run.hir
 conformance/LANG/LANG-9-track-caller-primitive-value-fail.hir
 conformance/LANG/LANG-9-track-caller-primitive-value-run.hir
+conformance/LANG/LANG-9-unix-client-expect-met-run.hir
+conformance/LANG/LANG-9-unix-client-unmet-close-fail.hir
 conformance/MEM/MEM-1-last-surviving-holder.hir
 conformance/MEM/MEM-1-moved-variant-payload-run.hir
 conformance/MEM/MEM-1-projection-survives-owner-move.hir

@@ -1,8 +1,8 @@
 //! Fixed core@1 `test.net` ABI. The layouts are the ordinary repr-C core layouts:
 //! NetPeer (64 bytes), IpAddr (20), NetConnection (16), NetStep (32), PeerTls (16:
 //! u32 tag, payload at 8), TlsFailure (8: u32 tag, AlertReceived's u8 at 4),
-//! SocketAddr (24: IpAddr, port at 20), NetListener (32: SocketAddr, clients at 24)
-//! and NetClient (48: SocketAddr, PeerTls at 24, steps at 40).
+//! SocketAddr (24: IpAddr, port at 20), NetListener (40: address String, port at 24,
+//! clients at 32) and NetClient (48: SocketAddr, PeerTls at 24, steps at 40).
 //! Native campaign programs exercise these layouts.
 use crate::{
     Header, RunCtx,
@@ -111,12 +111,11 @@ unsafe fn socket_addr(at: *const u8) -> (String, u16) {
     })
 }
 unsafe fn listener(at: *const u8) -> NetListener {
-    let (address, port) = unsafe { socket_addr(at) };
     NetListener {
-        address,
-        port,
+        address: unsafe { text(at) },
+        port: unsafe { at.add(24).cast::<u16>().read() },
         clients: unsafe {
-            list(pointer(at.add(24)), 48, |at| {
+            list(pointer(at.add(32)), 48, |at| {
                 let (address, port) = socket_addr(at);
                 NetClient {
                     address,
@@ -144,7 +143,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_net(
     let request = Request::TestNet {
         test: unsafe { test.read() },
         peers: unsafe { list(peers, 64, |at| peer(at)) },
-        listeners: unsafe { list(listeners, 32, |at| listener(at)) },
+        listeners: unsafe { list(listeners, 40, |at| listener(at)) },
     };
     let completion = match unsafe { crate::io::capability_call(ctx, request) } {
         Ok(completion) => completion,

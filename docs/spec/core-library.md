@@ -398,7 +398,7 @@ NetPeer       = { address: String, port: u16, resolves_to: List[IpAddr],
 PeerTls       = Plain() | Certificate(List[String]) | Fails(TlsFailure)
 NetConnection = Refused() | Unanswered() | Open(List[NetStep])
 NetStep       = Send(Bytes) | Expect(Bytes) | Stall() | Close() | Reset() | Truncate()
-NetListener   = { address: SocketAddr, clients: List[NetClient] }
+NetListener   = { address: String, port: u16, clients: List[NetClient] }
 NetClient     = { from: SocketAddr, tls: PeerTls, steps: List[NetStep] }
 ```
 
@@ -725,6 +725,11 @@ listens on that IP have no scripted clients.
   in place of `Connect` and `UdpPeer` rules. Each `net.unix_connect` to it takes its next
   connection entry as a connect does; `Unanswered()` never completes. Its streams' `peer_addr`
   is `0.0.0.0` with port 0. A Unix peer is reached only by `net.unix_connect`.
+- A listener's `address` is a canonical IP literal or a canonical socket path. A listener
+  whose address is a path is a Unix listener: its port is 0, its clients come from `0.0.0.0`
+  with port 0, since Unix peers are unnamed, and `test.net` grants `(path, 0, UnixListen())`
+  for it in place of `Listen` and `UdpBind` rules. `net.unix_listen` on that path takes its
+  clients as `net.listen` does, and Test reports name the listener by its path.
 - Resolving a peer's address returns `resolves_to` with the peer's port; other names are
   `UnknownHost()`. `peer_addr` is a literal-address peer's literal, or a host-name peer's
   first `resolves_to` address; with an empty list it is `UnknownHost()`.

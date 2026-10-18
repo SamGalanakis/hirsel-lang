@@ -1,0 +1,28 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 26
+// stdout: test failure: net client 0 of /run/app.sock expected b"pong" but the program closed after writing b"po"
+// entry: trial
+// A Unix listener's client report names the listener by its socket path. The accepted
+// twin is LANG-9-unix-client-expect-met-run.
+fn client() -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([0u8, 0u8, 0u8, 0u8]), port: 0u16),
+    tls: Plain(),
+    steps: [Send(b"ping"), Expect(b"pong")]
+  )
+}
+
+pub fn trial(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "/run/app.sock", port: 0u16, clients: [client()])]
+  )
+  let mut listener = net.unix_listen(n, path.of("/run/app.sock"))?
+  let mut (stream, _) = net.accept(n, mut listener)?
+  let mut request: List[u8] = []
+  net.read(n, mut stream, mut request, 4u64)?
+  net.write_all(n, mut stream, b"po")?
+  net.close(n, take stream)
+  Ok(())
+}

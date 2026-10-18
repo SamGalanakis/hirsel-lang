@@ -36,7 +36,8 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
     [],
     [
       NetListener(
-        address: home(),
+        address: "127.0.0.1",
+        port: home().port,
         clients: [
           client(
             40001u16,

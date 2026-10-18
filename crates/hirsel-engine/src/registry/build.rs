@@ -364,7 +364,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "NetListener",
             "",
-            "address: SocketAddr,clients: List[NetClient]",
+            "address: String,port: u16,clients: List[NetClient]",
         ),
     ] {
         let mut b = Builder::new(generic)

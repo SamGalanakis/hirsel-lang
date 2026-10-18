@@ -36,7 +36,8 @@ pub fn trial(t: Test) -> Result[(), NetError] {
     [],
     [
       NetListener(
-        address: home(),
+        address: "127.0.0.1",
+        port: home().port,
         clients: [
           client(40001u16, [Send(b"ping"), Expect(b"pong")]),
           client(40002u16, [Send(b"ping"), Expect(b"pong"), Close()]),

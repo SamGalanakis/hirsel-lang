@@ -19,7 +19,7 @@ pub fn main(t: Test) -> Result[(), NetError] {
   let all = test.net(
     t,
     [peer(9001u16, b"outside"), peer(9002u16, b"ok")],
-    [NetListener(address: address(9000u16), clients: [])]
+    [NetListener(address: "127.0.0.1", port: address(9000u16).port, clients: [])]
   )
   let n = net.narrow(
     all,

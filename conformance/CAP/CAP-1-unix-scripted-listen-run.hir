@@ -1,0 +1,89 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A Unix listener is a NetListener named by its socket path. test.net grants it UnixListen
+// only: net.unix_listen takes its scripted clients in order, accepted streams and the
+// listener report the unnamed address, a second listen while it is open is AddrInUse, it
+// listens again after the drop, a narrowed Net keeps UnixListen but cannot widen it to
+// UnixListenRemoveStale, and a TCP listen, a Unix connect to it and a listen on another
+// path are refused.
+fn unix_path() -> Path uses {} {
+  path.of("/run/app.sock")
+}
+
+fn unnamed() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([0u8, 0u8, 0u8, 0u8]), port: 0u16)
+}
+
+fn client(take request: Bytes, take reply: Bytes) -> NetClient uses {} {
+  NetClient(from: unnamed(), tls: Plain(), steps: [Send(request), Expect(reply)])
+}
+
+fn serve(n: Net, mut listener: Listener of n) -> Result[Bytes, NetError] {
+  let mut (stream, from) = net.accept(n, mut listener)?
+  if from != unnamed() {
+    return Error(Fault(1u32))
+  }
+  let mut request: List[u8] = []
+  net.read(n, mut stream, mut request, 16u64)?
+  let received = bytes.from_list(take request)
+  net.write_all(n, mut stream, received)?
+  net.close(n, take stream)
+  Ok(received)
+}
+
+fn rule(take operation: NetOperation) -> NetRule uses {} {
+  NetRule(address: "/run/app.sock", port: 0u16, operation: operation)
+}
+
+fn accept_both(t: Test, n: Net) -> Result[(), NetError] {
+  let mut listener = net.unix_listen(n, unix_path())?
+  test.check(t, net.local_addr(n, listener)? == unnamed())
+  let again = match net.unix_listen(n, unix_path()) {
+    Error(AddrInUse()) => true,
+    _ => false,
+  }
+  test.check(t, again)
+  test.check(t, serve(n, mut listener)? == b"one")
+  test.check(t, serve(n, mut listener)? == b"two")
+  Ok(())
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "/run/app.sock",
+        port: 0u16,
+        clients: [client(b"one", b"one"), client(b"two", b"two")]
+      )
+    ]
+  )
+  accept_both(t, n)?
+  let narrowed = net.narrow(n, [rule(UnixListen())])?
+  let reopened = net.unix_listen(narrowed, unix_path())?
+  test.check(t, net.local_addr(narrowed, reopened)? == unnamed())
+  let wider = match net.narrow(n, [rule(UnixListenRemoveStale())]) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  let other = match net.unix_listen(n, path.of("/run/other.sock")) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  let connect = match net.unix_connect(n, unix_path()) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  let tcp = match net.listen(
+    n,
+    SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  ) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  test.check(t, wider && other && connect && tcp)
+  Ok(())
+}

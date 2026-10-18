@@ -22,7 +22,11 @@ fn reopen(n: Net) -> Result[(), NetError] {
 }
 
 pub fn exercise(t: Test) -> Result[(), NetError] {
-  let n = test.net(t, [], [NetListener(address: home(), clients: [])])
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "127.0.0.1", port: home().port, clients: [])]
+  )
   reopen(n)?
   match net.narrow(n, [rule(Connect())]) {
     Error(NotGranted()) => (),

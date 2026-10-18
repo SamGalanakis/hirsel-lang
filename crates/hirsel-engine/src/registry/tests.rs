@@ -688,7 +688,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
         ),
         (
             "NetListener",
-            "{address:SocketAddr[],clients:List[NetClient[]]}",
+            "{address:String,port:U16,clients:List[NetClient[]]}",
         ),
         (
             "UdpReceived",

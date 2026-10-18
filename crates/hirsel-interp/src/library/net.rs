@@ -347,12 +347,11 @@ fn socket_addr(v: &Value) -> Result<SocketAddr, Error> {
     Ok(SocketAddr::new(ip(f[0])?, port(f[1])?))
 }
 fn listener(v: &Value) -> Result<NetListener, Error> {
-    let f = fields(v, "NetListener", 2)?;
-    let address = socket_addr(f[0])?;
+    let f = fields(v, "NetListener", 3)?;
     Ok(NetListener {
-        address: address.ip().to_string(),
-        port: address.port(),
-        clients: collection::elements(f[1], BuiltinType::List)?
+        address: text(f[0])?.to_owned(),
+        port: port(f[1])?,
+        clients: collection::elements(f[2], BuiltinType::List)?
             .iter()
             .map(|c| {
                 let f = fields(c, "NetClient", 3)?;

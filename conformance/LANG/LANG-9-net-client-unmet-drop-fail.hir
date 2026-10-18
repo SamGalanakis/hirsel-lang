@@ -22,7 +22,11 @@ fn forget(n: Net, mut listener: Listener of n) -> Result[(), NetError] {
 }
 
 pub fn trial(t: Test) -> Result[(), NetError] {
-  let n = test.net(t, [], [NetListener(address: home(), clients: [client()])])
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "127.0.0.1", port: home().port, clients: [client()])]
+  )
   let mut listener = net.listen(n, home())?
   forget(n, mut listener)?
   Ok(())

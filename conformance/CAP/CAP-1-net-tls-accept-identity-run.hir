@@ -52,7 +52,11 @@ fn upgrade_error(n: Net, take upgraded: Result[Stream of n, NetError]) -> Option
 }
 
 pub fn exercise(t: Test) -> Result[(), NetError] {
-  let n = test.net(t, [], [NetListener(address: home(), clients: clients(9u16))])
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "127.0.0.1", port: home().port, clients: clients(9u16))]
+  )
   let mut l = net.listen(n, home())?
   let good = identity()
   // Empty and malformed PEM, in either half, is invalid input before any handshake.

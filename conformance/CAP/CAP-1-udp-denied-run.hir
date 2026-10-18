@@ -6,7 +6,11 @@ fn address(port: u16) -> SocketAddr uses {} {
 }
 
 pub fn main(t: Test) -> Result[(), NetError] {
-  let n = test.net(t, [], [NetListener(address: address(9000u16), clients: [])])
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: "127.0.0.1", port: address(9000u16).port, clients: [])]
+  )
   let denied = match net.udp_bind(n, address(9002u16)) {
     Error(NotGranted()) => true,
     _ => false,

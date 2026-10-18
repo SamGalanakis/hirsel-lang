@@ -23,7 +23,8 @@ fn exercise(t: Test, timed: bool) -> Result[(), http.HttpError] {
     [],
     [
       NetListener(
-        address: addr,
+        address: "127.0.0.1",
+        port: addr.port,
         clients: [NetClient(from: addr, tls: Plain(), steps: steps)]
       )
     ]

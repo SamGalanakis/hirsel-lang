@@ -75,7 +75,8 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
     [],
     [
       NetListener(
-        address: addr,
+        address: "127.0.0.1",
+        port: addr.port,
         clients: [
           NetClient(
             from: addr,

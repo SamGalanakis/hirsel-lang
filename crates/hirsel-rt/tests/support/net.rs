@@ -334,7 +334,8 @@ fn listener(l: &NetListener) -> Value {
     record(
         "NetListener",
         vec![
-            at(&l.address, l.port),
+            Value::String(l.address.clone()),
+            number(Primitive::U16, l.port.into()),
             list(l.clients.iter().map(|c| {
                 record(
                     "NetClient",

@@ -738,7 +738,7 @@ Variant of NetError.
 
 <a id="def-core_401_2fNetListener"></a>
 
-- `type NetListener uses {} = { address: SocketAddr, clients: List[NetClient] }`
+- `type NetListener uses {} = { address: String, port: u16, clients: List[NetClient] }`
 
 <a id="def-core_401_2fNetOperation"></a>
 

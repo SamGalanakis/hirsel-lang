@@ -29,7 +29,7 @@ pub fn main(t: Test) -> Result[(), NetError] {
         ]
       )
     ],
-    [NetListener(address: address(9000u16), clients: [])]
+    [NetListener(address: "127.0.0.1", port: address(9000u16).port, clients: [])]
   )
   let mut s = net.udp_bind(n, address(9000u16))?
   let sent = udp.send_to(n, mut s, b"hi", address(9001u16))?
