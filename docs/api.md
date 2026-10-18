@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-834 exported definitions; 266 variants.
+835 exported definitions; 266 variants.
 
 ## Types and roots
 
@@ -217,6 +217,10 @@ Variant of ClockError.
 - `Unavailable() -> ClockError`
 
 Variant of ClockError.
+
+<a id="def-core_401_2fCommand"></a>
+
+- `type Command uses {Dir} = { program: Path, args: List[String], dir: Option[Dir], env: Option[List[(String, String)]] }`
 
 <a id="def-core_401_2fDb"></a>
 
@@ -4634,11 +4638,11 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-core_401_2fproc_2frun"></a>
 
-- `fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]`
+- `fn proc.run(p: Proc, cmd: Command, stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]`
 
 <a id="def-core_401_2fproc_2fspawn"></a>
 
-- `fn proc.spawn(p: Proc, program: Path, args: List[String], dir: Option[Dir]) -> Result[Child of p, ProcessError]`
+- `fn proc.spawn(p: Proc, cmd: Command) -> Result[Child of p, ProcessError]`
 
 
 ## random
