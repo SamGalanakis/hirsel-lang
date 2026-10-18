@@ -4,12 +4,24 @@
 //
 // usage: bench-lite [WORDS [SEED [ARENA_BYTES]]]: by default 2000 words, seed 1
 // and a 16 MiB arena.
+@format(summary_text)
 pub type Summary {
   words: u64,
   different: u64,
   bytes: u64,
   checksum: u64,
   top: List[(String, u64)],
+}
+
+@preserves_unique(out)
+fn summary_text(s: Summary, mut out: List[u8]) -> () uses {} {
+  text.append(
+    mut out,
+    f"words {s.words}\ndifferent {s.different}\nbytes {s.bytes}\nchecksum {s.checksum}\n"
+  )
+  for (w, n) in s.top {
+    text.append(mut out, f"  {w} {n}\n")
+  }
 }
 
 pub type Ranked {
@@ -146,30 +158,6 @@ fn arena_summary(words: List[String], capacity: u64) -> Result[Summary, String] 
   }
 }
 
-fn report(s: Summary) -> String {
-  let mut out: List[u8] = []
-  text.append(mut out, "words ")
-  u64.format_into(s.words, mut out)
-  text.append(mut out, "\ndifferent ")
-  u64.format_into(s.different, mut out)
-  text.append(mut out, "\nbytes ")
-  u64.format_into(s.bytes, mut out)
-  text.append(mut out, "\nchecksum ")
-  u64.format_into(s.checksum, mut out)
-  text.append(mut out, "\n")
-  for (w, n) in s.top {
-    text.append(mut out, "  ")
-    text.append(mut out, w)
-    text.append(mut out, " ")
-    u64.format_into(n, mut out)
-    text.append(mut out, "\n")
-  }
-  match text.finish(take out) {
-    Ok(t) => take t,
-    Error(_) => "",
-  }
-}
-
 fn number(args: Args, index: u64, default: u64) -> Result[u64, String] {
   if arg.count(args) <= index {
     return Ok(default)
@@ -194,7 +182,7 @@ fn run(args: Args) -> Result[String, String] {
   if on_heap != in_arena {
     return Error("heap and arena summaries differ")
   }
-  Ok(string.concat(report(on_heap), "heap and arena agree\n"))
+  Ok(f"{on_heap}heap and arena agree\n")
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), String] {
