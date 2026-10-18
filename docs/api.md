@@ -1454,9 +1454,9 @@ Variant of WaitError.
 
 ## arg
 
-<a id="def-core_401_2farg_2fcount"></a>
+<a id="def-core_401_2farg_2flen"></a>
 
-- `@noalloc fn arg.count(args: Args) -> u64`
+- `@noalloc fn arg.len(args: Args) -> u64`
 
 <a id="def-core_401_2farg_2fpath"></a>
 
