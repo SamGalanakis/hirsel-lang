@@ -7,3 +7,6 @@ conformance/PROG/PROG-3-exit-report-variant-error-run.hir
 conformance/SEM/SEM-3-fstring-zero-run.hir
 conformance/SEM/SEM-3-fstring-radix-run.hir
 conformance/SEM/SEM-3-fstring-precision-run.hir
+conformance/MEM/MEM-7-soa-push-scalars-run.hir
+conformance/MEM/MEM-7-soa-reserve-refs-run.hir
+conformance/MEM/MEM-7-soa-index-refs-run.hir

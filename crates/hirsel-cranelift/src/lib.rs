@@ -16,11 +16,13 @@ mod construction;
 mod data;
 mod drop;
 mod flat;
+mod foreign;
 mod function;
 mod instructions;
 mod module;
 mod places;
 mod scalar;
+mod soa;
 
 use std::fmt;
 

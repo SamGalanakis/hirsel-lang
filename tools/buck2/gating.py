@@ -366,9 +366,15 @@ class Selection:
             self.tests = uquery(f'(kind("_rust_test", {scope}) + attrfilter(labels, doctest, {scope}))'
                                 ' - attrfilter(labels, gate, //...)')
 
+    def native_programs(self):
+        return impact.native_programs(self.paths, self.crates, ROOT)
+
+    def native_targets(self):
+        return ['root//:gate-native-changed', 'root//:gate-native-cranelift-changed'] if self.native_programs() else []
+
     def campaign_targets(self):
         return [t for campaign in impact.CAMPAIGNS if campaign in self.campaigns
-                for t in CAMPAIGN_TARGETS[campaign]]
+                for t in CAMPAIGN_TARGETS[campaign]] + self.native_targets()
 
 
 # ---------------------------------------------------------------- results

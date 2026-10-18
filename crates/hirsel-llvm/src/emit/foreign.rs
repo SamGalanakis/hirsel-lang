@@ -2,6 +2,20 @@
 //! the platform convention, outside the Hirsel status protocol. A foreign call
 //! cannot fail in Hirsel terms, so it always continues on its normal edge.
 use super::*;
+use hirsel_lir::layout_types::CConvention;
+
+// Linux AAPCS64 assigns a register but leaves its high bits unspecified for
+// narrow C scalars. Model that raw register explicitly at the boundary; then
+// truncate/extend it to Hirsel's declared scalar before internal calls.
+fn aarch64_narrow(kind: ScalarKind, convention: CConvention) -> Option<bool> {
+    if convention != CConvention::Aapcs64 {
+        return None;
+    }
+    if kind == ScalarKind::Bool {
+        return Some(false);
+    }
+    scalar::integer(kind).and_then(|(width, signed)| (width < 64).then_some(signed))
+}
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
     pub(super) fn foreign_call(
@@ -37,6 +51,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     ArgumentValue::Value(value),
                     LayoutKind::Scalar(scalar),
                 ) => {
+                    let value = self.get(value)?;
+                    if let Some(signed) = aarch64_narrow(*scalar, self.inputs.target.c_convention) {
+                        types.push(self.module.int_type(64));
+                        args.push(self.builder.cast(
+                            if signed { Cast::SExt } else { Cast::ZExt },
+                            value,
+                            self.module.int_type(64),
+                        ));
+                        continue;
+                    }
                     match parameter.extension {
                         ScalarExtension::None => {}
                         ScalarExtension::Sign => {
@@ -47,7 +71,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         }
                     }
                     types.push(scalar::scalar_type(&self.builder, *scalar));
-                    args.push(self.get(value)?);
+                    args.push(value);
                 }
                 // A borrowed byte view: its first byte and its length.
                 (
@@ -86,6 +110,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             None => None,
         };
         let returns = match result {
+            Some(scalar) if aarch64_narrow(scalar, self.inputs.target.c_convention).is_some() => {
+                self.module.int_type(64)
+            }
             Some(scalar) => scalar::scalar_type(&self.builder, scalar),
             None => self.module.void_type(),
         };
@@ -120,7 +147,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.module
                 .add_call_attribute(returned, AttributeSlot::Parameter(index), attribute);
         }
-        if let Some(scalar) = result {
+        if let Some(scalar) = result
+            && self.inputs.target.c_convention != CConvention::Aapcs64
+        {
             match hirsel_lir::abi::extension_of(scalar) {
                 ScalarExtension::None => {}
                 ScalarExtension::Sign => self.module.add_call_attribute(
@@ -139,6 +168,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             if result.is_none() {
                 return self.invalid("a call result without an extern result");
             }
+            let returned = if let Some(kind) = result
+                && aarch64_narrow(kind, self.inputs.target.c_convention).is_some()
+            {
+                self.builder.cast(
+                    Cast::Trunc,
+                    returned,
+                    scalar::scalar_type(&self.builder, kind),
+                )
+            } else {
+                returned
+            };
             self.define(value, returned)?;
         }
         let Some(normal) = normal else {
@@ -173,6 +213,7 @@ pub(super) fn define_callback_thunk<'m>(
     module: &'m Module<'m>,
     manifested: &mut Manifested,
     layouts: &LayoutTable,
+    convention: CConvention,
     name: &str,
     target: Function<'m>,
     signature: &Signature<'m, '_>,
@@ -198,10 +239,17 @@ pub(super) fn define_callback_thunk<'m>(
         if parameter.passing != ParameterPassing::ByValue || parameter.slots.len() != 1 {
             return Err(unsupported("parameter that is not one scalar"));
         }
-        types.push(signature.types[signature.first[index + 1] as usize]);
+        let kind = layouts.layout(parameter.layout).map(|l| &l.kind);
+        let narrow = matches!(kind, Some(LayoutKind::Scalar(kind)) if aarch64_narrow(*kind, convention).is_some());
+        types.push(if narrow {
+            module.int_type(64)
+        } else {
+            signature.types[signature.first[index + 1] as usize]
+        });
     }
     let builder = Builder::new(module);
     let returns = match signature.value {
+        Some((kind, _)) if aarch64_narrow(kind, convention).is_some() => module.int_type(64),
         Some((kind, _)) => scalar::scalar_type(&builder, kind),
         None => module.void_type(),
     };
@@ -242,7 +290,18 @@ pub(super) fn define_callback_thunk<'m>(
         }
     }
     arguments.push(module.parameter(thunk, 0));
-    arguments.extend((1..types.len() as u32).map(|i| module.parameter(thunk, i)));
+    for (index, parameter) in rest.iter().enumerate() {
+        let raw = module.parameter(thunk, index as u32 + 1);
+        let kind = layouts.layout(parameter.layout).map(|l| &l.kind);
+        let value = if let Some(LayoutKind::Scalar(kind)) = kind
+            && aarch64_narrow(*kind, convention).is_some()
+        {
+            builder.cast(Cast::Trunc, raw, scalar::scalar_type(&builder, *kind))
+        } else {
+            raw
+        };
+        arguments.push(value);
+    }
     let returned = builder.call(target, &arguments);
     signature.attribute_call(module, returned);
     let status = if signature.returns_status() {
@@ -263,7 +322,17 @@ pub(super) fn define_callback_thunk<'m>(
         Some((kind, field)) => {
             let word = builder.extract(returned, field);
             let word_ty = value_word(module, kind);
-            builder.ret(decode_word(&builder, kind, word, word_ty));
+            let value = decode_word(&builder, kind, word, word_ty);
+            let value = if let Some(signed) = aarch64_narrow(kind, convention) {
+                builder.cast(
+                    if signed { Cast::SExt } else { Cast::ZExt },
+                    value,
+                    module.int_type(64),
+                )
+            } else {
+                value
+            };
+            builder.ret(value);
         }
         None => builder.ret_void(),
     }

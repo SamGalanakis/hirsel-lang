@@ -73,6 +73,7 @@ impl V {
 /// A prepared address: its pointer, layout and the alignment it is known to have.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Place {
+    pub(crate) columns: Option<crate::soa::ColumnRow>,
     pub(crate) ptr: Value,
     pub(crate) layout: LayoutId,
     pub(crate) align: u32,
@@ -440,6 +441,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let align = self.layout(layout)?.align;
         let (ptr, _) = self.stack_bytes(size, align);
         Ok(Place {
+            columns: None,
             ptr,
             layout,
             align,
@@ -589,6 +591,17 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         layout: LayoutId,
         unaligned: bool,
     ) -> Emitted<Place> {
+        if place.columns.is_some() {
+            let Some(field) = self
+                .layout(place.layout)?
+                .fields
+                .iter()
+                .find(|f| f.offset == offset && f.layout == layout)
+            else {
+                return self.invalid("column field absent");
+            };
+            return self.column_field(place, field);
+        }
         let ptr = self.offset(place.ptr, offset);
         let align = if unaligned {
             1
@@ -599,6 +612,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 .min(self.layout(layout)?.align)
         };
         Ok(Place {
+            columns: None,
             ptr,
             layout,
             align,
@@ -614,6 +628,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             Err(error) => return self.invalid(format!("{error:?}")),
         };
         Ok(Place {
+            columns: None,
             ptr: self.offset(block, offset),
             layout: payload,
             align,
@@ -870,6 +885,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 | ParameterPassing::TransferAddress
                 | ParameterPassing::ExclusiveAddress => {
                     let place = Place {
+                        columns: None,
                         ptr: self.entry_params[first],
                         layout,
                         align,
@@ -914,6 +930,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                         }
                         LayoutKind::Flat => {
                             let place = Place {
+                                columns: None,
                                 ptr: pointer,
                                 layout,
                                 align,
@@ -982,6 +999,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             let ptr = self.offset(payload, offset);
             let align = align.min(low_bit(offset)).min(self.layout(layout)?.align);
             self.slots[s] = Some(Place {
+                columns: None,
                 ptr,
                 layout,
                 align,
@@ -1467,6 +1485,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     };
                     let align = self.layout(result.layout)?.align;
                     let out = Place {
+                        columns: None,
                         ptr: self.entry_params[index],
                         layout: result.layout,
                         align,
@@ -1581,7 +1600,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         };
         let abi = self.em.fn_abi(site.abi, self.definition())?;
         if abi.shape == CallableShape::Foreign {
-            return self.unsupported("a call of an extern \"c\" function (the Foreign shape)");
+            return self.foreign_call(call, abi, normal);
         }
         let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
         let mut runtime_primitive = false;
@@ -1679,6 +1698,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 }
             }
         }
+        let mut column_returns = Vec::new();
         for parameter in &abi.parameters {
             let Some(argument) = arguments.iter().find(|a| a.parameter == parameter.source) else {
                 return self.invalid("a call without an argument for a parameter");
@@ -1705,7 +1725,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 }
                 (ParameterPassing::ExclusiveAddress, ArgumentValue::Address { address, .. }) => {
                     let place = self.place(address)?;
-                    args.push(place.ptr);
+                    let passed = self.gather(place)?;
+                    if place.columns.is_some() {
+                        column_returns.push((place, passed));
+                    }
+                    args.push(passed.ptr);
                 }
                 (ParameterPassing::PointerLength, ArgumentValue::Value(value)) => {
                     let place = match self.layout(parameter.layout)?.kind {
@@ -1748,6 +1772,12 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
             (None, None) => return self.invalid("a call without a callee"),
         };
+        // Both continuations observe the callee's mutations, including partial failure.
+        for (destination, temporary) in column_returns {
+            let shape = self.layout_shape(destination.layout)?;
+            let value = self.load(shape, temporary);
+            self.scatter(destination, shape, value)?;
+        }
         let status = returned[0];
         let failure_block = self.failure_block(failure)?;
         let fail = if self.unit.header.origin == UnitOrigin::Library {

@@ -254,6 +254,10 @@ def push_gate(base_ref):
         build = gating.uquery(gating.BUILD_SET)
         clippy = gating.uquery(gating.CLIPPY_SET)
         campaigns = selection.campaign_targets()
+        native_programs = selection.native_programs()
+        native_config = ['-c', 'hirsel.native_filters=' + '|'.join(native_programs)] if native_programs else []
+        if native_programs:
+            say(f'gate: LLVM smoke matrix and Cranelift parity: {len(native_programs)} selected programs')
         say(f'gate: one Buck2 invocation: build {len(build)} targets, Clippy {len(clippy)}, '
             f'{len(selection.tests)} test targets, campaigns: '
             + (', '.join(c for c in impact.CAMPAIGNS if c in selection.campaigns) or 'none'))
@@ -262,7 +266,7 @@ def push_gate(base_ref):
             event_log, build_report = Path(scratch) / 'events.pb.zst', Path(scratch) / 'build.json'
             with gating.gate_slot(), open(log, 'w') as out:
                 invoked = time.monotonic()
-                status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
+                status = gating.buck2('test', *native_config, '--event-log', str(event_log), '--build-report', str(build_report),
                                       *build, *[t + '[clippy.txt]' for t in clippy], *selection.tests, *campaigns,
                                       '--', '--timeout', str(gating.TIMEOUT), stdout=out, stderr=subprocess.STDOUT).returncode
             wall = time.monotonic() - invoked
@@ -281,6 +285,9 @@ def push_gate(base_ref):
                                           (impact.NATIVE_SMOKE, 'native smoke', smoke_summary)):
             if campaign in selection.campaigns:
                 campaign_row(report, name, results, gating.CAMPAIGN_TARGETS[campaign], summarize)
+        if selection.native_targets():
+            campaign_row(report, 'changed-program LLVM smoke matrix and Cranelift parity', results,
+                         selection.native_targets(), smoke_summary)
         test_rows(report, results, selection.tests)
         if status and report.passed:
             report.add(False, f'buck2 test exited {status}', [gating.last_lines(Path(log).read_text(errors='replace'), 30)])

@@ -182,6 +182,31 @@ int32_t counter_bump(void *c) { return ++((counter *)c)->value; }
 void counter_free(void *c) { freed++; free(c); }
 int32_t counter_freed(void) { return freed; }
 
+
+/* Exercise the ABI itself: AAPCS64 permits arbitrary high bits in narrow
+   callback arguments. The shim passes the declared low bytes with dirty highs. */
+#if defined(__aarch64__)
+__asm__(".text\n"
+        ".global demo_narrow\n"
+        ".type demo_narrow, %function\n"
+        "demo_narrow:\n"
+        "stp x29, x30, [sp, #-16]!\n"
+        "mov x29, sp\n"
+        "mov x3, x1\n"
+        "movz x1, #0x7f81\n"
+        "movk x1, #0xdead, lsl #16\n"
+        "movz x2, #0xbeef\n"
+        "movk x2, #0xabcd, lsl #16\n"
+        "blr x3\n"
+        "ldp x29, x30, [sp], #16\n"
+        "ret\n"
+        ".size demo_narrow, .-demo_narrow\n");
+#else
+int8_t demo_narrow(void *ctx, int8_t (*f)(void *, int8_t, uint16_t)) {
+    return f(ctx, -127, 0xbeef);
+}
+#endif
+
 int32_t demo_each(void *ctx, int32_t (*f)(void *, int32_t), int32_t n) {
     int32_t sum = 0;
     for (int32_t i = 0; i < n; i++) sum += f(ctx, i);
@@ -201,6 +226,25 @@ extern \"c\" fn demo_each(
   f: FnPtr[fn(mut state: unique Tally, i: i32) -> i32],
   n: i32
 ) -> i32
+
+
+/// Calls f(ctx, -127, 0xbeef) during this call and retains neither argument.
+extern \"c\" fn demo_narrow(
+  u: Unsafe,
+  mut ctx: unique Tally,
+  f: FnPtr[fn(mut state: unique Tally, a: i8, b: u16) -> i8]
+) -> i8
+
+fn narrow(mut ctx: Tally, a: i8, b: u16) -> i8 {
+  ctx.calls += 1
+  if a == -127i8 && b == 0xbeefu16 { -5i8 } else { 7i8 }
+}
+
+pub fn narrow_callback(u: Unsafe) -> bool {
+  let mut tally = Tally(calls: 0)
+  let value = demo_narrow(u, mut tally, narrow)
+  value == -5i8 && tally.calls == 1
+}
 
 fn double(mut ctx: Tally, i: i32) -> i32 {
   ctx.calls += 1
@@ -317,6 +361,9 @@ const NATIVE_MAIN: &str = "pub fn main(u: Unsafe) -> Result[(), ()] {
   if lib.each_doubled(u, 4) != 1204 {
     return Error(())
   }
+  if !lib.narrow_callback(u) {
+    return Error(())
+  }
   Ok(())
 }
 
@@ -330,14 +377,38 @@ fn counted(u: Unsafe) -> i32 {
 /// Builds `main` against the demo library, compiled with the pinned clang;
 /// returns the directory, its launch manifest and the executable.
 fn native_demo(name: &str, main: &str) -> (PathBuf, PathBuf, PathBuf) {
+    native_demo_backend(name, main, native::Backend::Llvm)
+}
+fn native_demo_backend(
+    name: &str,
+    main: &str,
+    backend: native::Backend,
+) -> (PathBuf, PathBuf, PathBuf) {
+    native_demo_target(
+        name,
+        main,
+        backend,
+        native::TargetSpec::x86_64_unknown_linux_gnu(),
+    )
+}
+fn native_demo_target(
+    name: &str,
+    main: &str,
+    backend: native::Backend,
+    target: native::TargetSpec,
+) -> (PathBuf, PathBuf, PathBuf) {
     use std::process::Command;
-    let target = native::TargetSpec::x86_64_unknown_linux_gnu();
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("foreign-{name}"));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("lib")).unwrap();
     let tools = native::Toolchain::in_tree(&root.join("runtime"), &[&target]).unwrap();
     std::fs::write(root.join("lib/demo.c"), DEMO_C).unwrap();
-    let compiled = Command::new(&tools.clang)
+    let cc = if target.triple.starts_with("aarch64") {
+        &tools.aarch64_cc
+    } else {
+        &tools.clang
+    };
+    let compiled = Command::new(cc)
         .args(["-c", "-O1", "-fPIC"])
         .arg(root.join("lib/demo.c"))
         .arg("-o")
@@ -354,6 +425,7 @@ fn native_demo(name: &str, main: &str) -> (PathBuf, PathBuf, PathBuf) {
         "scale",
         "each_doubled",
         "each_exploding",
+        "narrow_callback",
     ]
     .into_iter()
     .map(|name| json!({"module":[],"name":name,"kind":"pure","model":"deterministic"}))
@@ -371,11 +443,12 @@ fn native_demo(name: &str, main: &str) -> (PathBuf, PathBuf, PathBuf) {
     std::fs::write(root.join("grants.json"), r#"{"unsafe":true}"#).unwrap();
     let path = launch(&root, json!([select_lib()]));
     let executable = root.join("app");
-    let built = native::build_path_native(
+    let built = native::build_path_native_backend(
         &path,
         &executable,
         target,
         native::BuildProfile::Default,
+        backend,
         None,
     )
     .unwrap();
@@ -536,22 +609,94 @@ fn native_c_callbacks_follow_library_and_inline_definitions() {
                     .inline_instances
                     .insert(ready.units[index].unit().header.instance);
             }
-            for opt in [native::OptLevel::None, native::OptLevel::Speed] {
-                for partition in [native::Partition::Whole, native::Partition::Singleton] {
-                    let dir = root.join(format!("{library}-{opt:?}-{partition:?}"));
-                    std::fs::create_dir_all(&dir).unwrap();
-                    let exe =
-                        native::link(&ready, &loaded.entry, opt, partition, &tools, &dir).unwrap();
-                    let launched = native::launch(&exe, &target, &tools, &dir, false).unwrap();
-                    let observation = native::observe(
-                        &launched,
-                        &ready,
-                        &native::Sites::new(validated.snapshot()),
-                    )
-                    .unwrap();
-                    assert_eq!(observation.exit_code, Some(0), "{observation:?}");
-                    assert!(observation.failures.is_empty(), "{observation:?}");
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                for opt in [native::OptLevel::None, native::OptLevel::Speed] {
+                    for partition in [native::Partition::Whole, native::Partition::Singleton] {
+                        let dir = root.join(format!("{library}-{backend:?}-{opt:?}-{partition:?}"));
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+                            &ready.table,
+                            &ready.finalizers,
+                        );
+                        let objects = native::partition_backend_objects(
+                            &ready, backend, opt, partition, &registry, false, None,
+                        )
+                        .unwrap();
+                        let exe =
+                            native::link_objects(&ready, &loaded.entry, &objects, &tools, &dir)
+                                .unwrap();
+                        let launched = native::launch(&exe, &target, &tools, &dir, false).unwrap();
+                        let observation = native::observe(
+                            &launched,
+                            &ready,
+                            &native::Sites::new(validated.snapshot()),
+                        )
+                        .unwrap();
+                        assert_eq!(observation.exit_code, Some(0), "{observation:?}");
+                        assert!(observation.failures.is_empty(), "{observation:?}");
+                    }
                 }
+            }
+        }
+    });
+}
+
+#[test]
+fn cranelift_calls_c_and_c_callbacks_with_the_same_observations_as_llvm() {
+    with_compiler_stack(|| {
+        for target in native::TargetSpec::executed() {
+            let execute_target = |root: &Path, executable: &Path| {
+                if target.triple.starts_with("aarch64") {
+                    std::process::Command::new(std::env::var_os("HIRSEL_QEMU_AARCH64").unwrap())
+                        .arg("-L")
+                        .arg(std::env::var_os("HIRSEL_AARCH64_SYSROOT").unwrap())
+                        .arg(executable)
+                        .arg("--hirsel-grants")
+                        .arg(root.join("grants.json"))
+                        .output()
+                        .unwrap()
+                } else {
+                    execute(root, executable, false)
+                }
+            };
+            let mut checks = 0;
+            let main = NATIVE_MAIN.replace("Result[(), ()]", "Result[(), i32]");
+            let mut diagnostic = String::new();
+            for part in main.split_inclusive("return Error(())") {
+                if let Some(prefix) = part.strip_suffix("return Error(())") {
+                    checks += 1;
+                    diagnostic.push_str(&format!("{prefix}return Error({checks})"));
+                } else {
+                    diagnostic.push_str(part);
+                }
+            }
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                let (root, _, executable) = native_demo_target(
+                    &format!("parity-{backend:?}-{}", target.triple),
+                    &diagnostic,
+                    backend,
+                    target.clone(),
+                );
+                let ran = execute_target(&root, &executable);
+                assert_eq!(ran.status.code(), Some(0), "{backend:?}: {ran:?}");
+                let main = "pub fn main(u: Unsafe) -> Result[(), ()] {
+  let _ = lib.each_exploding(u, 3)
+  Ok(())
+}
+";
+                let (root, _, executable) = native_demo_target(
+                    &format!("parity-failure-{backend:?}-{}", target.triple),
+                    main,
+                    backend,
+                    target.clone(),
+                );
+                let ran = execute_target(&root, &executable);
+                assert!(!ran.status.success(), "{backend:?}: {ran:?}");
+                assert!(
+                    String::from_utf8_lossy(&ran.stderr)
+                        .contains("a callback failed; the process ends"),
+                    "{backend:?}: {ran:?}"
+                );
             }
         }
     });

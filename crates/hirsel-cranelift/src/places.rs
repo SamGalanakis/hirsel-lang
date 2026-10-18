@@ -51,6 +51,7 @@ impl FnEmitter<'_, '_, '_> {
                 } else {
                     // A pointer to a value of its own layout (a `mut` capture's address).
                     Place {
+                        columns: None,
                         ptr: pointer,
                         layout,
                         align: self.layout(layout)?.align,
@@ -169,6 +170,7 @@ impl FnEmitter<'_, '_, '_> {
             None
         };
         Ok(Place {
+            columns: None,
             ptr: pointer,
             layout: payload,
             align: record.align,
@@ -241,6 +243,7 @@ impl FnEmitter<'_, '_, '_> {
                         let base = self.offset_by(place.ptr, cursor);
                         let ptr = self.offset(base, field.offset);
                         return Ok(Place {
+                            columns: None,
                             ptr,
                             layout: field.layout,
                             align: 1,
@@ -270,6 +273,10 @@ impl FnEmitter<'_, '_, '_> {
                 self.field_place(place, field.offset, field.layout, field.unaligned)
             }
             ProjectionStep::Slot(index) => {
+                if let LayoutKind::SoaColumns { element } = record.kind {
+                    let index = self.index64(index)?;
+                    return self.column_row(place, element, index);
+                }
                 // An element slot below the capacity, with no count check: the library
                 // body proves the bound.
                 let LayoutKind::Sequence { element } = record.kind else {
@@ -289,6 +296,7 @@ impl FnEmitter<'_, '_, '_> {
                     .min(low_bit(offset))
                     .min(self.layout(element)?.align);
                 Ok(Place {
+                    columns: None,
                     ptr: self.offset_by(place.ptr, at),
                     layout: element,
                     align,
@@ -307,6 +315,7 @@ impl FnEmitter<'_, '_, '_> {
                 self.flat_content = Some(first);
                 let offset = self.index64(offset)?;
                 Ok(Place {
+                    columns: None,
                     ptr: self.offset_by(first, offset),
                     layout: element,
                     align: self.layout(element)?.align.min(place.align),
@@ -324,6 +333,7 @@ impl FnEmitter<'_, '_, '_> {
                 self.flat_content = Some(content);
                 let offset = self.index64(offset)?;
                 Ok(Place {
+                    columns: None,
                     ptr: self.offset_by(content, offset),
                     layout: element,
                     align: 1,
@@ -342,6 +352,7 @@ impl FnEmitter<'_, '_, '_> {
                 self.flat_content = Some(first);
                 let ptr = self.sequential_walk(first, element, index)?;
                 Ok(Place {
+                    columns: None,
                     ptr,
                     layout: element,
                     align: self.layout(element)?.align.min(place.align),
@@ -363,11 +374,22 @@ impl FnEmitter<'_, '_, '_> {
                     self.offset_by(at, scaled)
                 };
                 Ok(Place {
+                    columns: None,
                     ptr,
                     layout: element,
                     align: 1,
                     block: place.block,
                 })
+            }
+            ProjectionStep::Index(index)
+                if matches!(record.kind, LayoutKind::SoaColumns { .. }) =>
+            {
+                let LayoutKind::SoaColumns { element } = record.kind else {
+                    unreachable!()
+                };
+                let count = self.load_u64(place.ptr);
+                let index = self.checked_index(index, count, failure)?;
+                self.column_row(place, element, index)
             }
             ProjectionStep::Index(index) => {
                 let (element, count, base, element_offset) = match record.kind {
@@ -397,6 +419,7 @@ impl FnEmitter<'_, '_, '_> {
                         let payload = self.payload_of(owner, storage)?;
                         let bytes = self.offset(payload.ptr, 8);
                         let base = Place {
+                            columns: None,
                             ptr: self.offset_by(bytes, start),
                             layout: storage,
                             align: 1,
@@ -424,6 +447,7 @@ impl FnEmitter<'_, '_, '_> {
                     .min(low_bit(element_offset))
                     .min(self.layout(element)?.align);
                 Ok(Place {
+                    columns: None,
                     ptr: self.offset_by(base.ptr, offset),
                     layout: element,
                     align,

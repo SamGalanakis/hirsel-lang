@@ -551,3 +551,8 @@ Reads gather and writes scatter declaration-order fields; field projections
 address a column directly. Reserve relocates every column to its new capacity,
 moving unique storage or duplicating shared children before releasing the old
 root. Mutable row calls gather into ABI storage and scatter back on either exit.
+
+On Linux AArch64, foreign calls and C callback thunks normalize narrow integer
+registers explicitly. AAPCS64 leaves upper bits unspecified: C-facing register
+slots are read at full width, truncated to the declared scalar, and extended
+when handed back to C or to the internal ABI. No C return extension is assumed.

@@ -158,6 +158,7 @@ impl FnEmitter<'_, '_, '_> {
             } => {
                 let place = self.place(address)?;
                 let shape = self.value_shape(result)?;
+                let place = self.gather(place)?;
                 let value = self.load_bounded(shape, place)?;
                 let value =
                     self.read_uncounted(value, self.unit.values[result.index()].ty, address)?;
@@ -171,7 +172,7 @@ impl FnEmitter<'_, '_, '_> {
                     self.counted_view(value)?
                 };
                 let shape = self.value_shape(value)?;
-                self.store(shape, stored, place)
+                self.scatter(place, shape, stored)
             }
             Inst::Replace {
                 address,
@@ -182,7 +183,8 @@ impl FnEmitter<'_, '_, '_> {
                 // The exchange: old content to the displaced slot, then the new content in.
                 let place = self.place(address)?;
                 let shape = self.value_shape(value)?;
-                let old = self.load(shape, place);
+                let image = self.gather(place)?;
+                let old = self.load(shape, image);
                 let Some(Some(slot)) = self.slots.get(displaced.index()).copied() else {
                     return self.invalid("a Replace without its displaced slot");
                 };
@@ -194,7 +196,7 @@ impl FnEmitter<'_, '_, '_> {
                 } else {
                     self.counted_view(value)?
                 };
-                self.store(shape, stored, place)
+                self.scatter(place, shape, stored)
             }
             Inst::UpdateMask {
                 result,
@@ -650,7 +652,8 @@ impl FnEmitter<'_, '_, '_> {
                     return self.invalid("a copy at another layout than its place");
                 }
                 let shape = self.layout_shape(place.layout)?;
-                let value = self.load(shape, place);
+                let image = self.gather(place)?;
+                let value = self.load(shape, image);
                 self.dup_holders(place)?;
                 self.define(result, value)
             }
@@ -678,6 +681,12 @@ impl FnEmitter<'_, '_, '_> {
 
     fn seq_reserve(&mut self, address: AddressId, capacity: ValueId) -> Emitted {
         let place = self.place(address)?;
+        if let Some(payload) = self.layout_payload(place.layout)?
+            && let LayoutKind::SoaColumns { element } = self.layout(payload)?.kind
+        {
+            let wanted = self.get1(capacity)?;
+            return self.reserve_columns(place, payload, element, wanted);
+        }
         if let Some(payload) = self.layout_payload(place.layout)?
             && let LayoutKind::Sequential { element } = self.layout(payload)?.kind
         {
@@ -843,7 +852,8 @@ impl FnEmitter<'_, '_, '_> {
             (LayoutKind::Flat, ValueRepr::Aggregate) => {
                 let place = self.place(address)?;
                 let shape = self.layout_shape(layout)?;
-                let value = self.load(shape, place);
+                let image = self.gather(place)?;
+                let value = self.load(shape, image);
                 self.define(result, value)
             }
             // A variable flat value is a block of its extent: the copy is a new heap block

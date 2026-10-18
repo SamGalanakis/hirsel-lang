@@ -306,6 +306,13 @@ they add or touch on the pool. Focus runs book one CPU at lane priority:
 .buck2/bin/buck2 test -c hirsel.full=true -c hirsel.tests=focus //:gate-native-full -- --test-arg=--filter --test-arg=<program>
 ```
 
+A change to LLVM emission must carry the matching Cranelift change.
+
+Changes to `crates/hirsel-llvm`, `hirsel-cranelift`, `hirsel-lir`, `hirsel-rc`
+or the runtime run the same changed-program filters through the LLVM native
+smoke matrix and Cranelift parity in `tools/gate`. With no changed runnable fixtures,
+both use the bounded native smoke list.
+
 Changes to `crates/hirsel-cranelift` also run the Cranelift parity gate for the
 programs they touch: each case LLVM passes (unoptimized, diagnostic archive) must
 agree with the reference as a Cranelift executable, and every case that does not is

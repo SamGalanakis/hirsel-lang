@@ -14,7 +14,7 @@ use hirsel_driver::native::{
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --cranelift [--clif] [--aarch64] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
+const USAGE: &str = "usage: native --smoke [--filter TEXT]... | --sanitize [--filter TEXT]... | --cranelift [--clif] [--aarch64] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
                      options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
 
 fn main() -> ExitCode {
@@ -181,8 +181,20 @@ fn run() -> Result<bool, String> {
     match mode.as_str() {
         "--smoke" => {
             let matrix = seeded(smoke_matrix(), hash_seed);
-            let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
-            cases.extend(native::generate::cases(8));
+            let mut cases = if filter.is_empty() {
+                let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
+                cases.extend(native::generate::cases(8));
+                cases
+            } else {
+                native::cranelift::cases(&root)?
+            };
+            cases.retain(|c| filter.keeps(&c.id));
+            if cases.is_empty() {
+                return Err(format!(
+                    "native smoke: --filter {:?} selected no cases",
+                    filter.0
+                ));
+            }
             let results = native::run_cases(
                 &cases,
                 &matrix,

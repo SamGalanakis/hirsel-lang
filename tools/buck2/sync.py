@@ -103,6 +103,7 @@ def corpus_packages() -> list[str]:
 CORPUS_DATA = ["conformance/**", "packages/**", "stdlib/**", *corpus_packages()]
 
 RUNTIME_DATA = {
+    "hirsel-cranelift": ["crates/hirsel-rt/include/**"],
     "hirsel-cli": [*CORPUS_DATA],
     "hirsel-conformance": [*CORPUS_DATA, "bench/native/programs/**", "docs/spec/**", "native-tests/**"],
     "hirsel-driver": [*CORPUS_DATA, "docs/spec/**", "native-tests/**"],
@@ -146,7 +147,7 @@ TEST_DATA = {
 
 # Crates whose tests link native programs: they get the runtime archives
 # (HIRSEL_RUNTIME_ARCHIVES) instead of building them with Cargo.
-NATIVE_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-llvm", "hirsel-pipeline-tests", "hirsel-rc", "hirsel-rt"}
+NATIVE_TESTS = {"hirsel-cranelift", "hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-llvm", "hirsel-pipeline-tests", "hirsel-rc", "hirsel-rt"}
 RUNTIME_ARCHIVES = "//:hirsel-rt-archives"
 
 # Cases that call full_matrix (44 configurations) for toolchain or configuration
@@ -271,6 +272,11 @@ GATE_TESTS = [
            release=True, **GATE) for index in range(1, AGREE_SHARDS + 1)),
     dict(name="gate-native-smoke", binary="//:hirsel-conformance-bin-native", args=["--smoke"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
+    # Per-push matrix and parity share the changed-program filters from impact.py.
+    dict(name="gate-native-changed", binary="//:hirsel-conformance-bin-native", args=["--smoke"],
+         release=True, runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
+    dict(name="gate-native-cranelift-changed", binary="//:hirsel-conformance-bin-native", args=["--cranelift"],
+         release=True, runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
     # `tools/gate --full` (`-c hirsel.full=true` declares them). Native stages
     # carry their cross toolchain, qemu and Valgrind as pool action inputs.
     *(dict(name=f"gate-agree-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",

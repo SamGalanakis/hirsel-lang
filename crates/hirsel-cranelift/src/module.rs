@@ -223,24 +223,7 @@ pub(crate) fn emit(
             problem: "foreign or noncanonical descriptor registry".into(),
         });
     }
-    let isa = isa(inputs.target, inputs.opt)?;
-    let call_conv = isa.default_call_conv();
-    let builder = ObjectBuilder::new(isa, "hirsel", cranelift_module::default_libcall_names())
-        .map_err(|e| CodegenError::Target {
-            triple: inputs.target.triple.clone(),
-            message: e.to_string(),
-        })?;
-    let mut emitter = Emitter {
-        module: ObjectModule::new(builder),
-        inputs,
-        call_conv,
-        manifested: Manifested::default(),
-        functions: BTreeMap::new(),
-        data: BTreeMap::new(),
-        pending: Vec::new(),
-        anonymous: 0,
-        clif: clif.then(String::new),
-    };
+    let mut emitter = Emitter::new(inputs, clif)?;
     let emitted: Vec<&ValidatedUnit<Ready>> = units
         .iter()
         .copied()
@@ -255,12 +238,6 @@ pub(crate) fn emit(
     for unit in &emitted {
         let unit = unit.unit();
         let header = &unit.header;
-        if inputs.callbacks.contains(&header.definition) {
-            return Err(CodegenError::Unsupported {
-                definition: header.definition.clone(),
-                what: "a C callback thunk (unsafe ffi)".into(),
-            });
-        }
         let abi = emitter.fn_abi(header.abi, &header.definition)?;
         let name = symbol_name(&header.definition, Some(&header.instance));
         if emitter.functions.contains_key(&name) {
@@ -304,6 +281,21 @@ pub(crate) fn emit(
             let thunk_sig = thunk_signature(&sig.ir);
             let thunk_id = emitter.declare_function(&thunk, linkage, &thunk_sig)?;
             emitter.define_thunk(&thunk, thunk_id, id, &thunk_sig, &sig.ir)?;
+        }
+        if inputs.callbacks.contains(&header.definition) {
+            let callback = hirsel_lir::emission::callback_thunk_name(
+                &header.definition,
+                Some(&header.instance),
+            );
+            if library {
+                emitter.manifested.library.insert(callback.clone());
+            } else {
+                emitter
+                    .manifested
+                    .exports
+                    .insert(callback.clone(), record(&callback));
+            }
+            emitter.define_callback(&callback, id, &sig, linkage, &header.definition)?;
         }
         bodies.push((unit, id, sig));
     }
@@ -350,6 +342,27 @@ fn thunk_signature(entry: &ir::Signature) -> ir::Signature {
 }
 
 impl<'a> Emitter<'a> {
+    pub(crate) fn new(inputs: &'a EmitInputs<'a>, clif: bool) -> Emitted<Self> {
+        let isa = isa(inputs.target, inputs.opt)?;
+        let call_conv = isa.default_call_conv();
+        let builder = ObjectBuilder::new(isa, "hirsel", cranelift_module::default_libcall_names())
+            .map_err(|e| CodegenError::Target {
+                triple: inputs.target.triple.clone(),
+                message: e.to_string(),
+            })?;
+        Ok(Self {
+            module: ObjectModule::new(builder),
+            inputs,
+            call_conv,
+            manifested: Manifested::default(),
+            functions: BTreeMap::new(),
+            data: BTreeMap::new(),
+            pending: Vec::new(),
+            anonymous: 0,
+            clif: clif.then(String::new),
+        })
+    }
+
     pub(crate) fn fn_abi(
         &self,
         id: hirsel_lir::FnAbiId,

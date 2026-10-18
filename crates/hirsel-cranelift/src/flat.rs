@@ -45,7 +45,7 @@ impl FnEmitter<'_, '_, '_> {
             return Ok(None);
         };
         Ok(match self.layout(payload)?.kind {
-            LayoutKind::Sequence { element } => Some(element),
+            LayoutKind::Sequence { element } | LayoutKind::SoaColumns { element } => Some(element),
             _ => None,
         })
     }
@@ -68,7 +68,12 @@ impl FnEmitter<'_, '_, '_> {
     /// Zero-sized elements report `u64::MAX`.
     pub(crate) fn sequence_capacity(&mut self, value: ValueId) -> Emitted<Value> {
         let (data, element) = self.sequence_payload(value)?;
-        if self.fixed_size(element)? == 0 {
+        let Some(payload) = self.layout_payload(self.value_type(value)?.layout)? else {
+            return self.invalid("sequence capacity without payload");
+        };
+        if self.fixed_size(element)? == 0
+            && !matches!(self.layout(payload)?.kind, LayoutKind::SoaColumns { .. })
+        {
             return Ok(self.u64c(u64::MAX));
         }
         Ok(self.load_ty(types::I64, data, SEQUENCE_CAPACITY_OFFSET))
@@ -542,6 +547,7 @@ impl FnEmitter<'_, '_, '_> {
                 FlatPart::Fixed { value, size } => {
                     let layout = self.value_type(value)?.layout;
                     let place = Place {
+                        columns: None,
                         ptr: cursor,
                         layout,
                         align: 1,
@@ -624,6 +630,7 @@ impl FnEmitter<'_, '_, '_> {
         let offset = self.b.ins().imul_imm_s(index, stride as i64);
         let base = self.offset(source.ptr, start);
         let child = Place {
+            columns: None,
             ptr: self.offset_by(base, offset),
             layout: element,
             align: self.layout(element)?.align,

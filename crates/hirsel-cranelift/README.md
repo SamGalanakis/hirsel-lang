@@ -55,7 +55,16 @@ Invariants:
   (`hirsel.compare.<id>`, `hirsel.hash.<id>`), defined as soon as a unit asks for one so
   an error names that unit.
 
-Not yet lowered (each an explicit `Unsupported`): calls of `extern "c"` functions (the
-`Foreign` shape) and function references that are C callback addresses, inline drops that reach a finalizer or
-structure-of-arrays columns, copies of inline sequences, dynamic live masks on inline
-releases. Debug line tables and profile sources are not emitted.
+- Capacity-based SoA storage retains row coordinates through places; projection,
+  gather and scatter use the stored column capacity. Reserve moves credits from
+  private blocks and duplicates holders when detaching shared blocks.
+- Foreign calls use the platform C ABI and establish the thread's callback context.
+  Callback thunks restore the Hirsel status protocol and end the process on failure.
+  AAPCS64 narrow scalar registers are explicitly truncated/extended at the C boundary.
+- Inline releases use the runtime's inline continuation (`hirsel_rt_v2_finalize`),
+  sharing finalizer shielding, field-ordinal live masks, ordered drops and failure
+  accumulation with block releases. Sequence/column copies walk their scan programs.
+
+Debug line tables and profile sources are not emitted. Cranelift records source
+locations and machine-code ranges but does not write DWARF line sections; doing so
+requires a separate DWARF writer and object-section relocations.

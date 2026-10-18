@@ -275,9 +275,16 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let Some(symbol) = self.unit.tables.symbols.get(symbol.index()) else {
             return self.invalid("a function reference outside the symbol table");
         };
-        if self.value_type(result)?.repr != ValueRepr::Callable {
+        if self.layout(self.value_type(result)?.layout)?.kind
+            == LayoutKind::Scalar(ScalarKind::Pointer)
+        {
             // A pointer scalar result is a C callback thunk's address (unsafe ffi).
-            return self.unsupported("a function reference that is not a callable value");
+            let name = hirsel_lir::emission::callback_thunk_name(
+                &symbol.definition,
+                symbol.instance.as_ref(),
+            );
+            self.import_definition(&name, &symbol.definition, None);
+            return Ok(V::One(self.function_address(&name, None)?));
         }
         let name = function_thunk_name(&symbol.definition, symbol.instance.as_ref());
         self.import_definition(&name, &symbol.definition, None);
@@ -553,6 +560,21 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                             used = self.b.ins().iadd(used, bytes);
                         }
                         self.store_at(used, place.ptr, 8);
+                        return Ok(());
+                    }
+                    LayoutKind::SoaColumns { element } => {
+                        let count = self.u64c(values.len() as u64);
+                        let capacity = self.column_capacity(values.len() as u64, element)?;
+                        let capacity = self.u64c(capacity);
+                        self.store_at(count, place.ptr, 0);
+                        self.store_at(capacity, place.ptr, 8);
+                        for value in values {
+                            let index = self.u64c(u64::from(value.field));
+                            let row = self.column_row(place, element, index)?;
+                            let shape = self.value_shape(value.value)?;
+                            let v = self.counted_view(value.value)?;
+                            self.scatter(row, shape, v)?;
+                        }
                         return Ok(());
                     }
                     LayoutKind::Sequence { element } => {
@@ -910,6 +932,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             None
         };
         Ok(Place {
+            columns: None,
             ptr: self.offset(storage, offset),
             layout,
             align,
@@ -944,6 +967,18 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             (SizeSpec::Fixed(size), _) => *size,
             // A flat record's extent is its parts' bytes.
             (SizeSpec::Dynamic(_), LayoutKind::Flat) if flat => 0,
+            (SizeSpec::Dynamic(_), LayoutKind::SoaColumns { element }) => {
+                let count = self.pool(site.fields, &self.unit.pools.fields)?.len() as u64;
+                let capacity = self.column_capacity(count, element)?;
+                let (data, _, width) = self.column_shape(element)?;
+                match capacity
+                    .checked_mul(width)
+                    .and_then(|b| b.checked_add(data))
+                {
+                    Some(extent) => extent,
+                    None => return self.invalid("column extent overflow"),
+                }
+            }
             (SizeSpec::Dynamic(_), LayoutKind::Sequence { element }) => {
                 let count = self.pool(site.fields, &self.unit.pools.fields)?.len() as u64;
                 let start = sequence_elements_offset(self.layout(element)?).ok();

@@ -755,7 +755,11 @@ hirsel_test(
         "//third-party:cranelift-module",
         "//third-party:cranelift-object",
     ],
-    data = glob(["crates/hirsel-cranelift/Cargo.toml"]) + glob(["crates/hirsel-cranelift/src/**"], exclude = ["crates/hirsel-cranelift/src/**/*.rs"]),
+    data = glob([
+        "crates/hirsel-rt/include/**",
+        "crates/hirsel-cranelift/Cargo.toml",
+    ]) + glob(["crates/hirsel-cranelift/src/**"], exclude = ["crates/hirsel-cranelift/src/**/*.rs"]),
+    runtime_archives = "//:hirsel-rt-archives",
     crate = "hirsel_cranelift",
     crate_root = "crates/hirsel-cranelift/src/lib.rs",
     srcs = glob(["crates/hirsel-cranelift/src/**"]),
@@ -3964,6 +3968,46 @@ hirsel_command_test(
     args = ["--smoke"],
     release = True,
     runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-changed",
+    binary = "//:hirsel-conformance-bin-native",
+    args = ["--smoke"],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    changed_native = True,
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-changed",
+    binary = "//:hirsel-conformance-bin-native",
+    args = ["--cranelift"],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    changed_native = True,
     cwd = "crates/hirsel-conformance",
     data = glob([
         "bench/native/programs/**",

@@ -352,7 +352,7 @@ def _stage(name):
     stage, sep, shard = name.rpartition("-shard-")
     return stage if sep and shard.isdigit() else name
 
-def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, release = False, full = False, native_selection = None):
+def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, release = False, full = False, native_selection = None, changed_native = False):
     """A gate stage as a test: `binary args...` run from its package directory `cwd`.
 
     On the pool its result is cached by its inputs, so an unchanged corpus and
@@ -363,6 +363,13 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
     """
     if full and not FULL_GATE:
         return
+    if changed_native:
+        # This setting is part of the test command and therefore its cache key.
+        # No selection must never turn a per-push target into a whole campaign.
+        filters = read_root_config("hirsel", "native_filters", "").split("|")
+        if filters == [""]:
+            filters = ["__no_changed_native_programs__"]
+        args = args + [arg for path in filters for arg in ["--filter", path]]
     if release:
         configured = name + "-binary"
         native.configured_alias(name = configured, actual = binary, platform = "root//tools/buck2:release")

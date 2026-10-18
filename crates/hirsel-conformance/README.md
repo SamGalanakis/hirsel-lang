@@ -409,3 +409,7 @@ expectation unchanged.
 `// expect: blocked` requires a CONC-8 Blocked observation with no language failure
 or exit. Its stdout directives match the complete captured output prefix exactly,
 including an empty prefix. Ordinary and checked interpretation must agree.
+
+`native --smoke --filter TEXT` runs selected baseline programs under the per-push
+smoke matrix, with real Io record/replay. `tools/gate` gives this and Cranelift
+parity the same changed-program filters; an empty selection fails.

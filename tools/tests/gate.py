@@ -263,6 +263,40 @@ class Queries(unittest.TestCase):
         self.assertEqual(selection.campaigns, set(impact.CAMPAIGNS))
 
 
+class NativePrograms(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'native-tests/regressions').mkdir(parents=True)
+        (self.root / 'native-tests/regressions/smoke.txt').write_text('# comment\nsmoke-a.hir\nsmoke-b.hir\n')
+        (self.root / 'conformance/MEM').mkdir(parents=True)
+        (self.root / 'conformance/MEM/soa.hir').write_text('// expect: run\n')
+        (self.root / 'conformance/MEM/rejected.hir').write_text('// expect: reject MEM-7 at line 3\n')
+
+    def test_each_native_producer_selects_the_same_changed_program(self):
+        for crate in impact.NATIVE_PARITY_CRATES:
+            self.assertEqual(impact.native_programs(
+                ['conformance/MEM/soa.hir', 'conformance/MEM/soa.hir.json',
+                 'conformance/MEM/rejected.hir', 'conformance/MEM/deleted.hir'],
+                {crate}, self.root), ['conformance/MEM/soa.hir'])
+
+    def test_producer_without_changed_programs_uses_bounded_smoke_controls(self):
+        self.assertEqual(impact.native_programs(['crates/hirsel-llvm/src/emit.rs'],
+                         {'hirsel-llvm'}, self.root), ['smoke-a.hir', 'smoke-b.hir'])
+        self.assertEqual(impact.native_programs([], {'hirsel-parser'}, self.root), [])
+
+    def test_filtered_targets_share_the_command_and_cache_selection(self):
+        selection = gating.Selection.__new__(gating.Selection)
+        selection.paths = ['conformance/MEM/soa.hir']
+        selection.classified = impact.Classified(crates={'hirsel-llvm'})
+        selection.campaigns = set()
+        with patch.object(gating, 'ROOT', self.root):
+            self.assertEqual(selection.native_targets(),
+                             ['root//:gate-native-changed', 'root//:gate-native-cranelift-changed'])
+            self.assertEqual(selection.campaign_targets(), selection.native_targets())
+
+
 class Identity(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -368,6 +368,7 @@ fn lower<T>(
                     &module,
                     &mut manifested,
                     inputs.layouts,
+                    inputs.target.c_convention,
                     &thunk,
                     entry,
                     &external,

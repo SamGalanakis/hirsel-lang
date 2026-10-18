@@ -83,6 +83,34 @@ CRATE_CAMPAIGNS = {
     'hirsel-pipeline-tests': frozenset(),
 }
 
+# These producers must exercise both native backends with one program selection.
+NATIVE_PARITY_CRATES = frozenset({
+    'hirsel-llvm', 'hirsel-cranelift', 'hirsel-lir', 'hirsel-rc', 'hirsel-rt',
+})
+
+
+def native_programs(paths, crates, root):
+    """Changed runnable fixtures, with smoke cases when only a producer changed.
+
+    Explicit sources select the same cases in LLVM's matrix and Cranelift parity.
+    A backend implementation has no source dependency graph: without changed
+    fixtures its bounded control set is the existing native smoke list.
+    """
+    if not (set(crates) & NATIVE_PARITY_CRATES):
+        return []
+    programs = sorted({path.removesuffix('.json') for path in paths
+                       if path.startswith(('conformance/', 'native-tests/'))
+                       and path.endswith(('.hir', '.hir.json'))
+                       and (root / path.removesuffix('.json')).is_file()
+                       and (path.startswith('native-tests/') or
+                            any(line.startswith(('// expect: run', '// expect: fail', '// expect: blocked'))
+                                for line in (root / path.removesuffix('.json')).read_text().splitlines()))})
+    if programs:
+        return programs
+    return [line for line in (root / 'native-tests/regressions/smoke.txt').read_text().splitlines()
+            if line and not line.startswith('#')]
+
+
 # A crate's paths that are test code or test data, not its library source:
 # their edits select only the tests that read them.
 CRATE_TEST_DIRS = ('tests', 'benches', 'examples', 'proptest-regressions')
