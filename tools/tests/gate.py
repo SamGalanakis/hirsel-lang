@@ -384,6 +384,16 @@ class Identity(unittest.TestCase):
         self.assertNotEqual(self.identity(), before)
         self.assertIn('new.txt', gating.changed_paths(self.base, self.root))
 
+    def test_a_regenerated_api_index_keeps_the_identity_and_other_edits_do_not(self):
+        before = self.identity()
+        (self.root / 'docs').mkdir()
+        (self.root / 'docs/api.md').write_text('1 exported definitions\n')
+        self.assertEqual(self.identity(), before)
+        commit(self.root, {'docs/api.md': '2 exported definitions\n'}, 'Index')
+        self.assertEqual(self.identity(), before)
+        (self.root / 'docs/other.md').write_text('prose\n')
+        self.assertNotEqual(self.identity(), before)
+
     def test_no_change_has_no_identity(self):
         git(self.root, 'reset', '-q', '--hard', 'main')
         self.assertEqual(self.identity(), '')

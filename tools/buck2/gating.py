@@ -182,12 +182,19 @@ def worktree_tree(root=ROOT) -> str:
         return git('write-tree', root=root, env=env).strip()
 
 
+# Pathspec leaving the generated API index out of change identities.
+GENERATED_INDEX_EXCLUDE = ':(exclude)docs/api.md'
+
+
 def change_identity(base, root=ROOT) -> str:
     """The patch-id of the change from `base` to the worktree, from a diff without
     context lines: a clean rebase onto a newer main keeps it, and any edit of the
     change, including a hand-resolved conflict, gives a new one. Empty when the
-    worktree does not differ from `base`."""
-    diff = subprocess.run(['git', 'diff', '-U0', '--binary', '--no-renames', base, worktree_tree(root)],
+    worktree does not differ from `base`. The generated docs/api.md is left out:
+    the gate's drift test still checks it and tools/land regenerates it on the
+    rebased tree, so regenerating it after a rebase keeps a passed gate."""
+    diff = subprocess.run(['git', 'diff', '-U0', '--binary', '--no-renames', base, worktree_tree(root),
+                           '--', '.', GENERATED_INDEX_EXCLUDE],
                           cwd=root, check=True, capture_output=True).stdout
     if not diff:
         return ''

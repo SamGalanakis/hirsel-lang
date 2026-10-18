@@ -12,11 +12,12 @@ tools/gate on the result, and land again.
 
 Land never runs tests. tools/gate runs them once, on the finished change, and
 records the change's identity when it passes (gating.change_identity: the
-patch-id of the lane's own diff without context lines, and the crates it
-touches). Land refuses a change with no such record, so a clean rebase onto a
+patch-id of the lane's own diff without context lines or the generated
+docs/api.md, and the crates it touches). Land refuses a change with no such record, so a clean rebase onto a
 newer main never reruns tests, and an edited or hand-merged change always does.
 The export/drift test stays in the gate; land refreshes its generated page
-after any newer declarations arrive through the rebase.
+after any newer declarations arrive through the rebase, so a docs/api.md
+conflict is resolved by regenerating the page and needs no new gate.
 """
 
 import json
