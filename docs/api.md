@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-659 exported definitions; 219 variants.
+670 exported definitions; 224 variants.
 
 
 ## Types and roots
@@ -238,6 +238,9 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Aborted(E) -> TxFailure[E]` — Variant of TxFailure. <!-- core@1/TxFailure#Aborted -->
 - `Canceled(CancelCause) -> TxFailure[E]` — Variant of TxFailure. <!-- core@1/TxFailure#Canceled -->
 - `@capability(global) opaque type Unsafe: plain + copyable + sendable + noalloc_drop uses {Unsafe}` <!-- core@1/Unsafe -->
+- `type WaitError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Clock(ClockError) | Canceled(CancelCause)` <!-- core@1/WaitError -->
+- `Canceled(CancelCause) -> WaitError` — Variant of WaitError. <!-- core@1/WaitError#Canceled -->
+- `Clock(ClockError) -> WaitError` — Variant of WaitError. <!-- core@1/WaitError#Clock -->
 - `@capability(global) opaque type WallClock: plain + copyable + sendable + noalloc_drop uses {WallClock}` <!-- core@1/WallClock -->
 - `type bool: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/bool -->
 - `fn copy_to[T: copyable](a: Arena, x: T) -> T in a` <!-- core@1/copy_to -->
@@ -357,6 +360,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## clock
 
 - `@noalloc fn clock.monotonic(clock: MonotonicClock) -> Result[Instant of clock, ClockError]` <!-- core@1/clock/monotonic -->
+- `@noalloc fn clock.sleep_until(clock: MonotonicClock, deadline: Instant of clock) -> Result[(), WaitError]` <!-- core@1/clock/sleep_until -->
 - `@noalloc fn clock.wall(clock: WallClock) -> Result[i64, ClockError]` <!-- core@1/clock/wall -->
 
 ## codec
@@ -643,6 +647,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## instant
 
+- `@noalloc fn instant.checked_add(clock: MonotonicClock, start: Instant of clock, nanoseconds: u64) -> Option[Instant of clock]` <!-- core@1/instant/checked_add -->
 - `@noalloc fn instant.ticks(value: Instant) -> u64 uses {}` <!-- core@1/instant/ticks -->
 
 ## int
@@ -982,14 +987,20 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## time
 
 - `@serializable pub type time.Duration { nanoseconds: i128, }` — Widen ticks before subtracting so every u64 interval fits exactly. <!-- std@1/time/Duration -->
+- `pub type time.SleepError = NegativeDuration | OutOfRange | Wait(WaitError)` <!-- std@1/time/SleepError -->
+- `NegativeDuration -> time.SleepError` — Variant of time.SleepError. <!-- std@1/time/SleepError#NegativeDuration -->
+- `OutOfRange -> time.SleepError` — Variant of time.SleepError. <!-- std@1/time/SleepError#OutOfRange -->
+- `Wait(WaitError) -> time.SleepError` — Variant of time.SleepError. <!-- std@1/time/SleepError#Wait -->
 - `pub type time.TimeError = OutOfRange()` <!-- std@1/time/TimeError -->
 - `OutOfRange() -> time.TimeError` — Variant of time.TimeError. <!-- std@1/time/TimeError#OutOfRange -->
 - `@serializable pub type time.Timestamp { unix_nanoseconds: i128, }` <!-- std@1/time/Timestamp -->
 - `@noalloc pub fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> Duration` <!-- std@1/time/between -->
 - `@noalloc pub fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32` <!-- std@1/time/compare -->
+- `@noalloc pub fn time.deadline(clock: MonotonicClock, interval: Duration) -> Result[ Instant of clock, SleepError ]` — Relative-to-absolute conversion adapted from Zig lib/std/Io.zig Timeout.toDeadline, Clock.Timestamp.fromNow and Timeout.sleep, commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md). <!-- std@1/time/deadline -->
 - `@noalloc pub fn time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[ Duration, ClockError ]` <!-- std@1/time/elapsed -->
 - `pub fn time.format(value: Timestamp) -> Result[String, TimeError] uses {}` — Adapted from Zig lib/std/time/epoch.zig EpochDay.calculateYearDay, YearAndDay.calculateMonthDay and DaySeconds, commit bff490a23889750de7096d9057c0a432efc929a8. <!-- std@1/time/format -->
 - `@noalloc pub fn time.parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {}` — Contract-specific RFC3339 scanner; neither Zig epoch nor Rust std exposes one. <!-- std@1/time/parse -->
+- `@noalloc pub fn time.sleep(clock: MonotonicClock, interval: Duration) -> Result[(), SleepError]` <!-- std@1/time/sleep -->
 
 ## tls
 
@@ -1081,7 +1092,12 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub opaque type unicode.GraphemeCursor: copyable + inert + noalloc_drop uses {}` — Public signature type; representation and associated operations stay private. <!-- std@1/unicode/GraphemeCursor -->
 - `@loop_source(graphemes_open, graphemes_next) pub opaque type unicode.GraphemeView: copyable + inert + noalloc_drop uses {}` — Default extended grapheme clusters, Unicode16 UAX #29 revision 45. <!-- std@1/unicode/GraphemeView -->
 - `@noalloc pub fn unicode.graphemes(s: String) -> GraphemeView in s` — Adapted from src/grapheme.rs::new_graphemes at unicode-segmentation ff47b3187adddb14813e6fb2cfc1a079f58cfddc. <!-- std@1/unicode/graphemes -->
+- `@noalloc pub fn unicode.is_digit(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_digit -->
+- `@noalloc pub fn unicode.is_letter(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_letter -->
+- `@noalloc pub fn unicode.is_whitespace(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_whitespace -->
 - `pub fn unicode.normalize_nfc(s: String) -> String uses {}` — Explicit NFC: compatibility mappings never enter canonical_pair. <!-- std@1/unicode/normalize_nfc -->
+- `@noalloc pub fn unicode.simple_lower(cp: u32) -> u32 uses {}` <!-- std@1/unicode/simple_lower -->
+- `@noalloc pub fn unicode.simple_upper(cp: u32) -> u32 uses {}` <!-- std@1/unicode/simple_upper -->
 
 ## uri
 
