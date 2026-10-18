@@ -715,7 +715,8 @@ for value in invalid_lengths {
   server_parse(t, bytes.from_list(take b), 1024, 99, Error(Malformed(ContentLength())))
 }
 server_parse(t, b"POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nxx", 1024, 99, Error(Malformed(ContentLength())))
-server_parse(t, b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n", 1024, 99, Error(UnsupportedTransferEncoding()))
+server_parse(t, b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n", 1024, 99, Ok(None()))
+server_parse(t, b"POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n", 1024, 99, Error(Malformed(TransferEncoding())))
 server_parse(t, b"POST / HTTP/1.1\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n", 1024, 99, Error(Malformed(TransferEncoding())))
 "#);
         execute(&body);

@@ -557,7 +557,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub type http.Response { status: u16, headers: List[Header], body: Bytes, url: String, }` <!-- std@1/http/Response -->
 - `pub type http.ResponseHead { version: Version, status: u16, reason: String, headers: List[Header], content_length: Option[u64], chunked: bool, keep_alive: bool, location: Option[String], content_type: Option[String], }` <!-- std@1/http/ResponseHead -->
 - `pub opaque resource type http.ServerConnection: noalloc_drop uses {Net}` — A sequential server connection owns its stream and unread bytes. <!-- std@1/http/ServerConnection -->
-- `pub type http.ServerRequest { method: String, target: String, version: Version, headers: List[Header], body: Bytes, keep_alive: bool, }` <!-- std@1/http/ServerRequest -->
+- `pub type http.ServerRequest { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool, }` <!-- std@1/http/ServerRequest -->
 - `pub type http.Version = Http10 | Http11` <!-- std@1/http/Version -->
 - `Http10 -> http.Version` — Variant of http.Version. <!-- std@1/http/Version#Http10 -->
 - `Http11 -> http.Version` — Variant of http.Version. <!-- std@1/http/Version#Http11 -->
@@ -565,7 +565,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn http.end_body(mut r: Request, request_trailers: List[Header]) -> Result[(), HttpError]` <!-- std@1/http/end_body -->
 - `pub fn http.fetch( n: Net, config: Config, method: Method, url: String, headers: List[Header], body: Option[Bytes] ) -> Result[Response, HttpError]` <!-- std@1/http/fetch -->
 - `pub fn http.header(headers: List[Header], name: String) -> Option[String] uses {}` — Zig HeaderIterator lookup; the first case-insensitive match wins. <!-- std@1/http/header -->
-- `pub fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[ Option[(ServerRequest, u64)], HttpError ] uses {}` — Complete includes the consumed body; subsequent bytes belong to another request. <!-- std@1/http/parse_server_request -->
+- `pub fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[ Option[(ServerRequest, u64)], HttpError ] uses {}` — Complete includes decoded body and trailers; subsequent bytes belong to the next request. <!-- std@1/http/parse_server_request -->
 - `pub fn http.read_all(mut r: Request, limit: u64) -> Result[unique Bytes, HttpError]` <!-- std@1/http/read_all -->
 - `@preserves_unique(out) pub fn http.read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]` <!-- std@1/http/read_body -->
 - `pub fn http.receive_head(mut r: Request) -> Result[ResponseHead, HttpError]` <!-- std@1/http/receive_head -->

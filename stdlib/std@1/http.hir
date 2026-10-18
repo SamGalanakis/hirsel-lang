@@ -1040,12 +1040,193 @@ pub type ServerRequest {
   version: Version,
   headers: List[Header],
   body: Bytes,
+  trailers: List[Header],
   keep_alive: bool,
 }
 
-// Complete includes the consumed body; subsequent bytes belong to another request.
-pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[
-  Option[(ServerRequest, u64)],
+// Incremental request-body framing. The receive path consumes wire bytes as they
+// are decoded; only one incomplete metadata line and the decoded body are retained.
+type ServerBody {
+  chunked: bool,
+  state: u8,
+  remaining: u64,
+  output: List[u8],
+  trailers: List[Header],
+}
+
+fn http_server_body(frame: http_wire.Framing, limit: u64) -> Result[
+  ServerBody,
+  HttpError
+] uses {} {
+  let length = match frame.content_length {
+    Some(n) => n,
+    None() => 0,
+  }
+  if length > limit {
+    return Error(BodyTooLarge())
+  }
+  Ok(
+    ServerBody(
+      chunked: frame.chunked,
+      state: if frame.chunked {
+        1u8
+      } else {
+        2u8
+      },
+      remaining: length,
+      output: [],
+      trailers: []
+    )
+  )
+}
+
+fn http_server_trailers(buf: Bytes, start: u64, limit: u64) -> Result[
+  Option[(List[Header], u64)],
+  HttpError
+] uses {} {
+  let empty = http_wire.RawHeader(
+    name_start: 0,
+    name_end: 0,
+    value_start: 0,
+    value_end: 0
+  )
+  let mut raw: Inline[http_wire.RawHeader, 16] = [
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty,
+    empty
+  ]
+  let mut count: u64 = 0
+  let end = match http_wire.parse_headers(buf, start, mut raw, mut count) {
+    Ok(Partial()) => {
+      if core@1/bytes.len(buf) - start >= limit {
+        return Error(HeadTooLarge())
+      }
+      return Ok(None())
+    },
+    Ok(Complete(end)) => end,
+    Error(error) => return Error(Malformed(error)),
+  }
+  if end - start > limit {
+    return Error(HeadTooLarge())
+  }
+  let mut headers: List[Header] = []
+  let mut i: u64 = 0
+  while i < count {
+    let name = http_text(buf, raw[i].name_start, raw[i].name_end)?
+    // Trailers cannot change the message boundary, connection policy or routing.
+    if http_same(name, "content-length") || http_same(name, "transfer-encoding") || http_same(
+      name,
+      "host"
+    ) || http_same(name, "connection") {
+      return Error(Malformed(HeaderName()))
+    }
+    core@1/list.push(
+      mut headers,
+      Header(
+        name: take name,
+        value: http_text(buf, raw[i].value_start, raw[i].value_end)?
+      )
+    )
+    i += 1
+  }
+  Ok(Some((take headers, end)))
+}
+
+// Returns exactly the consumed prefix. An incomplete size line, suffix or trailer
+// stays with the caller; payload bytes already decoded need never be buffered again.
+fn http_server_body_step(
+  mut body: ServerBody,
+  buf: Bytes,
+  head_limit: u64,
+  body_limit: u64
+) -> Result[u64, HttpError] uses {} {
+  let end = core@1/bytes.len(buf)
+  let mut pos: u64 = 0
+  while body.state != 5 {
+    if body.state == 1 {
+      let (consumed, size) = match http_wire.parse_chunk_size(buf, pos) {
+        Ok(Partial()) => {
+          if end - pos >= head_limit {
+            return Error(HeadTooLarge())
+          }
+          return Ok(pos)
+        },
+        Ok(Complete(consumed, size)) => (consumed, size),
+        Error(_) => return Error(Chunk()),
+      }
+      if consumed > head_limit {
+        return Error(HeadTooLarge())
+      }
+      if size > body_limit - core@1/list.len(body.output) {
+        return Error(BodyTooLarge())
+      }
+      pos += consumed
+      body.remaining = size
+      body.state = if size == 0 {
+        4u8
+      } else {
+        2u8
+      }
+    } else if body.state == 2 {
+      let count = if body.remaining < end - pos {
+        body.remaining
+      } else {
+        end - pos
+      }
+      let mut i: u64 = 0
+      while i < count {
+        core@1/list.push(mut body.output, buf[pos + i])
+        i += 1
+      }
+      pos += count
+      body.remaining -= count
+      if body.remaining != 0 {
+        return Ok(pos)
+      }
+      body.state = if body.chunked {
+        3u8
+      } else {
+        5u8
+      }
+    } else if body.state == 3 {
+      if end - pos < 2 {
+        return Ok(pos)
+      }
+      if buf[pos] != 13 || buf[pos + 1] != 10 {
+        return Error(Chunk())
+      }
+      pos += 2
+      body.state = 1
+    } else {
+      match http_server_trailers(buf, pos, head_limit)? {
+        None() => return Ok(pos),
+        Some((headers, consumed)) => {
+          body.trailers = copy headers
+          pos = consumed
+          body.state = 5
+        },
+      }
+    }
+  }
+  Ok(pos)
+}
+
+// Parse the request head once, before incrementally consuming its body.
+fn http_server_head(buf: Bytes, max_head_bytes: u64) -> Result[
+  Option[(ServerRequest, http_wire.Framing, u64)],
   HttpError
 ] uses {} {
   let empty = http_wire.RawHeader(
@@ -1097,20 +1278,6 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
     Ok(f) => f,
     Error(e) => return Error(Malformed(e)),
   }
-  if frame.chunked {
-    return Error(UnsupportedTransferEncoding())
-  }
-  let length = match frame.content_length {
-    Some(n) => n,
-    None() => 0,
-  }
-  if length > max_body_bytes {
-    return Error(BodyTooLarge())
-  }
-  // Subtract before adding, so an advertised u64::MAX length cannot overflow.
-  if length > core@1/bytes.len(buf) - end {
-    return Ok(None())
-  }
   let mut headers: List[Header] = []
   let mut i: u64 = 0
   while i < count {
@@ -1143,12 +1310,61 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
             }
           ),
           headers: take headers,
-          body: unique core@1/bytes.slice(buf, end, end + length)
+          body: b"",
+          trailers: []
         ),
-        end + length
+        frame,
+        end
       )
     )
   )
+}
+
+// Complete includes decoded body and trailers; subsequent bytes belong to the next request.
+pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[
+  Option[(ServerRequest, u64)],
+  HttpError
+] uses {} {
+  let mut (incoming, frame, end) = match http_server_head(buf, max_head_bytes)? {
+    None() => return Ok(None()),
+    Some(parsed) => take parsed,
+  }
+  let mut body = http_server_body(frame, max_body_bytes)?
+  let consumed = http_server_body_step(
+    mut body,
+    core@1/bytes.slice(buf, end, core@1/bytes.len(buf)),
+    max_head_bytes,
+    max_body_bytes
+  )?
+  if body.state != 5 {
+    return Ok(None())
+  }
+  incoming.body = core@1/bytes.from_list(copy body.output)
+  incoming.trailers = copy body.trailers
+  Ok(Some((take incoming, end + consumed)))
+}
+
+fn http_server_read_more(mut c: ServerConnection, idle: bool) -> Result[u64, HttpError] {
+  let n = c.net
+  let timeout = http_timeout(
+    if idle {
+      c.config.idle_timeout
+    } else {
+      c.config.read_timeout
+    }
+  )?
+  core@1/net.set_read_timeout(n, mut c.stream, timeout) ? http_net_error
+  match bufio.stream_read_more(n, mut c.stream, mut c.input, 4096) {
+    Ok(count) => Ok(count),
+    Error(Source(TimedOut())) => {
+      if idle {
+        c.state = 2
+        return Error(Closed())
+      }
+      Error(http_net_error(TimedOut()))
+    },
+    Error(error) => Error(http_buffer_error(error)),
+  }
 }
 
 // Clean EOF and the keep-alive idle limit return Closed. An incomplete request
@@ -1161,38 +1377,36 @@ pub fn receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpErr
     return Error(OutOfOrder())
   }
   c.state = 3
-  let n = c.net
   let mut idle = c.served && bufio.buffered(c.input) == 0
   while true {
     let buf = bufio.contents(c.input)
-    match parse_server_request(buf, c.config.max_head_bytes, c.config.max_body_bytes)? {
-      Some((incoming, end)) => {
+    match http_server_head(buf, c.config.max_head_bytes)? {
+      Some((parsed, frame, end)) => {
+        let mut incoming = take parsed
         bufio.consume(mut c.input, end)
+        let mut body = http_server_body(frame, c.config.max_body_bytes)?
+        while body.state != 5 {
+          let unread = bufio.contents(c.input)
+          let consumed = http_server_body_step(
+            mut body,
+            unread,
+            c.config.max_head_bytes,
+            c.config.max_body_bytes
+          )?
+          bufio.consume(mut c.input, consumed)
+          if body.state != 5 && http_server_read_more(mut c, false)? == 0 {
+            return Error(Truncated())
+          }
+        }
+        incoming.body = core@1/bytes.from_list(copy body.output)
+        incoming.trailers = copy body.trailers
         c.keep_alive = incoming.keep_alive
         c.state = 1
         return Ok(take incoming)
       },
       None() => (),
     }
-    let timeout = http_timeout(
-      if idle {
-        c.config.idle_timeout
-      } else {
-        c.config.read_timeout
-      }
-    )?
-    core@1/net.set_read_timeout(n, mut c.stream, timeout) ? http_net_error
-    let count = match bufio.stream_read_more(n, mut c.stream, mut c.input, 4096) {
-      Ok(count) => count,
-      Error(Source(TimedOut())) => {
-        if idle {
-          c.state = 2
-          return Error(Closed())
-        }
-        return Error(http_net_error(TimedOut()))
-      },
-      Error(e) => return Error(http_buffer_error(e)),
-    }
+    let count = http_server_read_more(mut c, idle)?
     if count == 0 {
       if bufio.buffered(c.input) == 0 {
         c.state = 2

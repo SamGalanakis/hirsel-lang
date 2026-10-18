@@ -1,0 +1,179 @@
+// rule: SEM-1
+// expect: run
+// Existing client chunk/trailer vectors, exercised through server framing.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+fn net_error(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let input: Bytes = b"POST /upload HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=yes\r\nWiki\r\n5\r\npedia\r\n0\r\nx-check: yes\r\n\r\nNEXT"
+  let complete = bytes.len(input) - 4
+  match http.parse_server_request(input, 1024, 9)? {
+    Some((request, end)) => {
+      check(request.body == b"Wikipedia" && end == complete)
+      check(http.header(request.trailers, "X-CHECK") == Some("yes"))
+    },
+    None() => check(false),
+  }
+  check(http.parse_server_request(input, 1024, 8) == Error(BodyTooLarge()))
+  let empty: Bytes = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+  match http.parse_server_request(empty, 1024, 0)? {
+    Some((request, end)) => check(
+      request.body == b"" && request.trailers == [] && end == bytes.len(empty)
+    ),
+    None() => check(false),
+  }
+  check(
+    http.parse_server_request(
+      b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nx\r\n",
+      1024,
+      9
+    ) == Error(Chunk())
+  )
+  check(
+    http.parse_server_request(
+      b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffffffff\r\n",
+      1024,
+      9
+    ) == Error(Chunk())
+  )
+  check(
+    http.parse_server_request(
+      b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n",
+      1024,
+      9
+    ) == Error(BodyTooLarge())
+  )
+  check(
+    http.parse_server_request(
+      b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx!\r",
+      1024,
+      9
+    ) == Error(Chunk())
+  )
+  check(
+    http.parse_server_request(
+      b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 1\r\n\r\n",
+      1024,
+      9
+    ) == Error(Malformed(HeaderName()))
+  )
+  check(
+    http.parse_server_request(
+      b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nConnection: keep-alive\r\n\r\n",
+      1024,
+      9
+    ) == Error(Malformed(HeaderName()))
+  )
+  let addr = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: addr,
+        clients: [
+          NetClient(
+            from: addr,
+            steps: [
+              Send(
+                b"POST /upload HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=y\r"
+              ),
+              Send(b"\nWi"),
+              Send(b"ki\r\n5\r\nped"),
+              Send(
+                b"ia\r\n0\r\nx-check: yes\r\n\r\nGET /next HTTP/1.1\r\nConnection: close\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 9\r\nConnection: keep-alive\r\n\r\nWikipedia"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 4\r\nConnection: close\r\n\r\nnext"
+              ),
+              Close()
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, addr) ? net_error
+  let (stream, _) = net.accept(n, mut listener) ? net_error
+  let mut config = http.default_config()
+  config.max_body_bytes = 9
+  let mut connection = http.server_connection(n, take stream, config)
+  let request = http.receive_request(mut connection)?
+  check(
+    request.body == b"Wikipedia" && http.header(request.trailers, "x-check") == Some(
+      "yes"
+    )
+  )
+  http.respond(mut connection, 200u16, [], request.body, false)?
+  let next = http.receive_request(mut connection)?
+  check(next.target == "/next" && next.body == b"" && next.trailers == [])
+  http.respond(mut connection, 200u16, [], b"next", false)?
+  // The decoded limit is independent of wire overhead, and fails before payload allocation.
+  let large = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\na\r\n"),
+              Expect(b"HTTP/1.1 413 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let large_stream = net.connect(large, "example.com", 80u16, Unbounded()) ? net_error
+  let mut rejected = http.server_connection(large, take large_stream, config)
+  match http.receive_request(mut rejected) {
+    Error(BodyTooLarge()) => (),
+    _ => check(false),
+  }
+  http.respond(mut rejected, 413u16, [], b"", false)?
+  match http.receive_request(mut rejected) {
+    Error(Closed()) => (),
+    _ => check(false),
+  }
+  let short = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab"),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let short_stream = net.connect(short, "example.com", 80u16, Unbounded()) ? net_error
+  let mut truncated = http.server_connection(short, take short_stream, config)
+  match http.receive_request(mut truncated) {
+    Error(Truncated()) => (),
+    _ => check(false),
+  }
+  Ok(())
+}

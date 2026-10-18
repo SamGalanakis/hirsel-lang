@@ -665,7 +665,7 @@ The server shares the client's wire parser and error type:
 ```text
 RequestLine = { method_start: u64, method_end: u64, target_start: u64, target_end: u64, version: u8 }
 N fn http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut headers: Inline[RawHeader, k], mut count: u64) -> Result[ParseStatus, HeadError] uses {}
-ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes, keep_alive: bool }
+ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool }
 fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
 fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection
 fn http.receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError]
@@ -676,9 +676,19 @@ fn http.respond(mut c: ServerConnection, status: u16, headers: List[Header], bod
 HTTP/1.1, and reuses `parse_headers`. Its initialized-header count and absolute consumed
 head offset follow `parse_response`. `parse_server_request` returns an owned request and
 the consumed head-plus-body byte count, or `None` for incomplete input. It accepts at most
-16 headers, checks the caller's head and body byte limits, and reads a Content-Length body
-(zero bytes when absent). Malformed heads and framing fail; transfer codings are
-unsupported. Bytes after the declared body are excluded from the request.
+16 headers, checks the caller's head and body byte limits, and reads a Content-Length or chunked body (zero bytes when neither framing is
+present). Malformed heads, conflicting Content-Length and Transfer-Encoding, and
+unsupported transfer codings fail. Bytes after the declared body are excluded from the request.
+
+Chunked requests reuse `http_wire.parse_chunk_size`, including chunk extensions and
+split CRLF. The body limit applies to the decoded bytes; advertised chunks exceeding
+the remaining bound fail before their payload is read. Each size line and the trailer
+block obey the head byte limit. `ServerRequest.trailers` contains the decoded trailer
+headers, separate from the original headers; Content-Length, Transfer-Encoding, Host
+and Connection are forbidden there. Truncated framing or payload is `Truncated`.
+The pure parser and socket receiver share one incremental body decoder. The receiver
+consumes completed framing and payload as it progresses, retaining decoded data and
+only the unread wire suffix for pipelined requests.
 
 `ServerConnection` is a resource owning its branded stream and unread bytes. Its Config
 uses `max_head_bytes` and `max_body_bytes` (10 MiB by default), `read_timeout`,
