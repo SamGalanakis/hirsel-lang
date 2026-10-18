@@ -18,6 +18,12 @@
       ]
     },
     {
+      "path": "deque.hir",
+      "module": [
+        "deque"
+      ]
+    },
+    {
       "path": "list.hir",
       "module": [
         "list"

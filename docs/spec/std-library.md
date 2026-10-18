@@ -288,6 +288,28 @@ decomposition and integer arithmetic without a platform math call.
 `f32.sum_exact` and `f64.sum_exact` with the same types and allocation allowed, implement the
 reductions of [the core library](core-library.md#numeric-and-string-details).
 
+## Deque
+
+```text
+fn deque.empty[T]() -> unique deque.Deque[T] uses {}
+N fn deque.len[T](q: deque.Deque[T]) -> u64 uses {}
+fn deque.push_front[T](mut q: unique deque.Deque[T], take value: unique T) -> () uses {q, value}
+fn deque.push_back[T](mut q: unique deque.Deque[T], take value: unique T) -> () uses {q, value}
+fn deque.pop_front[T](mut q: unique deque.Deque[T]) -> unique Option[T] uses {q}
+fn deque.pop_back[T](mut q: unique deque.Deque[T]) -> unique Option[T] uses {q}
+```
+
+`Deque[T]` is an opaque source container owning its elements in two unique Lists
+of unique elements. Rebalancing reverses each side in place and uses constant
+extra space.
+Length is O(1); endpoint operations are amortized O(1). When one side is empty,
+half the other side moves across, preserving logical order and avoiding repeated
+whole-queue reversals when callers alternate removals. Empty pops return `None`.
+Push requires a unique input: use `unique value` to copy an aliased value into
+a fresh unique owner before pushing. Pop transfers deep uniqueness; leftover items follow ordinary
+cleanup,
+including resource payloads and failure paths. A fresh empty deque is unique.
+
 ## Testing helpers
 
 `test.equal` checks structural equality of `data` values. `test.approx` requires

@@ -1,0 +1,34 @@
+// rule: DROP-2
+// expect: run
+// stdout: first
+// stdout: last
+// stdout: middle
+resource type Item {
+  output: Stdout,
+  label: String,
+}
+drop(x) {
+  let _ = out.print(x.output, x.label)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut q: unique deque.Deque[Item] = deque.empty()
+  deque.push_back(mut q, Item(output: o, label: "first\n"))
+  deque.push_back(mut q, Item(output: o, label: "middle\n"))
+  deque.push_back(mut q, Item(output: o, label: "last\n"))
+  match deque.pop_front(mut q) {
+    Some(item) => {
+      let _ = take item
+    },
+    None => failure.check(false, Bounds()),
+  }
+  match deque.pop_back(mut q) {
+    Some(item) => {
+      let _ = take item
+    },
+    None => failure.check(false, Bounds()),
+  }
+  failure.check(deque.len(q) == 1, Bounds())
+  Ok(())
+}

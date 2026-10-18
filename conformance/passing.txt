@@ -615,6 +615,7 @@ conformance/DROP/DROP-2-reverse-locals.hir
 conformance/DROP/DROP-2-sequence-high-low.hir
 conformance/DROP/DROP-2-sorted-map-replaced-value.hir
 conformance/DROP/DROP-2-sorted-map-retained-key.hir
+conformance/DROP/DROP-2-std-deque-run.hir
 conformance/DROP/DROP-2-std-iter-fold-run.hir
 conformance/DROP/DROP-2-std-iter-predicate-fail.hir
 conformance/DROP/DROP-2-std-iter-predicate-run.hir
@@ -2467,6 +2468,8 @@ conformance/MODE/MODE-2-sharing-counted-part-ok.hir
 conformance/MODE/MODE-2-std-container-empty-run.hir
 conformance/MODE/MODE-2-std-decode-lossy-copied-bad.hir
 conformance/MODE/MODE-2-std-decode-lossy-unique-ok.hir
+conformance/MODE/MODE-2-std-deque-push-bad.hir
+conformance/MODE/MODE-2-std-deque-push-ok.hir
 conformance/MODE/MODE-2-std-map-constructor-ok.hir
 conformance/MODE/MODE-2-std-map-cycle-bad.hir
 conformance/MODE/MODE-2-std-map-cycle-ok.hir
@@ -4098,6 +4101,8 @@ conformance/SEM/SEM-5-short-byte-equality-run.hir
 conformance/SEM/SEM-5-sorted-brand-signature.hir
 conformance/SEM/SEM-5-sorted-map-projected-and-consuming-run.hir
 conformance/SEM/SEM-5-sorted-map-resource-modes-run.hir
+conformance/SEM/SEM-5-std-deque-owned-cycle-run.hir
+conformance/SEM/SEM-5-std-deque-run.hir
 conformance/SEM/SEM-5-std-map-lifecycle-run.hir
 conformance/SEM/SEM-5-std-map-owned-cycle-run.hir
 conformance/SEM/SEM-5-std-set-string-remove-run.hir

@@ -1,0 +1,21 @@
+// rule: SEM-5
+// expect: run
+resource type Item {
+  number: u64,
+}
+drop(x) {}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut q: unique std@1/deque.Deque[Item] = std@1/deque.empty()
+  std@1/deque.push_back(mut q, Item(number: 7))
+  match take std@1/deque.pop_front(mut q) {
+    Some(item) => std@1/deque.push_front(mut q, take item),
+    None => failure.check(false, Bounds()),
+  }
+  match take std@1/deque.pop_back(mut q) {
+    Some(item) => failure.check(item.number == 7, Bounds()),
+    None => failure.check(false, Bounds()),
+  }
+  failure.check(std@1/deque.len(q) == 0, Bounds())
+  Ok(())
+}
