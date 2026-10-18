@@ -2505,6 +2505,7 @@ hirsel_test(
     ]) + [
         "conformance/CLO/CLO-2-mut-handback-erased-state-run.hir",
         "conformance/CLO/CLO-2-nested-uses-annotation-run.hir",
+        "conformance/CONC/CONC-6-owned-record-payload-run.hir",
         "conformance/DROP/DROP-2-closure-zero-sized-destructure-run.hir",
         "conformance/DROP/DROP-2-failure-inner-scope-before-cursor-run.hir",
         "conformance/DROP/DROP-2-guarded-product-take-run.hir",

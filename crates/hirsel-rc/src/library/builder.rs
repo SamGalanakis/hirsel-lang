@@ -266,6 +266,8 @@ pub struct Body<'c, 'a> {
     /// Owned slots a failure here must drop (a `take` parameter not yet
     /// moved out), with their whole addresses, in the order they filled.
     held: Vec<(SlotId, AddressId)>,
+    /// What is held at entry: the owned `take` parameters.
+    entry_held: Vec<(SlotId, AddressId)>,
     /// The failure cleanup of each `held` list already built.
     cleanups: std::collections::HashMap<Vec<SlotId>, BlockId>,
     drop_anchor: Option<CleanupAnchorId>,
@@ -312,6 +314,7 @@ impl<'c, 'a> Body<'c, 'a> {
             current: entry,
             versions: Vec::new(),
             held: Vec::new(),
+            entry_held: Vec::new(),
             cleanups: std::collections::HashMap::new(),
             drop_anchor: None,
         };
@@ -335,6 +338,7 @@ impl<'c, 'a> Body<'c, 'a> {
         }
         // Every parameter is in its slot from entry, so each preparation's
         // failure drops every owned one.
+        body.entry_held = body.held.clone();
         for p in body.parameters.clone() {
             let failure = body.failure(None);
             body.push(Inst::Address {
@@ -574,6 +578,14 @@ impl<'c, 'a> Body<'c, 'a> {
     }
 
     /// Ownership state at a branch. Each successor builds its own transfers.
+    /// The failure of a preparation at entry, which releases what the body
+    /// holds there (its owned `take` parameters) whatever it holds now.
+    pub fn entry_failure(&mut self) -> FailureId {
+        let held = std::mem::replace(&mut self.held, self.entry_held.clone());
+        let failure = self.failure(None);
+        self.held = held;
+        failure
+    }
     pub fn held_state(&self) -> Vec<(SlotId, AddressId)> {
         self.held.clone()
     }

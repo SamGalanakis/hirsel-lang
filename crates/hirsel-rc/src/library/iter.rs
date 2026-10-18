@@ -168,11 +168,10 @@ pub(crate) fn local(
         projection: PoolRange::EMPTY,
         ty,
     });
-    let propagate = b.block(BlockKind::FailureCleanup, &[]);
-    b.ed.unit.terminators[propagate.index()] = Terminator::Propagate;
-    let failure = b.failure_to(propagate, &[], None);
     // A local's address is prepared at entry before any produced owner exists,
-    // just as source import prepares fixed frame storage in its prologue.
+    // just as source import prepares fixed frame storage in its prologue; its
+    // failure releases only the owned parameters held there.
+    let failure = b.entry_failure();
     b.ed.code[b.ed.unit.entry.index()].push(Inst::Address { address, failure });
     b.store(address, value)?;
     b.hold(slot, address);

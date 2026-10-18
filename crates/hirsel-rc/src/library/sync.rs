@@ -108,19 +108,16 @@ fn put(
 
 /// Pass `Some([value])` to the mutex `entry` as its carrier, with `handle` first when
 /// given; the runtime takes the block, and the then `None` local is dropped after the call.
-/// `held` is what the body held at its entry, which the carrier's preparation there
-/// releases when it fails.
 fn put_block(
     b: &mut Body<'_, '_>,
     entry: &Intrinsic,
     handle: Option<ValueId>,
     (list_layout, option_layout): (LayoutId, LayoutId),
-    held: &[(SlotId, AddressId)],
     value: ValueId,
 ) -> R<Option<ValueId>> {
     let list = construct(b, list_layout, ConstructorKind::Sequence, &[value])?;
     let some = option(b, option_layout, 1, &[list]);
-    let (slot, address) = super::isolate::local(b, held, some)?;
+    let (slot, address) = local(b, some)?;
     let first = u32::from(handle.is_some());
     let mut arguments: Vec<_> = handle
         .map(|h| argument(0, Passing::Borrow, h))
@@ -286,9 +283,8 @@ fn mutex_create(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let &[_, v] = b.parameters.as_slice() else {
         return Err(PassError::Malformed("mutex.create parameters".into()));
     };
-    let held = b.held_state();
     let value = b.take(v.address)?;
-    let mutex = put_block(&mut b, &entries[0], None, layouts, &held, value)?;
+    let mutex = put_block(&mut b, &entries[0], None, layouts, value)?;
     b.ret(mutex);
     Ok(b.finish())
 }
@@ -372,7 +368,7 @@ fn mutex_with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         slot: payload,
         if_live: false,
     });
-    put_block(&mut b, put_back, Some(m), layouts, &[], value)?;
+    put_block(&mut b, put_back, Some(m), layouts, value)?;
     // The continuation after the put holds the payload's mutex again.
     let put = b.current();
     kill_failures(

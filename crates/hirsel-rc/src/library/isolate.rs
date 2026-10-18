@@ -10,7 +10,7 @@
 use super::LibraryBody;
 use super::arena::{RESULT_ERROR, RESULT_OK, payload, variant};
 use super::builder::{Body, Cx};
-use super::iter::{drop_local, option};
+use super::iter::{drop_local, local, option};
 use super::slots::{construct, nominal};
 use super::tasks::{Intrinsic, argument, intrinsic, invoke, operation, parameter};
 use crate::PassError;
@@ -52,35 +52,6 @@ struct Shape {
     boxed: LayoutId,
 }
 
-/// A temporary holding `value`. Its place is prepared at entry, where a
-/// failure releases what the body held there (`entry`): a `take` parameter.
-pub(super) fn local(
-    b: &mut Body<'_, '_>,
-    entry: &[(SlotId, AddressId)],
-    value: ValueId,
-) -> R<(SlotId, AddressId)> {
-    let layout = b.layout_of(value);
-    let slot = b.slot(layout, SlotKind::Temporary);
-    b.push(Inst::StorageLive { slot });
-    let ty = b.ty(layout);
-    let address = AddressId(b.ed.unit.addresses.len() as u32);
-    b.ed.unit.addresses.push(AddressInfo {
-        source_place: None,
-        unchecked: Vec::new(),
-        base: AddressBase::Slot(slot),
-        projection: PoolRange::EMPTY,
-        ty,
-    });
-    let held = b.held_state();
-    b.restore_held(entry);
-    let failure = b.failure(None);
-    b.restore_held(&held);
-    b.ed.code[b.ed.unit.entry.index()].push(Inst::Address { address, failure });
-    b.store(address, value)?;
-    b.hold(slot, address);
-    Ok((slot, address))
-}
-
 fn field(b: &Body<'_, '_>, layout: LayoutId, ordinal: u32) -> R<LayoutId> {
     b.record(layout)
         .fields
@@ -113,7 +84,6 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         spawn: entry("IsolateSpawn")?,
     };
     let mut b = Body::new(cx)?;
-    let entry = b.held_state();
     let &[tasks, body] = b.parameters.as_slice() else {
         return Err(PassError::Malformed("task.isolate parameters".into()));
     };
@@ -143,7 +113,7 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     .ok_or_else(|| PassError::Malformed("IsolateBegin returns a count".into()))?;
     // The callable dies with this frame on both outcomes.
     let f = b.take(body.address)?;
-    let (f_slot, f_address) = local(&mut b, &entry, f)?;
+    let (f_slot, f_address) = local(&mut b, f)?;
 
     // A failed callback has unwound; the catch resumes ordinary code.
     let normal = b.current();
@@ -180,7 +150,7 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 
     b.at(caught);
     drop_local(&mut b, f_slot, f_address);
-    let failure = chain(&mut b, &entry, &entries, &shape, tasks)?;
+    let failure = chain(&mut b, &entries, &shape, tasks)?;
     let value = variant(&mut b, returned, "Result", RESULT_ERROR, &[failure]);
     b.ret(Some(value));
     Ok(b.finish())
@@ -210,16 +180,10 @@ fn read(
 }
 
 /// The caught chain as one `Failure`, built from its last record to its primary.
-fn chain(
-    b: &mut Body<'_, '_>,
-    entry: &[(SlotId, AddressId)],
-    entries: &Entries,
-    shape: &Shape,
-    tasks: ValueId,
-) -> R<ValueId> {
+fn chain(b: &mut Body<'_, '_>, entries: &Entries, shape: &Shape, tasks: ValueId) -> R<ValueId> {
     let count = read(b, &entries.count, tasks, None)?;
     let none = option(b, shape.cause, 0, &[]);
-    let (cause_slot, cause_address) = local(b, entry, none)?;
+    let (cause_slot, cause_address) = local(b, none)?;
     let all_ones = b.u64(u64::MAX)?;
     let last = b.add(ArithMode::Wrapping, count, all_ones);
     let u64_layout = b.layout_of(count);
@@ -233,7 +197,7 @@ fn chain(
     b.set_reaching(cause_slot, version);
     let zero = b.u64(0)?;
     let primary = b.compare(BinaryOp::Eq, index, zero)?;
-    let failure = failure_at(b, entry, entries, shape, tasks, index, cause_address)?;
+    let failure = failure_at(b, entries, shape, tasks, index, cause_address)?;
     let done = b.block(BlockKind::Body, &[]);
     let more = b.block(BlockKind::Body, &[]);
     b.branch(primary, done, more);
@@ -261,7 +225,6 @@ fn chain(
 /// before the record's other owned parts leave their temporaries.
 fn failure_at(
     b: &mut Body<'_, '_>,
-    entry: &[(SlotId, AddressId)],
     entries: &Entries,
     shape: &Shape,
     tasks: ValueId,
@@ -274,7 +237,7 @@ fn failure_at(
     let mut held = Vec::new();
     for entry_point in [&entries.rule, &entries.definition, &entries.spawn] {
         let value = read(b, entry_point, tasks, Some(index))?;
-        held.push(local(b, entry, value)?);
+        held.push(local(b, value)?);
     }
     let take = |b: &mut Body<'_, '_>, (slot, address): (SlotId, AddressId)| -> R<ValueId> {
         let value = b.take(address)?;

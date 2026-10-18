@@ -1,0 +1,79 @@
+// rule: CONC-6
+// expect: run
+// stdout: job 7 hello replied
+// stdout: refused bye
+// A message holding a unique String and a Sender crosses a channel and its
+// receiver uses both; a send the closed channel refuses returns the message.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+type Job {
+  version: u64,
+  text: unique String,
+  reply: Sender[bool],
+}
+
+fn discard[T](take value: T) -> () {}
+
+fn queue(
+  tasks: Tasks,
+  mut jobs: Sender[Job],
+  take text: unique String,
+  take reply: Sender[bool]
+) -> Result[(), String] {
+  match channel.send(
+    tasks,
+    mut jobs,
+    Job(version: 7u64, text: take text, reply: take reply)
+  ) {
+    Ok(()) => Ok(()),
+    Error((job, _)) => {
+      let Job(version: _, text: back, reply: _) = job
+      Error(take back)
+    },
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let (jobs, receiver): (Sender[Job], Receiver[Job]) = channel.open(tasks)
+  let (tx, replies): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  let mut j = take jobs
+  let mut inbox = take receiver
+  let mut rx = take replies
+  let queued = queue(tasks, mut j, unique "hello", take tx)
+  match channel.receive(tasks, mut inbox) {
+    Ok(job) => {
+      let Job(version: version, text: text, reply: answer) = job
+      let mut reply = take answer
+      let sent = channel.send(tasks, mut reply, true)
+      let replied = match channel.receive(tasks, mut rx) {
+        Ok(b) => b,
+        Error(_) => false,
+      }
+      out.print(
+        output,
+        if version == 7u64 && text == "hello" && replied {
+          "job 7 hello replied\n"
+        } else {
+          "wrong\n"
+        }
+      ) ? Output
+    },
+    Error(_) => out.print(output, "lost\n") ? Output,
+  }
+  discard(take inbox)
+  let (tx2, rx2): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  match queue(tasks, mut j, unique "bye", take tx2) {
+    Ok(()) => out.print(output, "sent\n") ? Output,
+    Error(text) => out.print(
+      output,
+      if text == "bye" {
+        "refused bye\n"
+      } else {
+        "wrong\n"
+      }
+    ) ? Output,
+  }
+  Ok(())
+}

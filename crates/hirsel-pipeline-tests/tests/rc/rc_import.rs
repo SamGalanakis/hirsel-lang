@@ -39,6 +39,15 @@ fn a_loop_element_matched_on_is_read_in_place() {
     ));
 }
 
+/// `channel.send` prepares its carrier's slots at entry, where the taken
+/// message is still held: each preparation's failure releases it.
+#[test]
+fn a_library_slot_prepared_at_entry_releases_a_taken_parameter() {
+    lower_valid(include_str!(
+        "../../../../conformance/CONC/CONC-6-owned-record-payload-run.hir"
+    ));
+}
+
 #[test]
 fn failure_preparing_the_second_taken_argument_disposes_the_first() {
     let (_, lowered) = lower_valid(
