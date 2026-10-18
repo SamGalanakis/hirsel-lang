@@ -17,6 +17,7 @@ pub mod layout_validate;
 pub mod object;
 pub mod operation;
 pub mod persistent;
+pub mod profile;
 pub mod rt_program;
 pub mod runtime_abi;
 pub mod snapshot;

@@ -655,6 +655,7 @@ dependencies = [
  "hirsel-graph",
  "hirsel-layout",
  "hirsel-lir",
+ "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",

@@ -16,11 +16,13 @@ the validators derive their own normal and failure graph from the IR.
 implement: `EmitInputs`, failure codes, link names, site codes, descriptor names,
 the immortal prefix, the register-result rule, the receipt check and the object
 manifest; `object.rs` reads an emitted ELF object's symbol interface.
+`profile.rs` shares immutable source ownership and source/cleanup anchor selection
+between native backends.
 `persistent.rs` is the structure-sharing vector that
 dataflow states are built from, here and in `hirsel-rc`: a state costs what it
 changes, so an analysis stays near-linear in the size of a function.
 
-Allowed dependencies: the dependency-free `hirsel-graph` utility and shared data crates (`hirsel-syntax`, `hirsel-core-contract`, `hirsel-codec`); no external production
+Allowed dependencies: the dependency-free `hirsel-graph` utility and shared data crates (`hirsel-span`, `hirsel-syntax`, `hirsel-core-contract`, `hirsel-codec`); no external production
 dependency. Never an implementation crate or `hirsel-driver`: the driver will
 depend on the native implementation crates, which depend on this crate. Production and build dependencies on hirsel-types, hirsel-tir or hirsel-layout
 are forbidden. Test-only: `hirsel-layout`, `hirsel-types`, `hirsel-tir`, `hirsel-diag`,
