@@ -87,19 +87,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         tasks,
         after(c, start, short),
         fn(s: Scope) -> String {
-          let child = task.async(
-            s,
-            fn() -> Option[CancelCause] {
-              let mut r = take receiver
-              match channel.receive(tasks, mut r) {
-                Error(Canceled(e)) => Some(e),
-                _ => None(),
-              }
-            }
-          )
-          let received = match task.await(s, take child) {
-            Some(e) => cause(e),
-            None() => "received",
+          // No child creation races expiry: this wait always sees this scope's cause.
+          let mut r = take receiver
+          let received = match channel.receive(tasks, mut r) {
+            Error(Canceled(e)) => cause(e),
+            _ => "received",
           }
           let checked = match task.check_canceled(s) {
             Ok(()) => "running",
@@ -110,35 +102,42 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
       )
     )
   )
-  show(
-    out,
-    "net",
-    report(
-      task.scope_until(
-        tasks,
-        after(c, start, short),
-        fn(s: Scope) -> String {
-          match net.connect(n, "example.com", 80u16, Unbounded()) {
-            Ok(stream) => {
-              let mut st = take stream
-              let mut buffer: List[u8] = []
-              let first = match net.read(n, mut st, mut buffer, 16u64) {
-                Ok(count) => f"read {count}",
-                Error(_) => "failed",
-              }
-              let second = match net.read(n, mut st, mut buffer, 16u64) {
-                Ok(count) => f"read {count}",
-                Error(Canceled(e)) => cause(e),
-                Error(_) => "failed",
-              }
-              f"{first}, {second}"
-            },
-            Error(_) => "unconnected",
+  // Deliver the success read before arming the short scope. Only the stalled
+  // second read competes with its deadline, so pool load cannot change the result.
+  let network = match net.connect(n, "example.com", 80u16, Unbounded()) {
+    Ok(stream) => {
+      let mut first_stream = take stream
+      let mut first_buffer: List[u8] = []
+      let first = match net.read(n, mut first_stream, mut first_buffer, 16u64) {
+        Ok(count) => f"read {count}",
+        Error(_) => "failed",
+      }
+      report(
+        task.scope_until(
+          tasks,
+          after(c, start, short),
+          fn(s: Scope) -> String {
+            let mut st = take first_stream
+            let mut buffer: List[u8] = []
+            let second = match net.read(n, mut st, mut buffer, 16u64) {
+              Ok(count) => f"read {count}",
+              Error(Canceled(e)) => cause(e),
+              Error(_) => "failed",
+            }
+            f"{first}, {second}"
           }
-        }
+        )
       )
-    )
-  )
+    },
+    Error(_) => "unconnected",
+  }
+  show(out, "net", network)
+  // Starting the child also precedes the short scope; it never produces stdout
+  // or exits by itself, so the scope alone ends the read.
+  let started = match proc.spawn(p, hang, ["infinity"], None()) {
+    Ok(child) => take child,
+    Error(_) => return Ok(()),
+  }
   show(
     out,
     "child",
@@ -147,10 +146,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         tasks,
         after(c, start, short),
         fn(s: Scope) -> String {
-          let mut test = match proc.spawn(p, hang, ["3600"], None()) {
-            Ok(child) => take child,
-            Error(_) => return "not spawned",
-          }
+          let mut test = take started
           let mut buffer: List[u8] = []
           match child.read_stdout(p, mut test, mut buffer, 16u64) {
             Ok(count) => f"read {count}",

@@ -334,8 +334,8 @@ fn process_recordings_replay_in_either_engine_without_spawning() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// Runs a private copy of sleep under a deadline that expires, then under one that does
-/// not (docs/spec/core-library.md#processes).
+/// A held process can only time out; the success run gets a fresh hour-long budget.
+/// See docs/spec/core-library.md#processes.
 const DEADLINE_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
 fn clock_error(take e: ClockError) -> () {}
 
@@ -352,7 +352,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Some(at) => at,
     None() => now,
   }
-  match proc.run(p, sleep, ["10"], b"", None(), 64, Some(Deadline(clock: c, at: soon))) {
+  match proc.run(p, sleep, ["infinity"], b"", None(), 64, Some(Deadline(clock: c, at: soon))) {
     Error(TimedOut()) => {
       let _ = out.print(out, "timed out\n")
     },
@@ -360,9 +360,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
       let _ = out.print(out, "ran on\n")
     },
   }
-  let later = match instant.checked_add(c, now, 60000000000u64) {
+  let fresh = clock.monotonic(c) ? clock_error
+  let later = match instant.checked_add(c, fresh, 3600000000000u64) {
     Some(at) => at,
-    None() => now,
+    None() => fresh,
   }
   match proc.run(p, sleep, ["0"], b"", None(), 64, Some(Deadline(clock: c, at: later))) {
     Ok(o) => {
@@ -378,24 +379,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 }
 "#;
 
-/// A task runs a script that would leave a marker after a second; its parent cancels it
-/// after 100 ms, which kills the child.
+/// The host signals stdin only after the script has published its PID through a
+/// FIFO. The script never exits by itself, so cancellation cannot race its exit.
 const CANCEL_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
-fn clock_error(take e: ClockError) -> () {}
 
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let out = io.stdout(rt) ? grant
   let p = io.process(rt) ? grant
   let tasks = io.tasks(rt) ? grant
-  let c = io.monotonic_clock(rt) ? grant
+  let input = io.stdin(rt) ? grant
   let script = match arg.path(args, 0u64) {
     Ok(program) => program,
     Error(_) => path.of("/missing"),
-  }
-  let now = clock.monotonic(c) ? clock_error
-  let soon = match instant.checked_add(c, now, 100000000u64) {
-    Some(at) => at,
-    None() => now,
   }
   let canceled = task.scope(
     tasks,
@@ -406,7 +401,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
           proc.run(p, script, [], b"", None(), 64, None()) == Error(Canceled(Requested))
         }
       )
-      let _ = clock.sleep_until(c, soon)
+      let mut signal: List[u8] = []
+      let _ = stdin.read(input, mut signal, 1u64)
       task.cancel(s, h)
       task.await(s, take h)
     }
@@ -474,20 +470,25 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 
 /// Record `program` with `grants` in both engines, then delete the granted program and
 /// replay each tape in both engines: nothing is spawned, and the output is the recorded one.
-fn process_round_trip(name: &str, program: &str, child: &Path, expected: &[u8]) -> PathBuf {
+fn process_round_trip(
+    name: &str,
+    program: &str,
+    child: &Path,
+    expected: &[u8],
+    ready: Option<&Path>,
+) -> PathBuf {
     let root = child.parent().unwrap();
     let source = root.join(format!("{name}.hir"));
     std::fs::write(&source, program).unwrap();
     let grants = root.join(format!("{name}.json"));
     std::fs::write(
         &grants,
-        serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"process":{"provider":"process.spawn@1","rules":[{"program":child}]}},"args":[child]}).to_string(),
+        serde_json::json!({"io":{"stdout":"stdout.bytes@1","stdin":"stdin.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"process":{"provider":"process.spawn@1","rules":[{"program":child}]}},"args":[child]}).to_string(),
     )
     .unwrap();
     let tapes = [false, true].map(|native| {
         let tape = root.join(format!("{name}-tape-{native}"));
-        let begun = std::time::Instant::now();
-        let output = hirsel(
+        let mut command = hirsel(
             native,
             &source,
             &[
@@ -496,18 +497,44 @@ fn process_round_trip(name: &str, program: &str, child: &Path, expected: &[u8]) 
                 "--record".as_ref(),
                 tape.as_os_str(),
             ],
-        )
-        .output()
-        .unwrap();
+        );
+        let output = if let Some(ready) = ready {
+            let mut running = command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            // Blocking FIFO IO is the readiness handshake: no sleeps or polling.
+            let mut pid = String::new();
+            std::fs::File::open(ready)
+                .unwrap()
+                .read_to_string(&mut pid)
+                .unwrap();
+            let pid: u32 = pid.trim().parse().unwrap();
+            running.stdin.take().unwrap().write_all(b"!").unwrap();
+            let output = running.wait_with_output().unwrap();
+            // Cancellation has killed and reaped the exact child that signaled readiness.
+            assert!(
+                Command::new("/bin/sh")
+                    .args(["-c", "! kill -0 \"$1\" 2>/dev/null", "sh", &pid.to_string()])
+                    .status()
+                    .unwrap()
+                    .success(),
+                "native={native}: child {pid} survived cancellation"
+            );
+            output
+        } else {
+            command.output().unwrap()
+        };
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "native={native}: {output:?}"
+        );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(expected),
             "native={native}: {output:?}"
-        );
-        // Neither a timeout nor a cancellation waits out the child.
-        assert!(
-            begun.elapsed() < std::time::Duration::from_secs(8),
-            "native={native}"
         );
         tape
     });
@@ -547,6 +574,7 @@ fn timed_out_runs_kill_their_child_and_replay_without_spawning() {
         DEADLINE_PROGRAM,
         &sleep,
         b"timed out\nin time\n",
+        None,
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -555,18 +583,31 @@ fn timed_out_runs_kill_their_child_and_replay_without_spawning() {
 fn a_canceled_parent_kills_its_running_child_and_replays_without_spawning() {
     use std::os::unix::fs::PermissionsExt;
     let root = process_root("replay-cancel");
-    let marker = root.join("survived");
+    let ready = root.join("ready");
+    // A FIFO lets the child acknowledge startup without a clock or a filesystem poll.
+    unsafe extern "C" {
+        fn mkfifo(path: *const std::ffi::c_char, mode: u32) -> i32;
+    }
+    let pipe = std::ffi::CString::new(ready.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: pipe is a live NUL-terminated path; mode grants only this user access.
+    assert_eq!(unsafe { mkfifo(pipe.as_ptr(), 0o600) }, 0);
     let script = root.join("child.sh");
     std::fs::write(
         &script,
-        format!("#!/bin/sh\nsleep 1\ntouch {}\n", marker.display()),
+        format!(
+            "#!/bin/sh\necho $$ > '{}'\nexec /bin/sleep infinity\n",
+            ready.display()
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    process_round_trip("cancel", CANCEL_PROGRAM, &script, b"canceled\n");
-    // Had either recorded run left its child alive, the marker would appear by now.
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    assert!(!marker.exists());
+    process_round_trip(
+        "cancel",
+        CANCEL_PROGRAM,
+        &script,
+        b"canceled\n",
+        Some(&ready),
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -580,6 +621,7 @@ fn a_streaming_cat_child_round_trips_lines_and_replays_without_spawning() {
         STREAM_PROGRAM,
         &cat,
         b"ping\npong\neof\nexited 0\nkilled\n",
+        None,
     );
     std::fs::remove_dir_all(&root).unwrap();
 }

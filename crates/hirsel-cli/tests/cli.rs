@@ -766,10 +766,20 @@ for i in 0u64..COUNTu64
         } else {
             source
         };
-        let source = if deadline {
+        // Successful exchanges (including the held partial request) have no clock
+        // budget. Only the timeout case arms a deadline, with a peer that never finishes.
+        let source = source.replace(
+            "config.read_timeout = Some(duration.from_parts(30, 0))",
+            if deadline {
+                "config.read_timeout = Some(duration.from_parts(0, 500000000))"
+            } else {
+                "config.read_timeout = None()"
+            },
+        );
+        let source = if concurrent && !deadline {
             source.replace(
-                "config.read_timeout = Some(duration.from_parts(30, 0))",
-                "config.read_timeout = Some(duration.from_parts(0, 500000000))",
+                "let mut config = http.default_config()",
+                "let mut config = http.default_config()\n  config.idle_timeout = None()",
             )
         } else {
             source

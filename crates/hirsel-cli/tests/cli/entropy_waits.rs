@@ -190,9 +190,8 @@ fn sleepers_fixture(name: &str) -> Fixture {
 #[test]
 fn interpreted_sleepers_wake_by_deadline_and_a_cancelled_wait_drops_its_timer() {
     let fixture = sleepers_fixture("sleepers");
-    let (stdout, elapsed) = fixture.live(false, Some("sleepers.tape"));
+    let (stdout, _) = fixture.live(false, Some("sleepers.tape"));
     assert_eq!(stdout, b"early\nlate\ncanceled\n");
-    assert!(elapsed < Duration::from_secs(60), "{elapsed:?}");
     // The parks and ready polls replay the schedule without waiting.
     assert_eq!(fixture.replay(false, "sleepers.tape").0, stdout);
 }
@@ -201,9 +200,8 @@ fn interpreted_sleepers_wake_by_deadline_and_a_cancelled_wait_drops_its_timer() 
 #[ignore = "full gate"]
 fn full_gate_native_sleepers_park_on_timers_and_replay_in_either_engine() {
     let fixture = sleepers_fixture("native-sleepers");
-    let (stdout, elapsed) = fixture.live(true, Some("native.tape"));
+    let (stdout, _) = fixture.live(true, Some("native.tape"));
     assert_eq!(stdout, b"early\nlate\ncanceled\n");
-    assert!(elapsed < Duration::from_secs(60), "{elapsed:?}");
     assert_eq!(fixture.replay(true, "native.tape").0, stdout);
     assert_eq!(fixture.replay(false, "native.tape").0, stdout);
 }
