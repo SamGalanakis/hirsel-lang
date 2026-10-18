@@ -169,12 +169,12 @@ fn keep(query: Query, entry: Entry) -> bool {
   }
 }
 
-fn bump(mut counts: Map[String, u64], key: String) {
+fn bump(mut counts: Map[String, u64], take key: String) {
   let n = match map.get(counts, key) {
     Some(n) => n,
     None() => 0u64,
   }
-  map.insert(mut counts, key, n + 1)
+  map.insert(mut counts, take key, n + 1)
 }
 
 @noalloc
@@ -275,8 +275,8 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
       None() => continue,
     }
     if keep(query, entry) {
-      bump(mut levels, entry.level)
-      bump(mut messages, entry.message)
+      bump(mut levels, copy entry.level)
+      bump(mut messages, copy entry.message)
     }
   }
   Ok(report(query, levels, messages))

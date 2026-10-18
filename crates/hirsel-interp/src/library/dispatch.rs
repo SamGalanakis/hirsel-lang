@@ -1502,7 +1502,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "map.insert" => {
                 return Ok(Some(keyed(
                     collection::insert(arg(a, 0)?.clone(), arg(a, 1)?.clone(), arg(a, 2)?.clone())
-                        .map(|m| m.into_result(0, vec![2])),
+                        .map(|m| m.into_result(0, vec![1, 2])),
                     &call,
                     context,
                 )?));

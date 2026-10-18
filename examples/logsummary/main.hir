@@ -16,7 +16,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
       Some(n) => n,
       None() => 0u64,
     }
-    map.insert(mut counts, level, count + 1)
+    map.insert(mut counts, take level, count + 1)
   }
   let mut builder: List[u8] = []
   for (level, count) in counts {

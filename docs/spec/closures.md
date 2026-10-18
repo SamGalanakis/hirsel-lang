@@ -102,9 +102,8 @@ state parameter is `mut` (`@preserves_unique` may also select a `take` parameter
   non-plain `take` or `mut` argument are unique at the call, a selected `mut` argument is
   handed back unique and a selected `take` parameter's call returns a unique result.
   Borrowed arguments impose nothing, since the body can only share out of them, except
-  for a bodyless core declaration such as `map.insert`, which may store a share of a
-  borrowed argument: there each borrowed argument it may retain must also be Plain or
-  Shared. One the ledger marks `@unretained`, which the operation only reads and stores
+  for a bodyless core declaration, which may store a share of a borrowed argument: there
+  each borrowed argument it may retain must also be Plain or Shared. One the ledger marks `@unretained`, which the operation only reads and stores
   nothing derived from (`sorted_map.insert`'s `by`, whose brand is type-level), is
   exempt. The body is checked again with the selected parameter and every non-plain
   `take` and `mut` parameter entering unique; the selected `mut` parameter must then be

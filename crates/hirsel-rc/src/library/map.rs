@@ -521,7 +521,7 @@ fn cleanup_anchor(b: &mut Body<'_, '_>) -> CleanupAnchorId {
     });
     id
 }
-fn drop_place(b: &mut Body<'_, '_>, address: AddressId) {
+pub(super) fn drop_place(b: &mut Body<'_, '_>, address: AddressId) {
     b.forget_held(address);
     let anchor = cleanup_anchor(b);
     let failure = b.failure(None);
@@ -587,6 +587,9 @@ fn insert(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
             slot: displaced,
             if_live: false,
         });
+        // The taken key equals the stored one, which stays.
+        let key = b.parameters[1].address;
+        drop_place(&mut b, key);
     } else {
         drop_place(&mut b, incoming.address);
     }
@@ -597,8 +600,7 @@ fn insert(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
     let element =
         b.cx.element(b.ed.unit.types[b.ed.unit.addresses[entries.index()].ty.index()].layout)?;
     let key = if is_map {
-        let failure = b.failure(None);
-        Some(b.copy(b.parameters[1].address, failure)?)
+        Some(b.take(b.parameters[1].address)?)
     } else {
         None
     };

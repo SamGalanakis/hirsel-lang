@@ -765,7 +765,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `fn map.empty[K: key, V]() -> unique Map[K, V]` <!-- core@1/map/empty -->
 - `@noalloc fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m` <!-- core@1/map/get -->
-- `@preserves_unique(m) fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()` <!-- core@1/map/insert -->
+- `@preserves_unique(m) fn map.insert[K: key, V](mut m: Map[K, V], take k: K, take v: V) -> ()` <!-- core@1/map/insert -->
 - `@noalloc pub fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool` — Equality ignores insertion order and borrows all entries, including opaque data. <!-- std@1/map/same_entries -->
 
 ## mutex
@@ -916,7 +916,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## sorted_map
 
 - `fn sorted_map.empty[K, V](by: Order[K]) -> unique SortedMap[K, V] of by` <!-- core@1/sorted_map/empty -->
-- `@preserves_unique(m) @unretained(by) fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()` <!-- core@1/sorted_map/insert -->
+- `@preserves_unique(m) @unretained(by) fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, take k: K, take v: V) -> ()` <!-- core@1/sorted_map/insert -->
 
 ## stdin
 

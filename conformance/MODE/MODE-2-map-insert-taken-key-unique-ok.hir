@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: accept
+// map.insert takes its key, so a unique key and value keep a unique Store root
+// unique through its entries field. Twin is MODE-2-map-insert-taken-key-copied-bad.
+type Store {
+  version: u64,
+  entries: Map[String, String],
+}
+
+fn bump(mut st: unique Store) -> u64 uses {} {
+  st.version
+}
+
+fn write(mut st: unique Store, key: String) -> u64 uses {} {
+  map.insert(mut st.entries, unique key, unique "v")
+  bump(mut st)
+}

@@ -220,7 +220,7 @@ impl Library {
         if lo == hi {
             entries.insert(lo, Value::Tuple(vec![Some(key), Some(value)]));
             return Ok(OperationResult::Complete {
-                consumed: vec![3],
+                consumed: vec![2, 3],
                 released: vec![],
                 value: Value::Unit,
                 arguments: vec![(1, sorted(by, entries))],
@@ -324,10 +324,9 @@ impl Library {
                     return self.compare_next(by, entries, key, value, lo, index);
                 }
                 let old = collection::replace_entry_value(&mut entries[index], value)?;
-                key.discard();
                 Ok(OperationResult::Complete {
-                    consumed: vec![3],
-                    released: vec![old],
+                    consumed: vec![2, 3],
+                    released: vec![old, key],
                     value: Value::Unit,
                     arguments: vec![(1, sorted(by, entries))],
                 })

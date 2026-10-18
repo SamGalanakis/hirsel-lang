@@ -1,10 +1,11 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
-// map.insert stores a share of its borrowed String key, so the map is aliased
+// expect: reject MODE-2 at line 10
+// map.insert takes a String key that `kept` still shares, so the map is aliased
 // after it. Twin is MODE-2-map-insert-plain-key-ok.
 fn need(mut m: unique Map[String, u64]) -> () {}
 
-fn root(mut m: unique Map[String, u64], k: String) -> () {
-  map.insert(mut m, k, 2)
+fn root(mut m: unique Map[String, u64], take k: String) -> () {
+  let kept = copy k
+  map.insert(mut m, take k, 2)
   need(mut m)
 }

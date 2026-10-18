@@ -408,22 +408,19 @@ fn insert(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let pair = b.slot_place(entries, equal_position)?;
     let target = field(&mut b, pair, pair_layout, 1)?;
     replace_from(&mut b, target, value.address)?;
+    // The taken key equals the stored one, which stays.
+    super::map::drop_place(&mut b, key.address);
     ret_unit(&mut b);
     b.at(vacant);
     b.set_reaching(map.slot, vacant_version);
+    b.hold(key.slot, key.address);
     b.hold(value.slot, value.address);
     let local = b.slot(pair_layout, SlotKind::Temporary);
     b.push(Inst::StorageLive { slot: local });
     let local_address = b.place(AddressBase::Slot(local), &[], pair_layout, None)?;
-    let failure = b.failure(None);
-    let copied = b.copy(key.address, failure)?;
+    let key = b.take(key.address)?;
     let moved = b.take(value.address)?;
-    let pair = construct(
-        &mut b,
-        pair_layout,
-        ConstructorKind::Tuple,
-        &[copied, moved],
-    );
+    let pair = construct(&mut b, pair_layout, ConstructorKind::Tuple, &[key, moved]);
     b.store(local_address, pair)?;
     b.hold(local, local_address);
     let count = b.add(ArithMode::Wrapping, len, one);

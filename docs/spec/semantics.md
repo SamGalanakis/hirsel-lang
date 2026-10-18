@@ -141,18 +141,19 @@ ordering operators stay limited to scalar and byte operands.
 The keyed reads `map.get` and `set.contains` use the same hash and key equality as
 insertion and change neither the container nor its order; `map.get` returns the value
 stored under an equal key, or `None`, and its result is related to the map
-(`Option[V] in m`). Map insertion replaces an existing value in its existing position; Set
-insertion of an existing key changes nothing. The default hasher is keyed SipHash-1-3.
+(`Option[V] in m`). Insertion takes its key. Map insertion replaces an existing value in its
+existing position, keeping the stored key, finalizes the displaced value and then drops the
+incoming key; Set insertion of an existing key changes nothing and drops the incoming one. The default hasher is keyed SipHash-1-3.
 
 `SortedMap` is `of` an `Order` and has no `data` or `key` equality. `sorted_map.insert`
 searches `[lo, hi)`, initially `[0, len)`, taking `mid = lo + (hi - lo) / 2` and comparing the
 incoming key against `entries[mid]`. A zero result replaces at `mid`, a negative result sets
 `hi = mid`, and a positive result sets `lo = mid + 1`; when `lo == hi`, it inserts at `lo`.
 Every comparator call finishes before any write, and the probe sequence is observable
-through comparator failure. The key is borrowed and must be copyable; an equal replacement
-keeps the existing key and position, installs the incoming value, then finalizes the
-displaced value. A comparator failure preserves the map and releases the still-owned
-incoming value through normal cleanup.
+through comparator failure. The key is taken; an equal replacement keeps the existing key
+and position, installs the incoming value, finalizes the displaced value, then drops the
+incoming key. A comparator failure preserves the map and releases the still-owned incoming
+key and value through normal cleanup.
 
 The run's placement seed is not the Random seed, the Test seed, the scheduler seed or a
 user `Hasher` argument. Varying only that seed cannot change program observations.

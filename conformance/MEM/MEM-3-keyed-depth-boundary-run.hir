@@ -15,7 +15,7 @@ fn boundary() -> Chain {
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let key = boundary()
   let mut m: Map[Chain, u64] = map.empty()
-  map.insert(mut m, key, 7)
+  map.insert(mut m, copy key, 7)
   let found = map.get(m, key)
   let hit = match found {
     Some(value) => value == 7u64,

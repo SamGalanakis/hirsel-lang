@@ -485,7 +485,7 @@ keeps the root unique. A directly called declaration with `@preserves_unique(p)`
 `mut` argument back unique, or returns a unique result for a selected `take`
 parameter, when every non-plain taken and `mut` argument is unique at the call, and,
 for a bodyless core@1 callee (`callee_definition`), every borrowed argument is Plain or
-Shared, since a ledger operation such as `map.insert` may store a share of it, unless the
+Shared, since a ledger operation may store a share of it, unless the
 promise lists it `unretained` (`callee_unretained`: `sorted_map.insert`'s `by`); that
 result uniqueness is flow evidence only, so the published call row stays the
 declared one, as V derives it. A `mut x: unique T` parameter must be unique at every

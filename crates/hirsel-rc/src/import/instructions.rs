@@ -1221,21 +1221,7 @@ impl Importer<'_, '_> {
                 key.projection.push(ProjectionStep::Field(0));
                 key.ty = self.intern(record.fields[0].layout);
                 let key_address = self.address(&key)?;
-                let loan = self.synthetic_loan(key_address);
-                self.failure.before.insert(0, Action::EndLoan { loan });
-                let holding = if self.owns(key.ty) {
-                    Holding::Borrowed(loan)
-                } else {
-                    Holding::Plain
-                };
-                let k = self.value(key.ty, holding);
-                let reaching = self.reaching(s)?;
-                self.push(Inst::Read {
-                    result: k,
-                    address: key_address,
-                    reaching,
-                    mode: ReadMode::Borrow,
-                });
+                let k = self.operand_at(UseKind::Take, &key, key_address, None)?;
                 let mut item = whole;
                 item.steps.push(Step::Field(1));
                 item.projection.push(ProjectionStep::Field(1));
@@ -1244,7 +1230,7 @@ impl Importer<'_, '_> {
                 let v = self.operand_at(UseKind::Take, &item, a, None)?;
                 args.push(CallArgument {
                     parameter: 1,
-                    passing: Passing::Borrow,
+                    passing: Passing::Take,
                     value: ArgumentValue::Value(k),
                 });
                 args.push(CallArgument {
@@ -1252,7 +1238,7 @@ impl Importer<'_, '_> {
                     passing: Passing::Take,
                     value: ArgumentValue::Value(v),
                 });
-                Some((s, loan, release))
+                Some((s, release))
             } else {
                 args.push(CallArgument {
                     parameter: 1,
@@ -1272,13 +1258,7 @@ impl Importer<'_, '_> {
                 },
             );
             Inline::direct_call(self, symbol, direct.abi, args)?;
-            if let Some((s, loan, release)) = pair {
-                self.failure.before.remove(0);
-                self.push(Inst::EndLoan {
-                    loan,
-                    if_active: false,
-                });
-                self.state.loans[loan.index()] = Tri::No;
+            if let Some((s, release)) = pair {
                 self.failure.before.remove(0);
                 self.run_normal(&[release], &[])?;
                 self.push(Inst::StorageDead {

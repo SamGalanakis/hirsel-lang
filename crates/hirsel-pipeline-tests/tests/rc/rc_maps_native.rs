@@ -293,7 +293,10 @@ fn deep_key_failures_name_the_source_operation_through_nested_library_calls() {
         Toolchain::in_tree_diagnostic(&root.join("runtime"), &targets.iter().collect::<Vec<_>>())
             .unwrap();
     with_compiler_stack(move || {
-        for operation in ["let found = map.get(m, key)", "map.insert(mut m, key, 1)"] {
+        for operation in [
+            "let found = map.get(m, key)",
+            "map.insert(mut m, take key, 1)",
+        ] {
             for indexed in [false, true] {
                 let inserts = if indexed {
                     (0..9)
@@ -303,7 +306,7 @@ fn deep_key_failures_name_the_source_operation_through_nested_library_calls() {
                     String::new()
                 };
                 let source = format!(
-                    "type Chain = End | Link(next: box Chain)\nfn chain(depth: u64) -> Chain {{ let mut c: Chain = End\n for i in 0..depth {{ c = Link(next: box take c) }}\n take c }}\nfn invoke(mut m: Map[Chain,u64], key: Chain) {{ {operation} }}\nfn relay(mut m: Map[Chain,u64], key: Chain) {{ invoke(mut m,key) }}\npub fn main(rt: Io, args: Args) -> Result[(),()] {{ let mut m: Map[Chain,u64] = map.empty()\n {inserts}let key = chain(545)\n relay(mut m,key)\n Ok(()) }}"
+                    "type Chain = End | Link(next: box Chain)\nfn chain(depth: u64) -> Chain {{ let mut c: Chain = End\n for i in 0..depth {{ c = Link(next: box take c) }}\n take c }}\nfn invoke(mut m: Map[Chain,u64], take key: Chain) {{ {operation} }}\nfn relay(mut m: Map[Chain,u64], take key: Chain) {{ invoke(mut m,take key) }}\npub fn main(rt: Io, args: Args) -> Result[(),()] {{ let mut m: Map[Chain,u64] = map.empty()\n {inserts}let key = chain(545)\n relay(mut m,take key)\n Ok(()) }}"
                 );
                 let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
                 let file = engine

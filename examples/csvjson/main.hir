@@ -69,7 +69,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
       Some(_) => return Error(Invalid()),
       None() => (),
     }
-    map.insert(mut names, name, true)
+    map.insert(mut names, copy name, true)
   }
   let mut converted: List[box json.Value] = []
   for i in 1u64..list.len(records) {
@@ -79,7 +79,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     }
     let mut object: Map[String, box json.Value] = map.empty()
     for j in 0u64..list.len(headers) {
-      map.insert(mut object, headers[j], box Text(copy row[j]))
+      map.insert(mut object, copy headers[j], box Text(copy row[j]))
     }
     list.push(mut converted, box Object(take object))
   }

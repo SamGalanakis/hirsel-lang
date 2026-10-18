@@ -123,11 +123,11 @@ pub fn insert(mut value: Value, key: Value, item: Value) -> Result<Mutation, Key
         return Err(invalid("map.insert requires Map").into());
     };
     if let Some(index) = find(elements, &key, entry_key)? {
+        // The taken key drops after the displaced value, as natively.
         let old = replace_entry_value(elements[index].as_mut().unwrap(), item)?;
-        key.discard();
         return Ok(Mutation {
             value,
-            released: vec![old],
+            released: vec![old, key],
         });
     }
     elements.push(Some(Value::Tuple(vec![Some(key), Some(item)])));
