@@ -1,0 +1,22 @@
+// rule: CAP-1
+// expect: run
+fn selected(item: Result[Path, FileError]) -> bool {
+  match item {
+    Ok(p) => string.ends_with(path.text(p), ".hir"),
+    Error(_) => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(
+    t,
+    [(path.of("z.hir"), b"z"), (path.of("a.txt"), b"a"), (path.of("b.hir"), b"b")]
+  )
+  let paths = iter.collect(iter.take_n(iter.filter(file.walk(dir)?, selected), 1))
+  failure.check(list.len(paths) == 1, Bounds())
+  match paths[0] {
+    Ok(p) => failure.check(path.text(p) == "b.hir", Bounds()),
+    Error(_) => failure.check(false, Bounds()),
+  }
+  Ok(())
+}

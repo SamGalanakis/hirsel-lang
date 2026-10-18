@@ -1,0 +1,128 @@
+// Rust core/src/iter/adapters/{filter,take,enumerate,zip}.rs, f6c1107f.
+// Each adapter fuses at the first None; state and callbacks remain owned.
+type Filtered[T] {
+  inner: Iter[T],
+  predicate: fn(T) -> bool,
+  ended: bool,
+}
+
+type Taken[T] {
+  inner: Iter[T],
+  remaining: u64,
+}
+
+type Enumerated[T] {
+  inner: Iter[T],
+  index: u64,
+  ended: bool,
+}
+
+type Zipped[T, U] {
+  left: Iter[T],
+  right: Iter[U],
+  ended: bool,
+}
+
+@captures(it, predicate)
+pub fn filter[T](take it: Iter[T], take predicate: fn(T) -> bool) -> Iter[T] uses {it, predicate} {
+  core@1/iter.from(
+    take Filtered(inner: take it, predicate: take predicate, ended: false),
+    fn(mut s: Filtered[T]) -> Option[T] {
+      while !s.ended {
+        match core@1/iter.next(mut s.inner) {
+          Some(item) => if s.predicate(item) {
+            return Some(take item)
+          },
+          None => {
+            s.ended = true
+          },
+        }
+      }
+      None
+    }
+  )
+}
+
+@captures(it)
+pub fn take_n[T](take it: Iter[T], count: u64) -> Iter[T] uses {it} {
+  core@1/iter.from(
+    take Taken(inner: take it, remaining: count),
+    fn(mut s: Taken[T]) -> Option[T] {
+      if s.remaining == 0 {
+        return None
+      }
+      s.remaining -= 1
+      match core@1/iter.next(mut s.inner) {
+        Some(item) => Some(take item),
+        None => {
+          s.remaining = 0
+          None
+        },
+      }
+    }
+  )
+}
+
+@captures(it)
+pub fn enumerate[T](take it: Iter[T]) -> Iter[(u64, T)] uses {it} {
+  core@1/iter.from(
+    take Enumerated(inner: take it, index: 0, ended: false),
+    fn(mut s: Enumerated[T]) -> Option[(u64, T)] {
+      if s.ended {
+        return None
+      }
+      match core@1/iter.next(mut s.inner) {
+        Some(item) => {
+          let index = s.index
+          s.index += 1
+          Some((index, take item))
+        },
+        None => {
+          s.ended = true
+          None
+        },
+      }
+    }
+  )
+}
+
+@captures(a, b)
+pub fn zip[T, U](take a: Iter[T], take b: Iter[U]) -> Iter[(T, U)] uses {a, b} {
+  core@1/iter.from(
+    take Zipped(left: take a, right: take b, ended: false),
+    fn(mut s: Zipped[T, U]) -> Option[(T, U)] {
+      if s.ended {
+        return None
+      }
+      match core@1/iter.next(mut s.left) {
+        Some(left) => match core@1/iter.next(mut s.right) {
+          Some(right) => Some((take left, take right)),
+          None => {
+            s.ended = true
+            None
+          },
+        },
+        None => {
+          s.ended = true
+          None
+        },
+      }
+    }
+  )
+}
+
+pub fn collect[T](take it: Iter[T]) -> List[T] uses {it} {
+  let mut out: List[T] = []
+  for item in take it {
+    core@1/list.push(mut out, take item)
+  }
+  take out
+}
+
+pub fn fold[T, A](take it: Iter[T], take initial: A, take f: fn(take A, take T) -> A) -> A uses {it, initial, f} {
+  let mut accumulator = take initial
+  for item in take it {
+    accumulator = f(take accumulator, take item)
+  }
+  take accumulator
+}

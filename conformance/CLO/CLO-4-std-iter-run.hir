@@ -1,0 +1,39 @@
+// rule: CLO-4
+// expect: run
+// stdout: iter
+fn count(mut n: u64) -> Option[u64] {
+  let value = n
+  n += 1
+  if value < 8 {
+    Some(value)
+  } else {
+    None
+  }
+}
+
+fn odd(n: u64) -> bool {
+  n % 2 == 1
+}
+
+fn sum(take a: u64, take b: u64) -> u64 {
+  a + b
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let items = iter.collect(iter.take_n(iter.filter(iter.from(0u64, count), odd), 3))
+  failure.check(items == [1u64, 3u64, 5u64], Bounds())
+  let total = iter.fold(iter.from(0u64, count), 0u64, sum)
+  failure.check(total == 28, Bounds())
+  let mut pairs = iter.zip(
+    iter.enumerate(iter.from(2u64, count)),
+    iter.from(6u64, count)
+  )
+  let mut pair_total: u64 = 0
+  for pair in take pairs {
+    let ((index, left), right) = take pair
+    pair_total += index + left + right
+  }
+  failure.check(pair_total == 19, Bounds())
+  let _ = out.print(io.stdout(rt)?, "iter\n")
+  Ok(())
+}

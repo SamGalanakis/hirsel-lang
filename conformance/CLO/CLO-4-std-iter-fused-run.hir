@@ -1,0 +1,35 @@
+// rule: CLO-4
+// expect: run
+fn ended(mut polled: bool) -> Option[u64] {
+  failure.check(!polled, Bounds())
+  polled = true
+  None
+}
+
+fn never(mut n: u64) -> Option[u64] {
+  failure.check(false, Bounds())
+  None
+}
+
+fn yes(n: u64) -> bool {
+  true
+}
+
+fn twice(take source: Iter[u64]) -> () {
+  let mut it = take source
+  failure.check(iter.next(mut it) == None, Bounds())
+  failure.check(iter.next(mut it) == None, Bounds())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  twice(iter.take_n(iter.from(0u64, never), 0))
+  twice(iter.take_n(iter.from(false, ended), 3))
+  twice(iter.filter(iter.from(false, ended), yes))
+  let mut enumerated = iter.enumerate(iter.from(false, ended))
+  failure.check(iter.next(mut enumerated) == None, Bounds())
+  failure.check(iter.next(mut enumerated) == None, Bounds())
+  let mut zipped = iter.zip(iter.from(false, ended), iter.from(0u64, never))
+  failure.check(iter.next(mut zipped) == None, Bounds())
+  failure.check(iter.next(mut zipped) == None, Bounds())
+  Ok(())
+}

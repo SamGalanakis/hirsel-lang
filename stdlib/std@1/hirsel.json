@@ -248,6 +248,12 @@
       "module": [
         "hex"
       ]
+    },
+    {
+      "path": "iter.hir",
+      "module": [
+        "iter"
+      ]
     }
   ],
   "dependencies": []

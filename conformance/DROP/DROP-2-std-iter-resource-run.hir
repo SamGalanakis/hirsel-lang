@@ -1,0 +1,42 @@
+// rule: DROP-2
+// expect: run
+// stdout: 0
+// stdout: 2
+// stdout: source
+// stdout: 3
+// stdout: 1
+resource type Source {
+  out: Stdout,
+  n: u64,
+}
+drop(x) {
+  let _ = out.print(x.out, "source\n")
+}
+
+resource type Item {
+  out: Stdout,
+  n: u64,
+}
+drop(x) {
+  let _ = out.print(x.out, u64.to_string(x.n))
+  let _ = out.print(x.out, "\n")
+}
+
+fn step(mut s: Source) -> Option[Item] {
+  let n = s.n
+  s.n += 1
+  Some(Item(out: s.out, n: n))
+}
+
+fn odd(item: Item) -> bool {
+  item.n % 2 == 1
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let source = Source(out: io.stdout(rt)?, n: 0)
+  let items = iter.collect(
+    iter.take_n(iter.filter(iter.from(take source, step), odd), 2)
+  )
+  failure.check(list.len(items) == 2, Bounds())
+  Ok(())
+}

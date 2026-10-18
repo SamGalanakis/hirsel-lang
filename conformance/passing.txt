@@ -53,6 +53,7 @@ conformance/CAP/CAP-1-process-scripted-run.hir
 conformance/CAP/CAP-1-process-ungranted-run.hir
 conformance/CAP/CAP-1-random-projection-bad.hir
 conformance/CAP/CAP-1-random-projection-ok.hir
+conformance/CAP/CAP-1-std-iter-file-pipeline-run.hir
 conformance/CAP/CAP-1-stderr-parameter-bad.hir
 conformance/CAP/CAP-1-stderr-parameter-ok.hir
 conformance/CAP/CAP-1-stderr-projection-bad.hir
@@ -385,6 +386,8 @@ conformance/CLO/CLO-4-selected-callback-forward-bad.hir
 conformance/CLO/CLO-4-selected-callback-forward-ok.hir
 conformance/CLO/CLO-4-selected-callback-ok.hir
 conformance/CLO/CLO-4-spec-lazy-map.hir
+conformance/CLO/CLO-4-std-iter-fused-run.hir
+conformance/CLO/CLO-4-std-iter-run.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-bad.hir
 conformance/CLO/CLO-4-stored-borrowed-capture-ok.hir
 conformance/CLO/CLO-4-taken-function-needs-global-bad.hir
@@ -587,6 +590,11 @@ conformance/DROP/DROP-2-reverse-locals.hir
 conformance/DROP/DROP-2-sequence-high-low.hir
 conformance/DROP/DROP-2-sorted-map-replaced-value.hir
 conformance/DROP/DROP-2-sorted-map-retained-key.hir
+conformance/DROP/DROP-2-std-iter-fold-run.hir
+conformance/DROP/DROP-2-std-iter-predicate-fail.hir
+conformance/DROP/DROP-2-std-iter-predicate-run.hir
+conformance/DROP/DROP-2-std-iter-resource-run.hir
+conformance/DROP/DROP-2-std-iter-zip-run.hir
 conformance/DROP/DROP-2-testhelpers-expect-error-ok-drop-fail.hir
 conformance/DROP/DROP-2-testhelpers-for-all-law-resource-fail.hir
 conformance/DROP/DROP-2-testhelpers-for-all-resource-fail.hir

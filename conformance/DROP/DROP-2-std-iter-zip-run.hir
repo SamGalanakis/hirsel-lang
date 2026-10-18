@@ -1,0 +1,61 @@
+// rule: DROP-2
+// expect: run
+// stdout: unmatched
+// stdout: right
+// stdout: left
+resource type Source {
+  out: Stdout,
+  remaining: u64,
+  label: String,
+  item: bool,
+}
+drop(x) {
+  let _ = out.print(x.out, x.label)
+}
+
+resource type Item {
+  out: Stdout,
+  label: String,
+}
+drop(x) {
+  let _ = out.print(x.out, x.label)
+}
+
+fn step(mut s: Source) -> Option[Item] {
+  if s.remaining == 0 {
+    return None
+  }
+  s.remaining -= 1
+  Some(
+    Item(
+      out: s.out,
+      label: if s.item {
+        "unmatched\n"
+      } else {
+        "item\n"
+      }
+    )
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let left = iter.from(
+    take Source(out: output, remaining: 2, label: "left\n", item: true),
+    step
+  )
+  let right = iter.from(
+    take Source(out: output, remaining: 0, label: "right\n", item: false),
+    step
+  )
+  let mut zipped = iter.zip(take left, take right)
+  match iter.next(mut zipped) {
+    None => {},
+    Some(_) => failure.check(false, Bounds()),
+  }
+  match iter.next(mut zipped) {
+    None => {},
+    Some(_) => failure.check(false, Bounds()),
+  }
+  Ok(())
+}

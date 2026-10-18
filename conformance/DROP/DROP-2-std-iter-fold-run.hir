@@ -1,0 +1,69 @@
+// rule: DROP-2
+// expect: run
+// stdout: item
+// stdout: item
+// stdout: source
+// stdout: 2
+resource type Source {
+  out: Stdout,
+  remaining: u64,
+  label: String,
+  item: bool,
+}
+drop(x) {
+  let _ = out.print(x.out, x.label)
+}
+
+resource type Item {
+  out: Stdout,
+  label: String,
+}
+drop(x) {
+  let _ = out.print(x.out, x.label)
+}
+
+fn step(mut s: Source) -> Option[Item] {
+  if s.remaining == 0 {
+    return None
+  }
+  s.remaining -= 1
+  Some(
+    Item(
+      out: s.out,
+      label: if s.item {
+        "unmatched\n"
+      } else {
+        "item\n"
+      }
+    )
+  )
+}
+
+resource type Accumulator {
+  out: Stdout,
+  count: u64,
+}
+drop(x) {
+  let _ = out.print(x.out, u64.to_string(x.count))
+  let _ = out.print(x.out, "\n")
+}
+
+fn combine(take state: Accumulator, take item: Item) -> Accumulator {
+  let mut accumulator = take state
+  accumulator.count += 1
+  take accumulator
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let source = iter.from(
+    take Source(out: output, remaining: 2, label: "source\n", item: false),
+    step
+  )
+  let accumulator = iter.fold(
+    take source,
+    take Accumulator(out: output, count: 0),
+    combine
+  )
+  Ok(())
+}

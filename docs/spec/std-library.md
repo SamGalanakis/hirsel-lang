@@ -474,3 +474,30 @@ input byte offsets. Decoding checks digits in order; an invalid final byte
 precedes an odd-length error. No partial output is returned. Both functions
 are pure ordinary source and borrow their input; outputs are owned. Encoding
 checks doubled size for overflow before building.
+
+## Lazy iteration
+
+```text
+@captures(it, predicate)
+fn iter.filter[T](take it: Iter[T], take predicate: fn(T) -> bool) -> Iter[T] uses {it, predicate}
+@captures(it)
+fn iter.take_n[T](take it: Iter[T], count: u64) -> Iter[T] uses {it}
+@captures(it)
+fn iter.enumerate[T](take it: Iter[T]) -> Iter[(u64, T)] uses {it}
+@captures(a, b)
+fn iter.zip[T, U](take a: Iter[T], take b: Iter[U]) -> Iter[(T, U)] uses {a, b}
+fn iter.collect[T](take it: Iter[T]) -> List[T] uses {it}
+fn iter.fold[T, A](take it: Iter[T], take initial: A, take f: fn(take A, take T) -> A) -> A uses {it, initial, f}
+```
+
+These source helpers own their inputs and callbacks through core `iter.from`.
+Adapters are lazy and fused: after their first `None`, later polls return `None`
+without advancing either source. `take_n` (the word `take` is reserved) advances
+at most `count` times, and zero never polls its input. Filter drops each rejected
+item. Zip polls left before right; if right ends, the unmatched left item is
+dropped. Enumerate starts at zero and checks its increment with SEM-1 arithmetic
+before publishing each pair; exhaustion of the u64 index fails rather than wraps.
+Collect and fold consume items, preserving move-only ownership. Early destruction,
+callback failure and normal exhaustion release captured sources and callbacks
+through their ordinary cleanup. Authority and capture bounds propagate from the
+selected inputs; a file-walk pipeline retains its Dir authority.
