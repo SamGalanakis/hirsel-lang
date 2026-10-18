@@ -1,0 +1,102 @@
+// rule: SEM-1
+// expect: run
+// Body helpers use the existing URI and JSON codecs and install one media type.
+fn syntax_error(error: http.HttpError) -> bool uses {} {
+  match error {
+    Json(actual) => match actual {
+      Syntax(_) => true,
+      _ => false,
+    },
+    _ => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let pairs: List[(String, String)] = [("a b", "x+y&="), ("a b", "é")]
+  let form = http.form_body(pairs)
+  test.check(t, form.bytes == b"a+b=x%2By%26%3D&a+b=%C3%A9")
+  test.check(t, form.content_type == "application/x-www-form-urlencoded")
+  test.check(t, uri.query_pairs("a+b=x%2By%26%3D&a+b=%C3%A9") == Ok(unique pairs))
+  test.check(t, http.form_body([]).bytes == b"")
+  let encoded = http.json_body(Text("hi"))?
+  test.check(
+    t,
+    encoded.bytes == b"\"hi\"" && encoded.content_type == "application/json"
+  )
+  test.check(t, http.json_body(Number("NaN")) == Error(Json(InvalidNumber())))
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"POST /form HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\nx-tag: yes\r\nContent-Type: application/x-www-form-urlencoded\r\ncontent-length: 26\r\n\r\na+b=x%2By%26%3D&a+b=%C3%A9"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\n\r\ntrue"
+              ),
+              Expect(
+                b"POST /json HTTP/1.1\r\nhost: example.com\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\nContent-Type: application/json\r\ncontent-length: 4\r\n\r\n\"hi\""
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\n\r\nnull"
+              )
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let mut config = http.default_config()
+  config.idle_timeout = None()
+  let mut client = http.client(n, None(), config)?
+  let headers: List[http.Header] = [
+    http.Header(name: "cOnTeNt-TyPe", value: "ignored"),
+    http.Header(name: "x-tag", value: "yes"),
+    http.Header(name: "Content-Type", value: "also ignored")
+  ]
+  let first = http.client_send(
+    mut client,
+    Post(),
+    "http://example.com/form",
+    headers,
+    form
+  )?
+  test.check(t, http.response_json(first) == Ok(Bool(true)))
+  let second = http.client_send(
+    mut client,
+    Post(),
+    "http://example.com/json",
+    [],
+    encoded
+  )?
+  test.check(t, http.response_json(second) == Ok(Null()))
+  let malformed = http.Response(
+    status: 200u16,
+    headers: [],
+    body: b"{",
+    url: "http://example.com/"
+  )
+  test.check(
+    t,
+    match http.response_json(malformed) {
+      Error(error) => syntax_error(error),
+      _ => false,
+    }
+  )
+  let invalid = http.Response(
+    status: 200u16,
+    headers: [],
+    body: b"\xff",
+    url: "http://example.com/"
+  )
+  test.check(t, http.response_json(invalid) == Error(InvalidJsonUtf8()))
+  Ok(())
+}

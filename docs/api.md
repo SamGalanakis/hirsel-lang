@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-808 exported definitions; 257 variants.
+813 exported definitions; 259 variants.
 
 ## Types and roots
 
@@ -2525,6 +2525,15 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 ## http
 
+<a id="def-std_401_2fhttp_2fBody"></a>
+
+- `pub type http.Body { bytes: Bytes, content_type: String, }`
+
+An encoded request body and its media type. client_send installs exactly one
+Content-Type, replacing any Content-Type supplied in its headers argument.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
 <a id="def-std_401_2fhttp_2fClient"></a>
 
 - `pub opaque resource type http.Client: noalloc_drop uses {Net, MonotonicClock}`
@@ -2550,9 +2559,9 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fhttp_2fHttpError"></a>
 
-- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError)`
+- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8`
 
-References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http_wire/HeadError`](#def-std_401_2fhttp_5fwire_2fHeadError), [`std@1/uri/UriError`](#def-std_401_2furi_2fUriError)
+References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http_wire/HeadError`](#def-std_401_2fhttp_5fwire_2fHeadError), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/uri/UriError`](#def-std_401_2furi_2fUriError)
 
 <a id="def-std_401_2fhttp_2fHttpError_23BodyTooLarge"></a>
 
@@ -2585,6 +2594,20 @@ Variant of http.HttpError.
 - `HeadTooLarge -> http.HttpError`
 
 Variant of http.HttpError.
+
+<a id="def-std_401_2fhttp_2fHttpError_23InvalidJsonUtf8"></a>
+
+- `InvalidJsonUtf8 -> http.HttpError`
+
+Variant of http.HttpError.
+
+<a id="def-std_401_2fhttp_2fHttpError_23Json"></a>
+
+- `Json(json.JsonError) -> http.HttpError`
+
+Variant of http.HttpError.
+
+References: [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
 
 <a id="def-std_401_2fhttp_2fHttpError_23Malformed"></a>
 
@@ -2780,6 +2803,12 @@ bounds idle connections only. max_idle_connections bounds the entire idle pool.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Client`](#def-std_401_2fhttp_2fClient), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Method`](#def-std_401_2fhttp_2fMethod), [`std@1/http/Response`](#def-std_401_2fhttp_2fResponse)
 
+<a id="def-std_401_2fhttp_2fclient_5fsend"></a>
+
+- `pub fn http.client_send( mut c: Client, method: Method, url: String, headers: List[Header], body: Body ) -> Result[Response, HttpError]`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Body`](#def-std_401_2fhttp_2fBody), [`std@1/http/Client`](#def-std_401_2fhttp_2fClient), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Method`](#def-std_401_2fhttp_2fMethod), [`std@1/http/Response`](#def-std_401_2fhttp_2fResponse)
+
 <a id="def-std_401_2fhttp_2fclose_5fidle"></a>
 
 - `pub fn http.close_idle(mut c: Client)`
@@ -2806,11 +2835,23 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_4
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_2fNet), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Method`](#def-std_401_2fhttp_2fMethod), [`std@1/http/Response`](#def-std_401_2fhttp_2fResponse)
 
+<a id="def-std_401_2fhttp_2fform_5fbody"></a>
+
+- `pub fn http.form_body(pairs: List[(String, String)]) -> Body uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Body`](#def-std_401_2fhttp_2fBody)
+
 <a id="def-std_401_2fhttp_2fheader"></a>
 
 - `pub fn http.header(headers: List[Header], name: String) -> Option[String] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader)
+
+<a id="def-std_401_2fhttp_2fjson_5fbody"></a>
+
+- `pub fn http.json_body(value: json.Value) -> Result[Body, HttpError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/Body`](#def-std_401_2fhttp_2fBody), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
 <a id="def-std_401_2fhttp_2fparse_5fserver_5frequest"></a>
 
@@ -2853,6 +2894,12 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_
 - `pub fn http.respond( mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool ) -> Result[(), HttpError]`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+
+<a id="def-std_401_2fhttp_2fresponse_5fjson"></a>
+
+- `pub fn http.response_json(response: Response) -> Result[json.Value, HttpError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/Response`](#def-std_401_2fhttp_2fResponse), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
 <a id="def-std_401_2fhttp_2fsend_5fbodiless"></a>
 

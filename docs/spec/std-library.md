@@ -655,7 +655,7 @@ Response     = { status: u16, headers: List[Header], body: Bytes, url: String }
 HttpError    = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError)
              | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects
              | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme
-             | UnsupportedTransferEncoding | Status(u16) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError)
+             | UnsupportedTransferEncoding | Status(u16) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8
 
 pub opaque resource type Request: noalloc_drop uses {Net}
 
@@ -771,6 +771,23 @@ so later calls can use only other healthy idle connections or fresh ones. No per
 or extra polling loop is involved. The same pattern applies to one-shot `request`/`fetch`
 and incremental response reads. Config's existing connect/read/write timeouts remain
 relative network-provider bounds and return `TimedOut`, independently of a scope deadline.
+
+
+`Body = { bytes: Bytes, content_type: String }` pairs an encoded body with its media type.
+`form_body(pairs: List[(String, String)]) -> Body` uses `uri.encode_query`, preserving
+pair order, repeated keys and empty values, encoding spaces as `+` and literal `+` as
+`%2B`; its media type is `application/x-www-form-urlencoded`.
+`json_body(value: json.Value) -> Result[Body, HttpError]` uses `json.write` and selects
+`application/json`. Invalid JSON number representations return `Json(InvalidNumber())`.
+
+`client_send(mut c, method, url, headers, body: Body) -> Result[Response, HttpError]`
+calls `client_fetch` with the encoded bytes, replacing all caller Content-Type fields
+with exactly one field carrying the body's media type. Other headers keep their order.
+The transport still owns Content-Length and Transfer-Encoding.
+`response_json(response: Response) -> Result[json.Value, HttpError]` validates the body
+as UTF-8 and parses it with std JSON. Invalid UTF-8 is `InvalidJsonUtf8()`; parse and
+serialization errors are `Json(json.JsonError)`. Decoding does not require a response
+Content-Type and leaves the original response available through the borrowed argument.
 
 ## Input
 

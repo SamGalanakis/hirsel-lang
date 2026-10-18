@@ -60,7 +60,7 @@ pub type Response {
 
 pub type HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
   u16
-) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError)
+) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8
 
 // ready=0, streaming request=1, sent=2, body=3, done=4, failed=5.
 // body_kind: EOF=0, content-length=1, chunked=2. chunk_suffix tracks the
@@ -1156,6 +1156,59 @@ pub fn client_fetch(
     return Error(Status(head.status))
   }
   Ok(take response)
+}
+
+/// An encoded request body and its media type. client_send installs exactly one
+/// Content-Type, replacing any Content-Type supplied in its headers argument.
+pub type Body {
+  bytes: Bytes,
+  content_type: String,
+}
+
+pub fn form_body(pairs: List[(String, String)]) -> Body uses {} {
+  let encoded = uri.encode_query(pairs)
+  Body(
+    bytes: unique core@1/string.as_bytes(encoded),
+    content_type: "application/x-www-form-urlencoded"
+  )
+}
+
+fn http_json_error(error: json.JsonError) -> HttpError uses {} {
+  Json(unique error)
+}
+
+pub fn json_body(value: json.Value) -> Result[Body, HttpError] uses {} {
+  let mut out: List[u8] = []
+  json.write(value, mut out) ? http_json_error
+  Ok(Body(bytes: core@1/bytes.from_list(take out), content_type: "application/json"))
+}
+
+pub fn response_json(response: Response) -> Result[json.Value, HttpError] uses {} {
+  let text = match core@1/string.from_bytes(unique response.body) {
+    Ok(text) => take text,
+    Error(_) => return Error(InvalidJsonUtf8()),
+  }
+  Ok(json.parse(take text) ? http_json_error)
+}
+
+pub fn client_send(
+  mut c: Client,
+  method: Method,
+  url: String,
+  headers: List[Header],
+  body: Body
+) -> Result[Response, HttpError] {
+  let mut prepared: List[Header] = []
+  for h in headers {
+    if !http_same(h.name, "content-type") {
+      core@1/list.push(mut prepared, unique h)
+    }
+  }
+  core@1/list.push(
+    mut prepared,
+    Header(name: "Content-Type", value: unique body.content_type)
+  )
+  client_fetch(mut c, method, url, prepared, Some(body.bytes))
 }
 
 // A sequential server connection owns its stream and unread bytes. A response

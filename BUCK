@@ -136,6 +136,9 @@ hirsel_test(
         "examples/csvjson/demo.json",
         "examples/csvjson/hirsel.json",
         "examples/csvjson/main.hir",
+        "examples/fetchjson/demo.json",
+        "examples/fetchjson/hirsel.json",
+        "examples/fetchjson/main.hir",
         "examples/filesystem/main.hir",
         "examples/hello-web-concurrent/main.hir",
         "examples/hello-web/main.hir",
@@ -192,7 +195,7 @@ hirsel_test(
     bin_exes = {
         "hirsel": "//:hirsel-cli-bin-hirsel",
     },
-    shards = 37,
+    shards = 38,
     data = glob([
         "conformance/**",
         "packages/**",
@@ -227,6 +230,9 @@ hirsel_test(
         "examples/csvjson/demo.json",
         "examples/csvjson/hirsel.json",
         "examples/csvjson/main.hir",
+        "examples/fetchjson/demo.json",
+        "examples/fetchjson/hirsel.json",
+        "examples/fetchjson/main.hir",
         "examples/filesystem/main.hir",
         "examples/hello-web-concurrent/main.hir",
         "examples/hello-web/main.hir",

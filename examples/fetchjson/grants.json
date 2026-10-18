@@ -1,0 +1,20 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [],
+    "net": {
+      "provider": "net.stream@1",
+      "rules": [
+        {
+          "address": "example.com",
+          "service": "80",
+          "operation": "connect"
+        }
+      ]
+    }
+  },
+  "args": [
+    "http://example.com/echo"
+  ]
+}

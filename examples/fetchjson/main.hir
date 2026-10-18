@@ -1,0 +1,20 @@
+// Reuse one connection for two JSON requests. Authority comes from launch grants.
+pub type Error = Grants(GrantError) | Arguments(ArgError) | Http(http.HttpError) | Json(
+  json.JsonError
+) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), Error] {
+  let url = path.text(arg.path(args, 0) ? Arguments)
+  let n = io.net(rt) ? Grants
+  let c = io.monotonic_clock(rt) ? Grants
+  let output = io.stdout(rt) ? Grants
+  let mut client = http.client(n, Some(c), http.default_config()) ? Http
+  for index in 0u64..2u64 {
+    let body = http.json_body(Number(u64.to_string(index))) ? Http
+    let response = http.client_send(mut client, Post(), url, [], body) ? Http
+    let value = http.response_json(response) ? Http
+    out.print(output, json.stringify(value) ? Json) ? Output
+    out.print(output, "\n") ? Output
+  }
+  Ok(())
+}

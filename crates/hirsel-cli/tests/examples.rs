@@ -68,6 +68,10 @@ impl Fixture {
             "todo" => {
                 serde_json::from_str(include_str!("../../../examples/todo/hirsel.json")).unwrap()
             }
+            "fetchjson" => {
+                serde_json::from_str(include_str!("../../../examples/fetchjson/hirsel.json"))
+                    .unwrap()
+            }
             "httpget" => {
                 serde_json::from_str(include_str!("../../../examples/httpget/hirsel.json")).unwrap()
             }
@@ -1743,3 +1747,15 @@ example_tests!(testrun_package_tests, "testrun", 1);
 example_tests!(todo_package_tests, "todo", 1);
 example_tests!(todo_api_package_tests, "todo-api", 2);
 example_tests!(wordscan_package_tests, "wordscan", 1);
+
+// The corpus checks codecs; this runs the example's manifest and grant surface.
+#[test]
+fn fetchjson_reuses_one_scripted_connection() {
+    let fixture = Fixture::new(
+        "fetchjson",
+        include_str!("../../../examples/fetchjson/main.hir"),
+    );
+    let config =
+        serde_json::from_str(include_str!("../../../examples/fetchjson/demo.json")).unwrap();
+    fixture.run(false, Some(config), "0\n1\n", 0);
+}

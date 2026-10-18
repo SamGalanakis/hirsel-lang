@@ -3992,6 +3992,7 @@ conformance/SEM/SEM-1-hex-suffix-like-digits-bad.hir
 conformance/SEM/SEM-1-hex-suffix-like-digits-run.hir
 conformance/SEM/SEM-1-http-client-204-reuse-run.hir
 conformance/SEM/SEM-1-http-client-304-reuse-run.hir
+conformance/SEM/SEM-1-http-client-bodies-run.hir
 conformance/SEM/SEM-1-http-client-body-limit-run.hir
 conformance/SEM/SEM-1-http-client-bounds-run.hir
 conformance/SEM/SEM-1-http-client-chunked-reuse-run.hir
