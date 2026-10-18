@@ -75,6 +75,7 @@ impl Checker<'_> {
         sibling: bool,
     ) -> bool {
         let actual_id = actual;
+        let expected_id = expected;
         let a = self.out.body.types.get(actual).unwrap().clone();
         let b = self.out.body.types.get(expected).unwrap().clone();
         if matches!(a.kind, TypeKind::Error) || matches!(b.kind, TypeKind::Error) {
@@ -308,9 +309,7 @@ impl Checker<'_> {
                     const { RuleId::of("MEM-5") },
                     span,
                     "the function value may allocate where the function type is `@noalloc`",
-                    Explanation::default()
-                        .provided(Fact::new(Cause::Header, value, &[]))
-                        .required(Fact::new(Requirement::Header, receiver, &[])),
+                    self.header_facts(actual_id, expected_id, value, receiver),
                 );
                 return false;
             }
@@ -329,9 +328,7 @@ impl Checker<'_> {
                     if advance { const { RuleId::of("MEM-14") } } else { const { RuleId::of("CLO-4") } },
                     span,
                     "the function value does not promise the state guarantees the function type requires",
-                    Explanation::default()
-                        .provided(Fact::new(Cause::Header, value, &[]))
-                        .required(Fact::new(Requirement::Header, receiver, &[])),
+                    self.header_facts(actual_id, expected_id, value, receiver),
                 );
                 return false;
             }
@@ -342,9 +339,7 @@ impl Checker<'_> {
                     const { RuleId::of("CLO-4") },
                     span,
                     "the function value does not promise the creation inputs the function type selects",
-                    Explanation::default()
-                        .provided(Fact::new(Cause::Header, value, &[]))
-                        .required(Fact::new(Requirement::Header, receiver, &[])),
+                    self.header_facts(actual_id, expected_id, value, receiver),
                 );
                 return false;
             }
@@ -356,7 +351,9 @@ impl Checker<'_> {
                 .chain([(af.result, bf.result)])
                 .zip(Variance::Covariant.edges(&b.kind));
             for ((actual, expected), variance) in nested {
-                if let Some((rule, message)) = self.header_difference(actual, expected, variance) {
+                if let Some((rule, message)) =
+                    self.header_difference(actual, expected, variance, true)
+                {
                     let value = self.received_span(span);
                     let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
                     self.explained(
@@ -367,9 +364,7 @@ impl Checker<'_> {
                         },
                         span,
                         message,
-                        Explanation::default()
-                            .provided(Fact::new(Cause::Header, value, &[]))
-                            .required(Fact::new(Requirement::Header, receiver, &[])),
+                        self.header_facts(actual_id, expected_id, value, receiver),
                     );
                     return false;
                 }
@@ -658,6 +653,32 @@ impl Checker<'_> {
         }
         valid
     }
+    /// The provided and required facts of a function value whose header
+    /// differs from the required function type, naming both types.
+    fn header_facts(
+        &self,
+        actual: TypeId,
+        expected: TypeId,
+        value: Span,
+        receiver: Span,
+    ) -> Explanation {
+        let spell = |root| {
+            hirsel_types::type_spelling(
+                &self.out.body.types,
+                root,
+                &self.out.body.resolution.generic_declarations,
+                &self.signature.definition.0.package,
+                true,
+            )
+        };
+        Explanation::default()
+            .provided(Fact::new(Cause::Header, value, &[&spell(actual)]))
+            .required(Fact::new(
+                Requirement::Header,
+                receiver,
+                &[&spell(expected)],
+            ))
+    }
     /// A value kept in storage, a result or a constructed part.
     pub(super) fn kept(
         &mut self,
@@ -710,12 +731,15 @@ impl Checker<'_> {
     /// the required one in a mode, brand or placement is another type. A
     /// callable inside the header keeps its own promise in the direction it
     /// is read (CLO-2, `hirsel_types::Variance`): a result may promise more
-    /// than required, a parameter may ask for less than it is given.
+    /// than required, a parameter may ask for less than it is given. The same
+    /// holds for the uniqueness of a header row itself (`header`), never for
+    /// a row below it (MODE-2).
     fn header_difference(
         &mut self,
         actual: TypeId,
         expected: TypeId,
         variance: Variance,
+        header: bool,
     ) -> Option<(RuleId, &'static str)> {
         let types = &self.out.body.types;
         let (a, b) = (types.get(actual)?.clone(), types.get(expected)?.clone());
@@ -728,7 +752,9 @@ impl Checker<'_> {
                 "a function header's relation differs from the required function type",
             ));
         }
-        if a.modes.uniqueness != b.modes.uniqueness {
+        if a.modes.uniqueness != b.modes.uniqueness
+            && !(header && hirsel_types::header_weakens_uniqueness(&b, &a, variance))
+        {
             return Some((
                 const { RuleId::of("MODE-2") },
                 "a function header's uniqueness differs from the required function type",
@@ -787,11 +813,12 @@ impl Checker<'_> {
                 .collect(),
             kind => kind.value_parts(),
         };
+        let callable = matches!(b.kind, TypeKind::Function(_));
         nested(&a.kind)
             .into_iter()
             .zip(nested(&b.kind))
             .zip(variance.edges(&b.kind))
-            .find_map(|((a, b), variance)| self.header_difference(a, b, variance))
+            .find_map(|((a, b), variance)| self.header_difference(a, b, variance, callable))
     }
     /// CLO-2: the callee writes a `mut` argument back through its parameter,
     /// so the argument's storage and the parameter state the same callable
@@ -825,9 +852,7 @@ impl Checker<'_> {
                     const { RuleId::of("MODE-3") },
                     span,
                     "a `mut` callable argument must have exactly the parameter's once/many multiplicity: the callee may replace it with any function of the parameter's type. Match the binding and parameter types, or take the value and return the new one",
-                    Explanation::default()
-                        .provided(Fact::new(Cause::Header, self.received_span(span), &[]))
-                        .required(Fact::new(Requirement::Header, self.receiving.as_ref().map_or(span, |r| r.span), &[])),
+                    self.header_facts(actual, expected, self.received_span(span), self.receiving.as_ref().map_or(span, |r| r.span)),
                 );
                 if let Some(diagnostic) = self.out.diagnostics.last_mut()
                     && diagnostic.primary == span
@@ -852,9 +877,7 @@ impl Checker<'_> {
                         const { RuleId::of("CLO-2") },
                         span,
                         &message,
-                        Explanation::default()
-                            .provided(Fact::new(Cause::Header, value, &[]))
-                            .required(Fact::new(Requirement::Header, receiver, &[])),
+                        self.header_facts(actual, expected, value, receiver),
                     );
                     return false;
                 }
@@ -1002,9 +1025,7 @@ impl Checker<'_> {
                     &format!(
                         "a type argument's {what} must be exactly the expected type's: a generic type may use its argument in either direction. Write the value's type as the expected type states it"
                     ),
-                    Explanation::default()
-                        .provided(Fact::new(Cause::Header, value, &[]))
-                        .required(Fact::new(Requirement::Header, receiver, &[])),
+                    self.header_facts(actual, expected, value, receiver),
                 );
                 return false;
             }

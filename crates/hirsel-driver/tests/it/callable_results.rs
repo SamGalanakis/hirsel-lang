@@ -23,7 +23,7 @@ fn inferred_literal_results_receive_the_specialized_promise() {
     });
 }
 #[test]
-fn callable_headers_and_complete_literal_bounds_remain_exact() {
+fn callable_header_modes_and_complete_literal_bounds_follow_their_variance() {
     with_compiler_stack(|| {
         for (source, rule) in [
             (
@@ -31,11 +31,7 @@ fn callable_headers_and_complete_literal_bounds_remain_exact() {
                 "MODE-4",
             ),
             (
-                "fn cross(take f:once fn()->String) {}\nfn example(take x:unique String) {cross(fn()->unique String {take x})}",
-                "MODE-2",
-            ),
-            (
-                "fn named()->unique String {\"x\"}\nfn cross(f:fn()->String) {}\nfn example() {cross(named)}",
+                "fn named()->String {\"x\"}\nfn cross(f:fn()->unique String) {}\nfn example() {cross(named)}",
                 "MODE-2",
             ),
             (
@@ -65,6 +61,9 @@ fn callable_headers_and_complete_literal_bounds_remain_exact() {
             "fn cross(take f:once fn()->unique String) {}\nfn example(take x:unique String) {cross(fn()->unique String {take x})}",
             "fn named()->unique String {\"x\"}\nfn cross(f:fn()->unique String) {}\nfn example() {cross(named)}",
             "fn cross(take f:once fn()->unique String) {}\nfn example(take x:unique String) {cross(fn(){take x})}",
+            // MODE-2: a header's result may promise uniqueness its type does not.
+            "fn cross(take f:once fn()->String) {}\nfn example(take x:unique String) {cross(fn()->unique String {take x})}",
+            "fn named()->unique String {\"x\"}\nfn cross(f:fn()->String) {}\nfn example() {cross(named)}",
         ] {
             engine(source).lower_to_tir(&path("example")).unwrap();
         }

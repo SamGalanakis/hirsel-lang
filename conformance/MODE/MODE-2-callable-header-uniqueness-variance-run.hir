@@ -1,0 +1,39 @@
+// rule: MODE-2
+// expect: run
+// stdout: text
+// stdout: 1
+// A callable's result may promise `unique` where the required function type
+// asks for an aliased value, and a borrowed or taken parameter may accept an
+// aliased value where the required type gives a unique one: a unique value
+// is always a valid shared one. The generic result binds `T` to `String`.
+fn invoke[T](f: fn() -> T) -> T uses {f} {
+  f()
+}
+
+fn give(f: fn(take unique String) -> u64) -> u64 uses {f} {
+  f(unique "x")
+}
+
+fn len(take s: String) -> u64 {
+  string.byte_len(s)
+}
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let text = invoke(
+    fn() -> unique String {
+      "text"
+    }
+  )
+  out.print(output, text) ? Output
+  out.print(output, "\n") ? Output
+  let given = if give(len) == 1 {
+    "1\n"
+  } else {
+    "?\n"
+  }
+  out.print(output, given) ? Output
+  Ok(())
+}

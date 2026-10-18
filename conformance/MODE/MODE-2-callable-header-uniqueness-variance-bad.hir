@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 12
+// Header uniqueness weakens only in the direction a unique value is a valid
+// shared one: a required `unique` result cannot come from a function that
+// returns an aliased value. The diagnostic names both function types. The
+// accepted twin is MODE-2-callable-header-uniqueness-variance-run.hir.
+fn invoke(f: fn() -> unique String) -> unique String uses {f} {
+  f()
+}
+
+fn example() -> String {
+  invoke(
+    fn() -> String {
+      "text"
+    }
+  )
+}

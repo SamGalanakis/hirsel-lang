@@ -240,6 +240,17 @@ interior-mutable or channel contracts are invariant, and weakening a nominal gen
 requires `data`. Callable promises, erased captures and cleanup summaries follow the
 variance of [CLO-2](closures.md#clo-2-transparent).
 
+The one exception in a callable header is the uniqueness of a parameter or result row
+itself, which follows that edge's variance, because a `unique` value is always a valid
+aliased one: a function value whose result is `unique` is received where the function
+type's result is aliased, and one whose borrowed or taken parameter is aliased where that
+parameter is `unique`. So `invoke(fn() -> unique String { "text" })` meets
+`invoke[T](f: fn() -> T)` with `T = String`, and `len(take s: String)` meets
+`fn(take unique String) -> u64`. A `mut` parameter, which the callee hands back, and every
+row below a header row (a `List[unique String]` result) stay exact. A rejection names
+both function types, for example: the function value is `fn() -> String`, but the
+required function type is `fn() -> unique String`.
+
 When a sendability proof depends on exclusive counted ownership, an operation that ends
 that ownership also ends that proof, including through an enclosing aggregate. A
 `sendable` qualifier does not make counted copying preserve sendability, and crossing

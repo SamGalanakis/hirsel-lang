@@ -259,3 +259,104 @@ fn replacement_accepts_the_declared_callable_guarantees() {
         replacement(true, guarantee).valid();
     }
 }
+
+fn text(f: &mut Fixture, uniqueness: Uniqueness) -> TypeId {
+    let mut row = ty(TypeKind::Primitive(Primitive::String));
+    row.modes.uniqueness = uniqueness;
+    f.definition.types.push(row)
+}
+
+fn header(parameters: Vec<(PassingMode, TypeId)>, result: TypeId) -> FunctionType {
+    FunctionType {
+        generics: vec![].into(),
+        parameters: parameters
+            .into_iter()
+            .map(|(passing, ty)| Parameter {
+                name: None,
+                label: None,
+                passing,
+                ty,
+            })
+            .collect(),
+        result,
+        error: None,
+        allocation: Allocation::MayAllocate,
+        authority: AuthoritySummary::Unknown,
+        uses: Uses::Unrestricted,
+        contracts: vec![].into(),
+        state_promises: vec![].into(),
+        incomplete: false,
+        foreign: None,
+    }
+}
+
+/// MODE-2: a named function materialized at its declared header is held where
+/// a function type states the header rows' uniqueness.
+fn header_storage(actual: FunctionType, expected: FunctionType, f: &mut Fixture) {
+    let source = f.slot(TypeKind::Function(actual.clone()), Storage::Temporary);
+    let held = f.slot(TypeKind::Function(expected), Storage::Local);
+    declaration(f, "made", actual);
+    f.assign(
+        source,
+        Rvalue::FunctionReference {
+            definition: path("made"),
+            arguments: vec![],
+        },
+        0,
+    );
+    let failure = f.cleanup(vec![drop(source)]);
+    f.assign(held, Rvalue::Use(operand(source, UseKind::Take)), failure);
+    let cleanup = f.cleanup(vec![drop(source), drop(held)]);
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    owner_signature(f, PassingMode::Take);
+}
+
+/// A result row `unique` and a borrowed or taken parameter row aliased
+/// (`actual`) against the opposite rows (`expected`), or the reverse.
+fn header_rows(weakening: bool, passing: PassingMode, nested: bool) -> Fixture {
+    let mut f = Fixture::unit();
+    let (unique, aliased) = (
+        text(&mut f, Uniqueness::Unique),
+        text(&mut f, Uniqueness::Aliased),
+    );
+    let (unique, aliased) = if nested {
+        let list = |f: &mut Fixture, element| {
+            f.definition.types.push(ty(TypeKind::Builtin {
+                kind: BuiltinType::List,
+                arguments: vec![GenericArgument::Type(element)].into(),
+            }))
+        };
+        (list(&mut f, unique), list(&mut f, aliased))
+    } else {
+        (unique, aliased)
+    };
+    let strong = header(vec![(passing, aliased)], unique);
+    let weak = header(vec![(passing, unique)], aliased);
+    let (actual, expected) = if weakening {
+        (strong, weak)
+    } else {
+        (weak, strong)
+    };
+    header_storage(actual, expected, &mut f);
+    f
+}
+
+#[test]
+fn header_rows_follow_their_variance_in_uniqueness() {
+    for passing in [PassingMode::Borrow, PassingMode::Take] {
+        header_rows(true, passing, false).valid();
+        header_rows(false, passing, false).broken(vec![ViolationKind::TypeMismatch {
+            entity: "assignment",
+        }]);
+    }
+}
+
+#[test]
+fn mut_parameter_and_nested_header_uniqueness_stay_exact() {
+    header_rows(true, PassingMode::Mut, false).broken(vec![ViolationKind::TypeMismatch {
+        entity: "assignment",
+    }]);
+    header_rows(true, PassingMode::Take, true).broken(vec![ViolationKind::TypeMismatch {
+        entity: "assignment",
+    }]);
+}

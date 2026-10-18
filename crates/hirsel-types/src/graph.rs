@@ -721,10 +721,11 @@ pub(crate) fn semantic_equal_adjusted(
     } else {
         Variance::Exact
     };
-    let mut pending = vec![(a_root, b_root, payloads.is_some(), root)];
+    // `header`: the row is a callable's parameter or result.
+    let mut pending = vec![(a_root, b_root, payloads.is_some(), root, false)];
     let mut seen = BTreeSet::new();
-    while let Some((left, right, view, variance)) = pending.pop() {
-        if !seen.insert((left, right, view, variance)) {
+    while let Some((left, right, view, variance, header)) = pending.pop() {
+        if !seen.insert((left, right, view, variance, header)) {
             continue;
         }
         work::count(Counter::EqualityRows);
@@ -763,6 +764,12 @@ pub(crate) fn semantic_equal_adjusted(
                 actual.modes.sendability = Sendability::NotSendable;
             }
         }
+        // MODE-2: a callable's result may promise uniqueness its required
+        // type does not, and a parameter may ask for less than it is given.
+        // Only the header row's root weakens, as a received value's root does.
+        if header && header_weakens_uniqueness(&expected, &actual, variance) {
+            actual.modes.uniqueness = expected.modes.uniqueness;
+        }
         let subsumed = if adjusted_root {
             true
         } else {
@@ -777,16 +784,35 @@ pub(crate) fn semantic_equal_adjusted(
         if !subsumed || expected != actual {
             return Ok(false);
         }
+        let children_header = matches!(left.kind, TypeKind::Function(_));
         pending.extend(
             left.kind
                 .graph_edges()
                 .into_iter()
                 .zip(right.kind.graph_edges())
                 .zip(variance.edges(&left.kind))
-                .map(|((a, b), variance)| (a.ty, b.ty, children_view, variance)),
+                .map(|((a, b), variance)| (a.ty, b.ty, children_view, variance, children_header)),
         );
     }
     Ok(true)
+}
+
+/// MODE-2 for a callable's header row read in `variance`: a covariant row
+/// (a result) may be `unique` where `expected` is aliased, a contravariant row
+/// (a borrowed or taken parameter) aliased where `expected` is `unique`.
+/// A `mut` parameter is exact: the callee hands the value back.
+pub fn header_weakens_uniqueness(expected: &Type, actual: &Type, variance: Variance) -> bool {
+    match variance {
+        Variance::Covariant => {
+            expected.modes.uniqueness == Uniqueness::Aliased
+                && actual.modes.uniqueness == Uniqueness::Unique
+        }
+        Variance::Contravariant => {
+            expected.modes.uniqueness == Uniqueness::Unique
+                && actual.modes.uniqueness == Uniqueness::Aliased
+        }
+        Variance::Exact => false,
+    }
 }
 
 /// Proof expansions own only imported actual arguments and declaration rows.

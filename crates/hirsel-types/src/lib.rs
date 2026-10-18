@@ -685,6 +685,8 @@ mod parameters;
 pub use parameters::*;
 mod graph;
 pub use graph::*;
+mod spelling;
+pub use spelling::type_spelling;
 mod store;
 pub use store::*;
 /// Self-contained cross-query signature. Importers remap TypeIds into their own store (LANG-6).

@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+// A `mut` parameter is read and written back, so its uniqueness is exact in
+// a callable header. The accepted twin is
+// MODE-2-callable-header-uniqueness-variance-run.hir.
+fn edit(f: fn(mut s: unique String) -> ()) -> u64 {
+  0
+}
+
+fn edit_shared(mut s: String) -> () {}
+
+fn example() -> u64 {
+  edit(edit_shared)
+}

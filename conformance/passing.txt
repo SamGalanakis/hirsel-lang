@@ -2534,6 +2534,10 @@ conformance/MODE/MODE-2-box-payload-unique-bad.hir
 conformance/MODE/MODE-2-box-payload-unique-ok.hir
 conformance/MODE/MODE-2-callable-annotation-header-bad.hir
 conformance/MODE/MODE-2-callable-annotation-header-ok.hir
+conformance/MODE/MODE-2-callable-header-mut-uniqueness-bad.hir
+conformance/MODE/MODE-2-callable-header-nested-uniqueness-bad.hir
+conformance/MODE/MODE-2-callable-header-uniqueness-variance-bad.hir
+conformance/MODE/MODE-2-callable-header-uniqueness-variance-run.hir
 conformance/MODE/MODE-2-callable-parameter-unique-bad.hir
 conformance/MODE/MODE-2-callable-parameter-unique-ok.hir
 conformance/MODE/MODE-2-called-closure-copy-ok.hir

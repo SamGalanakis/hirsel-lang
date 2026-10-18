@@ -308,8 +308,8 @@ impl Cause {
                 "a sibling brand owner lives and moves with its record (PROV-5)",
             ),
             Header => (
-                "the function value's header differs",
-                "this function value's header",
+                "the function value is `{0}`",
+                "this function value is `{0}`",
             ),
             MutLend => (
                 "the operand is lent `mut`",
@@ -641,8 +641,8 @@ impl Requirement {
             ),
             Index => ("this indexes it", "indexing needs random access (MEM-13)"),
             Header => (
-                "the required function type differs",
-                "the required function type",
+                "the required function type is `{0}`",
+                "the required function type is `{0}`",
             ),
             NoOwnPlacement => (
                 "a result cannot live in its own parameters",

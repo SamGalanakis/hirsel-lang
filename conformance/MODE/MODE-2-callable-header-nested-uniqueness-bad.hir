@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+// Only a header row itself weakens: an element's uniqueness inside a result
+// and a `mut` parameter, which the callee hands back, stay exact. The
+// accepted twin is MODE-2-callable-header-uniqueness-variance-run.hir.
+fn list_of(f: fn() -> List[String]) -> u64 uses {f} {
+  0
+}
+
+fn example() -> u64 {
+  list_of(
+    fn() -> List[unique String] {
+      []
+    }
+  )
+}

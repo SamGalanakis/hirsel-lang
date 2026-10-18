@@ -14,7 +14,8 @@ Tests build TIR by hand. `tests/it` runs them through the public API
 (`checks.rs` and its `*_controls` and `review` modules, with fixture builders in
 `support.rs`). `callable_promise_controls.rs` covers written callable state
 promises and result capture selections through local, tuple and replacement
-storage, with accepted twins. `gap_controls.rs` and `typing_gap_controls.rs`
+storage, and the uniqueness variance of a callable's header rows (MODE-2), with
+accepted twins. `gap_controls.rs` and `typing_gap_controls.rs`
 hold the only guards of rules no conformance file reaches (J rejects every
 source form first): aliased arguments, unsupported cleanup, reachable
 `Unreachable`, orphan bodies, entry captures, finalizer signatures, each

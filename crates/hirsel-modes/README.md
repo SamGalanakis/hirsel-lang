@@ -732,6 +732,11 @@ or of a non-sequence builtin (`Option`, `Map`, `Shared`, `Iter`, ...) is
 exact for a callable's promise, an erased state's captures and a cleanup
 summary (`keeps_exact_promises`), since the declaration may use it in either
 direction. v22 is silent there; this is the conservative reading (spec #92).
+A header row's own uniqueness follows the same edges (MODE-2,
+`hirsel_types::header_weakens_uniqueness`, shared with V): a `unique` result
+meets an aliased one, an aliased non-`mut` parameter a `unique` one; rows below
+it stay exact. Header diagnostics name both function types through
+`hirsel_types::type_spelling` with modes shown.
 
 `@noalloc` is a promise that is proven (MEM-5). A function value is received
 by a `@noalloc` function type, at the root or as any value part, only when its
