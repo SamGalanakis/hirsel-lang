@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: accept
+// Tagged's `label` field names no parameter, so it cannot hold, lend or hand
+// over a T: untag's result is the unique item it was given. Twin is
+// MODE-2-parametric-named-thunk-bad.
+pub type Tagged[T] {
+  item: T,
+  label: Shared[String],
+}
+
+fn untag[T](take tagged: Tagged[T]) -> T uses {} {
+  let Tagged(item: item, label: _) = take tagged
+  take item
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let name: unique String = unique "tag"
+  let label = shared.freeze(take name)
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let b: unique Bytes = untag(Tagged(item: take fresh, label: label))
+  Ok(())
+}

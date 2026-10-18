@@ -1,0 +1,18 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 16
+// A borrowed list of functions returning U can hand pick a U the caller still
+// holds, so pick's result is aliased. Twin is MODE-2-parametric-borrowed-input-ok.
+fn pick[U](take a: U, makers: List[fn() -> U]) -> U uses {} {
+  take a
+}
+
+fn make() -> Bytes uses {} {
+  core@1/bytes.from_list([2u8])
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let makers: List[fn() -> Bytes] = [make]
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let b: unique Bytes = pick(take fresh, makers)
+  Ok(())
+}

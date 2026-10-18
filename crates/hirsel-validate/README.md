@@ -383,8 +383,10 @@ hand-back" violations are kept. A call result declared as a bare type parameter 
 expected with the declared root modes (aliased unless written `unique`), whatever
 contract argument instantiates it, as the checker publishes it. A parametric call
 (`parametric_unique`, from `hirsel_types::parametric_inputs`) makes its destination
-current-unique when every argument that may supply its result is. Hand-built controls are in
-`tests/it/unique_handback_controls.rs`.
+current-unique when every argument that may supply its result is; a core callee counts as
+bodyless, so its borrowed inputs disqualify it. Hand-built controls, including a borrowed
+input, a nominal part naming no held parameter, a lent `uses {}` callback and a callback
+tuple result, each beside its rejected twin, are in `tests/it/unique_handback_controls.rs`.
 
 Projected writes affect current uniqueness only when their contents belong to
 the parent's counted owned graph. Plain bits and Shared boundaries preserve that

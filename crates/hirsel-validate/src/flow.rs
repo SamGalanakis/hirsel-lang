@@ -4196,7 +4196,10 @@ impl Checker<'_> {
         };
         let mut lookup =
             |path: &DefPath| Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new));
-        let Some(inputs) = hirsel_types::parametric_inputs(&signature.types, function, &mut lookup)
+        // A bodyless core declaration has no checked body.
+        let checked = !path.package_is("core", "1");
+        let Some(inputs) =
+            hirsel_types::parametric_inputs(&signature.types, function, checked, &mut lookup)
         else {
             return false;
         };
@@ -4212,8 +4215,14 @@ impl Checker<'_> {
                 }
                 Some(hirsel_types::ParametricInput::UniqueResult) => {
                     matches!(&types.get(ty).unwrap().kind, TypeKind::Function(f)
-                        if types.get(f.result).unwrap().modes.uniqueness
-                            == hirsel_types::Uniqueness::Unique)
+                    if hirsel_types::unique_rows(
+                        types,
+                        f.result,
+                        &self.generic_declarations(),
+                        &mut |path: &DefPath| {
+                            Ok(self.signatures.get(path).cloned().map(std::sync::Arc::new))
+                        },
+                    ))
                 }
                 None => false,
             }

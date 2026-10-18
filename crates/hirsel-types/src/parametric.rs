@@ -21,10 +21,13 @@ pub enum ParametricInput {
 /// the result holds no other counted content, its content is exactly values
 /// the arguments supply, so the result is unique whenever every supplying
 /// argument is: the inputs, one per parameter, say which must be. `None` when
-/// the signature does not qualify.
+/// the signature does not qualify. `checked` says the callee has a checked
+/// body; a bodyless core or foreign declaration may keep or hand back a share
+/// of a borrowed argument.
 pub fn parametric_inputs(
     store: &TypeStore,
     function: &FunctionType,
+    checked: bool,
     lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Option<Vec<ParametricInput>> {
     if function.foreign.is_some() || !store.get(function.result)?.modes.relation.is_global() {
@@ -85,28 +88,148 @@ pub fn parametric_inputs(
         }
         let row = store.get(parameter.ty)?;
         if let TypeKind::Function(callback) = &row.kind {
-            // A callback lent a held value could copy it into its own
-            // environment; one that takes it owns it.
-            let receives = callback.parameters.iter().all(|p| {
-                !mentions(store, p.ty, 1, &held)
-                    || p.passing == PassingMode::Take && data_shape(store, p.ty, 1, &held, lookup)
-            });
-            if !receives || !data_shape(store, callback.result, 1, &held, lookup) {
+            // A callback that takes a held value owns it. One lent a held
+            // value may copy it, so it must have nowhere to keep a copy: no
+            // authority, no counted `mut` parameter, and a plain result and
+            // error, so it supplies nothing (its environment is fixed, CLO-1).
+            let mut lent = false;
+            for p in callback.parameters.iter() {
+                if !mentions(store, p.ty, 1, &held) {
+                    continue;
+                }
+                if !data_shape(store, p.ty, 1, &held, lookup) {
+                    return None;
+                }
+                match p.passing {
+                    PassingMode::Take => {}
+                    PassingMode::Borrow => lent = true,
+                    PassingMode::Mut => return None,
+                }
+            }
+            if lent {
+                let kept = callback
+                    .parameters
+                    .iter()
+                    .any(|p| p.passing == PassingMode::Mut && !closed_plain(store, p.ty, lookup));
+                if kept
+                    || !closed_plain(store, callback.result, lookup)
+                    || callback
+                        .error
+                        .is_some_and(|e| !closed_plain(store, e, lookup))
+                    || !no_authority(callback)
+                {
+                    return None;
+                }
+                inputs.push(ParametricInput::Free);
+                continue;
+            }
+            if !data_shape(store, callback.result, 1, &held, lookup) {
                 return None;
             }
             inputs.push(ParametricInput::UniqueResult);
             continue;
         }
-        // A borrowed input cannot move a held value out; a handle could hand
-        // one over, so only data may name a held parameter.
-        if parameter.passing == PassingMode::Borrow
-            || !data_shape(store, parameter.ty, 0, &held, lookup)
-        {
+        // A handle could hand a held value over, so only data may name a held
+        // parameter. A checked body cannot move a held value out of a borrowed
+        // argument, copy one, or return what it derives from the borrow (it
+        // stays local, and the result is global), so a borrowed argument
+        // supplies nothing.
+        if !data_shape(store, parameter.ty, 0, &held, lookup) {
             return None;
+        }
+        if parameter.passing == PassingMode::Borrow {
+            if !checked {
+                return None;
+            }
+            inputs.push(ParametricInput::Free);
+            continue;
         }
         inputs.push(ParametricInput::Unique);
     }
     Some(inputs)
+}
+
+/// MODE-2: an instantiated callback result proves uniqueness when its row is
+/// written `unique`, or when it is a tuple, an inline aggregate with no block
+/// of its own, whose every part does so or is plain.
+pub fn unique_rows(
+    store: &TypeStore,
+    root: TypeId,
+    generics: &GenericDeclarations,
+    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+) -> bool {
+    let Some(row) = store.get(root) else {
+        return false;
+    };
+    if row.modes.uniqueness == Uniqueness::Unique {
+        return true;
+    }
+    let TypeKind::Tuple(parts) = &row.kind else {
+        return false;
+    };
+    parts.iter().all(|part| {
+        unique_rows(store, *part, generics, lookup)
+            || structural_property(store, *part, StructuralProperty::Plain, generics, lookup)
+                .unwrap_or(false)
+    })
+}
+
+/// `root` names no type parameter and is plain, so a value of it holds no
+/// counted content, whatever the instantiation.
+fn closed_plain(
+    store: &TypeStore,
+    root: TypeId,
+    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+) -> bool {
+    !names_parameter(store, root)
+        && structural_property(
+            store,
+            root,
+            StructuralProperty::Plain,
+            &GenericDeclarations::signature(&[]),
+            lookup,
+        )
+        .unwrap_or(false)
+}
+
+/// The callable's `uses` grants no authority.
+fn no_authority(function: &FunctionType) -> bool {
+    matches!(&function.uses, Uses::Only(AuthoritySummary::Known(terms)) if terms.is_empty())
+}
+
+/// Whether any type parameter, of any binder, occurs in `root`.
+fn names_parameter(store: &TypeStore, root: TypeId) -> bool {
+    let mut pending = vec![root];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(row) = store.get(id) else {
+            return true;
+        };
+        match &row.kind {
+            TypeKind::Parameter(_) => return true,
+            TypeKind::Tuple(parts) => pending.extend(parts.iter().copied()),
+            TypeKind::Box(t) => pending.push(*t),
+            TypeKind::Record(fields) => pending.extend(fields.iter().map(|f| f.ty)),
+            TypeKind::Variant(variants) => {
+                pending.extend(variants.iter().flat_map(|v| v.fields.iter().map(|f| f.1)))
+            }
+            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => pending
+                .extend(arguments.iter().filter_map(|a| match a {
+                    GenericArgument::Type(t) => Some(*t),
+                    GenericArgument::Size(_) => None,
+                })),
+            TypeKind::Function(f) => {
+                pending.extend(f.parameters.iter().map(|p| p.ty));
+                pending.push(f.result);
+                pending.extend(f.error);
+            }
+            TypeKind::Primitive(_) | TypeKind::Error => {}
+        }
+    }
+    false
 }
 
 /// Every part of `root` that names a held parameter is data: no function,
@@ -117,6 +240,19 @@ fn data_shape(
     depth: u32,
     held: &BTreeSet<TypeParamId>,
     lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+) -> bool {
+    data_shape_within(store, root, depth, held, lookup, &mut BTreeSet::new())
+}
+
+/// `data_shape`, entering each nominal declaration once per set of held
+/// parameters: a recursive occurrence is data when the rest of it is.
+fn data_shape_within(
+    store: &TypeStore,
+    root: TypeId,
+    depth: u32,
+    held: &BTreeSet<TypeParamId>,
+    lookup: &mut impl FnMut(&hirsel_syntax::DefPath) -> Result<Option<SignatureRef>, QueryError>,
+    entered: &mut BTreeSet<(hirsel_syntax::DefPath, BTreeSet<TypeParamId>)>,
 ) -> bool {
     let mut pending = vec![root];
     let mut seen = BTreeSet::new();
@@ -146,7 +282,10 @@ fn data_shape(
                 definition,
                 arguments,
             } => {
-                // The declaration is data whenever its arguments are.
+                // The declaration's parts that name a parameter instantiated
+                // with a held one must be data too; other parts cannot hold,
+                // lend or hand over a held value. An opaque declaration hides
+                // its parts.
                 let Ok(Some(signature)) = lookup(definition) else {
                     return false;
                 };
@@ -156,29 +295,25 @@ fn data_shape(
                 let Some(representation) = declaration.representation else {
                     return false;
                 };
-                let generics: Vec<_> = declaration
-                    .generics
+                let inner: BTreeSet<_> = arguments
                     .iter()
-                    .map(|parameter| match parameter {
-                        GenericParameter::Type { name, bounds } => {
-                            let mut bounds = bounds.to_vec();
-                            bounds.push(Bound::Data);
-                            GenericParameter::Type {
-                                name: name.clone(),
-                                bounds: bounds.into(),
-                            }
+                    .enumerate()
+                    .filter_map(|(ordinal, argument)| match argument {
+                        GenericArgument::Type(t) if mentions(store, *t, depth, held) => {
+                            Some(TypeParamId(ordinal as u32))
                         }
-                        parameter => parameter.clone(),
+                        _ => None,
                     })
                     .collect();
-                if !structural_equality(
-                    &signature.types,
-                    representation,
-                    Bound::Data,
-                    &GenericDeclarations::signature(&generics),
-                    lookup,
-                )
-                .unwrap_or(false)
+                if entered.insert((definition.clone(), inner.clone()))
+                    && !data_shape_within(
+                        &signature.types,
+                        representation,
+                        0,
+                        &inner,
+                        lookup,
+                        entered,
+                    )
                 {
                     return false;
                 }

@@ -1105,7 +1105,7 @@ mod parametric;
 pub use local_results::{
     local_result_destination, local_result_generics, local_result_permissions,
 };
-pub use parametric::{ParametricInput, parametric_inputs};
+pub use parametric::{ParametricInput, parametric_inputs, unique_rows};
 mod relation;
 pub use relation::{
     Destination, Reach, Relation, adopt_local, arena_parameter, destination, is_arena_type,

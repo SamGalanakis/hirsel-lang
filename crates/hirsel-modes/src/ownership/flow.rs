@@ -2749,9 +2749,9 @@ impl Checker<'_> {
         arguments: &[hirsel_syntax::Argument],
         requirements: &[Option<super::cfg::Requirement>],
     ) -> bool {
-        if self.callee_definition(callee).is_none() {
+        let Some(path) = self.callee_definition(callee) else {
             return false;
-        }
+        };
         let Some(TypeKind::Function(function)) = self
             .ty(callee)
             .and_then(|ty| self.body.types.get(ty))
@@ -2760,7 +2760,10 @@ impl Checker<'_> {
             return false;
         };
         let mut lookup = |path: &hirsel_syntax::DefPath| Ok(self.signatures.cached(path));
-        let Some(inputs) = parametric_inputs(&self.body.types, function, &mut lookup) else {
+        // A bodyless core declaration has no checked body.
+        let checked = !path.package_is("core", "1");
+        let Some(inputs) = parametric_inputs(&self.body.types, function, checked, &mut lookup)
+        else {
             return false;
         };
         arguments
@@ -2781,10 +2784,17 @@ impl Checker<'_> {
                     Some(ParametricInput::UniqueResult) => self
                         .ty(argument.value)
                         .and_then(|ty| match &self.body.types.get(ty)?.kind {
-                            TypeKind::Function(f) => self.body.types.get(f.result),
+                            TypeKind::Function(f) => Some(f.result),
                             _ => None,
                         })
-                        .is_some_and(|result| result.modes.uniqueness == Uniqueness::Unique),
+                        .is_some_and(|result| {
+                            unique_rows(
+                                &self.body.types,
+                                result,
+                                &self.body.resolution.generic_declarations,
+                                &mut |path| Ok(self.signatures.cached(path)),
+                            )
+                        }),
                     None => false,
                 }
             })

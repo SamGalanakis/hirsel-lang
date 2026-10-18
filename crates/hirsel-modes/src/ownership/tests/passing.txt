@@ -654,8 +654,8 @@ MODE/MODE-2-nested-view-take-ok.hir
 MODE/MODE-2-nested-view-written-binding-ok.hir
 MODE/MODE-2-ordering-operand-drops-unique-ok.hir
 MODE/MODE-2-parametric-aliased-callback-bad.hir
-MODE/MODE-2-parametric-borrowed-input-bad.hir
 MODE/MODE-2-parametric-borrowed-input-ok.hir
+MODE/MODE-2-parametric-borrowed-other-parameter-ok.hir
 MODE/MODE-2-parametric-copyable-bound-bad.hir
 MODE/MODE-2-parametric-lent-callback-bad.hir
 MODE/MODE-2-parametric-lent-callback-ok.hir

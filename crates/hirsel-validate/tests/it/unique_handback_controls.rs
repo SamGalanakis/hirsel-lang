@@ -1024,3 +1024,373 @@ fn a_failing_finalizer_is_a_hand_back_failure_site() {
     // The finalizer may fail while `kept` shares `x`.
     handback_error(&released_resource(true), "mutable unique hand-back");
 }
+
+/// What a `parametric_call` variant passes `first` beside `xs`.
+enum Extra {
+    /// A borrowed `seen: List[String]` for `seen: List[T]`; `first` is a
+    /// bodyless core declaration when `core`.
+    Borrowed { core: bool },
+    /// A unique `tag: Tagged[String]` taken for `tag: Tagged[T]`, where
+    /// `Tagged[T] { item: T, label: L }` and `L` is `Shared[String]`, or
+    /// `fn() -> T` when `thunk`.
+    Named { thunk: bool },
+    /// A callback `f: fn(String) -> u64` for `f: fn(view: T) -> u64`, whose
+    /// function type is `uses {}` when `pure`.
+    Lent { pure: bool },
+}
+
+fn tagged(thunk: bool) -> Signature {
+    let mut tagged = function_signature("Tagged", vec![], TypeKind::Tuple(vec![].into()));
+    let item = tagged
+        .types
+        .push(ty(TypeKind::Parameter(TypeParameterRef::bound(
+            TypeParamId(0),
+        ))));
+    let label = if thunk {
+        let inner = tagged
+            .types
+            .push(ty(TypeKind::Parameter(TypeParameterRef::Bound {
+                depth: 1,
+                parameter: TypeParamId(0),
+            })));
+        tagged
+            .types
+            .push(ty(TypeKind::Function(fn_type(vec![], inner))))
+    } else {
+        let string = tagged
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::String)));
+        tagged.types.push(ty(TypeKind::Builtin {
+            kind: BuiltinType::Shared,
+            arguments: vec![GenericArgument::Type(string)].into(),
+        }))
+    };
+    let representation = tagged.types.push(ty(TypeKind::Record(
+        vec![
+            Field {
+                growable: false,
+                name: "item".into(),
+                ty: item,
+            },
+            Field {
+                growable: false,
+                name: "label".into(),
+                ty: label,
+            },
+        ]
+        .into(),
+    )));
+    tagged.kind = SignatureKind::Type(TypeDefinition {
+        loop_source: None,
+        format: None,
+        generics: vec![GenericParameter::Type {
+            name: "T".into(),
+            bounds: vec![].into(),
+        }],
+        representation: Some(representation),
+        bounds: vec![],
+        authority: AuthoritySummary::inert(),
+        capability: None,
+        implementation_authority: None,
+        serializable: false,
+        layout: Layout::default(),
+        distinct: false,
+        resource: false,
+        drop: None,
+        fact: None,
+        destructor_allocation: Allocation::NoAlloc,
+    });
+    tagged
+}
+
+/// `parametric_call(true)` with a second argument, `extra`.
+fn parametric_variant(extra: Extra) -> Fixture {
+    let mut f = parametric_call(true);
+    let string = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::String)));
+    let (kind, usage, passing) = match &extra {
+        Extra::Borrowed { .. } => (
+            TypeKind::Builtin {
+                kind: BuiltinType::List,
+                arguments: vec![GenericArgument::Type(string)].into(),
+            },
+            UseKind::Borrow,
+            PassingMode::Borrow,
+        ),
+        Extra::Named { .. } => (
+            TypeKind::Named {
+                definition: path("Tagged"),
+                arguments: vec![GenericArgument::Type(string)].into(),
+            },
+            UseKind::Take,
+            PassingMode::Take,
+        ),
+        Extra::Lent { .. } => {
+            let count = f
+                .definition
+                .types
+                .push(ty(TypeKind::Primitive(Primitive::U64)));
+            let parameter = Parameter {
+                name: None,
+                label: None,
+                passing: PassingMode::Borrow,
+                ty: string,
+            };
+            (
+                TypeKind::Function(fn_type(vec![parameter], count)),
+                UseKind::Borrow,
+                PassingMode::Borrow,
+            )
+        }
+    };
+    let second = param(&mut f, kind);
+    if matches!(extra, Extra::Named { .. }) {
+        let old = f.body().places[second as usize].ty;
+        let mut row = f.definition.types.get(old).unwrap().clone();
+        row.modes.uniqueness = Uniqueness::Unique;
+        let row = f.definition.types.push(row);
+        f.body().locals[second as usize].ty = row;
+        f.body().places[second as usize].ty = row;
+    }
+    let Terminator::Call {
+        callee: Callee::Definition { path: called, .. },
+        arguments,
+        ..
+    } = &mut f.body().blocks[0].terminator
+    else {
+        panic!()
+    };
+    arguments.push(CallArgument {
+        parameter: ParamId(1),
+        value: operand(second, usage),
+    });
+    if matches!(extra, Extra::Borrowed { core: true }) {
+        *called = DefPath::core("test.first");
+    }
+    let called = called.clone();
+    owner_sig(&mut f, &[PassingMode::Take, passing]);
+    let mut callee = f.signatures.remove(&path("callee")).unwrap();
+    callee.definition = called.clone();
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    let t = |depth| {
+        ty(TypeKind::Parameter(TypeParameterRef::Bound {
+            depth,
+            parameter: TypeParamId(0),
+        }))
+    };
+    let ty_kind = match extra {
+        Extra::Borrowed { .. } => {
+            let element = callee.types.push(t(0));
+            TypeKind::Builtin {
+                kind: BuiltinType::List,
+                arguments: vec![GenericArgument::Type(element)].into(),
+            }
+        }
+        Extra::Named { thunk } => {
+            let element = callee.types.push(t(0));
+            f.signatures.insert(path("Tagged"), tagged(thunk));
+            TypeKind::Named {
+                definition: path("Tagged"),
+                arguments: vec![GenericArgument::Type(element)].into(),
+            }
+        }
+        Extra::Lent { pure } => {
+            let element = callee.types.push(t(1));
+            let count = callee.types.push(ty(TypeKind::Primitive(Primitive::U64)));
+            let mut callback = fn_type(
+                vec![Parameter {
+                    name: None,
+                    label: None,
+                    passing: PassingMode::Borrow,
+                    ty: element,
+                }],
+                count,
+            );
+            if !pure {
+                callback.uses = Uses::Unrestricted;
+            }
+            TypeKind::Function(callback)
+        }
+    };
+    let mut parameters = fun.parameters.to_vec();
+    parameters.push(Parameter {
+        name: None,
+        label: None,
+        passing,
+        ty: callee.types.push(ty(ty_kind)),
+    });
+    fun.parameters = parameters.into();
+    f.signatures.insert(called, callee);
+    f
+}
+
+#[test]
+fn a_borrowed_input_supplies_nothing_to_a_checked_parametric_body() {
+    // A checked `first` cannot move a `T` out of `seen` or return a share of it.
+    parametric_variant(Extra::Borrowed { core: false }).valid();
+    // A bodyless core `first` might hand back a share of `seen`.
+    assert!(
+        !parametric_variant(Extra::Borrowed { core: true })
+            .kinds()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_nominal_part_naming_no_held_parameter_is_ignored() {
+    // `label: Shared[String]` cannot hold or hand over a `T`.
+    parametric_variant(Extra::Named { thunk: false }).valid();
+    // `label: fn() -> T` can hand over a `T` the caller still holds.
+    assert!(
+        !parametric_variant(Extra::Named { thunk: true })
+            .kinds()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_lent_callback_without_authority_or_counted_outputs_supplies_nothing() {
+    // `fn(view: T) -> u64 uses {}` has nowhere to keep a copy of the `T`.
+    parametric_variant(Extra::Lent { pure: true }).valid();
+    // With authority it might keep one beyond the call.
+    assert!(
+        !parametric_variant(Extra::Lent { pure: false })
+            .kinds()
+            .is_empty()
+    );
+}
+
+/// `fn main(take xs: unique String, f: fn(take String) -> (unique String, S))
+/// -> unique (String, String)` returning `apply[String, (unique String, S)](take xs, f)`,
+/// where `fn apply[T, U](take value: T, f: fn(take T) -> U) -> U` and `S` is
+/// `unique String` when `unique`.
+fn tuple_result(unique: bool) -> Fixture {
+    let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
+    let string = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::String)));
+    let mut unique_row = f.definition.types.get(string).unwrap().clone();
+    unique_row.modes.uniqueness = Uniqueness::Unique;
+    let unique_string = f.definition.types.push(unique_row);
+    let second = if unique { unique_string } else { string };
+    let parts = f
+        .definition
+        .types
+        .push(ty(TypeKind::Tuple(vec![unique_string, second].into())));
+    let mut result = ty(TypeKind::Tuple(vec![string, string].into()));
+    result.modes.uniqueness = Uniqueness::Unique;
+    let result = f.definition.types.push(result);
+    f.body().result = result;
+    f.body().locals[0].ty = result;
+    f.body().places[0].ty = result;
+    let Terminator::Call {
+        returns: Some(CallReturn { destination, .. }),
+        ..
+    } = &f.body().blocks[0].terminator
+    else {
+        panic!()
+    };
+    let destination = destination.0 as usize;
+    let local = f.body().places[destination].root.0 as usize;
+    f.body().places[destination].ty = parts;
+    f.body().locals[local].ty = parts;
+    let xs = param(&mut f, TypeKind::Primitive(Primitive::String));
+    f.body().locals[xs as usize].ty = unique_string;
+    f.body().places[xs as usize].ty = unique_string;
+    let callback = param(
+        &mut f,
+        TypeKind::Function(fn_type(
+            vec![Parameter {
+                name: None,
+                label: None,
+                passing: PassingMode::Take,
+                ty: string,
+            }],
+            parts,
+        )),
+    );
+    let Terminator::Call {
+        callee: Callee::Definition {
+            arguments: generics,
+            ..
+        },
+        arguments,
+        ..
+    } = &mut f.body().blocks[0].terminator
+    else {
+        panic!()
+    };
+    *generics = vec![GenericArgument::Type(string), GenericArgument::Type(parts)];
+    arguments.push(CallArgument {
+        parameter: ParamId(0),
+        value: take(xs),
+    });
+    arguments.push(CallArgument {
+        parameter: ParamId(1),
+        value: operand(callback, UseKind::Borrow),
+    });
+    owner_sig(&mut f, &[PassingMode::Take, PassingMode::Borrow]);
+    let mut callee = function_signature(
+        "callee",
+        vec![],
+        TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(1))),
+    );
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    let parameter = |depth, ordinal| {
+        ty(TypeKind::Parameter(TypeParameterRef::Bound {
+            depth,
+            parameter: TypeParamId(ordinal),
+        }))
+    };
+    let value = callee.types.push(parameter(0, 0));
+    let received = callee.types.push(parameter(1, 0));
+    let returned = callee.types.push(parameter(1, 1));
+    let f_ty = callee.types.push(ty(TypeKind::Function(fn_type(
+        vec![Parameter {
+            name: None,
+            label: None,
+            passing: PassingMode::Take,
+            ty: received,
+        }],
+        returned,
+    ))));
+    fun.parameters = vec![
+        Parameter {
+            name: None,
+            label: None,
+            passing: PassingMode::Take,
+            ty: value,
+        },
+        Parameter {
+            name: None,
+            label: None,
+            passing: PassingMode::Borrow,
+            ty: f_ty,
+        },
+    ]
+    .into();
+    fun.generics = ["T", "U"]
+        .map(|name| GenericParameter::Type {
+            name: name.into(),
+            bounds: vec![].into(),
+        })
+        .to_vec()
+        .into();
+    f.signatures.insert(callee.definition.clone(), callee);
+    f
+}
+
+#[test]
+fn a_callback_tuple_of_unique_parts_is_a_unique_result() {
+    // A tuple owns no block of its own, so unique parts make it unique.
+    tuple_result(true).valid();
+    // An aliased part leaves the result aliased: the unique return is forged.
+    assert!(!tuple_result(false).kinds().is_empty());
+}

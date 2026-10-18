@@ -104,3 +104,9 @@ Lowered intrinsics are enumerated by `hirsel_types::core_roles::LoweredIntrinsic
 They retain checked ledger declarations but calls disappear into existing TIR
 instructions before execution. They therefore have no runtime dispatch entry or
 operation-inventory/manifest row. `replace` lowers to TIR `Replace`.
+
+A core generic whose result can hold values of a parameter it cannot copy, which a
+borrowed argument holds too, relates its result to that argument or returns it
+`unique`; a test enforces this over the whole ledger. MODE-2's parametric rule relies
+on it: a checked generic body derives nothing owned and global from a borrow through
+a core call.

@@ -334,8 +334,12 @@ by runtime thaw. Deep aggregate uniqueness still stops at Shared boundaries.
 `parametric_inputs` reads MODE-2 parametricity off a generic signature: when the
 owned result holds only values of type parameters without copying permission
 (GEN-1), it says, per parameter, whether the argument is free, must be unique, or
-is a callback whose instantiated result must be unique. Borrowed inputs, lent
-callbacks and non-data holders of those parameters disqualify the signature.
+is a callback whose instantiated result must prove uniqueness (`unique_rows`: written
+`unique`, or a tuple of such or plain parts). A borrowed data input is free when the
+callee has a checked body; a lent callback is free when it is `uses {}` with plain,
+parameter-free result, error and `mut` parameters. Non-data holders of those
+parameters, counting only a nominal declaration's parts that name them, disqualify the
+signature, as do borrowed inputs of a bodyless declaration and other lent callbacks.
 
 `compatible_view_type_in` applies the existing non-writing view comparison with
 Parameter or Value root policy. Readonly/taken payloads can forget nested Unique

@@ -1,0 +1,24 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 22
+// split's result tuple has an aliased Bytes part, so it is not unique and
+// neither is apply's result. Twin is MODE-2-parametric-tuple-callback-result-ok.
+fn apply[T, U](take value: T, take f: fn(take T) -> U) -> U uses {f} {
+  f(take value)
+}
+
+fn split(take b: unique Bytes) -> (unique Bytes, Bytes, u64) uses {} {
+  let n = core@1/bytes.len(b)
+  (take b, core@1/bytes.from_list([0u8]), n)
+}
+
+fn need(take parts: unique (Bytes, Bytes, u64)) -> u64 uses {} {
+  let (_, _, n) = take parts
+  n
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let parts = apply(take fresh, split)
+  let _ = need(take parts)
+  Ok(())
+}

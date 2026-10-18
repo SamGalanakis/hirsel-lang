@@ -1,8 +1,10 @@
 // rule: MODE-2
 // expect: accept
-// A borrowed input naming another parameter supplies nothing the result
-// holds, so pick's result is unique. Twin is MODE-2-parametric-borrowed-input-bad.
-fn pick[U, S](take a: U, seen: List[S]) -> U uses {} {
+// pick's checked body cannot move a U out of the borrowed `seen`, copy one, or
+// return what it derives from the borrow, so `seen` supplies nothing and pick
+// hands its taken value back unique. Twins are
+// MODE-2-parametric-borrowed-thunks-bad and GEN-1-parametric-borrowed-share-bad.
+fn pick[U](take a: U, seen: List[U]) -> U uses {} {
   take a
 }
 

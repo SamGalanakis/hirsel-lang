@@ -1,0 +1,23 @@
+// rule: MODE-2
+// expect: accept
+// tap lends its callback a U, but the callback grants no authority, has no
+// `mut` parameter and returns plain bits, so any copy of the U it makes dies
+// in the call: tap hands its taken value back unique. Twins are
+// MODE-2-parametric-lent-callback-bad, MODE-2-parametric-lent-callback-result-bad
+// and MODE-2-parametric-lent-callback-mut-bad.
+fn tap[U](take u: U, f: fn(view: U) -> u64 uses {}) -> U uses {f} {
+  let _ = f(u)
+  take u
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let b: unique Bytes = tap(
+    take fresh,
+    fn(v: Bytes) -> u64 uses {} {
+      let kept = copy v
+      core@1/bytes.len(kept)
+    }
+  )
+  Ok(())
+}

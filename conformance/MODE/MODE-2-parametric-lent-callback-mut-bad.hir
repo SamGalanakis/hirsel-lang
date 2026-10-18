@@ -1,0 +1,26 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+// A callback lent a U with a counted `mut` parameter can store a copy of the U
+// there, so tap's result shares with `log`. Twin is
+// MODE-2-parametric-lent-pure-callback-ok.
+fn tap[U](
+  take u: U,
+  mut log: List[Bytes],
+  f: fn(view: U, mut out: List[Bytes]) -> () uses {}
+) -> U uses {f} {
+  f(u, mut log)
+  take u
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut log: List[Bytes] = []
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let b: unique Bytes = tap(
+    take fresh,
+    mut log,
+    fn(v: Bytes, mut out: List[Bytes]) -> () uses {} {
+      list.push(mut out, copy v)
+    }
+  )
+  Ok(())
+}

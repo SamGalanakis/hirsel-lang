@@ -521,7 +521,7 @@ destruction (`destroyed`: noncopyable or once) at a kill, at the end of a statem
 holds such a call temporary (`destroying`), or by a displacing write is a failure site
 for the hand-back. A parametric call (`parametric_unique`, from
 `hirsel_types::parametric_inputs`) returns a unique value when every argument that may
-supply its result's type-parameter values is unique. A taken argument of
+supply its result's type-parameter values is unique; a core callee counts as bodyless. A taken argument of
 a call reaching it makes the share real (`share`). A `@preserves_unique`
 body is checked a second time (`flow::check` with a proof parameter) with its
 selected and non-plain taken parameters entering unique (`proof_entry`), other `mut`

@@ -1,0 +1,21 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 19
+// Thunk's `make` field returns a T, which can be one the caller still holds, so
+// force's result is aliased. Twin is MODE-2-parametric-named-handle-part-ok.
+pub type Thunk[T] {
+  make: fn() -> T,
+}
+
+fn force[T](take thunk: Thunk[T], take fallback: T) -> T uses {} {
+  take fallback
+}
+
+fn make() -> Bytes uses {} {
+  core@1/bytes.from_list([2u8])
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let b: unique Bytes = force(Thunk(make: make), take fresh)
+  Ok(())
+}

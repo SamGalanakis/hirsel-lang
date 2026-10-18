@@ -1,0 +1,20 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+// A callback lent a U that returns a U can return a copy of it, which tap could
+// keep beside the value it hands back, so tap's result is aliased. Twin is
+// MODE-2-parametric-lent-pure-callback-ok.
+fn tap[U](take u: U, f: fn(view: U) -> U uses {}) -> U uses {f} {
+  let _ = f(u)
+  take u
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let fresh: unique Bytes = core@1/bytes.from_list([1u8])
+  let b: unique Bytes = tap(
+    take fresh,
+    fn(v: Bytes) -> Bytes uses {} {
+      copy v
+    }
+  )
+  Ok(())
+}

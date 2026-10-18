@@ -208,16 +208,34 @@ no counted content except values of type parameters it has no copying permission
 holds exactly values its arguments supplied, and it is unique when every possible supplier
 is. The suppliers are each taken or `mut` argument whose type names such a parameter, which
 must be currently unique, and each function argument that receives them only by `take`,
-whose instantiated result must be declared `unique`. Such a function argument may be lent
-values of other parameters: the callee cannot hand it a held value, so the held values the
-call returns are still exactly what it returned, each proved unique by its own body.
+whose instantiated result must prove uniqueness by its rows: written `unique`, or a tuple
+whose every part does or is plain, since a tuple is inline and owns no block of its own. A
+record or variant result counts only when written `unique`, since its declaration may hold
+unqualified counted fields the function type does not show. Such a function argument may be
+lent values of other parameters: the callee cannot hand it a held value, so the held values
+the call returns are still exactly what it returned, each proved unique by its own body.
 `mutex.with[T, R]` lends its body the guarded `T` and returns its `R`, so a body declared
 `-> unique R` makes the call's result unique, and a body that builds that result from a
-part of the lent `T` fails its own proof. Some arguments would hide where a value goes, so
-they make the call ordinary:
-- a borrowed argument that names such a parameter;
-- a callback lent such a value, which could keep it in its environment;
-- a handle, iterator or function that holds such a value inside a non-function argument.
+part of the lent `T` fails its own proof.
+
+Two kinds of argument name such a parameter and supply nothing. A borrowed argument whose
+type names one only in data: a checked body cannot move a value out of a borrow
+([OWN-1](#own-1-borrow)) or copy one ([GEN-1](generics.md#gen-1-bounds)), and what it
+derives from the borrow stays local to it ([MODE-1](#mode-1-locality)), which the global
+result excludes; every core operation that hands back content of a borrowed argument
+relates its result to it, and another checked callee is held to the same rules. And a
+callback lent such a value that has nowhere to keep a copy: its type is `uses {}`, its
+result and error name no type parameter and are plain, and none of its `mut` parameters
+holds counted content, while its environment is fixed when it is built
+([CLO-1](closures.md#clo-1-scoped)). Some arguments would hide where a value goes, so they
+make the call ordinary:
+- a borrowed argument of a bodyless core or foreign declaration that names such a
+  parameter, since that declaration may keep or hand back a share of it
+  ([CLO-2](closures.md#clo-2-transparent));
+- any other callback lent such a value, which could keep a copy;
+- a handle, iterator or function that holds such a value inside a non-function argument,
+  including in a part of a nominal declaration that names a parameter the argument
+  instantiates with it; an opaque nominal type, whose parts are hidden, counts as one.
 
 Any other call is an ordinary call, whose result holds its declared modes: a result declared
 as a bare type parameter `T` is aliased even when a `unique` payload instantiates `T`.

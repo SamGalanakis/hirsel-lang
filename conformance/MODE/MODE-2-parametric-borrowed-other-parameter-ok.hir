@@ -1,8 +1,8 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 12
-// A borrowed input naming U is not counted as a supplier of U, so the
-// result stays aliased. Twin is MODE-2-parametric-borrowed-input-ok.
-fn pick[U](take a: U, seen: List[U]) -> U uses {} {
+// expect: accept
+// A borrowed input naming another parameter supplies nothing the result
+// holds, so pick's result is unique. Twin is MODE-2-parametric-borrowed-thunks-bad.
+fn pick[U, S](take a: U, seen: List[S]) -> U uses {} {
   take a
 }
 

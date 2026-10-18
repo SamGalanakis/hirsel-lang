@@ -1,0 +1,15 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 7
+// slots.get hands back a share of the borrowed `seen`, local to it, so pick
+// cannot return it as its global result: a checked body never turns a borrow
+// into an owned U. Twin is MODE-2-parametric-borrowed-input-ok.
+fn pick[U](take a: U, seen: Slots[U], id: SlotId[U] of seen) -> U uses {} {
+  match slots.get(seen, id) {
+    Some(v) => take v,
+    None() => take a,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  Ok(())
+}

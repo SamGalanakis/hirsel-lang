@@ -2,6 +2,7 @@ use super::review::*;
 use super::*;
 use hirsel_syntax::PackageId;
 use hirsel_types::core_roles::{intrinsic_roles, loop_protocols};
+use std::collections::BTreeSet;
 #[test]
 fn registry_has_canonical_signatures() {
     let r = BuiltinRegistry::new();
@@ -815,4 +816,142 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
             DropAllocation::NoAlloc
         );
     }
+}
+
+#[test]
+fn core_generics_hand_back_borrowed_content_only_related_to_it() {
+    // MODE-2's parametric rule lets a borrowed argument of a checked generic
+    // body supply nothing, because whatever the body derives from it through a
+    // core call stays local to it. So a core generic whose result can hold
+    // values of a parameter it cannot copy, which a borrowed argument holds
+    // too, either relates its result to that argument or returns it fresh.
+    // `$intrinsic` declarations are not callable from source.
+    let r = BuiltinRegistry::new();
+    let mut checked = 0;
+    let mut unrelated = Vec::new();
+    for s in r.signatures() {
+        let SignatureKind::Function(f) = &s.kind else {
+            continue;
+        };
+        if s.definition
+            .0
+            .modules
+            .iter()
+            .any(|m| m.as_str() == "$intrinsic")
+        {
+            continue;
+        }
+        let (count, found) = borrowed_content(&s.types, f, &s.metadata.schema);
+        checked += count;
+        unrelated.extend(
+            found
+                .into_iter()
+                .map(|ordinal| format!("{:?} parameter {ordinal}", s.definition.0)),
+        );
+    }
+    assert!(checked > 0);
+    assert!(
+        unrelated.is_empty(),
+        "results that can hold borrowed content unrelated to it: {unrelated:#?}"
+    );
+    // A declaration handing back a borrowed list's element unrelated to it is
+    // what the test exists to catch.
+    let mut builder = build::Builder::new("T");
+    let function = builder.function("xs:List[T]", "T", true);
+    assert_eq!(
+        borrowed_content(&builder.types, &function, &[]),
+        (1, vec![0])
+    );
+}
+
+/// How many borrowed parameters of `f` hold values of a parameter its result
+/// can hold and cannot copy, and which of them its result does not relate to.
+fn borrowed_content(
+    types: &TypeStore,
+    f: &FunctionType,
+    schema: &[SchemaConstraint],
+) -> (usize, Vec<usize>) {
+    // Declared copying bounds; a local result adds its own (GEN-1).
+    let mut copying: BTreeSet<TypeParamId> = f
+        .generics
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, parameter)| {
+            matches!(parameter, GenericParameter::Type { bounds, .. } if bounds.iter().any(copies))
+                .then_some(TypeParamId(ordinal as u32))
+        })
+        .collect();
+    copying.extend(schema.iter().filter_map(|constraint| match constraint {
+        SchemaConstraint::Domain { parameter, .. } => Some(parameter.parameter()),
+        SchemaConstraint::Bound {
+            parameter, bound, ..
+        } if copies(bound) => Some(parameter.parameter()),
+        _ => None,
+    }));
+    let result = types.get(f.result).unwrap();
+    if result.modes.uniqueness == Uniqueness::Unique {
+        return (0, vec![]);
+    }
+    let held: BTreeSet<_> = content_parameters(types, f.result)
+        .into_iter()
+        .filter(|p| !copying.contains(p))
+        .collect();
+    let related = result.modes.relation.named_parameters().unwrap_or_default();
+    let mut count = 0;
+    let mut unrelated = vec![];
+    for (ordinal, parameter) in f.parameters.iter().enumerate() {
+        if parameter.passing != hirsel_syntax::PassingMode::Borrow
+            || matches!(types.get(parameter.ty).unwrap().kind, TypeKind::Function(_))
+            || content_parameters(types, parameter.ty).is_disjoint(&held)
+        {
+            continue;
+        }
+        count += 1;
+        if !related.contains(&ParameterRef::bound(ParamId(ordinal as u32))) {
+            unrelated.push(ordinal);
+        }
+    }
+    (count, unrelated)
+}
+
+fn copies(bound: &Bound) -> bool {
+    matches!(
+        bound,
+        Bound::Copyable | Bound::Data | Bound::Key | Bound::Flat | Bound::Plain
+    )
+}
+
+/// The type parameters whose values a value of `root` may hold. A Sender or a
+/// SlotId names its payload type but holds none of its values.
+fn content_parameters(store: &TypeStore, root: TypeId) -> BTreeSet<TypeParamId> {
+    let mut found = BTreeSet::new();
+    let mut pending = vec![root];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match &store.get(id).unwrap().kind {
+            TypeKind::Parameter(p) if p.binder() == GenericBinder::Bound(0) => {
+                found.insert(p.parameter());
+            }
+            TypeKind::Builtin {
+                kind: BuiltinType::Sender | BuiltinType::SlotId,
+                ..
+            } => {}
+            TypeKind::Tuple(parts) => pending.extend(parts.iter().copied()),
+            TypeKind::Box(t) => pending.push(*t),
+            TypeKind::Record(fields) => pending.extend(fields.iter().map(|f| f.ty)),
+            TypeKind::Variant(variants) => {
+                pending.extend(variants.iter().flat_map(|v| v.fields.iter().map(|f| f.1)))
+            }
+            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => pending
+                .extend(arguments.iter().filter_map(|a| match a {
+                    GenericArgument::Type(t) => Some(*t),
+                    GenericArgument::Size(_) => None,
+                })),
+            _ => {}
+        }
+    }
+    found
 }
