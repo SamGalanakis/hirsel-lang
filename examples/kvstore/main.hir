@@ -122,13 +122,6 @@ fn changed(st: Store, status: u16) -> Reply uses {} {
   )
 }
 
-fn read(entries: Map[String, String], key: String) -> Reply uses {} {
-  match map.get(entries, key) {
-    Some(value) => plain(200u16, value),
-    None() => plain(404u16, "not found\n"),
-  }
-}
-
 fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
   match action {
     List() => Reply(
@@ -138,7 +131,10 @@ fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
       allow: "",
       save: None()
     ),
-    Read(key) => read(st.entries, key),
+    Read(key) => match map.get(st.entries, key) {
+      Some(value) => plain(200u16, unique value),
+      None() => plain(404u16, "not found\n"),
+    },
     Write(key, value) => {
       let status = if map.contains(st.entries, key) {
         200u16
