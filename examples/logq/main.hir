@@ -294,15 +294,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), String] {
         Error(_) => Error("cannot write output"),
       }
     },
-    Error(message) => {
-      let line = string.concat("error: ", string.concat(message, "\n"))
-      match io.stderr(rt) {
-        Ok(e) => {
-          let _ = err.print(e, line)
-        },
-        Error(_) => (),
-      }
-      Error(take message)
-    },
+    Error(message) => Error(take message),
   }
 }
