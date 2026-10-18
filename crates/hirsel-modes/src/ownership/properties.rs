@@ -45,6 +45,25 @@ impl Signatures {
             .collect()
     }
 }
+/// SEM-3: naming a function in a nominal receiver's association promises
+/// uniqueness of its builder, including for ordinary direct calls.
+pub(super) fn format_association(
+    types: &TypeStore,
+    function: &FunctionType,
+    path: &DefPath,
+    signatures: &Signatures,
+) -> Option<DefPath> {
+    let receiver = function.parameters.first()?;
+    let TypeKind::Named { definition, .. } = &types.get(receiver.ty)?.kind else {
+        return None;
+    };
+    let signature = signatures.cached(definition)?;
+    let SignatureKind::Type(nominal) = &signature.kind else {
+        return None;
+    };
+    (nominal.format.as_ref() == Some(path)).then(|| definition.clone())
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Properties {
     pub plain: bool,

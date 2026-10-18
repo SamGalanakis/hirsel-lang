@@ -1,7 +1,7 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 5
-// An @format function must promise @preserves_unique(out), so the f-string's
-// builder, and the String it finishes, stay unique.
+// expect: accept
+// The association implies the promise: no ownership annotation is needed.
+// The builder, and the String it finishes, stay unique.
 @format(point_text)
 type Point {
   x: i64,

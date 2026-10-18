@@ -7,7 +7,6 @@ type Point {
   y: i64,
 }
 
-@preserves_unique(out)
 fn point_text(p: Point, mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"({p.x}, {p.y})")
 }
@@ -18,7 +17,6 @@ type Segment {
   to: Point,
 }
 
-@preserves_unique(out)
 fn segment_text(s: Segment, mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"{s.from} -> {s.to:>8}")
 }
@@ -29,7 +27,6 @@ type Route {
   legs: List[Segment],
 }
 
-@preserves_unique(out)
 fn route_text(route: Route, mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"{route.name}:")
   for leg in route.legs {

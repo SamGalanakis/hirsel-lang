@@ -2497,7 +2497,16 @@ impl Checker<'_> {
                 function.state_promises.iter().any(|p| {
                     p.selector.parameter == ParameterRef::bound(ParamId(ordinal as u32))
                         && p.preserve_unique
-                })
+                }) || ordinal == 1
+                    && self.callee_definition(callee).is_some_and(|path| {
+                        super::properties::format_association(
+                            &self.body.types,
+                            function,
+                            path,
+                            self.signatures,
+                        )
+                        .is_some()
+                    })
             });
         promised && self.callee_definition(callee).is_some()
     }

@@ -81,5 +81,6 @@ Stage two (`protocol.rs`) validates associations after headers publish, includin
 unused ones: `validate_loop_source` for `@loop_source(open, next)` (SEM-4) and
 `validate_format` for `@format(function)` (SEM-3), which requires exactly
 `fn(value: T, mut out: List[u8]) -> ()` after inferring the function's generics from
-the declaring type's own parameters, with `@preserves_unique(out)` and no error
-result. Both share the receiver inference in `specialize`.
+the declaring type's own parameters and no error result. The association implies
+`@preserves_unique(out)`; source ownership and independent IR validation prove it.
+Both share the receiver inference in `specialize`.

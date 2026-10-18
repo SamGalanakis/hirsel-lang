@@ -5,7 +5,6 @@ pub type Point {
   y: i64,
 }
 
-@preserves_unique(out)
 fn point_text(p: Point, mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"<{p.x};{p.y}>")
 }

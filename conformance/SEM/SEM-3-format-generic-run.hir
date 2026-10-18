@@ -9,7 +9,6 @@ type Pair[A, B] {
   label: String,
 }
 
-@preserves_unique(out)
 fn pair_text[A, B](pair: Pair[A, B], mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"pair {pair.label}")
 }
@@ -20,7 +19,6 @@ type Window[n: size] {
   cells: Inline[u8, n],
 }
 
-@preserves_unique(out)
 fn window_text[n: size](window: Window[n], mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"window@{window.start}")
 }

@@ -4,7 +4,6 @@
 @format(light_text)
 type Light = Red | Amber(u8) | Green(minutes: u64, arrow: bool)
 
-@preserves_unique(out)
 fn light_text(light: Light, mut out: List[u8]) -> () uses {} {
   match light {
     Red => text.append(mut out, "red"),

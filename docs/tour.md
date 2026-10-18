@@ -480,10 +480,11 @@ mean 2.5, all done: false
 
 A type joins f-strings by naming one function with `@format`. The function borrows
 the value and appends its text to a `mut out: List[u8]` builder, usually with another
-f-string, and promises `@preserves_unique(out)`. A hole of that type calls it, so
-records, variants and generic types (with a function generic over the same
-parameters) format like scalars; nothing formats without the attribute. Fill,
-alignment and width pad the produced text as they pad strings. A width or precision
+f-string. The association promises that the function keeps the builder unique;
+the compiler proves its body, so no ownership annotation is needed. A hole of
+that type calls it, so records, variants and generic types (with a function generic
+over the same parameters) format like scalars; nothing formats without the
+attribute. Fill, alignment and width pad the produced text as they pad strings. A width or precision
 can come from a `u64` in scope: `{name:width$}`, `{hours:.places$}`.
 
 <!-- tour: conformance/SEM/SEM-3-tour-15-format-run.hir -->
@@ -498,7 +499,6 @@ type Ticket {
   done: bool,
 }
 
-@preserves_unique(out)
 fn ticket_text(ticket: Ticket, mut out: List[u8]) -> () uses {} {
   let state = if ticket.done {
     "done"

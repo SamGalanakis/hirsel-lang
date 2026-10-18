@@ -3886,6 +3886,8 @@ conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
 conformance/SEM/SEM-3-empty-graphemes.hir
 conformance/SEM/SEM-3-empty-scalars.hir
+conformance/SEM/SEM-3-format-alias-bad.hir
+conformance/SEM/SEM-3-format-alias-ok.hir
 conformance/SEM/SEM-3-format-enum-run.hir
 conformance/SEM/SEM-3-format-external-run.hir
 conformance/SEM/SEM-3-format-generic-bad.hir

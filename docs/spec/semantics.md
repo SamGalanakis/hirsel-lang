@@ -91,13 +91,17 @@ the type; the message for a declared type names `@format`.
 `@format(function)`, which names one ordinary declared function. After substituting the
 type's own type and size parameters, the function is exactly
 `fn(value: T, mut out: List[u8]) -> ()`: an unlabelled borrowed receiver of the declaring
-type `T`, an unlabelled `mut` UTF-8 builder selected by `@preserves_unique(out)`, a unit
-result and no error result. A generic type's function is generic over the same
+type `T`, an unlabelled `mut` UTF-8 builder, a unit result and no error result. A generic type's function is generic over the same
 parameters (`@format(pair_text)` on `Pair[A, B]` names
 `fn pair_text[A, B](value: Pair[A, B], mut out: List[u8]) -> ()`), each inferred from the
-receiver. The function appends the value's text and keeps the builder's existing
-content, as the protocol operations do. The association is a signature input checked at
-the attribute, including when no f-string uses the type; any other shape is SEM-3 there.
+receiver. The association implies `@preserves_unique(out)`: both the source ownership
+checker and the independent IR checker prove the body under that rule, and direct
+calls preserve the builder's uniqueness. No ownership annotation is needed; writing
+the attribute explicitly is allowed and redundant. A body that fails the proof is
+MODE-2 at the function, with a note naming the `@format` association. The function
+appends the value's text and keeps the builder's existing content, as the protocol
+operations do. The association is a signature input checked at the attribute,
+including when no f-string uses the type; any other shape is SEM-3 there.
 There is no derive, structural lookup or automatic formatting of records: an f-string
 hole of type `T` is `function(hole, mut builder)`, the same ordinary call as
 `u64.format_into` for a `u64` hole, checked as one. The function may be private;

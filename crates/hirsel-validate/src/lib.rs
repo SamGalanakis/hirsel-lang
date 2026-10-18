@@ -490,7 +490,7 @@ fn validate_input(
         if let Some(captures) = environments.get(&(index as u32)) {
             checker.flow(captures, true);
             if index as u32 == definition.entry.0 {
-                for parameter in unique_promises(signatures.get(&definition.path)) {
+                for parameter in unique_promises(signatures.get(&definition.path), signatures) {
                     let mut proof = Checker {
                         definition,
                         body,
@@ -523,12 +523,16 @@ fn validate_input(
     Validation { violations: errors }
 }
 
-/// The parameters a function declares `@preserves_unique` on (MODE-2).
-fn unique_promises(signature: Option<&Signature>) -> Vec<hirsel_types::ParamId> {
+/// Explicit and SEM-3-implied `@preserves_unique` selections (MODE-2).
+fn unique_promises(
+    signature: Option<&Signature>,
+    signatures: &dyn SignatureLookup,
+) -> Vec<hirsel_types::ParamId> {
     let Some(hirsel_types::SignatureKind::Function(f)) = signature.map(|s| &s.kind) else {
         return Vec::new();
     };
-    f.state_promises
+    let mut promised: Vec<_> = f
+        .state_promises
         .iter()
         .filter(|p| p.preserve_unique && p.selector.fields.is_empty())
         .filter_map(|p| match p.selector.parameter {
@@ -538,7 +542,36 @@ fn unique_promises(signature: Option<&Signature>) -> Vec<hirsel_types::ParamId> 
             } => Some(parameter),
             _ => None,
         })
-        .collect()
+        .collect();
+    if signature.is_some_and(|s| format_association(s, signatures))
+        && !promised.contains(&hirsel_types::ParamId(1))
+    {
+        promised.push(hirsel_types::ParamId(1));
+    }
+    promised
+}
+
+/// Reconstruct SEM-3's implied promise from declaration snapshots, independent
+/// of source annotations and of the producer's ownership decisions.
+fn format_association(signature: &Signature, signatures: &dyn SignatureLookup) -> bool {
+    let hirsel_types::SignatureKind::Function(f) = &signature.kind else {
+        return false;
+    };
+    if f.foreign.is_some() {
+        return false;
+    }
+    let Some(receiver) = f.parameters.first() else {
+        return false;
+    };
+    let Some(TypeKind::Named { definition, .. }) =
+        signature.types.get(receiver.ty).map(|r| &r.kind)
+    else {
+        return false;
+    };
+    signatures.get(definition).is_some_and(|s| {
+        matches!(&s.kind, hirsel_types::SignatureKind::Type(t)
+            if t.format.as_ref() == Some(&signature.definition))
+    })
 }
 
 /// Lowering-test helper: make invariant failures readable at their publication

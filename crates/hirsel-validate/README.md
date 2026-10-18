@@ -799,3 +799,8 @@ Hand-built domain controls accept the same invalid call only when its rule is re
 Closure parameter origin proofs are rebuilt after installing capture identities and
 header names. A captured owner already present in the entry map still supplies the
 parameter proof; a same-typed capture from another owner cannot claim that identity.
+
+SEM-3 format associations independently imply the same uniqueness promise for
+the formatting function's second parameter. V reconstructs the association from
+the receiver and nominal signature snapshots, both at direct calls and when
+re-proving the function body; no source attribute or producer fact is trusted.

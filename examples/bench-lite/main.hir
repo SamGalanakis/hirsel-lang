@@ -13,7 +13,6 @@ pub type Summary {
   top: List[(String, u64)],
 }
 
-@preserves_unique(out)
 fn summary_text(s: Summary, mut out: List[u8]) -> () uses {} {
   text.append(
     mut out,

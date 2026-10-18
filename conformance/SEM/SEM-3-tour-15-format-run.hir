@@ -12,7 +12,6 @@ type Ticket {
   done: bool,
 }
 
-@preserves_unique(out)
 fn ticket_text(ticket: Ticket, mut out: List[u8]) -> () uses {} {
   let state = if ticket.done {
     "done"

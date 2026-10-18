@@ -1,13 +1,16 @@
 // rule: SEM-3
 // expect: accept
-// Twin of the missing promise: the function preserves the builder's uniqueness.
+// The function preserves the builder's uniqueness through its association.
 @format(point_text)
 type Point {
   x: i64,
   y: i64,
 }
 
-@preserves_unique(out)
 fn point_text(p: Point, mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"({p.x}, {p.y})")
+}
+
+fn formatted(p: Point) -> unique String uses {} {
+  f"{p}"
 }

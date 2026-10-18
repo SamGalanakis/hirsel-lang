@@ -137,7 +137,7 @@ pub fn validate_loop_source(
 /// Validate an `@format(function)` association even when no f-string formats
 /// the type (SEM-3). After substituting the type's own generic parameters, the
 /// function is exactly `fn(value: T, mut out: List[u8]) -> ()`: an unlabelled
-/// borrowed receiver, an unlabelled `mut` UTF-8 builder it preserves unique,
+/// borrowed receiver, an unlabelled `mut` UTF-8 builder implicitly preserved unique,
 /// and no error result.
 pub fn validate_format(
     signature: &Signature,
@@ -155,7 +155,7 @@ pub fn validate_format(
             const { RuleId::of("SEM-3") },
             span,
             "an @format function is `fn(value: T, mut out: List[u8]) -> ()` for its type T, \
-             generic over T's own parameters, with @preserves_unique(out) and no error result",
+             generic over T's own parameters, with no error result",
         )
     };
     let function = provider.signature(path)?;
@@ -180,15 +180,9 @@ pub fn validate_format(
         let byte = |argument: &GenericArgument| matches!(argument, GenericArgument::Type(t) if matches!(function.types.get(*t).map(|r| &r.kind), Some(TypeKind::Primitive(Primitive::U8))));
         matches!(function.types.get(ty).map(|r| &r.kind), Some(TypeKind::Builtin { kind: BuiltinType::List, arguments }) if matches!(arguments.as_slice(), [a] if byte(a)))
     };
-    let preserved = f.state_promises.iter().any(|p| {
-        p.preserve_unique
-            && p.selector.fields.is_empty()
-            && p.selector.parameter == ParameterRef::bound(ParamId(1))
-    });
     if out.passing != PassingMode::Mut
         || out.label.is_some()
         || !builder(out.ty)
-        || !preserved
         || f.error.is_some()
         || !matches!(&types.get(result).unwrap().kind, TypeKind::Tuple(items) if items.is_empty())
     {

@@ -8,7 +8,6 @@ type Cell[T] {
   id: u64,
 }
 
-@preserves_unique(out)
 fn cell_text(cell: Cell[u8], mut out: List[u8]) -> () uses {} {
   text.append(mut out, f"cell {cell.id}")
 }

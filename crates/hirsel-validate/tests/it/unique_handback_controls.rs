@@ -596,3 +596,60 @@ fn a_returned_value_keeps_only_the_shares_it_derives_from() {
     // The returned `y` is counted but unrelated to `x`'s dead share.
     viewed_then_needed(Share::Returned).valid();
 }
+
+/// Hand-built IR has no source annotation: the receiver's association alone
+/// selects the builder for proof. The identical unassociated body is valid.
+fn format_body(aliases: bool, associated: bool) -> Fixture {
+    let mut f = Fixture::unit();
+    param(
+        &mut f,
+        TypeKind::Named {
+            definition: path("Point"),
+            arguments: vec![].into(),
+        },
+    );
+    let byte = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::U8)));
+    let builder = TypeKind::Builtin {
+        kind: BuiltinType::List,
+        arguments: vec![GenericArgument::Type(byte)].into(),
+    };
+    let out = param(&mut f, builder.clone());
+    if aliases {
+        let kept = f.slot(builder, Storage::Local);
+        let cleanup = f.cleanup(vec![drop(kept)]);
+        f.assign(kept, Rvalue::Use(copy(out)), 0);
+        f.body().blocks[0].terminator = ret(0, cleanup);
+    }
+    owner_sig(&mut f, &[PassingMode::Borrow, PassingMode::Mut]);
+    let mut point = function_signature("Point", vec![], TypeKind::Tuple(vec![].into()));
+    let representation = point.types.push(Type::unit());
+    point.kind = SignatureKind::Type(TypeDefinition {
+        loop_source: None,
+        format: associated.then(|| path("main")),
+        generics: vec![].into(),
+        representation: Some(representation),
+        bounds: vec![Bound::Plain],
+        authority: AuthoritySummary::inert(),
+        capability: None,
+        implementation_authority: None,
+        serializable: false,
+        layout: Layout::default(),
+        distinct: false,
+        resource: false,
+        drop: None,
+        fact: None,
+        destructor_allocation: Allocation::NoAlloc,
+    });
+    f.signatures.insert(point.definition.clone(), point);
+    f
+}
+
+#[test]
+fn a_format_association_implies_the_builder_body_proof() {
+    format_body(true, false).valid();
+    format_body(false, true).valid();
+    handback_error(&format_body(true, true), "preserved unique hand-back");
+}

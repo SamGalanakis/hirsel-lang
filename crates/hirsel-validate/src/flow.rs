@@ -4154,22 +4154,20 @@ impl Checker<'_> {
         })
     }
     fn callee_preserves_unique(&self, callee: &Callee, ordinal: hirsel_types::ParamId) -> bool {
-        let function = match callee {
-            Callee::Definition { path, .. } => {
-                self.signatures.get(path).and_then(|s| match &s.kind {
-                    SignatureKind::Function(f) => Some(f),
-                    _ => None,
-                })
-            }
+        let Callee::Definition { path, .. } = callee else {
             // MODE-2: a function value's promise may come from an unproved body.
-            Callee::Indirect { .. } => None,
+            return false;
         };
-        // A foreign declaration has no body to prove a promise (LANG-7).
-        function.is_some_and(|f| {
+        self.signatures.get(path).is_some_and(|signature| {
+            let SignatureKind::Function(f) = &signature.kind else {
+                return false;
+            };
+            // A foreign declaration has no body to prove a promise (LANG-7).
             f.foreign.is_none()
-                && f.state_promises.iter().any(|p| {
+                && (f.state_promises.iter().any(|p| {
                     p.selector.parameter == ParameterRef::bound(ordinal) && p.preserve_unique
-                })
+                }) || ordinal == hirsel_types::ParamId(1)
+                    && super::format_association(signature, self.signatures))
         })
     }
     /// A borrowed parameter a bodyless core promise reads and stores nothing of.

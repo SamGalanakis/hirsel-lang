@@ -896,3 +896,9 @@ locality causes, so a plain sibling cannot become the cited counted alias.
 Explicit take capture classification follows transparent block tails (LANG-11),
 so `take { x }` captures the same owner as `take x`, including resource and task
 captures. Statements inside the block retain their ordinary evaluation order.
+
+A nominal `@format(f)` association implies `@preserves_unique` for f's second
+parameter (SEM-3). Ownership reconstructs that promise from the receiver's
+declaration for direct calls and re-proves f's body, including unused functions.
+Failed proofs report MODE-2 at f with a note naming the association; an explicit
+promise is redundant and runs the same proof once.
