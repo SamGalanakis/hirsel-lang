@@ -440,8 +440,9 @@ MEM-3 `Depth`, MEM-6 `OutOfSpace`, FAIL-4 `DeadMutex`, else `Check`), rule ID, d
 line, column and spawn path, each a fresh block. A record holds compiler codes, so a program
 that isolates registers its failure table before the entry runs
 (`hirsel_rt_v2_failure_table`, called by `main` of the launcher object from either backend):
-one pointer-free byte string holding each site code's definition path and one-based position,
-sorted by code, and each program rule code's rule ID.
+one pointer-free byte string holding each site code's definition path and one-based position
+(0 and 0 for a site inside a library body, which only a resource failure reaches), sorted by
+code, and each program rule code's rule ID.
 
 ## Launch and the Hirsel-ABI Io entries
 

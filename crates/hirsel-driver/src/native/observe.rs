@@ -168,7 +168,8 @@ pub fn isolates(program: &ReadyProgram) -> bool {
 }
 
 /// The program's failure table (`hirsel_rt::isolate`): each site code's definition path and
-/// one-based line and column, in code order, and each program rule code's rule ID.
+/// one-based line and column (0 and 0 inside a library body), in code order, and each program
+/// rule code's rule ID.
 #[derive(Clone, Debug)]
 pub struct FailureTable {
     pub sites: Vec<(u64, String, u32, u32)>,
@@ -207,9 +208,10 @@ pub fn failure_table(program: &ReadyProgram, sites: &Sites<'_>) -> FailureTable 
     FailureTable {
         sites: site_codes(program)
             .into_iter()
-            .filter_map(|(code, (definition, range))| {
-                let (line, column) = sites.position(&definition, range)?;
-                Some((code, definition.to_string(), line, column))
+            .map(|(code, (definition, range))| {
+                // A site inside a library body has no source position: line and column 0.
+                let (line, column) = sites.position(&definition, range).unwrap_or((0, 0));
+                (code, definition.to_string(), line, column)
             })
             .collect(),
         rules: super::emit::failure_rules(program),

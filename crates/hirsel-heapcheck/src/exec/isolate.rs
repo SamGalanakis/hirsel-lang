@@ -65,10 +65,14 @@ impl<S: Stage> Machine<'_, S> {
                     .ok()
                     .and_then(|i| self.scheduler().isolated.get(i).cloned())
                     .ok_or_else(|| err(V::Malformed, "an isolated failure index out of range"))?;
-                let position = || {
-                    self.ops
+                // A site inside a library body, which only a resource failure such as an
+                // allocation's reaches, has no source position: it is line and column 0, as
+                // the runtime's failure table lists it.
+                let position = || -> Checked<(u64, u64)> {
+                    Ok(self
+                        .ops
                         .failure_position(&failure.definition, failure.site)
-                        .ok_or_else(|| err(V::Malformed, "a failure site without its position"))
+                        .unwrap_or((0, 0)))
                 };
                 let value = match name {
                     "$intrinsic.IsolateKind" => OpValue::Bits {
