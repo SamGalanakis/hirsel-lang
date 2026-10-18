@@ -761,3 +761,7 @@ RuntimeTypes retains the checked nominal signature snapshots needed to specializ
 Callable materialization reports CT-2 for named function references as well as
 closures. Compile-time computations may invoke a contextually instantiated generic
 reference and publish its ordinary data result; callable constants remain excluded.
+
+`Compiler::load_test_package` indexes an explicit manifest without requiring a
+launch entry. It retains the same package graph, source contexts and checking
+policy; test discovery selects ordinary functions after checking the package.

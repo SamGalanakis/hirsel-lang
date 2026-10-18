@@ -391,6 +391,7 @@ pub(crate) fn load_program_source_with_cache(
     path: &Path,
     replacement: Option<&str>,
     cache: &PackageCache,
+    package_only: bool,
 ) -> Result<LoadedProgram, ToolError> {
     let manifest = if path.extension().is_some_and(|e| e == "json") {
         Some(path.to_path_buf())
@@ -441,10 +442,19 @@ pub(crate) fn load_program_source_with_cache(
     let mut graph = Graph::default();
     let package = graph.visit(&manifest, None)?;
     let root = graph.packages.get(&package).unwrap();
-    let entry = root
-        .entry
-        .clone()
-        .ok_or_else(|| invalid("launch manifest requires entry"))?;
+    let entry = if package_only {
+        entry_path(
+            &root
+                .sources
+                .first()
+                .ok_or_else(|| invalid("test package has no sources"))?
+                .1,
+        )
+    } else {
+        root.entry
+            .clone()
+            .ok_or_else(|| invalid("launch manifest requires entry"))?
+    };
     let primary_path = if path.extension().is_some_and(|e| e == "json") {
         root.sources
             .iter()

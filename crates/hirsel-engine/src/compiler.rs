@@ -51,7 +51,23 @@ impl Compiler {
         replacement: Option<&str>,
         cache: &PackageCache,
     ) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_cache(self, path, replacement, cache)
+        crate::package::load_program_source_with_cache(self, path, replacement, cache, false)
+    }
+    /// Load an explicit test package without requiring a launch entry. The root
+    /// package's sources are checked in full; no function is selected as main.
+    pub fn load_test_package(&self, manifest: &Path) -> Result<LoadedProgram, ToolError> {
+        if manifest.extension().is_none_or(|e| e != "json") {
+            return Err(ToolError::Runtime(
+                "test requires a package manifest JSON path".into(),
+            ));
+        }
+        crate::package::load_program_source_with_cache(
+            self,
+            manifest,
+            None,
+            &PackageCache::shared(),
+            true,
+        )
     }
     /// The precheck of the package `manifest` describes, checked freshly as the only
     /// dependency of an empty program (docs/building.md, "The std precheck").
