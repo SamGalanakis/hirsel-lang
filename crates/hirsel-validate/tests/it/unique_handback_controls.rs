@@ -238,6 +238,7 @@ fn an_indirect_call_does_not_use_the_promise() {
         panic!()
     };
     *callee = Callee::Indirect {
+        forward_caller: false,
         value: operand(place, UseKind::Borrow),
         arguments: vec![],
     };

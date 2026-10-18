@@ -970,6 +970,7 @@ impl Builder<'_, '_> {
                 });
                 (
                     Some(Callee::Indirect {
+                        forward_caller: false,
                         value: Operand {
                             place: value.place,
                             usage: value.usage,

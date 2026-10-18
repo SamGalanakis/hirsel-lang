@@ -52,6 +52,7 @@ pub fn fact_signature(owner: &Signature) -> Result<Signature, QueryError> {
         types,
         fingerprint: ContentHash::default(),
         metadata: SignatureMetadata {
+            track_caller: false,
             visibility: Visibility::Private,
             ..owner.metadata.clone()
         },

@@ -1698,3 +1698,25 @@ fn an_owner_view_seals_to_its_public_signature_and_keeps_its_fingerprint() {
     other.metadata.visibility = hirsel_syntax::Visibility::Public;
     assert_ne!(encoding::sealed(&other), public);
 }
+
+#[test]
+fn caller_tracking_changes_declaration_identity_without_changing_callable_types() {
+    let mut types = TypeStore::default();
+    let result = types.push(Type::unit());
+    let TypeKind::Function(callable) = function(result, vec![]).kind else {
+        unreachable!()
+    };
+    let mut signature = Signature {
+        definition: path("helper"),
+        types,
+        metadata: SignatureMetadata::default(),
+        fingerprint: Default::default(),
+        kind: SignatureKind::Function(callable),
+    };
+    let original = signature.clone();
+    let before = encoding::fingerprint(&signature, &[]).unwrap();
+    signature.metadata.track_caller = true;
+    assert_ne!(before, encoding::fingerprint(&signature, &[]).unwrap());
+    assert_eq!(original.kind, signature.kind);
+    assert_eq!(original.types, signature.types);
+}

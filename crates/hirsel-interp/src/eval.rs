@@ -2998,6 +2998,7 @@ fn execute_terminator(
                     }
                 }
                 Callee::Indirect {
+                    forward_caller: _,
                     value: operand,
                     arguments,
                 } => {

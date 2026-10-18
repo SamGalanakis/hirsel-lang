@@ -35,6 +35,7 @@ pub fn canonical_encoding(
     let SignatureMetadata {
         visibility,
         alias,
+        track_caller,
         unsafe_ffi,
         wrapper,
         roles,
@@ -48,7 +49,7 @@ pub fn canonical_encoding(
         heap,
     } = roles;
     let mut e = Encoder::default();
-    e.atom(b"hirsel.signature.encoding.v13");
+    e.atom(b"hirsel.signature.encoding.v14");
     e.path(definition);
     e.tag(match visibility {
         hirsel_syntax::Visibility::Private => "private",
@@ -56,6 +57,7 @@ pub fn canonical_encoding(
         hirsel_syntax::Visibility::PublicOpaque => "opaque",
     });
     e.boolean(*alias);
+    e.boolean(*track_caller);
     e.boolean(*unsafe_ffi);
     // None encodes as the retired exported-C flag's false.
     e.option(

@@ -41,6 +41,7 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
             usage: UseKind::Take,
         };
         let definition = Definition {
+            caller_bodies: vec![],
             protocol_associations: vec![],
             path: build,
             signature_hash: function.fingerprint,

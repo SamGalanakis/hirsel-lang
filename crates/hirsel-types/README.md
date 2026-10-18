@@ -476,3 +476,6 @@ fixture used by the LIR, LLVM and runtime test suites. It derives no property ev
 
 `snapshot` owns the canonical Primitive and BuiltinType encodings through
 hirsel-codec; the codec itself never depends on semantic types.
+
+Signature encoding v14 retains caller-attribution metadata as a declaration
+property. Function value types do not carry that property.

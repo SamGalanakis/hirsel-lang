@@ -970,3 +970,72 @@ fn growing_schema_limits_remain_operational_and_owner_replacement_clears_them() 
             .is_empty()
     );
 }
+
+#[test]
+fn caller_attribution_is_bound_to_the_independent_declaration() {
+    let mut f = Fixture::unit();
+    let signature = function_signature("main", vec![], TypeKind::Tuple(vec![].into()));
+    f.signatures.insert(signature.definition.clone(), signature);
+    f.valid();
+    f.definition.caller_bodies = vec![f.definition.entry];
+    f.broken(vec![ViolationKind::TypeMismatch {
+        entity: "caller attribution",
+    }]);
+    f.signatures
+        .get_mut(&path("main"))
+        .unwrap()
+        .metadata
+        .track_caller = true;
+    f.valid();
+    f.definition.caller_bodies.clear();
+    f.broken(vec![ViolationKind::TypeMismatch {
+        entity: "caller attribution",
+    }]);
+}
+
+#[test]
+fn caller_tracking_requires_an_ordinary_function() {
+    let mut signature = capability();
+    verdict(signature.clone(), true);
+    signature.metadata.track_caller = true;
+    verdict(signature, false);
+    let mut f = Fixture::unit();
+    let mut foreign = function_signature("external", vec![], TypeKind::Primitive(Primitive::U64));
+    let SignatureKind::Function(function) = &mut foreign.kind else {
+        unreachable!()
+    };
+    function.foreign = Some(ForeignContract {
+        abi: "c".into(),
+        blocking: false,
+        aliasing_contract: "Retains nothing.".into(),
+    });
+    f.signatures.insert(foreign.definition.clone(), foreign);
+    f.valid();
+    f.signatures
+        .get_mut(&path("external"))
+        .unwrap()
+        .metadata
+        .track_caller = true;
+    f.broken(vec![ViolationKind::InvalidSignature(path("external"))]);
+}
+
+#[test]
+fn caller_body_ids_are_checked_at_the_structural_boundary() {
+    let mut f = Fixture::unit();
+    assert!(validate_structure(&f.definition).is_empty());
+    f.definition.caller_bodies = vec![f.definition.entry];
+    assert!(validate_structure(&f.definition).is_empty());
+    f.definition.caller_bodies = vec![BodyId(99)];
+    assert_eq!(
+        validate_structure(&f.definition),
+        vec![Violation {
+            body: None,
+            block: None,
+            instruction: None,
+            kind: ViolationKind::InvalidId {
+                arena: "body",
+                index: 99
+            },
+        }]
+    );
+}

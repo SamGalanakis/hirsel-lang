@@ -95,6 +95,7 @@ fn an_indirect_callee_is_a_function_value() {
         let r = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
         f.body().blocks[0].terminator = Terminator::Call {
             callee: Callee::Indirect {
+                forward_caller: false,
                 value,
                 arguments: vec![],
             },
@@ -937,4 +938,36 @@ fn a_function_reference_derives_its_instantiated_error_channel() {
     };
     build(false).broken(mismatch("function reference"));
     build(true).valid();
+}
+
+#[test]
+fn caller_body_sets_follow_entry_contract_producers_and_exclude_nested_contracts() {
+    let mut f = contract_clause(Primitive::Bool);
+    let mut signature = function_signature("main", vec![], TypeKind::Tuple(vec![].into()));
+    signature.metadata.track_caller = true;
+    f.signatures.insert(signature.definition.clone(), signature);
+    f.definition.caller_bodies = vec![BodyId(0), BodyId(1)];
+    f.valid();
+    f.definition.caller_bodies = vec![BodyId(0)];
+    f.broken(mismatch("caller attribution"));
+    // Move that contract's producer into an ordinary nested function.
+    let entry = empty_body(&mut f);
+    let nested = std::mem::replace(&mut f.definition.bodies[0], entry);
+    f.definition.bodies.push(nested);
+    let unit = f.body().result;
+    let function = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
+    f.assign(
+        function,
+        Rvalue::Closure {
+            body: BodyId(2),
+            captures: vec![],
+            destination: Destination::Inferred,
+        },
+        0,
+    );
+    let cleanup = f.cleanup(vec![drop(function)]);
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    f.valid();
+    f.definition.caller_bodies.push(BodyId(1));
+    f.broken(mismatch("caller attribution"));
 }

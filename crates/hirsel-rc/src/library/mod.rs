@@ -422,6 +422,7 @@ impl Request {
 /// body. Nothing reads a body through it; `Cx` builds the unit.
 fn declaration(path: &DefPath) -> tir::DefinitionRef {
     std::sync::Arc::new(tir::Definition {
+        caller_bodies: vec![],
         protocol_associations: vec![],
         types: Default::default(),
         path: path.clone(),

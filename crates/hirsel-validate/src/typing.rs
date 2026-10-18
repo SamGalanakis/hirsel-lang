@@ -2053,6 +2053,7 @@ impl<'a> Checker<'a> {
                 (&s.types, f, arguments.as_slice())
             }
             Callee::Indirect {
+                forward_caller: _,
                 value: o,
                 arguments: generics,
             } => {

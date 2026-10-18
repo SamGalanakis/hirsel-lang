@@ -6,8 +6,8 @@ use hirsel_types::QueryError;
 use hirsel_types::{Destination, GenericArgument, TypeId, TypeStore, UseKind};
 
 /// Borrowed-association receipts revised the formerly implicit v1 TIR schema;
-/// v3 adds diverging calls (`Terminator::Call { returns: None, .. }`).
-pub const TIR_VERSION: u32 = 3;
+/// v3 adds diverging calls; v4 retains named-entry caller attribution.
+pub const TIR_VERSION: u32 = 4;
 
 pub mod representation;
 
@@ -249,6 +249,8 @@ pub enum Callee {
         arguments: Vec<GenericArgument>,
     },
     Indirect {
+        /// Compiler-owned contract calls inherit attribution; source function values reset it.
+        forward_caller: bool,
         value: Operand,
         arguments: Vec<GenericArgument>,
     },
@@ -502,6 +504,9 @@ pub struct ProtocolAssociationReceipt {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Definition {
+    /// Sorted bodies that inherit attribution: the marked entry and its own contract bodies.
+    /// Ordinary closures and their contracts remain separate invocation boundaries.
+    pub caller_bodies: Vec<BodyId>,
     pub protocol_associations: Vec<ProtocolAssociationReceipt>,
     /// The sole published type graph for all entry, closure and contract bodies.
     pub types: TypeStore,
@@ -510,6 +515,14 @@ pub struct Definition {
     pub bodies: Vec<Body>,
     pub entry: BodyId,
     pub contracts: Vec<(u32, BodyId)>,
+}
+impl Definition {
+    /// Whether a validated body inherits the declaration's caller attribution.
+    pub fn tracks_caller(&self, body: BodyId) -> bool {
+        self.caller_bodies
+            .binary_search_by_key(&body.0, |id| id.0)
+            .is_ok()
+    }
 }
 /// Observable fail-stop data uses an indexed cause chain (FAIL-2); no Rc trees.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]

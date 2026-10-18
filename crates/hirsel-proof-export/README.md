@@ -6,7 +6,7 @@ The prover-neutral proof seam (rules PS-1..PS-16):
   (`obligations.rs`);
 - the per-definition TIR digest (`hirsel.tir.digest.v1`) and the obligation
   checksum over it and the referenced signature fingerprints;
-- the canonical `hirsel.tir.export.v1` text (`wire.rs` encodes every TIR,
+- the canonical `hirsel.tir.export.v2` text (`wire.rs` encodes every TIR,
   type-graph and signature type under the export context) and its importer,
   which re-derives every signature fingerprint (one derivation for every
   signature; an owner view must seal to its public signature), recomputes every
@@ -22,8 +22,9 @@ trusted external verdict; nothing is replayed. The driver maps accepted
 obligations to removal forms (`docs/spec/proof-seam.md`, PS-13).
 
 Consumers read the text out of process; there is no plugin API. Interpreter and
-runtime `Failure` records are unchanged: `Export::failure_obligations` maps a
-failure's (definition, rule, site) to candidate obligation ids.
+runtime reports retain attribution separately from the defining operation.
+`Export::failure_obligations` maps that operation's (definition, rule, site) to
+candidate obligation ids.
 
 Dependencies: `hirsel-codec`, `hirsel-diag`, `hirsel-span`, `hirsel-syntax`,
 `hirsel-tir`, `hirsel-types`, `hirsel-validate`; never an implementation crate

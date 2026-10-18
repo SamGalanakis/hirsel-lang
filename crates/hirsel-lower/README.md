@@ -386,3 +386,6 @@ one TIR `Replace`, and the displaced temporary becomes the call result without
 destruction. Assignment uses the same exchange helper, then drops that temporary.
 
 Labelled exits select an enclosing Loop entry, end its exited scopes with existing cleanup, and publish break/feedback states to that selected entry. Inner loop preparation ends on an outer exit; the selected loop preparation survives continue.
+
+`Input.track_caller` transports declaration metadata into TIR. Internal contract
+invocations inherit attribution; source function-value calls retain their boundary.

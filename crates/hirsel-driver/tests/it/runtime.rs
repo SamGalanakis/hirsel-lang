@@ -94,6 +94,7 @@ fn fixture(fail: bool) -> (Fixture, SourceMap, RunConfiguration) {
         matches: vec![],
     };
     let definition = Definition {
+        caller_bodies: vec![],
         protocol_associations: vec![],
         types,
         path: path.clone(),
@@ -190,6 +191,7 @@ fn library_launch_uses_declared_runtime_types_and_exact_simulated_output_on_comp
         },
     };
     let definition = Definition {
+        caller_bodies: vec![],
         protocol_associations: vec![],
         types,
         path: signature.definition.clone(),

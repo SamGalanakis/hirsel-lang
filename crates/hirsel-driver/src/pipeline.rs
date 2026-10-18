@@ -419,6 +419,7 @@ fn lower_expression(
         }
     }
     lower::lower(lower::Input {
+        track_caller: signature.metadata.track_caller,
         tree: &file.tree,
         checked: &checked,
         plans: &plans,

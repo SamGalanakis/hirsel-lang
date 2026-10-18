@@ -227,6 +227,7 @@ impl Importer<'_, '_> {
                 }
             }
             tir::Callee::Indirect {
+                forward_caller: _,
                 value,
                 arguments: generics,
             } => {

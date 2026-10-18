@@ -1763,6 +1763,7 @@ mod instance_keys {
         let mut store = TypeStore::default();
         let unit_ty = store.push(Type::unit());
         let definition = std::sync::Arc::new(hirsel_tir::Definition {
+            caller_bodies: vec![],
             protocol_associations: vec![],
             types: store.clone(),
             path: path("f"),

@@ -266,6 +266,7 @@ impl Builder {
             );
         }
         Definition {
+            caller_bodies: vec![],
             protocol_associations: vec![],
             types: self.types,
             path: path(name),

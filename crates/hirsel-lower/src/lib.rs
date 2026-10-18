@@ -77,6 +77,7 @@ pub enum ErrorMapper {
     },
 }
 pub struct Input<'a> {
+    pub track_caller: bool,
     pub tree: &'a SyntaxTree,
     pub checked: &'a CheckedBody,
     pub plans: &'a Plans,
@@ -184,6 +185,22 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
         }
     }
     let definition = Definition {
+        caller_bodies: if input.track_caller {
+            let mut bodies = vec![entry_body()];
+            bodies.extend(
+                contracts
+                    .iter()
+                    .filter(|(ordinal, _)| {
+                        input.plans.contracts[*ordinal as usize].owner == input.owner
+                    })
+                    .map(|(_, body)| *body),
+            );
+            bodies.sort_unstable_by_key(|body| body.0);
+            bodies.dedup();
+            bodies
+        } else {
+            vec![]
+        },
         protocol_associations,
         types,
         path: input.path.clone(),

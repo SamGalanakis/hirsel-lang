@@ -6517,6 +6517,7 @@ fn indirect_generic_calls_check_actuals_arity_kinds_and_bounds() {
     owner_signature(&mut f, PassingMode::Borrow);
     if let Terminator::Call { callee: target, .. } = &mut f.body().blocks[0].terminator {
         *target = Callee::Indirect {
+            forward_caller: false,
             value: operand(callee, UseKind::Borrow),
             arguments: vec![GenericArgument::Type(argument_type)],
         };
@@ -8059,6 +8060,7 @@ fn local_closure_results_retain_capture_content_but_not_callable_access() {
     ]);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Indirect {
+            forward_caller: false,
             value: operand(callee, UseKind::Borrow),
             arguments: vec![],
         },

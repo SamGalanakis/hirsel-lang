@@ -326,6 +326,46 @@ fn validate_input(
         return Validation { violations: errors };
     }
     errors.extend(signature_errors());
+    // Reconstruct tracked bodies from the declaration and the entry's own clause producers.
+    // Contracts inside ordinary nested closures cannot inherit the enclosing declaration.
+    let mut caller_bodies = Vec::new();
+    if signatures
+        .get(&definition.path)
+        .is_some_and(|s| s.metadata.track_caller)
+    {
+        caller_bodies.push(definition.entry);
+        let contracts: BTreeSet<_> = definition
+            .contracts
+            .iter()
+            .map(|(_, body)| body.0)
+            .collect();
+        caller_bodies.extend(
+            definition.bodies[definition.entry.0 as usize]
+                .rvalues
+                .iter()
+                .filter_map(|value| {
+                    if let Rvalue::Closure { body, .. } = value
+                        && contracts.contains(&body.0)
+                    {
+                        Some(*body)
+                    } else {
+                        None
+                    }
+                }),
+        );
+        caller_bodies.sort_unstable_by_key(|body| body.0);
+        caller_bodies.dedup();
+    }
+    if definition.caller_bodies != caller_bodies {
+        errors.push(Violation {
+            body: None,
+            block: None,
+            instruction: None,
+            kind: ViolationKind::TypeMismatch {
+                entity: "caller attribution",
+            },
+        });
+    }
     errors.extend(protocol::receipts(definition, signatures));
     errors.extend(protocol::unproved_promises(definition, signatures));
     if !errors.is_empty() {
@@ -840,6 +880,20 @@ pub fn validate_structure(definition: &Definition) -> Vec<Violation> {
                 index: definition.entry.0,
             },
         );
+    }
+    // Caller body references are checked even at the structural-only interpreter boundary.
+    for body in &definition.caller_bodies {
+        if body.0 as usize >= definition.bodies.len() {
+            add(
+                None,
+                None,
+                None,
+                ViolationKind::InvalidId {
+                    arena: "body",
+                    index: body.0,
+                },
+            );
+        }
     }
     let mut ordinals = BTreeSet::new();
     for (ordinal, body) in &definition.contracts {

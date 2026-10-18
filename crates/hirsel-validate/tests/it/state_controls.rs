@@ -218,6 +218,7 @@ fn indirect_calls_require_the_same_declared_promise() {
             panic!()
         };
         *callee = Callee::Indirect {
+            forward_caller: false,
             value: operand(place, UseKind::Borrow),
             arguments: vec![],
         };
@@ -343,6 +344,7 @@ fn captured_state(mutable: bool) -> Fixture {
         let destination = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
         f.body().blocks[0].terminator = Terminator::Call {
             callee: Callee::Indirect {
+                forward_caller: false,
                 value: operand(closure, UseKind::Borrow),
                 arguments: vec![],
             },

@@ -69,6 +69,7 @@ impl Fixture {
         let unit = types.push(ty(TypeKind::Tuple(vec![].into())));
         Self {
             definition: Definition {
+                caller_bodies: vec![],
                 protocol_associations: vec![],
                 types,
                 path: path("main"),

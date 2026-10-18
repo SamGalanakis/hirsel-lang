@@ -542,6 +542,7 @@ impl Fixture {
         result_types: &'a [(NameSite, TypeId)],
     ) -> Input<'a> {
         Input {
+            track_caller: false,
             tree: &self.tree,
             checked: &self.checked,
             plans: &self.plans,

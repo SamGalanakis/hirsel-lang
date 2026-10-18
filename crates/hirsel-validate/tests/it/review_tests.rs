@@ -235,6 +235,7 @@ fn consuming_closure(capture_usage: UseKind, multiplicity: Multiplicity, calls: 
         let next = f.body().blocks.len();
         f.body().blocks[from].terminator = Terminator::Call {
             callee: Callee::Indirect {
+                forward_caller: false,
                 value: operand(via, UseKind::Borrow),
                 arguments: vec![],
             },
@@ -506,6 +507,7 @@ fn indirect_call(f: &mut Fixture, from: usize, callee: Operand, dest: u32) -> us
     let next = f.body().blocks.len();
     f.body().blocks[from].terminator = Terminator::Call {
         callee: Callee::Indirect {
+            forward_caller: false,
             value: callee,
             arguments: vec![],
         },
@@ -3718,6 +3720,7 @@ fn n1_mut_captured_variant_keeps_creation_time_tag_across_calls() {
             ],
             Terminator::Call {
                 callee: Callee::Indirect {
+                    forward_caller: false,
                     value: operand(via_clo, UseKind::Borrow),
                     arguments: vec![],
                 },
@@ -3734,6 +3737,7 @@ fn n1_mut_captured_variant_keeps_creation_time_tag_across_calls() {
             vec![],
             Terminator::Call {
                 callee: Callee::Indirect {
+                    forward_caller: false,
                     value: operand(via_clo, UseKind::Borrow),
                     arguments: vec![],
                 },
@@ -4364,6 +4368,7 @@ fn scoped_capture_result_fixture() -> Fixture {
     ]);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Indirect {
+            forward_caller: false,
             value: operand(via_closure, UseKind::Borrow),
             arguments: vec![],
         },
@@ -4546,6 +4551,7 @@ fn copied_scoped_capture_result_fixture() -> Fixture {
         panic!()
     };
     *callee = Callee::Indirect {
+        forward_caller: false,
         value: operand(result, UseKind::Borrow),
         arguments: vec![],
     };
@@ -7828,6 +7834,7 @@ fn postcondition_formals_cannot_claim_uniqueness_lost_by_the_parent() {
             ],
             Terminator::Call {
                 callee: Callee::Indirect {
+                    forward_caller: false,
                     value: Operand {
                         place: function,
                         usage: UseKind::Copy,

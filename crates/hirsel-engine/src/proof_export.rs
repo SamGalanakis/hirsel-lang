@@ -169,7 +169,7 @@ impl QueryEngine {
         })
     }
 
-    /// `hirsel.tir.export.v1` text of the entry's closure.
+    /// `hirsel.tir.export.v2` text of the entry's closure.
     pub fn export_tir(&mut self, entry: &DefPath) -> Result<String, QueryError> {
         Ok(hirsel_proof_export::export(
             &self.proof_export_input(entry)?,

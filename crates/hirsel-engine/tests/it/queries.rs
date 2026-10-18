@@ -270,6 +270,7 @@ impl LoweringPhase for Fake {
         let item = body.typed.item;
         self.fail("lower", file.tree.items[item.0 as usize].origin.span)?;
         Ok(out(hirsel_tir::Definition {
+            caller_bodies: vec![],
             protocol_associations: vec![],
             types: signature.types.clone(),
             path: signature.definition.clone(),

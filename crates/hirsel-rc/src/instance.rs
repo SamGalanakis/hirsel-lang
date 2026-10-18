@@ -909,7 +909,12 @@ impl Expander<'_, '_, '_> {
         }
         for (b, block) in body.blocks.iter().enumerate() {
             let hirsel_tir::Terminator::Call {
-                callee: hirsel_tir::Callee::Indirect { value, arguments },
+                callee:
+                    hirsel_tir::Callee::Indirect {
+                        forward_caller: _,
+                        value,
+                        arguments,
+                    },
                 ..
             } = &block.terminator
             else {

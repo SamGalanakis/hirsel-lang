@@ -406,7 +406,11 @@ impl Checker<'_> {
                     signature.metadata.roles,
                 )
             }
-            Callee::Indirect { value, arguments } => {
+            Callee::Indirect {
+                forward_caller: _,
+                value,
+                arguments,
+            } => {
                 let source = self.definition.types.clone();
                 let TypeKind::Function(function) = source
                     .get(self.place_type(value.place))

@@ -31,6 +31,7 @@ fn callback(selected: bool) -> Fixture {
     let result = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Indirect {
+            forward_caller: false,
             value: operand(parameters[usize::from(!selected)].0, UseKind::Borrow),
             arguments: vec![],
         },
@@ -118,6 +119,7 @@ fn nested_once_callback(selected: Option<bool>) -> Fixture {
     f.assign(staged, Rvalue::Use(take(supplied)), cleanup);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Indirect {
+            forward_caller: false,
             value: take(staged),
             arguments: vec![],
         },
@@ -531,6 +533,7 @@ fn captured_inactive_payload(present: bool) -> Fixture {
     let cleanup = f.cleanup(vec![drop(closure)]);
     f.body().blocks[0].terminator = Terminator::Call {
         callee: Callee::Indirect {
+            forward_caller: false,
             value: operand(borrowed, UseKind::Borrow),
             arguments: vec![],
         },

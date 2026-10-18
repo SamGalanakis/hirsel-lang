@@ -340,7 +340,7 @@ A moved aggregate field is absent from the interpreter's `Option<Value>` field
 slots. Dropping the remaining aggregate visits only present fields, so a partial
 move followed by whole-aggregate teardown releases each remaining value once.
 
-Indirect calls carry `{ value, arguments }`, including an empty argument list for
+Indirect calls carry `{ value, arguments, forward_caller }`, including an empty argument list for
 nongeneric callables. Their generic instantiation receives the same independent
 arity, kind and bound checks as a direct call. Actual operand proofs look up each
 reference at its own binder; a nested callee's generics are a fresh binder.
@@ -816,3 +816,8 @@ re-proving the function body; no source attribute or producer fact is trusted.
 FunctionReference derives its error channel from the substituted result, including
 an abstract generic result instantiated as Result. Its callable contract is still
 replayed independently from the declaration and actual arguments.
+
+V independently derives `Definition.caller_bodies` from its owner declaration and
+the entry's contract producers, and refuses caller tracking on type and extern
+declarations. Hand-built controls in `declaration_controls.rs` cover mismatches
+and accepted twins; `typing_gap_controls.rs` keeps nested contracts untracked.

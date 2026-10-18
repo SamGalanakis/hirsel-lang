@@ -1191,7 +1191,7 @@ fn hash_changes_with_noalloc_drop_bound() {
         canonical_encoding(&signature, &[])
             .unwrap()
             .windows(29)
-            .any(|w| w == b"hirsel.signature.encoding.v13")
+            .any(|w| w == b"hirsel.signature.encoding.v14")
     );
 }
 

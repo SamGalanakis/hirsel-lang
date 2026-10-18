@@ -4,6 +4,11 @@ use super::*;
 use hirsel_types::*;
 
 pub(super) fn valid(s: &Signature, signatures: &dyn SignatureLookup) -> bool {
+    if s.metadata.track_caller
+        && !matches!(&s.kind, SignatureKind::Function(f) if f.foreign.is_none())
+    {
+        return false;
+    }
     let SignatureKind::Type(d) = &s.kind else {
         return true;
     };

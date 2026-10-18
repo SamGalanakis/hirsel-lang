@@ -177,6 +177,7 @@ impl Builder<'_, '_> {
         self.terminate(
             Terminator::Call {
                 callee: Callee::Indirect {
+                    forward_caller: true,
                     value: function,
                     arguments: vec![],
                 },

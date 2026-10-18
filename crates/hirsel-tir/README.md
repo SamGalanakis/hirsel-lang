@@ -64,3 +64,9 @@ by the interpreter's operation registry. The IR checker, `hirsel-validate`,
 checks structure, types, CFG, live slots, loans and cleanup dataflow before
 publication/execution, reporting invariant failures separately from source
 rejection diagnostics.
+
+TIR v4 retains the sorted body set that inherits declaration caller attribution:
+the entry and its own internal contract bodies. Ordinary closures and their
+contracts remain separate invocation boundaries. Indirect
+calls retain whether they are internal contract calls or source function-value
+invocations. V derives this set from the independently supplied signature and clause producers.

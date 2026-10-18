@@ -575,6 +575,7 @@ snapshot_enum!(SchemaConstraint {
     NoallocDrop(p)
 } in Cx);
 snapshot_struct!(SignatureMetadata {
+    track_caller,
     visibility,
     alias,
     unsafe_ffi,
@@ -684,7 +685,7 @@ snapshot_struct!(Instruction {
 } in Cx);
 snapshot_enum!(Callee {
     Definition { path, arguments },
-    Indirect { value, arguments }
+    Indirect { forward_caller, value, arguments }
 } in Cx);
 snapshot_struct!(CallReturn { destination, next } in Cx);
 snapshot_enum!(Terminator {
@@ -764,6 +765,7 @@ snapshot_struct!(ProtocolAssociationReceipt {
     next
 } in Cx);
 snapshot_struct!(Definition {
+    caller_bodies,
     protocol_associations,
     types,
     path,

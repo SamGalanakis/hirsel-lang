@@ -43,6 +43,8 @@ pub struct Metadata {
 pub struct SignatureMetadata {
     pub visibility: ast::Visibility,
     pub alias: bool,
+    /// Caller attribution is a declaration property, not part of a function value type.
+    pub track_caller: bool,
     pub unsafe_ffi: bool,
     /// The trusted safe-wrapper declaration of the package manifest (PROG-4).
     pub wrapper: Option<ForeignWrapper>,
@@ -56,6 +58,7 @@ impl Default for SignatureMetadata {
         Self {
             visibility: ast::Visibility::Private,
             alias: false,
+            track_caller: false,
             unsafe_ffi: false,
             wrapper: None,
             roles: NominalRoles::default(),

@@ -497,6 +497,7 @@ fn normalize_inner(
     };
     let mut signature = Signature {
         metadata: SignatureMetadata {
+            track_caller: false,
             visibility: item.visibility,
             alias: item.visibility != ast::Visibility::PublicOpaque
                 && matches!(

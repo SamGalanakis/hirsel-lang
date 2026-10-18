@@ -264,8 +264,8 @@ fn rule_id_scanning_and_anchors_follow_their_conventions() {
     );
     assert_eq!(slug("OWN-3: Exclusive access"), "own-3-exclusive-access");
     assert_eq!(
-        slug("The export: `hirsel.tir.export.v1`"),
-        "the-export-hirseltirexportv1"
+        slug("The export: `hirsel.tir.export.v2`"),
+        "the-export-hirseltirexportv2"
     );
     assert!(anchors("## A\n```\n## B\n```\n## A\n").contains("a-1"));
 }
