@@ -8665,6 +8665,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             returned,
             output: self.output.clone(),
             failures: self.failures.clone(),
+            blocked: false,
         };
         self.terminal = Some(observation);
         if let Finished::Returned(Some((held, layout, _))) = finished

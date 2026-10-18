@@ -60,7 +60,7 @@ pub fn baseline(root: &Path) -> Result<Vec<Case>, String> {
         let header = crate::parse_header(Path::new(id), &source, &rules)?;
         if matches!(
             header.expect,
-            crate::Expect::Run { .. } | crate::Expect::Fail { .. }
+            crate::Expect::Run { .. } | crate::Expect::Fail { .. } | crate::Expect::Blocked { .. }
         ) {
             cases.push(Case {
                 id: id.to_string(),

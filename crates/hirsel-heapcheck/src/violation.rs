@@ -94,6 +94,9 @@ pub enum ViolationKind {
     Malformed,
     /// An operation this executor or M1b does not execute; never a pass.
     Unsupported,
+    /// Every task of the run waits on another (CONC-8): no violation but the run's
+    /// Blocked observation, which `run` reports without the terminal audit.
+    Blocked,
 }
 
 /// Where a violation was detected: the unit, block and statement (the

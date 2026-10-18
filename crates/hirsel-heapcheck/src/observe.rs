@@ -49,6 +49,8 @@ pub struct Observation {
     pub output: Vec<u8>,
     /// Primary failure first, then cleanup failures in order.
     pub failures: Vec<ObservedFailure>,
+    /// The run is Blocked (CONC-8): it neither returned nor failed.
+    pub blocked: bool,
 }
 
 impl Observation {

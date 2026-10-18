@@ -91,7 +91,7 @@ fn an_artifact_of_another_schema_version_is_refused() {
     let case = std::fs::read_to_string(root().join(FIXTURE).join("case.txt")).unwrap();
     std::fs::write(
         dir.join("case.txt"),
-        case.replace("observation-schema 1", "observation-schema 0"),
+        case.replace("observation-schema 2", "observation-schema 0"),
     )
     .unwrap();
     std::fs::write(dir.join("source.hir"), "").unwrap();
@@ -165,6 +165,7 @@ fn row(reason: &str) -> Exclusion {
 fn wrong(output: &[u8]) -> Outcome {
     Outcome::Mismatch(Observation {
         exit_code: Some(0),
+        blocked: false,
         output: output.to_vec(),
         failures: Vec::new(),
     })

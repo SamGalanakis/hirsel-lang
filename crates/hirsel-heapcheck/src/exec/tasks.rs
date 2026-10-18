@@ -894,8 +894,8 @@ impl<S: Stage> Machine<'_, S> {
         loop {
             let s = self.scheduler();
             let Some(next) = s.runnable.pop_front() else {
-                // CONC-8: environmental in the runtime, never a valid program's schedule here.
-                return fail(V::Unsupported, "every task of the run is blocked (CONC-8)");
+                // CONC-8: the run's outcome, which `run` reports as Blocked.
+                return fail(V::Blocked, "every task of the run is blocked (CONC-8)");
             };
             let row = s.task(next)?;
             if !row.parking {

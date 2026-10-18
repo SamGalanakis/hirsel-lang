@@ -100,12 +100,15 @@ impl<'p, S: Stage> Machine<'p, S> {
             steps: self.steps,
             trace: self.ledger.trace.clone(),
             counters: self.ledger.counters,
-            result: result
-                .map(|(observation, exemptions)| Audit {
-                    observation,
-                    exemptions,
-                })
-                .map_err(|v| *v),
+            result: crate::blocked(
+                result
+                    .map(|(observation, exemptions)| Audit {
+                        observation,
+                        exemptions,
+                    })
+                    .map_err(|v| *v),
+                &self.output,
+            ),
         }
     }
 

@@ -80,6 +80,7 @@ pub fn run<S: Stage>(
         })
     })()
     .map_err(|v: Box<Violation>| *v);
+    let result = blocked(result, &machine.output);
     Run {
         output: machine.output.clone(),
         sites: machine.sites,
@@ -87,6 +88,25 @@ pub fn run<S: Stage>(
         trace: machine.ledger.trace.clone(),
         counters: machine.ledger.counters,
         result,
+    }
+}
+
+/// CONC-8: reporting Blocked runs no user code, cancellation or destruction, so the blocked
+/// tasks keep their storage and no terminal audit applies: a Blocked violation is the run's
+/// observation.
+fn blocked(result: Result<Audit, Violation>, output: &[u8]) -> Result<Audit, Violation> {
+    match result {
+        Err(v) if v.kind == ViolationKind::Blocked => Ok(Audit {
+            observation: Observation {
+                schema_version: observe::OBSERVATION_SCHEMA_VERSION,
+                returned: None,
+                output: output.to_vec(),
+                failures: Vec::new(),
+                blocked: true,
+            },
+            exemptions: Default::default(),
+        }),
+        result => result,
     }
 }
 

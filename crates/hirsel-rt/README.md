@@ -446,7 +446,9 @@ sorted by code, and each program rule code's rule ID.
 the linked program's immutable descriptor registry and runs one compiled
 `fn(rt: Io, args: Args) -> Result[(), E]` in a fresh context with real Io
 granted on `HIRSEL_RT_ROOT`, and exits 0 for `Ok`, 1 for `Error`, 2 for a
-language failure and 3 for a refused launch. With `HIRSEL_RT_OBSERVATION` it
+language failure, 3 for a refused launch and 4 for a Blocked run (CONC-8: every task waits
+and none can proceed; the run stops there without cleanup, and its record says `blocked` and
+`audit unavailable`). With `HIRSEL_RT_OBSERVATION` it
 writes the observation record (`hirsel-observation 1`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape

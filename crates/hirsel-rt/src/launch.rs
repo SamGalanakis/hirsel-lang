@@ -50,6 +50,28 @@ pub const OBSERVATION_VERSION: u32 = 1;
 pub const EXIT_FAILURE: i32 = 2;
 /// Process exit code of a refused launch: bad grants, ABI or entry contract.
 pub(crate) const EXIT_LAUNCH: i32 = 3;
+/// Process exit code of a Blocked run (CONC-8): every task waits on another and nothing
+/// outside the run can wake one. No user code, cancellation or destruction runs after it.
+pub const EXIT_BLOCKED: i32 = 4;
+
+/// What a launch does after its entry: the outputs' and tapes' last writes and the observation
+/// record. Taken by the entry's return, or by [`blocked`] when the run never returns.
+type Finish = Box<dyn FnOnce(String, i32) -> i32>;
+
+thread_local! {
+    static FINISH: RefCell<Option<Finish>> = const { RefCell::new(None) };
+}
+
+/// End a Blocked run (CONC-8) from the scheduler: the launch records `blocked` and exits with
+/// [`EXIT_BLOCKED`], with no exit audit, since the blocked tasks still hold their storage. A
+/// harness that did not launch through here ends environmentally.
+pub(crate) fn blocked() -> ! {
+    let Some(finish) = FINISH.with(|f| f.borrow_mut().take()) else {
+        crate::environmental("every task of the run is blocked (CONC-8)");
+    };
+    let record = format!("hirsel-observation {OBSERVATION_VERSION}\nblocked\naudit unavailable\n");
+    std::process::exit(finish(record, EXIT_BLOCKED))
+}
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
 /// The logical identity of the launch argument-table capability.
@@ -1545,6 +1567,56 @@ unsafe fn execute(
     let mut result = [0u128; RESULT_MAX as usize / 16];
     let (mut rt, mut args) = (IO_HANDLE, ARGS_HANDLE);
     let mut roots = [IO_HANDLE, ARGS_HANDLE, u64::MAX, 0, TEST_HANDLE];
+    // The replay output already echoed to the real streams.
+    let echoed = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
+    let finish: Finish = Box::new({
+        let (replay, echoed) = (replay.clone(), echoed.clone());
+        move |record: String, exit: i32| {
+            if let Some(io) = &replay {
+                // The simulated adapter holds what the program printed; every recorded event
+                // must have been consumed.
+                let io = io.borrow();
+                let (out, err) = echoed.get();
+                if let Err(error) =
+                    std::io::Write::write_all(&mut std::io::stdout(), &io.stdout()[out..])
+                {
+                    return refuse(&format!("standard output: {error}"));
+                }
+                if let Err(error) =
+                    std::io::Write::write_all(&mut std::io::stderr(), &io.stderr()[err..])
+                {
+                    return refuse(&format!("standard error: {error}"));
+                }
+                if let Err(error) = io.finish() {
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                    return refuse(&format!("the replayed tape: {error:?}"));
+                }
+            }
+            // Rust's stdout is line buffered and a C `main` returning does not flush it: output
+            // after the last newline would be lost.
+            if let Err(error) = std::io::Write::flush(&mut std::io::stdout()) {
+                return refuse(&format!("standard output: {error}"));
+            }
+            if let Some(io) = &real {
+                if let Err(error) = io.borrow_mut().finish_recording() {
+                    return refuse(&format!("the Io tape: {error}"));
+                }
+            }
+            if let Some(writer) = &mut zero_recording
+                && let Err(error) = writer.finish()
+            {
+                return refuse(&format!("the Io tape: {error}"));
+            }
+            if let Some(file) = &mut observation
+                && let Err(error) = std::io::Write::write_all(file, record.as_bytes())
+                    .and_then(|()| std::io::Write::flush(file))
+            {
+                return refuse(&format!("the observation file: {error}"));
+            }
+            exit
+        }
+    });
+    FINISH.with(|f| *f.borrow_mut() = Some(finish));
     let mut status = unsafe {
         match entry {
             Launch::Zero(entry) => entry(ctx, std::ptr::null_mut(), result.as_mut_ptr().cast()),
@@ -1569,15 +1641,15 @@ unsafe fn execute(
             ),
         }
     };
-    let mut echoed = (0, 0);
-    let mut echo_replay = || -> Result<(), String> {
+    let echo_replay = || -> Result<(), String> {
         if let Some(io) = &replay {
             let io = io.borrow();
-            std::io::Write::write_all(&mut std::io::stdout(), &io.stdout()[echoed.0..])
+            let (out, err) = echoed.get();
+            std::io::Write::write_all(&mut std::io::stdout(), &io.stdout()[out..])
                 .map_err(|e| format!("standard output: {e}"))?;
-            std::io::Write::write_all(&mut std::io::stderr(), &io.stderr()[echoed.1..])
+            std::io::Write::write_all(&mut std::io::stderr(), &io.stderr()[err..])
                 .map_err(|e| format!("standard error: {e}"))?;
-            echoed = (io.stdout().len(), io.stderr().len());
+            echoed.set((io.stdout().len(), io.stderr().len()));
         }
         Ok(())
     };
@@ -1673,40 +1745,13 @@ unsafe fn execute(
     record.push_str("audit unavailable\n");
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
     drop(binding);
+    let finish = FINISH
+        .with(|f| f.borrow_mut().take())
+        .unwrap_or_else(|| crate::fault("a launch finished twice"));
     if let Some(error) = report_refusal {
         return refuse(&error);
     }
-    if let Err(error) = echo_replay() {
-        return refuse(&error);
-    }
-    if let Some(io) = &replay {
-        if let Err(error) = io.borrow().finish() {
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-            return refuse(&format!("the replayed tape: {error:?}"));
-        }
-    }
-    // Rust's stdout is line buffered and a C `main` returning does not flush it: output
-    // after the last newline would be lost.
-    if let Err(error) = std::io::Write::flush(&mut std::io::stdout()) {
-        return refuse(&format!("standard output: {error}"));
-    }
-    if let Some(io) = &real {
-        if let Err(error) = io.borrow_mut().finish_recording() {
-            return refuse(&format!("the Io tape: {error}"));
-        }
-    }
-    if let Some(writer) = &mut zero_recording
-        && let Err(error) = writer.finish()
-    {
-        return refuse(&format!("the Io tape: {error}"));
-    }
-    if let Some(file) = &mut observation
-        && let Err(error) = std::io::Write::write_all(file, record.as_bytes())
-            .and_then(|()| std::io::Write::flush(file))
-    {
-        return refuse(&format!("the observation file: {error}"));
-    }
-    exit
+    finish(record, exit)
 }
 
 /// Ordinary flushed streaming tape, explicitly nonresumable after interruption.

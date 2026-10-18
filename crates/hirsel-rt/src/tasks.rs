@@ -467,7 +467,7 @@ unsafe fn next_task(ctx: *mut RunCtx) -> u32 {
     }
     let Some(next) = scheduler(ctx).runnable.pop_front() else {
         // CONC-8: no task can run and nothing outside the run can wake one.
-        crate::environmental("every task of the run is blocked (CONC-8)");
+        crate::launch::blocked();
     };
     next
 }

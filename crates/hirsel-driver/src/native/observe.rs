@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 /// The comparison's own version: bump when a field is added or its meaning
 /// changes, so stored mismatch artifacts name what they compared.
-pub const OBSERVATION_SCHEMA: u32 = 1;
+pub const OBSERVATION_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Failure {
@@ -27,8 +27,10 @@ pub struct Failure {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Observation {
-    /// 0 for `Ok`, 1 for `Error`; None when the entry failed.
+    /// 0 for `Ok`, 1 for `Error`; None when the entry failed or the run is Blocked.
     pub exit_code: Option<i32>,
+    /// The run is Blocked (CONC-8, schema 2): it neither returned nor failed.
+    pub blocked: bool,
     pub output: Vec<u8>,
     /// The primary failure, then cleanup failures in order.
     pub failures: Vec<Failure>,
@@ -39,6 +41,7 @@ impl Observation {
     pub fn of_reference(observable: &hirsel_interp::observation::Observable) -> Self {
         Self {
             exit_code: observable.exit_code,
+            blocked: observable.blocked.is_some(),
             output: observable.output.clone(),
             failures: observable
                 .failures
@@ -61,6 +64,9 @@ impl Observation {
                 let _ = writeln!(out, "exit {code}");
             }
             None => out.push_str("exit none\n"),
+        }
+        if self.blocked {
+            out.push_str("blocked\n");
         }
         let _ = writeln!(out, "output {:?}", String::from_utf8_lossy(&self.output));
         for f in &self.failures {

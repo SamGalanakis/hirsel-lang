@@ -1444,10 +1444,12 @@ pub fn observe(
     let mut result = None;
     let mut failures = Vec::new();
     let mut audit = None;
+    let mut blocked = false;
     for line in lines {
         let words: Vec<&str> = line.split(' ').collect();
         match words.as_slice() {
             ["status", s] => status = s.parse::<u8>().ok(),
+            ["blocked"] => blocked = true,
             ["result", hex] => result = Some(*hex),
             ["failure", _kind, rule, site] => {
                 let rule = rule
@@ -1475,9 +1477,23 @@ pub fn observe(
             _ => return Err(bad(format!("a malformed observation line `{line}`"))),
         }
     }
-    if audit != Some(("0", "0", "0"))
-        && (launched.audit_required || audit != Some(("unavailable", "unavailable", "unavailable")))
-    {
+    // A Blocked run (CONC-8) ends without cleanup, so it has no exit audit.
+    let unaudited = audit == Some(("unavailable", "unavailable", "unavailable"));
+    if blocked {
+        if status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
+            return Err(bad("an inconsistent Blocked observation record".into()));
+        }
+        if launched.exit != Some(hirsel_rt::launch::EXIT_BLOCKED) {
+            return Err(bad("a Blocked process did not exit as Blocked".into()));
+        }
+        return Ok(Observation {
+            exit_code: None,
+            blocked: true,
+            output: launched.stdout.clone(),
+            failures,
+        });
+    }
+    if audit != Some(("0", "0", "0")) && (launched.audit_required || !unaudited) {
         return Err(bad(format!(
             "the runtime's exit audit is not clean: (live blocks, regions, retained) = {audit:?}"
         )));
@@ -1493,6 +1509,7 @@ pub fn observe(
     }
     Ok(Observation {
         exit_code,
+        blocked: false,
         output: launched.stdout.clone(),
         failures,
     })
