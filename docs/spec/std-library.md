@@ -566,6 +566,78 @@ callback failure and normal exhaustion release captured sources and callbacks
 through their ordinary cleanup. Authority and capture bounds propagate from the
 selected inputs; a file-walk pipeline retains its Dir authority.
 
+## Bounded regular expressions
+
+`regex` compiles immutable source patterns and searches strings without authority:
+
+```text
+pub type regex.CompileError = Syntax(u64) | ProgramTooLarge
+pub type regex.MatchError = WorkLimit()
+pub type regex.Span { start: u64, end: u64 }
+fn regex.compile(pattern: String, max_instructions: u64) -> Result[regex.Regex, regex.CompileError] uses {}
+fn regex.find(re: regex.Regex, text: String, work_limit: u64) -> Result[Option[regex.Span], regex.MatchError] uses {}
+fn regex.is_match(re: regex.Regex, text: String, work_limit: u64) -> Result[bool, regex.MatchError] uses {}
+```
+
+The fixed dialect operates on Unicode scalars. It supports literal scalars, `.`,
+`^`, `$`, `\A`, `\z`, bracket ranges and negation (`[a-z]`, `[^a-z]`),
+structural groups `(...)` and `(?:...)`, alternation `|`, and repetitions `*`,
+`+`, `?`, `{n}`, `{n,}`, `{n,m}`. Counts are unsigned decimal; a maximum must
+be at least its minimum. Repetitions are greedy unless followed by `?`.
+Empty groups and alternatives are valid. A bracket's initial `]` is literal;
+`-` is literal when it does not introduce a range. Reversed ranges are errors; range
+endpoints must be single scalars. Backslash escapes punctuation or a literal
+non-ASCII scalar; `\a`, `\f`, `\n`, `\r`, `\t`, `\v` denote ASCII controls.
+
+`\d` is ASCII 0–9; `\w` is ASCII letters, digits and underscore; `\s` is
+HT, LF, FF, CR and space (excluding VT, following Go regexp). Uppercase
+`\D`, `\W`, `\S` complement these classes, including inside brackets.
+`\b` and `\B` assert an ASCII word boundary or its absence outside brackets.
+Dot excludes LF. Anchors are absolute text boundaries, so `$` does not match
+before a trailing LF. There are no flags, captures, backreferences,
+lookaround, property or POSIX named classes, octal/hex escapes, replacement
+language or native regex hook. An unescaped `{` always begins a repetition;
+malformed repetitions are errors. Literal braces can be escaped.
+
+`Syntax` reports the unexpected scalar's UTF-8 byte offset, or pattern byte
+length for unexpected EOF. A repeated quantifier reports the second operator;
+a bad range reports its upper endpoint; reversed repetition bounds report
+the byte after the closing brace. Counts exceeding u64 yield ProgramTooLarge.
+The size limit includes the final match, jumps and branch instructions.
+A consuming class uses one slot for its first range and one for each further
+range, bounding range payloads as well as instructions. Every intermediate
+fragment must fit; sizes use checked arithmetic before repetitions expand.
+Zero limits reject every pattern. Compilation uses O(pattern scalars + size
+limit) memory and explicit parser/compiler stacks.
+
+`find` returns the leftmost-first whole match, preferring earlier alternatives
+and each repetition's greediness. `Span.start` is inclusive, `end` exclusive;
+both are byte offsets relative to the supplied String, on scalar boundaries.
+Empty matches, including EOF, return equal offsets. Groups affect structure
+and priority but expose no captures. `is_match` applies the same search and
+work budget, returning whether a span exists. Searches never change Regex and
+own their queues; a WorkLimit error leaves it reusable.
+
+The ordered Pike VM has no recursive backtracker. For each scalar boundary,
+each instruction enters its epsilon closure at most once; first arrival wins.
+Once a match is queued, lower-priority epsilon branches, threads and new
+search starts are discarded; earlier consuming threads may still extend it.
+The work counter starts at work_limit and charges one unit for each queue
+slot initialization, each scalar boundary processed (including EOF), each
+instruction popped from the explicit epsilon stack (including duplicates),
+each ready instruction examined, and each character-class range tested.
+Literal matching tests its one range. Input uses the existing lazy `string.scalars` view. Queue and
+range iteration cannot continue after the next charged step would exceed the
+budget: the call returns WorkLimit without a partial span. This accounting is
+deterministic and independent of wall time or host regex behavior. Queue
+memory is O(compiled size); work is bounded by the caller even on adversarial
+alternation, nested repetition or nullable cycles.
+
+For extraction, turn the returned byte offsets into `string.position` values
+and slice the same text; the scalar-boundary span guarantees both positions
+exist. Advancing a repeated search after an empty match is the caller's job:
+advance by one scalar, and stop after an empty EOF match.
+
 ## Slash glob patterns
 
 `glob` compiles immutable patterns and matches pure strings without authority:

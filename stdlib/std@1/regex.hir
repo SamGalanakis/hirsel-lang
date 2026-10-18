@@ -1,0 +1,834 @@
+// Thompson compiler and ordered Pike queues adapted from Go regexp/syntax
+// {parse,compile,prog}.go and regexp/exec.go. No backtracking optimization.
+// Copyright 2010-2011 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
+pub type CompileError = Syntax(u64) | ProgramTooLarge
+
+pub type MatchError = WorkLimit()
+
+pub type Span {
+  start: u64,
+  end: u64,
+}
+
+// Primitive kinds: 0 jump, 1 scalar class, 2 dot, 3 begin, 4 end,
+// 5 word boundary, 6 non-boundary. Tree-only: 7 concat, 8 alternate, 9 repeat.
+type Node {
+  kind: u8,
+  ranges: List[(u32, u32)],
+  negated: bool,
+  left: u64,
+  right: u64,
+  min: u64,
+  max: u64,
+  unbounded: bool,
+  lazy: bool,
+  size: u64,
+  nullable: bool,
+}
+
+// VM-only: 10 split, 11 match. x is the preferred branch.
+type Inst {
+  kind: u8,
+  x: u64,
+  y: u64,
+  ranges: List[(u32, u32)],
+  negated: bool,
+}
+
+pub opaque type Regex: copyable + inert + noalloc_drop uses {} {
+  code: List[Inst],
+  entry: u64,
+}
+
+type Input {
+  scalars: List[u32],
+  offsets: List[u64],
+  at: u64,
+}
+
+type Context {
+  alternatives: Option[u64],
+  sequence: Option[u64],
+  atom: Option[u64],
+  repeated: bool,
+}
+
+type Tree {
+  nodes: List[Node],
+  limit: u64,
+}
+
+fn scalar_width(cp: u32) -> u64 uses {} {
+  if cp < 128 {
+    1
+  } else if cp < 2048 {
+    2
+  } else if cp < 65536 {
+    3
+  } else {
+    4
+  }
+}
+
+fn empty_node(kind: u8) -> Node uses {} {
+  Node(
+    kind: kind,
+    ranges: [],
+    negated: false,
+    left: 0,
+    right: 0,
+    min: 0,
+    max: 0,
+    unbounded: false,
+    lazy: false,
+    size: 1,
+    nullable: kind != 1 && kind != 2
+  )
+}
+
+fn context() -> Context uses {} {
+  Context(alternatives: None(), sequence: None(), atom: None(), repeated: false)
+}
+
+fn peek(cursor: Input) -> u32 uses {} {
+  if cursor.at < core@1/list.len(cursor.scalars) {
+    cursor.scalars[cursor.at]
+  } else {
+    1114112
+  }
+}
+
+fn syntax(cursor: Input) -> CompileError uses {} {
+  Syntax(cursor.offsets[cursor.at])
+}
+
+fn sum(a: u64, b: u64, limit: u64) -> Result[u64, CompileError] uses {} {
+  if a > limit || b > limit - a {
+    Error(ProgramTooLarge())
+  } else {
+    Ok(a + b)
+  }
+}
+
+fn product(a: u64, b: u64, limit: u64) -> Result[u64, CompileError] uses {} {
+  if a != 0 && b > limit / a {
+    Error(ProgramTooLarge())
+  } else {
+    Ok(a * b)
+  }
+}
+
+fn add_node(mut tree: Tree, take node: Node) -> Result[u64, CompileError] uses {} {
+  if node.size > tree.limit || core@1/list.len(node.ranges) > tree.limit {
+    return Error(ProgramTooLarge())
+  }
+  let index = core@1/list.len(tree.nodes)
+  core@1/list.push(mut tree.nodes, take node)
+  Ok(index)
+}
+
+fn binary(mut tree: Tree, kind: u8, left: u64, right: u64) -> Result[u64, CompileError] uses {} {
+  let mut node = empty_node(kind)
+  node.left = left
+  node.right = right
+  node.size = sum(tree.nodes[left].size, tree.nodes[right].size, tree.limit)?
+  node.nullable = if kind == 8 {
+    tree.nodes[left].nullable || tree.nodes[right].nullable
+  } else {
+    tree.nodes[left].nullable && tree.nodes[right].nullable
+  }
+  if kind == 8 {
+    node.size = sum(node.size, 1, tree.limit)?
+  }
+  add_node(mut tree, take node)
+}
+
+fn flush(mut tree: Tree, mut ctx: Context) -> Result[(), CompileError] uses {} {
+  match ctx.atom {
+    Some(atom) => {
+      ctx.sequence = Some(
+        match ctx.sequence {
+          Some(left) => binary(mut tree, 7, left, atom)?,
+          None() => atom,
+        }
+      )
+      ctx.atom = None()
+    },
+    None() => (),
+  }
+  Ok(())
+}
+
+fn finish_sequence(mut tree: Tree, mut ctx: Context) -> Result[u64, CompileError] uses {} {
+  flush(mut tree, mut ctx)?
+  let sequence = match ctx.sequence {
+    Some(n) => n,
+    None() => add_node(mut tree, empty_node(0))?,
+  }
+  ctx.sequence = None()
+  Ok(sequence)
+}
+
+fn finish_context(mut tree: Tree, mut ctx: Context) -> Result[u64, CompileError] uses {} {
+  let right = finish_sequence(mut tree, mut ctx)?
+  match ctx.alternatives {
+    Some(left) => binary(mut tree, 8, left, right),
+    None() => Ok(right),
+  }
+}
+
+fn class_ranges(cp: u32) -> List[(u32, u32)] uses {} {
+  if cp == 100 || cp == 68 {
+    [(48, 57)]
+  } else if cp == 115 || cp == 83 {
+    [(9, 10), (12, 13), (32, 32)]
+  } else {
+    [(48, 57), (65, 90), (95, 95), (97, 122)]
+  }
+}
+
+fn escaped(mut cursor: Input, in_class: bool) -> Result[Node, CompileError] uses {} {
+  let cp = peek(cursor)
+  if cp == 1114112 {
+    return Error(syntax(cursor))
+  }
+  cursor.at += 1
+  let mut node = empty_node(1)
+  if cp == 100 || cp == 68 || cp == 115 || cp == 83 || cp == 119 || cp == 87 {
+    node.ranges = class_ranges(cp)
+    node.size = core@1/list.len(node.ranges)
+    node.negated = cp == 68 || cp == 83 || cp == 87
+    return Ok(take node)
+  }
+  if !in_class && (cp == 65 || cp == 122 || cp == 98 || cp == 66) {
+    node.kind = if cp == 65 {
+      3
+    } else if cp == 122 {
+      4
+    } else if cp == 98 {
+      5
+    } else {
+      6
+    }
+    node.nullable = true
+    return Ok(take node)
+  }
+  let scalar: u32 = if cp == 110 {
+    10
+  } else if cp == 114 {
+    13
+  } else if cp == 116 {
+    9
+  } else if cp == 102 {
+    12
+  } else if cp == 97 {
+    7
+  } else if cp == 118 {
+    11
+  } else if cp < 128 && (cp >= 48 && cp <= 57 || cp >= 65 && cp <= 90 || cp >= 97 && cp <= 122) {
+    return Error(Syntax(cursor.offsets[cursor.at - 1]))
+  } else {
+    cp
+  }
+  core@1/list.push(mut node.ranges, (scalar, scalar))
+  Ok(take node)
+}
+
+fn class_item(mut cursor: Input) -> Result[Node, CompileError] uses {} {
+  if peek(cursor) == 91 && cursor.at + 1 < core@1/list.len(cursor.scalars) && cursor.scalars[cursor.at + 1] == 58 {
+    return Error(syntax(cursor))
+  }
+  if peek(cursor) == 1114112 {
+    return Error(syntax(cursor))
+  }
+  let cp = peek(cursor)
+  cursor.at += 1
+  if cp == 92 {
+    return escaped(mut cursor, true)
+  }
+  let mut node = empty_node(1)
+  core@1/list.push(mut node.ranges, (cp, cp))
+  Ok(take node)
+}
+
+// Complement predefined ASCII classes before unioning them into a bracket class.
+fn append_ranges(mut out: List[(u32, u32)], node: Node) -> () uses {} {
+  let mut begin: u32 = 0
+  for (lo, hi) in node.ranges {
+    if node.negated {
+      if begin < lo {
+        core@1/list.push(mut out, (begin, lo - 1))
+      }
+      begin = hi + 1
+    } else {
+      core@1/list.push(mut out, (lo, hi))
+    }
+  }
+  if node.negated && begin <= 1114111 {
+    core@1/list.push(mut out, (begin, 1114111))
+  }
+}
+
+fn bracket(mut cursor: Input) -> Result[Node, CompileError] uses {} {
+  let mut node = empty_node(1)
+  if peek(cursor) == 94 {
+    node.negated = true
+    cursor.at += 1
+  }
+  let mut first = true
+  while peek(cursor) != 93 || first {
+    let item = class_item(mut cursor)?
+    first = false
+    if peek(cursor) == 45 && cursor.at + 1 < core@1/list.len(cursor.scalars) && cursor.scalars[cursor.at + 1] != 93 {
+      cursor.at += 1
+      let end_offset = cursor.offsets[cursor.at]
+      let end = class_item(mut cursor)?
+      if item.negated || end.negated || core@1/list.len(item.ranges) != 1 || core@1/list.len(
+        end.ranges
+      ) != 1 {
+        return Error(Syntax(end_offset))
+      }
+      let (lo, _) = item.ranges[0]
+      let (_, hi) = end.ranges[0]
+      let (_, lo_end) = item.ranges[0]
+      let (hi_start, _) = end.ranges[0]
+      if lo != lo_end || hi_start != hi || lo > hi {
+        return Error(Syntax(end_offset))
+      }
+      core@1/list.push(mut node.ranges, (lo, hi))
+    } else {
+      append_ranges(mut node.ranges, item)
+    }
+  }
+  cursor.at += 1
+  node.size = core@1/list.len(node.ranges)
+  Ok(take node)
+}
+
+fn decimal(mut cursor: Input) -> Result[u64, CompileError] uses {} {
+  if peek(cursor) < 48 || peek(cursor) > 57 {
+    return Error(syntax(cursor))
+  }
+  let mut value: u64 = 0
+  while peek(cursor) >= 48 && peek(cursor) <= 57 {
+    let digit: u64 = core@1/int.widen(peek(cursor) - 48)
+    if value > (18446744073709551615u64 - digit) / 10 {
+      return Error(ProgramTooLarge())
+    }
+    value = value * 10 + digit
+    cursor.at += 1
+  }
+  Ok(value)
+}
+
+fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, cp: u32) -> Result[
+  u64,
+  CompileError
+] uses {} {
+  let mut node = empty_node(9)
+  node.left = atom
+  if cp == 42 {
+    node.unbounded = true
+  } else if cp == 43 {
+    node.min = 1
+    node.unbounded = true
+  } else if cp == 63 {
+    node.max = 1
+  } else {
+    node.min = decimal(mut cursor)?
+    node.max = node.min
+    if peek(cursor) == 44 {
+      cursor.at += 1
+      if peek(cursor) == 125 {
+        node.unbounded = true
+      } else {
+        node.max = decimal(mut cursor)?
+      }
+    }
+    if peek(cursor) != 125 {
+      return Error(syntax(cursor))
+    }
+    cursor.at += 1
+    if !node.unbounded && node.max < node.min {
+      return Error(syntax(cursor))
+    }
+  }
+  if peek(cursor) == 63 {
+    node.lazy = true
+    cursor.at += 1
+  }
+  let child_size = tree.nodes[atom].size
+  node.nullable = node.min == 0 || tree.nodes[atom].nullable
+  if node.unbounded {
+    let copies: u64 = if node.min == 0 {
+      1
+    } else {
+      node.min
+    }
+    node.size = sum(product(child_size, copies, tree.limit)?, 1, tree.limit)?
+    if node.min == 0 && tree.nodes[atom].nullable {
+      node.size = sum(node.size, 1, tree.limit)?
+    }
+  } else {
+    node.size = sum(
+      product(child_size, node.max, tree.limit)?,
+      node.max - node.min,
+      tree.limit
+    )?
+    if node.max == 0 {
+      node.size = 1
+    }
+  }
+  add_node(mut tree, take node)
+}
+
+fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses {} {
+  let mut cursor = Input(scalars: [], offsets: [], at: 0)
+  let mut byte: u64 = 0
+  for cp in core@1/string.scalars(pattern) {
+    core@1/list.push(mut cursor.scalars, cp)
+    core@1/list.push(mut cursor.offsets, byte)
+    byte += scalar_width(cp)
+  }
+  core@1/list.push(mut cursor.offsets, byte)
+  let mut tree = Tree(nodes: [], limit: limit)
+  let mut contexts: List[Context] = [context()]
+  let mut depth: u64 = 0
+  while cursor.at < core@1/list.len(cursor.scalars) {
+    let cp = peek(cursor)
+    let at = cursor.offsets[cursor.at]
+    cursor.at += 1
+    if cp == 40 {
+      flush(mut tree, mut contexts[depth])?
+      if peek(cursor) == 63 {
+        cursor.at += 1
+        if peek(cursor) != 58 {
+          return Error(syntax(cursor))
+        }
+        cursor.at += 1
+      }
+      depth += 1
+      if depth < core@1/list.len(contexts) {
+        contexts[depth] = context()
+      } else {
+        core@1/list.push(mut contexts, context())
+      }
+    } else if cp == 41 {
+      if depth == 0 {
+        return Error(Syntax(at))
+      }
+      let group = finish_context(mut tree, mut contexts[depth])?
+      depth -= 1
+      contexts[depth].atom = Some(group)
+      contexts[depth].repeated = false
+    } else if cp == 124 {
+      let right = finish_sequence(mut tree, mut contexts[depth])?
+      contexts[depth].alternatives = Some(
+        match contexts[depth].alternatives {
+          Some(left) => binary(mut tree, 8, left, right)?,
+          None() => right,
+        }
+      )
+    } else if cp == 42 || cp == 43 || cp == 63 || cp == 123 {
+      if contexts[depth].repeated {
+        return Error(Syntax(at))
+      }
+      let atom = match contexts[depth].atom {
+        Some(n) => n,
+        None() => return Error(Syntax(at)),
+      }
+      let repeated = repetition(mut tree, mut cursor, atom, cp)?
+      contexts[depth].atom = Some(repeated)
+      contexts[depth].repeated = true
+    } else {
+      flush(mut tree, mut contexts[depth])?
+      let node = if cp == 91 {
+        bracket(mut cursor)?
+      } else if cp == 92 {
+        escaped(mut cursor, false)?
+      } else {
+        let mut node = empty_node(
+          if cp == 46 {
+            2
+          } else if cp == 94 {
+            3
+          } else if cp == 36 {
+            4
+          } else {
+            1
+          }
+        )
+        if node.kind == 1 {
+          core@1/list.push(mut node.ranges, (cp, cp))
+        }
+        take node
+      }
+      let atom = add_node(mut tree, take node)?
+      contexts[depth].atom = Some(atom)
+      contexts[depth].repeated = false
+    }
+  }
+  if depth != 0 {
+    return Error(syntax(cursor))
+  }
+  let root = finish_context(mut tree, mut contexts[0])?
+  sum(tree.nodes[root].size, 1, limit)?
+  Ok((take tree, root))
+}
+
+// Explicit compiler frames keep deeply nested user patterns off the call stack.
+type Frame {
+  node: u64,
+  target: u64,
+  phase: u8,
+  saved: u64,
+  remaining: u64,
+  loop_pc: u64,
+}
+
+fn frame(node: u64, target: u64) -> Frame uses {} {
+  Frame(node: node, target: target, phase: 0, saved: 0, remaining: 0, loop_pc: 0)
+}
+
+fn emit(
+  mut code: List[Inst],
+  kind: u8,
+  x: u64,
+  y: u64,
+  take ranges: List[(u32, u32)],
+  negated: bool
+) -> u64 uses {} {
+  let pc = core@1/list.len(code)
+  core@1/list.push(
+    mut code,
+    Inst(kind: kind, x: x, y: y, ranges: take ranges, negated: negated)
+  )
+  pc
+}
+
+fn split(mut code: List[Inst], preferred: u64, other: u64, lazy: bool) -> u64 uses {} {
+  emit(
+    mut code,
+    10,
+    if lazy {
+      other
+    } else {
+      preferred
+    },
+    if lazy {
+      preferred
+    } else {
+      other
+    },
+    [],
+    false
+  )
+}
+
+pub fn compile(pattern: String, max_instructions: u64) -> Result[Regex, CompileError] uses {} {
+  if max_instructions == 0 {
+    return Error(ProgramTooLarge())
+  }
+  let (tree, root) = parse(pattern, max_instructions)?
+  let mut code: List[Inst] = []
+  emit(mut code, 11, 0, 0, [], false)
+  let mut stack: List[Frame] = [frame(root, 0)]
+  let mut depth: u64 = 1
+  let mut entry: u64 = 0
+  while depth != 0 {
+    let top = depth - 1
+    let current = copy stack[top]
+    let node = tree.nodes[current.node]
+    let mut child: Option[Frame] = None()
+    if node.kind < 7 {
+      entry = emit(
+        mut code,
+        node.kind,
+        current.target,
+        0,
+        copy node.ranges,
+        node.negated
+      )
+      depth -= 1
+    } else if node.kind == 7 || node.kind == 8 {
+      if current.phase == 0 {
+        stack[top].phase = 1
+        child = Some(frame(node.right, current.target))
+      } else if current.phase == 1 {
+        stack[top].phase = 2
+        stack[top].saved = entry
+        child = Some(
+          frame(
+            node.left,
+            if node.kind == 7 {
+              entry
+            } else {
+              current.target
+            }
+          )
+        )
+      } else {
+        if node.kind == 8 {
+          entry = split(mut code, entry, current.saved, false)
+        }
+        depth -= 1
+      }
+    } else {
+      if current.phase == 0 {
+        stack[top].saved = current.target
+        stack[top].remaining = if node.unbounded {
+          if node.min == 0 {
+            0
+          } else {
+            node.min - 1
+          }
+        } else {
+          node.max
+        }
+        if node.unbounded {
+          let loop_pc = emit(mut code, 10, 0, 0, [], false)
+          stack[top].loop_pc = loop_pc
+          stack[top].phase = 1
+          child = Some(frame(node.left, loop_pc))
+        } else {
+          stack[top].phase = 2
+        }
+      } else if current.phase == 1 {
+        let loop_pc = current.loop_pc
+        code[loop_pc].x = if node.lazy {
+          current.target
+        } else {
+          entry
+        }
+        code[loop_pc].y = if node.lazy {
+          entry
+        } else {
+          current.target
+        }
+        // A nullable star is (child+)? so its empty alternative retains priority.
+        stack[top].saved = if node.min != 0 {
+          entry
+        } else if tree.nodes[node.left].nullable {
+          split(mut code, entry, current.target, node.lazy)
+        } else {
+          loop_pc
+        }
+        stack[top].phase = 2
+      } else if current.phase == 2 {
+        if current.remaining == 0 {
+          entry = if !node.unbounded && node.max == 0 {
+            emit(mut code, 0, current.target, 0, [], false)
+          } else {
+            current.saved
+          }
+          depth -= 1
+        } else {
+          stack[top].phase = 3
+          child = Some(frame(node.left, current.saved))
+        }
+      } else {
+        stack[top].saved = if !node.unbounded && current.remaining > node.min {
+          split(mut code, entry, current.saved, node.lazy)
+        } else {
+          entry
+        }
+        stack[top].remaining -= 1
+        stack[top].phase = 2
+      }
+    }
+    match child {
+      Some(next) => {
+        if depth < core@1/list.len(stack) {
+          stack[depth] = take next
+        } else {
+          core@1/list.push(mut stack, take next)
+        }
+        depth += 1
+      },
+      None() => (),
+    }
+  }
+  Ok(Regex(code: take code, entry: entry))
+}
+
+fn spend(mut left: u64) -> Result[(), MatchError] uses {} {
+  if left == 0 {
+    return Error(WorkLimit())
+  }
+  left -= 1
+  Ok(())
+}
+
+fn word(cp: u32) -> bool uses {} {
+  cp >= 48 && cp <= 57 || cp >= 65 && cp <= 90 || cp == 95 || cp >= 97 && cp <= 122
+}
+
+type Thread {
+  pc: u64,
+  start: u64,
+}
+
+// Ordered epsilon closure, deduplicated by instruction for each scalar boundary.
+// An explicit DFS stack replaces Go's recursive add; first arrival wins.
+fn add(
+  re: Regex,
+  seed: Thread,
+  at: u64,
+  previous: u32,
+  next: u32,
+  mut seen: List[u64],
+  mut ready: List[Thread],
+  mut work: u64
+) -> Result[bool, MatchError] uses {} {
+  let mut stack: List[Thread] = [copy seed]
+  let mut depth: u64 = 1
+  while depth != 0 {
+    spend(mut work)?
+    depth -= 1
+    let thread = copy stack[depth]
+    if seen[thread.pc] != at + 1 {
+      seen[thread.pc] = at + 1
+      let inst = re.code[thread.pc]
+      if inst.kind == 1 || inst.kind == 2 || inst.kind == 11 {
+        core@1/list.push(mut ready, copy thread)
+        if inst.kind == 11 {
+          return Ok(true)
+        }
+      } else {
+        let allowed = inst.kind == 0 || inst.kind == 10 || inst.kind == 3 && at == 0 || inst.kind == 4 && next == 1114112 || inst.kind == 5 && word(
+          previous
+        ) != word(next) || inst.kind == 6 && word(previous) == word(next)
+        if allowed {
+          if inst.kind == 10 {
+            let other = Thread(pc: inst.y, start: thread.start)
+            if depth < core@1/list.len(stack) {
+              stack[depth] = take other
+            } else {
+              core@1/list.push(mut stack, take other)
+            }
+            depth += 1
+          }
+          let first = Thread(pc: inst.x, start: thread.start)
+          if depth < core@1/list.len(stack) {
+            stack[depth] = take first
+          } else {
+            core@1/list.push(mut stack, take first)
+          }
+          depth += 1
+        }
+      }
+    }
+  }
+  Ok(false)
+}
+
+fn accepts(inst: Inst, cp: u32, mut work: u64) -> Result[bool, MatchError] uses {} {
+  if inst.kind == 2 {
+    return Ok(cp != 10)
+  }
+  let mut found = false
+  for (lo, hi) in inst.ranges {
+    spend(mut work)?
+    if lo <= cp && cp <= hi {
+      found = true
+    }
+  }
+  Ok(found != inst.negated)
+}
+
+type Machine {
+  seen: List[u64],
+  seeds: List[Thread],
+  matched: Option[Span],
+  at: u64,
+  previous: u32,
+  work: u64,
+}
+
+// One scalar boundary, including the final EOF sentinel. The scalar view is lazy.
+fn step(re: Regex, cp: u32, mut machine: Machine) -> Result[bool, MatchError] uses {} {
+  spend(mut machine.work)?
+  let at = machine.at
+  let mut ready: List[Thread] = []
+  let mut queued_match = false
+  for seed in machine.seeds {
+    if add(
+      re,
+      seed,
+      at,
+      machine.previous,
+      cp,
+      mut machine.seen,
+      mut ready,
+      mut machine.work
+    )? {
+      queued_match = true
+      break
+    }
+  }
+  if !queued_match && machine.matched == None() {
+    add(
+      re,
+      Thread(pc: re.entry, start: at),
+      at,
+      machine.previous,
+      cp,
+      mut machine.seen,
+      mut ready,
+      mut machine.work
+    )?;
+  }
+  let mut next: List[Thread] = []
+  for thread in ready {
+    spend(mut machine.work)?
+    let inst = re.code[thread.pc]
+    if inst.kind == 11 {
+      machine.matched = Some(Span(start: thread.start, end: at))
+      break
+    }
+    if cp != 1114112 && accepts(inst, cp, mut machine.work)? {
+      core@1/list.push(mut next, Thread(pc: inst.x, start: thread.start))
+    }
+  }
+  if cp == 1114112 || core@1/list.len(next) == 0 && machine.matched != None() {
+    return Ok(true)
+  }
+  machine.seeds = take next
+  machine.previous = cp
+  machine.at += scalar_width(cp)
+  Ok(false)
+}
+
+pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
+  Option[Span],
+  MatchError
+] uses {} {
+  let mut machine = Machine(
+    seen: [],
+    seeds: [],
+    matched: None(),
+    at: 0,
+    previous: 1114112,
+    work: work_limit
+  )
+  let mut i: u64 = 0
+  while i < core@1/list.len(re.code) {
+    spend(mut machine.work)?
+    core@1/list.push(mut machine.seen, 0)
+    i += 1
+  }
+  for cp in core@1/string.scalars(text) {
+    if step(re, cp, mut machine)? {
+      return Ok(copy machine.matched)
+    }
+  }
+  step(re, 1114112, mut machine)?
+  Ok(copy machine.matched)
+}
+
+pub fn is_match(re: Regex, text: String, work_limit: u64) -> Result[bool, MatchError] uses {} {
+  match find(re, text, work_limit)? {
+    Some(_) => Ok(true),
+    None() => Ok(false),
+  }
+}

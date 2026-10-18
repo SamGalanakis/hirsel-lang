@@ -3722,6 +3722,8 @@ conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
 conformance/SEM/SEM-3-empty-graphemes.hir
 conformance/SEM/SEM-3-empty-scalars.hir
+conformance/SEM/SEM-3-glob-files-run.hir
+conformance/SEM/SEM-3-glob-run.hir
 conformance/SEM/SEM-3-graphemes-reference-run.hir
 conformance/SEM/SEM-3-graphemes-source-run.hir
 conformance/SEM/SEM-3-invalid-utf8-returned.hir
@@ -3745,6 +3747,13 @@ conformance/SEM/SEM-3-pathtime-path-run.hir
 conformance/SEM/SEM-3-pathtime-reference-run.hir
 conformance/SEM/SEM-3-positions-empty-terminal.hir
 conformance/SEM/SEM-3-positions-terminal.hir
+conformance/SEM/SEM-3-regex-depth-run.hir
+conformance/SEM/SEM-3-regex-edges-run.hir
+conformance/SEM/SEM-3-regex-extract-run.hir
+conformance/SEM/SEM-3-regex-go-1-run.hir
+conformance/SEM/SEM-3-regex-go-2-run.hir
+conformance/SEM/SEM-3-regex-go-3-run.hir
+conformance/SEM/SEM-3-regex-limits-run.hir
 conformance/SEM/SEM-3-scalar-safe-slices.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir

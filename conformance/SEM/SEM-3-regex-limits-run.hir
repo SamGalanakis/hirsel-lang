@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+fn too_large(pattern: String, limit: u64) {
+  failure.check(
+    match regex.compile(pattern, limit) {
+      Error(ProgramTooLarge()) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  too_large("a", 1)
+  too_large("", 1)
+  too_large("a{1000000000}", 100)
+  too_large("(a{100}){100}", 1000)
+  too_large("a{18446744073709551616}", 1000)
+  too_large("a{18446744073709551615,}", 18446744073709551615)
+  too_large("a{18446744073709551615}", 1000)
+  too_large("a", 0)
+  let exact = match regex.compile("a", 2) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(regex.find(exact, "a", 0) == Error(WorkLimit()), TextInvariant())
+  failure.check(
+    regex.find(exact, "a", 9) == Ok(Some(regex.Span(start: 0, end: 1))),
+    TextInvariant()
+  )
+  failure.check(regex.find(exact, "a", 8) == Error(WorkLimit()), TextInvariant())
+  let adversary = match regex.compile("(a|aa)*b", 100) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  let input = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  failure.check(
+    regex.find(adversary, input, 100) == Error(WorkLimit()),
+    TextInvariant()
+  )
+  failure.check(regex.find(adversary, input, 10000) == Ok(None()), TextInvariant())
+  // Each call owns its queue; exhausting one search never changes a compiled Regex.
+  failure.check(regex.is_match(adversary, "aaaab", 10000) == Ok(true), TextInvariant())
+  let empty = match regex.compile("()*", 4) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(
+    regex.find(empty, "", 100) == Ok(Some(regex.Span(start: 0, end: 0))),
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,27 @@
+// rule: SEM-3
+// expect: run
+// Deep structural groups use explicit parser frames, with no recursive calls.
+pub fn main() -> Result[(), ()] {
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < 512 {
+    text.append(mut builder, "(")
+    i += 1
+  }
+  text.append(mut builder, "a")
+  i = 0
+  while i < 512 {
+    text.append(mut builder, ")")
+    i += 1
+  }
+  let nested = match text.finish(take builder) {
+    Ok(s) => take s,
+    Error(_) => return Error(()),
+  }
+  let compiled = match regex.compile(nested, 2) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(regex.is_match(compiled, "a", 9) == Ok(true), TextInvariant())
+  Ok(())
+}

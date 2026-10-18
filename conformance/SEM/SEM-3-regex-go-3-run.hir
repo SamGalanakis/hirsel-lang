@@ -1,0 +1,48 @@
+// rule: SEM-3
+// expect: run
+// Copyright (c) 2009 The RE2 Authors. BSD-3-Clause; third-party/NOTICES.md.
+// Go regexp/testdata/re2-search.txt: ordered partial-match column, whole spans only.
+fn check(pattern: String, input: String, expected: Option[regex.Span]) -> Result[(), ()] {
+  let re = match regex.compile(pattern, 1000) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(regex.find(re, input, 10000) == Ok(expected), TextInvariant())
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  check("[abcd]", "xxxabcdxxx", Some(regex.Span(start: 3, end: 4)))?
+  check("^(?:[abcd])$", "", None())?
+  check("^(?:[abcd])", "", None())?
+  check("(?:[abcd])$", "", None())?
+  check("[^x]", "", None())?
+  check("[^x]", "xxxabcdxxx", Some(regex.Span(start: 3, end: 4)))?
+  check("^(?:[^x])$", "", None())?
+  check("^(?:[^x])", "", None())?
+  check("(?:[^x])$", "", None())?
+  check("[abcd]+", "", None())?
+  check("[abcd]+", "xxxabcdxxx", Some(regex.Span(start: 3, end: 7)))?
+  check("^(?:[abcd]+)$", "", None())?
+  check("^(?:[abcd]+)", "", None())?
+  check("(?:[abcd]+)$", "", None())?
+  check("[^x]+", "", None())?
+  check("[^x]+", "xxxabcdxxx", Some(regex.Span(start: 3, end: 7)))?
+  check("^(?:[^x]+)$", "", None())?
+  check("^(?:[^x]+)", "", None())?
+  check("(?:[^x]+)$", "", None())?
+  check("(fo|foo)", "", None())?
+  check("(fo|foo)", "fo", Some(regex.Span(start: 0, end: 2)))?
+  check("^(?:(fo|foo))$", "", None())?
+  check("^(?:(fo|foo))$", "fo", Some(regex.Span(start: 0, end: 2)))?
+  check("^(?:(fo|foo))", "", None())?
+  check("^(?:(fo|foo))", "fo", Some(regex.Span(start: 0, end: 2)))?
+  check("(?:(fo|foo))$", "", None())?
+  check("(?:(fo|foo))$", "fo", Some(regex.Span(start: 0, end: 2)))?
+  check("(foo|fo)", "", None())?
+  check("(foo|fo)", "foo", Some(regex.Span(start: 0, end: 3)))?
+  check("^(?:(foo|fo))$", "", None())?
+  check("^(?:(foo|fo))$", "foo", Some(regex.Span(start: 0, end: 3)))?
+  check("^(?:(foo|fo))", "", None())?
+  Ok(())
+}

@@ -1,0 +1,34 @@
+// rule: SEM-3
+// expect: run
+// Grep-like extraction uses relative byte offsets on the same sliced source.
+pub fn main() -> Result[(), ()] {
+  let original = "prefix:é:error=123;ok"
+  let begin = match string.position(original, 7) {
+    Some(p) => p,
+    None() => return Error(()),
+  }
+  let end = match string.position(original, string.byte_len(original)) {
+    Some(p) => p,
+    None() => return Error(()),
+  }
+  let text = string.slice(original, begin, end)
+  let re = match regex.compile("error=\\d+", 20) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  let span = match regex.find(re, text, 1000) {
+    Ok(Some(span)) => take span,
+    _ => return Error(()),
+  }
+  failure.check(span == regex.Span(start: 3, end: 12), TextInvariant())
+  let a = match string.position(text, span.start) {
+    Some(p) => p,
+    None() => return Error(()),
+  }
+  let b = match string.position(text, span.end) {
+    Some(p) => p,
+    None() => return Error(()),
+  }
+  failure.check(string.slice(text, a, b) == "error=123", TextInvariant())
+  Ok(())
+}

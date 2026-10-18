@@ -1,0 +1,48 @@
+// rule: SEM-3
+// expect: run
+// Copyright (c) 2009 The RE2 Authors. BSD-3-Clause; third-party/NOTICES.md.
+// Go regexp/testdata/re2-search.txt: ordered partial-match column, whole spans only.
+fn check(pattern: String, input: String, expected: Option[regex.Span]) -> Result[(), ()] {
+  let re = match regex.compile(pattern, 1000) {
+    Ok(re) => take re,
+    Error(_) => return Error(()),
+  }
+  failure.check(regex.find(re, input, 10000) == Ok(expected), TextInvariant())
+  Ok(())
+}
+
+pub fn main() -> Result[(), ()] {
+  check("a", "", None())?
+  check("a", "a", Some(regex.Span(start: 0, end: 1)))?
+  check("^(?:a)$", "", None())?
+  check("^(?:a)$", "a", Some(regex.Span(start: 0, end: 1)))?
+  check("^(?:a)", "", None())?
+  check("^(?:a)", "a", Some(regex.Span(start: 0, end: 1)))?
+  check("(?:a)$", "", None())?
+  check("(?:a)$", "a", Some(regex.Span(start: 0, end: 1)))?
+  check("a+", "", None())?
+  check("a+", "aa", Some(regex.Span(start: 0, end: 2)))?
+  check("^(?:a+)$", "", None())?
+  check("^(?:a+)$", "aa", Some(regex.Span(start: 0, end: 2)))?
+  check("^(?:a+)", "", None())?
+  check("^(?:a+)", "aa", Some(regex.Span(start: 0, end: 2)))?
+  check("(?:a+)$", "", None())?
+  check("(?:a+)$", "aa", Some(regex.Span(start: 0, end: 2)))?
+  check("(a+|b)+", "", None())?
+  check("(a+|b)+", "ab", Some(regex.Span(start: 0, end: 2)))?
+  check("^(?:(a+|b)+)$", "", None())?
+  check("^(?:(a+|b)+)$", "ab", Some(regex.Span(start: 0, end: 2)))?
+  check("^(?:(a+|b)+)", "", None())?
+  check("^(?:(a+|b)+)", "ab", Some(regex.Span(start: 0, end: 2)))?
+  check("(?:(a+|b)+)$", "", None())?
+  check("(?:(a+|b)+)$", "ab", Some(regex.Span(start: 0, end: 2)))?
+  check("ab|cd", "", None())?
+  check("ab|cd", "xabcdx", Some(regex.Span(start: 1, end: 3)))?
+  check("^(?:ab|cd)$", "", None())?
+  check("^(?:ab|cd)", "", None())?
+  check("(?:ab|cd)$", "", None())?
+  check("h.*od?", "", None())?
+  check("h.*od?", "hello\ngoodbye\n", Some(regex.Span(start: 0, end: 5)))?
+  check("^(?:h.*od?)$", "", None())?
+  Ok(())
+}
